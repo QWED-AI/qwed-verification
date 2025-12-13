@@ -12,7 +12,7 @@ from qwed_new.core.router import Router
 from qwed_new.core.policy import PolicyEngine
 from qwed_new.core.translator import TranslationLayer
 from qwed_new.core.verifier import VerificationEngine
-from qwed_new.core.logic_verifier import LogicVerifier
+from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
 from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.core.observability import metrics_collector
 from qwed_new.core.security import EnhancedSecurityGateway
@@ -29,7 +29,8 @@ class ControlPlane:
         self.policy = PolicyEngine()
         self.translator = TranslationLayer()
         self.math_verifier = VerificationEngine()
-        self.logic_verifier = LogicVerifier()
+        # Use new DSL-based Logic Verifier
+        self.logic_verifier = DSLLogicVerifier()
         
         # Enterprise security components
         self.security_gateway = EnhancedSecurityGateway()
@@ -144,7 +145,7 @@ class ControlPlane:
         max_retries: int = 2
     ) -> Dict[str, Any]:
         """
-        Entry point for logic puzzles with automatic refinement.
+        Entry point for logic puzzles using QWED-DSL pipeline.
         """
         start_time = time.time()
 
@@ -172,63 +173,45 @@ class ControlPlane:
         # 2. Routing
         provider = self.router.route(query, preferred_provider)
 
-        # 3. Try verification with refinement
-        previous_error = None
-        for attempt in range(max_retries):
-            try:
-                # Translation
-                if attempt == 0:
-                    logic_task = self.translator.translate_logic(query, provider=provider)
-                else:
-                    logic_task = self.translator.refine_logic(query, previous_error, provider=provider)
-                
-                # Verification
-                result = self.logic_verifier.verify_logic(logic_task.variables, logic_task.constraints)
-                
-                # If success, return
-                if result.status != "ERROR":
-                    response = {
-                        "status": result.status,
-                        "model": result.model,
-                        "translation": logic_task.dict(),
-                        "provider_used": provider,
-                        "attempts": attempt + 1,
-                        "latency_ms": (time.time() - start_time) * 1000
-                    }
+        # 3. DSL Logic Pipeline
+        try:
+            # Full Pipeline: NL -> DSL -> Verification
+            # DSLLogicVerifier handles the translation internally via Azure/Anthropic
+            result = self.logic_verifier.verify_from_natural_language(
+                query=query,
+                provider=provider
+            )
+            
+            response = {
+                "status": result.status,
+                "model": result.model,
+                "dsl_code": result.dsl_code, # Expose DSL for transparency
+                "error": result.error,
+                "provider_used": provider,
+                "latency_ms": (time.time() - start_time) * 1000
+            }
+            
+            # Sanitize Output
+            response = self.output_sanitizer.sanitize_output(
+                result=response,
+                output_type="logic",
+                organization_id=organization_id
+            )
+            
+            if organization_id:
+                metrics_collector.track_request(
+                    organization_id=organization_id,
+                    status=response["status"],
+                    latency_ms=response["latency_ms"],
+                    provider=provider
+                )
+            
+            return response
                     
-                    response = self.output_sanitizer.sanitize_output(
-                        result=response,
-                        output_type="logic",
-                        organization_id=organization_id
-                    )
-                    
-                    if organization_id:
-                        metrics_collector.track_request(
-                            organization_id=organization_id,
-                            status=response["status"],
-                            latency_ms=response["latency_ms"],
-                            provider=provider
-                        )
-                    
-                    return response
-                else:
-                    previous_error = result.error
-                    
-            except Exception as e:
-                previous_error = str(e)
-                if attempt == max_retries - 1:
-                    return {
-                        "status": "ERROR",
-                        "error": previous_error,
-                        "attempts": max_retries,
-                        "latency_ms": (time.time() - start_time) * 1000
-                    }
-        
-        return {
-            "status": "ERROR", 
-            "error": "Failed after all retry attempts",
-            "last_error": previous_error,
-            "attempts": max_retries,
-            "latency_ms": (time.time() - start_time) * 1000
-        }
+        except Exception as e:
+            return {
+                "status": "ERROR",
+                "error": f"Pipeline failure: {str(e)}",
+                "latency_ms": (time.time() - start_time) * 1000
+            }
 

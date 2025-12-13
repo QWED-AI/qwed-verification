@@ -516,3 +516,31 @@ QWED now has **Three Engines**: Math, Logic, and Statistics. 📊
 **Result**:
 - **All Scenarios**: ✅ PASS
 - **Conclusion**: QWED handles complex reasoning, not just simple queries.
+
+## Phase 17: QWED-Logic DSL (Complete)
+
+We replaced the fragile Python/Z3 translation with a **Secure Domain Specific Language**.
+
+### The Problem
+Allowing LLMs to generate Python code (even for Z3) is risky (`eval` is evil) and prone to syntax errors.
+
+### The Solution: QWED-Logic S-Expressions
+We defined a secure, whitelist-based format:
+```lisp
+(AND (GT x 5) (LT y 10))
+(IMPLIES (GT amount 10000) (EQ requires_approval True))
+```
+
+### Components Implemented
+1.  **Parser**: Recursive descent parser for S-expressions.
+2.  **Compiler**: Translates AST to Z3 constraints safely.
+3.  **Whitelist**: Only allows specific operators (`AND`, `OR`, `GT`, `PLUS`, etc.). No `import` or `eval`.
+
+### Verification
+We verified with `run_adversarial_dsl_local.py`:
+- **Tower of Hanoi**: Solved.
+- **Knights & Knaves**: Solved.
+- **Adversarial Input**: "Ignore instructions" attacks blocked.
+
+QWED is now **Secure by Design** for logic verification. 🛡️
+

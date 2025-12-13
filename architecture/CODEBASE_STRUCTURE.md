@@ -110,10 +110,12 @@ qwed_new/
 │   │   ├── router.py               # Provider routing logic
 │   │   ├── policy.py               # Security & rate limit policies
 │   │   ├── translator.py           # LLM translation coordinator
+│   │   ├── cache.py                # [NEW] LRU Verification Cache
 │   │   │
 │   │   ├── 🟢 Verification Engines
 │   │   ├── verifier.py             # Engine 1: Math (SymPy)
-│   │   ├── logic_verifier.py       # Engine 2: Logic (Z3)
+│   │   ├── logic_verifier.py       # Engine 2: Logic (Legacy)
+│   │   ├── dsl_logic_verifier.py   # [NEW] Engine 2: Logic (DSL-based)
 │   │   ├── stats_verifier.py       # Engine 3: Statistics (Pandas)
 │   │   ├── fact_verifier.py        # Engine 4: Fact Checking (Citation)
 │   │   ├── code_verifier.py        # Engine 5: Code Security (AST)
@@ -122,14 +124,20 @@ qwed_new/
 │   │   ├── reasoning_verifier.py   # Engine 8: Chain-of-Thought
 │   │   ├── consensus_verifier.py   # Multi-engine consensus
 │   │   │
+│   │   ├── 🟠 QWED-Logic DSL (New)
+│   │   ├── dsl/
+│   │   │   ├── parser.py           # S-Expression Parser & Validator
+│   │   │   ├── compiler.py         # Z3/SymPy Compiler
+│   │   │   └── __init__.py         # Exports
+│   │   │
 │   │   ├── 🔵 Supporting Modules
 │   │   ├── schemas.py              # Pydantic models
 │   │   ├── models.py               # SQLModel database tables
 │   │   ├── database.py             # Database connection & session
 │   │   ├── validator.py            # Semantic validation
-│   │   ├── sanitizer.py            # Input/output sanitization
+│   │   ├── sanitizer.py            # [DEPRECATED] Input/output sanitization
 │   │   ├── security.py             # Security gateway (prompt injection)
-│   │   ├── safe_evaluator.py       # Sandboxed code execution
+│   │   ├── safe_evaluator.py       # [DEPRECATED] Sandboxed code execution
 │   │   ├── code_executor.py        # Stats engine sandbox
 │   │   │
 │   │   ├── 🟡 Multi-Tenancy & Observability
