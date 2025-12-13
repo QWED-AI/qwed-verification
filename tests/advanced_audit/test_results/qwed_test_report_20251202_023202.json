@@ -1,0 +1,277 @@
+{
+  "metadata": {
+    "report_type": "QWED_COMPREHENSIVE_AUDIT",
+    "generated_at": "2025-12-02T02:32:02.025972",
+    "version": "1.0"
+  },
+  "summary": {
+    "timestamp": "2025-12-02T02:32:02.024825",
+    "duration_seconds": 0.004889,
+    "total_tests": 9,
+    "passed": 0,
+    "failed": 9,
+    "pass_rate": 0.0,
+    "by_priority": {
+      "critical": {
+        "total": 4,
+        "passed": 0,
+        "pass_rate": 0.0
+      },
+      "high": {
+        "total": 3,
+        "passed": 0,
+        "pass_rate": 0.0
+      },
+      "medium": {
+        "total": 2,
+        "passed": 0,
+        "pass_rate": 0.0
+      }
+    },
+    "by_engine": {
+      "logic": {
+        "total": 9,
+        "passed": 0,
+        "pass_rate": 0.0
+      }
+    }
+  },
+  "results": [
+    {
+      "test_id": "LOGIC_SAT_001",
+      "test_name": "Verify simple SAT constraints",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.018146"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_001",
+      "test_name": "Detect simple contradiction (UNSAT)",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.019135"
+    },
+    {
+      "test_id": "LOGIC_SAT_002",
+      "test_name": "Verify boolean logic constraints",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.019507"
+    },
+    {
+      "test_id": "LOGIC_SAT_003",
+      "test_name": "Verify inequality chain (x < y < z)",
+      "engine": "logic",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.020012"
+    },
+    {
+      "test_id": "LOGIC_SAT_004",
+      "test_name": "Verify divisibility constraint (x % 5 == 0)",
+      "engine": "logic",
+      "priority": "MEDIUM",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.021018"
+    },
+    {
+      "test_id": "LOGIC_SAT_005",
+      "test_name": "Verify implication (P implies Q)",
+      "engine": "logic",
+      "priority": "MEDIUM",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.022021"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_002",
+      "test_name": "Detect circular dependency (x=y+1 AND y=x+1)",
+      "engine": "logic",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.022021"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_003",
+      "test_name": "Detect boolean contradiction (P AND NOT P)",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.022021"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_004",
+      "test_name": "Detect conflict in multiple constraints",
+      "engine": "logic",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.022021"
+    }
+  ],
+  "failures": [
+    {
+      "test_id": "LOGIC_SAT_001",
+      "test_name": "Verify simple SAT constraints",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.018146"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_001",
+      "test_name": "Detect simple contradiction (UNSAT)",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.019135"
+    },
+    {
+      "test_id": "LOGIC_SAT_002",
+      "test_name": "Verify boolean logic constraints",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.019507"
+    },
+    {
+      "test_id": "LOGIC_SAT_003",
+      "test_name": "Verify inequality chain (x < y < z)",
+      "engine": "logic",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.020012"
+    },
+    {
+      "test_id": "LOGIC_SAT_004",
+      "test_name": "Verify divisibility constraint (x % 5 == 0)",
+      "engine": "logic",
+      "priority": "MEDIUM",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.021018"
+    },
+    {
+      "test_id": "LOGIC_SAT_005",
+      "test_name": "Verify implication (P implies Q)",
+      "engine": "logic",
+      "priority": "MEDIUM",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.022021"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_002",
+      "test_name": "Detect circular dependency (x=y+1 AND y=x+1)",
+      "engine": "logic",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.022021"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_003",
+      "test_name": "Detect boolean contradiction (P AND NOT P)",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.022021"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_004",
+      "test_name": "Detect conflict in multiple constraints",
+      "engine": "logic",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "N/A",
+      "actual_result": {},
+      "error": "'QWEDAPIClient' object has no attribute 'verify_logic'",
+      "latency_ms": 0.0,
+      "timestamp": "2025-12-02T02:32:02.022021"
+    }
+  ],
+  "statistics": {
+    "total_tests": 9,
+    "passed_count": 0,
+    "failed_count": 9,
+    "latency": {
+      "min_ms": 0.0,
+      "max_ms": 0.0,
+      "avg_ms": 0.0
+    },
+    "engines_tested": [
+      "logic"
+    ],
+    "priorities_tested": [
+      "CRITICAL",
+      "MEDIUM",
+      "HIGH"
+    ]
+  }
+}

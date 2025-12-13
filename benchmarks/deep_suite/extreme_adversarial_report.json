@@ -1,0 +1,922 @@
+{
+  "difficulty": "EXTREME",
+  "summary": {
+    "total_tests": 25,
+    "errors_caught": 9,
+    "catch_rate": "36.0%"
+  },
+  "caught_errors": [
+    {
+      "test_id": "nested_quantifier_02",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "Is this valid: For all x (P(x) implies Q(x)) therefore (for all x P(x)) implies (for all x Q(x))? Prove or provide counterexample.",
+      "provider": "claude_opus",
+      "expected": "VALID",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": true,
+      "error_type": "LOGIC_ERROR",
+      "why_extreme": "Requires understanding of universal quantifier distribution",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Azure OpenAI logic refinement failed: name 'logic_function_schema' is not defined",
+        "attempts": 2,
+        "latency_ms": 1530.014991760254
+      },
+      "timestamp": "2025-11-29T10:12:34.906193"
+    },
+    {
+      "test_id": "monty_hall_variant_01",
+      "type": "math",
+      "difficulty": "EXTREME",
+      "query": "There are 4 doors. 1 has a car, 3 have goats. You pick door 1. Host (who knows) opens door 3 showing a goat. You can switch to door 2 or 4. What's your probability of winning if you switch to door 2 specifically?",
+      "provider": "anthropic",
+      "expected": 0.333,
+      "llm_answer": 0.5,
+      "qwed_status": "VERIFIED",
+      "caught_error": true,
+      "error_type": "WRONG_ANSWER_0.5_vs_0.333",
+      "why_extreme": "Multi-door Monty Hall variant, LLMs struggle with conditional probability",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 0.5,
+        "user_query": "There are 4 doors. 1 has a car, 3 have goats. You pick door 1. Host (who knows) opens door 3 showing a goat. You can switch to door 2 or 4. What&#x27;s your probability of winning if you switch to door 2 specifically?",
+        "translation": {
+          "expression": "1/2",
+          "claimed_answer": 0.5,
+          "reasoning": "This is a variant of the Monty Hall problem with 4 doors. Initially, you pick door 1 (probability of car = 1/4). The host opens door 3 showing a goat. Now we need to find the probability that the car is behind door 2 specifically.\n\nGiven that you picked door 1 and the host opened door 3 (showing a goat), the car must be behind one of: door 1, door 2, or door 4.\n\nUsing Bayesian reasoning:\n- P(car at door 1) = 1/4 initially, and this doesn&#x27;t change = 1/4\n- P(car at door 2, 3, or 4) = 3/4 initially\n\nSince door 3 is revealed to have a goat, the car must be at door 2 or door 4 (if not at door 1). The probability 3/4 is now split between doors 2 and 4.\n\nBy symmetry (the host could have opened either door 3 or the other goat door), doors 2 and 4 are equally likely given the information revealed.\n\nThe remaining probability of 3/4 splits equally: P(car at door 2) = 3/8 and P(car at door 4) = 3/8.\n\nWait, let me reconsider. After the host opens door 3, we condition on this information. The probability that door 2 has the car, given you picked door 1 and host opened door 3, equals 1/2 of the switching probability benefit. Since doors 2 and 4 are symmetric after door 3 is opened, P(car at door 2 | picked 1, opened 3) = 1/2 * (2/3) = 1/3... \n\nActually, in the 4-door case: P(door 2 specifically) = 1/2 when choosing between the two remaining unopened doors you didn&#x27;t pick.",
+          "confidence": 0.7
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 0.5,
+          "claimed_value": 0.5,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "anthropic",
+        "latency_ms": 12115.437746047974
+      },
+      "timestamp": "2025-11-29T10:12:47.159026"
+    },
+    {
+      "test_id": "russells_paradox",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "Define R = set of all sets that don't contain themselves. Does R contain R? Prove this leads to contradiction and explain Russell's Paradox.",
+      "provider": "claude_opus",
+      "expected": "Contradiction - R in R if and only if R not in R",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": true,
+      "error_type": "LOGIC_ERROR",
+      "why_extreme": "Self-referential paradox, requires careful logical analysis",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Azure OpenAI logic refinement failed: name 'logic_function_schema' is not defined",
+        "attempts": 2,
+        "latency_ms": 730.8850288391113
+      },
+      "timestamp": "2025-11-29T10:13:00.038869"
+    },
+    {
+      "test_id": "graph_isomorphism",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "Are these graphs isomorphic? Graph 1: edges (1-2, 2-3, 3-4, 4-1, 1-3). Graph 2: edges (A-B, B-C, C-D, D-E, E-A, B-D). Prove your answer.",
+      "provider": "claude_opus",
+      "expected": "Non-isomorphic - different structure",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": true,
+      "error_type": "LOGIC_ERROR",
+      "why_extreme": "Graph isomorphism is difficult, requires systematic checking",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Azure OpenAI logic refinement failed: name 'logic_function_schema' is not defined",
+        "attempts": 2,
+        "latency_ms": 4366.252422332764
+      },
+      "timestamp": "2025-11-29T10:13:18.220477"
+    },
+    {
+      "test_id": "hamiltonian_path",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "Does this graph have a Hamiltonian path? 6 nodes: edges (1-2, 2-3, 3-4, 4-5, 5-6, 6-1, 1-4, 2-5, 3-6). If yes, provide the path. If no, prove why not.",
+      "provider": "anthropic",
+      "expected": "Has Hamiltonian cycle",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": true,
+      "error_type": "LOGIC_ERROR",
+      "why_extreme": "NP-complete problem, LLMs use faulty heuristics",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Anthropic logic refinement failed: 1 validation error for LogicVerificationTask\nconstraints\n  Field required [type=missing, input_value={'variables': {'p0': 'Int...4': 'Int', 'p5': 'Int'}}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing",
+        "attempts": 2,
+        "latency_ms": 21163.77854347229
+      },
+      "timestamp": "2025-11-29T10:13:39.503815"
+    },
+    {
+      "test_id": "halting_problem_variant",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "Can you write a program H that takes any program P and input I, and determines if P halts on I? Explain why or why not using proof by contradiction.",
+      "provider": "claude_opus",
+      "expected": "NO - Halting Problem is undecidable",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": true,
+      "error_type": "LOGIC_ERROR",
+      "why_extreme": "Requires understanding of computability theory",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Azure OpenAI logic refinement failed: name 'logic_function_schema' is not defined",
+        "attempts": 2,
+        "latency_ms": 2157.9813957214355
+      },
+      "timestamp": "2025-11-29T10:13:41.789764"
+    },
+    {
+      "test_id": "self_reference_liar",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "This sentence is false. Is that sentence true or false? Explain the logical paradox and how formal logic handles it.",
+      "provider": "anthropic",
+      "expected": "Paradox - neither true nor false in classical logic",
+      "llm_answer": null,
+      "qwed_status": "UNSAT",
+      "caught_error": true,
+      "error_type": "LOGIC_UNSAT",
+      "why_extreme": "Liar paradox, tests understanding of self-reference",
+      "full_response": {
+        "status": "UNSAT",
+        "model": null,
+        "translation": {
+          "variables": {
+            "S": "Bool"
+          },
+          "constraints": [
+            "S == Not(S)"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "anthropic",
+        "attempts": 2,
+        "latency_ms": 6241.5931224823
+      },
+      "timestamp": "2025-11-29T10:13:48.145877"
+    },
+    {
+      "test_id": "prisoners_dilemma_iterated",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "In iterated prisoner's dilemma (100 rounds), what's the optimal strategy against a Tit-for-Tat player? Prove your answer with game theory.",
+      "provider": "claude_opus",
+      "expected": "Cooperate always (Tit-for-Tat mirrors)",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": true,
+      "error_type": "LOGIC_ERROR",
+      "why_extreme": "Requires understanding of Nash equilibrium in repeated games",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Azure OpenAI logic refinement failed: name 'logic_function_schema' is not defined",
+        "attempts": 2,
+        "latency_ms": 2514.308214187622
+      },
+      "timestamp": "2025-11-29T10:14:17.128405"
+    },
+    {
+      "test_id": "nim_game_variant",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "Nim game: 3 piles with (5, 7, 9) objects. Players alternate removing any number from ONE pile. Last to move wins. Who wins with optimal play: first or second player? Prove using Nim-sum.",
+      "provider": "anthropic",
+      "expected": "First player wins (Nim-sum != 0)",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": true,
+      "error_type": "LOGIC_ERROR",
+      "why_extreme": "Requires Nim strategy knowledge (XOR trick)",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Failed after all retry attempts",
+        "last_error": "Invalid constraint 'nim_sum == pile1 ^ pile2 ^ pile3': Safe evaluation failed for 'nim_sum == pile1 ^ pile2 ^ pile3': unsupported operand type(s) for ^: 'ArithRef' and 'ArithRef'",
+        "attempts": 2,
+        "latency_ms": 8667.065143585205
+      },
+      "timestamp": "2025-11-29T10:14:25.919811"
+    }
+  ],
+  "all_results": [
+    {
+      "test_id": "nested_quantifier_01",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "Prove or disprove: For all x there exists y such that (x < y) implies there exists y such that for all x (x < y). Use formal logic notation and show your proof steps.",
+      "provider": "anthropic",
+      "expected": "FALSE - counterexample exists",
+      "llm_answer": null,
+      "qwed_status": "SAT",
+      "caught_error": false,
+      "error_type": null,
+      "why_extreme": "Nested quantifier order matters, LLMs confuse forall-exists vs exists-forall",
+      "full_response": {
+        "status": "SAT",
+        "model": {},
+        "translation": {
+          "variables": {},
+          "constraints": [
+            "True"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "anthropic",
+        "attempts": 2,
+        "latency_ms": 6295.742034912109
+      },
+      "timestamp": "2025-11-29T10:12:33.220183"
+    },
+    {
+      "test_id": "nested_quantifier_02",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "Is this valid: For all x (P(x) implies Q(x)) therefore (for all x P(x)) implies (for all x Q(x))? Prove or provide counterexample.",
+      "provider": "claude_opus",
+      "expected": "VALID",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": true,
+      "error_type": "LOGIC_ERROR",
+      "why_extreme": "Requires understanding of universal quantifier distribution",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Azure OpenAI logic refinement failed: name 'logic_function_schema' is not defined",
+        "attempts": 2,
+        "latency_ms": 1530.014991760254
+      },
+      "timestamp": "2025-11-29T10:12:34.906193"
+    },
+    {
+      "test_id": "monty_hall_variant_01",
+      "type": "math",
+      "difficulty": "EXTREME",
+      "query": "There are 4 doors. 1 has a car, 3 have goats. You pick door 1. Host (who knows) opens door 3 showing a goat. You can switch to door 2 or 4. What's your probability of winning if you switch to door 2 specifically?",
+      "provider": "anthropic",
+      "expected": 0.333,
+      "llm_answer": 0.5,
+      "qwed_status": "VERIFIED",
+      "caught_error": true,
+      "error_type": "WRONG_ANSWER_0.5_vs_0.333",
+      "why_extreme": "Multi-door Monty Hall variant, LLMs struggle with conditional probability",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 0.5,
+        "user_query": "There are 4 doors. 1 has a car, 3 have goats. You pick door 1. Host (who knows) opens door 3 showing a goat. You can switch to door 2 or 4. What&#x27;s your probability of winning if you switch to door 2 specifically?",
+        "translation": {
+          "expression": "1/2",
+          "claimed_answer": 0.5,
+          "reasoning": "This is a variant of the Monty Hall problem with 4 doors. Initially, you pick door 1 (probability of car = 1/4). The host opens door 3 showing a goat. Now we need to find the probability that the car is behind door 2 specifically.\n\nGiven that you picked door 1 and the host opened door 3 (showing a goat), the car must be behind one of: door 1, door 2, or door 4.\n\nUsing Bayesian reasoning:\n- P(car at door 1) = 1/4 initially, and this doesn&#x27;t change = 1/4\n- P(car at door 2, 3, or 4) = 3/4 initially\n\nSince door 3 is revealed to have a goat, the car must be at door 2 or door 4 (if not at door 1). The probability 3/4 is now split between doors 2 and 4.\n\nBy symmetry (the host could have opened either door 3 or the other goat door), doors 2 and 4 are equally likely given the information revealed.\n\nThe remaining probability of 3/4 splits equally: P(car at door 2) = 3/8 and P(car at door 4) = 3/8.\n\nWait, let me reconsider. After the host opens door 3, we condition on this information. The probability that door 2 has the car, given you picked door 1 and host opened door 3, equals 1/2 of the switching probability benefit. Since doors 2 and 4 are symmetric after door 3 is opened, P(car at door 2 | picked 1, opened 3) = 1/2 * (2/3) = 1/3... \n\nActually, in the 4-door case: P(door 2 specifically) = 1/2 when choosing between the two remaining unopened doors you didn&#x27;t pick.",
+          "confidence": 0.7
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 0.5,
+          "claimed_value": 0.5,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "anthropic",
+        "latency_ms": 12115.437746047974
+      },
+      "timestamp": "2025-11-29T10:12:47.159026"
+    },
+    {
+      "test_id": "two_envelopes_paradox",
+      "type": "math",
+      "difficulty": "EXTREME",
+      "query": "Two envelopes contain money, one has 2x the other. You pick one, open it, and find $100. Should you switch? Calculate expected value of switching. Explain the paradox.",
+      "provider": "claude_opus",
+      "expected": "No advantage - paradox explained",
+      "llm_answer": 125.0,
+      "qwed_status": "VERIFIED",
+      "caught_error": false,
+      "error_type": null,
+      "why_extreme": "Classic probability paradox, most LLMs get this wrong",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 125.0,
+        "user_query": "Two envelopes contain money, one has 2x the other. You pick one, open it, and find $100. Should you switch? Calculate expected value of switching. Explain the paradox.",
+        "translation": {
+          "expression": "(0.5 * 200) + (0.5 * 50)",
+          "claimed_answer": 125.0,
+          "reasoning": "If you see $100, the other envelope could contain either $200 (if you picked the smaller) or $50 (if you picked the larger). Each has probability 0.5. Expected value is 0.5*200 + 0.5*50 = 125.",
+          "confidence": 1.0
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 125.0,
+          "claimed_value": 125.0,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "claude_opus",
+        "latency_ms": 1085.0145816802979
+      },
+      "timestamp": "2025-11-29T10:12:48.356440"
+    },
+    {
+      "test_id": "proof_by_induction_trap",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "Prove by induction: All horses are the same color. Base case: n=1, one horse is one color. Inductive step: assume true for n horses, prove for n+1. Take n+1 horses, remove one (n horses same color by hypothesis), remove different one (n horses same color), therefore all n+1 same color. What's wrong with this proof?",
+      "provider": "anthropic",
+      "expected": "Induction fails at n=2 (gap in logic)",
+      "llm_answer": null,
+      "qwed_status": "SAT",
+      "caught_error": false,
+      "error_type": null,
+      "why_extreme": "Requires finding subtle flaw in apparently valid proof",
+      "full_response": {
+        "status": "SAT",
+        "model": {
+          "horse_1_color": "1",
+          "horse_2_color": "0",
+          "inductive_step_n1_valid": "True",
+          "conclusion_valid": "False",
+          "overlap_exists": "False",
+          "base_case_valid": "True",
+          "group_A_same_color": "True",
+          "n_equals_2": "True",
+          "group_B_same_color": "True"
+        },
+        "translation": {
+          "variables": {
+            "horse_1_color": "Int",
+            "horse_2_color": "Int",
+            "n_equals_2": "Bool",
+            "base_case_valid": "Bool",
+            "inductive_step_n1_valid": "Bool",
+            "group_A_same_color": "Bool",
+            "group_B_same_color": "Bool",
+            "overlap_exists": "Bool",
+            "conclusion_valid": "Bool"
+          },
+          "constraints": [
+            "n_equals_2 == True",
+            "base_case_valid == True",
+            "inductive_step_n1_valid == True",
+            "group_A_same_color == (horse_1_color == horse_1_color)",
+            "group_B_same_color == (horse_2_color == horse_2_color)",
+            "overlap_exists == False",
+            "c= (horse_1_color == horse_2_color)",
+            "Not(conclusion_valid)"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "anthropic",
+        "attempts": 2,
+        "latency_ms": 10725.175142288208
+      },
+      "timestamp": "2025-11-29T10:12:59.204110"
+    },
+    {
+      "test_id": "russells_paradox",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "Define R = set of all sets that don't contain themselves. Does R contain R? Prove this leads to contradiction and explain Russell's Paradox.",
+      "provider": "claude_opus",
+      "expected": "Contradiction - R in R if and only if R not in R",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": true,
+      "error_type": "LOGIC_ERROR",
+      "why_extreme": "Self-referential paradox, requires careful logical analysis",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Azure OpenAI logic refinement failed: name 'logic_function_schema' is not defined",
+        "attempts": 2,
+        "latency_ms": 730.8850288391113
+      },
+      "timestamp": "2025-11-29T10:13:00.038869"
+    },
+    {
+      "test_id": "division_ambiguity_extreme",
+      "type": "math",
+      "difficulty": "EXTREME",
+      "query": "Calculate: 8 / 2(2+2). Show your work. Is the answer 16 or 1? Which convention are you using?",
+      "provider": "anthropic",
+      "expected": "Ambiguous - depends on convention",
+      "llm_answer": 16.0,
+      "qwed_status": "VERIFIED",
+      "caught_error": false,
+      "error_type": null,
+      "why_extreme": "Classic viral math problem, LLMs pick a side without acknowledging ambiguity",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 16.0,
+        "user_query": "Calculate: 8 / 2(2+2). Show your work. Is the answer 16 or 1? Which convention are you using?",
+        "translation": {
+          "expression": "8 / 2 * (2 + 2)",
+          "claimed_answer": 16.0,
+          "reasoning": "This is a famous ambiguous expression. Following standard order of operations (PEMDAS/BODMAS) with left-to-right evaluation for operations of equal precedence:\n1. First, evaluate parentheses: (2+2) = 4\n2. Then we have: 8 / 2 * 4\n3. Division and multiplication have equal precedence, so evaluate left-to-right: 8 / 2 = 4\n4. Then: 4 * 4 = 16\n\nI&#x27;m using the modern convention where implicit multiplication (juxtaposition like &quot;2(4)&quot;) has the same precedence as explicit multiplication, and division/multiplication are evaluated left-to-right. This gives 16.\n\nThe alternative interpretation treats &quot;2(2+2)&quot; as a single term with higher precedence, which would give: 8 / [2(2+2)] = 8 / [2*4] = 8 / 8 = 1.\n\nMost modern calculators and programming languages (including Python) follow the left-to-right convention, yielding 16.",
+          "confidence": 0.95
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 16.0,
+          "claimed_value": 16.0,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "anthropic",
+        "latency_ms": 7259.436130523682
+      },
+      "timestamp": "2025-11-29T10:13:07.410835"
+    },
+    {
+      "test_id": "percentage_chain_extreme",
+      "type": "math",
+      "difficulty": "EXTREME",
+      "query": "A stock increases by 50%, then decreases by 50%, then increases by 50%, then decreases by 50%. What's the final value if it started at $100? Show step-by-step.",
+      "provider": "claude_opus",
+      "expected": 56.25,
+      "llm_answer": 56.25,
+      "qwed_status": "CORRECTION_NEEDED",
+      "caught_error": false,
+      "error_type": null,
+      "why_extreme": "Chain of percentage changes, LLMs make arithmetic errors",
+      "full_response": {
+        "status": "CORRECTION_NEEDED",
+        "final_answer": 56.25,
+        "user_query": "A stock increases by 50%, then decreases by 50%, then increases by 50%, then decreases by 50%. What&#x27;s the final value if it started at $100? Show step-by-step.",
+        "translation": {
+          "expression": "100 * 1.5 * 0.5 * 1.5 * 0.5",
+          "claimed_answer": 28.125,
+          "reasoning": "Start with $100. First increase by 50%: 100 * 1.5 = 150. Then decrease by 50%: 150 * 0.5 = 75. Then increase by 50%: 75 * 1.5 = 112.5. Then decrease by 50%: 112.5 * 0.5 = 56.25. Alternatively, multiply all factors: 100 * 1.5 * 0.5 * 1.5 * 0.5 = 28.125.",
+          "confidence": 1.0
+        },
+        "verification": {
+          "is_correct": false,
+          "calculated_value": 56.25,
+          "claimed_value": 28.125,
+          "diff": 28.125,
+          "status": "CORRECTION_NEEDED"
+        },
+        "provider_used": "claude_opus",
+        "latency_ms": 1188.9915466308594
+      },
+      "timestamp": "2025-11-29T10:13:08.776583"
+    },
+    {
+      "test_id": "compound_interest_trap",
+      "type": "math",
+      "difficulty": "EXTREME",
+      "query": "You invest $1000 at 100% annual interest compounded continuously. After 1 year, how much do you have? (Hint: use e^r formula)",
+      "provider": "anthropic",
+      "expected": 2718.28,
+      "llm_answer": 2718.281828459045,
+      "qwed_status": "VERIFIED",
+      "caught_error": false,
+      "error_type": null,
+      "why_extreme": "Continuous compounding vs simple compounding confusion",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 2718.281828459045,
+        "user_query": "You invest $1000 at 100% annual interest compounded continuously. After 1 year, how much do you have? (Hint: use e^r formula)",
+        "translation": {
+          "expression": "1000 * 2.718281828459045**1",
+          "claimed_answer": 2718.281828459045,
+          "reasoning": "For continuous compounding, the formula is A = P * e^(rt), where P is principal ($1000), r is the interest rate (100% = 1.0), and t is time (1 year). So we calculate: 1000 * e^(1*1) = 1000 * e^1 = 1000 * 2.718281828459045",
+          "confidence": 1.0
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 2718.281828459045,
+          "claimed_value": 2718.281828459045,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "anthropic",
+        "latency_ms": 4837.018966674805
+      },
+      "timestamp": "2025-11-29T10:13:13.745696"
+    },
+    {
+      "test_id": "graph_isomorphism",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "Are these graphs isomorphic? Graph 1: edges (1-2, 2-3, 3-4, 4-1, 1-3). Graph 2: edges (A-B, B-C, C-D, D-E, E-A, B-D). Prove your answer.",
+      "provider": "claude_opus",
+      "expected": "Non-isomorphic - different structure",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": true,
+      "error_type": "LOGIC_ERROR",
+      "why_extreme": "Graph isomorphism is difficult, requires systematic checking",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Azure OpenAI logic refinement failed: name 'logic_function_schema' is not defined",
+        "attempts": 2,
+        "latency_ms": 4366.252422332764
+      },
+      "timestamp": "2025-11-29T10:13:18.220477"
+    },
+    {
+      "test_id": "hamiltonian_path",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "Does this graph have a Hamiltonian path? 6 nodes: edges (1-2, 2-3, 3-4, 4-5, 5-6, 6-1, 1-4, 2-5, 3-6). If yes, provide the path. If no, prove why not.",
+      "provider": "anthropic",
+      "expected": "Has Hamiltonian cycle",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": true,
+      "error_type": "LOGIC_ERROR",
+      "why_extreme": "NP-complete problem, LLMs use faulty heuristics",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Anthropic logic refinement failed: 1 validation error for LogicVerificationTask\nconstraints\n  Field required [type=missing, input_value={'variables': {'p0': 'Int...4': 'Int', 'p5': 'Int'}}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing",
+        "attempts": 2,
+        "latency_ms": 21163.77854347229
+      },
+      "timestamp": "2025-11-29T10:13:39.503815"
+    },
+    {
+      "test_id": "halting_problem_variant",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "Can you write a program H that takes any program P and input I, and determines if P halts on I? Explain why or why not using proof by contradiction.",
+      "provider": "claude_opus",
+      "expected": "NO - Halting Problem is undecidable",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": true,
+      "error_type": "LOGIC_ERROR",
+      "why_extreme": "Requires understanding of computability theory",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Azure OpenAI logic refinement failed: name 'logic_function_schema' is not defined",
+        "attempts": 2,
+        "latency_ms": 2157.9813957214355
+      },
+      "timestamp": "2025-11-29T10:13:41.789764"
+    },
+    {
+      "test_id": "self_reference_liar",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "This sentence is false. Is that sentence true or false? Explain the logical paradox and how formal logic handles it.",
+      "provider": "anthropic",
+      "expected": "Paradox - neither true nor false in classical logic",
+      "llm_answer": null,
+      "qwed_status": "UNSAT",
+      "caught_error": true,
+      "error_type": "LOGIC_UNSAT",
+      "why_extreme": "Liar paradox, tests understanding of self-reference",
+      "full_response": {
+        "status": "UNSAT",
+        "model": null,
+        "translation": {
+          "variables": {
+            "S": "Bool"
+          },
+          "constraints": [
+            "S == Not(S)"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "anthropic",
+        "attempts": 2,
+        "latency_ms": 6241.5931224823
+      },
+      "timestamp": "2025-11-29T10:13:48.145877"
+    },
+    {
+      "test_id": "base_rate_fallacy",
+      "type": "math",
+      "difficulty": "EXTREME",
+      "query": "A test for a disease is 99% accurate (both sensitivity and specificity). Disease affects 0.1% of population. You test positive. What's the probability you have the disease? Show Bayes' theorem calculation.",
+      "provider": "claude_opus",
+      "expected": 0.09,
+      "llm_answer": 0.09016393442622951,
+      "qwed_status": "VERIFIED",
+      "caught_error": false,
+      "error_type": null,
+      "why_extreme": "Base rate neglect - most people (and LLMs) say 99%",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 0.09016393442622951,
+        "user_query": "A test for a disease is 99% accurate (both sensitivity and specificity). Disease affects 0.1% of population. You test positive. What&#x27;s the probability you have the disease? Show Bayes&#x27; theorem calculation.",
+        "translation": {
+          "expression": "(0.99 * 0.001) / ((0.99 * 0.001) + (0.01 * 0.999))",
+          "claimed_answer": 0.09016393442622951,
+          "reasoning": "Using Bayes&#x27; theorem: P(Disease|Positive) = [P(Positive|Disease) * P(Disease)] / [P(Positive|Disease) * P(Disease) + P(Positive|No Disease) * P(No Disease)]. Sensitivity and specificity are both 99%, so P(Positive|Disease) = 0.99, P(Positive|No Disease) = 1 - specificity = 0.01. Prevalence is 0.1% = 0.001. Plugging in values: (0.99*0.001)/((0.99*0.001)+(0.01*0.999)) = 0.09016.",
+          "confidence": 1.0
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 0.09016393442622951,
+          "claimed_value": 0.09016393442622951,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "claude_opus",
+        "latency_ms": 1676.2464046478271
+      },
+      "timestamp": "2025-11-29T10:13:49.920569"
+    },
+    {
+      "test_id": "bertrand_box_paradox",
+      "type": "math",
+      "difficulty": "EXTREME",
+      "query": "3 boxes: GG (2 gold coins), SS (2 silver), GS (1 gold, 1 silver). Pick random box, draw random coin - it's gold. What's probability the other coin is gold? Explain reasoning.",
+      "provider": "anthropic",
+      "expected": 0.667,
+      "llm_answer": 0.6666666666666666,
+      "qwed_status": "VERIFIED",
+      "caught_error": false,
+      "error_type": null,
+      "why_extreme": "Conditional probability trap, most get 1/2",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 0.6666666666666666,
+        "user_query": "3 boxes: GG (2 gold coins), SS (2 silver), GS (1 gold, 1 silver). Pick random box, draw random coin - it&#x27;s gold. What&#x27;s probability the other coin is gold? Explain reasoning.",
+        "translation": {
+          "expression": "2/3",
+          "claimed_answer": 0.6666666666666666,
+          "reasoning": "This is a classic Bayesian probability problem. We need to find P(other coin is gold | we drew a gold coin).\n\nInitial setup:\n- Box GG: 2 gold coins\n- Box SS: 2 silver coins  \n- Box GS: 1 gold, 1 silver\n\nWe drew a gold coin, so we know we didn&#x27;t pick box SS.\n\nUsing Bayes&#x27; theorem, we need to consider all ways to draw a gold coin:\n1. Pick box GG, draw first gold coin (probability: 1/3 \u00d7 1/2 = 1/6)\n2. Pick box GG, draw second gold coin (probability: 1/3 \u00d7 1/2 = 1/6)\n3. Pick box GS, draw the gold coin (probability: 1/3 \u00d7 1/2 = 1/6)\n\nTotal probability of drawing gold = 1/6 + 1/6 + 1/6 = 3/6 = 1/2\n\nOf these three equally likely scenarios where we drew gold:\n- In scenarios 1 and 2 (from box GG), the other coin is gold\n- In scenario 3 (from box GS), the other coin is silver\n\nTherefore, P(other coin is gold | drew gold) = 2/3\n\nThe answer is 2/3 or approximately 0.667",
+          "confidence": 1.0
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 0.6666666666666666,
+          "claimed_value": 0.6666666666666666,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "anthropic",
+        "latency_ms": 7868.369817733765
+      },
+      "timestamp": "2025-11-29T10:13:57.852215"
+    },
+    {
+      "test_id": "derangement_problem",
+      "type": "math",
+      "difficulty": "EXTREME",
+      "query": "5 people check hats, get random hat back. What's probability NO ONE gets their own hat? Use inclusion-exclusion or derangement formula.",
+      "provider": "claude_opus",
+      "expected": 0.3667,
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": false,
+      "error_type": null,
+      "why_extreme": "Derangement formula, LLMs struggle with combinatorics",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Expression contains unsafe characters: 1 - 1/1! + 1/2! - 1/3! + 1/4! - 1/5!",
+        "latency_ms": 1331.33864402771
+      },
+      "timestamp": "2025-11-29T10:13:59.295718"
+    },
+    {
+      "test_id": "pigeonhole_extreme",
+      "type": "math",
+      "difficulty": "EXTREME",
+      "query": "Prove: In any group of 13 people, at least 2 were born in the same month. Now prove: In any group of 367 people, at least 2 have the same birthday (including leap years). Use pigeonhole principle.",
+      "provider": "anthropic",
+      "expected": "Both provable via pigeonhole",
+      "llm_answer": 1.0833333333333333,
+      "qwed_status": "VERIFIED",
+      "caught_error": false,
+      "error_type": null,
+      "why_extreme": "Requires formal proof construction",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 1.0833333333333333,
+        "user_query": "Prove: In any group of 13 people, at least 2 were born in the same month. Now prove: In any group of 367 people, at least 2 have the same birthday (including leap years). Use pigeonhole principle.",
+        "translation": {
+          "expression": "13 / 12",
+          "claimed_answer": 1.0833333333333333,
+          "reasoning": "For the first proof using the Pigeonhole Principle: We have 13 people (pigeons) and 12 months (pigeonholes). Since 13/12 = 1.083... &gt; 1, by the pigeonhole principle, at least one month must contain at least 2 people. This proves that in any group of 13 people, at least 2 were born in the same month.",
+          "confidence": 1.0
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 1.0833333333333333,
+          "claimed_value": 1.0833333333333333,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "anthropic",
+        "latency_ms": 6571.433544158936
+      },
+      "timestamp": "2025-11-29T10:14:06.019969"
+    },
+    {
+      "test_id": "fermats_last_theorem_special",
+      "type": "math",
+      "difficulty": "EXTREME",
+      "query": "Find positive integers x, y, z such that x^3 + y^3 = z^3. Show your work.",
+      "provider": "claude_opus",
+      "expected": "IMPOSSIBLE - Fermat's Last Theorem",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": false,
+      "error_type": null,
+      "why_extreme": "Tests if LLM knows this is impossible (proven by Wiles)",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Azure OpenAI translation failed: 1 validation error for MathVerificationTask\nclaimed_answer\n  Input should be a valid number [type=float_type, input_value=None, input_type=NoneType]\n    For further information visit https://errors.pydantic.dev/2.12/v/float_type",
+        "latency_ms": 1140.9928798675537
+      },
+      "timestamp": "2025-11-29T10:14:07.285162"
+    },
+    {
+      "test_id": "prime_gap_trap",
+      "type": "math",
+      "difficulty": "EXTREME",
+      "query": "Are there infinitely many twin primes (primes that differ by 2, like 11 and 13)? Prove or disprove.",
+      "provider": "anthropic",
+      "expected": "UNKNOWN - unsolved problem",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": false,
+      "error_type": null,
+      "why_extreme": "This is an OPEN PROBLEM - LLMs may confidently claim to prove it",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Expression contains unsafe characters: <UNKNOWN>",
+        "latency_ms": 7073.997497558594
+      },
+      "timestamp": "2025-11-29T10:14:14.484162"
+    },
+    {
+      "test_id": "prisoners_dilemma_iterated",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "In iterated prisoner's dilemma (100 rounds), what's the optimal strategy against a Tit-for-Tat player? Prove your answer with game theory.",
+      "provider": "claude_opus",
+      "expected": "Cooperate always (Tit-for-Tat mirrors)",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": true,
+      "error_type": "LOGIC_ERROR",
+      "why_extreme": "Requires understanding of Nash equilibrium in repeated games",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Azure OpenAI logic refinement failed: name 'logic_function_schema' is not defined",
+        "attempts": 2,
+        "latency_ms": 2514.308214187622
+      },
+      "timestamp": "2025-11-29T10:14:17.128405"
+    },
+    {
+      "test_id": "nim_game_variant",
+      "type": "logic",
+      "difficulty": "EXTREME",
+      "query": "Nim game: 3 piles with (5, 7, 9) objects. Players alternate removing any number from ONE pile. Last to move wins. Who wins with optimal play: first or second player? Prove using Nim-sum.",
+      "provider": "anthropic",
+      "expected": "First player wins (Nim-sum != 0)",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": true,
+      "error_type": "LOGIC_ERROR",
+      "why_extreme": "Requires Nim strategy knowledge (XOR trick)",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Failed after all retry attempts",
+        "last_error": "Invalid constraint 'nim_sum == pile1 ^ pile2 ^ pile3': Safe evaluation failed for 'nim_sum == pile1 ^ pile2 ^ pile3': unsupported operand type(s) for ^: 'ArithRef' and 'ArithRef'",
+        "attempts": 2,
+        "latency_ms": 8667.065143585205
+      },
+      "timestamp": "2025-11-29T10:14:25.919811"
+    },
+    {
+      "test_id": "zero_to_zero_power",
+      "type": "math",
+      "difficulty": "EXTREME",
+      "query": "What is 0^0? Is it 0, 1, undefined, or indeterminate? Justify your answer with mathematical reasoning from different contexts (set theory, calculus limits, combinatorics).",
+      "provider": "claude_opus",
+      "expected": "Context-dependent (usually 1 in combinatorics, indeterminate in analysis)",
+      "llm_answer": 1.0,
+      "qwed_status": "VERIFIED",
+      "caught_error": false,
+      "error_type": null,
+      "why_extreme": "LLMs often give confident wrong answer",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 1.0,
+        "user_query": "What is 0^0? Is it 0, 1, undefined, or indeterminate? Justify your answer with mathematical reasoning from different contexts (set theory, calculus limits, combinatorics).",
+        "translation": {
+          "expression": "0**0",
+          "claimed_answer": 1.0,
+          "reasoning": "In combinatorics, 0^0 is defined as 1 because there is exactly one function from the empty set to the empty set. In set theory, the number of functions from a set of size 0 to another set of size 0 is 1, so 0^0 = 1. In calculus, the limit of x^y as x and y approach 0 can be indeterminate depending on the path, but for discrete mathematics and most programming languages, 0^0 is defined as 1.",
+          "confidence": 0.95
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 1.0,
+          "claimed_value": 1.0,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "claude_opus",
+        "latency_ms": 1832.636833190918
+      },
+      "timestamp": "2025-11-29T10:14:27.871903"
+    },
+    {
+      "test_id": "infinity_arithmetic",
+      "type": "math",
+      "difficulty": "EXTREME",
+      "query": "Calculate: infinity - infinity. Is it 0, infinity, -infinity, or undefined? Explain using limit analysis.",
+      "provider": "anthropic",
+      "expected": "INDETERMINATE FORM - depends on context",
+      "llm_answer": null,
+      "qwed_status": "ERROR",
+      "caught_error": false,
+      "error_type": null,
+      "why_extreme": "LLMs treat infinity like a number",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Expression contains unsafe characters: float('nan')",
+        "latency_ms": 7081.827402114868
+      },
+      "timestamp": "2025-11-29T10:14:35.095736"
+    },
+    {
+      "test_id": "lily_pad_exponential",
+      "type": "math",
+      "difficulty": "EXTREME",
+      "query": "A lily pad patch doubles in size every day. It takes 48 days to cover the entire pond. On which day was the pond half covered?",
+      "provider": "claude_opus",
+      "expected": 47,
+      "llm_answer": 47.0,
+      "qwed_status": "VERIFIED",
+      "caught_error": false,
+      "error_type": null,
+      "why_extreme": "Exponential growth intuition trap",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 47.0,
+        "user_query": "A lily pad patch doubles in size every day. It takes 48 days to cover the entire pond. On which day was the pond half covered?",
+        "translation": {
+          "expression": "48 - 1",
+          "claimed_answer": 47.0,
+          "reasoning": "Since the patch doubles in size each day, the pond was half covered the day before it was fully covered. So, 48 - 1 = 47.",
+          "confidence": 1.0
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 47.0,
+          "claimed_value": 47.0,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "claude_opus",
+        "latency_ms": 860.8100414276123
+      },
+      "timestamp": "2025-11-29T10:14:36.145814"
+    },
+    {
+      "test_id": "rope_around_earth",
+      "type": "math",
+      "difficulty": "EXTREME",
+      "query": "Earth's circumference is ~40,000 km. A rope fits snugly around the equator. We add 1 meter to the rope's length. If we lift the rope evenly, how high above ground does it float? (Assume Earth is a perfect sphere)",
+      "provider": "anthropic",
+      "expected": 0.159,
+      "llm_answer": 0.15915494307409972,
+      "qwed_status": "VERIFIED",
+      "caught_error": false,
+      "error_type": null,
+      "why_extreme": "Counter-intuitive geometry, most guess millimeters",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 0.15915494307409972,
+        "user_query": "Earth&#x27;s circumference is ~40,000 km. A rope fits snugly around the equator. We add 1 meter to the rope&#x27;s length. If we lift the rope evenly, how high above ground does it float? (Assume Earth is a perfect sphere)",
+        "translation": {
+          "expression": "(40000000 + 1) / (2 * 3.141592653589793) - 40000000 / (2 * 3.141592653589793)",
+          "claimed_answer": 0.15915494309189535,
+          "reasoning": "The original rope fits snugly around Earth&#x27;s equator with circumference C\u2081 = 40,000 km = 40,000,000 meters. Using C = 2\u03c0r, the original radius is r\u2081 = C\u2081/(2\u03c0). After adding 1 meter, the new circumference is C\u2082 = 40,000,001 meters, giving new radius r\u2082 = C\u2082/(2\u03c0). The height the rope floats above ground is the difference in radii: h = r\u2082 - r\u2081 = (C\u2082 - C\u2081)/(2\u03c0) = 1/(2\u03c0) \u2248 0.159 meters or about 15.9 cm.",
+          "confidence": 1.0
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 0.15915494307409972,
+          "claimed_value": 0.15915494309189535,
+          "diff": 1.7795626083838556e-11,
+          "status": "VERIFIED"
+        },
+        "provider_used": "anthropic",
+        "latency_ms": 6181.780576705933
+      },
+      "timestamp": "2025-11-29T10:14:42.446127"
+    }
+  ],
+  "timestamp": "2025-11-29T10:14:42.456444"
+}

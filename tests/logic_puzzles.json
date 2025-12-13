@@ -1,0 +1,32 @@
+[
+    {
+        "id": "logic_1",
+        "category": "Scheduling",
+        "query": "Schedule 3 meetings (A, B, C) of 1 hour each between 9am (9) and 12pm (12). A must be before B. B must be before C. Meetings cannot overlap.",
+        "expected_status": "SAT"
+    },
+    {
+        "id": "logic_2",
+        "category": "Map Coloring",
+        "query": "Color 3 regions (R1, R2, R3) with 2 colors (1, 2). R1 touches R2. R2 touches R3. R1 touches R3. Adjacent regions cannot have the same color.",
+        "expected_status": "UNSAT"
+    },
+    {
+        "id": "logic_3",
+        "category": "Knapsack-like",
+        "query": "I have items with weights: w1=10, w2=20, w3=30. I can carry max 40. Must pick at least 2 items. Which ones?",
+        "expected_status": "SAT"
+    },
+    {
+        "id": "logic_4",
+        "category": "Zebra-lite",
+        "query": "There are 3 houses (1, 2, 3). Englishman lives in red house. Spaniard owns the dog. Coffee is drunk in the green house. Green house is immediately to the right of ivory house. Who drinks water?",
+        "expected_status": "SAT"
+    },
+    {
+        "id": "logic_5",
+        "category": "Boolean Logic",
+        "query": "Find boolean values for P, Q, R such that (P OR Q) is True, (Q AND R) is False, and (P IMPLIES R) is True.",
+        "expected_status": "SAT"
+    }
+]

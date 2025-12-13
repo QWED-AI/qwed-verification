@@ -1,0 +1,101 @@
+# Configuration for QWED Advanced Testing
+
+api:
+  url: "http://13.71.22.94:8000"
+  key: "qwed_live_VJO2vWhLgZnuXwIePn_s5o2-MTFncN2KJZJAf2jiuOI"
+  timeout: 30
+  max_retries: 3
+
+test_priorities:
+  critical:
+    # Code Engine
+    - context_aware_detection
+    - sql_injection
+    - rce_detection
+    - dynamic_import
+    - reflection_execution
+    
+    # Stats Engine
+    - dataframe_eval_injection
+    - exec_in_stats
+    
+    # SQL Engine
+    - union_injection
+    - blind_injection
+    - nosql_injection
+    
+    # Fact Engine
+    - knowledge_cutoff
+    - contradictions
+    
+  high:
+    # Code Engine
+    - crypto_misuse
+    - weak_hashing
+    
+    # Math Engine
+    - ambiguity_detection
+    - domain_restrictions
+    
+    # Logic Engine
+    - schema_validation
+    - quantifier_handling
+    
+    # Stats Engine
+    - statistical_correctness
+    - large_dataset_performance
+    
+    # SQL Engine
+    - schema_validation
+    - query_complexity
+    
+    # Fact Engine
+    - hallucination_detection
+    - source_validation
+    
+    # Image Engine
+    - ocr_accuracy
+    - claim_image_alignment
+    
+  medium:
+    - performance_tests
+    - edge_cases
+    - integration_tests
+
+performance:
+  max_concurrent_requests: 100
+  max_file_size_lines: 10000
+  timeout_threshold_seconds: 30
+  large_dataset_rows: 1000000
+
+reporting:
+  output_dir: "./test_results"
+  formats: 
+    - json
+    - markdown
+    - html
+  save_failed_tests: true
+  save_detailed_logs: true
+
+engines:
+  code:
+    enabled: true
+    test_count: 50
+  math:
+    enabled: true
+    test_count: 45
+  logic:
+    enabled: true
+    test_count: 40
+  stats:
+    enabled: true
+    test_count: 35
+  sql:
+    enabled: true
+    test_count: 40
+  fact:
+    enabled: true
+    test_count: 30
+  image:
+    enabled: true
+    test_count: 25

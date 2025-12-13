@@ -1,0 +1,30 @@
+{
+    "name": "@qwed/sdk",
+    "version": "0.1.0",
+    "description": "Official JavaScript Client for QWED Verification Engine",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "tsc",
+        "test": "jest"
+    },
+    "keywords": [
+        "qwed",
+        "verification",
+        "ai",
+        "llm",
+        "hallucination"
+    ],
+    "author": "QWED Team",
+    "license": "MIT",
+    "dependencies": {
+        "axios": "^1.6.0"
+    },
+    "devDependencies": {
+        "typescript": "^5.0.0",
+        "@types/node": "^20.0.0",
+        "jest": "^29.0.0",
+        "ts-jest": "^29.0.0",
+        "@types/jest": "^29.0.0"
+    }
+}

@@ -1,0 +1,34 @@
+================================================================================
+TESTING CLAUDE SONNET 4.5 & OPUS 4.5 WITH ADVERSARIAL PROBLEMS
+================================================================================
+
+I built a formal verification system to test top-tier LLMs.
+
+TEST SUITE:
+  - MEDIUM-HARD: 32 tests
+  - EXTREME: 0 tests
+  - TOTAL: 32 adversarial problems
+
+TESTED AREAS:
+  - Logic puzzles (Knights & Knaves, Tower of Hanoi)
+  - Probability paradoxes (Monty Hall variants, Bayesian reasoning)
+  - Nested quantifiers and multi-step proofs
+  - Graph theory (isomorphism, Hamiltonian paths)
+  - Number theory and combinatorics
+  - Complex arithmetic and constraint satisfaction
+
+RESULTS:
+  Issues detected across difficulty levels
+  EXTREME tests caught: 0 errors
+
+KEY INSIGHT:
+  Even state-of-the-art LLMs need formal verification for:
+  - Enterprise deployment
+  - Mission-critical systems
+  - Compliance & auditability
+  - Trust & reliability
+
+This isn't about LLMs being 'bad' - it's about building reliable AI systems.
+
+- Rahul, AI Verification Researcher
+================================================================================

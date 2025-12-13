@@ -1,0 +1,122 @@
+{
+  "timestamp": "2025-11-30T18:04:25.960862",
+  "total_tests": 6,
+  "passed": 0,
+  "failed": 6,
+  "results": [
+    {
+      "id": "legal_bns_cheating",
+      "query": "I have been accused of cheating and dishonestly inducing delivery of property. Under the new Bharatiya Nyaya Sanhita (BNS), which section applies?",
+      "expected": [
+        "Section 318",
+        "318(4)"
+      ],
+      "forbidden": [
+        "Section 420"
+      ],
+      "ai_answer": " ",
+      "passed": false,
+      "missing": [
+        "Section 318",
+        "318(4)"
+      ],
+      "found_forbidden": []
+    },
+    {
+      "id": "legal_bns_murder",
+      "query": "What is the punishment for murder under the Bharatiya Nyaya Sanhita (BNS)? Cite the specific section.",
+      "expected": [
+        "Section 103"
+      ],
+      "forbidden": [
+        "Section 302"
+      ],
+      "ai_answer": " ",
+      "passed": false,
+      "missing": [
+        "Section 103"
+      ],
+      "found_forbidden": []
+    },
+    {
+      "id": "legal_bns_sedition",
+      "query": "Does the Bharatiya Nyaya Sanhita (BNS) have a section specifically titled 'Sedition' like IPC 124A?",
+      "expected": [
+        "No",
+        "removed",
+        "Section 152",
+        "sovereignty"
+      ],
+      "forbidden": [
+        "Yes",
+        "Section 124A is retained"
+      ],
+      "ai_answer": " ",
+      "passed": false,
+      "missing": [
+        "No",
+        "removed",
+        "Section 152",
+        "sovereignty"
+      ],
+      "found_forbidden": []
+    },
+    {
+      "id": "legal_fake_section",
+      "query": "Explain the provisions of Section 500 of the Bharatiya Nyaya Sanhita (BNS).",
+      "expected": [
+        "does not exist",
+        "invalid",
+        "no such section"
+      ],
+      "forbidden": [
+        "defamation",
+        "punishment"
+      ],
+      "ai_answer": " ",
+      "passed": false,
+      "missing": [
+        "does not exist",
+        "invalid",
+        "no such section"
+      ],
+      "found_forbidden": []
+    },
+    {
+      "id": "legal_time_trap",
+      "query": "A crime was committed on June 30, 2024. Which law applies to the investigation - IPC or BNS?",
+      "expected": [
+        "IPC",
+        "Indian Penal Code"
+      ],
+      "forbidden": [
+        "BNS",
+        "Bharatiya Nyaya Sanhita"
+      ],
+      "ai_answer": " ",
+      "passed": false,
+      "missing": [
+        "IPC",
+        "Indian Penal Code"
+      ],
+      "found_forbidden": []
+    },
+    {
+      "id": "legal_source_citation",
+      "query": "Which section of BNS covers cheating? Cite the official source act year.",
+      "expected": [
+        "2023"
+      ],
+      "forbidden": [
+        "2022",
+        "2024"
+      ],
+      "ai_answer": " ",
+      "passed": false,
+      "missing": [
+        "2023"
+      ],
+      "found_forbidden": []
+    }
+  ]
+}

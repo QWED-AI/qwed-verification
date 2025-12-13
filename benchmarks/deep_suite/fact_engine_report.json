@@ -1,0 +1,157 @@
+{
+  "test_type": "FACT_ENGINE_VERIFICATION",
+  "summary": {
+    "total_tests": 12,
+    "tests_passed": 11,
+    "tests_failed": 1,
+    "accuracy": "91.7%"
+  },
+  "failed_tests": [
+    {
+      "test_id": "fact_inference_01",
+      "claim": "The company is profitable",
+      "expected_verdict": "NOT_ENOUGH_INFO",
+      "actual_verdict": "SUPPORTED",
+      "test_passed": false,
+      "reasoning": "Profitability is determined by whether revenue exceeds expenses. Here, the company's revenue is $100M and expenses are $80M, indicating a profit of $20M.",
+      "why_test": "Should not infer profit from revenue-expenses (could have debt, etc.)",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:15.233173"
+    }
+  ],
+  "all_results": [
+    {
+      "test_id": "fact_supported_01",
+      "claim": "The company's revenue increased by 25% in Q3",
+      "expected_verdict": "SUPPORTED",
+      "actual_verdict": "SUPPORTED",
+      "test_passed": true,
+      "reasoning": "The claim states that \"The company's revenue increased by 25% in Q3\". The context directly confirms this by stating \"Revenue grew from $40M in Q2 to $50M in Q3, representing a 25% increase.\" This is an exact match - the context explicitly mentions a 25% increase in Q3 revenue.",
+      "why_test": "Direct factual match",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:37:40.050024"
+    },
+    {
+      "test_id": "fact_supported_02",
+      "claim": "The policy covers water damage",
+      "expected_verdict": "SUPPORTED",
+      "actual_verdict": "SUPPORTED",
+      "test_passed": true,
+      "reasoning": "The context explicitly states that the policy provides coverage for damages caused by water, which directly supports the claim.",
+      "why_test": "Explicit statement in context",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:37:41.688782"
+    },
+    {
+      "test_id": "fact_refuted_01",
+      "claim": "The product launch was successful",
+      "expected_verdict": "REFUTED",
+      "actual_verdict": "REFUTED",
+      "test_passed": true,
+      "reasoning": "The claim states that \"The product launch was successful\" but the context directly contradicts this. The context explicitly states \"The launch failed to meet targets, with only 1,000 units sold versus the 10,000 unit goal.\" This indicates the launch was unsuccessful, as it only achieved 10% of its sales target (1,000 out of 10,000 units). The use of the word \"failed\" in the context directly refutes the characterization of the launch as \"successful.\"",
+      "why_test": "Context contradicts claim",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:37:47.219767"
+    },
+    {
+      "test_id": "fact_refuted_02",
+      "claim": "All employees received a bonus",
+      "expected_verdict": "REFUTED",
+      "actual_verdict": "REFUTED",
+      "test_passed": true,
+      "reasoning": "The context states that only senior management received bonuses, which contradicts the claim that all employees received a bonus.",
+      "why_test": "Partial truth should be refuted",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:37:48.306606"
+    },
+    {
+      "test_id": "fact_neutral_01",
+      "claim": "The CEO resigned in 2023",
+      "expected_verdict": "NOT_ENOUGH_INFO",
+      "actual_verdict": "NOT_ENOUGH_INFO",
+      "test_passed": true,
+      "reasoning": "The claim states that \"The CEO resigned in 2023.\" However, the provided context only contains information about company news from 2024, specifically mentioning \"a new product line and expanded to 3 new markets.\" There is no information in the context about the CEO, any resignation, or any events from 2023. Since the context does not address the claim at all, there is insufficient information to verify or refute it.",
+      "why_test": "Context doesn't mention CEO",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:37:53.916816"
+    },
+    {
+      "test_id": "fact_subtle_01",
+      "claim": "Sales increased every month in Q1",
+      "expected_verdict": "REFUTED",
+      "actual_verdict": "REFUTED",
+      "test_passed": true,
+      "reasoning": "The claim states that sales increased every month in Q1. However, while sales increased from January ($10M) to February ($12M), they decreased from February ($12M) to March ($11M). Therefore, the claim is contradicted by the data.",
+      "why_test": "March decreased from February - LLMs miss this",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:37:55.319396"
+    },
+    {
+      "test_id": "fact_subtle_02",
+      "claim": "The majority of customers are satisfied",
+      "expected_verdict": "REFUTED",
+      "actual_verdict": "REFUTED",
+      "test_passed": true,
+      "reasoning": "The claim states that \"the majority of customers are satisfied.\" A majority means more than 50%. According to the context, \"45% satisfied, 30% neutral, 25% dissatisfied.\" Since 45% is less than 50%, the majority of customers are NOT satisfied. Therefore, the claim is refuted by the context.",
+      "why_test": "45% is not majority - LLMs confuse plurality with majority",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:00.606138"
+    },
+    {
+      "test_id": "fact_subtle_03",
+      "claim": "Revenue doubled in 2024",
+      "expected_verdict": "REFUTED",
+      "actual_verdict": "REFUTED",
+      "test_passed": true,
+      "reasoning": "Doubling revenue would require a 100% increase, but the context states that revenue increased by 90%, from $50M to $95M, which is not a doubling.",
+      "why_test": "90% \u2260 100% (doubled) - LLMs round up",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:02.031080"
+    },
+    {
+      "test_id": "fact_precision_01",
+      "claim": "The interest rate is 5%",
+      "expected_verdict": "REFUTED",
+      "actual_verdict": "REFUTED",
+      "test_passed": true,
+      "reasoning": "The claim states that \"The interest rate is 5%\" but the context explicitly states \"The annual percentage rate (APR) is 4.95%\". The APR of 4.95% is not equal to 5%. While these numbers are close, they are not the same, and in financial contexts, precision matters. The claim is therefore refuted by the context.",
+      "why_test": "4.95% \u2260 5% exactly",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:07.380436"
+    },
+    {
+      "test_id": "fact_precision_02",
+      "claim": "Approximately 1000 people attended",
+      "expected_verdict": "SUPPORTED",
+      "actual_verdict": "SUPPORTED",
+      "test_passed": true,
+      "reasoning": "The claim states that approximately 1000 people attended, and the context reports a total attendance of 987 people. Since 987 is very close to 1000, the claim is reasonably supported by the context.",
+      "why_test": "'Approximately' should allow 987 \u2248 1000",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:08.716417"
+    },
+    {
+      "test_id": "fact_temporal_01",
+      "claim": "The project was completed before the deadline",
+      "expected_verdict": "REFUTED",
+      "actual_verdict": "REFUTED",
+      "test_passed": true,
+      "reasoning": "The claim states that \"The project was completed before the deadline.\" However, the context clearly shows that the deadline was December 31, 2024, and the project was completed on January 5, 2025. Since January 5, 2025 comes after December 31, 2024, the project was completed AFTER the deadline, not before it. This directly contradicts the claim.",
+      "why_test": "Jan 5 is after Dec 31",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:13.895806"
+    },
+    {
+      "test_id": "fact_inference_01",
+      "claim": "The company is profitable",
+      "expected_verdict": "NOT_ENOUGH_INFO",
+      "actual_verdict": "SUPPORTED",
+      "test_passed": false,
+      "reasoning": "Profitability is determined by whether revenue exceeds expenses. Here, the company's revenue is $100M and expenses are $80M, indicating a profit of $20M.",
+      "why_test": "Should not infer profit from revenue-expenses (could have debt, etc.)",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:15.233173"
+    }
+  ],
+  "timestamp": "2025-11-30T11:38:15.233173"
+}

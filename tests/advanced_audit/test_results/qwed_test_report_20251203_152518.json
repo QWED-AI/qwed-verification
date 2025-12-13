@@ -1,0 +1,204 @@
+{
+  "metadata": {
+    "report_type": "QWED_COMPREHENSIVE_AUDIT",
+    "generated_at": "2025-12-03T15:25:18.592880",
+    "version": "1.0"
+  },
+  "summary": {
+    "timestamp": "2025-12-03T15:25:18.592880",
+    "duration_seconds": 42.852856,
+    "total_tests": 6,
+    "passed": 0,
+    "failed": 6,
+    "pass_rate": 0.0,
+    "by_priority": {
+      "critical": {
+        "total": 4,
+        "passed": 0,
+        "pass_rate": 0.0
+      },
+      "high": {
+        "total": 2,
+        "passed": 0,
+        "pass_rate": 0.0
+      },
+      "medium": {
+        "total": 0,
+        "passed": 0,
+        "pass_rate": 0
+      }
+    },
+    "by_engine": {
+      "stats": {
+        "total": 6,
+        "passed": 0,
+        "pass_rate": 0.0
+      }
+    }
+  },
+  "results": [
+    {
+      "test_id": "STATS_IMP_001",
+      "test_name": "Detect os module in statistical code",
+      "engine": "stats",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "WARNING/CRITICAL - os.system detected",
+      "actual_result": {},
+      "error": "HTTP 500: Internal Server Error",
+      "latency_ms": 31.551837921142578,
+      "timestamp": "2025-12-03T15:24:42.853381"
+    },
+    {
+      "test_id": "STATS_IMP_002",
+      "test_name": "Detect subprocess in stats code",
+      "engine": "stats",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "CRITICAL - subprocess detected",
+      "actual_result": {},
+      "error": "HTTP 500: Internal Server Error",
+      "latency_ms": 24.92809295654297,
+      "timestamp": "2025-12-03T15:24:50.032623"
+    },
+    {
+      "test_id": "STATS_IMP_003",
+      "test_name": "Detect pickle.loads() RCE risk",
+      "engine": "stats",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "CRITICAL - pickle.loads with user input",
+      "actual_result": {},
+      "error": "HTTP 500: Internal Server Error",
+      "latency_ms": 26.715993881225586,
+      "timestamp": "2025-12-03T15:24:57.188626"
+    },
+    {
+      "test_id": "STATS_SEC_001",
+      "test_name": "Detect DataFrame.eval() injection risk",
+      "engine": "stats",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "CRITICAL - DataFrame.eval with user input",
+      "actual_result": {},
+      "error": "HTTP 500: Internal Server Error",
+      "latency_ms": 22.317171096801758,
+      "timestamp": "2025-12-03T15:25:04.331091"
+    },
+    {
+      "test_id": "STATS_SEC_002",
+      "test_name": "Detect exec() in analysis code",
+      "engine": "stats",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "CRITICAL - exec() detected",
+      "actual_result": {},
+      "error": "HTTP 500: Internal Server Error",
+      "latency_ms": 24.758338928222656,
+      "timestamp": "2025-12-03T15:25:11.460236"
+    },
+    {
+      "test_id": "STATS_SAFE_001",
+      "test_name": "Allow safe pandas operations",
+      "engine": "stats",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "SAFE - No security issues",
+      "actual_result": {},
+      "error": "HTTP 500: Internal Server Error",
+      "latency_ms": 32.004356384277344,
+      "timestamp": "2025-12-03T15:25:18.587807"
+    }
+  ],
+  "failures": [
+    {
+      "test_id": "STATS_IMP_001",
+      "test_name": "Detect os module in statistical code",
+      "engine": "stats",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "WARNING/CRITICAL - os.system detected",
+      "actual_result": {},
+      "error": "HTTP 500: Internal Server Error",
+      "latency_ms": 31.551837921142578,
+      "timestamp": "2025-12-03T15:24:42.853381"
+    },
+    {
+      "test_id": "STATS_IMP_002",
+      "test_name": "Detect subprocess in stats code",
+      "engine": "stats",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "CRITICAL - subprocess detected",
+      "actual_result": {},
+      "error": "HTTP 500: Internal Server Error",
+      "latency_ms": 24.92809295654297,
+      "timestamp": "2025-12-03T15:24:50.032623"
+    },
+    {
+      "test_id": "STATS_IMP_003",
+      "test_name": "Detect pickle.loads() RCE risk",
+      "engine": "stats",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "CRITICAL - pickle.loads with user input",
+      "actual_result": {},
+      "error": "HTTP 500: Internal Server Error",
+      "latency_ms": 26.715993881225586,
+      "timestamp": "2025-12-03T15:24:57.188626"
+    },
+    {
+      "test_id": "STATS_SEC_001",
+      "test_name": "Detect DataFrame.eval() injection risk",
+      "engine": "stats",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "CRITICAL - DataFrame.eval with user input",
+      "actual_result": {},
+      "error": "HTTP 500: Internal Server Error",
+      "latency_ms": 22.317171096801758,
+      "timestamp": "2025-12-03T15:25:04.331091"
+    },
+    {
+      "test_id": "STATS_SEC_002",
+      "test_name": "Detect exec() in analysis code",
+      "engine": "stats",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "CRITICAL - exec() detected",
+      "actual_result": {},
+      "error": "HTTP 500: Internal Server Error",
+      "latency_ms": 24.758338928222656,
+      "timestamp": "2025-12-03T15:25:11.460236"
+    },
+    {
+      "test_id": "STATS_SAFE_001",
+      "test_name": "Allow safe pandas operations",
+      "engine": "stats",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "SAFE - No security issues",
+      "actual_result": {},
+      "error": "HTTP 500: Internal Server Error",
+      "latency_ms": 32.004356384277344,
+      "timestamp": "2025-12-03T15:25:18.587807"
+    }
+  ],
+  "statistics": {
+    "total_tests": 6,
+    "passed_count": 0,
+    "failed_count": 6,
+    "latency": {
+      "min_ms": 22.317171096801758,
+      "max_ms": 32.004356384277344,
+      "avg_ms": 27.04596519470215
+    },
+    "engines_tested": [
+      "stats"
+    ],
+    "priorities_tested": [
+      "CRITICAL",
+      "HIGH"
+    ]
+  }
+}

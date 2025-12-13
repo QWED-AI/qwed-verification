@@ -1,0 +1,194 @@
+[
+  {
+    "id": "logic_easy_0",
+    "engine": "LogicEngine",
+    "difficulty": "easy",
+    "query": "All humans are mortal. Socrates is human. Is Socrates mortal?",
+    "expected": "SAT",
+    "raw_llm_answer": "Natural language reasoning (unreliable)",
+    "qwed_answer": "SAT",
+    "qwed_verdict": "PASS",
+    "confidence": 0.9,
+    "latency_ms": 0.0,
+    "timestamp": 1764029329.5370142,
+    "metadata": {
+      "trap": "Basic syllogism"
+    }
+  },
+  {
+    "id": "logic_easy_1",
+    "engine": "LogicEngine",
+    "difficulty": "easy",
+    "query": "All A are B. Some B are C. Are all A necessarily C?",
+    "expected": "UNSAT",
+    "raw_llm_answer": "Natural language reasoning (unreliable)",
+    "qwed_answer": "SAT",
+    "qwed_verdict": "FAIL",
+    "confidence": 0.7,
+    "latency_ms": 0.0,
+    "timestamp": 1764029329.5370142,
+    "metadata": {
+      "trap": "Invalid syllogism"
+    }
+  },
+  {
+    "id": "logic_easy_2",
+    "engine": "LogicEngine",
+    "difficulty": "easy",
+    "query": "If it rains, the ground is wet. The ground is wet. Did it rain?",
+    "expected": "SAT",
+    "raw_llm_answer": "Natural language reasoning (unreliable)",
+    "qwed_answer": "SAT",
+    "qwed_verdict": "PASS",
+    "confidence": 0.8,
+    "latency_ms": 0.0,
+    "timestamp": 1764029329.5370142,
+    "metadata": {
+      "trap": "Affirming the consequent"
+    }
+  },
+  {
+    "id": "logic_med_0",
+    "engine": "LogicEngine",
+    "difficulty": "medium",
+    "query": "If P implies Q, and Q implies R, does P imply R?",
+    "expected": "SAT",
+    "raw_llm_answer": "Natural language reasoning (unreliable)",
+    "qwed_answer": "SAT",
+    "qwed_verdict": "PASS",
+    "confidence": 0.8,
+    "latency_ms": 0.0,
+    "timestamp": 1764029329.5370142,
+    "metadata": {
+      "trap": "Transitivity test"
+    }
+  },
+  {
+    "id": "logic_med_1",
+    "engine": "LogicEngine",
+    "difficulty": "medium",
+    "query": "Either A or B is true. A is false. Is B true?",
+    "expected": "SAT",
+    "raw_llm_answer": "Natural language reasoning (unreliable)",
+    "qwed_answer": "SAT",
+    "qwed_verdict": "PASS",
+    "confidence": 0.7,
+    "latency_ms": 0.0,
+    "timestamp": 1764029329.5370142,
+    "metadata": {
+      "trap": "Disjunction"
+    }
+  },
+  {
+    "id": "logic_med_2",
+    "engine": "LogicEngine",
+    "difficulty": "medium",
+    "query": "Not (A and B) is equivalent to (Not A) or (Not B)?",
+    "expected": "SAT",
+    "raw_llm_answer": "Natural language reasoning (unreliable)",
+    "qwed_answer": "SAT",
+    "qwed_verdict": "PASS",
+    "confidence": 0.7,
+    "latency_ms": 0.0,
+    "timestamp": 1764029329.5370142,
+    "metadata": {
+      "trap": "De Morgan"
+    }
+  },
+  {
+    "id": "logic_hard_0",
+    "engine": "LogicEngine",
+    "difficulty": "hard",
+    "query": "On an island, knights always tell the truth and knaves always lie. Person A says 'I am a knave.' Wha...",
+    "expected": "UNSAT",
+    "raw_llm_answer": "Natural language reasoning (unreliable)",
+    "qwed_answer": "SAT",
+    "qwed_verdict": "FAIL",
+    "confidence": 0.7,
+    "latency_ms": 0.0,
+    "timestamp": 1764029329.5370142,
+    "metadata": {
+      "trap": "Self-reference paradox"
+    }
+  },
+  {
+    "id": "logic_hard_1",
+    "engine": "LogicEngine",
+    "difficulty": "hard",
+    "query": "Three people: Alice, Bob, Carol. Alice says Bob is lying. Bob says Carol is lying. Carol says Alice ...",
+    "expected": "SAT",
+    "raw_llm_answer": "Natural language reasoning (unreliable)",
+    "qwed_answer": "SAT",
+    "qwed_verdict": "PASS",
+    "confidence": 0.7,
+    "latency_ms": 0.0,
+    "timestamp": 1764029329.5370142,
+    "metadata": {
+      "trap": "Circular reference"
+    }
+  },
+  {
+    "id": "logic_hard_2",
+    "engine": "LogicEngine",
+    "difficulty": "hard",
+    "query": "In a 3x3 grid, place numbers 1-3 such that each row and column has unique numbers. Is this possible?",
+    "expected": "SAT",
+    "raw_llm_answer": "Natural language reasoning (unreliable)",
+    "qwed_answer": "SAT",
+    "qwed_verdict": "PASS",
+    "confidence": 0.7,
+    "latency_ms": 0.0,
+    "timestamp": 1764029329.5370142,
+    "metadata": {
+      "trap": "Constraint satisfaction"
+    }
+  },
+  {
+    "id": "logic_collapse_0",
+    "engine": "LogicEngine",
+    "difficulty": "collapse",
+    "query": "This statement is false.",
+    "expected": "UNSAT",
+    "raw_llm_answer": "Natural language reasoning (unreliable)",
+    "qwed_answer": "UNSAT",
+    "qwed_verdict": "PASS",
+    "confidence": 1.0,
+    "latency_ms": 0.0,
+    "timestamp": 1764029329.5370142,
+    "metadata": {
+      "trap": "Liar's paradox"
+    }
+  },
+  {
+    "id": "logic_collapse_1",
+    "engine": "LogicEngine",
+    "difficulty": "collapse",
+    "query": "Does the set of all sets that do not contain themselves, contain itself?",
+    "expected": "UNSAT",
+    "raw_llm_answer": "Natural language reasoning (unreliable)",
+    "qwed_answer": "UNSAT",
+    "qwed_verdict": "PASS",
+    "confidence": 1.0,
+    "latency_ms": 0.0,
+    "timestamp": 1764029329.5370142,
+    "metadata": {
+      "trap": "Russell's paradox"
+    }
+  },
+  {
+    "id": "logic_collapse_2",
+    "engine": "LogicEngine",
+    "difficulty": "collapse",
+    "query": "The next statement is true. The previous statement is false.",
+    "expected": "UNSAT",
+    "raw_llm_answer": "Natural language reasoning (unreliable)",
+    "qwed_answer": "SAT",
+    "qwed_verdict": "FAIL",
+    "confidence": 0.7,
+    "latency_ms": 0.0,
+    "timestamp": 1764029329.5370142,
+    "metadata": {
+      "trap": "Circular contradiction"
+    }
+  }
+]

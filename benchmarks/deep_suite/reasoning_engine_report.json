@@ -1,0 +1,321 @@
+{
+  "test_type": "REASONING_ENGINE_VALIDATION",
+  "summary": {
+    "total_tests": 10,
+    "tests_passed": 8,
+    "avg_confidence": 1.0
+  },
+  "all_results": [
+    {
+      "test_id": "reasoning_correct_01",
+      "query": "What is 2 plus 2?",
+      "reasoning_valid": true,
+      "confidence": 1.0,
+      "issues_found": [],
+      "why_test": "Simple addition should be understood correctly",
+      "provider": "anthropic",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 4.0,
+        "user_query": "What is 2 plus 2?",
+        "translation": {
+          "expression": "2 + 2",
+          "claimed_answer": 4.0,
+          "reasoning": "Simple addition: 2 plus 2 equals 4",
+          "confidence": 1.0
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 4.0,
+          "claimed_value": 4.0,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "anthropic",
+        "latency_ms": 3430.5782318115234
+      },
+      "timestamp": "2025-11-30T11:39:47.200391",
+      "test_passed": true
+    },
+    {
+      "test_id": "reasoning_correct_02",
+      "query": "Calculate the area of a circle with radius 5",
+      "reasoning_valid": true,
+      "confidence": 1.0,
+      "issues_found": [],
+      "why_test": "Standard formula should be recognized",
+      "provider": "claude_opus",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 78.53981633974483,
+        "user_query": "Calculate the area of a circle with radius 5",
+        "translation": {
+          "expression": "pi * 5**2",
+          "claimed_answer": 78.53981633974483,
+          "reasoning": "The area of a circle is given by the formula pi * r^2. Substituting r = 5, we get pi * 25 = 78.53981633974483.",
+          "confidence": 1.0
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 78.53981633974483,
+          "claimed_value": 78.53981633974483,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "claude_opus",
+        "latency_ms": 1795.2313423156738
+      },
+      "timestamp": "2025-11-30T11:39:49.120189",
+      "test_passed": true
+    },
+    {
+      "test_id": "reasoning_ambiguous_01",
+      "query": "What is 6/2(1+2)?",
+      "reasoning_valid": true,
+      "confidence": 1.0,
+      "issues_found": [],
+      "why_test": "Classic PEMDAS ambiguity",
+      "provider": "anthropic",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 9.0,
+        "user_query": "What is 6/2(1+2)?",
+        "translation": {
+          "expression": "6/2*(1+2)",
+          "claimed_answer": 9.0,
+          "reasoning": "Following standard order of operations (PEMDAS/BODMAS): First evaluate the parentheses (1+2)=3. Then perform division and multiplication from left to right: 6/2=3, then 3*3=9. The expression 6/2(1+2) is interpreted as 6/2*(1+2) where division and multiplication have equal precedence and are evaluated left to right.",
+          "confidence": 0.95
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 9.0,
+          "claimed_value": 9.0,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "anthropic",
+        "latency_ms": 4358.184814453125
+      },
+      "timestamp": "2025-11-30T11:39:53.608207",
+      "test_passed": false
+    },
+    {
+      "test_id": "reasoning_ambiguous_02",
+      "query": "Calculate the average",
+      "reasoning_valid": true,
+      "confidence": 1.0,
+      "issues_found": [],
+      "why_test": "Missing context - average of what?",
+      "provider": "claude_opus",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 0.0,
+        "user_query": "Calculate the average",
+        "translation": {
+          "expression": "(0 + 0) / 2",
+          "claimed_answer": 0.0,
+          "reasoning": "No numbers were provided, so the average of two zeros is zero.",
+          "confidence": 0.5
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 0.0,
+          "claimed_value": 0.0,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "claude_opus",
+        "latency_ms": 638.4081840515137
+      },
+      "timestamp": "2025-11-30T11:39:54.356582",
+      "test_passed": false
+    },
+    {
+      "test_id": "reasoning_misunderstood_01",
+      "query": "If I have 10 apples and give away 3, how many do I have left?",
+      "reasoning_valid": true,
+      "confidence": 1.0,
+      "issues_found": [],
+      "why_test": "LLM might confuse 'give away' with 'receive'",
+      "provider": "anthropic",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 7.0,
+        "user_query": "If I have 10 apples and give away 3, how many do I have left?",
+        "translation": {
+          "expression": "10 - 3",
+          "claimed_answer": 7.0,
+          "reasoning": "Starting with 10 apples and giving away 3 apples means subtracting 3 from 10, which equals 7 apples remaining.",
+          "confidence": 1.0
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 7.0,
+          "claimed_value": 7.0,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "anthropic",
+        "latency_ms": 3524.871587753296
+      },
+      "timestamp": "2025-11-30T11:39:57.983850",
+      "test_passed": true
+    },
+    {
+      "test_id": "reasoning_misunderstood_02",
+      "query": "A product costs $100. After a 20% discount, what's the price?",
+      "reasoning_valid": true,
+      "confidence": 1.0,
+      "issues_found": [],
+      "why_test": "LLM might subtract 20 instead of calculating 20%",
+      "provider": "claude_opus",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 80.0,
+        "user_query": "A product costs $100. After a 20% discount, what&#x27;s the price?",
+        "translation": {
+          "expression": "100 - (0.20 * 100)",
+          "claimed_answer": 80.0,
+          "reasoning": "20% as a decimal is 0.20. Multiply by 100 to get the discount amount, then subtract from the original price.",
+          "confidence": 1.0
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 80.0,
+          "claimed_value": 80.0,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "claude_opus",
+        "latency_ms": 668.0641174316406
+      },
+      "timestamp": "2025-11-30T11:39:58.766492",
+      "test_passed": true
+    },
+    {
+      "test_id": "reasoning_word_problem_01",
+      "query": "A bat and ball cost $1.10 total. The bat costs $1 more than the ball. How much does the ball cost?",
+      "reasoning_valid": true,
+      "confidence": 1.0,
+      "issues_found": [],
+      "why_test": "Classic cognitive bias - LLMs often get this wrong",
+      "provider": "anthropic",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 0.050000000000000044,
+        "user_query": "A bat and ball cost $1.10 total. The bat costs $1 more than the ball. How much does the ball cost?",
+        "translation": {
+          "expression": "(1.10 - 1.00) / 2",
+          "claimed_answer": 0.05,
+          "reasoning": "Let&#x27;s call the ball&#x27;s cost x. Then the bat costs x + 1.00. Together they cost: x + (x + 1.00) = 1.10. Simplifying: 2x + 1.00 = 1.10, so 2x = 0.10, therefore x = 0.05. The ball costs $0.05 (5 cents).",
+          "confidence": 1.0
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 0.050000000000000044,
+          "claimed_value": 0.05,
+          "diff": 4.163336342344337e-17,
+          "status": "VERIFIED"
+        },
+        "provider_used": "anthropic",
+        "latency_ms": 5446.674823760986
+      },
+      "timestamp": "2025-11-30T11:40:04.350530",
+      "test_passed": true
+    },
+    {
+      "test_id": "reasoning_word_problem_02",
+      "query": "If 5 machines make 5 widgets in 5 minutes, how long for 100 machines to make 100 widgets?",
+      "reasoning_valid": true,
+      "confidence": 1.0,
+      "issues_found": [],
+      "why_test": "Linear thinking trap",
+      "provider": "claude_opus",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 5.0,
+        "user_query": "If 5 machines make 5 widgets in 5 minutes, how long for 100 machines to make 100 widgets?",
+        "translation": {
+          "expression": "5",
+          "claimed_answer": 5.0,
+          "reasoning": "If 5 machines make 5 widgets in 5 minutes, each machine makes 1 widget in 5 minutes. So, 100 machines will make 100 widgets in the same 5 minutes.",
+          "confidence": 1.0
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 5.0,
+          "claimed_value": 5.0,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "claude_opus",
+        "latency_ms": 776.576042175293
+      },
+      "timestamp": "2025-11-30T11:40:05.231022",
+      "test_passed": true
+    },
+    {
+      "test_id": "reasoning_facts_01",
+      "query": "John has 3 apples, Mary has 5 apples. How many total?",
+      "reasoning_valid": true,
+      "confidence": 1.0,
+      "issues_found": [],
+      "why_test": "Should extract entities and numbers",
+      "provider": "anthropic",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 8.0,
+        "user_query": "John has 3 apples, Mary has 5 apples. How many total?",
+        "translation": {
+          "expression": "3 + 5",
+          "claimed_answer": 8.0,
+          "reasoning": "John has 3 apples and Mary has 5 apples. To find the total, we add them together: 3 + 5 = 8",
+          "confidence": 1.0
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 8.0,
+          "claimed_value": 8.0,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "anthropic",
+        "latency_ms": 3443.5601234436035
+      },
+      "timestamp": "2025-11-30T11:40:08.783985",
+      "test_passed": true
+    },
+    {
+      "test_id": "reasoning_equivalence_01",
+      "query": "What is 2 times 3 plus 4?",
+      "reasoning_valid": true,
+      "confidence": 1.0,
+      "issues_found": [],
+      "why_test": "Parentheses don't change meaning here",
+      "provider": "claude_opus",
+      "full_response": {
+        "status": "VERIFIED",
+        "final_answer": 10.0,
+        "user_query": "What is 2 times 3 plus 4?",
+        "translation": {
+          "expression": "2 * 3 + 4",
+          "claimed_answer": 10.0,
+          "reasoning": "First, multiply 2 by 3 to get 6. Then add 4 to get 10.",
+          "confidence": 1.0
+        },
+        "verification": {
+          "is_correct": true,
+          "calculated_value": 10.0,
+          "claimed_value": 10.0,
+          "diff": 0.0,
+          "status": "VERIFIED"
+        },
+        "provider_used": "claude_opus",
+        "latency_ms": 584.7423076629639
+      },
+      "timestamp": "2025-11-30T11:40:09.488705",
+      "test_passed": true
+    }
+  ],
+  "timestamp": "2025-11-30T11:40:09.488705"
+}

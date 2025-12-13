@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qwed"
+version = "0.1.0"
+description = "Official Python Client for QWED Verification Engine"
+authors = [
+    {name = "QWED Team", email = "dev@qwed.tech"},
+]
+dependencies = [
+    "requests>=2.25.0",
+    "pydantic>=2.0.0"
+]
+requires-python = ">=3.8"
+readme = "README.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["qwed"]

@@ -1,0 +1,92 @@
+[
+  {
+    "id": "1",
+    "query": "Calculate 25 * 4 + 10",
+    "expected": 110.0,
+    "status": "PASSED",
+    "actual": 110.0,
+    "latency": 4.137359380722046,
+    "error": null
+  },
+  {
+    "id": "2",
+    "query": "What is 15% of 80?",
+    "expected": 12.0,
+    "status": "PASSED",
+    "actual": 12.0,
+    "latency": 3.0797548294067383,
+    "error": null
+  },
+  {
+    "id": "3",
+    "query": "What is the square root of 144?",
+    "expected": 12.0,
+    "status": "PASSED",
+    "actual": 12.0,
+    "latency": 3.2810423374176025,
+    "error": null
+  },
+  {
+    "id": "4",
+    "query": "What is 2 raised to the power of 10?",
+    "expected": 1024.0,
+    "status": "PASSED",
+    "actual": 1024.0,
+    "latency": 3.4381582736968994,
+    "error": null
+  },
+  {
+    "id": "5",
+    "query": "What is sin(pi/2)?",
+    "expected": 1.0,
+    "status": "PASSED",
+    "actual": 1.0,
+    "latency": 3.160184144973755,
+    "error": null
+  },
+  {
+    "id": "6",
+    "query": "What is log base 10 of 100?",
+    "expected": 2.0,
+    "status": "PASSED",
+    "actual": 2.0,
+    "latency": 3.964470863342285,
+    "error": null
+  },
+  {
+    "id": "7",
+    "query": "If I have 5 apples and buy 3 more, how many do I have?",
+    "expected": 8.0,
+    "status": "PASSED",
+    "actual": 8.0,
+    "latency": 3.1576523780822754,
+    "error": null
+  },
+  {
+    "id": "8",
+    "query": "Calculate compound interest on 1000 principal at 5% rate for 2 years (Formula: P * (1+r)^t)",
+    "expected": 1102.5,
+    "status": "PASSED",
+    "actual": 1102.5,
+    "latency": 4.062110900878906,
+    "error": null
+  },
+  {
+    "id": "9",
+    "query": "What is the factorial of 5?",
+    "expected": 120.0,
+    "status": "PASSED",
+    "actual": 120.0,
+    "latency": 3.8908774852752686,
+    "error": null
+  },
+  {
+    "id": "10",
+    "query": "What is (5 + 5) * 2 / 4?",
+    "expected": 5.0,
+    "status": "PASSED",
+    "actual": 5.0,
+    "latency": 4.260891437530518,
+    "error": null
+  }
+]

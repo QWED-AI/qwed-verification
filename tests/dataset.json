@@ -1,0 +1,62 @@
+[
+  {
+    "id": "1",
+    "category": "Arithmetic",
+    "query": "Calculate 25 * 4 + 10",
+    "expected_answer": 110.0
+  },
+  {
+    "id": "2",
+    "category": "Percentage",
+    "query": "What is 15% of 80?",
+    "expected_answer": 12.0
+  },
+  {
+    "id": "3",
+    "category": "Roots",
+    "query": "What is the square root of 144?",
+    "expected_answer": 12.0
+  },
+  {
+    "id": "4",
+    "category": "Power",
+    "query": "What is 2 raised to the power of 10?",
+    "expected_answer": 1024.0
+  },
+  {
+    "id": "5",
+    "category": "Trigonometry",
+    "query": "What is sin(pi/2)?",
+    "expected_answer": 1.0
+  },
+  {
+    "id": "6",
+    "category": "Logarithms",
+    "query": "What is log base 10 of 100?",
+    "expected_answer": 2.0
+  },
+  {
+    "id": "7",
+    "category": "Word Problem",
+    "query": "If I have 5 apples and buy 3 more, how many do I have?",
+    "expected_answer": 8.0
+  },
+  {
+    "id": "8",
+    "category": "Finance",
+    "query": "Calculate compound interest on 1000 principal at 5% rate for 2 years (Formula: P * (1+r)^t)",
+    "expected_answer": 1102.5
+  },
+  {
+    "id": "9",
+    "category": "Factorial",
+    "query": "What is the factorial of 5?",
+    "expected_answer": 120.0
+  },
+  {
+    "id": "10",
+    "category": "Complex Arithmetic",
+    "query": "What is (5 + 5) * 2 / 4?",
+    "expected_answer": 5.0
+  }
+]

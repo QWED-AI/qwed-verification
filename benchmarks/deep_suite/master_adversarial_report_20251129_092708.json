@@ -1,0 +1,513 @@
+{
+  "test_run_timestamp": "20251129_092708",
+  "overall_summary": {
+    "total_math_tests": 16,
+    "total_logic_tests": 0,
+    "total_tests": 16,
+    "math_errors_caught": 0,
+    "logic_issues_detected": 0,
+    "total_issues_caught": 0
+  },
+  "math_results": {
+    "summary": {
+      "total_tests": 16,
+      "qwed_caught_errors": 0,
+      "correct_answers": 7,
+      "test_errors": 2,
+      "catch_rate": "0.0%"
+    },
+    "caught_errors": [],
+    "all_results": [
+      {
+        "test_id": "math_chain_01",
+        "query": "Compute: 156 + 289 + 134. Show your working step-by-step and final numeric answer.",
+        "provider": "anthropic",
+        "expected": 579,
+        "llm_answer": 579.0,
+        "qwed_status": "VERIFIED",
+        "qwed_verified": true,
+        "result_type": "CORRECT",
+        "caught_error": false,
+        "error_type": null,
+        "why_hard": "LLMs print intermediate results (156, 445, 579) - extractor may grab wrong number",
+        "full_response": {
+          "status": "VERIFIED",
+          "final_answer": 579.0,
+          "user_query": "Compute: 156 + 289 + 134. Show your working step-by-step and final numeric answer.",
+          "translation": {
+            "expression": "156 + 289 + 134",
+            "claimed_answer": 579.0,
+            "reasoning": "Adding three numbers step-by-step:\nStep 1: 156 + 289 = 445\nStep 2: 445 + 134 = 579\nTherefore, 156 + 289 + 134 = 579",
+            "confidence": 1.0
+          },
+          "verification": {
+            "is_correct": true,
+            "calculated_value": 579.0,
+            "claimed_value": 579.0,
+            "diff": 0.0,
+            "status": "VERIFIED"
+          },
+          "provider_used": "anthropic",
+          "latency_ms": 4172.013521194458
+        },
+        "timestamp": "2025-11-29T09:27:15.090449"
+      },
+      {
+        "test_id": "math_chain_02",
+        "query": "What is (47 \u00d7 23) + (1024 \u00f7 16) ? Show each operation step-by-step.",
+        "provider": "claude_opus",
+        "expected": 1145,
+        "llm_answer": 1145.0,
+        "qwed_status": "CORRECTION_NEEDED",
+        "qwed_verified": false,
+        "result_type": "CORRECT",
+        "caught_error": false,
+        "error_type": null,
+        "why_hard": "Multi-op with parentheses, different formatting per step",
+        "full_response": {
+          "status": "CORRECTION_NEEDED",
+          "final_answer": 1145.0,
+          "user_query": "What is (47 \u00d7 23) + (1024 \u00f7 16) ? Show each operation step-by-step.",
+          "translation": {
+            "expression": "(47 * 23) + (1024 / 16)",
+            "claimed_answer": 1101.0,
+            "reasoning": "First, multiply 47 by 23 to get 1081. Then, divide 1024 by 16 to get 64. Finally, add 1081 and 64 to get 1101.",
+            "confidence": 1.0
+          },
+          "verification": {
+            "is_correct": false,
+            "calculated_value": 1145.0,
+            "claimed_value": 1101.0,
+            "diff": 44.0,
+            "status": "CORRECTION_NEEDED"
+          },
+          "provider_used": "claude_opus",
+          "latency_ms": 1223.304271697998
+        },
+        "timestamp": "2025-11-29T09:27:16.419945"
+      },
+      {
+        "test_id": "math_chain_03",
+        "query": "Compute: 12*3 + 45/5 - (7*2 + 3) + 123*4 - 456/3. Show step-by-step.",
+        "provider": "anthropic",
+        "expected": 512,
+        "llm_answer": 368.0,
+        "qwed_status": "VERIFIED",
+        "qwed_verified": true,
+        "result_type": "FALSE_POSITIVE",
+        "caught_error": false,
+        "error_type": "LLM_WRONG_QWED_ACCEPTED",
+        "why_hard": "Long chained expression stresses parser and extraction",
+        "full_response": {
+          "status": "VERIFIED",
+          "final_answer": 368.0,
+          "user_query": "Compute: 12*3 + 45/5 - (7*2 + 3) + 123*4 - 456/3. Show step-by-step.",
+          "translation": {
+            "expression": "12*3 + 45/5 - (7*2 + 3) + 123*4 - 456/3",
+            "claimed_answer": 368.0,
+            "reasoning": "Step-by-step calculation:\n1. 12*3 = 36\n2. 45/5 = 9\n3. 7*2 = 14\n4. 14 + 3 = 17\n5. 123*4 = 492\n6. 456/3 = 152\n7. Now combine: 36 + 9 - 17 + 492 - 152\n8. 36 + 9 = 45\n9. 45 - 17 = 28\n10. 28 + 492 = 520\n11. 520 - 152 = 368\n\nWait, let me recalculate:\n36 + 9 = 45\n45 - 17 = 28\n28 + 492 = 520\n520 - 152 = 368\n\nActually checking again: 12*3=36, 45/5=9, 7*2+3=17, 123*4=492, 456/3=152\n36 + 9 - 17 + 492 - 152 = 368",
+            "confidence": 1.0
+          },
+          "verification": {
+            "is_correct": true,
+            "calculated_value": 368.0,
+            "claimed_value": 368.0,
+            "diff": 0.0,
+            "status": "VERIFIED"
+          },
+          "provider_used": "anthropic",
+          "latency_ms": 5606.309652328491
+        },
+        "timestamp": "2025-11-29T09:27:22.161687"
+      },
+      {
+        "test_id": "math_tricky_01",
+        "query": "I got 445 after adding 156+289, then adding 134 gives 579. What's the final answer?",
+        "provider": "claude_opus",
+        "expected": 579,
+        "llm_answer": 579.0,
+        "qwed_status": "VERIFIED",
+        "qwed_verified": true,
+        "result_type": "CORRECT",
+        "caught_error": false,
+        "error_type": null,
+        "why_hard": "Extractor must find rightmost numeric, not first (445)",
+        "full_response": {
+          "status": "VERIFIED",
+          "final_answer": 579.0,
+          "user_query": "I got 445 after adding 156+289, then adding 134 gives 579. What&#x27;s the final answer?",
+          "translation": {
+            "expression": "156 + 289 + 134",
+            "claimed_answer": 579.0,
+            "reasoning": "First, add 156 and 289 to get 445. Then, add 134 to 445 to get 579.",
+            "confidence": 1.0
+          },
+          "verification": {
+            "is_correct": true,
+            "calculated_value": 579.0,
+            "claimed_value": 579.0,
+            "diff": 0.0,
+            "status": "VERIFIED"
+          },
+          "provider_used": "claude_opus",
+          "latency_ms": 807.8436851501465
+        },
+        "timestamp": "2025-11-29T09:27:23.083373"
+      },
+      {
+        "test_id": "ambiguous_01",
+        "query": "Evaluate 6/2(1+2). Explain each step.",
+        "provider": "anthropic",
+        "expected": null,
+        "llm_answer": 9.0,
+        "qwed_status": "VERIFIED",
+        "qwed_verified": true,
+        "result_type": "AMBIGUOUS_HANDLED",
+        "caught_error": false,
+        "error_type": null,
+        "why_hard": "Classic ambiguity - QWED should detect multiple interpretations",
+        "full_response": {
+          "status": "VERIFIED",
+          "final_answer": 9.0,
+          "user_query": "Evaluate 6/2(1+2). Explain each step.",
+          "translation": {
+            "expression": "6/2*(1+2)",
+            "claimed_answer": 9.0,
+            "reasoning": "Following the standard order of operations (PEMDAS/BODMAS):\n1. First, evaluate the parentheses: (1+2) = 3\n2. The expression becomes: 6/2*3\n3. Division and multiplication have equal precedence and are evaluated left-to-right\n4. So: 6/2 = 3\n5. Then: 3*3 = 9\n\nNote: The expression 6/2(1+2) is interpreted as 6/2*(1+2) where the multiplication is implicit. Following standard mathematical convention, we evaluate left-to-right after resolving parentheses, giving us 9.",
+            "confidence": 0.95
+          },
+          "verification": {
+            "is_correct": true,
+            "calculated_value": 9.0,
+            "claimed_value": 9.0,
+            "diff": 0.0,
+            "status": "VERIFIED"
+          },
+          "provider_used": "anthropic",
+          "latency_ms": 5228.057146072388
+        },
+        "timestamp": "2025-11-29T09:27:28.421063"
+      },
+      {
+        "test_id": "ambiguous_02",
+        "query": "What is 48\u00f72(9+3)?",
+        "provider": "claude_opus",
+        "expected": null,
+        "llm_answer": 288.0,
+        "qwed_status": "VERIFIED",
+        "qwed_verified": true,
+        "result_type": "AMBIGUOUS_HANDLED",
+        "caught_error": false,
+        "error_type": null,
+        "why_hard": "Implicit multiplication precedence is undefined",
+        "full_response": {
+          "status": "VERIFIED",
+          "final_answer": 288.0,
+          "user_query": "What is 48\u00f72(9+3)?",
+          "translation": {
+            "expression": "48 / 2 * (9 + 3)",
+            "claimed_answer": 288.0,
+            "reasoning": "First, calculate the parentheses: 9 + 3 = 12. Then, 48 divided by 2 is 24. Finally, 24 multiplied by 12 is 288.",
+            "confidence": 1.0
+          },
+          "verification": {
+            "is_correct": true,
+            "calculated_value": 288.0,
+            "claimed_value": 288.0,
+            "diff": 0.0,
+            "status": "VERIFIED"
+          },
+          "provider_used": "claude_opus",
+          "latency_ms": 1379.7008991241455
+        },
+        "timestamp": "2025-11-29T09:27:29.900182"
+      },
+      {
+        "test_id": "precision_01",
+        "query": "Calculate exactly: 999999999 \u00d7 888888888",
+        "provider": "anthropic",
+        "expected": 888888887111111112,
+        "llm_answer": 8.888888871111112e+17,
+        "qwed_status": "VERIFIED",
+        "qwed_verified": true,
+        "result_type": "FALSE_POSITIVE",
+        "caught_error": false,
+        "error_type": "LLM_WRONG_QWED_ACCEPTED",
+        "why_hard": "Large numbers cause floating point errors in LLMs",
+        "full_response": {
+          "status": "VERIFIED",
+          "final_answer": 8.888888871111112e+17,
+          "user_query": "Calculate exactly: 999999999 \u00d7 888888888",
+          "translation": {
+            "expression": "999999999 * 888888888",
+            "claimed_answer": 8.888888871111112e+17,
+            "reasoning": "Direct multiplication of 999999999 and 888888888. This can be computed as (1000000000 - 1) * 888888888 = 888888888000000000 - 888888888 = 888888887111111112",
+            "confidence": 1.0
+          },
+          "verification": {
+            "is_correct": true,
+            "calculated_value": 8.888888871111112e+17,
+            "claimed_value": 8.888888871111112e+17,
+            "diff": 0.0,
+            "status": "VERIFIED"
+          },
+          "provider_used": "anthropic",
+          "latency_ms": 3874.7029304504395
+        },
+        "timestamp": "2025-11-29T09:27:33.898438"
+      },
+      {
+        "test_id": "precision_02",
+        "query": "What is 123456789 \u00d7 987654321 exactly?",
+        "provider": "claude_opus",
+        "expected": 121932631112635269,
+        "llm_answer": 1.2193263111263526e+17,
+        "qwed_status": "VERIFIED",
+        "qwed_verified": true,
+        "result_type": "FALSE_POSITIVE",
+        "caught_error": false,
+        "error_type": "LLM_WRONG_QWED_ACCEPTED",
+        "why_hard": "Tests precision with 9-digit multiplication",
+        "full_response": {
+          "status": "VERIFIED",
+          "final_answer": 1.2193263111263526e+17,
+          "user_query": "What is 123456789 \u00d7 987654321 exactly?",
+          "translation": {
+            "expression": "123456789 * 987654321",
+            "claimed_answer": 1.2193263111263526e+17,
+            "reasoning": "Multiply 123456789 by 987654321 directly to get the exact product.",
+            "confidence": 1.0
+          },
+          "verification": {
+            "is_correct": true,
+            "calculated_value": 1.2193263111263526e+17,
+            "claimed_value": 1.2193263111263526e+17,
+            "diff": 0.0,
+            "status": "VERIFIED"
+          },
+          "provider_used": "claude_opus",
+          "latency_ms": 1135.0278854370117
+        },
+        "timestamp": "2025-11-29T09:27:35.150001"
+      },
+      {
+        "test_id": "percentage_01",
+        "query": "If a $500 item is increased by 20% then decreased by 20%, what's the final price?",
+        "provider": "anthropic",
+        "expected": 480,
+        "llm_answer": 480.0,
+        "qwed_status": "VERIFIED",
+        "qwed_verified": true,
+        "result_type": "CORRECT",
+        "caught_error": false,
+        "error_type": null,
+        "why_hard": "Common misconception that +20% then -20% returns to original",
+        "full_response": {
+          "status": "VERIFIED",
+          "final_answer": 480.0,
+          "user_query": "If a $500 item is increased by 20% then decreased by 20%, what&#x27;s the final price?",
+          "translation": {
+            "expression": "500 * (1 + 0.20) * (1 - 0.20)",
+            "claimed_answer": 480.0,
+            "reasoning": "Start with $500. Increase by 20% means multiply by 1.20, giving $600. Then decrease that result by 20% means multiply by 0.80, giving $480. The calculation is: 500 * 1.20 * 0.80 = 480",
+            "confidence": 1.0
+          },
+          "verification": {
+            "is_correct": true,
+            "calculated_value": 480.0,
+            "claimed_value": 480.0,
+            "diff": 0.0,
+            "status": "VERIFIED"
+          },
+          "provider_used": "anthropic",
+          "latency_ms": 4689.332485198975
+        },
+        "timestamp": "2025-11-29T09:27:39.958363"
+      },
+      {
+        "test_id": "percentage_02",
+        "query": "A stock goes from $100 to $150 then back to $100. What are the percentage changes?",
+        "provider": "claude_opus",
+        "expected": null,
+        "llm_answer": 50.0,
+        "qwed_status": "VERIFIED",
+        "qwed_verified": true,
+        "result_type": "AMBIGUOUS_HANDLED",
+        "caught_error": false,
+        "error_type": null,
+        "why_hard": "Asymmetric percentage changes",
+        "full_response": {
+          "status": "VERIFIED",
+          "final_answer": 50.0,
+          "user_query": "A stock goes from $100 to $150 then back to $100. What are the percentage changes?",
+          "translation": {
+            "expression": "(150 - 100) / 100 * 100",
+            "claimed_answer": 50.0,
+            "reasoning": "The percentage change from $100 to $150 is (150 - 100) / 100 * 100 = 50%.",
+            "confidence": 1.0
+          },
+          "verification": {
+            "is_correct": true,
+            "calculated_value": 50.0,
+            "claimed_value": 50.0,
+            "diff": 0.0,
+            "status": "VERIFIED"
+          },
+          "provider_used": "claude_opus",
+          "latency_ms": 614.4967079162598
+        },
+        "timestamp": "2025-11-29T09:27:40.680380"
+      },
+      {
+        "test_id": "word_problem_01",
+        "query": "A bat and ball cost $1.10. The bat costs $1 more than the ball. How much does the ball cost?",
+        "provider": "anthropic",
+        "expected": 0.05,
+        "llm_answer": 0.050000000000000044,
+        "qwed_status": "VERIFIED",
+        "qwed_verified": true,
+        "result_type": "FALSE_POSITIVE",
+        "caught_error": false,
+        "error_type": "LLM_WRONG_QWED_ACCEPTED",
+        "why_hard": "Classic cognitive bias problem - LLMs often answer $0.10",
+        "full_response": {
+          "status": "VERIFIED",
+          "final_answer": 0.050000000000000044,
+          "user_query": "A bat and ball cost $1.10. The bat costs $1 more than the ball. How much does the ball cost?",
+          "translation": {
+            "expression": "(1.10 - 1) / 2",
+            "claimed_answer": 0.05,
+            "reasoning": "Let the ball cost x dollars. Then the bat costs (x + 1) dollars. Together they cost 1.10 dollars, so: x + (x + 1) = 1.10. Simplifying: 2x + 1 = 1.10, so 2x = 0.10, therefore x = 0.05. The ball costs $0.05 (5 cents).",
+            "confidence": 1.0
+          },
+          "verification": {
+            "is_correct": true,
+            "calculated_value": 0.050000000000000044,
+            "claimed_value": 0.05,
+            "diff": 4.163336342344337e-17,
+            "status": "VERIFIED"
+          },
+          "provider_used": "anthropic",
+          "latency_ms": 4556.690216064453
+        },
+        "timestamp": "2025-11-29T09:27:45.370074"
+      },
+      {
+        "test_id": "word_problem_02",
+        "query": "If 5 machines make 5 widgets in 5 minutes, how long does it take 100 machines to make 100 widgets?",
+        "provider": "claude_opus",
+        "expected": 5,
+        "llm_answer": 5.0,
+        "qwed_status": "VERIFIED",
+        "qwed_verified": true,
+        "result_type": "CORRECT",
+        "caught_error": false,
+        "error_type": null,
+        "why_hard": "Linear thinking trap",
+        "full_response": {
+          "status": "VERIFIED",
+          "final_answer": 5.0,
+          "user_query": "If 5 machines make 5 widgets in 5 minutes, how long does it take 100 machines to make 100 widgets?",
+          "translation": {
+            "expression": "5",
+            "claimed_answer": 5.0,
+            "reasoning": "Each machine makes 1 widget in 5 minutes. So 100 machines will make 100 widgets in the same 5 minutes.",
+            "confidence": 1.0
+          },
+          "verification": {
+            "is_correct": true,
+            "calculated_value": 5.0,
+            "claimed_value": 5.0,
+            "diff": 0.0,
+            "status": "VERIFIED"
+          },
+          "provider_used": "claude_opus",
+          "latency_ms": 678.2824993133545
+        },
+        "timestamp": "2025-11-29T09:27:46.188623"
+      },
+      {
+        "test_id": "complex_01",
+        "error": "'charmap' codec can't encode character '\\U0001f3af' in position 2: character maps to <undefined>",
+        "result_type": "ERROR",
+        "timestamp": "2025-11-29T09:27:51.201219"
+      },
+      {
+        "test_id": "complex_02",
+        "error": "'charmap' codec can't encode character '\\U0001f3af' in position 2: character maps to <undefined>",
+        "result_type": "ERROR",
+        "timestamp": "2025-11-29T09:27:52.388756"
+      },
+      {
+        "test_id": "extraction_01",
+        "query": "First calculate 25 \u00d7 4 = 100. Now multiply that by 3. The final answer is?",
+        "provider": "anthropic",
+        "expected": 300,
+        "llm_answer": 300.0,
+        "qwed_status": "VERIFIED",
+        "qwed_verified": true,
+        "result_type": "CORRECT",
+        "caught_error": false,
+        "error_type": null,
+        "why_hard": "Extractor might grab intermediate '100' instead of final '300'",
+        "full_response": {
+          "status": "VERIFIED",
+          "final_answer": 300.0,
+          "user_query": "First calculate 25 \u00d7 4 = 100. Now multiply that by 3. The final answer is?",
+          "translation": {
+            "expression": "25 * 4 * 3",
+            "claimed_answer": 300.0,
+            "reasoning": "First calculate 25 \u00d7 4 = 100, then multiply that result by 3: 100 \u00d7 3 = 300",
+            "confidence": 1.0
+          },
+          "verification": {
+            "is_correct": true,
+            "calculated_value": 300.0,
+            "claimed_value": 300.0,
+            "diff": 0.0,
+            "status": "VERIFIED"
+          },
+          "provider_used": "anthropic",
+          "latency_ms": 3071.16961479187
+        },
+        "timestamp": "2025-11-29T09:27:55.569429"
+      },
+      {
+        "test_id": "extraction_02",
+        "query": "Add these numbers: 123, 456, 789. Steps: 123+456=579, 579+789=1368. Answer:",
+        "provider": "claude_opus",
+        "expected": 1368,
+        "llm_answer": 1368.0,
+        "qwed_status": "VERIFIED",
+        "qwed_verified": true,
+        "result_type": "CORRECT",
+        "caught_error": false,
+        "error_type": null,
+        "why_hard": "Multiple numbers in output - extractor must find last one",
+        "full_response": {
+          "status": "VERIFIED",
+          "final_answer": 1368.0,
+          "user_query": "Add these numbers: 123, 456, 789. Steps: 123+456=579, 579+789=1368. Answer:",
+          "translation": {
+            "expression": "123 + 456 + 789",
+            "claimed_answer": 1368.0,
+            "reasoning": "First, add 123 and 456 to get 579. Then add 579 and 789 to get 1368.",
+            "confidence": 1.0
+          },
+          "verification": {
+            "is_correct": true,
+            "calculated_value": 1368.0,
+            "claimed_value": 1368.0,
+            "diff": 0.0,
+            "status": "VERIFIED"
+          },
+          "provider_used": "claude_opus",
+          "latency_ms": 642.1496868133545
+        },
+        "timestamp": "2025-11-29T09:27:56.320424"
+      }
+    ],
+    "timestamp": "2025-11-29T09:27:56.320424"
+  },
+  "logic_results": {}
+}

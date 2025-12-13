@@ -1,0 +1,330 @@
+{
+  "metadata": {
+    "report_type": "QWED_COMPREHENSIVE_AUDIT",
+    "generated_at": "2025-12-02T02:33:56.989047",
+    "version": "1.0"
+  },
+  "summary": {
+    "timestamp": "2025-12-02T02:33:56.987481",
+    "duration_seconds": 10.691985,
+    "total_tests": 9,
+    "passed": 9,
+    "failed": 0,
+    "pass_rate": 100.0,
+    "by_priority": {
+      "critical": {
+        "total": 4,
+        "passed": 4,
+        "pass_rate": 100.0
+      },
+      "high": {
+        "total": 3,
+        "passed": 3,
+        "pass_rate": 100.0
+      },
+      "medium": {
+        "total": 2,
+        "passed": 2,
+        "pass_rate": 100.0
+      }
+    },
+    "by_engine": {
+      "logic": {
+        "total": 9,
+        "passed": 9,
+        "pass_rate": 100.0
+      }
+    }
+  },
+  "results": [
+    {
+      "test_id": "LOGIC_SAT_001",
+      "test_name": "Verify simple SAT constraints",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": true,
+      "expected_result": "SAT with solution (x=6,7,8,or 9)",
+      "actual_result": {
+        "status": "SAT",
+        "model": {
+          "x": "6"
+        },
+        "translation": {
+          "variables": {
+            "x": "Int"
+          },
+          "constraints": [
+            "x &gt; 5",
+            "x &lt; 10"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "azure_openai",
+        "attempts": 1,
+        "latency_ms": 4039.522171020508
+      },
+      "error": null,
+      "latency_ms": 4225.020408630371,
+      "timestamp": "2025-12-02T02:33:50.518416"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_001",
+      "test_name": "Detect simple contradiction (UNSAT)",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": true,
+      "expected_result": "UNSAT (contradiction)",
+      "actual_result": {
+        "status": "UNSAT",
+        "model": null,
+        "translation": {
+          "variables": {
+            "x": "Int"
+          },
+          "constraints": [
+            "x &gt; 10",
+            "x &lt; 5"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "azure_openai",
+        "attempts": 1,
+        "latency_ms": 651.8146991729736
+      },
+      "error": null,
+      "latency_ms": 883.0106258392334,
+      "timestamp": "2025-12-02T02:33:51.401759"
+    },
+    {
+      "test_id": "LOGIC_SAT_002",
+      "test_name": "Verify boolean logic constraints",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": true,
+      "expected_result": "SAT (P=True or Q=True)",
+      "actual_result": {
+        "status": "SAT",
+        "model": {
+          "Q": "False",
+          "P": "True"
+        },
+        "translation": {
+          "variables": {
+            "P": "Bool",
+            "Q": "Bool"
+          },
+          "constraints": [
+            "Or(P, Q)"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "azure_openai",
+        "attempts": 1,
+        "latency_ms": 563.9262199401855
+      },
+      "error": null,
+      "latency_ms": 737.9817962646484,
+      "timestamp": "2025-12-02T02:33:52.141764"
+    },
+    {
+      "test_id": "LOGIC_SAT_003",
+      "test_name": "Verify inequality chain (x < y < z)",
+      "engine": "logic",
+      "priority": "HIGH",
+      "passed": true,
+      "expected_result": "SAT (e.g., x=0, y=1, z=2)",
+      "actual_result": {
+        "status": "SAT",
+        "model": {
+          "z": "1",
+          "x": "-1",
+          "y": "0"
+        },
+        "translation": {
+          "variables": {
+            "x": "Int",
+            "y": "Int",
+            "z": "Int"
+          },
+          "constraints": [
+            "x &lt; y",
+            "y &lt; z"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "azure_openai",
+        "attempts": 1,
+        "latency_ms": 613.4040355682373
+      },
+      "error": null,
+      "latency_ms": 841.4018154144287,
+      "timestamp": "2025-12-02T02:33:52.984163"
+    },
+    {
+      "test_id": "LOGIC_SAT_004",
+      "test_name": "Verify divisibility constraint (x % 5 == 0)",
+      "engine": "logic",
+      "priority": "MEDIUM",
+      "passed": true,
+      "expected_result": "SAT (x=5, 10, or 15)",
+      "actual_result": {
+        "status": "SAT",
+        "model": {
+          "x": "5"
+        },
+        "translation": {
+          "variables": {
+            "x": "Int"
+          },
+          "constraints": [
+            "x % 5 == 0",
+            "x &gt; 0",
+            "x &lt; 20"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "azure_openai",
+        "attempts": 1,
+        "latency_ms": 663.1393432617188
+      },
+      "error": null,
+      "latency_ms": 892.6825523376465,
+      "timestamp": "2025-12-02T02:33:53.877867"
+    },
+    {
+      "test_id": "LOGIC_SAT_005",
+      "test_name": "Verify implication (P implies Q)",
+      "engine": "logic",
+      "priority": "MEDIUM",
+      "passed": true,
+      "expected_result": "SAT (P=True, Q=True)",
+      "actual_result": {
+        "status": "SAT",
+        "model": {
+          "Q": "True",
+          "P": "True"
+        },
+        "translation": {
+          "variables": {
+            "P": "Bool",
+            "Q": "Bool"
+          },
+          "constraints": [
+            "And(P, Or(Not(P), Q))"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "azure_openai",
+        "attempts": 1,
+        "latency_ms": 553.6069869995117
+      },
+      "error": null,
+      "latency_ms": 802.9751777648926,
+      "timestamp": "2025-12-02T02:33:54.681842"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_002",
+      "test_name": "Detect circular dependency (x=y+1 AND y=x+1)",
+      "engine": "logic",
+      "priority": "HIGH",
+      "passed": true,
+      "expected_result": "UNSAT (circular dependency)",
+      "actual_result": {
+        "status": "UNSAT",
+        "model": null,
+        "translation": {
+          "variables": {
+            "x": "Int",
+            "y": "Int"
+          },
+          "constraints": [
+            "x == y + 1",
+            "y == x + 1"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "azure_openai",
+        "attempts": 1,
+        "latency_ms": 566.490650177002
+      },
+      "error": null,
+      "latency_ms": 721.820592880249,
+      "timestamp": "2025-12-02T02:33:55.405538"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_003",
+      "test_name": "Detect boolean contradiction (P AND NOT P)",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": true,
+      "expected_result": "UNSAT (logical contradiction)",
+      "actual_result": {
+        "status": "UNSAT",
+        "model": null,
+        "translation": {
+          "variables": {
+            "P": "Bool"
+          },
+          "constraints": [
+            "And(P, Not(P))"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "azure_openai",
+        "attempts": 1,
+        "latency_ms": 572.2644329071045
+      },
+      "error": null,
+      "latency_ms": 785.2590084075928,
+      "timestamp": "2025-12-02T02:33:56.192101"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_004",
+      "test_name": "Detect conflict in multiple constraints",
+      "engine": "logic",
+      "priority": "HIGH",
+      "passed": true,
+      "expected_result": "UNSAT (conflicting constraints)",
+      "actual_result": {
+        "status": "UNSAT",
+        "model": null,
+        "translation": {
+          "variables": {
+            "x": "Int"
+          },
+          "constraints": [
+            "x &gt; 5",
+            "x &lt; 10",
+            "x == 15"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "azure_openai",
+        "attempts": 1,
+        "latency_ms": 544.0142154693604
+      },
+      "error": null,
+      "latency_ms": 789.8657321929932,
+      "timestamp": "2025-12-02T02:33:56.984969"
+    }
+  ],
+  "failures": [],
+  "statistics": {
+    "total_tests": 9,
+    "passed_count": 9,
+    "failed_count": 0,
+    "latency": {
+      "min_ms": 721.820592880249,
+      "max_ms": 4225.020408630371,
+      "avg_ms": 1186.6686344146729
+    },
+    "engines_tested": [
+      "logic"
+    ],
+    "priorities_tested": [
+      "CRITICAL",
+      "HIGH",
+      "MEDIUM"
+    ]
+  }
+}

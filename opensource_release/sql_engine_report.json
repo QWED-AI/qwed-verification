@@ -1,0 +1,168 @@
+{
+  "test_type": "SQL_ENGINE_VALIDATION",
+  "summary": {
+    "total_tests": 11,
+    "tests_passed": 8,
+    "tests_failed": 3,
+    "accuracy": "72.7%"
+  },
+  "failed_tests": [
+    {
+      "test_id": "sql_valid_01",
+      "query": "SELECT name, email FROM users WHERE age > 18",
+      "expected_valid": true,
+      "actual_valid": false,
+      "test_passed": false,
+      "issues_found": [],
+      "why_test": "Simple SELECT should be valid",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:17.780981"
+    },
+    {
+      "test_id": "sql_valid_02",
+      "query": "SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id",
+      "expected_valid": true,
+      "actual_valid": false,
+      "test_passed": false,
+      "issues_found": [],
+      "why_test": "JOIN should work",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:17.870651"
+    },
+    {
+      "test_id": "sql_injection_01",
+      "query": "SELECT * FROM users WHERE name = 'admin' OR '1'='1'",
+      "expected_valid": true,
+      "actual_valid": false,
+      "test_passed": false,
+      "issues_found": [],
+      "why_test": "Classic SQL injection pattern (valid syntax)",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:18.633402"
+    }
+  ],
+  "all_results": [
+    {
+      "test_id": "sql_valid_01",
+      "query": "SELECT name, email FROM users WHERE age > 18",
+      "expected_valid": true,
+      "actual_valid": false,
+      "test_passed": false,
+      "issues_found": [],
+      "why_test": "Simple SELECT should be valid",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:17.780981"
+    },
+    {
+      "test_id": "sql_valid_02",
+      "query": "SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id",
+      "expected_valid": true,
+      "actual_valid": false,
+      "test_passed": false,
+      "issues_found": [],
+      "why_test": "JOIN should work",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:17.870651"
+    },
+    {
+      "test_id": "sql_invalid_table",
+      "query": "SELECT * FROM products",
+      "expected_valid": false,
+      "actual_valid": false,
+      "test_passed": true,
+      "issues_found": [],
+      "why_test": "'products' table doesn't exist",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:17.950610"
+    },
+    {
+      "test_id": "sql_invalid_table_join",
+      "query": "SELECT * FROM users u JOIN payments p ON u.id = p.user_id",
+      "expected_valid": false,
+      "actual_valid": false,
+      "test_passed": true,
+      "issues_found": [],
+      "why_test": "'payments' table doesn't exist",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:18.050045"
+    },
+    {
+      "test_id": "sql_invalid_column",
+      "query": "SELECT name, phone FROM users",
+      "expected_valid": false,
+      "actual_valid": false,
+      "test_passed": true,
+      "issues_found": [],
+      "why_test": "'phone' column doesn't exist in users",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:18.145685"
+    },
+    {
+      "test_id": "sql_invalid_column_where",
+      "query": "SELECT * FROM users WHERE salary > 50000",
+      "expected_valid": false,
+      "actual_valid": false,
+      "test_passed": true,
+      "issues_found": [],
+      "why_test": "'salary' column doesn't exist",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:18.238688"
+    },
+    {
+      "test_id": "sql_drop_table",
+      "query": "DROP TABLE users",
+      "expected_valid": false,
+      "actual_valid": false,
+      "test_passed": true,
+      "issues_found": [],
+      "why_test": "DROP should be forbidden",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:18.333902"
+    },
+    {
+      "test_id": "sql_delete_all",
+      "query": "DELETE FROM users",
+      "expected_valid": false,
+      "actual_valid": false,
+      "test_passed": true,
+      "issues_found": [],
+      "why_test": "DELETE should be forbidden",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:18.445745"
+    },
+    {
+      "test_id": "sql_alter_table",
+      "query": "ALTER TABLE users ADD COLUMN password TEXT",
+      "expected_valid": false,
+      "actual_valid": false,
+      "test_passed": true,
+      "issues_found": [],
+      "why_test": "ALTER should be forbidden",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:18.538856"
+    },
+    {
+      "test_id": "sql_injection_01",
+      "query": "SELECT * FROM users WHERE name = 'admin' OR '1'='1'",
+      "expected_valid": true,
+      "actual_valid": false,
+      "test_passed": false,
+      "issues_found": [],
+      "why_test": "Classic SQL injection pattern (valid syntax)",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:18.633402"
+    },
+    {
+      "test_id": "sql_syntax_error",
+      "query": "SELCT * FORM users",
+      "expected_valid": false,
+      "actual_valid": false,
+      "test_passed": true,
+      "issues_found": [],
+      "why_test": "Typos should be caught",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:18.756025"
+    }
+  ],
+  "timestamp": "2025-11-30T11:38:18.756025"
+}

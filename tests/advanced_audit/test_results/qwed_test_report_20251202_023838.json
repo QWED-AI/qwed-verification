@@ -1,0 +1,366 @@
+{
+  "metadata": {
+    "report_type": "QWED_COMPREHENSIVE_AUDIT",
+    "generated_at": "2025-12-02T02:38:38.185732",
+    "version": "1.0"
+  },
+  "summary": {
+    "timestamp": "2025-12-02T02:38:38.184718",
+    "duration_seconds": 1.153582,
+    "total_tests": 6,
+    "passed": 3,
+    "failed": 3,
+    "pass_rate": 50.0,
+    "by_priority": {
+      "critical": {
+        "total": 4,
+        "passed": 2,
+        "pass_rate": 50.0
+      },
+      "high": {
+        "total": 2,
+        "passed": 1,
+        "pass_rate": 50.0
+      },
+      "medium": {
+        "total": 0,
+        "passed": 0,
+        "pass_rate": 0
+      }
+    },
+    "by_engine": {
+      "stats": {
+        "total": 6,
+        "passed": 3,
+        "pass_rate": 50.0
+      }
+    }
+  },
+  "results": [
+    {
+      "test_id": "STATS_IMP_001",
+      "test_name": "Detect os module in statistical code",
+      "engine": "stats",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "CRITICAL - os.system() detected",
+      "actual_result": {
+        "is_safe": true,
+        "issues": [
+          "Import of restricted module: os - verify usage is necessary",
+          "Use of os.system detected - verify security context"
+        ],
+        "detailed_issues": [
+          {
+            "severity": "WARNING",
+            "message": "Import of restricted module: os - verify usage is necessary",
+            "line": 3,
+            "requires_manual_review": true,
+            "remediation": "Ensure module usage is validated and necessary for functionality"
+          },
+          {
+            "severity": "WARNING",
+            "message": "Use of os.system detected - verify security context",
+            "line": 6,
+            "requires_manual_review": true,
+            "remediation": null
+          }
+        ],
+        "requires_manual_review": true,
+        "severity_summary": {
+          "critical": 0,
+          "warning": 2,
+          "info": 0
+        }
+      },
+      "error": null,
+      "latency_ms": 205.7931423187256,
+      "timestamp": "2025-12-02T02:38:37.235431"
+    },
+    {
+      "test_id": "STATS_IMP_002",
+      "test_name": "Detect subprocess in stats code",
+      "engine": "stats",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "CRITICAL - subprocess usage",
+      "actual_result": {
+        "is_safe": true,
+        "issues": [
+          "Import of restricted module: subprocess - verify usage is necessary",
+          "Use of subprocess.check_output detected - verify security context"
+        ],
+        "detailed_issues": [
+          {
+            "severity": "WARNING",
+            "message": "Import of restricted module: subprocess - verify usage is necessary",
+            "line": 2,
+            "requires_manual_review": true,
+            "remediation": "Ensure module usage is validated and necessary for functionality"
+          },
+          {
+            "severity": "WARNING",
+            "message": "Use of subprocess.check_output detected - verify security context",
+            "line": 5,
+            "requires_manual_review": true,
+            "remediation": null
+          }
+        ],
+        "requires_manual_review": true,
+        "severity_summary": {
+          "critical": 0,
+          "warning": 2,
+          "info": 0
+        }
+      },
+      "error": null,
+      "latency_ms": 228.47867012023926,
+      "timestamp": "2025-12-02T02:38:37.464910"
+    },
+    {
+      "test_id": "STATS_IMP_003",
+      "test_name": "Detect pickle.loads() RCE risk",
+      "engine": "stats",
+      "priority": "CRITICAL",
+      "passed": true,
+      "expected_result": "CRITICAL - pickle.loads() detected",
+      "actual_result": {
+        "is_safe": false,
+        "issues": [
+          "Import of dangerous module: pickle",
+          "File I/O with potential user input - path traversal risk",
+          "Dangerous function: pickle.loads"
+        ],
+        "detailed_issues": [
+          {
+            "severity": "CRITICAL",
+            "message": "Import of dangerous module: pickle",
+            "line": 2,
+            "requires_manual_review": false,
+            "remediation": "Use json or safer serialization instead"
+          },
+          {
+            "severity": "CRITICAL",
+            "message": "File I/O with potential user input - path traversal risk",
+            "line": 5,
+            "requires_manual_review": false,
+            "remediation": "Validate and sanitize file paths against whitelist"
+          },
+          {
+            "severity": "CRITICAL",
+            "message": "Dangerous function: pickle.loads",
+            "line": 7,
+            "requires_manual_review": false,
+            "remediation": "Avoid pickle.loads() - use safer alternatives"
+          }
+        ],
+        "requires_manual_review": false,
+        "severity_summary": {
+          "critical": 3,
+          "warning": 0,
+          "info": 0
+        }
+      },
+      "error": null,
+      "latency_ms": 169.38328742980957,
+      "timestamp": "2025-12-02T02:38:37.635298"
+    },
+    {
+      "test_id": "STATS_SEC_001",
+      "test_name": "Detect DataFrame.eval() injection risk",
+      "engine": "stats",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "CRITICAL - eval() with user input detected",
+      "actual_result": {
+        "is_safe": true,
+        "issues": [],
+        "detailed_issues": [],
+        "requires_manual_review": false,
+        "severity_summary": {
+          "critical": 0,
+          "warning": 0,
+          "info": 0
+        }
+      },
+      "error": null,
+      "latency_ms": 160.4599952697754,
+      "timestamp": "2025-12-02T02:38:37.797265"
+    },
+    {
+      "test_id": "STATS_SEC_002",
+      "test_name": "Detect exec() in analysis code",
+      "engine": "stats",
+      "priority": "CRITICAL",
+      "passed": true,
+      "expected_result": "CRITICAL - exec() with user input",
+      "actual_result": {
+        "is_safe": false,
+        "issues": [
+          "Dangerous function: exec"
+        ],
+        "detailed_issues": [
+          {
+            "severity": "CRITICAL",
+            "message": "Dangerous function: exec",
+            "line": 3,
+            "requires_manual_review": false,
+            "remediation": "Avoid exec() - use safer alternatives"
+          }
+        ],
+        "requires_manual_review": false,
+        "severity_summary": {
+          "critical": 1,
+          "warning": 0,
+          "info": 0
+        }
+      },
+      "error": null,
+      "latency_ms": 188.2777214050293,
+      "timestamp": "2025-12-02T02:38:37.986824"
+    },
+    {
+      "test_id": "STATS_SAFE_001",
+      "test_name": "Allow safe pandas operations",
+      "engine": "stats",
+      "priority": "HIGH",
+      "passed": true,
+      "expected_result": "SAFE - Standard pandas operations",
+      "actual_result": {
+        "is_safe": true,
+        "issues": [],
+        "detailed_issues": [],
+        "requires_manual_review": false,
+        "severity_summary": {
+          "critical": 0,
+          "warning": 0,
+          "info": 0
+        }
+      },
+      "error": null,
+      "latency_ms": 192.4748420715332,
+      "timestamp": "2025-12-02T02:38:38.181213"
+    }
+  ],
+  "failures": [
+    {
+      "test_id": "STATS_IMP_001",
+      "test_name": "Detect os module in statistical code",
+      "engine": "stats",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "CRITICAL - os.system() detected",
+      "actual_result": {
+        "is_safe": true,
+        "issues": [
+          "Import of restricted module: os - verify usage is necessary",
+          "Use of os.system detected - verify security context"
+        ],
+        "detailed_issues": [
+          {
+            "severity": "WARNING",
+            "message": "Import of restricted module: os - verify usage is necessary",
+            "line": 3,
+            "requires_manual_review": true,
+            "remediation": "Ensure module usage is validated and necessary for functionality"
+          },
+          {
+            "severity": "WARNING",
+            "message": "Use of os.system detected - verify security context",
+            "line": 6,
+            "requires_manual_review": true,
+            "remediation": null
+          }
+        ],
+        "requires_manual_review": true,
+        "severity_summary": {
+          "critical": 0,
+          "warning": 2,
+          "info": 0
+        }
+      },
+      "error": null,
+      "latency_ms": 205.7931423187256,
+      "timestamp": "2025-12-02T02:38:37.235431"
+    },
+    {
+      "test_id": "STATS_IMP_002",
+      "test_name": "Detect subprocess in stats code",
+      "engine": "stats",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "CRITICAL - subprocess usage",
+      "actual_result": {
+        "is_safe": true,
+        "issues": [
+          "Import of restricted module: subprocess - verify usage is necessary",
+          "Use of subprocess.check_output detected - verify security context"
+        ],
+        "detailed_issues": [
+          {
+            "severity": "WARNING",
+            "message": "Import of restricted module: subprocess - verify usage is necessary",
+            "line": 2,
+            "requires_manual_review": true,
+            "remediation": "Ensure module usage is validated and necessary for functionality"
+          },
+          {
+            "severity": "WARNING",
+            "message": "Use of subprocess.check_output detected - verify security context",
+            "line": 5,
+            "requires_manual_review": true,
+            "remediation": null
+          }
+        ],
+        "requires_manual_review": true,
+        "severity_summary": {
+          "critical": 0,
+          "warning": 2,
+          "info": 0
+        }
+      },
+      "error": null,
+      "latency_ms": 228.47867012023926,
+      "timestamp": "2025-12-02T02:38:37.464910"
+    },
+    {
+      "test_id": "STATS_SEC_001",
+      "test_name": "Detect DataFrame.eval() injection risk",
+      "engine": "stats",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "CRITICAL - eval() with user input detected",
+      "actual_result": {
+        "is_safe": true,
+        "issues": [],
+        "detailed_issues": [],
+        "requires_manual_review": false,
+        "severity_summary": {
+          "critical": 0,
+          "warning": 0,
+          "info": 0
+        }
+      },
+      "error": null,
+      "latency_ms": 160.4599952697754,
+      "timestamp": "2025-12-02T02:38:37.797265"
+    }
+  ],
+  "statistics": {
+    "total_tests": 6,
+    "passed_count": 3,
+    "failed_count": 3,
+    "latency": {
+      "min_ms": 160.4599952697754,
+      "max_ms": 228.47867012023926,
+      "avg_ms": 190.81127643585205
+    },
+    "engines_tested": [
+      "stats"
+    ],
+    "priorities_tested": [
+      "CRITICAL",
+      "HIGH"
+    ]
+  }
+}

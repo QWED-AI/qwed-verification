@@ -1,0 +1,277 @@
+{
+  "metadata": {
+    "report_type": "QWED_COMPREHENSIVE_AUDIT",
+    "generated_at": "2025-12-02T02:31:14.182372",
+    "version": "1.0"
+  },
+  "summary": {
+    "timestamp": "2025-12-02T02:31:14.180178",
+    "duration_seconds": 1.242545,
+    "total_tests": 9,
+    "passed": 0,
+    "failed": 9,
+    "pass_rate": 0.0,
+    "by_priority": {
+      "critical": {
+        "total": 4,
+        "passed": 0,
+        "pass_rate": 0.0
+      },
+      "high": {
+        "total": 3,
+        "passed": 0,
+        "pass_rate": 0.0
+      },
+      "medium": {
+        "total": 2,
+        "passed": 0,
+        "pass_rate": 0.0
+      }
+    },
+    "by_engine": {
+      "logic": {
+        "total": 9,
+        "passed": 0,
+        "pass_rate": 0.0
+      }
+    }
+  },
+  "results": [
+    {
+      "test_id": "LOGIC_SAT_001",
+      "test_name": "Verify simple SAT constraints",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "SAT with solution",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"x > 5 AND x < 10\",\"context\":{}}}]}",
+      "latency_ms": 115.41485786437988,
+      "timestamp": "2025-12-02T02:31:13.051407"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_001",
+      "test_name": "Detect simple contradiction (UNSAT)",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "UNSAT (contradictory)",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"x > 10 AND x < 5\",\"context\":{}}}]}",
+      "latency_ms": 124.79043006896973,
+      "timestamp": "2025-12-02T02:31:13.177198"
+    },
+    {
+      "test_id": "LOGIC_SAT_002",
+      "test_name": "Verify boolean logic constraints",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "SAT with boolean solution",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"P or Q\",\"context\":{}}}]}",
+      "latency_ms": 130.58209419250488,
+      "timestamp": "2025-12-02T02:31:13.308781"
+    },
+    {
+      "test_id": "LOGIC_SAT_003",
+      "test_name": "Verify inequality chain (x < y < z)",
+      "engine": "logic",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "SAT",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"x < y AND y < z\",\"context\":{}}}]}",
+      "latency_ms": 121.26874923706055,
+      "timestamp": "2025-12-02T02:31:13.432062"
+    },
+    {
+      "test_id": "LOGIC_SAT_004",
+      "test_name": "Verify divisibility constraint (x % 5 == 0)",
+      "engine": "logic",
+      "priority": "MEDIUM",
+      "passed": false,
+      "expected_result": "SAT",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"x % 5 == 0 AND x > 0 AND x < 20\",\"context\":{}}}]}",
+      "latency_ms": 160.80927848815918,
+      "timestamp": "2025-12-02T02:31:13.595295"
+    },
+    {
+      "test_id": "LOGIC_SAT_005",
+      "test_name": "Verify implication (P implies Q)",
+      "engine": "logic",
+      "priority": "MEDIUM",
+      "passed": false,
+      "expected_result": "SAT",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"P and (not P or Q)\",\"context\":{}}}]}",
+      "latency_ms": 103.88422012329102,
+      "timestamp": "2025-12-02T02:31:13.701826"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_002",
+      "test_name": "Detect circular dependency (x=y+1 AND y=x+1)",
+      "engine": "logic",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "UNSAT (circular)",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"x == y + 1 AND y == x + 1\",\"context\":{}}}]}",
+      "latency_ms": 179.77452278137207,
+      "timestamp": "2025-12-02T02:31:13.884107"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_003",
+      "test_name": "Detect boolean contradiction (P AND NOT P)",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "UNSAT",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"P and not P\",\"context\":{}}}]}",
+      "latency_ms": 162.18066215515137,
+      "timestamp": "2025-12-02T02:31:14.047571"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_004",
+      "test_name": "Detect conflict in multiple constraints",
+      "engine": "logic",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "UNSAT",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"x > 5 AND x < 10 AND x == 15\",\"context\":{}}}]}",
+      "latency_ms": 126.35469436645508,
+      "timestamp": "2025-12-02T02:31:14.176526"
+    }
+  ],
+  "failures": [
+    {
+      "test_id": "LOGIC_SAT_001",
+      "test_name": "Verify simple SAT constraints",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "SAT with solution",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"x > 5 AND x < 10\",\"context\":{}}}]}",
+      "latency_ms": 115.41485786437988,
+      "timestamp": "2025-12-02T02:31:13.051407"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_001",
+      "test_name": "Detect simple contradiction (UNSAT)",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "UNSAT (contradictory)",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"x > 10 AND x < 5\",\"context\":{}}}]}",
+      "latency_ms": 124.79043006896973,
+      "timestamp": "2025-12-02T02:31:13.177198"
+    },
+    {
+      "test_id": "LOGIC_SAT_002",
+      "test_name": "Verify boolean logic constraints",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "SAT with boolean solution",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"P or Q\",\"context\":{}}}]}",
+      "latency_ms": 130.58209419250488,
+      "timestamp": "2025-12-02T02:31:13.308781"
+    },
+    {
+      "test_id": "LOGIC_SAT_003",
+      "test_name": "Verify inequality chain (x < y < z)",
+      "engine": "logic",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "SAT",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"x < y AND y < z\",\"context\":{}}}]}",
+      "latency_ms": 121.26874923706055,
+      "timestamp": "2025-12-02T02:31:13.432062"
+    },
+    {
+      "test_id": "LOGIC_SAT_004",
+      "test_name": "Verify divisibility constraint (x % 5 == 0)",
+      "engine": "logic",
+      "priority": "MEDIUM",
+      "passed": false,
+      "expected_result": "SAT",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"x % 5 == 0 AND x > 0 AND x < 20\",\"context\":{}}}]}",
+      "latency_ms": 160.80927848815918,
+      "timestamp": "2025-12-02T02:31:13.595295"
+    },
+    {
+      "test_id": "LOGIC_SAT_005",
+      "test_name": "Verify implication (P implies Q)",
+      "engine": "logic",
+      "priority": "MEDIUM",
+      "passed": false,
+      "expected_result": "SAT",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"P and (not P or Q)\",\"context\":{}}}]}",
+      "latency_ms": 103.88422012329102,
+      "timestamp": "2025-12-02T02:31:13.701826"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_002",
+      "test_name": "Detect circular dependency (x=y+1 AND y=x+1)",
+      "engine": "logic",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "UNSAT (circular)",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"x == y + 1 AND y == x + 1\",\"context\":{}}}]}",
+      "latency_ms": 179.77452278137207,
+      "timestamp": "2025-12-02T02:31:13.884107"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_003",
+      "test_name": "Detect boolean contradiction (P AND NOT P)",
+      "engine": "logic",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "UNSAT",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"P and not P\",\"context\":{}}}]}",
+      "latency_ms": 162.18066215515137,
+      "timestamp": "2025-12-02T02:31:14.047571"
+    },
+    {
+      "test_id": "LOGIC_UNSAT_004",
+      "test_name": "Detect conflict in multiple constraints",
+      "engine": "logic",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "UNSAT",
+      "actual_result": {},
+      "error": "HTTP 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"query\"],\"msg\":\"Field required\",\"input\":{\"constraints\":\"x > 5 AND x < 10 AND x == 15\",\"context\":{}}}]}",
+      "latency_ms": 126.35469436645508,
+      "timestamp": "2025-12-02T02:31:14.176526"
+    }
+  ],
+  "statistics": {
+    "total_tests": 9,
+    "passed_count": 0,
+    "failed_count": 9,
+    "latency": {
+      "min_ms": 103.88422012329102,
+      "max_ms": 179.77452278137207,
+      "avg_ms": 136.1177232530382
+    },
+    "engines_tested": [
+      "logic"
+    ],
+    "priorities_tested": [
+      "MEDIUM",
+      "CRITICAL",
+      "HIGH"
+    ]
+  }
+}

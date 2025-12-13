@@ -1,0 +1,289 @@
+{
+  "metadata": {
+    "report_type": "QWED_COMPREHENSIVE_AUDIT",
+    "generated_at": "2025-12-01T06:10:57.900563",
+    "version": "1.0"
+  },
+  "summary": {
+    "timestamp": "2025-12-01T06:10:57.899515",
+    "duration_seconds": 1.106124,
+    "total_tests": 9,
+    "passed": 0,
+    "failed": 9,
+    "pass_rate": 0.0,
+    "by_priority": {
+      "critical": {
+        "total": 3,
+        "passed": 0,
+        "pass_rate": 0.0
+      },
+      "high": {
+        "total": 5,
+        "passed": 0,
+        "pass_rate": 0.0
+      },
+      "medium": {
+        "total": 1,
+        "passed": 0,
+        "pass_rate": 0.0
+      }
+    },
+    "by_engine": {
+      "math": {
+        "total": 9,
+        "passed": 0,
+        "pass_rate": 0.0
+      }
+    }
+  },
+  "results": [
+    {
+      "test_id": "MATH_AMB_001",
+      "test_name": "Detect order of operations ambiguity",
+      "engine": "math",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "WARNING - Ambiguous expression",
+      "actual_result": {},
+      "error": "HTTP 404: {\"detail\":\"Not Found\"}",
+      "latency_ms": 81.9399356842041,
+      "timestamp": "2025-12-01T06:10:56.874542"
+    },
+    {
+      "test_id": "MATH_AMB_002",
+      "test_name": "Handle implicit multiplication (2x vs 2*x)",
+      "engine": "math",
+      "priority": "MEDIUM",
+      "passed": false,
+      "expected_result": "Both parse successfully",
+      "actual_result": {},
+      "error": "HTTP 404: {\"detail\":\"Not Found\"}",
+      "latency_ms": 230.3619384765625,
+      "timestamp": "2025-12-01T06:10:57.114485"
+    },
+    {
+      "test_id": "MATH_AMB_003",
+      "test_name": "Detect division by zero",
+      "engine": "math",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "Error or warning about division by zero",
+      "actual_result": {
+        "error": "HTTP 404: {\"detail\":\"Not Found\"}"
+      },
+      "error": null,
+      "latency_ms": 108.45565795898438,
+      "timestamp": "2025-12-01T06:10:57.224453"
+    },
+    {
+      "test_id": "MATH_DOM_001",
+      "test_name": "Detect sqrt of negative in real domain",
+      "engine": "math",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "Error - undefined in real domain",
+      "actual_result": {
+        "error": "HTTP 404: {\"detail\":\"Not Found\"}"
+      },
+      "error": null,
+      "latency_ms": 109.71403121948242,
+      "timestamp": "2025-12-01T06:10:57.334167"
+    },
+    {
+      "test_id": "MATH_DOM_002",
+      "test_name": "Detect log(0) undefined",
+      "engine": "math",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "Error - log(0) undefined",
+      "actual_result": {
+        "error": "HTTP 404: {\"detail\":\"Not Found\"}"
+      },
+      "error": null,
+      "latency_ms": 132.97080993652344,
+      "timestamp": "2025-12-01T06:10:57.468143"
+    },
+    {
+      "test_id": "MATH_SYM_001",
+      "test_name": "Verify true algebraic identity",
+      "engine": "math",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "VERIFIED - Identity is true",
+      "actual_result": {},
+      "error": "HTTP 404: {\"detail\":\"Not Found\"}",
+      "latency_ms": 95.63612937927246,
+      "timestamp": "2025-12-01T06:10:57.564829"
+    },
+    {
+      "test_id": "MATH_SYM_002",
+      "test_name": "Detect false algebraic identity (missing 2xy)",
+      "engine": "math",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "FALSE - Missing 2xy term",
+      "actual_result": {},
+      "error": "HTTP 404: {\"detail\":\"Not Found\"}",
+      "latency_ms": 146.04926109313965,
+      "timestamp": "2025-12-01T06:10:57.711864"
+    },
+    {
+      "test_id": "MATH_SYM_003",
+      "test_name": "Detect sqrt(x²) ≠ x (should be |x|)",
+      "engine": "math",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "FALSE - Should be |x|",
+      "actual_result": {},
+      "error": "HTTP 404: {\"detail\":\"Not Found\"}",
+      "latency_ms": 91.91060066223145,
+      "timestamp": "2025-12-01T06:10:57.804774"
+    },
+    {
+      "test_id": "MATH_SYM_004",
+      "test_name": "Verify simple arithmetic (2+2=4)",
+      "engine": "math",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "TRUE",
+      "actual_result": {},
+      "error": "HTTP 404: {\"detail\":\"Not Found\"}",
+      "latency_ms": 89.89572525024414,
+      "timestamp": "2025-12-01T06:10:57.896353"
+    }
+  ],
+  "failures": [
+    {
+      "test_id": "MATH_AMB_001",
+      "test_name": "Detect order of operations ambiguity",
+      "engine": "math",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "WARNING - Ambiguous expression",
+      "actual_result": {},
+      "error": "HTTP 404: {\"detail\":\"Not Found\"}",
+      "latency_ms": 81.9399356842041,
+      "timestamp": "2025-12-01T06:10:56.874542"
+    },
+    {
+      "test_id": "MATH_AMB_002",
+      "test_name": "Handle implicit multiplication (2x vs 2*x)",
+      "engine": "math",
+      "priority": "MEDIUM",
+      "passed": false,
+      "expected_result": "Both parse successfully",
+      "actual_result": {},
+      "error": "HTTP 404: {\"detail\":\"Not Found\"}",
+      "latency_ms": 230.3619384765625,
+      "timestamp": "2025-12-01T06:10:57.114485"
+    },
+    {
+      "test_id": "MATH_AMB_003",
+      "test_name": "Detect division by zero",
+      "engine": "math",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "Error or warning about division by zero",
+      "actual_result": {
+        "error": "HTTP 404: {\"detail\":\"Not Found\"}"
+      },
+      "error": null,
+      "latency_ms": 108.45565795898438,
+      "timestamp": "2025-12-01T06:10:57.224453"
+    },
+    {
+      "test_id": "MATH_DOM_001",
+      "test_name": "Detect sqrt of negative in real domain",
+      "engine": "math",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "Error - undefined in real domain",
+      "actual_result": {
+        "error": "HTTP 404: {\"detail\":\"Not Found\"}"
+      },
+      "error": null,
+      "latency_ms": 109.71403121948242,
+      "timestamp": "2025-12-01T06:10:57.334167"
+    },
+    {
+      "test_id": "MATH_DOM_002",
+      "test_name": "Detect log(0) undefined",
+      "engine": "math",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "Error - log(0) undefined",
+      "actual_result": {
+        "error": "HTTP 404: {\"detail\":\"Not Found\"}"
+      },
+      "error": null,
+      "latency_ms": 132.97080993652344,
+      "timestamp": "2025-12-01T06:10:57.468143"
+    },
+    {
+      "test_id": "MATH_SYM_001",
+      "test_name": "Verify true algebraic identity",
+      "engine": "math",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "VERIFIED - Identity is true",
+      "actual_result": {},
+      "error": "HTTP 404: {\"detail\":\"Not Found\"}",
+      "latency_ms": 95.63612937927246,
+      "timestamp": "2025-12-01T06:10:57.564829"
+    },
+    {
+      "test_id": "MATH_SYM_002",
+      "test_name": "Detect false algebraic identity (missing 2xy)",
+      "engine": "math",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "FALSE - Missing 2xy term",
+      "actual_result": {},
+      "error": "HTTP 404: {\"detail\":\"Not Found\"}",
+      "latency_ms": 146.04926109313965,
+      "timestamp": "2025-12-01T06:10:57.711864"
+    },
+    {
+      "test_id": "MATH_SYM_003",
+      "test_name": "Detect sqrt(x²) ≠ x (should be |x|)",
+      "engine": "math",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "FALSE - Should be |x|",
+      "actual_result": {},
+      "error": "HTTP 404: {\"detail\":\"Not Found\"}",
+      "latency_ms": 91.91060066223145,
+      "timestamp": "2025-12-01T06:10:57.804774"
+    },
+    {
+      "test_id": "MATH_SYM_004",
+      "test_name": "Verify simple arithmetic (2+2=4)",
+      "engine": "math",
+      "priority": "CRITICAL",
+      "passed": false,
+      "expected_result": "TRUE",
+      "actual_result": {},
+      "error": "HTTP 404: {\"detail\":\"Not Found\"}",
+      "latency_ms": 89.89572525024414,
+      "timestamp": "2025-12-01T06:10:57.896353"
+    }
+  ],
+  "statistics": {
+    "total_tests": 9,
+    "passed_count": 0,
+    "failed_count": 9,
+    "latency": {
+      "min_ms": 81.9399356842041,
+      "max_ms": 230.3619384765625,
+      "avg_ms": 120.77045440673828
+    },
+    "engines_tested": [
+      "math"
+    ],
+    "priorities_tested": [
+      "HIGH",
+      "MEDIUM",
+      "CRITICAL"
+    ]
+  }
+}

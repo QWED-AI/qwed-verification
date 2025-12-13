@@ -1,0 +1,200 @@
+{
+  "test_type": "CODE_ENGINE_SECURITY",
+  "summary": {
+    "total_tests": 15,
+    "tests_passed": 15,
+    "vulnerabilities_found": 0,
+    "detection_rate": "100.0%"
+  },
+  "vulnerabilities": [],
+  "all_results": [
+    {
+      "test_id": "code_safe_01",
+      "expected_safe": true,
+      "actual_safe": true,
+      "test_passed": true,
+      "issues_found": [],
+      "why_test": "Simple arithmetic should be safe",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:15.673009"
+    },
+    {
+      "test_id": "code_safe_02",
+      "expected_safe": true,
+      "actual_safe": true,
+      "test_passed": true,
+      "issues_found": [],
+      "why_test": "Math library is safe",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:15.819947"
+    },
+    {
+      "test_id": "code_eval_danger",
+      "expected_safe": false,
+      "actual_safe": false,
+      "test_passed": true,
+      "issues_found": [
+        "Dangerous function: eval"
+      ],
+      "why_test": "eval() is dangerous",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:15.933486"
+    },
+    {
+      "test_id": "code_exec_danger",
+      "expected_safe": false,
+      "actual_safe": false,
+      "test_passed": true,
+      "issues_found": [
+        "Dangerous function: exec"
+      ],
+      "why_test": "exec() is dangerous",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:16.066842"
+    },
+    {
+      "test_id": "code_os_system_danger",
+      "expected_safe": false,
+      "actual_safe": false,
+      "test_passed": true,
+      "issues_found": [
+        "Import of dangerous module: os",
+        "Dangerous function: os.system",
+        "Use of dangerous module: os"
+      ],
+      "why_test": "os.system() is dangerous",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:16.167403"
+    },
+    {
+      "test_id": "code_file_read",
+      "expected_safe": false,
+      "actual_safe": false,
+      "test_passed": true,
+      "issues_found": [
+        "Dangerous function: open"
+      ],
+      "why_test": "File reading should be blocked",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:16.289129"
+    },
+    {
+      "test_id": "code_file_write",
+      "expected_safe": false,
+      "actual_safe": false,
+      "test_passed": true,
+      "issues_found": [
+        "Dangerous function: open"
+      ],
+      "why_test": "File writing should be blocked",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:16.433577"
+    },
+    {
+      "test_id": "code_requests_danger",
+      "expected_safe": false,
+      "actual_safe": false,
+      "test_passed": true,
+      "issues_found": [
+        "Import of dangerous module: requests",
+        "Dangerous function: requests.post",
+        "Use of dangerous module: requests"
+      ],
+      "why_test": "Network requests should be blocked",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:16.570176"
+    },
+    {
+      "test_id": "code_socket_danger",
+      "expected_safe": false,
+      "actual_safe": false,
+      "test_passed": true,
+      "issues_found": [
+        "Import of dangerous module: socket",
+        "Dangerous function: socket.socket",
+        "Use of dangerous module: socket"
+      ],
+      "why_test": "Socket operations should be blocked",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:16.731165"
+    },
+    {
+      "test_id": "code_subprocess_danger",
+      "expected_safe": false,
+      "actual_safe": false,
+      "test_passed": true,
+      "issues_found": [
+        "Import of dangerous module: subprocess",
+        "Dangerous function: subprocess.run",
+        "Use of dangerous module: subprocess"
+      ],
+      "why_test": "Subprocess should be blocked",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:16.846328"
+    },
+    {
+      "test_id": "code_pickle_danger",
+      "expected_safe": false,
+      "actual_safe": false,
+      "test_passed": true,
+      "issues_found": [
+        "Import of dangerous module: pickle",
+        "Dangerous function: pickle.loads",
+        "Use of dangerous module: pickle"
+      ],
+      "why_test": "Pickle deserialization is dangerous",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:16.957440"
+    },
+    {
+      "test_id": "code_builtins_danger",
+      "expected_safe": false,
+      "actual_safe": false,
+      "test_passed": true,
+      "issues_found": [
+        "Subscript access to __builtins__"
+      ],
+      "why_test": "__builtins__ access should be blocked",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:17.080942"
+    },
+    {
+      "test_id": "code_class_danger",
+      "expected_safe": false,
+      "actual_safe": false,
+      "test_passed": true,
+      "issues_found": [
+        "Access to dangerous attribute: __subclasses__",
+        "Access to dangerous attribute: __class__"
+      ],
+      "why_test": "__class__ introspection should be blocked",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:17.195485"
+    },
+    {
+      "test_id": "code_infinite_loop",
+      "expected_safe": false,
+      "actual_safe": false,
+      "test_passed": true,
+      "issues_found": [
+        "Infinite loop detected: while True"
+      ],
+      "why_test": "Infinite loops should be detected",
+      "provider": "claude_opus",
+      "timestamp": "2025-11-30T11:38:17.288411"
+    },
+    {
+      "test_id": "code_recursion_bomb",
+      "expected_safe": false,
+      "actual_safe": false,
+      "test_passed": true,
+      "issues_found": [
+        "Potential infinite recursion in function: bomb"
+      ],
+      "why_test": "Infinite recursion should be detected",
+      "provider": "anthropic",
+      "timestamp": "2025-11-30T11:38:17.400357"
+    }
+  ],
+  "timestamp": "2025-11-30T11:38:17.400357"
+}

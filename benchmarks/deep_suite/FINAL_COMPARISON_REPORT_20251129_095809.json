@@ -1,0 +1,1091 @@
+{
+  "test_run_timestamp": "20251129_095809",
+  "difficulty_progression": {
+    "MEDIUM_HARD": {
+      "math_tests": 16,
+      "logic_tests": 16,
+      "total_tests": 32,
+      "errors_caught": 10
+    },
+    "EXTREME": {
+      "total_tests": 0,
+      "errors_caught": 0,
+      "catch_rate": "0%"
+    }
+  },
+  "overall_summary": {
+    "total_tests_run": 32,
+    "total_errors_caught": 10
+  },
+  "detailed_reports": {
+    "medium_math": {
+      "summary": {
+        "total_tests": 16,
+        "qwed_caught_errors": 0,
+        "correct_answers": 7,
+        "test_errors": 2,
+        "catch_rate": "0.0%"
+      },
+      "caught_errors": [],
+      "all_results": [
+        {
+          "test_id": "math_chain_01",
+          "query": "Compute: 156 + 289 + 134. Show your working step-by-step and final numeric answer.",
+          "provider": "anthropic",
+          "expected": 579,
+          "llm_answer": 579.0,
+          "qwed_status": "VERIFIED",
+          "qwed_verified": true,
+          "result_type": "CORRECT",
+          "caught_error": false,
+          "error_type": null,
+          "why_hard": "LLMs print intermediate results (156, 445, 579) - extractor may grab wrong number",
+          "full_response": {
+            "status": "VERIFIED",
+            "final_answer": 579.0,
+            "user_query": "Compute: 156 + 289 + 134. Show your working step-by-step and final numeric answer.",
+            "translation": {
+              "expression": "156 + 289 + 134",
+              "claimed_answer": 579.0,
+              "reasoning": "Adding three numbers step-by-step:\nStep 1: 156 + 289 = 445\nStep 2: 445 + 134 = 579\nTherefore, 156 + 289 + 134 = 579",
+              "confidence": 1.0
+            },
+            "verification": {
+              "is_correct": true,
+              "calculated_value": 579.0,
+              "claimed_value": 579.0,
+              "diff": 0.0,
+              "status": "VERIFIED"
+            },
+            "provider_used": "anthropic",
+            "latency_ms": 4438.513278961182
+          },
+          "timestamp": "2025-11-29T09:58:14.638749"
+        },
+        {
+          "test_id": "math_chain_02",
+          "query": "What is (47 \u00d7 23) + (1024 \u00f7 16) ? Show each operation step-by-step.",
+          "provider": "claude_opus",
+          "expected": 1145,
+          "llm_answer": 1145.0,
+          "qwed_status": "CORRECTION_NEEDED",
+          "qwed_verified": false,
+          "result_type": "CORRECT",
+          "caught_error": false,
+          "error_type": null,
+          "why_hard": "Multi-op with parentheses, different formatting per step",
+          "full_response": {
+            "status": "CORRECTION_NEEDED",
+            "final_answer": 1145.0,
+            "user_query": "What is (47 \u00d7 23) + (1024 \u00f7 16) ? Show each operation step-by-step.",
+            "translation": {
+              "expression": "(47 * 23) + (1024 / 16)",
+              "claimed_answer": 1101.0,
+              "reasoning": "First, multiply 47 by 23 to get 1081. Then, divide 1024 by 16 to get 64. Finally, add 1081 and 64 to get 1101.",
+              "confidence": 1.0
+            },
+            "verification": {
+              "is_correct": false,
+              "calculated_value": 1145.0,
+              "claimed_value": 1101.0,
+              "diff": 44.0,
+              "status": "CORRECTION_NEEDED"
+            },
+            "provider_used": "claude_opus",
+            "latency_ms": 851.9318103790283
+          },
+          "timestamp": "2025-11-29T09:58:15.595676"
+        },
+        {
+          "test_id": "math_chain_03",
+          "query": "Compute: 12*3 + 45/5 - (7*2 + 3) + 123*4 - 456/3. Show step-by-step.",
+          "provider": "anthropic",
+          "expected": 512,
+          "llm_answer": 368.0,
+          "qwed_status": "VERIFIED",
+          "qwed_verified": true,
+          "result_type": "FALSE_POSITIVE",
+          "caught_error": false,
+          "error_type": "LLM_WRONG_QWED_ACCEPTED",
+          "why_hard": "Long chained expression stresses parser and extraction",
+          "full_response": {
+            "status": "VERIFIED",
+            "final_answer": 368.0,
+            "user_query": "Compute: 12*3 + 45/5 - (7*2 + 3) + 123*4 - 456/3. Show step-by-step.",
+            "translation": {
+              "expression": "12*3 + 45/5 - (7*2 + 3) + 123*4 - 456/3",
+              "claimed_answer": 368.0,
+              "reasoning": "Step-by-step calculation:\n1. 12*3 = 36\n2. 45/5 = 9\n3. 7*2 = 14\n4. 14 + 3 = 17\n5. 123*4 = 492\n6. 456/3 = 152\n7. Now combine: 36 + 9 - 17 + 492 - 152\n8. 36 + 9 = 45\n9. 45 - 17 = 28\n10. 28 + 492 = 520\n11. 520 - 152 = 368\n\nWait, let me recalculate:\n36 + 9 = 45\n45 - 17 = 28\n28 + 492 = 520\n520 - 152 = 368\n\nActually checking again: 12*3=36, 45/5=9, 7*2+3=17, 123*4=492, 456/3=152\n36 + 9 - 17 + 492 - 152 = 368",
+              "confidence": 1.0
+            },
+            "verification": {
+              "is_correct": true,
+              "calculated_value": 368.0,
+              "claimed_value": 368.0,
+              "diff": 0.0,
+              "status": "VERIFIED"
+            },
+            "provider_used": "anthropic",
+            "latency_ms": 5828.245401382446
+          },
+          "timestamp": "2025-11-29T09:58:21.533911"
+        },
+        {
+          "test_id": "math_tricky_01",
+          "query": "I got 445 after adding 156+289, then adding 134 gives 579. What's the final answer?",
+          "provider": "claude_opus",
+          "expected": 579,
+          "llm_answer": 579.0,
+          "qwed_status": "VERIFIED",
+          "qwed_verified": true,
+          "result_type": "CORRECT",
+          "caught_error": false,
+          "error_type": null,
+          "why_hard": "Extractor must find rightmost numeric, not first (445)",
+          "full_response": {
+            "status": "VERIFIED",
+            "final_answer": 579.0,
+            "user_query": "I got 445 after adding 156+289, then adding 134 gives 579. What&#x27;s the final answer?",
+            "translation": {
+              "expression": "156 + 289 + 134",
+              "claimed_answer": 579.0,
+              "reasoning": "First, add 156 and 289 to get 445. Then, add 134 to 445 to get 579.",
+              "confidence": 1.0
+            },
+            "verification": {
+              "is_correct": true,
+              "calculated_value": 579.0,
+              "claimed_value": 579.0,
+              "diff": 0.0,
+              "status": "VERIFIED"
+            },
+            "provider_used": "claude_opus",
+            "latency_ms": 757.0292949676514
+          },
+          "timestamp": "2025-11-29T09:58:22.393783"
+        },
+        {
+          "test_id": "ambiguous_01",
+          "query": "Evaluate 6/2(1+2). Explain each step.",
+          "provider": "anthropic",
+          "expected": null,
+          "llm_answer": 9.0,
+          "qwed_status": "VERIFIED",
+          "qwed_verified": true,
+          "result_type": "AMBIGUOUS_HANDLED",
+          "caught_error": false,
+          "error_type": null,
+          "why_hard": "Classic ambiguity - QWED should detect multiple interpretations",
+          "full_response": {
+            "status": "VERIFIED",
+            "final_answer": 9.0,
+            "user_query": "Evaluate 6/2(1+2). Explain each step.",
+            "translation": {
+              "expression": "6/2*(1+2)",
+              "claimed_answer": 9.0,
+              "reasoning": "Following the standard order of operations (PEMDAS/BODMAS):\n1. First, evaluate the parentheses: (1+2) = 3\n2. The expression becomes: 6/2*3\n3. Division and multiplication have equal precedence and are evaluated left-to-right\n4. So: 6/2 = 3\n5. Then: 3*3 = 9\n\nNote: The expression 6/2(1+2) is interpreted as 6/2*(1+2) where the multiplication is implicit. Following standard mathematical convention, we evaluate left-to-right after resolving parentheses, giving us 9.",
+              "confidence": 0.95
+            },
+            "verification": {
+              "is_correct": true,
+              "calculated_value": 9.0,
+              "claimed_value": 9.0,
+              "diff": 0.0,
+              "status": "VERIFIED"
+            },
+            "provider_used": "anthropic",
+            "latency_ms": 5300.527334213257
+          },
+          "timestamp": "2025-11-29T09:58:27.842821"
+        },
+        {
+          "test_id": "ambiguous_02",
+          "query": "What is 48\u00f72(9+3)?",
+          "provider": "claude_opus",
+          "expected": null,
+          "llm_answer": 288.0,
+          "qwed_status": "VERIFIED",
+          "qwed_verified": true,
+          "result_type": "AMBIGUOUS_HANDLED",
+          "caught_error": false,
+          "error_type": null,
+          "why_hard": "Implicit multiplication precedence is undefined",
+          "full_response": {
+            "status": "VERIFIED",
+            "final_answer": 288.0,
+            "user_query": "What is 48\u00f72(9+3)?",
+            "translation": {
+              "expression": "48 / 2 * (9 + 3)",
+              "claimed_answer": 288.0,
+              "reasoning": "First, calculate the parentheses: 9 + 3 = 12. Then, perform the division and multiplication from left to right: 48 / 2 = 24, then 24 * 12 = 288.",
+              "confidence": 1.0
+            },
+            "verification": {
+              "is_correct": true,
+              "calculated_value": 288.0,
+              "claimed_value": 288.0,
+              "diff": 0.0,
+              "status": "VERIFIED"
+            },
+            "provider_used": "claude_opus",
+            "latency_ms": 936.009407043457
+          },
+          "timestamp": "2025-11-29T09:58:28.888624"
+        },
+        {
+          "test_id": "precision_01",
+          "query": "Calculate exactly: 999999999 \u00d7 888888888",
+          "provider": "anthropic",
+          "expected": 888888887111111112,
+          "llm_answer": 8.888888871111112e+17,
+          "qwed_status": "VERIFIED",
+          "qwed_verified": true,
+          "result_type": "FALSE_POSITIVE",
+          "caught_error": false,
+          "error_type": "LLM_WRONG_QWED_ACCEPTED",
+          "why_hard": "Large numbers cause floating point errors in LLMs",
+          "full_response": {
+            "status": "VERIFIED",
+            "final_answer": 8.888888871111112e+17,
+            "user_query": "Calculate exactly: 999999999 \u00d7 888888888",
+            "translation": {
+              "expression": "999999999 * 888888888",
+              "claimed_answer": 8.888888871111112e+17,
+              "reasoning": "Direct multiplication of 999999999 and 888888888. This can be computed as (1000000000 - 1) * 888888888 = 888888888000000000 - 888888888 = 888888887111111112",
+              "confidence": 1.0
+            },
+            "verification": {
+              "is_correct": true,
+              "calculated_value": 8.888888871111112e+17,
+              "claimed_value": 8.888888871111112e+17,
+              "diff": 0.0,
+              "status": "VERIFIED"
+            },
+            "provider_used": "anthropic",
+            "latency_ms": 3815.5839443206787
+          },
+          "timestamp": "2025-11-29T09:58:32.833487"
+        },
+        {
+          "test_id": "precision_02",
+          "query": "What is 123456789 \u00d7 987654321 exactly?",
+          "provider": "claude_opus",
+          "expected": 121932631112635269,
+          "llm_answer": 1.2193263111263526e+17,
+          "qwed_status": "VERIFIED",
+          "qwed_verified": true,
+          "result_type": "FALSE_POSITIVE",
+          "caught_error": false,
+          "error_type": "LLM_WRONG_QWED_ACCEPTED",
+          "why_hard": "Tests precision with 9-digit multiplication",
+          "full_response": {
+            "status": "VERIFIED",
+            "final_answer": 1.2193263111263526e+17,
+            "user_query": "What is 123456789 \u00d7 987654321 exactly?",
+            "translation": {
+              "expression": "123456789 * 987654321",
+              "claimed_answer": 1.2193263111263526e+17,
+              "reasoning": "Multiply 123456789 by 987654321 directly to get the exact product.",
+              "confidence": 1.0
+            },
+            "verification": {
+              "is_correct": true,
+              "calculated_value": 1.2193263111263526e+17,
+              "claimed_value": 1.2193263111263526e+17,
+              "diff": 0.0,
+              "status": "VERIFIED"
+            },
+            "provider_used": "claude_opus",
+            "latency_ms": 664.555549621582
+          },
+          "timestamp": "2025-11-29T09:58:33.620366"
+        },
+        {
+          "test_id": "percentage_01",
+          "query": "If a $500 item is increased by 20% then decreased by 20%, what's the final price?",
+          "provider": "anthropic",
+          "expected": 480,
+          "llm_answer": 480.0,
+          "qwed_status": "VERIFIED",
+          "qwed_verified": true,
+          "result_type": "CORRECT",
+          "caught_error": false,
+          "error_type": null,
+          "why_hard": "Common misconception that +20% then -20% returns to original",
+          "full_response": {
+            "status": "VERIFIED",
+            "final_answer": 480.0,
+            "user_query": "If a $500 item is increased by 20% then decreased by 20%, what&#x27;s the final price?",
+            "translation": {
+              "expression": "500 * (1 + 0.20) * (1 - 0.20)",
+              "claimed_answer": 480.0,
+              "reasoning": "Start with $500. Increase by 20% means multiply by 1.20, giving $600. Then decrease that result by 20% means multiply by 0.80, giving $480. The calculation is: 500 * 1.20 * 0.80 = 480",
+              "confidence": 1.0
+            },
+            "verification": {
+              "is_correct": true,
+              "calculated_value": 480.0,
+              "claimed_value": 480.0,
+              "diff": 0.0,
+              "status": "VERIFIED"
+            },
+            "provider_used": "anthropic",
+            "latency_ms": 4110.618829727173
+          },
+          "timestamp": "2025-11-29T09:58:37.895939"
+        },
+        {
+          "test_id": "percentage_02",
+          "query": "A stock goes from $100 to $150 then back to $100. What are the percentage changes?",
+          "provider": "claude_opus",
+          "expected": null,
+          "llm_answer": 50.0,
+          "qwed_status": "VERIFIED",
+          "qwed_verified": true,
+          "result_type": "AMBIGUOUS_HANDLED",
+          "caught_error": false,
+          "error_type": null,
+          "why_hard": "Asymmetric percentage changes",
+          "full_response": {
+            "status": "VERIFIED",
+            "final_answer": 50.0,
+            "user_query": "A stock goes from $100 to $150 then back to $100. What are the percentage changes?",
+            "translation": {
+              "expression": "(150 - 100) / 100 * 100",
+              "claimed_answer": 50.0,
+              "reasoning": "The percentage change from $100 to $150 is (150-100)/100*100 = 50%.",
+              "confidence": 1.0
+            },
+            "verification": {
+              "is_correct": true,
+              "calculated_value": 50.0,
+              "claimed_value": 50.0,
+              "diff": 0.0,
+              "status": "VERIFIED"
+            },
+            "provider_used": "claude_opus",
+            "latency_ms": 674.1480827331543
+          },
+          "timestamp": "2025-11-29T09:58:38.694074"
+        },
+        {
+          "test_id": "word_problem_01",
+          "query": "A bat and ball cost $1.10. The bat costs $1 more than the ball. How much does the ball cost?",
+          "provider": "anthropic",
+          "expected": 0.05,
+          "llm_answer": 0.050000000000000044,
+          "qwed_status": "VERIFIED",
+          "qwed_verified": true,
+          "result_type": "FALSE_POSITIVE",
+          "caught_error": false,
+          "error_type": "LLM_WRONG_QWED_ACCEPTED",
+          "why_hard": "Classic cognitive bias problem - LLMs often answer $0.10",
+          "full_response": {
+            "status": "VERIFIED",
+            "final_answer": 0.050000000000000044,
+            "user_query": "A bat and ball cost $1.10. The bat costs $1 more than the ball. How much does the ball cost?",
+            "translation": {
+              "expression": "(1.10 - 1) / 2",
+              "claimed_answer": 0.05,
+              "reasoning": "Let the ball cost x dollars. Then the bat costs (x + 1) dollars. Together they cost 1.10 dollars, so: x + (x + 1) = 1.10. Simplifying: 2x + 1 = 1.10, so 2x = 0.10, therefore x = 0.05. The ball costs $0.05 (5 cents).",
+              "confidence": 1.0
+            },
+            "verification": {
+              "is_correct": true,
+              "calculated_value": 0.050000000000000044,
+              "claimed_value": 0.05,
+              "diff": 4.163336342344337e-17,
+              "status": "VERIFIED"
+            },
+            "provider_used": "anthropic",
+            "latency_ms": 4214.623212814331
+          },
+          "timestamp": "2025-11-29T09:58:43.037669"
+        },
+        {
+          "test_id": "word_problem_02",
+          "query": "If 5 machines make 5 widgets in 5 minutes, how long does it take 100 machines to make 100 widgets?",
+          "provider": "claude_opus",
+          "expected": 5,
+          "llm_answer": 5.0,
+          "qwed_status": "VERIFIED",
+          "qwed_verified": true,
+          "result_type": "CORRECT",
+          "caught_error": false,
+          "error_type": null,
+          "why_hard": "Linear thinking trap",
+          "full_response": {
+            "status": "VERIFIED",
+            "final_answer": 5.0,
+            "user_query": "If 5 machines make 5 widgets in 5 minutes, how long does it take 100 machines to make 100 widgets?",
+            "translation": {
+              "expression": "5",
+              "claimed_answer": 5.0,
+              "reasoning": "Each machine makes 1 widget in 5 minutes. With 100 machines, each makes 1 widget in 5 minutes, so 100 machines make 100 widgets in 5 minutes.",
+              "confidence": 1.0
+            },
+            "verification": {
+              "is_correct": true,
+              "calculated_value": 5.0,
+              "claimed_value": 5.0,
+              "diff": 0.0,
+              "status": "VERIFIED"
+            },
+            "provider_used": "claude_opus",
+            "latency_ms": 714.0188217163086
+          },
+          "timestamp": "2025-11-29T09:58:43.866741"
+        },
+        {
+          "test_id": "complex_01",
+          "error": "'charmap' codec can't encode character '\\U0001f3af' in position 2: character maps to <undefined>",
+          "result_type": "ERROR",
+          "timestamp": "2025-11-29T09:58:49.422682"
+        },
+        {
+          "test_id": "complex_02",
+          "error": "'charmap' codec can't encode character '\\U0001f3af' in position 2: character maps to <undefined>",
+          "result_type": "ERROR",
+          "timestamp": "2025-11-29T09:58:50.467210"
+        },
+        {
+          "test_id": "extraction_01",
+          "query": "First calculate 25 \u00d7 4 = 100. Now multiply that by 3. The final answer is?",
+          "provider": "anthropic",
+          "expected": 300,
+          "llm_answer": 300.0,
+          "qwed_status": "VERIFIED",
+          "qwed_verified": true,
+          "result_type": "CORRECT",
+          "caught_error": false,
+          "error_type": null,
+          "why_hard": "Extractor might grab intermediate '100' instead of final '300'",
+          "full_response": {
+            "status": "VERIFIED",
+            "final_answer": 300.0,
+            "user_query": "First calculate 25 \u00d7 4 = 100. Now multiply that by 3. The final answer is?",
+            "translation": {
+              "expression": "25 * 4 * 3",
+              "claimed_answer": 300.0,
+              "reasoning": "First calculate 25 \u00d7 4 = 100, then multiply that result by 3: 100 \u00d7 3 = 300",
+              "confidence": 1.0
+            },
+            "verification": {
+              "is_correct": true,
+              "calculated_value": 300.0,
+              "claimed_value": 300.0,
+              "diff": 0.0,
+              "status": "VERIFIED"
+            },
+            "provider_used": "anthropic",
+            "latency_ms": 3379.1239261627197
+          },
+          "timestamp": "2025-11-29T09:58:53.980730"
+        },
+        {
+          "test_id": "extraction_02",
+          "query": "Add these numbers: 123, 456, 789. Steps: 123+456=579, 579+789=1368. Answer:",
+          "provider": "claude_opus",
+          "expected": 1368,
+          "llm_answer": 1368.0,
+          "qwed_status": "VERIFIED",
+          "qwed_verified": true,
+          "result_type": "CORRECT",
+          "caught_error": false,
+          "error_type": null,
+          "why_hard": "Multiple numbers in output - extractor must find last one",
+          "full_response": {
+            "status": "VERIFIED",
+            "final_answer": 1368.0,
+            "user_query": "Add these numbers: 123, 456, 789. Steps: 123+456=579, 579+789=1368. Answer:",
+            "translation": {
+              "expression": "123 + 456 + 789",
+              "claimed_answer": 1368.0,
+              "reasoning": "First, add 123 and 456 to get 579. Then add 579 and 789 to get 1368.",
+              "confidence": 1.0
+            },
+            "verification": {
+              "is_correct": true,
+              "calculated_value": 1368.0,
+              "claimed_value": 1368.0,
+              "diff": 0.0,
+              "status": "VERIFIED"
+            },
+            "provider_used": "claude_opus",
+            "latency_ms": 630.2018165588379
+          },
+          "timestamp": "2025-11-29T09:58:54.709243"
+        }
+      ],
+      "timestamp": "2025-11-29T09:58:54.710242"
+    },
+    "medium_logic": {
+      "summary": {
+        "total_tests": 16,
+        "issues_detected": 10
+      },
+      "all_results": [
+        {
+          "test_id": "hanoi_3_disks",
+          "query": "Give the exact optimal sequence of moves to solve Tower of Hanoi for 3 disks from peg A to peg C using peg B. Provide only the moves, one per line: 'Move disk X from peg Y to peg Z'.",
+          "provider": "anthropic",
+          "qwed_status": "SAT",
+          "detected_issue": false,
+          "why_hard": "LLMs often add extra moves, make illegal moves, or get the sequence wrong",
+          "full_response": {
+            "status": "SAT",
+            "model": {
+              "move6_to": "1",
+              "move5_from": "2",
+              "move3_from": "1",
+              "move5_disk": "1",
+              "move4_to": "1",
+              "move5_to": "1",
+              "move4_from": "2",
+              "move6_disk": "1",
+              "move1_to": "2",
+              "move3_disk": "1",
+              "move4_disk": "1",
+              "move2_to": "1",
+              "move2_disk": "1",
+              "move2_from": "2",
+              "move6_from": "2",
+              "move7_from": "1",
+              "move3_to": "2",
+              "move1_disk": "1",
+              "move7_to": "3",
+              "move7_disk": "3",
+              "move1_from": "1"
+            },
+            "translation": {
+              "variables": {
+                "move1_disk": "Int",
+                "move1_from": "Int",
+                "move1_to": "Int",
+                "move2_disk": "Int",
+                "move2_from": "Int",
+                "move2_to": "Int",
+                "move3_disk": "Int",
+                "move3_from": "Int",
+                "move3_to": "Int",
+                "move4_disk": "Int",
+                "move4_from": "Int",
+                "move4_to": "Int",
+                "move5_disk": "Int",
+                "move5_from": "Int",
+                "move5_to": "Int",
+                "move6_disk": "Int",
+                "move6_from": "Int",
+                "move6_to": "Int",
+                "move7_disk": "Int",
+                "move7_from": "Int",
+                "move7_to": "Int"
+              },
+              "constraints": [
+                "move1_disk &gt;= 1",
+                "move1_disk &lt;= 3",
+                "move1_from &gt;= 1",
+                "move1_from &lt;= 3",
+                "move1_to &gt;= 1",
+                "move1_to &lt;= 3",
+                "move1_from != move1_to",
+                "move2_disk &gt;= 1",
+                "move2_disk &lt;= 3",
+                "move2_from &gt;= 1",
+                "move2_from &lt;= 3",
+                "move2_to &gt;= 1",
+                "move2_to &lt;= 3",
+                "move2_from != move2_to",
+                "move3_disk &gt;= 1",
+                "move3_disk &lt;= 3",
+                "move3_from &gt;= 1",
+                "move3_from &lt;= 3",
+                "move3_to &gt;= 1",
+                "move3_to &lt;= 3",
+                "move3_from != move3_to",
+                "move4_disk &gt;= 1",
+                "move4_disk &lt;= 3",
+                "move4_from &gt;= 1",
+                "move4_from &lt;= 3",
+                "move4_to &gt;= 1",
+                "move4_to &lt;= 3",
+                "move4_from != move4_to",
+                "move5_disk &gt;= 1",
+                "move5_disk &lt;= 3",
+                "move5_from &gt;= 1",
+                "move5_from &lt;= 3",
+                "move5_to &gt;= 1",
+                "move5_to &lt;= 3",
+                "move5_from != move5_to",
+                "move6_disk &gt;= 1",
+                "move6_disk &lt;= 3",
+                "move6_from &gt;= 1",
+                "move6_from &lt;= 3",
+                "move6_to &gt;= 1",
+                "move6_to &lt;= 3",
+                "move6_from != move6_to",
+                "move7_disk &gt;= 1",
+                "move7_disk &lt;= 3",
+                "move7_from &gt;= 1",
+                "move7_from &lt;= 3",
+                "move7_to &gt;= 1",
+                "move7_to &lt;= 3",
+                "move7_from != move7_to",
+                "move1_disk == 1",
+                "move1_from == 1",
+                "move7_disk == 3",
+                "move7_to == 3"
+              ],
+              "goal": "SATISFIABILITY"
+            },
+            "provider_used": "anthropic",
+            "attempts": 2,
+            "latency_ms": 12154.989004135132
+          },
+          "timestamp": "2025-11-29T09:59:07.724532"
+        },
+        {
+          "test_id": "hanoi_4_disks",
+          "query": "Solve Tower of Hanoi for 4 disks. Provide the complete sequence of moves from peg A to peg C.",
+          "provider": "claude_opus",
+          "qwed_status": "ERROR",
+          "detected_issue": true,
+          "why_hard": "More complex, LLMs struggle with maintaining state across many steps",
+          "full_response": {
+            "status": "ERROR",
+            "error": "Azure OpenAI logic refinement failed: name 'logic_function_schema' is not defined",
+            "attempts": 2,
+            "latency_ms": 6451.649188995361
+          },
+          "timestamp": "2025-11-29T09:59:14.322429"
+        },
+        {
+          "test_id": "knights_knaves_01",
+          "query": "On an island, knights always tell truth and knaves always lie. A says 'B is lying.' B says 'A is telling the truth.' Who is the knight and who is the knave? Show step-by-step logical deduction.",
+          "provider": "anthropic",
+          "qwed_status": "UNSAT",
+          "detected_issue": true,
+          "why_hard": "Self-referential logic confuses LLMs - must build truth table",
+          "full_response": {
+            "status": "UNSAT",
+            "model": null,
+            "translation": {
+              "variables": {
+                "A": "Bool",
+                "B": "Bool"
+              },
+              "constraints": [
+                "A == Not(B)",
+                "B == A"
+              ],
+              "goal": "SATISFIABILITY"
+            },
+            "provider_used": "anthropic",
+            "attempts": 2,
+            "latency_ms": 6467.90337562561
+          },
+          "timestamp": "2025-11-29T09:59:20.899056"
+        },
+        {
+          "test_id": "knights_knaves_02",
+          "query": "A says 'I am a knave.' Is this possible? Explain the logical contradiction.",
+          "provider": "claude_opus",
+          "qwed_status": "ERROR",
+          "detected_issue": true,
+          "why_hard": "Classic liar paradox, LLMs may not detect the contradiction",
+          "full_response": {
+            "status": "ERROR",
+            "error": "Azure OpenAI logic refinement failed: name 'logic_function_schema' is not defined",
+            "attempts": 2,
+            "latency_ms": 761.5976333618164
+          },
+          "timestamp": "2025-11-29T09:59:21.770056"
+        },
+        {
+          "test_id": "knights_knaves_03",
+          "query": "A says 'Either I am a knave or B is a knight.' B says 'A is a knave.' What are A and B?",
+          "provider": "anthropic",
+          "qwed_status": "UNSAT",
+          "detected_issue": true,
+          "why_hard": "Requires evaluating disjunction in different cases",
+          "full_response": {
+            "status": "UNSAT",
+            "model": null,
+            "translation": {
+              "variables": {
+                "A": "Bool",
+                "B": "Bool"
+              },
+              "constraints": [
+                "A == Or(Not(A), B)",
+                "B == Not(A)"
+              ],
+              "goal": "SATISFIABILITY"
+            },
+            "provider_used": "anthropic",
+            "attempts": 2,
+            "latency_ms": 6370.121002197266
+          },
+          "timestamp": "2025-11-29T09:59:28.286070"
+        },
+        {
+          "test_id": "wolf_goat_cabbage",
+          "query": "A farmer must cross a river with a wolf, goat, and cabbage. The boat holds only the farmer and one item. If left alone: wolf eats goat, goat eats cabbage. Provide the exact sequence of crossings (one action per line). Format: 'Farmer takes X across' or 'Farmer returns alone'.",
+          "provider": "claude_opus",
+          "qwed_status": "SAT",
+          "detected_issue": false,
+          "why_hard": "LLMs make illegal moves or forget constraints",
+          "full_response": {
+            "status": "SAT",
+            "model": {
+              "f2": "1",
+              "w2": "1",
+              "c1": "0",
+              "g2": "1",
+              "w3": "0",
+              "g1": "0",
+              "w1": "0",
+              "f1": "0",
+              "f3": "0",
+              "g3": "0",
+              "c2": "0",
+              "c3": "0",
+              "g4": "1",
+              "c0": "0",
+              "f4": "1",
+              "c4": "1",
+              "w4": "1",
+              "g0": "0",
+              "w0": "0",
+              "f0": "0"
+            },
+            "translation": {
+              "variables": {
+                "f0": "Int",
+                "w0": "Int",
+                "g0": "Int",
+                "c0": "Int",
+                "f4": "Int",
+                "w4": "Int",
+                "g4": "Int",
+                "c4": "Int",
+                "f1": "Int",
+                "f2": "Int",
+                "f3": "Int",
+                "w1": "Int",
+                "w2": "Int",
+                "w3": "Int",
+                "g1": "Int",
+                "g2": "Int",
+                "g3": "Int",
+                "c1": "Int",
+                "c2": "Int",
+                "c3": "Int"
+              },
+              "constraints": [
+                "And(f0 == 0, w0 == 0, g0 == 0, c0 == 0)",
+                "And(f4 == 1, w4 == 1, g4 == 1, c4 == 1)",
+                "Or(f1 == f0, f1 == 1 - f0)",
+                "Or(f2 == f1, f2 == 1 - f1)",
+                "Or(f3 == f2, f3 == 1 - f2)",
+                "Or(f4 == f3, f4 == 1 - f3)",
+                "Or(w1 == w0, And(f0 == w0, w1 == 1 - w0))",
+                "Or(w2 == w1, And(f1 == w1, w2 == 1 - w1))",
+                "Or(w3 == w2, And(f2 == w2, w3 == 1 - w2))",
+                "Or(w4 == w3, And(f3 == w3, w4 == 1 - w3))",
+                "Or(g1 == g0, And(f0 == g0, g1 == 1 - g0))",
+                "Or(g2 == g1, And(f1 == g1, g2 == 1 - g1))",
+                "Or(g3 == g2, And(f2 == g2, g3 == 1 - g2))",
+                "Or(g4 == g3, And(f3 == g3, g4 == 1 - g3))",
+                "Or(c1 == c0, And(f0 == c0, c1 == 1 - c0))",
+                "Or(c2 == c1, And(f1 == c1, c2 == 1 - c1))",
+                "Or(c3 == c2, And(f2 == c2, c3 == 1 - c2))",
+                "Or(c4 == c3, And(f3 == c3, c4 == 1 - c3))",
+                "Or(f0 == g0, Not(And(w0 == g0, f0 != g0)))",
+                "Or(f1 == g1, Not(And(w1 == g1, f1 != g1)))",
+                "Or(f2 == g2, Not(And(w2 == g2, f2 != g2)))",
+                "Or(f3 == g3, Not(And(w3 == g3, f3 != g3)))",
+                "Or(f4 == g4, Not(And(w4 == g4, f4 != g4)))",
+                "Or(f0 == g0, Not(And(g0 == c0, f0 != g0)))",
+                "Or(f1 == g1, Not(And(g1 == c1, f1 != g1)))",
+                "Or(f2 == g2, Not(And(g2 == c2, f2 != g2)))",
+                "Or(f3 == g3, Not(And(g3 == c3, f3 != g3)))",
+                "Or(f4 == g4, Not(And(g4 == c4, f4 != g4)))"
+              ],
+              "goal": "SATISFIABILITY"
+            },
+            "provider_used": "claude_opus",
+            "attempts": 1,
+            "latency_ms": 3528.0377864837646
+          },
+          "timestamp": "2025-11-29T09:59:31.875613"
+        },
+        {
+          "test_id": "missionaries_cannibals",
+          "query": "3 missionaries and 3 cannibals must cross a river. Boat holds 2 people. Cannibals cannot outnumber missionaries on either side. Give the exact sequence of boat trips.",
+          "provider": "anthropic",
+          "qwed_status": "ERROR",
+          "detected_issue": true,
+          "why_hard": "Complex state space, LLMs violate constraints",
+          "full_response": {
+            "status": "ERROR",
+            "error": "Anthropic logic refinement failed: 1 validation error for LogicVerificationTask\nconstraints\n  Field required [type=missing, input_value={'variables': {'m0': 'Int...: 'Int', 'dc11': 'Int'}}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing",
+            "attempts": 2,
+            "latency_ms": 22367.533445358276
+          },
+          "timestamp": "2025-11-29T09:59:54.389826"
+        },
+        {
+          "test_id": "constraint_sat_01",
+          "query": "Find values for x and y such that: x + y = 10, x > y, x is even, y is odd. List all possible solutions.",
+          "provider": "anthropic",
+          "qwed_status": "UNSAT",
+          "detected_issue": true,
+          "why_hard": "Multiple constraints, LLMs miss edge cases",
+          "full_response": {
+            "status": "UNSAT",
+            "model": null,
+            "translation": {
+              "variables": {
+                "x": "Int",
+                "y": "Int"
+              },
+              "constraints": [
+                "x + y == 10",
+                "x &gt; y",
+                "x % 2 == 0",
+                "y % 2 == 1"
+              ],
+              "goal": "SATISFIABILITY"
+            },
+            "provider_used": "anthropic",
+            "attempts": 2,
+            "latency_ms": 5979.056596755981
+          },
+          "timestamp": "2025-11-29T10:00:00.469968"
+        },
+        {
+          "test_id": "constraint_sat_02",
+          "query": "Three variables x, y, z must satisfy: x < y < z, x + y + z = 15, all are prime numbers. Find all solutions.",
+          "provider": "claude_opus",
+          "qwed_status": "SAT",
+          "detected_issue": false,
+          "why_hard": "Combining ordering, arithmetic, and primality constraints",
+          "full_response": {
+            "status": "SAT",
+            "model": {
+              "z": "7",
+              "y": "5",
+              "x": "3"
+            },
+            "translation": {
+              "variables": {
+                "x": "Int",
+                "y": "Int",
+                "z": "Int"
+              },
+              "constraints": [
+                "x &lt; y",
+                "y &lt; z",
+                "x + y + z == 15",
+                "Or(x == 2, x == 3, x == 5, x == 7, x == 11, x == 13)",
+                "Or(y == 2, y == 3, y == 5, y == 7, y == 11, y == 13)",
+                "Or(z == 2, z == 3, z == 5, z == 7, z == 11, z == 13)"
+              ],
+              "goal": "SATISFIABILITY"
+            },
+            "provider_used": "claude_opus",
+            "attempts": 1,
+            "latency_ms": 1209.8941802978516
+          },
+          "timestamp": "2025-11-29T10:00:01.809480"
+        },
+        {
+          "test_id": "logic_puzzle_01",
+          "query": "Five houses in five colors. British lives in red house. Spaniard owns dog. Coffee drunk in green house. Ukrainian drinks tea. Green house immediately right of ivory. Who owns zebra? Provide systematic deduction.",
+          "provider": "anthropic",
+          "qwed_status": null,
+          "detected_issue": false,
+          "why_hard": "Classic Einstein riddle - requires systematic constraint propagation",
+          "full_response": {
+            "detail": "Security violation: Input contains suspicious keywords commonly used in prompt injections"
+          },
+          "timestamp": "2025-11-29T10:00:01.904404"
+        },
+        {
+          "test_id": "boolean_sat_01",
+          "query": "Find an assignment for A, B, C that satisfies: (A OR B) AND (NOT A OR C) AND (NOT B OR NOT C). Show the truth table.",
+          "provider": "claude_opus",
+          "qwed_status": "ERROR",
+          "detected_issue": true,
+          "why_hard": "3-SAT problem, LLMs may not systematically evaluate all cases",
+          "full_response": {
+            "status": "ERROR",
+            "error": "Azure OpenAI logic refinement failed: name 'logic_function_schema' is not defined",
+            "attempts": 2,
+            "latency_ms": 627.6049613952637
+          },
+          "timestamp": "2025-11-29T10:00:02.706436"
+        },
+        {
+          "test_id": "boolean_sat_02",
+          "query": "Is this formula satisfiable: (A AND B) AND (NOT A OR NOT B)? Prove your answer.",
+          "provider": "anthropic",
+          "qwed_status": "UNSAT",
+          "detected_issue": true,
+          "why_hard": "Requires detecting contradiction via resolution",
+          "full_response": {
+            "status": "UNSAT",
+            "model": null,
+            "translation": {
+              "variables": {
+                "A": "Bool",
+                "B": "Bool"
+              },
+              "constraints": [
+                "And(A, B)",
+                "Or(Not(A), Not(B))"
+              ],
+              "goal": "SATISFIABILITY"
+            },
+            "provider_used": "anthropic",
+            "attempts": 2,
+            "latency_ms": 6186.267614364624
+          },
+          "timestamp": "2025-11-29T10:00:09.006896"
+        },
+        {
+          "test_id": "graph_coloring",
+          "query": "Color a graph with 5 nodes connected as: 1-2, 2-3, 3-4, 4-5, 5-1, 1-3. Use minimum colors where adjacent nodes have different colors. What's the minimum?",
+          "provider": "claude_opus",
+          "qwed_status": "SAT",
+          "detected_issue": false,
+          "why_hard": "Graph coloring is NP-hard, LLMs use heuristics incorrectly",
+          "full_response": {
+            "status": "SAT",
+            "model": {
+              "c5": "1",
+              "c1": "3",
+              "c2": "1",
+              "c3": "2",
+              "c4": "3"
+            },
+            "translation": {
+              "variables": {
+                "c1": "Int",
+                "c2": "Int",
+                "c3": "Int",
+                "c4": "Int",
+                "c5": "Int"
+              },
+              "constraints": [
+                "And(c1 &gt;= 1, c1 &lt;= 5)",
+                "And(c2 &gt;= 1, c2 &lt;= 5)",
+                "And(c3 &gt;= 1, c3 &lt;= 5)",
+                "And(c4 &gt;= 1, c4 &lt;= 5)",
+                "And(c5 &gt;= 1, c5 &lt;= 5)",
+                "c1 != c2",
+                "c2 != c3",
+                "c3 != c4",
+                "c4 != c5",
+                "c5 != c1",
+                "c1 != c3"
+              ],
+              "goal": "SATISFIABILITY"
+            },
+            "provider_used": "claude_opus",
+            "attempts": 1,
+            "latency_ms": 1119.6389198303223
+          },
+          "timestamp": "2025-11-29T10:00:10.262458"
+        },
+        {
+          "test_id": "sudoku_mini",
+          "query": "Fill a 4x4 grid where each row and column contains 1,2,3,4. Top row starts: 1,_,_,4. Left column: 1,_,4,_. Provide the complete solution.",
+          "provider": "anthropic",
+          "qwed_status": "ERROR",
+          "detected_issue": true,
+          "why_hard": "Constraint propagation required, LLMs make invalid assignments",
+          "full_response": {
+            "status": "ERROR",
+            "error": "Anthropic logic refinement failed: 1 validation error for LogicVerificationTask\nconstraints\n  Field required [type=missing, input_value={'variables': {'r0c0': 'I...: 'Int', 'r3c3': 'Int'}}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing",
+            "attempts": 2,
+            "latency_ms": 19553.767204284668
+          },
+          "timestamp": "2025-11-29T10:00:29.920278"
+        },
+        {
+          "test_id": "temporal_01",
+          "query": "Events: A happens before B. B happens before C. C happens before D. D happens before A. Is this timeline consistent? Explain.",
+          "provider": "claude_opus",
+          "qwed_status": "UNSAT",
+          "detected_issue": true,
+          "why_hard": "Cycle detection in partial order",
+          "full_response": {
+            "status": "UNSAT",
+            "model": null,
+            "translation": {
+              "variables": {
+                "A": "Int",
+                "B": "Int",
+                "C": "Int",
+                "D": "Int"
+              },
+              "constraints": [
+                "A &lt; B",
+                "B &lt; C",
+                "C &lt; D",
+                "D &lt; A"
+              ],
+              "goal": "SATISFIABILITY"
+            },
+            "provider_used": "claude_opus",
+            "attempts": 1,
+            "latency_ms": 1067.3480033874512
+          },
+          "timestamp": "2025-11-29T10:00:31.106818"
+        },
+        {
+          "test_id": "resource_allocation",
+          "query": "3 tasks (A,B,C) need resources. A needs 2 units, B needs 3, C needs 2. Only 5 units available. B and C cannot run together. Which tasks can run simultaneously?",
+          "provider": "anthropic",
+          "qwed_status": "SAT",
+          "detected_issue": false,
+          "why_hard": "Resource constraints + mutex constraints",
+          "full_response": {
+            "status": "SAT",
+            "model": {
+              "A": "True",
+              "B": "False",
+              "C": "False"
+            },
+            "translation": {
+              "variables": {
+                "A": "Bool",
+                "B": "Bool",
+                "C": "Bool"
+              },
+              "constraints": [
+                "Or(Not(A), Not(B), Not(C), (2 + 3 + 2) &lt;= 5)",
+                "Or(Not(A), Not(B), (2 + 3) &lt;= 5)",
+                "Or(Not(A), Not(C), (2 + 2) &lt;= 5)",
+                "Or(Not(B), Not(C), (3 + 2) &lt;= 5)",
+                "Or(Not(A), 2 &lt;= 5)",
+                "Or(Not(B), 3 &lt;= 5)",
+                "Or(Not(C), 2 &lt;= 5)",
+                "Not(And(B, C))",
+                "Or(A, B, C)"
+              ],
+              "goal": "SATISFIABILITY"
+            },
+            "provider_used": "anthropic",
+            "attempts": 2,
+            "latency_ms": 9949.311017990112
+          },
+          "timestamp": "2025-11-29T10:00:41.170333"
+        }
+      ],
+      "timestamp": "2025-11-29T10:00:41.170333"
+    }
+  }
+}

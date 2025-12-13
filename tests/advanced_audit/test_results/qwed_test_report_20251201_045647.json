@@ -1,0 +1,130 @@
+{
+  "metadata": {
+    "report_type": "QWED_COMPREHENSIVE_AUDIT",
+    "generated_at": "2025-12-01T04:56:47.819568",
+    "version": "1.0"
+  },
+  "summary": {
+    "timestamp": "2025-12-01T04:56:47.818573",
+    "duration_seconds": 0.325892,
+    "total_tests": 2,
+    "passed": 2,
+    "failed": 0,
+    "pass_rate": 100.0,
+    "by_priority": {
+      "critical": {
+        "total": 2,
+        "passed": 2,
+        "pass_rate": 100.0
+      },
+      "high": {
+        "total": 0,
+        "passed": 0,
+        "pass_rate": 0
+      },
+      "medium": {
+        "total": 0,
+        "passed": 0,
+        "pass_rate": 0
+      }
+    },
+    "by_engine": {
+      "code": {
+        "total": 2,
+        "passed": 2,
+        "pass_rate": 100.0
+      }
+    }
+  },
+  "results": [
+    {
+      "test_id": "CODE_001",
+      "test_name": "Detect eval() with user input",
+      "engine": "code",
+      "priority": "CRITICAL",
+      "passed": true,
+      "expected_result": "CRITICAL - eval() with user input",
+      "actual_result": {
+        "is_safe": false,
+        "issues": [
+          "Dangerous function: eval"
+        ],
+        "detailed_issues": [
+          {
+            "severity": "CRITICAL",
+            "message": "Dangerous function: eval",
+            "line": 3,
+            "requires_manual_review": false,
+            "remediation": "Avoid eval() - use safer alternatives"
+          }
+        ],
+        "requires_manual_review": false,
+        "severity_summary": {
+          "critical": 1,
+          "warning": 0,
+          "info": 0
+        }
+      },
+      "error": null,
+      "latency_ms": 161.865234375,
+      "timestamp": "2025-12-01T04:56:47.654563"
+    },
+    {
+      "test_id": "CODE_002",
+      "test_name": "Detect pickle.loads() RCE",
+      "engine": "code",
+      "priority": "CRITICAL",
+      "passed": true,
+      "expected_result": "CRITICAL - pickle.loads()",
+      "actual_result": {
+        "is_safe": false,
+        "issues": [
+          "Import of dangerous module: pickle",
+          "Dangerous function: pickle.loads"
+        ],
+        "detailed_issues": [
+          {
+            "severity": "CRITICAL",
+            "message": "Import of dangerous module: pickle",
+            "line": 2,
+            "requires_manual_review": false,
+            "remediation": "Use json or safer serialization instead"
+          },
+          {
+            "severity": "CRITICAL",
+            "message": "Dangerous function: pickle.loads",
+            "line": 4,
+            "requires_manual_review": false,
+            "remediation": "Avoid pickle.loads() - use safer alternatives"
+          }
+        ],
+        "requires_manual_review": false,
+        "severity_summary": {
+          "critical": 2,
+          "warning": 0,
+          "info": 0
+        }
+      },
+      "error": null,
+      "latency_ms": 160.53199768066406,
+      "timestamp": "2025-12-01T04:56:47.816095"
+    }
+  ],
+  "failures": [],
+  "statistics": {
+    "total_tests": 2,
+    "passed_count": 2,
+    "failed_count": 0,
+    "latency": {
+      "min_ms": 160.53199768066406,
+      "max_ms": 161.865234375,
+      "avg_ms": 161.19861602783203
+    },
+    "engines_tested": [
+      "code"
+    ],
+    "priorities_tested": [
+      "CRITICAL"
+    ]
+  }
+}

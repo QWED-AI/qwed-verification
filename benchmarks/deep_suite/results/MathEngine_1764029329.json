@@ -1,0 +1,194 @@
+[
+  {
+    "id": "math_easy_0",
+    "engine": "MathEngine",
+    "difficulty": "easy",
+    "query": "What is 5 + 7 + 9?",
+    "expected": 21.0,
+    "raw_llm_answer": "5 + 7 + 9",
+    "qwed_answer": "21",
+    "qwed_verdict": "PASS",
+    "confidence": 0.596,
+    "latency_ms": 5797.022581100464,
+    "timestamp": 1764029080.6809492,
+    "metadata": {
+      "trap": "None"
+    }
+  },
+  {
+    "id": "math_easy_1",
+    "engine": "MathEngine",
+    "difficulty": "easy",
+    "query": "What is 5 - 6 * 3?",
+    "expected": -13.0,
+    "raw_llm_answer": "5 - 6 * 3",
+    "qwed_answer": "-13",
+    "qwed_verdict": "PASS",
+    "confidence": 0.596,
+    "latency_ms": 4972.923755645752,
+    "timestamp": 1764029085.653873,
+    "metadata": {
+      "trap": "None"
+    }
+  },
+  {
+    "id": "math_easy_2",
+    "engine": "MathEngine",
+    "difficulty": "easy",
+    "query": "What is 8 - 5 + 1?",
+    "expected": 4.0,
+    "raw_llm_answer": "8 - 5 + 1",
+    "qwed_answer": "4",
+    "qwed_verdict": "PASS",
+    "confidence": 0.596,
+    "latency_ms": 52567.15703010559,
+    "timestamp": 1764029138.22103,
+    "metadata": {
+      "trap": "None"
+    }
+  },
+  {
+    "id": "math_med_0",
+    "engine": "MathEngine",
+    "difficulty": "medium",
+    "query": "What is 26% of 614?",
+    "expected": 159.64000000000001,
+    "raw_llm_answer": "0.26 * 614",
+    "qwed_answer": "159.64000000000001",
+    "qwed_verdict": "PASS",
+    "confidence": 0.596,
+    "latency_ms": 5642.039060592651,
+    "timestamp": 1764029143.8725479,
+    "metadata": {
+      "trap": "Percentage calculation"
+    }
+  },
+  {
+    "id": "math_med_1",
+    "engine": "MathEngine",
+    "difficulty": "medium",
+    "query": "What is 67% of 784?",
+    "expected": 525.2800000000001,
+    "raw_llm_answer": "0.67 * 784",
+    "qwed_answer": "525.2800000000001",
+    "qwed_verdict": "PASS",
+    "confidence": 0.596,
+    "latency_ms": 4498.310804367065,
+    "timestamp": 1764029148.3708587,
+    "metadata": {
+      "trap": "Percentage calculation"
+    }
+  },
+  {
+    "id": "math_med_2",
+    "engine": "MathEngine",
+    "difficulty": "medium",
+    "query": "What is 81% of 326?",
+    "expected": 264.06,
+    "raw_llm_answer": "0.81 * 326",
+    "qwed_answer": "264.06",
+    "qwed_verdict": "PASS",
+    "confidence": 0.596,
+    "latency_ms": 53634.60159301758,
+    "timestamp": 1764029202.0110686,
+    "metadata": {
+      "trap": "Percentage calculation"
+    }
+  },
+  {
+    "id": "math_hard_0",
+    "engine": "MathEngine",
+    "difficulty": "hard",
+    "query": "Sophie has 44 apples. She eats 7. Then buys 5 times what she has left.",
+    "expected": 222.0,
+    "raw_llm_answer": "(44 - 7) * 5",
+    "qwed_answer": "185",
+    "qwed_verdict": "FAIL",
+    "confidence": 0.596,
+    "latency_ms": 6061.639070510864,
+    "timestamp": 1764029208.0727077,
+    "metadata": {
+      "trap": "Multi-step logic"
+    }
+  },
+  {
+    "id": "math_hard_1",
+    "engine": "MathEngine",
+    "difficulty": "hard",
+    "query": "Sophie has 40 apples. She eats 9. Then buys 2 times what she has left.",
+    "expected": 93.0,
+    "raw_llm_answer": "(40 - 9) * 2",
+    "qwed_answer": "93",
+    "qwed_verdict": "PASS",
+    "confidence": 0.596,
+    "latency_ms": 52685.68468093872,
+    "timestamp": 1764029260.7583923,
+    "metadata": {
+      "trap": "Multi-step logic"
+    }
+  },
+  {
+    "id": "math_hard_2",
+    "engine": "MathEngine",
+    "difficulty": "hard",
+    "query": "A train travels 29 miles at 8 mph. How long does it take?",
+    "expected": 3.625,
+    "raw_llm_answer": "29 / 8",
+    "qwed_answer": "3.625",
+    "qwed_verdict": "PASS",
+    "confidence": 0.596,
+    "latency_ms": 5163.532257080078,
+    "timestamp": 1764029265.9219246,
+    "metadata": {
+      "trap": "Multi-step logic"
+    }
+  },
+  {
+    "id": "math_collapse_0",
+    "engine": "MathEngine",
+    "difficulty": "collapse",
+    "query": "What is 6/2(1+2)?",
+    "expected": "AMBIGUOUS",
+    "raw_llm_answer": "6/2*(1+2)",
+    "qwed_answer": "9.0",
+    "qwed_verdict": "PASS",
+    "confidence": 0.596,
+    "latency_ms": 5932.438373565674,
+    "timestamp": 1764029271.8554196,
+    "metadata": {
+      "trap": "Ambiguous operator precedence"
+    }
+  },
+  {
+    "id": "math_collapse_1",
+    "engine": "MathEngine",
+    "difficulty": "collapse",
+    "query": "Calculate 5 divided by 0.",
+    "expected": "ERROR",
+    "raw_llm_answer": "Error: Azure OpenAI translation failed: 1 validation error for MathVerificationTask\nclaimed_answer\n  Input should be a valid number, unable to parse string as a number [type=float_parsing, input_value='undefined', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.12/v/float_parsing",
+    "qwed_answer": "None",
+    "qwed_verdict": "PASS",
+    "confidence": 0.0,
+    "latency_ms": 51349.21431541443,
+    "timestamp": 1764029323.204634,
+    "metadata": {
+      "trap": "Division by zero"
+    }
+  },
+  {
+    "id": "math_collapse_2",
+    "engine": "MathEngine",
+    "difficulty": "collapse",
+    "query": "Prove that 1 equals 2.",
+    "expected": "FALSE",
+    "raw_llm_answer": "1 == 2",
+    "qwed_answer": "False",
+    "qwed_verdict": "PASS",
+    "confidence": 0.596,
+    "latency_ms": 6304.778575897217,
+    "timestamp": 1764029329.5094125,
+    "metadata": {
+      "trap": "False premise"
+    }
+  }
+]

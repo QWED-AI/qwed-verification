@@ -1,0 +1,241 @@
+{
+  "metadata": {
+    "report_type": "QWED_COMPREHENSIVE_AUDIT",
+    "generated_at": "2025-12-01T09:55:24.183072",
+    "version": "1.0"
+  },
+  "summary": {
+    "timestamp": "2025-12-01T09:55:24.182067",
+    "duration_seconds": 5.710883,
+    "total_tests": 9,
+    "passed": 8,
+    "failed": 1,
+    "pass_rate": 88.88888888888889,
+    "by_priority": {
+      "critical": {
+        "total": 3,
+        "passed": 3,
+        "pass_rate": 100.0
+      },
+      "high": {
+        "total": 5,
+        "passed": 4,
+        "pass_rate": 80.0
+      },
+      "medium": {
+        "total": 1,
+        "passed": 1,
+        "pass_rate": 100.0
+      }
+    },
+    "by_engine": {
+      "math": {
+        "total": 9,
+        "passed": 8,
+        "pass_rate": 88.88888888888889
+      }
+    }
+  },
+  "results": [
+    {
+      "test_id": "MATH_AMB_001",
+      "test_name": "Detect order of operations ambiguity",
+      "engine": "math",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "WARNING - Ambiguous (16 vs 1)",
+      "actual_result": {
+        "status": "ERROR",
+        "error": "'Integer' object is not callable",
+        "is_valid": false
+      },
+      "error": null,
+      "latency_ms": 122.02906608581543,
+      "timestamp": "2025-12-01T09:55:18.591862"
+    },
+    {
+      "test_id": "MATH_AMB_002",
+      "test_name": "Handle implicit multiplication (2x vs 2*x)",
+      "engine": "math",
+      "priority": "MEDIUM",
+      "passed": true,
+      "expected_result": "Both expressions parse successfully",
+      "actual_result": {
+        "expr1": {
+          "status": "ERROR",
+          "error": "invalid syntax (<string>, line 1)",
+          "is_valid": false
+        },
+        "expr2": {
+          "is_valid": true,
+          "simplified": "2*x + 3",
+          "original": "2*x + 3",
+          "is_symbolic": true
+        }
+      },
+      "error": null,
+      "latency_ms": 3411.766529083252,
+      "timestamp": "2025-12-01T09:55:22.003628"
+    },
+    {
+      "test_id": "MATH_AMB_003",
+      "test_name": "Detect division by zero",
+      "engine": "math",
+      "priority": "HIGH",
+      "passed": true,
+      "expected_result": "Division by zero flagged",
+      "actual_result": {
+        "is_valid": false,
+        "error": "Division by zero",
+        "message": "Expression contains division by zero"
+      },
+      "error": null,
+      "latency_ms": 196.14195823669434,
+      "timestamp": "2025-12-01T09:55:22.201934"
+    },
+    {
+      "test_id": "MATH_DOM_001",
+      "test_name": "Detect sqrt of negative in real domain",
+      "engine": "math",
+      "priority": "HIGH",
+      "passed": true,
+      "expected_result": "Undefined in real domain",
+      "actual_result": {
+        "is_valid": false,
+        "error": "domain error",
+        "message": "Square root of negative number is undefined in real domain"
+      },
+      "error": null,
+      "latency_ms": 204.2098045349121,
+      "timestamp": "2025-12-01T09:55:22.409642"
+    },
+    {
+      "test_id": "MATH_DOM_002",
+      "test_name": "Detect log(0) undefined",
+      "engine": "math",
+      "priority": "HIGH",
+      "passed": true,
+      "expected_result": "Undefined - log(0)",
+      "actual_result": {
+        "is_valid": false,
+        "error": "undefined",
+        "message": "log(0) is undefined"
+      },
+      "error": null,
+      "latency_ms": 172.6691722869873,
+      "timestamp": "2025-12-01T09:55:22.582978"
+    },
+    {
+      "test_id": "MATH_SYM_001",
+      "test_name": "Verify true algebraic identity",
+      "engine": "math",
+      "priority": "CRITICAL",
+      "passed": true,
+      "expected_result": "TRUE - Difference of squares identity",
+      "actual_result": {
+        "is_valid": true,
+        "result": true,
+        "left_side": "x**2 - y**2",
+        "right_side": "(x - y)*(x + y)",
+        "simplified_difference": "0",
+        "message": "Identity is true"
+      },
+      "error": null,
+      "latency_ms": 411.18717193603516,
+      "timestamp": "2025-12-01T09:55:22.994165"
+    },
+    {
+      "test_id": "MATH_SYM_002",
+      "test_name": "Detect false algebraic identity (missing 2xy)",
+      "engine": "math",
+      "priority": "CRITICAL",
+      "passed": true,
+      "expected_result": "FALSE - Should be x²+2xy+y²",
+      "actual_result": {
+        "is_valid": false,
+        "result": false,
+        "left_side": "(x + y)**2",
+        "right_side": "x**2 + y**2",
+        "simplified_difference": "2*x*y",
+        "message": "Identity is false"
+      },
+      "error": null,
+      "latency_ms": 448.8334655761719,
+      "timestamp": "2025-12-01T09:55:23.445016"
+    },
+    {
+      "test_id": "MATH_SYM_003",
+      "test_name": "Detect sqrt(x²) ≠ x (should be |x|)",
+      "engine": "math",
+      "priority": "HIGH",
+      "passed": true,
+      "expected_result": "FALSE - sqrt(x²) = |x|, not x",
+      "actual_result": {
+        "is_valid": false,
+        "result": false,
+        "left_side": "sqrt(x**2)",
+        "right_side": "x",
+        "simplified_difference": "-x + sqrt(x**2)",
+        "message": "Identity is false"
+      },
+      "error": null,
+      "latency_ms": 542.2520637512207,
+      "timestamp": "2025-12-01T09:55:23.988273"
+    },
+    {
+      "test_id": "MATH_SYM_004",
+      "test_name": "Verify simple arithmetic (2+2=4)",
+      "engine": "math",
+      "priority": "CRITICAL",
+      "passed": true,
+      "expected_result": "TRUE - Basic arithmetic",
+      "actual_result": {
+        "is_valid": true,
+        "result": true,
+        "left_side": "4",
+        "right_side": "4",
+        "simplified_difference": "0",
+        "message": "Identity is true"
+      },
+      "error": null,
+      "latency_ms": 190.71531295776367,
+      "timestamp": "2025-12-01T09:55:24.178988"
+    }
+  ],
+  "failures": [
+    {
+      "test_id": "MATH_AMB_001",
+      "test_name": "Detect order of operations ambiguity",
+      "engine": "math",
+      "priority": "HIGH",
+      "passed": false,
+      "expected_result": "WARNING - Ambiguous (16 vs 1)",
+      "actual_result": {
+        "status": "ERROR",
+        "error": "'Integer' object is not callable",
+        "is_valid": false
+      },
+      "error": null,
+      "latency_ms": 122.02906608581543,
+      "timestamp": "2025-12-01T09:55:18.591862"
+    }
+  ],
+  "statistics": {
+    "total_tests": 9,
+    "passed_count": 8,
+    "failed_count": 1,
+    "latency": {
+      "min_ms": 122.02906608581543,
+      "max_ms": 3411.766529083252,
+      "avg_ms": 633.3116160498726
+    },
+    "engines_tested": [
+      "math"
+    ],
+    "priorities_tested": [
+      "MEDIUM",
+      "HIGH",
+      "CRITICAL"
+    ]
+  }
+}

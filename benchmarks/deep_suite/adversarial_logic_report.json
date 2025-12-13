@@ -1,0 +1,597 @@
+{
+  "summary": {
+    "total_tests": 16,
+    "issues_detected": 11
+  },
+  "all_results": [
+    {
+      "test_id": "hanoi_3_disks",
+      "query": "Give the exact optimal sequence of moves to solve Tower of Hanoi for 3 disks from peg A to peg C using peg B. Provide only the moves, one per line: 'Move disk X from peg Y to peg Z'.",
+      "provider": "anthropic",
+      "qwed_status": "SAT",
+      "detected_issue": false,
+      "why_hard": "LLMs often add extra moves, make illegal moves, or get the sequence wrong",
+      "full_response": {
+        "status": "SAT",
+        "model": {
+          "move6_to": "1",
+          "move5_from": "1",
+          "move3_from": "2",
+          "move5_disk": "1",
+          "move4_to": "2",
+          "move5_to": "2",
+          "move4_from": "1",
+          "move6_disk": "1",
+          "move1_to": "2",
+          "move3_disk": "1",
+          "move4_disk": "1",
+          "move2_to": "1",
+          "move2_disk": "1",
+          "move2_from": "2",
+          "move6_from": "2",
+          "move7_from": "1",
+          "move3_to": "1",
+          "move1_disk": "1",
+          "move7_to": "3",
+          "move7_disk": "3",
+          "move1_from": "1"
+        },
+        "translation": {
+          "variables": {
+            "move1_disk": "Int",
+            "move1_from": "Int",
+            "move1_to": "Int",
+            "move2_disk": "Int",
+            "move2_from": "Int",
+            "move2_to": "Int",
+            "move3_disk": "Int",
+            "move3_from": "Int",
+            "move3_to": "Int",
+            "move4_disk": "Int",
+            "move4_from": "Int",
+            "move4_to": "Int",
+            "move5_disk": "Int",
+            "move5_from": "Int",
+            "move5_to": "Int",
+            "move6_disk": "Int",
+            "move6_from": "Int",
+            "move6_to": "Int",
+            "move7_disk": "Int",
+            "move7_from": "Int",
+            "move7_to": "Int"
+          },
+          "constraints": [
+            "move1_disk &gt;= 1",
+            "move1_disk &lt;= 3",
+            "move1_from &gt;= 1",
+            "move1_from &lt;= 3",
+            "move1_to &gt;= 1",
+            "move1_to &lt;= 3",
+            "move1_from != move1_to",
+            "move2_disk &gt;= 1",
+            "move2_disk &lt;= 3",
+            "move2_from &gt;= 1",
+            "move2_from &lt;= 3",
+            "move2_to &gt;= 1",
+            "move2_to &lt;= 3",
+            "move2_from != move2_to",
+            "move3_disk &gt;= 1",
+            "move3_disk &lt;= 3",
+            "move3_from &gt;= 1",
+            "move3_from &lt;= 3",
+            "move3_to &gt;= 1",
+            "move3_to &lt;= 3",
+            "move3_from != move3_to",
+            "move4_disk &gt;= 1",
+            "move4_disk &lt;= 3",
+            "move4_from &gt;= 1",
+            "move4_from &lt;= 3",
+            "move4_to &gt;= 1",
+            "move4_to &lt;= 3",
+            "move4_from != move4_to",
+            "move5_disk &gt;= 1",
+            "move5_disk &lt;= 3",
+            "move5_from &gt;= 1",
+            "move5_from &lt;= 3",
+            "move5_to &gt;= 1",
+            "move5_to &lt;= 3",
+            "move5_from != move5_to",
+            "move6_disk &gt;= 1",
+            "move6_disk &lt;= 3",
+            "move6_from &gt;= 1",
+            "move6_from &lt;= 3",
+            "move6_to &gt;= 1",
+            "move6_to &lt;= 3",
+            "move6_from != move6_to",
+            "move7_disk &gt;= 1",
+            "move7_disk &lt;= 3",
+            "move7_from &gt;= 1",
+            "move7_from &lt;= 3",
+            "move7_to &gt;= 1",
+            "move7_to &lt;= 3",
+            "move7_from != move7_to",
+            "move1_disk == 1",
+            "move1_from == 1",
+            "move7_disk == 3",
+            "move7_to == 3"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "anthropic",
+        "attempts": 2,
+        "latency_ms": 12678.336381912231
+      },
+      "timestamp": "2025-11-29T10:03:13.216754"
+    },
+    {
+      "test_id": "hanoi_4_disks",
+      "query": "Solve Tower of Hanoi for 4 disks. Provide the complete sequence of moves from peg A to peg C.",
+      "provider": "claude_opus",
+      "qwed_status": "ERROR",
+      "detected_issue": true,
+      "why_hard": "More complex, LLMs struggle with maintaining state across many steps",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Azure OpenAI logic refinement failed: name 'logic_function_schema' is not defined",
+        "attempts": 2,
+        "latency_ms": 2760.287284851074
+      },
+      "timestamp": "2025-11-29T10:03:16.095402"
+    },
+    {
+      "test_id": "knights_knaves_01",
+      "query": "On an island, knights always tell truth and knaves always lie. A says 'B is lying.' B says 'A is telling the truth.' Who is the knight and who is the knave? Show step-by-step logical deduction.",
+      "provider": "anthropic",
+      "qwed_status": "UNSAT",
+      "detected_issue": true,
+      "why_hard": "Self-referential logic confuses LLMs - must build truth table",
+      "full_response": {
+        "status": "UNSAT",
+        "model": null,
+        "translation": {
+          "variables": {
+            "A": "Bool",
+            "B": "Bool"
+          },
+          "constraints": [
+            "A == Not(B)",
+            "B == A"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "anthropic",
+        "attempts": 2,
+        "latency_ms": 5956.449270248413
+      },
+      "timestamp": "2025-11-29T10:03:22.206140"
+    },
+    {
+      "test_id": "knights_knaves_02",
+      "query": "A says 'I am a knave.' Is this possible? Explain the logical contradiction.",
+      "provider": "claude_opus",
+      "qwed_status": "ERROR",
+      "detected_issue": true,
+      "why_hard": "Classic liar paradox, LLMs may not detect the contradiction",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Azure OpenAI logic refinement failed: name 'logic_function_schema' is not defined",
+        "attempts": 2,
+        "latency_ms": 1070.2874660491943
+      },
+      "timestamp": "2025-11-29T10:03:23.388669"
+    },
+    {
+      "test_id": "knights_knaves_03",
+      "query": "A says 'Either I am a knave or B is a knight.' B says 'A is a knave.' What are A and B?",
+      "provider": "anthropic",
+      "qwed_status": "UNSAT",
+      "detected_issue": true,
+      "why_hard": "Requires evaluating disjunction in different cases",
+      "full_response": {
+        "status": "UNSAT",
+        "model": null,
+        "translation": {
+          "variables": {
+            "A": "Bool",
+            "B": "Bool"
+          },
+          "constraints": [
+            "A == Or(Not(A), B)",
+            "B == Not(A)"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "anthropic",
+        "attempts": 2,
+        "latency_ms": 6372.627735137939
+      },
+      "timestamp": "2025-11-29T10:03:29.891543"
+    },
+    {
+      "test_id": "wolf_goat_cabbage",
+      "query": "A farmer must cross a river with a wolf, goat, and cabbage. The boat holds only the farmer and one item. If left alone: wolf eats goat, goat eats cabbage. Provide the exact sequence of crossings (one action per line). Format: 'Farmer takes X across' or 'Farmer returns alone'.",
+      "provider": "claude_opus",
+      "qwed_status": "SAT",
+      "detected_issue": false,
+      "why_hard": "LLMs make illegal moves or forget constraints",
+      "full_response": {
+        "status": "SAT",
+        "model": {
+          "w6": "0",
+          "w1": "0",
+          "w2": "1",
+          "g6": "0",
+          "g3": "0",
+          "g4": "1",
+          "f0": "0",
+          "w3": "1",
+          "f5": "0",
+          "g2": "1",
+          "w4": "1",
+          "c1": "0",
+          "f3": "0",
+          "c2": "1",
+          "w5": "0",
+          "g5": "0",
+          "f6": "0",
+          "w0": "0",
+          "f1": "0",
+          "g1": "0",
+          "c5": "1",
+          "f4": "1",
+          "f2": "1",
+          "c6": "1",
+          "c3": "0",
+          "c4": "1",
+          "c0": "0",
+          "f7": "1",
+          "c7": "1",
+          "g7": "1",
+          "w7": "1",
+          "g0": "0"
+        },
+        "translation": {
+          "variables": {
+            "f0": "Int",
+            "w0": "Int",
+            "g0": "Int",
+            "c0": "Int",
+            "f7": "Int",
+            "w7": "Int",
+            "g7": "Int",
+            "c7": "Int",
+            "f1": "Int",
+            "w1": "Int",
+            "g1": "Int",
+            "c1": "Int",
+            "f2": "Int",
+            "w2": "Int",
+            "g2": "Int",
+            "c2": "Int",
+            "f3": "Int",
+            "w3": "Int",
+            "g3": "Int",
+            "c3": "Int",
+            "f4": "Int",
+            "w4": "Int",
+            "g4": "Int",
+            "c4": "Int",
+            "f5": "Int",
+            "w5": "Int",
+            "g5": "Int",
+            "c5": "Int",
+            "f6": "Int",
+            "w6": "Int",
+            "g6": "Int",
+            "c6": "Int"
+          },
+          "constraints": [
+            "And(f0 == 0, w0 == 0, g0 == 0, c0 == 0)",
+            "And(f7 == 1, w7 == 1, g7 == 1, c7 == 1)",
+            "Or(f1 == f0, f1 == 1 - f0)",
+            "Or(w1 == w0, w1 == f1)",
+            "Or(g1 == g0, g1 == f1)",
+            "Or(c1 == c0, c1 == f1)",
+            "Or(f2 == f1, f2 == 1 - f1)",
+            "Or(w2 == w1, w2 == f2)",
+            "Or(g2 == g1, g2 == f2)",
+            "Or(c2 == c1, c2 == f2)",
+            "Or(f3 == f2, f3 == 1 - f2)",
+            "Or(w3 == w2, w3 == f3)",
+            "Or(g3 == g2, g3 == f3)",
+            "Or(c3 == c2, c3 == f3)",
+            "Or(f4 == f3, f4 == 1 - f3)",
+            "Or(w4 == w3, w4 == f4)",
+            "Or(g4 == g3, g4 == f4)",
+            "Or(c4 == c3, c4 == f4)",
+            "Or(f5 == f4, f5 == 1 - f4)",
+            "Or(w5 == w4, w5 == f5)",
+            "Or(g5 == g4, g5 == f5)",
+            "Or(c5 == c4, c5 == f5)",
+            "Or(f6 == f5, f6 == 1 - f5)",
+            "Or(w6 == w5, w6 == f6)",
+            "Or(g6 == g5, g6 == f6)",
+            "Or(c6 == c5, c6 == f6)",
+            "Or(f7 == f6, f7 == 1 - f6)",
+            "Or(w7 == w6, w7 == f7)",
+            "Or(g7 == g6, g7 == f7)",
+            "Or(c7 == c6, c7 == f7)",
+            "And(Or(f1 == 1, Not(And(w1 == g1, f1 != g1))), Or(f1 == 1, Not(And(g1 == c1, f1 != g1))))",
+            "And(Or(f2 == 0, Not(And(w2 == g2, f2 != g2))), Or(f2 == 0, Not(And(g2 == c2, f2 != g2))))",
+            "And(Or(f3 == 1, Not(And(w3 == g3, f3 != g3))), Or(f3 == 1, Not(And(g3 == c3, f3 != g3))))",
+            "And(Or(f4 == 0, Not(And(w4 == g4, f4 != g4))), Or(f4 == 0, Not(And(g4 == c4, f4 != g4))))",
+            "And(Or(f5 == 1, Not(And(w5 == g5, f5 != g5))), Or(f5 == 1, Not(And(g5 == c5, f5 != g5))))",
+            "And(Or(f6 == 0, Not(And(w6 == g6, f6 != g6))), Or(f6 == 0, Not(And(g6 == c6, f6 != g6))))",
+            "And(Or(f7 == 1, Not(And(w7 == g7, f7 != g7))), Or(f7 == 1, Not(And(g7 == c7, f7 != g7))))"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "claude_opus",
+        "attempts": 1,
+        "latency_ms": 4512.521028518677
+      },
+      "timestamp": "2025-11-29T10:03:34.471301"
+    },
+    {
+      "test_id": "missionaries_cannibals",
+      "query": "3 missionaries and 3 cannibals must cross a river. Boat holds 2 people. Cannibals cannot outnumber missionaries on either side. Give the exact sequence of boat trips.",
+      "provider": "anthropic",
+      "qwed_status": "ERROR",
+      "detected_issue": true,
+      "why_hard": "Complex state space, LLMs violate constraints",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Anthropic logic refinement failed: 1 validation error for LogicVerificationTask\nconstraints\n  Field required [type=missing, input_value={'variables': {'m0': 'Int...': 'Int', 'b12': 'Int'}}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing",
+        "attempts": 2,
+        "latency_ms": 21298.93398284912
+      },
+      "timestamp": "2025-11-29T10:03:55.910803"
+    },
+    {
+      "test_id": "constraint_sat_01",
+      "query": "Find values for x and y such that: x + y = 10, x > y, x is even, y is odd. List all possible solutions.",
+      "provider": "anthropic",
+      "qwed_status": "UNSAT",
+      "detected_issue": true,
+      "why_hard": "Multiple constraints, LLMs miss edge cases",
+      "full_response": {
+        "status": "UNSAT",
+        "model": null,
+        "translation": {
+          "variables": {
+            "x": "Int",
+            "y": "Int"
+          },
+          "constraints": [
+            "x + y == 10",
+            "x &gt; y",
+            "x % 2 == 0",
+            "y % 2 == 1"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "anthropic",
+        "attempts": 2,
+        "latency_ms": 6448.573589324951
+      },
+      "timestamp": "2025-11-29T10:04:02.506464"
+    },
+    {
+      "test_id": "constraint_sat_02",
+      "query": "Three variables x, y, z must satisfy: x < y < z, x + y + z = 15, all are prime numbers. Find all solutions.",
+      "provider": "claude_opus",
+      "qwed_status": "UNSAT",
+      "detected_issue": true,
+      "why_hard": "Combining ordering, arithmetic, and primality constraints",
+      "full_response": {
+        "status": "UNSAT",
+        "model": null,
+        "translation": {
+          "variables": {
+            "x": "Int",
+            "y": "Int",
+            "z": "Int"
+          },
+          "constraints": [
+            "x &lt; y",
+            "y &lt; z",
+            "x + y + z == 15",
+            "And(x == 2, x == 3, x == 5, x == 7, x == 11, x == 13) == False or x == 2 or x == 3 or x == 5 or x == 7 or x == 11 or x == 13",
+            "And(y == 2, y == 3, y == 5, y == 7, y == 11, y == 13) == False or y == 2 or y == 3 or y == 5 or y == 7 or y == 11 or y == 13",
+            "And(z == 2, z == 3, z == 5, z == 7, z == 11, z == 13) == False or z == 2 or z == 3 or z == 5 or z == 7 or z == 11 or z == 13"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "claude_opus",
+        "attempts": 1,
+        "latency_ms": 1665.3814315795898
+      },
+      "timestamp": "2025-11-29T10:04:04.345801"
+    },
+    {
+      "test_id": "logic_puzzle_01",
+      "query": "Five houses in five colors. British lives in red house. Spaniard owns dog. Coffee drunk in green house. Ukrainian drinks tea. Green house immediately right of ivory. Who owns zebra? Provide systematic deduction.",
+      "provider": "anthropic",
+      "qwed_status": null,
+      "detected_issue": false,
+      "why_hard": "Classic Einstein riddle - requires systematic constraint propagation",
+      "full_response": {
+        "detail": "Security violation: Input contains suspicious keywords commonly used in prompt injections"
+      },
+      "timestamp": "2025-11-29T10:04:04.420166"
+    },
+    {
+      "test_id": "boolean_sat_01",
+      "query": "Find an assignment for A, B, C that satisfies: (A OR B) AND (NOT A OR C) AND (NOT B OR NOT C). Show the truth table.",
+      "provider": "claude_opus",
+      "qwed_status": "ERROR",
+      "detected_issue": true,
+      "why_hard": "3-SAT problem, LLMs may not systematically evaluate all cases",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Azure OpenAI logic refinement failed: name 'logic_function_schema' is not defined",
+        "attempts": 2,
+        "latency_ms": 618.344783782959
+      },
+      "timestamp": "2025-11-29T10:04:05.138906"
+    },
+    {
+      "test_id": "boolean_sat_02",
+      "query": "Is this formula satisfiable: (A AND B) AND (NOT A OR NOT B)? Prove your answer.",
+      "provider": "anthropic",
+      "qwed_status": "UNSAT",
+      "detected_issue": true,
+      "why_hard": "Requires detecting contradiction via resolution",
+      "full_response": {
+        "status": "UNSAT",
+        "model": null,
+        "translation": {
+          "variables": {
+            "A": "Bool",
+            "B": "Bool"
+          },
+          "constraints": [
+            "And(A, B)",
+            "Or(Not(A), Not(B))"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "anthropic",
+        "attempts": 2,
+        "latency_ms": 5836.283922195435
+      },
+      "timestamp": "2025-11-29T10:04:11.095809"
+    },
+    {
+      "test_id": "graph_coloring",
+      "query": "Color a graph with 5 nodes connected as: 1-2, 2-3, 3-4, 4-5, 5-1, 1-3. Use minimum colors where adjacent nodes have different colors. What's the minimum?",
+      "provider": "claude_opus",
+      "qwed_status": "SAT",
+      "detected_issue": false,
+      "why_hard": "Graph coloring is NP-hard, LLMs use heuristics incorrectly",
+      "full_response": {
+        "status": "SAT",
+        "model": {
+          "c5": "5",
+          "c1": "2",
+          "c2": "1",
+          "c3": "3",
+          "c4": "4"
+        },
+        "translation": {
+          "variables": {
+            "c1": "Int",
+            "c2": "Int",
+            "c3": "Int",
+            "c4": "Int",
+            "c5": "Int"
+          },
+          "constraints": [
+            "And(c1 &gt;= 1, c1 &lt;= 5)",
+            "And(c2 &gt;= 1, c2 &lt;= 5)",
+            "And(c3 &gt;= 1, c3 &lt;= 5)",
+            "And(c4 &gt;= 1, c4 &lt;= 5)",
+            "And(c5 &gt;= 1, c5 &lt;= 5)",
+            "c1 != c2",
+            "c2 != c3",
+            "c3 != c4",
+            "c4 != c5",
+            "c5 != c1",
+            "c1 != c3"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "claude_opus",
+        "attempts": 1,
+        "latency_ms": 1042.7699089050293
+      },
+      "timestamp": "2025-11-29T10:04:12.306892"
+    },
+    {
+      "test_id": "sudoku_mini",
+      "query": "Fill a 4x4 grid where each row and column contains 1,2,3,4. Top row starts: 1,_,_,4. Left column: 1,_,4,_. Provide the complete solution.",
+      "provider": "anthropic",
+      "qwed_status": "ERROR",
+      "detected_issue": true,
+      "why_hard": "Constraint propagation required, LLMs make invalid assignments",
+      "full_response": {
+        "status": "ERROR",
+        "error": "Anthropic logic refinement failed: 1 validation error for LogicVerificationTask\nconstraints\n  Field required [type=missing, input_value={'variables': {'r0c0': 'I...: 'Int', 'r3c3': 'Int'}}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing",
+        "attempts": 2,
+        "latency_ms": 18752.596378326416
+      },
+      "timestamp": "2025-11-29T10:04:31.167071"
+    },
+    {
+      "test_id": "temporal_01",
+      "query": "Events: A happens before B. B happens before C. C happens before D. D happens before A. Is this timeline consistent? Explain.",
+      "provider": "claude_opus",
+      "qwed_status": "UNSAT",
+      "detected_issue": true,
+      "why_hard": "Cycle detection in partial order",
+      "full_response": {
+        "status": "UNSAT",
+        "model": null,
+        "translation": {
+          "variables": {
+            "A": "Int",
+            "B": "Int",
+            "C": "Int",
+            "D": "Int"
+          },
+          "constraints": [
+            "A &lt; B",
+            "B &lt; C",
+            "C &lt; D",
+            "D &lt; A"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "claude_opus",
+        "attempts": 1,
+        "latency_ms": 767.2717571258545
+      },
+      "timestamp": "2025-11-29T10:04:32.088820"
+    },
+    {
+      "test_id": "resource_allocation",
+      "query": "3 tasks (A,B,C) need resources. A needs 2 units, B needs 3, C needs 2. Only 5 units available. B and C cannot run together. Which tasks can run simultaneously?",
+      "provider": "anthropic",
+      "qwed_status": "SAT",
+      "detected_issue": false,
+      "why_hard": "Resource constraints + mutex constraints",
+      "full_response": {
+        "status": "SAT",
+        "model": {
+          "A": "False",
+          "B": "False",
+          "C": "True"
+        },
+        "translation": {
+          "variables": {
+            "A": "Bool",
+            "B": "Bool",
+            "C": "Bool"
+          },
+          "constraints": [
+            "Or(Not(A), Not(B), Not(C), (2 + 3 + 2) &lt;= 5)",
+            "Or(Not(A), Not(B), (2 + 3) &lt;= 5)",
+            "Or(Not(A), Not(C), (2 + 2) &lt;= 5)",
+            "Or(Not(B), Not(C), (3 + 2) &lt;= 5)",
+            "Or(Not(A), 2 &lt;= 5)",
+            "Or(Not(B), 3 &lt;= 5)",
+            "Or(Not(C), 2 &lt;= 5)",
+            "Not(And(B, C))",
+            "Or(A, B, C)"
+          ],
+          "goal": "SATISFIABILITY"
+        },
+        "provider_used": "anthropic",
+        "attempts": 2,
+        "latency_ms": 9469.54345703125
+      },
+      "timestamp": "2025-11-29T10:04:41.670554"
+    }
+  ],
+  "timestamp": "2025-11-29T10:04:41.676839"
+}
