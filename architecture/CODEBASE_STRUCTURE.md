@@ -1,7 +1,8 @@
 # QWED Backend - Complete Codebase Structure
 
-> **Last Updated:** 2025-11-29  
+> **Last Updated:** 2025-12-17  
 > **Purpose:** Comprehensive architecture and code organization documentation
+> **Latest Changes:** PostgreSQL migration, Financial Precision (Decimal), Z3 Counter-Models
 
 ---
 
@@ -133,7 +134,8 @@ qwed_new/
 │   │   ├── 🔵 Supporting Modules
 │   │   ├── schemas.py              # Pydantic models
 │   │   ├── models.py               # SQLModel database tables
-│   │   ├── database.py             # Database connection & session
+│   │   ├── database.py             # Database connection (SQLite/PostgreSQL)
+│   │   ├── money.py                # [NEW] Financial Precision (Decimal + Currency)
 │   │   ├── validator.py            # Semantic validation
 │   │   ├── sanitizer.py            # [DEPRECATED] Input/output sanitization
 │   │   ├── security.py             # Security gateway (prompt injection)
@@ -175,12 +177,13 @@ qwed_new/
 ├── 📁 sdk/                         # Python SDK for clients
 ├── 📁 examples/                    # Example usage
 │
-├── 🗄️ Database Files
-├── qwed.db                         # Main production database
-├── qwed_v2.db                      # Version 2 database
+├── 🗄️ Database
+├── qwed.db                         # SQLite (Development)
+├── docker-compose.yml              # [NEW] PostgreSQL container
 │
 └── 📜 Configuration
     ├── .env                        # Environment variables
+    ├── .env.example                # [NEW] Template for contributors
     ├── pyproject.toml              # Python project config
     ├── README.md
     └── start_api.bat               # Windows startup script

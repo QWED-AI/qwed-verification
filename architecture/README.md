@@ -38,14 +38,15 @@ making it easier for:
 
 ## 📊 Quick Stats
 
-- **Total Backend Files:** 65+
-- **Lines of Code:** ~14,000+
+- **Total Backend Files:** 70+
+- **Lines of Code:** ~15,000+
 - **Verification Engines:** 8
 - **API Endpoints:** 20+
-- **Database Tables:** 11 (enhanced with security fields)
+- **Database:** SQLite (Dev) / PostgreSQL (Prod)
 - **Supported Domains:** Mathematics, Logic, Statistics, Fact Checking, Code Security, SQL, Images, Reasoning
 - **Security Modules:** 8 (OWASP LLM 2025 compliant)
-- **Production Status:** ✅ **LIVE** on Azure VM
+- **Financial Precision:** Decimal-based Money class
+- **Production Status:** ✅ **LIVE**
 
 ## 🚀 Production Deployment
 
@@ -65,5 +66,5 @@ See also:
 
 ---
 
-**Last Updated:** 2025-11-29  
+**Last Updated:** 2025-12-17  
 **Maintained by:** QWED Development Team

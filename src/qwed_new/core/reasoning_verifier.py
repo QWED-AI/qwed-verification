@@ -31,8 +31,23 @@ class ReasoningVerifier:
     """
     
     def __init__(self):
-        self.primary_llm = AzureOpenAIProvider()  # GPT-4
-        self.secondary_llm = AnthropicProvider()  # Claude
+        # Lazy loading: providers instantiated on first use
+        self._primary_llm = None
+        self._secondary_llm = None
+    
+    @property
+    def primary_llm(self):
+        """Lazy load primary LLM (Anthropic since Azure is not configured)."""
+        if self._primary_llm is None:
+            self._primary_llm = AnthropicProvider()
+        return self._primary_llm
+    
+    @property
+    def secondary_llm(self):
+        """Lazy load secondary LLM."""
+        if self._secondary_llm is None:
+            self._secondary_llm = AnthropicProvider()
+        return self._secondary_llm
         
     def verify_understanding(
         self,

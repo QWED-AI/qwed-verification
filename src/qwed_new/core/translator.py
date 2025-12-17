@@ -20,23 +20,29 @@ class TranslationLayer:
     """
     
     def __init__(self):
-        # Initialize all available providers
-        self.providers = {
-            ProviderType.AZURE_OPENAI: AzureOpenAIProvider(),
-            ProviderType.ANTHROPIC: AnthropicProvider(),
-            ProviderType.CLAUDE_OPUS: ClaudeOpusProvider(),
-            ProviderType.AUTO: AutoShiftProvider()
+        # Lazy loading: providers are instantiated on first use
+        self._providers = {}
+        self._provider_classes = {
+            ProviderType.AZURE_OPENAI: AzureOpenAIProvider,
+            ProviderType.ANTHROPIC: AnthropicProvider,
+            ProviderType.CLAUDE_OPUS: ClaudeOpusProvider,
+            ProviderType.AUTO: AutoShiftProvider
         }
         # Default fallback
         self.default_provider = settings.ACTIVE_PROVIDER
     
     def _get_provider(self, provider_key: str = None) -> LLMProvider:
-        """Get the requested provider or default."""
+        """Get the requested provider or default (lazy initialization)."""
         key = provider_key or self.default_provider
-        if key not in self.providers:
+        if key not in self._provider_classes:
             # Fallback to default if key is invalid/unknown
             key = self.default_provider
-        return self.providers[key]
+        
+        # Lazy instantiation: only create provider when first requested
+        if key not in self._providers:
+            self._providers[key] = self._provider_classes[key]()
+        
+        return self._providers[key]
     
     def _validate_math_output(self, task: MathVerificationTask) -> None:
         """
