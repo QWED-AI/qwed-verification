@@ -147,7 +147,6 @@ class SecureCodeExecutor:
             detach=False,  # Wait for completion
             stdout=True,
             stderr=True,
-            timeout=self.timeout
         )
         
         return container
