@@ -57,41 +57,9 @@ QWED is a **Model-Agnostic Verification Middleware** that acts as a firewall bet
 
 ## Quick Links
 
-<div class="grid cards" markdown>
-
--   :material-rocket-launch:{ .lg .middle } **Getting Started**
-
-    ---
-
-    Install QWED and run your first verification in under 5 minutes.
-
-    [:octicons-arrow-right-24: Installation](getting-started/installation.md)
-
--   :material-book-open-variant:{ .lg .middle } **Architecture**
-
-    ---
-
-    Deep dive into QWED's 8-engine verification architecture.
-
-    [:octicons-arrow-right-24: Architecture Guide](architecture.md)
-
--   :material-api:{ .lg .middle } **API Reference**
-
-    ---
-
-    Complete API documentation with examples.
-
-    [:octicons-arrow-right-24: API Docs](api.md)
-
--   :material-shield-lock:{ .lg .middle } **Security**
-
-    ---
-
-    Enterprise security features and compliance.
-
-    [:octicons-arrow-right-24: Security Overview](security.md)
-
-</div>
+| 🚀 Getting Started | 🏛️ Architecture | 📚 API | 🛡️ Security |
+|:------------------:|:---------------:|:------:|:-----------:|
+| [Installation](getting-started/installation.md) | [Architecture Guide](architecture.md) | [API Docs](api.md) | [Security Overview](security.md) |
 
 ---
 
