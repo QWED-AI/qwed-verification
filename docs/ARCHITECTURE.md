@@ -67,11 +67,24 @@ mindmap
         Multi-modal Proofs
 ```
 
+---
+
+## Engine Deep Dives
+
 ### 1. 🏦 Financial Precision (Engine 1)
 LLMs use floating-point math. QWED uses **Arbitrary-Precision Decimal Arithmetic**. We verify billions in transactions with zero rounding errors and strict currency awareness.
 
+!!! success "Example"
+    ```python
+    # LLM says: 0.1 + 0.2 = 0.30000000000000004
+    # QWED says: 0.1 + 0.2 = 0.3 ✓
+    ```
+
 ### 2. 🧠 Formal Logic (Engine 2)
 Using the **Microsoft Z3 Theorem Prover**, we prove that business rules are mathematically consistent. If a rule is violated, we don't just say "No"—we provide a **Counter-Model** explaining exactly why.
+
+!!! example "Counter-Model Example"
+    > *"Rejected. Violation: `tax_rate` is 12% but 'Electronics' requires 18%."*
 
 ### 3. 🛡️ SQL Armor (Engine 6)
 We parse AI-generated SQL through an AST (Abstract Syntax Tree) firewall. If the AI suggests `DROP TABLE`, QWED incinerates the request before it even touches your database.
@@ -82,10 +95,12 @@ We parse AI-generated SQL through an AST (Abstract Syntax Tree) firewall. If the
 
 QWED is designed for the most regulated industries on Earth.
 
-- **Auditable Proofs**: Every verification result comes with a "Proof of Correctness".
-- **Cryptographic Audit Logs**: Every action is logged with immutable hashes, ready for regulatory audits.
-- **Shadow Execution**: Code verification happens in an ephemeral, isolated sandbox.
-- **Policy Engine**: Define granular "Golden Rules" that the AI can never cross.
+| Feature | Description |
+|---------|-------------|
+| **Auditable Proofs** | Every verification result comes with a "Proof of Correctness" |
+| **Cryptographic Audit Logs** | Every action is logged with immutable hashes, ready for regulatory audits |
+| **Shadow Execution** | Code verification happens in an ephemeral, isolated sandbox |
+| **Policy Engine** | Define granular "Golden Rules" that the AI can never cross |
 
 ---
 
@@ -94,13 +109,26 @@ QWED is designed for the most regulated industries on Earth.
 For developers, QWED is an integrated protocol that fits seamlessly into your stack.
 
 ### The Integration Flow
-1. **Translate**: LLM maps Natural Language to QWED-Logic DSL.
-2. **Verify**: Deterministic engines solve the logic.
-3. **Audit**: Results are captured in the multi-tenant audit trail.
 
-> [!TIP]
-> **Explore the Specs**
-> For deep-dive technical documentation, including file structures and API schemas, head over to the **[Technical Architecture Library](../architecture/README.md)**.
+```mermaid
+sequenceDiagram
+    participant User
+    participant API as QWED API
+    participant LLM as LLM Adapter
+    participant Engine as Verification Engine
+    participant Audit as Audit Logger
+    
+    User->>API: Natural Language Query
+    API->>LLM: Translate to Symbolic
+    LLM-->>API: QWED-DSL Expression
+    API->>Engine: Verify Deterministically
+    Engine-->>API: Proof + Result
+    API->>Audit: Log with Hash
+    API-->>User: Verified Response
+```
+
+!!! tip "Explore the Specs"
+    For deep-dive technical documentation, including file structures and API schemas, check out the [API Reference](api.md).
 
 ---
 

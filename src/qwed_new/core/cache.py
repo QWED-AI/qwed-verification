@@ -171,13 +171,220 @@ class VerificationCache:
         return key in self._cache
 
 
+class RedisCache:
+    """
+    Redis-backed verification cache for distributed deployments.
+    
+    Features:
+    - Distributed cache across multiple instances
+    - Automatic TTL expiration
+    - Graceful fallback to in-memory if Redis unavailable
+    - Same interface as VerificationCache
+    """
+    
+    def __init__(
+        self,
+        ttl_math: int = 3600,      # 1 hour for deterministic math
+        ttl_logic: int = 300,       # 5 minutes for logic
+        ttl_default: int = 600,     # 10 minutes default
+        tenant_id: Optional[int] = None,
+        enabled: bool = True
+    ):
+        self.ttl_math = ttl_math
+        self.ttl_logic = ttl_logic
+        self.ttl_default = ttl_default
+        self.tenant_id = tenant_id
+        self.enabled = enabled
+        
+        # Import here to avoid circular imports
+        from qwed_new.core.redis_config import get_redis_client, CacheKeys
+        
+        self._client = get_redis_client()
+        self._cache_keys = CacheKeys
+        
+        # Metrics (stored in Redis for distributed tracking)
+        self._hits = 0
+        self._misses = 0
+        
+        # Fallback to in-memory if Redis unavailable
+        self._fallback_cache: Optional[VerificationCache] = None
+        if self._client is None:
+            self._fallback_cache = VerificationCache()
+    
+    def _get_ttl(self, result_type: str = "default") -> int:
+        """Get TTL based on result type."""
+        if result_type == "math":
+            return self.ttl_math
+        elif result_type == "logic":
+            return self.ttl_logic
+        return self.ttl_default
+    
+    def _generate_key(self, dsl_code: str, variables: Optional[list] = None) -> str:
+        """Generate a cache key from DSL code and variables."""
+        normalized = ' '.join(dsl_code.split())
+        if variables:
+            normalized += json.dumps(variables, sort_keys=True)
+        query_hash = hashlib.sha256(normalized.encode()).hexdigest()[:32]
+        return self._cache_keys.verification_key(self.tenant_id, query_hash)
+    
+    def get(self, dsl_code: str, variables: Optional[list] = None) -> Optional[Dict[str, Any]]:
+        """Get cached result for DSL code."""
+        if not self.enabled:
+            return None
+        
+        # Fallback to in-memory
+        if self._fallback_cache:
+            return self._fallback_cache.get(dsl_code, variables)
+        
+        key = self._generate_key(dsl_code, variables)
+        
+        try:
+            cached = self._client.get(key)
+            if cached is None:
+                self._misses += 1
+                return None
+            
+            self._hits += 1
+            return json.loads(cached)
+            
+        except Exception as e:
+            # Redis error - log and return None
+            import logging
+            logging.warning(f"Redis get error: {e}")
+            self._misses += 1
+            return None
+    
+    def set(
+        self,
+        dsl_code: str,
+        result: Dict[str, Any],
+        variables: Optional[list] = None,
+        result_type: str = "default"
+    ) -> None:
+        """Cache a verification result."""
+        if not self.enabled:
+            return
+        
+        # Fallback to in-memory
+        if self._fallback_cache:
+            self._fallback_cache.set(dsl_code, result, variables)
+            return
+        
+        key = self._generate_key(dsl_code, variables)
+        ttl = self._get_ttl(result_type)
+        
+        try:
+            self._client.setex(key, ttl, json.dumps(result))
+        except Exception as e:
+            import logging
+            logging.warning(f"Redis set error: {e}")
+    
+    def invalidate(self, dsl_code: str, variables: Optional[list] = None) -> bool:
+        """Remove a specific entry from cache."""
+        if self._fallback_cache:
+            return self._fallback_cache.invalidate(dsl_code, variables)
+        
+        key = self._generate_key(dsl_code, variables)
+        
+        try:
+            return self._client.delete(key) > 0
+        except Exception:
+            return False
+    
+    def clear(self, pattern: str = None) -> int:
+        """
+        Clear cached entries.
+        
+        Args:
+            pattern: Optional pattern to match (e.g., "qwed:verify:*")
+                    If None, clears all QWED verification cache
+        """
+        if self._fallback_cache:
+            return self._fallback_cache.clear()
+        
+        try:
+            if pattern is None:
+                pattern = f"{self._cache_keys.VERIFICATION}:*"
+            
+            # Use SCAN to avoid blocking
+            cursor = 0
+            deleted = 0
+            while True:
+                cursor, keys = self._client.scan(cursor, match=pattern, count=100)
+                if keys:
+                    deleted += self._client.delete(*keys)
+                if cursor == 0:
+                    break
+            
+            self._hits = 0
+            self._misses = 0
+            return deleted
+            
+        except Exception as e:
+            import logging
+            logging.warning(f"Redis clear error: {e}")
+            return 0
+    
+    @property
+    def stats(self) -> Dict[str, Any]:
+        """Get cache statistics."""
+        if self._fallback_cache:
+            stats = self._fallback_cache.stats
+            stats["backend"] = "in-memory (fallback)"
+            return stats
+        
+        total = self._hits + self._misses
+        hit_rate = (self._hits / total * 100) if total > 0 else 0
+        
+        try:
+            info = self._client.info("memory")
+            return {
+                "backend": "redis",
+                "hits": self._hits,
+                "misses": self._misses,
+                "hit_rate_percent": round(hit_rate, 2),
+                "redis_used_memory": info.get("used_memory_human"),
+                "enabled": self.enabled,
+                "tenant_id": self.tenant_id
+            }
+        except Exception:
+            return {
+                "backend": "redis",
+                "hits": self._hits,
+                "misses": self._misses,
+                "hit_rate_percent": round(hit_rate, 2),
+                "enabled": self.enabled
+            }
+
+
 # Global cache singleton
 _verification_cache: Optional[VerificationCache] = None
+_redis_cache: Optional[RedisCache] = None
 
 
-def get_cache() -> VerificationCache:
-    """Get the global verification cache."""
-    global _verification_cache
+def get_cache(use_redis: bool = True, tenant_id: Optional[int] = None) -> VerificationCache:
+    """
+    Get the appropriate verification cache.
+    
+    Args:
+        use_redis: Whether to prefer Redis cache (falls back to in-memory if unavailable)
+        tenant_id: Optional tenant ID for multi-tenant isolation
+        
+    Returns:
+        Cache instance (RedisCache or VerificationCache)
+    """
+    global _verification_cache, _redis_cache
+    
+    if use_redis:
+        # Try Redis first
+        from qwed_new.core.redis_config import is_redis_available
+        
+        if is_redis_available():
+            if _redis_cache is None or _redis_cache.tenant_id != tenant_id:
+                _redis_cache = RedisCache(tenant_id=tenant_id)
+            return _redis_cache
+    
+    # Fallback to in-memory
     if _verification_cache is None:
         _verification_cache = VerificationCache()
     return _verification_cache
