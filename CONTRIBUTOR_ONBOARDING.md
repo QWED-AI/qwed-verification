@@ -1,7 +1,6 @@
-# QWED Contributor Onboarding Guide (Phase 0)
+# QWED Contributor Onboarding Guide (Phase 0: Security)
 
 **Welcome aboard!** 🚀
-
 We believe in **Trust & Openness**. You have full access to the codebase because we want you to see the big picture.
 
 ---
@@ -10,56 +9,57 @@ We believe in **Trust & Openness**. You have full access to the codebase because
 
 Don't read the code yet. Read these first to understand *why* we exist.
 
-1.  **[The Story](docs/WALKTHROUGH.md)**: Read how we evolved from a simple prototype to a 8-engine architecture. It explains the "Why".
-2.  **[The System](docs/ARCHITECTURE.md)**: Understand the 3-Layer Defense System (Translation -> Validation -> Verification).
-3.  **[The Data](src/qwed_new/core/schemas.py)**: Look at `MathVerificationTask`. This is the core data structure we pass around.
+1. **[The Story](docs/WALKTHROUGH.md)**: Read how we evolved from a simple prototype to an Enterprise Architecture.
+2. **[The System](docs/ARCHITECTURE.md)**: Understand the "Firewall" concept. We sit between the AI and the Database.
+3. **[The Threat Model](architecture/SECURITY_IMPLEMENTATION_REPORT.md)**: Briefly scan the "SQL Injection" section to understand what we are protecting against.
 
 ---
 
 ## 🛠️ Step 2: The Setup (30 Mins)
 
-1.  **Clone the Repo**:
-    ```bash
-    git clone https://github.com/StartUp-Rahul/qwed-verification.git
-    cd qwed-verification
-    ```
+1. **Clone the Repo**:
+```bash
+git clone https://github.com/rahuldass19/qwed-verification.git
+cd qwed-verification
+```
 
-2.  **Install Dependencies**:
-    ```bash
-    # We use uv for speed, but pip works too
-    pip install -r requirements.txt
-    ```
+2. **Install Dependencies**:
+```bash
+# We use standard pip for the core dependencies
+pip install -e .
+```
 
-3.  **Environment Variables**:
-    *   Create a `.env` file (copy `.env.example` if it exists, or ask me for the template).
-    *   *Note: You don't need live API keys for the Phase 0 task. You can run tests using mocks.*
+3. **Environment Variables**:
+* Create a `.env` file (copy `.env.example`).
+* *Note: We now use **PostgreSQL** via Docker. Ensure you have Docker running (`docker-compose up -d`) to run the full suite, but for this task, standard unit tests will suffice.*
 
 ---
 
 ## 🎯 Step 3: The Task (Phase 0)
 
-### The Business Goal: Building an "AI Auditor"
-Enterprises process thousands of invoices daily. Manual auditing is slow; standard OCR is error-prone; and raw LLMs "hallucinate" numbers.
+### The Goal: Building a "SQL Firewall" for AI Agents
 
-**QWED's Role**: We act as the **Mathematical Guarantee**.
-We don't just "read" the invoice; we **prove** it is valid using the Z3 Theorem Prover.
+Enterprises want to use "Text-to-SQL" agents (e.g., "Show me top 10 users").
+**The Risk:** LLMs hallucinate. If an LLM generates `DROP TABLE users` or `SELECT * FROM passwords`, the company is destroyed.
+
+**QWED's Role**: We parse the SQL (using AST analysis) and **Block** dangerous queries before they hit the database.
 
 ### Real-World Scenarios (Your Task)
-You are building the **Verification Logic** for a FinTech client. They need to block invalid invoices *before* payment.
 
-**Your Workspace**: `tests/test_enterprise.py` (Create this file).
+You are building the **Safety Test Suite** for our SQL Engine.
+**Your Workspace**: `tests/test_sql_safety.py` (Create this file).
 
-**Task**: Write 5-10 test cases that cover these real-world failure modes:
+**Task**: Write 5-10 test cases that simulate these "Bad AI" behaviors:
 
-| Scenario | The Logic Rule (What QWED must verify) | Why it matters (Real World Impact) |
-| :--- | :--- | :--- |
-| **GST Fraud** | `GST Format = 2 digits (State Code) + 10 alphanumeric (PAN) + ...` | Prevents accepting fake invoices from shell companies. |
-| **Math Error** | `Subtotal + Tax_Amount == Total_Amount` | Vendors often make rounding errors or hidden surcharges. |
-| **Date Slip** | `Invoice_Date <= Payment_Due_Date` AND `Invoice_Date <= Today` | Prevents paying for future-dated or stale invoices. |
-| **Tax Rate** | `Tax_Amount == Subtotal * 0.18` (assuming 18% GST) | Ensures compliance with tax laws, preventing audits. |
+| Scenario | The Safety Rule (What QWED must catch) | Why it matters (Real World Impact) |
+| --- | --- | --- |
+| **The Destructor** | Query contains `DROP`, `TRUNCATE`, or `ALTER` | Prevents AI from deleting the production database. |
+| **The Data Leak** | Query selects sensitive columns: `password_hash`, `ssn`, `salary` | Prevents AI from revealing PII or credentials. |
+| **The Injection** | Query contains comment attacks (`--`, `/*`) or `1=1` | Prevents classic SQL Injection bypasses. |
+| **The Mass Delete** | `DELETE` or `UPDATE` statement without a `WHERE` clause | Prevents accidentally wiping all records instead of one. |
 
 **Output**:
-We need you to write the **Tests** that simulate these scenarios (both Valid and Invalid invoices) and assert that our Logic Engine catches them to demonstrate TDD (Test Driven Development).
+Write the **Tests** first (TDD). Create scenarios for both **Safe Queries** (e.g., `SELECT name FROM users`) and **Unsafe Queries`. Assert that our engine raises a `SecurityViolation` error for the unsafe ones.
 
 ---
 
