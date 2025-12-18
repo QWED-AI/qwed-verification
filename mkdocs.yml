@@ -3,6 +3,7 @@ site_description: Enterprise-Grade AI Output Verification - The Protocol for Ver
 site_url: https://qwed-ai.github.io/qwed-verification/
 repo_url: https://github.com/QWED-AI/qwed-verification
 repo_name: QWED-AI/qwed-verification
+docs_dir: docs
 
 theme:
   name: material
