@@ -1,114 +1,109 @@
-# QWED Architecture Guide
+# QWED: The Global Standard for Verifiable AI 🛡️
 
-**For Internal Developers & Contributors**
+> **The Future of AI is Not Just Intelligence—It is Trust.**
 
----
-
-## System Overview
-
-QWED is a **Model-Agnostic Verification Engine**. It treats LLMs as "untrusted translators" and uses symbolic engines as "trusted verifiers".
-
-### The 8-Engine Architecture
-
-QWED now supports 8 distinct verification engines:
-
-1.  **Engine 1: Math Verifier (SymPy)**
-    *   **Goal**: Verify mathematical calculations.
-    *   **Mechanism**: LLM translates to Python expression -> SymPy evaluates.
-    *   **Status**: Production.
-
-2.  **Engine 2: Logic Verifier (Z3 + QWED-DSL)**
-    *   **Goal**: Verify logic puzzles and constraint problems.
-    *   **Mechanism**: LLM translates to **QWED-Logic DSL** (S-Expressions).
-    *   **Pipeline**: DSL -> Parser -> Security Whitelist -> Z3 Compiler -> Z3 Solver.
-    *   **Status**: Production (Secured).
-
-3.  **Engine 3: Statistical Verifier (Pandas)**
-    *   **Goal**: Verify claims about tabular data.
-    *   **Mechanism**: **Active Interceptor**. QWED generates Pandas code, executes it in a **Secure Sandbox**, and returns the fact.
-    *   **Status**: Production.
-
-4.  **Engine 4: Fact Verifier (Citation)**
-    *   **Goal**: Verify claims against a text context (RAG).
-    *   **Mechanism**: **Citation Extraction**. LLM extracts exact quotes to support/refute the claim.
-    *   **Status**: Production.
-
-5.  **Engine 5: Code Security Verifier (Static Analysis)**
-    *   **Goal**: Detect vulnerabilities in generated code.
-    *   **Mechanism**: **AST & Regex**. Scans for dangerous functions (`eval`, `exec`) and secrets.
-    *   **Status**: Production.
-
-6.  **Engine 6: SQL Verifier (SQLGlot)**
-    *   **Goal**: Detect SQL Injection and syntax errors.
-    *   **Mechanism**: AST parsing via SQLGlot to validate query structure and safety.
-    *   **Status**: Production.
-
-7.  **Engine 7: Image Verifier (Vision)**
-    *   **Goal**: Verify claims against image evidence.
-    *   **Mechanism**: Multi-modal LLM (Claude Opus/GPT-4V) analysis.
-    *   **Status**: Production.
-
-8.  **Engine 8: Reasoning Verifier (Chain-of-Thought)**
-    *   **Goal**: checking step-by-step logical validity.
-    *   **Mechanism**: Neuro-symbolic entailment checking.
-    *   **Status**: Experimental.
+In a world increasingly driven by probabilistic models, QWED (Query With Evidence & Determinism) serves as the **Critical Verification Layer**. We bridge the gap between AI intuition and mathematical reality.
 
 ---
 
-## Core Components
+## 🌟 The Vision: A Safe, Auditable AI Future
 
-### 1. QWED-Logic DSL (New)
-A secure, whitelist-based Domain Specific Language for logic verification.
-*   **Format**: S-Expressions (Lisp-like), e.g., `(AND (GT x 5) (LT y 10))`.
-*   **Security**: Replaces unsafe `eval()` with strict operator whitelisting.
-*   **Components**: `src/qwed_new/core/dsl/`.
+QWED is more than just a verifier; it is an **Infrastructure for Accountability**. Our mission is to make the most powerful AIs in the world safe for enterprise, compliant for regulators, and trusted by humanity.
 
-### 2. Verification Cache
-*   **Mechanism**: LRU (Least Recently Used) in-memory cache.
-*   **TTL**: Results are cached for 1 hour by default.
-*   **Impact**: drastically reduces latency for repeated queries.
+### The Problem: The "Hallucination Gap"
+LLMs are brilliant translators but unreliable calculators. They can generate perfect-sounding code that deletes your database, or convincing financial reports with subtle math errors.
 
-### 3. Security Gateway
-*   **Prompt Injection Detection**: Blocks malicious inputs before they reach engines.
-*   **PII Redaction**: Scrubs sensitive data from logs.
+### The Solution: The Symbolic Firewall
+QWED treats LLMs as **Untrusted Translators** and Symbolic Engines as **Trusted Verifiers**.
 
----
-
-## Directory Structure
-
-```
-src/qwed_new/
-├── api/                # FastAPI Interface
-│   └── main.py         # Endpoints & Middleware
-├── core/               # Core Logic
-│   ├── dsl/            # [NEW] QWED-Logic DSL Modules
-│   │   ├── parser.py
-│   │   └── compiler.py
-│   ├── translator.py   # Orchestrates translation
-│   ├── cache.py        # [NEW] Caching Layer
-│   ├── verifier.py     # Engine 1: SymPy
-│   ├── dsl_logic_verifier.py # [NEW] Engine 2: DSL+Z3
-│   ├── stats_verifier.py # Engine 3: Pandas
-│   ├── fact_verifier.py  # Engine 4: Citation
-│   ├── code_verifier.py  # Engine 5: Static Analysis
-│   ├── sql_verifier.py   # Engine 6: SQL
-│   ├── image_verifier.py # Engine 7: Vision
-│   ├── reasoning_verifier.py # Engine 8: CoT
-│   ├── consensus_verifier.py # Multi-engine consensus
-│   ├── security.py     # Security Gateway
-│   └── database.py     # SQLModel Database
-├── providers/          # LLM Adapters
-│   ├── base.py         # Interface
-│   ├── azure_openai.py # GPT-4
-│   ├── anthropic.py    # Claude Sonnet
-│   └── claude_opus.py  # Claude Opus
-└── config.py           # Settings & Env Vars
+```mermaid
+graph LR
+    User([User Query]) --> LLM[(LLM Adapter)]
+    LLM -- Translates to Symbolic Logic --> Firewall{{Symbolic Firewall}}
+    Firewall -- Verified by --> Engine[[Deterministic Engines]]
+    Engine -- Proof & Evidence --> Result([Trustworthy Result])
+    
+    style User fill:#4A90E2,color:#fff
+    style LLM fill:#F5A623,color:#fff
+    style Firewall fill:#7ED321,color:#fff
+    style Engine fill:#9B59B6,color:#fff
+    style Result fill:#50E3C2,color:#fff
 ```
 
 ---
 
-## Database Layer
+## 🏛️ The 8-Engine Specialized Architecture
 
-*   **Technology**: SQLModel (SQLite default).
-*   **Schema**: `VerificationLog`
-    *   Stores ID, Query, Result, Verdict, Latency, and Cost.
+We don't rely on one engine for everything. QWED uses **8 Specialized Deterministic Engines**, each a master of its domain.
+
+```mermaid
+mindmap
+  root((QWED Core))
+    Deterministic Verification
+      Math & Finance
+        SymPy
+        Decimal Precision
+      Logic & Constraints
+        Microsoft Z3
+        QWED-Logic DSL
+      SQL Safety
+        SQLGlot
+        AST Sanitization
+    Enterprise Compliance
+      Audit Logger
+        Cryptographic Proofs
+        Immutability
+      RBAC & Policy
+        Tenant Isolation
+        Constraint Policies
+    Data & Evidence
+      Stats & Tabular
+        Sandboxed Pandas
+      Fact Checking
+        Citation Extraction
+      Code Analysis
+        Shadow Execution
+      Vision
+        Multi-modal Proofs
+```
+
+### 1. 🏦 Financial Precision (Engine 1)
+LLMs use floating-point math. QWED uses **Arbitrary-Precision Decimal Arithmetic**. We verify billions in transactions with zero rounding errors and strict currency awareness.
+
+### 2. 🧠 Formal Logic (Engine 2)
+Using the **Microsoft Z3 Theorem Prover**, we prove that business rules are mathematically consistent. If a rule is violated, we don't just say "No"—we provide a **Counter-Model** explaining exactly why.
+
+### 3. 🛡️ SQL Armor (Engine 6)
+We parse AI-generated SQL through an AST (Abstract Syntax Tree) firewall. If the AI suggests `DROP TABLE`, QWED incinerates the request before it even touches your database.
+
+---
+
+## 🔒 Enterprise Safeguards: The Foundation of Trust
+
+QWED is designed for the most regulated industries on Earth.
+
+- **Auditable Proofs**: Every verification result comes with a "Proof of Correctness".
+- **Cryptographic Audit Logs**: Every action is logged with immutable hashes, ready for regulatory audits.
+- **Shadow Execution**: Code verification happens in an ephemeral, isolated sandbox.
+- **Policy Engine**: Define granular "Golden Rules" that the AI can never cross.
+
+---
+
+## 🛠️ Deep Technical Integration
+
+For developers, QWED is an integrated protocol that fits seamlessly into your stack.
+
+### The Integration Flow
+1. **Translate**: LLM maps Natural Language to QWED-Logic DSL.
+2. **Verify**: Deterministic engines solve the logic.
+3. **Audit**: Results are captured in the multi-tenant audit trail.
+
+> [!TIP]
+> **Explore the Specs**
+> For deep-dive technical documentation, including file structures and API schemas, head over to the **[Technical Architecture Library](../architecture/README.md)**.
+
+---
+
+### "Safe AI is the only AI that can change the world."
+
+*Built with ❤️ for a deterministic future.*

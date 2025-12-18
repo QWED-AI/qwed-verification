@@ -10,8 +10,9 @@ We believe in **Trust & Openness**. You have full access to the codebase because
 Don't read the code yet. Read these first to understand *why* we exist.
 
 1. **[The Story](docs/WALKTHROUGH.md)**: Read how we evolved from a simple prototype to an Enterprise Architecture.
-2. **[The System](docs/ARCHITECTURE.md)**: Understand the "Firewall" concept. We sit between the AI and the Database.
-3. **[The Threat Model](architecture/SECURITY_IMPLEMENTATION_REPORT.md)**: Briefly scan the "SQL Injection" section to understand what we are protecting against.
+2. **[The System](docs/ARCHITECTURE.md)**: Understand the **Deterministic Verification Logic** and how we safeguard the future of AI.
+3. **[The Technical Core](architecture/README.md)**: Explore how visionary concepts map to our 8-Engine specialized architecture.
+4. **[The Threat Model](architecture/SECURITY_IMPLEMENTATION_REPORT.md)**: Scan the latest enterprise security framework.
 
 ---
 
@@ -65,7 +66,7 @@ Write the **Tests** first (TDD). Create scenarios for both **Safe Queries** (e.g
 
 ## 🚀 Step 4: Submission
 
-1.  Create a branch: `git checkout -b feature/invoice-tests`
+1.  Create a branch: `git checkout -b feature/sql-safety-tests`
 2.  Push your changes.
 3.  Open a Pull Request (PR).
 
