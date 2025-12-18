@@ -1,7 +1,8 @@
 import pytest
 from sqlmodel import Session, create_engine, SQLModel
 from qwed_new.core.models import Organization, ApiKey, ResourceQuota
-from qwed_new.core.tenant_context import generate_api_key, get_current_tenant
+from qwed_new.core.tenant_context import get_current_tenant
+from qwed_new.auth.security import generate_api_key
 from qwed_new.core.policy import PolicyEngine
 from fastapi import HTTPException
 
@@ -31,7 +32,7 @@ def test_org(test_session):
 @pytest.fixture
 def test_api_key(test_session, test_org):
     """Create a test API key"""
-    key_value = generate_api_key()
+    key_value, _ = generate_api_key(prefix="qwed") # Get plaintext key
     api_key = ApiKey(
         key=key_value,
         organization_id=test_org.id,
@@ -44,7 +45,7 @@ def test_api_key(test_session, test_org):
 
 def test_generate_api_key():
     """Test API key generation"""
-    key = generate_api_key()
+    key, _ = generate_api_key(prefix="qwed")
     assert key.startswith("qwed_")
     assert len(key) == 69  # "qwed_" + 64 hex chars
 
