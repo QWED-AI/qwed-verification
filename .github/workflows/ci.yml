@@ -19,9 +19,18 @@ jobs:
           POSTGRES_DB: qwed_db
         ports:
           - 5432:5432
-        # Wait until postgres is healthy
         options: >-
           --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -44,10 +53,12 @@ jobs:
       run: |
         python -c "import sqlglot; print('SQLGlot version:', sqlglot.__version__)"
         python -c "import qwed_new; print('Package qwed_new imported successfully')"
+        python -c "import redis; r = redis.from_url('redis://localhost:6379'); print('Redis ping:', r.ping())"
 
     - name: Run Tests
       env:
         DATABASE_URL: postgresql://qwed:qwed_secret@localhost:5432/qwed_db
+        REDIS_URL: redis://localhost:6379/0
         ACTIVE_PROVIDER: mock
       run: |
         pytest tests/ -v
