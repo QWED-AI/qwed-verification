@@ -75,8 +75,12 @@ graph LR
 | **Multi-Tenancy** | ✅ | Per-organization isolation |
 | **Rate Limiting** | ✅ | Redis sliding window |
 | **Batch Processing** | ✅ | Up to 100 concurrent verifications |
-| **Python SDK** | ✅ | Sync + Async clients |
-| **CLI Tool** | ✅ | `qwed verify`, `qwed batch` |
+| **Multi-Language SDKs** | ✅ | Python, TypeScript, Go, Rust |
+| **Protocol Specification** | ✅ | Formal QWED Protocol v1.0 |
+| **Cryptographic Attestations** | ✅ | JWT/ES256 verification proofs |
+| **Agent Verification** | ✅ | Pre-execution checks for AI agents |
+| **Reference Implementation** | ✅ | `qwed-core` embeddable library |
+
 
 ---
 
@@ -232,6 +236,33 @@ qwed_cache_operations{operation="hit"}
 | [API Reference](docs/api.md) | Endpoint documentation |
 | [Security](docs/security.md) | Security features & compliance |
 | [Codebase Structure](architecture/CODEBASE_STRUCTURE.md) | Full code documentation |
+
+### 📜 Protocol Specifications
+
+| Spec | Description |
+|------|-------------|
+| [QWED-SPEC v1.0](specs/QWED-SPEC-v1.0.md) | Core protocol specification |
+| [QWED-Attestation](specs/QWED-ATTESTATION-v1.0.md) | Cryptographic proofs |
+| [QWED-Agent](specs/QWED-AGENT-v1.0.md) | AI agent verification |
+
+### 📦 SDKs
+
+| Language | Package | Install |
+|----------|---------|---------|
+| Python | `qwed-new` | `pip install qwed-new` |
+| TypeScript | `@qwed-ai/sdk` | `npm install @qwed-ai/sdk` |
+| Go | `qwed-go` | `go get github.com/qwed-ai/qwed-go` |
+| Rust | `qwed` | `cargo add qwed` |
+
+### 🔧 Reference Implementation
+
+[**qwed-core**](qwed-core/) - Minimal, embeddable verification library
+
+```bash
+pip install qwed-core
+# or
+docker run -p 8080:8080 qwed/qwed-core
+```
 
 ---
 
