@@ -1,0 +1,128 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://qwed.ai/schemas/attestation/v1.json",
+    "title": "QWED Attestation Claims",
+    "description": "Schema for QWED attestation JWT payload",
+    "type": "object",
+    "required": [
+        "iss",
+        "sub",
+        "iat",
+        "qwed"
+    ],
+    "properties": {
+        "iss": {
+            "type": "string",
+            "description": "Issuer identifier (DID or URL)",
+            "pattern": "^(did:qwed:|https://)"
+        },
+        "sub": {
+            "type": "string",
+            "description": "Subject hash (SHA-256 of verified content)",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "iat": {
+            "type": "integer",
+            "description": "Issued at (Unix timestamp)",
+            "minimum": 0
+        },
+        "exp": {
+            "type": "integer",
+            "description": "Expiration (Unix timestamp)",
+            "minimum": 0
+        },
+        "nbf": {
+            "type": "integer",
+            "description": "Not before (Unix timestamp)",
+            "minimum": 0
+        },
+        "jti": {
+            "type": "string",
+            "description": "Unique attestation ID",
+            "pattern": "^att_[a-z0-9]+$"
+        },
+        "qwed": {
+            "type": "object",
+            "description": "QWED-specific claims",
+            "required": [
+                "version",
+                "result"
+            ],
+            "properties": {
+                "version": {
+                    "type": "string",
+                    "const": "1.0"
+                },
+                "result": {
+                    "type": "object",
+                    "required": [
+                        "status",
+                        "verified"
+                    ],
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "enum": [
+                                "VERIFIED",
+                                "FAILED",
+                                "CORRECTED",
+                                "BLOCKED"
+                            ]
+                        },
+                        "verified": {
+                            "type": "boolean"
+                        },
+                        "engine": {
+                            "type": "string"
+                        },
+                        "confidence": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                        }
+                    }
+                },
+                "query_hash": {
+                    "type": "string",
+                    "description": "SHA-256 of original query",
+                    "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "proof_hash": {
+                    "type": "string",
+                    "description": "SHA-256 of proof data",
+                    "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "chain_id": {
+                    "type": "string",
+                    "description": "Verification chain ID"
+                },
+                "chain_index": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "previous_attestation": {
+                    "type": "string"
+                },
+                "anchor": {
+                    "type": "object",
+                    "properties": {
+                        "chain": {
+                            "type": "string",
+                            "enum": [
+                                "ethereum",
+                                "polygon",
+                                "solana"
+                            ]
+                        },
+                        "tx_hash": {
+                            "type": "string"
+                        },
+                        "block_number": {
+                            "type": "integer"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,356 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://qwed.ai/schemas/agent/v1.json",
+    "title": "QWED Agent Registration",
+    "description": "Schema for QWED agent registration and verification",
+    "definitions": {
+        "AgentRegistration": {
+            "type": "object",
+            "required": [
+                "agent",
+                "permissions",
+                "budget"
+            ],
+            "properties": {
+                "agent": {
+                    "type": "object",
+                    "required": [
+                        "name",
+                        "type",
+                        "principal_id"
+                    ],
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 100
+                        },
+                        "type": {
+                            "type": "string",
+                            "enum": [
+                                "supervised",
+                                "autonomous",
+                                "trusted"
+                            ]
+                        },
+                        "description": {
+                            "type": "string",
+                            "maxLength": 500
+                        },
+                        "principal_id": {
+                            "type": "string"
+                        },
+                        "framework": {
+                            "type": "string",
+                            "enum": [
+                                "langchain",
+                                "crewai",
+                                "autogen",
+                                "custom"
+                            ]
+                        },
+                        "model": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "permissions": {
+                    "type": "object",
+                    "properties": {
+                        "allowed_engines": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": [
+                                    "math",
+                                    "logic",
+                                    "stats",
+                                    "fact",
+                                    "code",
+                                    "sql",
+                                    "image",
+                                    "reasoning"
+                                ]
+                            }
+                        },
+                        "allowed_tools": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        },
+                        "blocked_tools": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "budget": {
+                    "$ref": "#/definitions/Budget"
+                },
+                "trust_level": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 3,
+                    "default": 1
+                }
+            }
+        },
+        "Budget": {
+            "type": "object",
+            "properties": {
+                "max_daily_cost_usd": {
+                    "type": "number",
+                    "minimum": 0
+                },
+                "max_per_request_cost_usd": {
+                    "type": "number",
+                    "minimum": 0
+                },
+                "max_requests_per_hour": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "max_requests_per_day": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "max_tokens_per_request": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "max_daily_tokens": {
+                    "type": "integer",
+                    "minimum": 1
+                }
+            }
+        },
+        "AgentVerificationRequest": {
+            "type": "object",
+            "required": [
+                "agent_id",
+                "agent_token",
+                "action"
+            ],
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "pattern": "^agent_[a-z0-9]+$"
+                },
+                "agent_token": {
+                    "type": "string",
+                    "pattern": "^qwed_agent_"
+                },
+                "action": {
+                    "type": "object",
+                    "required": [
+                        "type"
+                    ],
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "enum": [
+                                "execute_sql",
+                                "execute_code",
+                                "call_api",
+                                "calculate",
+                                "verify_fact",
+                                "file_operation"
+                            ]
+                        },
+                        "query": {
+                            "type": "string"
+                        },
+                        "code": {
+                            "type": "string"
+                        },
+                        "target": {
+                            "type": "string"
+                        },
+                        "parameters": {
+                            "type": "object"
+                        }
+                    }
+                },
+                "context": {
+                    "type": "object",
+                    "properties": {
+                        "conversation_id": {
+                            "type": "string"
+                        },
+                        "step_number": {
+                            "type": "integer"
+                        },
+                        "user_intent": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "options": {
+                    "type": "object",
+                    "properties": {
+                        "require_attestation": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "risk_threshold": {
+                            "type": "string",
+                            "enum": [
+                                "low",
+                                "medium",
+                                "high",
+                                "critical"
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "AgentVerificationResponse": {
+            "type": "object",
+            "required": [
+                "decision"
+            ],
+            "properties": {
+                "decision": {
+                    "type": "string",
+                    "enum": [
+                        "APPROVED",
+                        "DENIED",
+                        "CORRECTED",
+                        "PENDING",
+                        "BUDGET_EXCEEDED"
+                    ]
+                },
+                "verification": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string"
+                        },
+                        "engine": {
+                            "type": "string"
+                        },
+                        "risk_level": {
+                            "type": "string",
+                            "enum": [
+                                "low",
+                                "medium",
+                                "high",
+                                "critical"
+                            ]
+                        },
+                        "checks_passed": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        },
+                        "checks_failed": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "corrected_action": {
+                    "type": "object",
+                    "description": "Corrected version if decision is CORRECTED"
+                },
+                "attestation": {
+                    "type": "string"
+                },
+                "budget_remaining": {
+                    "type": "object",
+                    "properties": {
+                        "daily_cost_usd": {
+                            "type": "number"
+                        },
+                        "hourly_requests": {
+                            "type": "integer"
+                        },
+                        "daily_requests": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "error": {
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "string"
+                        },
+                        "message": {
+                            "type": "string"
+                        },
+                        "details": {
+                            "type": "object"
+                        }
+                    }
+                }
+            }
+        },
+        "ActivityLog": {
+            "type": "object",
+            "required": [
+                "activity_id",
+                "agent_id",
+                "timestamp",
+                "action"
+            ],
+            "properties": {
+                "activity_id": {
+                    "type": "string",
+                    "pattern": "^act_[a-z0-9]+$"
+                },
+                "agent_id": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "action": {
+                    "type": "object"
+                },
+                "verification": {
+                    "type": "object"
+                },
+                "decision": {
+                    "type": "string"
+                },
+                "execution": {
+                    "type": "object",
+                    "properties": {
+                        "success": {
+                            "type": "boolean"
+                        },
+                        "result_hash": {
+                            "type": "string"
+                        },
+                        "error": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "cost": {
+                    "type": "object",
+                    "properties": {
+                        "usd": {
+                            "type": "number"
+                        },
+                        "tokens": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "attestation_id": {
+                    "type": "string"
+                }
+            }
+        }
+    }
+}

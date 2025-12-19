@@ -1,0 +1,169 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://qwed.ai/schemas/response/v1.json",
+    "title": "QWED Verification Response",
+    "description": "Schema for QWED protocol verification responses",
+    "type": "object",
+    "required": [
+        "status",
+        "verified"
+    ],
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": [
+                "VERIFIED",
+                "FAILED",
+                "CORRECTED",
+                "BLOCKED",
+                "ERROR",
+                "TIMEOUT",
+                "UNSUPPORTED"
+            ],
+            "description": "Verification result status"
+        },
+        "verified": {
+            "type": "boolean",
+            "description": "True if verification passed"
+        },
+        "engine": {
+            "type": "string",
+            "description": "Engine that performed verification"
+        },
+        "result": {
+            "type": "object",
+            "description": "Engine-specific result data",
+            "properties": {
+                "is_valid": {
+                    "type": "boolean"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "expected": {},
+                "actual": {},
+                "simplified": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "object",
+                    "description": "Satisfying assignment for logic verification"
+                },
+                "satisfiability": {
+                    "type": "string",
+                    "enum": [
+                        "SAT",
+                        "UNSAT",
+                        "UNKNOWN"
+                    ]
+                },
+                "vulnerabilities": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": "string"
+                            },
+                            "severity": {
+                                "type": "string"
+                            },
+                            "line": {
+                                "type": "integer"
+                            },
+                            "message": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "verdict": {
+                    "type": "string",
+                    "enum": [
+                        "SUPPORTED",
+                        "REFUTED",
+                        "NOT_ENOUGH_INFO"
+                    ]
+                },
+                "citations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "text": {
+                                "type": "string"
+                            },
+                            "source": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "proof": {
+            "type": "object",
+            "description": "Verification proof (if requested)",
+            "properties": {
+                "type": {
+                    "type": "string"
+                },
+                "steps": {
+                    "type": "array"
+                },
+                "hash": {
+                    "type": "string"
+                }
+            }
+        },
+        "attestation": {
+            "type": "string",
+            "description": "JWT attestation token (if requested)"
+        },
+        "error": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "pattern": "^QWED-[A-Z]+-[0-9]+$",
+                    "description": "QWED error code"
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Human-readable error message"
+                },
+                "details": {
+                    "type": "object",
+                    "description": "Additional error details"
+                },
+                "documentation_url": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "Link to error documentation"
+                }
+            }
+        },
+        "metadata": {
+            "type": "object",
+            "properties": {
+                "request_id": {
+                    "type": "string"
+                },
+                "latency_ms": {
+                    "type": "number",
+                    "minimum": 0
+                },
+                "engine_version": {
+                    "type": "string"
+                },
+                "protocol_version": {
+                    "type": "string",
+                    "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                },
+                "cached": {
+                    "type": "boolean"
+                }
+            }
+        }
+    }
+}

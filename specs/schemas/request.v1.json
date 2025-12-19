@@ -1,0 +1,125 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://qwed.ai/schemas/request/v1.json",
+    "title": "QWED Verification Request",
+    "description": "Schema for QWED protocol verification requests",
+    "type": "object",
+    "required": [
+        "query"
+    ],
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": "The content to verify",
+            "minLength": 1,
+            "maxLength": 100000
+        },
+        "type": {
+            "type": "string",
+            "enum": [
+                "natural_language",
+                "math",
+                "logic",
+                "stats",
+                "fact",
+                "code",
+                "sql",
+                "image",
+                "reasoning"
+            ],
+            "default": "natural_language",
+            "description": "Verification engine type"
+        },
+        "params": {
+            "type": "object",
+            "description": "Engine-specific parameters",
+            "properties": {
+                "language": {
+                    "type": "string",
+                    "description": "Programming language (for code verification)"
+                },
+                "dialect": {
+                    "type": "string",
+                    "description": "SQL dialect (for SQL verification)"
+                },
+                "schema_ddl": {
+                    "type": "string",
+                    "description": "Database schema DDL (for SQL verification)"
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Context for fact verification"
+                },
+                "format": {
+                    "type": "string",
+                    "enum": [
+                        "natural",
+                        "dsl"
+                    ],
+                    "description": "Input format for logic verification"
+                },
+                "domain": {
+                    "type": "string",
+                    "enum": [
+                        "real",
+                        "integer",
+                        "complex"
+                    ],
+                    "description": "Numeric domain for math verification"
+                },
+                "precision": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "description": "Decimal precision for calculations"
+                }
+            }
+        },
+        "options": {
+            "type": "object",
+            "properties": {
+                "timeout_ms": {
+                    "type": "integer",
+                    "minimum": 1000,
+                    "maximum": 300000,
+                    "default": 30000,
+                    "description": "Request timeout in milliseconds"
+                },
+                "include_proof": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Include verification proof in response"
+                },
+                "include_attestation": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Include cryptographic attestation"
+                },
+                "attestation_validity_days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3650,
+                    "default": 365,
+                    "description": "Attestation validity period in days"
+                }
+            }
+        },
+        "metadata": {
+            "type": "object",
+            "properties": {
+                "request_id": {
+                    "type": "string",
+                    "description": "Client-provided request ID"
+                },
+                "correlation_id": {
+                    "type": "string",
+                    "description": "Correlation ID for distributed tracing"
+                },
+                "trace_id": {
+                    "type": "string",
+                    "description": "OpenTelemetry trace ID"
+                }
+            }
+        }
+    }
+}
