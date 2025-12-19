@@ -1,0 +1,48 @@
+[project]
+name = "qwed-core"
+version = "1.0.0"
+description = "QWED Protocol Reference Implementation - Minimal Verification Library"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "QWED-AI", email = "team@qwed.ai"}
+]
+requires-python = ">=3.10"
+keywords = ["qwed", "verification", "ai", "llm", "trust", "symbolic"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "sympy>=1.12",
+    "z3-solver>=4.12",
+]
+
+[project.optional-dependencies]
+full = [
+    "sqlglot>=20.0",
+    "pandas>=2.0",
+    "scipy>=1.11",
+]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/QWED-AI/qwed-verification"
+Documentation = "https://qwed.ai/docs"
+Repository = "https://github.com/QWED-AI/qwed-verification"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/qwed_core"]
