@@ -38,16 +38,19 @@ qwed verify-code -f script.py
 
 QWED is a **verification firewall** that sits between your LLM and your business logic:
 
-```
-User Query → LLM (Translator) → QWED (Verifier) → Trusted Result
-                  ↑                    ↑
-            Probabilistic         Deterministic
-            (hallucinations)      (mathematical proof)
+```mermaid
+graph LR
+    User[User Query] --> LLM[LLM - Translator]
+    LLM -->|Probabilistic Guess| QWED[QWED - Verifier]
+    QWED -->|Deterministic Proof| Result[Trusted Result]
+    style QWED fill:#00C853,stroke:#333,stroke-width:2px,color:white
+    style LLM fill:#FF5252,stroke:#333,stroke-width:2px,color:white
 ```
 
 **The Problem:** LLMs hallucinate. `0.1 + 0.2 = 0.30000000004`.
 
 **The Solution:** QWED uses **symbolic engines** (Z3, SymPy) to guarantee correctness.
+
 
 ---
 
