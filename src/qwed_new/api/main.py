@@ -973,3 +973,111 @@ async def startup_security_tasks():
         print(f"Startup security check failed: {e}")
 
 # --- End Enterprise Security Endpoints ---
+
+# ============================================================
+# BATCH VERIFICATION ENDPOINTS (Phase 4)
+# ============================================================
+
+from qwed_new.core.batch import batch_service, VerificationType
+from typing import List
+
+class BatchVerifyRequest(BaseModel):
+    """Request model for batch verification."""
+    items: List[dict]  # Each item: {query, type?, params?}
+    
+class BatchVerifyItem(BaseModel):
+    """Single item in batch request."""
+    query: str
+    type: str = "natural_language"
+    params: Optional[dict] = None
+
+@app.post("/verify/batch", tags=["Batch"])
+async def batch_verify(
+    request: BatchVerifyRequest,
+    tenant: TenantContext = Depends(get_current_tenant)
+):
+    """
+    Submit a batch of verification requests.
+    
+    Processes all items concurrently and returns aggregated results.
+    
+    Request body:
+    {
+        "items": [
+            {"query": "What is 2+2?", "type": "natural_language"},
+            {"query": "(AND (GT x 5) (LT y 10))", "type": "logic"},
+            {"query": "x**2 + 2*x + 1 = (x+1)**2", "type": "math"}
+        ]
+    }
+    
+    Supported types: natural_language, logic, math, code, fact, sql
+    """
+    check_rate_limit(tenant.api_key)
+    
+    # Validate item count
+    if len(request.items) > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="Maximum 100 items per batch"
+        )
+    
+    if len(request.items) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one item required"
+        )
+    
+    # Create and process job
+    job = batch_service.create_job(
+        organization_id=tenant.organization_id,
+        items=request.items
+    )
+    
+    # Process synchronously (for simplicity)
+    # For very large batches, return job_id and process async
+    job = await batch_service.process_job(job)
+    
+    # Return results
+    return batch_service.get_job_results(job.job_id)
+
+
+@app.get("/verify/batch/{job_id}", tags=["Batch"])
+async def get_batch_status(
+    job_id: str,
+    tenant: TenantContext = Depends(get_current_tenant)
+):
+    """
+    Get the status and results of a batch verification job.
+    
+    Useful for polling when processing large batches asynchronously.
+    """
+    job = batch_service.get_job(job_id)
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Authorization: ensure job belongs to this tenant
+    if job.organization_id != tenant.organization_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    return batch_service.get_job_results(job_id)
+
+
+# ============================================================
+# PROMETHEUS METRICS ENDPOINT
+# ============================================================
+
+from qwed_new.core.observability import get_prometheus_metrics, get_prometheus_content_type
+
+@app.get("/metrics/prometheus", tags=["Observability"])
+async def prometheus_metrics():
+    """
+    Prometheus-compatible metrics endpoint.
+    
+    Returns metrics in Prometheus text format for scraping.
+    """
+    content = get_prometheus_metrics()
+    return Response(
+        content=content,
+        media_type=get_prometheus_content_type()
+    )
