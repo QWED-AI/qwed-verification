@@ -1,13 +1,13 @@
 ```
- ██████╗ ██╗    ██╗███████╗██████╗ 
-██╔═══██╗██║    ██║██╔════╝██╔══██╗
-██║   ██║██║ █╗ ██║█████╗  ██║  ██║
-██║▄▄ ██║██║███╗██║██╔══╝  ██║  ██║
-╚██████╔╝╚███╔███╔╝███████╗██████╔╝
- ╚══▀▀═╝  ╚══╝╚══╝ ╚══════╝╚═════╝ 
+ ██████╗ ██╗    ██╗███████╗██████╗        █████╗ ██╗
+██╔═══██╗██║    ██║██╔════╝██╔══██╗      ██╔══██╗██║
+██║   ██║██║ █╗ ██║█████╗  ██║  ██║█████╗███████║██║
+██║▄▄ ██║██║███╗██║██╔══╝  ██║  ██║╚════╝██╔══██║██║
+╚██████╔╝╚███╔███╔╝███████╗██████╔╝      ██║  ██║██║
+ ╚══▀▀═╝  ╚══╝╚══╝ ╚══════╝╚═════╝       ╚═╝  ╚═╝╚═╝
 ```
 
-# QWED: The Deterministic Verification Protocol for AI 🛡️
+# QWED-AI: The Deterministic Verification Protocol for AI 🛡️
 
 [![CI](https://github.com/QWED-AI/qwed-verification/actions/workflows/ci.yml/badge.svg)](https://github.com/QWED-AI/qwed-verification/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
