@@ -118,6 +118,40 @@ if organization_id:
 
 ---
 
+## Observability & Monitoring
+
+QWED provides comprehensive observability for production deployments:
+
+### Infrastructure Services
+
+| Service | URL | Purpose |
+|---------|-----|---------|
+| **QWED API** | http://localhost:8000 | Main API server |
+| **Jaeger** | http://localhost:16686 | Distributed tracing |
+| **Prometheus** | http://localhost:9090 | Metrics collection |
+| **Grafana** | http://localhost:3000 | Dashboards (admin/qwed_admin) |
+| **Redis** | localhost:6379 | Caching & rate limiting |
+
+### Prometheus Metrics
+
+All security events are exported as Prometheus metrics:
+
+| Metric | Description |
+|--------|-------------|
+| `qwed_security_blocks_total{block_type}` | Security policy violations blocked |
+| `qwed_rate_limit_hits_total{action}` | Rate limit enforcement events |
+| `qwed_verification_total{status}` | All verification outcomes |
+
+### Grafana Dashboard
+
+The **QWED Verification Dashboard** includes:
+- Security Blocks counter
+- Rate Limits Blocked counter
+- Active Tenants gauge
+- Verification Latency (p95)
+
+---
+
 ## Reporting Security Issues
 
 If you discover a security vulnerability, please report it responsibly:

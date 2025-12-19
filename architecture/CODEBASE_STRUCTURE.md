@@ -710,17 +710,17 @@ class SecurityGateway:
 ```
 
 **Implementation:**
-- In-memory token bucket
-- Redis-ready architecture
+- **Redis-backed** sliding window limiter (production)
+- In-memory fallback (development)
 - Returns `429 Too Many Requests` on exceed
 
 ---
 
-### Observability
+### Observability Stack (Phase 2)
 
 **File:** `src/qwed_new/core/observability.py`
 
-**Metrics Collected:**
+**In-Memory + Prometheus Metrics:**
 
 ```python
 class MetricsCollector:
@@ -736,7 +736,144 @@ class MetricsCollector:
     - P50/P95/P99 latencies
 ```
 
-**Export Format:** JSON (Prometheus-ready)
+**Prometheus Metrics Exported:**
+
+| Metric | Type | Labels |
+|--------|------|--------|
+| `qwed_verification_total` | Counter | engine, status, tenant_id |
+| `qwed_verification_latency_seconds` | Histogram | engine |
+| `qwed_llm_latency_seconds` | Histogram | provider |
+| `qwed_cache_operations_total` | Counter | operation, result |
+| `qwed_rate_limit_hits_total` | Counter | tenant_id, action |
+| `qwed_security_blocks_total` | Counter | block_type |
+| `qwed_active_tenants` | Gauge | - |
+
+**Export Endpoint:** `/metrics/prometheus`
+
+---
+
+### OpenTelemetry Tracing
+
+**File:** `src/qwed_new/core/telemetry.py`
+
+**Distributed Tracing:**
+- OTLP export to Jaeger
+- Automatic FastAPI instrumentation
+- LLM call tracing with token counts
+- Trace ID correlation with audit logs
+
+---
+
+## Infrastructure Services
+
+### Docker Compose Services
+
+**File:** `docker-compose.yml`
+
+| Service | Image | Port | Purpose |
+|---------|-------|------|---------|
+| **postgres** | `postgres:15` | `localhost:5432` | Primary database |
+| **redis** | `redis:7-alpine` | `localhost:6379` | Caching & rate limiting |
+| **jaeger** | `jaegertracing/all-in-one:1.53` | `localhost:16686` | Distributed tracing UI |
+| **prometheus** | `prom/prometheus:v2.48.0` | `localhost:9090` | Metrics collection |
+| **grafana** | `grafana/grafana:10.2.2` | `localhost:3000` | Dashboards |
+
+### Dashboard Access
+
+| Dashboard | URL | Credentials |
+|-----------|-----|-------------|
+| **Jaeger UI** | http://localhost:16686 | None required |
+| **Prometheus UI** | http://localhost:9090 | None required |
+| **Grafana** | http://localhost:3000 | admin / qwed_admin |
+| **QWED API Docs** | http://localhost:8000/docs | API Key required |
+
+### Grafana Dashboards
+
+| Dashboard | Location | Panels |
+|-----------|----------|--------|
+| **QWED Verification Dashboard** | QWED folder | Requests/sec, Latency p95, Active Tenants, Rate Limits, Cache Hit Rate, LLM Latency |
+
+---
+
+## Redis Caching (Phase 1)
+
+**Files:** 
+- `src/qwed_new/core/redis_config.py`
+- `src/qwed_new/core/cache.py`
+
+### Cache Strategy
+
+| Cache Key | TTL | Purpose |
+|-----------|-----|---------|
+| `qwed:verify:math:{hash}` | 1 hour | Math verification results |
+| `qwed:verify:logic:{hash}` | 5 min | Logic verification (less deterministic) |
+| `qwed:rate:{org_id}` | 60 sec | Sliding window rate limit |
+
+### Features
+- Multi-tenant key isolation
+- Automatic fallback to in-memory if Redis unavailable
+- Connection pooling (max 10 connections)
+
+---
+
+## Batch Verification (Phase 4)
+
+**File:** `src/qwed_new/core/batch.py`
+
+**BatchVerificationService:**
+- Concurrent processing with configurable parallelism (default: 10)
+- Progress tracking
+- Error isolation (one failure doesn't stop others)
+- Support for all verification types
+
+**Endpoint:** `POST /verify/batch`
+
+```json
+{
+  "items": [
+    {"query": "2+2=4", "type": "math"},
+    {"query": "(AND (GT x 5) (LT y 10))", "type": "logic"}
+  ]
+}
+```
+
+---
+
+## Python SDK (Phase 4)
+
+**Package:** `qwed_sdk/`
+
+| File | Class/Function | Purpose |
+|------|----------------|---------|
+| `client.py` | `QWEDClient` | Synchronous HTTP client |
+| `client.py` | `QWEDAsyncClient` | Async HTTP client |
+| `models.py` | `VerificationResult` | Typed result model |
+| `models.py` | `BatchResult` | Batch result model |
+| `cli.py` | `main()` | CLI entry point |
+
+### SDK Usage
+
+```python
+from qwed_sdk import QWEDClient
+
+client = QWEDClient(api_key="qwed_...", base_url="http://localhost:8000")
+result = client.verify("What is 2+2?")
+print(result.status)  # "VERIFIED"
+```
+
+### CLI Commands
+
+```bash
+qwed verify "What is 2+2?"
+qwed verify-math "x**2 + 2*x + 1 = (x+1)**2"
+qwed verify-logic "(AND (GT x 5) (LT y 10))"
+qwed batch input.json -o results.json
+qwed health
+```
+
+**Environment Variables:**
+- `QWED_API_KEY`: Your API key
+- `QWED_API_URL`: Base URL (default: http://localhost:8000)
 
 ---
 

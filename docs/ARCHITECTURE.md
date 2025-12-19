@@ -132,6 +132,53 @@ sequenceDiagram
 
 ---
 
+## 🖥️ Developer Tools & Infrastructure
+
+### Local Development Stack
+
+Start the full stack with Docker Compose:
+
+```bash
+docker-compose up -d
+```
+
+| Service | URL | Purpose |
+|---------|-----|---------|
+| **QWED API** | http://localhost:8000/docs | API Documentation |
+| **Jaeger** | http://localhost:16686 | Distributed Tracing |
+| **Prometheus** | http://localhost:9090 | Metrics |
+| **Grafana** | http://localhost:3000 | Dashboards (admin/qwed_admin) |
+| **Redis** | localhost:6379 | Caching |
+| **PostgreSQL** | localhost:5432 | Database |
+
+### Grafana Dashboards
+
+- **QWED Verification Dashboard**: Real-time metrics, latency percentiles, cache hit rates
+
+### Python SDK
+
+```bash
+pip install qwed-new
+```
+
+```python
+from qwed_sdk import QWEDClient
+
+client = QWEDClient(api_key="qwed_...")
+result = client.verify("What is 2+2?")
+```
+
+### CLI Tool
+
+```bash
+export QWED_API_KEY="qwed_..."
+qwed verify "Is 2+2 equal to 4?"
+qwed verify-math "x**2 - y**2 = (x-y)*(x+y)"
+qwed batch queries.json -o results.json
+```
+
+---
+
 ### "Safe AI is the only AI that can change the world."
 
 *Built with ❤️ for a deterministic future.*
