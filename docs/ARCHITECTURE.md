@@ -41,53 +41,112 @@ mindmap
   root((QWED Core))
     Deterministic Verification
       Math & Finance
-        SymPy
-        Decimal Precision
+        SymPy Calculus
+        Matrix Operations
+        NPV/IRR/Compound Interest
+        Unit Conversion
       Logic & Constraints
-        Microsoft Z3
-        QWED-Logic DSL
+        Z3 Theorem Prover
+        ForAll/Exists Quantifiers
+        BitVectors & Arrays
+        Counter-Model Generation
       SQL Safety
-        SQLGlot
-        AST Sanitization
+        SQLGlot AST
+        Complexity Limits
+        Cost Estimation
+        Schema Validation
     Enterprise Compliance
       Audit Logger
         Cryptographic Proofs
         Immutability
-      RBAC & Policy
-        Tenant Isolation
-        Constraint Policies
+      Consensus Verifier
+        Async Parallel Execution
+        Circuit Breaker
+        Health Monitoring
     Data & Evidence
       Stats & Tabular
-        Sandboxed Pandas
+        Wasm Sandbox
+        Docker Isolation
+        Restricted Executor
       Fact Checking
+        TF-IDF Similarity
+        Entity Matching
         Citation Extraction
       Code Analysis
-        Shadow Execution
-      Vision
-        Multi-modal Proofs
+        Python Security
+        JavaScript XSS
+        Java/Go Patterns
+        Secret Detection
+      Vision/Image
+        Metadata Extraction
+        Size Verification
+        Multi-VLM Consensus
 ```
 
 ---
 
 ## Engine Deep Dives
 
-### 1. 🏦 Financial Precision (Engine 1)
-LLMs use floating-point math. QWED uses **Arbitrary-Precision Decimal Arithmetic**. We verify billions in transactions with zero rounding errors and strict currency awareness.
+### 1. 🏦 Math & Finance Engine
+Supports **calculus** (derivatives, integrals, limits), **matrix operations** (determinant, inverse, eigenvalues), **financial formulas** (NPV, IRR, compound interest), **statistics** (mean, variance, correlation), and **unit conversion**.
 
 !!! success "Example"
     ```python
-    # LLM says: 0.1 + 0.2 = 0.30000000000000004
-    # QWED says: 0.1 + 0.2 = 0.3 ✓
+    # Calculus: derivative of x^2 = 2x ✓
+    # Matrix: det([[1,2],[3,4]]) = -2 ✓
+    # Finance: NPV at 10% for [100,200,300] = $481.59 ✓
     ```
 
-### 2. 🧠 Formal Logic (Engine 2)
-Using the **Microsoft Z3 Theorem Prover**, we prove that business rules are mathematically consistent. If a rule is violated, we don't just say "No"—we provide a **Counter-Model** explaining exactly why.
+### 2. 🧠 Formal Logic Engine
+Using the **Microsoft Z3 Theorem Prover** with support for:
+- **Quantifiers**: ForAll(∀), Exists(∃)
+- **BitVectors**: 8/16/32/64-bit operations for crypto verification
+- **Array Theory**: Select/Store operations
+- **Theorem Proving**: Equivalence, implication, counter-models
 
 !!! example "Counter-Model Example"
-    > *"Rejected. Violation: `tax_rate` is 12% but 'Electronics' requires 18%."*
+    > *"UNSAT. Violation: ForAll x. (x > 0) => (x * 2 > x) - Cannot prove for x = 0"*
 
-### 3. 🛡️ SQL Armor (Engine 6)
-We parse AI-generated SQL through an AST (Abstract Syntax Tree) firewall. If the AI suggests `DROP TABLE`, QWED incinerates the request before it even touches your database.
+### 3. 🛡️ SQL Armor Engine
+We parse AI-generated SQL through an AST firewall with:
+- **Complexity Limits**: Max tables, joins, subqueries, columns
+- **Cost Estimation**: Query cost scoring
+- **Injection Detection**: Tautologies, stacked queries, comments
+- **Schema Validation**: Table/column existence checks
+
+### 4. 📊 Statistics Engine
+Executes statistical queries in secure sandboxes:
+- **Docker**: Full isolation (production)
+- **Wasm**: Portable (works anywhere)
+- **Restricted**: AST-validated Python subset (fallback)
+
+### 5. ✅ Fact Checker Engine
+**No LLM required for most claims!** Uses deterministic methods:
+- TF-IDF semantic similarity
+- Keyword overlap analysis
+- Entity matching (numbers, dates, names)
+- Citation extraction with relevance scoring
+
+### 6. 🔐 Code Security Engine
+Multi-language AST analysis:
+- **Python**: eval, exec, pickle, weak crypto
+- **JavaScript/TypeScript**: XSS, prototype pollution, eval
+- **Java**: SQL injection, deserialization
+- **Go**: Command injection, path traversal
+- **Secret Detection**: AWS keys, GitHub tokens, OpenAI keys
+
+### 7. 🖼️ Image Verification Engine
+**Deterministic first, VLM fallback:**
+- Metadata extraction (dimensions, format)
+- Size/dimension claim verification (100% accurate)
+- Multi-VLM consensus for semantic claims
+
+### 8. 🤖 Reasoning & Consensus Engine
+- **Chain-of-Thought Validation**: Parse and verify reasoning steps
+- **Result Caching**: LRU + Redis for repeated queries
+- **Multi-Provider**: Anthropic, Azure, OpenAI
+- **Circuit Breaker**: Auto-disable failing engines
+- **Async Parallel**: Execute engines concurrently
 
 ---
 

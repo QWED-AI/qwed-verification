@@ -20,6 +20,21 @@
 
 ---
 
+## 🆕 What's New in v2.0
+
+| Engine | Upgrade | Impact |
+|--------|---------|--------|
+| **Math** | Calculus, Matrix, Finance, Statistics | 10x more use cases |
+| **Logic** | ForAll/Exists quantifiers, BitVectors, Arrays | Crypto & formal proofs |
+| **Code** | JavaScript, Java, Go support | 4 languages total |
+| **SQL** | Complexity limits, Cost estimation | Production-ready |
+| **Fact** | TF-IDF semantic matching | No LLM needed! |
+| **Image** | Deterministic size verification | 100% accurate |
+| **Consensus** | Async + Circuit breaker | Fault-tolerant |
+| **Stats** | Wasm sandbox | Works anywhere |
+
+---
+
 ## ⚡ Quick Start (30 Seconds)
 
 ```bash
@@ -179,16 +194,57 @@ print(f"Success rate: {result.success_rate}%")
 
 ## 🧠 The 8 Verification Engines
 
-| # | Engine | Technology | Function |
-|---|--------|------------|----------|
-| 1 | **Math & Finance** | `SymPy` + `Decimal` | Infinite precision calculations |
-| 2 | **Logic & Constraint** | `Z3` + `QWED-DSL` | SMT solving with counter-models |
-| 3 | **Statistics** | `Pandas` + `SciPy` | Tabular data verification |
-| 4 | **Fact Checker** | `NLP` | Citation-based verification |
-| 5 | **Code Security** | `AST` | Vulnerability detection |
-| 6 | **SQL Safety** | `SQLGlot` | SQL injection prevention |
-| 7 | **Image Verification** | `Vision API` | Multimodal claims |
-| 8 | **Chain-of-Thought** | `Multi-LLM` | Cross-provider consensus |
+QWED uses **8 Specialized Deterministic Engines**, each a master of its domain.
+
+| # | Engine | Technology | Capabilities |
+|---|--------|------------|--------------|
+| 1 | **Math & Finance** | `SymPy` + `Decimal` | Calculus, Matrix ops, NPV/IRR, Statistics, Unit conversion |
+| 2 | **Logic & Constraint** | `Z3` + `QWED-DSL` | ForAll/Exists quantifiers, BitVectors, Arrays, Theorem proving |
+| 3 | **Statistics** | `Pandas` + Wasm Sandbox | Secure code execution, Docker/Wasm/Restricted sandboxes |
+| 4 | **Fact Checker** | `TF-IDF` + `NLP` | Semantic similarity, Entity matching, Citation extraction |
+| 5 | **Code Security** | `AST` Multi-Language | Python, JavaScript, Java, Go security analysis |
+| 6 | **SQL Safety** | `SQLGlot` AST | Complexity limits, Cost estimation, Schema validation |
+| 7 | **Image Verification** | Deterministic + VLM | Metadata extraction, Size verification, Multi-VLM consensus |
+| 8 | **Reasoning** | `Multi-LLM` + Cache | Chain-of-thought validation, Result caching, Cross-provider |
+
+### Engine Feature Matrix
+
+```
+┌─────────────────┬───────────────────────────────────────────────────────┐
+│ Engine          │ Key Feature                                           │
+├─────────────────┼───────────────────────────────────────────────────────┤
+│ Math            │ Calculus (derivatives, integrals, limits)             │
+│                 │ Matrix operations (determinant, inverse, eigenvalues) │
+│                 │ Financial (NPV, IRR, compound interest)               │
+│                 │ Statistics (mean, median, variance, correlation)      │
+├─────────────────┼───────────────────────────────────────────────────────┤
+│ Logic           │ Quantifiers: ForAll(∀), Exists(∃)                     │
+│                 │ BitVector operations (for crypto verification)        │
+│                 │ Array theory (Select, Store)                          │
+│                 │ Theorem proving with counterexamples                  │
+├─────────────────┼───────────────────────────────────────────────────────┤
+│ Code            │ Python: eval, exec, pickle, weak crypto               │
+│                 │ JavaScript: XSS, prototype pollution, eval            │
+│                 │ Java: SQL injection, deserialization                  │
+│                 │ Go: command injection, path traversal                 │
+│                 │ Secret detection: AWS, GitHub, OpenAI keys            │
+├─────────────────┼───────────────────────────────────────────────────────┤
+│ SQL             │ Complexity limits (tables, joins, subqueries)         │
+│                 │ Query cost estimation                                 │
+│                 │ Injection pattern detection                           │
+│                 │ Schema validation                                     │
+├─────────────────┼───────────────────────────────────────────────────────┤
+│ Fact            │ TF-IDF semantic similarity (no LLM needed!)           │
+│                 │ Keyword overlap analysis                              │
+│                 │ Entity matching (numbers, dates, names)               │
+│                 │ Citation extraction with relevance scoring            │
+├─────────────────┼───────────────────────────────────────────────────────┤
+│ Consensus       │ Async parallel engine execution                       │
+│                 │ Circuit breaker for failing engines                   │
+│                 │ Engine health monitoring                              │
+│                 │ Weighted consensus calculation                        │
+└─────────────────┴───────────────────────────────────────────────────────┘
+```
 
 ---
 
