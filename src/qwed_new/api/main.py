@@ -493,6 +493,68 @@ async def verify_sql(
         }
 
 
+@app.post("/verify/image")
+async def verify_image(
+    image: UploadFile = File(...),
+    claim: str = Form(...),
+    tenant: TenantContext = Depends(get_current_tenant),
+    session: Session = Depends(get_session)
+):
+    """
+    Verify a claim against an uploaded image.
+    
+    Form data:
+    - image: Image file (PNG, JPEG, GIF, WebP)
+    - claim: The statement to verify (e.g., "The image is 800x600 pixels")
+    
+    Returns verification result with:
+    - verdict: SUPPORTED, REFUTED, INCONCLUSIVE, or VLM_REQUIRED
+    - confidence: 0.0 to 1.0
+    - reasoning: Explanation of the result
+    - methods_used: List of verification methods applied
+    """
+    check_rate_limit(tenant.api_key)
+    
+    try:
+        from qwed_new.core.image_verifier import ImageVerifier
+        
+        # Read image bytes
+        image_bytes = await image.read()
+        
+        if len(image_bytes) == 0:
+            raise HTTPException(status_code=400, detail="Empty image file")
+        
+        if len(image_bytes) > 10 * 1024 * 1024:  # 10MB limit
+            raise HTTPException(status_code=400, detail="Image too large (max 10MB)")
+        
+        # Verify claim against image
+        verifier = ImageVerifier(use_vlm_fallback=False)
+        result = verifier.verify_image(image_bytes, claim)
+        
+        # Log the verification
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=f"Image claim: {claim}",
+            result=str(result),
+            is_verified=result.get("verdict") == "SUPPORTED",
+            domain="IMAGE"
+        )
+        session.add(log)
+        session.commit()
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {
+            "status": "ERROR",
+            "error": str(e),
+            "verdict": "INCONCLUSIVE",
+            "confidence": 0.0
+        }
+
+
 # ============================================================
 # OBSERVABILITY ENDPOINTS
 # ============================================================

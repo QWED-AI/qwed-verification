@@ -162,6 +162,40 @@ class QWEDClient:
         data["latency_ms"] = (time.time() - start) * 1000
         return VerificationResult.from_dict(data)
     
+    def verify_image(
+        self,
+        image_path: str,
+        claim: str
+    ) -> VerificationResult:
+        """
+        Verify a claim against an image.
+        
+        Args:
+            image_path: Path to the image file
+            claim: The claim to verify (e.g., "The image is 800x600 pixels")
+            
+        Returns:
+            VerificationResult with verdict and confidence
+        """
+        start = time.time()
+        
+        with open(image_path, "rb") as f:
+            files = {"image": (image_path, f, "application/octet-stream")}
+            data = {"claim": claim}
+            
+            url = f"{self.base_url}/verify/image"
+            response = self._client.post(
+                url,
+                headers={"X-API-Key": self.api_key},
+                files=files,
+                data=data
+            )
+            response.raise_for_status()
+            result = response.json()
+        
+        result["latency_ms"] = (time.time() - start) * 1000
+        return VerificationResult.from_dict(result)
+    
     def verify_batch(
         self,
         items: List[Dict[str, Any]]
@@ -313,6 +347,40 @@ class QWEDAsyncClient:
         )
         data["latency_ms"] = (time.time() - start) * 1000
         return VerificationResult.from_dict(data)
+    
+    async def verify_image(
+        self,
+        image_path: str,
+        claim: str
+    ) -> VerificationResult:
+        """
+        Verify a claim against an image.
+        
+        Args:
+            image_path: Path to the image file
+            claim: The claim to verify
+        """
+        if not self._client:
+            raise RuntimeError("Client not initialized. Use 'async with' context.")
+        
+        start = time.time()
+        
+        with open(image_path, "rb") as f:
+            files = {"image": (image_path, f, "application/octet-stream")}
+            data = {"claim": claim}
+            
+            url = f"{self.base_url}/verify/image"
+            response = await self._client.post(
+                url,
+                headers={"X-API-Key": self.api_key},
+                files=files,
+                data=data
+            )
+            response.raise_for_status()
+            result = response.json()
+        
+        result["latency_ms"] = (time.time() - start) * 1000
+        return VerificationResult.from_dict(result)
     
     async def verify_batch(
         self,
