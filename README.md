@@ -264,6 +264,28 @@ pip install qwed-core
 docker run -p 8080:8080 qwed/qwed-core
 ```
 
+### 🔌 Framework Integrations
+
+| Framework | Import | Description |
+|-----------|--------|-------------|
+| **LangChain** | `from qwed_sdk.langchain import QWEDTool` | Tools, callbacks, chain wrapper |
+| **LlamaIndex** | `from qwed_sdk.llamaindex import QWEDQueryEngine` | Query engine, transforms |
+| **CrewAI** | `from qwed_sdk.crewai import QWEDVerifiedAgent` | Verified agents, crews |
+
+### 📖 Interactive Documentation
+
+| Resource | URL |
+|----------|-----|
+| **Docusaurus Docs** | http://localhost:3030 (local) |
+| **API Docs (FastAPI)** | http://localhost:8000/docs |
+
+Run the docs site locally:
+```bash
+cd docs-site
+npm install
+npm start  # Opens at http://localhost:3030
+```
+
 ---
 
 ## 🤝 Contributing
