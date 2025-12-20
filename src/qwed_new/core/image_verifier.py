@@ -263,8 +263,22 @@ class ImageVerifier:
     def _classify_claim(self, claim: str) -> str:
         """
         Classify the type of claim to determine verification method.
+        
+        Priority: size > color > numeric > text > semantic
         """
         claim_lower = claim.lower()
+        
+        # Size claims - check dimension pattern first (e.g., "1x1", "800x600")
+        if re.search(r'\d+\s*[×x]\s*\d+', claim):
+            return "size"
+        
+        # Size claims - keyword based (check BEFORE numeric to catch "width is 1")
+        if any(word in claim_lower for word in ['width', 'height', 'size', 'pixel', 'pixels', 'resolution', 'dimension']):
+            return "size"
+        
+        # Color claims
+        if any(color in claim_lower for color in self.COLOR_KEYWORDS):
+            return "color"
         
         # Numeric claims (percentages, amounts, counts)
         if any(re.search(pattern, claim) for pattern in self.NUMERIC_PATTERNS):
@@ -272,14 +286,6 @@ class ImageVerifier:
         
         if any(word in claim_lower for word in ['percent', '%', 'increase', 'decrease', 'growth']):
             return "numeric"
-        
-        # Color claims
-        if any(color in claim_lower for color in self.COLOR_KEYWORDS):
-            return "color"
-        
-        # Size claims
-        if any(word in claim_lower for word in ['width', 'height', 'size', 'pixel', 'resolution', 'dimension']):
-            return "size"
         
         # Text claims
         if any(word in claim_lower for word in ['says', 'text', 'reads', 'written', 'title', 'label']):
@@ -364,7 +370,8 @@ class ImageVerifier:
         """
         claim_lower = claim.lower()
         
-        # Extract dimension numbers from claim
+        # Extract dimension numbers from claim (various formats)
+        # Matches: "1x1", "100×200", "is 1x1 pixels", "800 x 600", etc.
         dimension_match = re.search(r'(\d+)\s*[×x]\s*(\d+)', claim)
         if dimension_match:
             claimed_width = int(dimension_match.group(1))
@@ -387,9 +394,10 @@ class ImageVerifier:
                         reasoning=f"Claimed {claimed_width}x{claimed_height}, actual {metadata.width}x{metadata.height}"
                     )
         
-        # Check for single dimension
-        width_match = re.search(r'width\s*(?:is|of)?\s*(\d+)', claim_lower)
-        height_match = re.search(r'height\s*(?:is|of)?\s*(\d+)', claim_lower)
+        # Check for single dimension - more flexible patterns
+        # Matches: "width is 1", "The width is 500", "width of 100", "width: 100"
+        width_match = re.search(r'width\s*(?:is|of|:)?\s*(\d+)', claim_lower)
+        height_match = re.search(r'height\s*(?:is|of|:)?\s*(\d+)', claim_lower)
         
         if width_match and metadata.width > 0:
             claimed = int(width_match.group(1))
