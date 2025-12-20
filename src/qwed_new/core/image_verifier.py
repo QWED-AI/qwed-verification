@@ -54,6 +54,10 @@ class ImageVerifier:
     4. Chart data extraction (for simple charts)
     
     VLM is only consulted for complex semantic claims.
+
+    Attributes:
+        vlm_provider: Vision-Language Model provider.
+        use_vlm_fallback (bool): Whether to use VLM for complex claims.
     """
     
     # Common claim patterns we can verify deterministically
@@ -75,8 +79,11 @@ class ImageVerifier:
         Initialize the Image Verifier.
         
         Args:
-            vlm_provider: Vision-Language Model provider for fallback
-            use_vlm_fallback: Whether to use VLM for complex claims
+            vlm_provider: Vision-Language Model provider for fallback.
+            use_vlm_fallback: Whether to use VLM for complex claims.
+
+        Example:
+            >>> verifier = ImageVerifier(use_vlm_fallback=False)
         """
         self.vlm_provider = vlm_provider
         self.use_vlm_fallback = use_vlm_fallback
@@ -91,12 +98,18 @@ class ImageVerifier:
         Verify a claim against an image.
         
         Args:
-            image_bytes: Raw bytes of the image
-            claim: The statement to verify (e.g., "Sales increased in Q3")
-            context: Optional additional context
+            image_bytes: Raw bytes of the image.
+            claim: The statement to verify (e.g., "Sales increased in Q3").
+            context: Optional additional context.
             
         Returns:
-            Dict containing verdict, confidence, reasoning, and analysis
+            Dict containing verdict, confidence, reasoning, and analysis.
+
+        Example:
+            >>> with open("image.jpg", "rb") as f:
+            ...     img_data = f.read()
+            >>> result = verifier.verify_image(img_data, "The image is 800x600")
+            >>> print(result["verdict"])
         """
         if not image_bytes or not claim:
             return {
@@ -489,6 +502,17 @@ class ImageVerifier:
     ) -> Dict[str, Any]:
         """
         Verify multiple claims against the same image.
+
+        Args:
+            image_bytes: The image data.
+            claims: List of claims to verify.
+
+        Returns:
+            Dict containing batch results and summary statistics.
+
+        Example:
+            >>> result = verifier.verify_batch(img_data, ["Claim 1", "Claim 2"])
+            >>> print(result["summary"]["supported"])
         """
         results = []
         
@@ -522,6 +546,10 @@ class ImageVerifier:
 class MultiVLMVerifier:
     """
     Verifies image claims using multiple VLM providers for consensus.
+
+    Attributes:
+        providers (List[Any]): List of VLM provider instances.
+        base_verifier (ImageVerifier): Base verifier for deterministic checks.
     """
     
     def __init__(self, providers: List[Any]):
@@ -529,7 +557,10 @@ class MultiVLMVerifier:
         Initialize with multiple VLM providers.
         
         Args:
-            providers: List of VLM provider instances
+            providers: List of VLM provider instances.
+
+        Example:
+            >>> verifier = MultiVLMVerifier([provider1, provider2])
         """
         self.providers = providers
         self.base_verifier = ImageVerifier(use_vlm_fallback=False)
@@ -544,9 +575,16 @@ class MultiVLMVerifier:
         Verify claim using multiple VLMs and calculate consensus.
         
         Args:
-            image_bytes: The image to verify
-            claim: The claim to verify
-            min_agreement: Minimum number of VLMs that must agree
+            image_bytes: The image to verify.
+            claim: The claim to verify.
+            min_agreement: Minimum number of VLMs that must agree.
+
+        Returns:
+            Dict containing consensus verdict and details.
+
+        Example:
+            >>> result = verifier.verify_with_consensus(img_data, "There is a cat", min_agreement=2)
+            >>> print(result["verdict"])
         """
         # First try deterministic methods
         base_result = self.base_verifier.verify_image(image_bytes, claim)

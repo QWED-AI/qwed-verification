@@ -52,6 +52,9 @@ class FactVerifier:
     
     The LLM is only consulted as a LAST RESORT when deterministic
     methods cannot provide a confident answer.
+
+    Attributes:
+        use_llm_fallback (bool): Whether to use LLM as last resort.
     """
     
     # Stopwords for TF-IDF
@@ -90,7 +93,10 @@ class FactVerifier:
         Initialize the Fact Verifier.
         
         Args:
-            use_llm_fallback: Whether to use LLM as last resort (default: True)
+            use_llm_fallback: Whether to use LLM as last resort (default: True).
+
+        Example:
+            >>> verifier = FactVerifier(use_llm_fallback=False)
         """
         self.use_llm_fallback = use_llm_fallback
         self._translator = None  # Lazy load
@@ -106,10 +112,10 @@ class FactVerifier:
         Verify a factual claim against a source context.
         
         Args:
-            claim: The statement to verify (e.g., "The policy covers water damage")
-            context: The source text (e.g., policy document, article)
-            provider: Optional LLM provider for fallback
-            min_confidence: Minimum confidence to return verdict without LLM
+            claim: The statement to verify (e.g., "The policy covers water damage").
+            context: The source text (e.g., policy document, article).
+            provider: Optional LLM provider for fallback.
+            min_confidence: Minimum confidence to return verdict without LLM.
             
         Returns:
             dict: {
@@ -119,6 +125,12 @@ class FactVerifier:
                 "citations": list[dict],
                 "methods_used": list[str]
             }
+
+        Example:
+            >>> context = "The sky is blue."
+            >>> result = verifier.verify_fact("The sky is blue", context)
+            >>> print(result["verdict"])
+            'SUPPORTED'
         """
         if not claim or not context:
             return {
@@ -547,9 +559,13 @@ class FactVerifier:
 class BatchFactVerifier:
     """
     Batch verification for multiple claims against a single context.
+
+    Attributes:
+        verifier (FactVerifier): The underlying verifier instance.
     """
     
     def __init__(self):
+        """Initialize BatchFactVerifier."""
         self.verifier = FactVerifier()
     
     def verify_batch(
@@ -560,6 +576,18 @@ class BatchFactVerifier:
     ) -> Dict[str, Any]:
         """
         Verify multiple claims against the same context.
+
+        Args:
+            claims: List of claims to verify.
+            context: The source context text.
+            provider: Optional LLM provider.
+
+        Returns:
+            Dict containing batch results and summary statistics.
+
+        Example:
+            >>> batch = verifier.verify_batch(["Claim 1", "Claim 2"], "context")
+            >>> print(batch["summary"]["supported"])
         """
         results = []
         

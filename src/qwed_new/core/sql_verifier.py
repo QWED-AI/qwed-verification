@@ -52,6 +52,11 @@ class SQLVerifier:
     4. Query complexity limits
     5. Schema validation
     6. Cost estimation
+
+    Attributes:
+        blocked_columns (Set[str]): Set of column names that are forbidden to access.
+        limits (Dict[str, int]): Configuration for complexity limits.
+        allow_destructive (bool): Whether to allow destructive commands.
     """
     
     # Destructive commands (Blocked by default)
@@ -93,9 +98,12 @@ class SQLVerifier:
         Initialize SQL Verifier.
         
         Args:
-            blocked_columns: Additional columns to block
-            complexity_limits: Override default complexity limits
-            allow_destructive: If True, allow UPDATE/INSERT (for admin contexts)
+            blocked_columns: Additional columns to block.
+            complexity_limits: Override default complexity limits.
+            allow_destructive: If True, allow UPDATE/INSERT (for admin contexts).
+
+        Example:
+            >>> verifier = SQLVerifier(blocked_columns={"ssn", "password"})
         """
         self.blocked_columns = self.DEFAULT_SENSITIVE_COLUMNS.union(blocked_columns or set())
         self.limits = {**self.DEFAULT_LIMITS, **(complexity_limits or {})}
@@ -112,13 +120,18 @@ class SQLVerifier:
         Verify a SQL query for safety.
         
         Args:
-            query: The SQL query to verify
-            schema_ddl: Optional DDL for schema validation
-            dialect: SQL dialect (postgres, mysql, sqlite, etc.)
-            check_complexity: Whether to check complexity limits
+            query: The SQL query to verify.
+            schema_ddl: Optional DDL for schema validation.
+            dialect: SQL dialect (postgres, mysql, sqlite, etc.).
+            check_complexity: Whether to check complexity limits.
             
         Returns:
-            Dict with verification results
+            Dict with verification results including safety status and issues list.
+
+        Example:
+            >>> result = verifier.verify_sql("SELECT * FROM users WHERE id = 1")
+            >>> print(result["is_safe"])
+            True
         """
         issues: List[SQLIssue] = []
         
@@ -487,7 +500,22 @@ class SQLVerifier:
         schema_ddl: Optional[str] = None,
         dialect: str = "postgres"
     ) -> Dict[str, Any]:
-        """Verify multiple SQL queries."""
+        """
+        Verify multiple SQL queries.
+
+        Args:
+            queries: List of SQL queries to verify.
+            schema_ddl: Optional DDL schema.
+            dialect: SQL dialect.
+
+        Returns:
+            Dict containing batch results and summary statistics.
+
+        Example:
+            >>> result = verifier.verify_batch(["SELECT * FROM table1", "DROP TABLE table2"])
+            >>> print(result["summary"]["blocked"])
+            1
+        """
         results = []
         
         for query in queries:

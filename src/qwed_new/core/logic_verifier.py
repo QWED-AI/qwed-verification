@@ -50,6 +50,9 @@ class LogicVerifier:
     - Arrays: Array theory
     - Arithmetic: +, -, *, /, mod
     - Logical: And, Or, Not, Implies, Iff
+
+    Attributes:
+        timeout_ms (int): Solver timeout in milliseconds.
     """
     
     # Reserved keywords (skip in variable inference)
@@ -64,7 +67,10 @@ class LogicVerifier:
         Initialize Logic Verifier.
         
         Args:
-            timeout_ms: Solver timeout in milliseconds
+            timeout_ms: Solver timeout in milliseconds.
+
+        Example:
+            >>> verifier = LogicVerifier(timeout_ms=10000)
         """
         self.timeout_ms = timeout_ms
         self._sanitizer = None
@@ -102,12 +108,20 @@ class LogicVerifier:
         Check if a set of constraints is satisfiable.
         
         Args:
-            variables: Variable declarations {"x": "Int", "P": "Bool", "bv": "BitVec[8]"}
-            constraints: List of constraint strings
-            prove_unsat: If True and UNSAT, try to explain why
+            variables: Variable declarations {"x": "Int", "P": "Bool", "bv": "BitVec[8]"}.
+            constraints: List of constraint strings.
+            prove_unsat: If True and UNSAT, try to explain why.
             
         Returns:
-            LogicResult with status and model (if SAT)
+            LogicResult with status and model (if SAT).
+
+        Example:
+            >>> result = verifier.verify_logic(
+            ...     {"x": "Int", "y": "Int"},
+            ...     ["x > 0", "y > 0", "x + y == 10"]
+            ... )
+            >>> print(result.status)
+            'SAT'
         """
         try:
             # 1. Sanitize constraints (if sanitizer available)
@@ -179,12 +193,20 @@ class LogicVerifier:
         Verify formulas with quantifiers (ForAll, Exists).
         
         Args:
-            variables: Free variable declarations
-            quantified_formulas: List of quantified formulas
-            constraints: Additional unquantified constraints
+            variables: Free variable declarations.
+            quantified_formulas: List of quantified formulas.
+            constraints: Additional unquantified constraints.
             
         Returns:
-            LogicResult
+            LogicResult indicating satisfiability.
+
+        Example:
+            >>> qf = QuantifiedFormula(
+            ...     quantifier="forall",
+            ...     bound_vars=[("x", "Int")],
+            ...     body="x + y == y + x"
+            ... )
+            >>> result = verifier.verify_with_quantifiers({"y": "Int"}, [qf])
         """
         try:
             solver = Solver()
@@ -252,11 +274,17 @@ class LogicVerifier:
         Verify bitvector constraints (for crypto/low-level verification).
         
         Args:
-            variables: Variable name to bit width mapping
-            constraints: Bitvector constraint expressions
+            variables: Variable name to bit width mapping.
+            constraints: Bitvector constraint expressions.
             
         Returns:
-            LogicResult
+            LogicResult indicating satisfiability.
+
+        Example:
+            >>> result = verifier.verify_bitvector(
+            ...     {"x": 8, "y": 8},
+            ...     ["x & y == 0", "x | y == 255"]
+            ... )
         """
         try:
             solver = Solver()
@@ -309,12 +337,19 @@ class LogicVerifier:
         Verify constraints involving arrays.
         
         Args:
-            array_decls: Array declarations {"name": (index_type, value_type)}
-            variables: Regular variable declarations
-            constraints: Constraints using Select(arr, idx) and Store(arr, idx, val)
+            array_decls: Array declarations {"name": (index_type, value_type)}.
+            variables: Regular variable declarations.
+            constraints: Constraints using Select(arr, idx) and Store(arr, idx, val).
             
         Returns:
-            LogicResult
+            LogicResult indicating satisfiability.
+
+        Example:
+            >>> result = verifier.verify_array(
+            ...     {"A": ("Int", "Int")},
+            ...     {"i": "Int", "x": "Int"},
+            ...     ["Select(Store(A, i, x), i) == x"]
+            ... )
         """
         try:
             solver = Solver()
@@ -376,12 +411,20 @@ class LogicVerifier:
         Uses proof by contradiction: premises AND NOT(conclusion) should be UNSAT.
         
         Args:
-            variables: Variable declarations
-            premises: List of premise constraints
-            conclusion: The theorem to prove
+            variables: Variable declarations.
+            premises: List of premise constraints.
+            conclusion: The theorem to prove.
             
         Returns:
-            LogicResult with "SAT" if theorem is VALID, "UNSAT" if INVALID
+            LogicResult with "SAT" if theorem is VALID, "UNSAT" if INVALID.
+
+        Example:
+            >>> result = verifier.prove_theorem(
+            ...     {"p": "Bool", "q": "Bool"},
+            ...     ["Implies(p, q)", "p"],
+            ...     "q"
+            ... )
+            >>> # Status will be SAT if theorem is valid (proof found)
         """
         try:
             solver = Solver()
@@ -522,7 +565,20 @@ class LogicVerifier:
         """
         Check if antecedent implies consequent.
         
-        Returns SAT if the implication holds for all values.
+        Args:
+            variables: Variable declarations.
+            antecedent: The condition formula.
+            consequent: The implied formula.
+
+        Returns:
+            LogicResult (SAT if implication holds for all values).
+
+        Example:
+            >>> result = verifier.check_implication(
+            ...     {"x": "Int"},
+            ...     "x > 10",
+            ...     "x > 5"
+            ... )
         """
         # P → Q is valid iff P ∧ ¬Q is unsatisfiable
         return self.prove_theorem(variables, [antecedent], consequent)
@@ -535,6 +591,21 @@ class LogicVerifier:
     ) -> LogicResult:
         """
         Check if two formulas are logically equivalent.
+
+        Args:
+            variables: Variable declarations.
+            formula1: First formula.
+            formula2: Second formula.
+
+        Returns:
+            LogicResult (SAT if equivalent).
+
+        Example:
+            >>> result = verifier.check_equivalence(
+            ...     {"p": "Bool", "q": "Bool"},
+            ...     "Not(Or(p, q))",
+            ...     "And(Not(p), Not(q))"
+            ... )
         """
         try:
             solver = Solver()

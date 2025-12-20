@@ -45,6 +45,9 @@ class CodeVerifier:
     - Java: SQL injection, deserialization, SSRF
     - Go: command injection, path traversal
     - SQL: injection patterns (delegated to SQLVerifier)
+
+    Attributes:
+        supported_languages (List[str]): List of supported programming languages.
     """
     
     # =========================================================================
@@ -214,7 +217,12 @@ class CodeVerifier:
     }
     
     def __init__(self):
-        """Initialize the multi-language code verifier."""
+        """
+        Initialize the multi-language code verifier.
+
+        Example:
+            >>> verifier = CodeVerifier()
+        """
         self.supported_languages = ["python", "javascript", "typescript", "java", "go", "sql"]
     
     def verify_code(self, code: str, language: str = "python") -> Dict[str, Any]:
@@ -222,11 +230,16 @@ class CodeVerifier:
         Verify code for security vulnerabilities.
         
         Args:
-            code: The code snippet to verify
-            language: Programming language
+            code: The code snippet to verify.
+            language: Programming language (default: "python").
             
         Returns:
-            Dict with verification results
+            Dict with verification results including safety status and issues list.
+
+        Example:
+            >>> result = verifier.verify_code("eval('rm -rf /')", language="python")
+            >>> print(result["is_safe"])
+            False
         """
         language = language.lower()
         
@@ -600,10 +613,14 @@ class CodeVerifier:
         Verify multiple code snippets.
         
         Args:
-            snippets: List of {"code": str, "language": str}
+            snippets: List of dicts with {"code": str, "language": str}.
             
         Returns:
-            Batch verification results
+            Dict with batch verification results and summary stats.
+
+        Example:
+            >>> batch = [{"code": "print(1)", "language": "python"}, {"code": "alert(1)", "language": "js"}]
+            >>> result = verifier.verify_batch(batch)
         """
         results = []
         

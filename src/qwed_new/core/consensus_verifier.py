@@ -78,6 +78,11 @@ class CircuitBreaker:
     - CLOSED: Normal operation, requests pass through
     - OPEN: After threshold failures, block requests for recovery_time
     - HALF_OPEN: After recovery_time, allow one test request
+
+    Attributes:
+        failure_threshold (int): Number of failures before opening circuit.
+        recovery_time (float): Seconds to wait before attempting recovery.
+        success_threshold (int): Number of successes to close circuit.
     """
     
     def __init__(
@@ -86,6 +91,14 @@ class CircuitBreaker:
         recovery_time_seconds: float = 30.0,
         success_threshold: int = 2
     ):
+        """
+        Initialize Circuit Breaker.
+
+        Args:
+            failure_threshold: Consecutive failures to trigger open state.
+            recovery_time_seconds: Seconds to wait in open state.
+            success_threshold: Consecutive successes to recover from degraded.
+        """
         self.failure_threshold = failure_threshold
         self.recovery_time = recovery_time_seconds
         self.success_threshold = success_threshold
@@ -94,14 +107,30 @@ class CircuitBreaker:
         self._lock = threading.Lock()
     
     def get_health(self, engine_name: str) -> EngineHealth:
-        """Get or create engine health record."""
+        """
+        Get or create engine health record.
+
+        Args:
+            engine_name: Name of the engine.
+
+        Returns:
+            EngineHealth object.
+        """
         with self._lock:
             if engine_name not in self._engines:
                 self._engines[engine_name] = EngineHealth(name=engine_name)
             return self._engines[engine_name]
     
     def is_available(self, engine_name: str) -> bool:
-        """Check if engine is available for requests."""
+        """
+        Check if engine is available for requests.
+
+        Args:
+            engine_name: Name of the engine.
+
+        Returns:
+            bool: True if engine can accept requests.
+        """
         health = self.get_health(engine_name)
         
         if health.state == EngineState.HEALTHY:
@@ -120,7 +149,13 @@ class CircuitBreaker:
         return True
     
     def record_success(self, engine_name: str, latency_ms: float):
-        """Record successful request."""
+        """
+        Record successful request.
+
+        Args:
+            engine_name: Name of the engine.
+            latency_ms: Request latency in milliseconds.
+        """
         with self._lock:
             health = self.get_health(engine_name)
             health.total_calls += 1
@@ -137,7 +172,12 @@ class CircuitBreaker:
                 health.state = EngineState.HEALTHY
     
     def record_failure(self, engine_name: str):
-        """Record failed request."""
+        """
+        Record failed request.
+
+        Args:
+            engine_name: Name of the engine.
+        """
         with self._lock:
             health = self.get_health(engine_name)
             health.total_calls += 1
@@ -151,7 +191,12 @@ class CircuitBreaker:
                 health.circuit_open_until = time.time() + self.recovery_time
     
     def get_all_health(self) -> Dict[str, Dict[str, Any]]:
-        """Get health status for all engines."""
+        """
+        Get health status for all engines.
+
+        Returns:
+            Dict mapping engine names to health statistics.
+        """
         return {
             name: {
                 "state": health.state.value,
@@ -174,6 +219,10 @@ class ConsensusVerifier:
     - Engine health monitoring
     - Adaptive timeouts
     - Weighted consensus calculation
+
+    Attributes:
+        max_workers (int): Maximum number of parallel worker threads.
+        circuit_breaker (CircuitBreaker): Circuit breaker instance.
     """
     
     # Default timeouts per engine (ms)
@@ -205,8 +254,11 @@ class ConsensusVerifier:
         Initialize Consensus Verifier.
         
         Args:
-            max_workers: Max parallel engine threads
-            enable_circuit_breaker: Enable circuit breaker pattern
+            max_workers: Max parallel engine threads.
+            enable_circuit_breaker: Enable circuit breaker pattern.
+
+        Example:
+            >>> verifier = ConsensusVerifier(max_workers=8)
         """
         self.max_workers = max_workers
         self.circuit_breaker = CircuitBreaker() if enable_circuit_breaker else None
@@ -270,13 +322,17 @@ class ConsensusVerifier:
         Verify query using multiple engines.
         
         Args:
-            query: The query to verify
-            mode: Verification depth
-            min_confidence: Minimum required confidence
-            parallel: Use parallel execution
+            query: The query to verify.
+            mode: Verification depth (SINGLE, HIGH, MAXIMUM).
+            min_confidence: Minimum required confidence.
+            parallel: Use parallel execution.
             
         Returns:
-            ConsensusResult with answer and confidence
+            ConsensusResult with answer and confidence.
+
+        Example:
+            >>> result = verifier.verify_with_consensus("2+2", mode=VerificationMode.HIGH)
+            >>> print(result.final_answer)
         """
         start_time = time.time()
         
@@ -317,12 +373,15 @@ class ConsensusVerifier:
         Async verification using multiple engines in parallel.
         
         Args:
-            query: The query to verify
-            mode: Verification depth
-            timeout_seconds: Max time for all engines
+            query: The query to verify.
+            mode: Verification depth.
+            timeout_seconds: Max time for all engines.
             
         Returns:
-            ConsensusResult
+            ConsensusResult object.
+
+        Example:
+            >>> result = await verifier.verify_async("2+2")
         """
         start_time = time.time()
         engine_methods = self._select_engines(query, mode)
@@ -725,13 +784,26 @@ class ConsensusVerifier:
     # =========================================================================
     
     def get_engine_health(self) -> Dict[str, Any]:
-        """Get health status of all engines."""
+        """
+        Get health status of all engines.
+
+        Returns:
+            Dict of engine health metrics.
+
+        Example:
+            >>> health = verifier.get_engine_health()
+        """
         if self.circuit_breaker:
             return self.circuit_breaker.get_all_health()
         return {}
     
     def reset_circuit_breakers(self):
-        """Reset all circuit breakers."""
+        """
+        Reset all circuit breakers.
+
+        Example:
+            >>> verifier.reset_circuit_breakers()
+        """
         if self.circuit_breaker:
             self.circuit_breaker._engines.clear()
 

@@ -51,6 +51,10 @@ class WasmSandbox:
     
     Uses Pyodide (Python in Wasm) for sandboxed execution.
     More portable than Docker, works in any environment.
+
+    Attributes:
+        memory_limit_mb (int): Memory limit in MB.
+        timeout_seconds (float): Execution timeout in seconds.
     """
     
     def __init__(
@@ -58,13 +62,25 @@ class WasmSandbox:
         memory_limit_mb: int = 128,
         timeout_seconds: float = 30.0
     ):
+        """
+        Initialize Wasm sandbox.
+
+        Args:
+            memory_limit_mb: Memory limit in megabytes.
+            timeout_seconds: Execution timeout in seconds.
+        """
         self.memory_limit_mb = memory_limit_mb
         self.timeout_seconds = timeout_seconds
         self._pyodide = None
         self._available = None
     
     def is_available(self) -> bool:
-        """Check if Wasm sandbox is available."""
+        """
+        Check if Wasm sandbox is available.
+
+        Returns:
+            bool: True if available, False otherwise.
+        """
         if self._available is not None:
             return self._available
         
@@ -92,6 +108,18 @@ class WasmSandbox:
         
         Since Pyodide requires async/browser context, this implementation
         uses a restricted Python executor with similar security properties.
+
+        Args:
+            code: Python code to execute.
+            context: Dictionary of variables to inject into the execution scope.
+
+        Returns:
+            ExecutionResult object containing success status and output.
+
+        Example:
+            >>> result = sandbox.execute("result = 1 + 1", {})
+            >>> print(result.result)
+            2
         """
         start_time = time.time()
         
@@ -166,6 +194,9 @@ class RestrictedExecutor:
     Fallback executor with AST-based security restrictions.
     
     Analyzes code AST to block dangerous operations before execution.
+
+    Attributes:
+        timeout_seconds (float): Execution timeout in seconds.
     """
     
     # Allowed AST node types
@@ -191,10 +222,29 @@ class RestrictedExecutor:
     }
     
     def __init__(self, timeout_seconds: float = 30.0):
+        """
+        Initialize RestrictedExecutor.
+
+        Args:
+            timeout_seconds: Execution timeout in seconds.
+        """
         self.timeout_seconds = timeout_seconds
     
     def is_code_safe(self, code: str) -> Tuple[bool, List[str]]:
-        """Check if code is safe to execute."""
+        """
+        Check if code is safe to execute.
+
+        Args:
+            code: Python code to check.
+
+        Returns:
+            Tuple containing boolean status and list of issues.
+
+        Example:
+            >>> is_safe, issues = executor.is_code_safe("import os")
+            >>> print(is_safe)
+            False
+        """
         issues = []
         
         try:
@@ -217,7 +267,21 @@ class RestrictedExecutor:
         return len(issues) == 0, issues
     
     def execute(self, code: str, context: Dict[str, Any]) -> ExecutionResult:
-        """Execute code if it passes safety checks."""
+        """
+        Execute code if it passes safety checks.
+
+        Args:
+            code: Python code to execute.
+            context: Dictionary of variables to inject.
+
+        Returns:
+            ExecutionResult with execution details.
+
+        Example:
+            >>> result = executor.execute("result = 5 * 5", {})
+            >>> print(result.result)
+            25
+        """
         start_time = time.time()
         
         is_safe, issues = self.is_code_safe(code)
@@ -278,6 +342,11 @@ class StatsVerifier:
     1. Docker (most secure, requires Docker)
     2. Wasm (portable, works anywhere)
     3. Restricted (fallback, AST-validated)
+
+    Attributes:
+        preferred_sandbox (str): Preferred sandbox type.
+        timeout_seconds (float): Execution timeout.
+        memory_limit_mb (int): Memory limit.
     """
     
     def __init__(
@@ -290,9 +359,12 @@ class StatsVerifier:
         Initialize Stats Verifier.
         
         Args:
-            preferred_sandbox: "docker", "wasm", "restricted", or "auto"
-            timeout_seconds: Execution timeout
-            memory_limit_mb: Memory limit
+            preferred_sandbox: "docker", "wasm", "restricted", or "auto".
+            timeout_seconds: Execution timeout in seconds.
+            memory_limit_mb: Memory limit in megabytes.
+
+        Example:
+            >>> verifier = StatsVerifier(preferred_sandbox="restricted")
         """
         self.preferred_sandbox = preferred_sandbox
         self.timeout_seconds = timeout_seconds
@@ -380,12 +452,18 @@ class StatsVerifier:
         Verify a statistical claim about tabular data.
         
         Args:
-            query: The user's question or claim
-            df: The pandas DataFrame containing the data
-            provider: Optional LLM provider
+            query: The user's question or claim.
+            df: The pandas DataFrame containing the data.
+            provider: Optional LLM provider.
             
         Returns:
-            dict with status, result, code, and security info
+            dict with status, result, code, and security info.
+
+        Example:
+            >>> df = pd.DataFrame({'a': [1, 2, 3]})
+            >>> result = verifier.verify_stats("What is the mean of a?", df)
+            >>> print(result["result"])
+            2.0
         """
         start_time = time.time()
         columns = list(df.columns)
@@ -547,9 +625,17 @@ class StatsVerifier:
         Safer alternative for common operations.
         
         Args:
-            df: DataFrame
-            column: Column name
-            operation: "mean", "median", "std", "var", "sum", "count", "min", "max"
+            df: DataFrame containing the data.
+            column: Name of the column to operate on.
+            operation: One of "mean", "median", "std", "var", "sum", "count", "min", "max", "mode".
+
+        Returns:
+            Dict containing the result or error.
+
+        Example:
+            >>> result = verifier.compute_statistics(df, "age", "mean")
+            >>> print(result["result"])
+            35.5
         """
         start_time = time.time()
         
@@ -598,7 +684,12 @@ class StatsVerifier:
             }
     
     def get_sandbox_info(self) -> Dict[str, Any]:
-        """Get information about available sandboxes."""
+        """
+        Get information about available sandboxes.
+
+        Returns:
+            Dict with availability status for each sandbox type.
+        """
         docker_available = (
             self.docker_executor is not None and 
             self.docker_executor.is_available()
