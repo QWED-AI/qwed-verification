@@ -14,6 +14,16 @@ Usage:
     # Async client
     async with QWEDAsyncClient(api_key="qwed_...") as client:
         result = await client.verify("Is 2+2=4?")
+
+Framework Integrations:
+    # LangChain
+    from qwed_sdk.langchain import QWEDTool, QWEDVerificationCallback
+    
+    # LlamaIndex
+    from qwed_sdk.llamaindex import QWEDQueryEngine, QWEDVerificationTransform
+    
+    # CrewAI
+    from qwed_sdk.crewai import QWEDVerifiedAgent, QWEDVerificationTool
 """
 
 from qwed_sdk.client import QWEDClient, QWEDAsyncClient
@@ -23,7 +33,7 @@ from qwed_sdk.models import (
     VerificationType,
 )
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 __all__ = [
     "QWEDClient",
     "QWEDAsyncClient",
@@ -31,3 +41,45 @@ __all__ = [
     "BatchResult",
     "VerificationType",
 ]
+
+# Optional framework integrations (lazy imports)
+def get_langchain_tools():
+    """Get LangChain integration classes."""
+    from qwed_sdk.langchain import (
+        QWEDTool, QWEDMathTool, QWEDLogicTool, QWEDCodeTool,
+        QWEDVerificationCallback, QWEDVerifiedChain
+    )
+    return {
+        "QWEDTool": QWEDTool,
+        "QWEDMathTool": QWEDMathTool,
+        "QWEDLogicTool": QWEDLogicTool,
+        "QWEDCodeTool": QWEDCodeTool,
+        "QWEDVerificationCallback": QWEDVerificationCallback,
+        "QWEDVerifiedChain": QWEDVerifiedChain,
+    }
+
+def get_llamaindex_tools():
+    """Get LlamaIndex integration classes."""
+    from qwed_sdk.llamaindex import (
+        QWEDQueryEngine, QWEDVerificationTransform,
+        QWEDCallbackHandler, QWEDVerifyTool
+    )
+    return {
+        "QWEDQueryEngine": QWEDQueryEngine,
+        "QWEDVerificationTransform": QWEDVerificationTransform,
+        "QWEDCallbackHandler": QWEDCallbackHandler,
+        "QWEDVerifyTool": QWEDVerifyTool,
+    }
+
+def get_crewai_tools():
+    """Get CrewAI integration classes."""
+    from qwed_sdk.crewai import (
+        QWEDVerificationTool, QWEDMathTool, QWEDCodeTool,
+        QWEDVerifiedAgent, QWEDVerifiedCrew, VerificationConfig
+    )
+    return {
+        "QWEDVerificationTool": QWEDVerificationTool,
+        "QWEDVerifiedAgent": QWEDVerifiedAgent,
+        "QWEDVerifiedCrew": QWEDVerifiedCrew,
+        "VerificationConfig": VerificationConfig,
+    }
