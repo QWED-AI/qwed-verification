@@ -22,6 +22,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.pytest_cache/
 
 # Virtual environments
 venv/
@@ -41,3 +42,13 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Security - SSL certificates and keys
+*.pem
+*.key
+*.crt
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
