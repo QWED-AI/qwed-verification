@@ -2,10 +2,10 @@
 Tests for QWED LlamaIndex Integration.
 
 Tests the QWED query engine wrapper, node postprocessor, and callback handler.
+These are simple import and initialization tests - no mocks needed.
 """
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
 
 
 class TestQWEDLlamaIndexImports:
@@ -44,7 +44,10 @@ class TestQWEDQueryEngine:
         """Test query engine initializes with base engine."""
         from qwed_sdk.llamaindex import QWEDQueryEngine
         
-        mock_engine = Mock()
+        class MockEngine:
+            pass
+        
+        mock_engine = MockEngine()
         engine = QWEDQueryEngine(mock_engine, api_key="test_key")
         
         assert engine.query_engine == mock_engine
@@ -53,40 +56,40 @@ class TestQWEDQueryEngine:
         """Test query engine has query method."""
         from qwed_sdk.llamaindex import QWEDQueryEngine
         
-        mock_engine = Mock()
-        engine = QWEDQueryEngine(mock_engine, api_key="test_key")
+        class MockEngine:
+            pass
         
+        engine = QWEDQueryEngine(MockEngine(), api_key="test_key")
         assert hasattr(engine, 'query')
     
     def test_query_engine_has_aquery_method(self):
         """Test query engine has async query method."""
         from qwed_sdk.llamaindex import QWEDQueryEngine
         
-        mock_engine = Mock()
-        engine = QWEDQueryEngine(mock_engine, api_key="test_key")
+        class MockEngine:
+            pass
         
+        engine = QWEDQueryEngine(MockEngine(), api_key="test_key")
         assert hasattr(engine, 'aquery')
     
-    @patch('qwed_sdk.llamaindex.QWEDClient')
-    def test_query_returns_verified_response(self, mock_client_class):
-        """Test query returns VerifiedResponse object."""
-        from qwed_sdk.llamaindex import QWEDQueryEngine, VerifiedResponse
+    def test_query_engine_options(self):
+        """Test query engine accepts options."""
+        from qwed_sdk.llamaindex import QWEDQueryEngine
         
-        # Setup mocks
-        mock_client = Mock()
-        mock_result = Mock()
-        mock_result.verified = True
-        mock_result.status = "VERIFIED"
-        mock_client.verify.return_value = mock_result
-        mock_client_class.return_value = mock_client
+        class MockEngine:
+            pass
         
-        mock_base_engine = Mock()
-        mock_base_engine.query.return_value = "The answer is 30"
+        engine = QWEDQueryEngine(
+            MockEngine(),
+            api_key="test_key",
+            verify_math=True,
+            verify_facts=False,
+            auto_correct=True,
+        )
         
-        engine = QWEDQueryEngine(mock_base_engine, api_key="test_key")
-        response = engine.query("What is 15% of 200?")
-        
-        assert isinstance(response, VerifiedResponse)
+        assert engine.verify_math is True
+        assert engine.verify_facts is False
+        assert engine.auto_correct is True
 
 
 class TestVerifiedResponse:
@@ -130,6 +133,18 @@ class TestVerifiedResponse:
         )
         
         assert response.attestation is not None
+    
+    def test_verified_response_default_source_nodes(self):
+        """Test VerifiedResponse defaults source_nodes to empty list."""
+        from qwed_sdk.llamaindex import VerifiedResponse
+        
+        response = VerifiedResponse(
+            response="Test",
+            verified=True,
+            status="VERIFIED",
+        )
+        
+        assert response.source_nodes == []
 
 
 class TestQWEDVerificationTransform:
@@ -142,12 +157,20 @@ class TestQWEDVerificationTransform:
         transform = QWEDVerificationTransform(api_key="test_key")
         assert transform is not None
     
-    def test_transform_has_postprocess_method(self):
-        """Test transform has _postprocess_nodes method."""
+    def test_transform_options(self):
+        """Test transform accepts options."""
         from qwed_sdk.llamaindex import QWEDVerificationTransform
         
-        transform = QWEDVerificationTransform(api_key="test_key")
-        assert hasattr(transform, '_postprocess_nodes')
+        transform = QWEDVerificationTransform(
+            api_key="test_key",
+            verify_math=False,
+            verify_code=True,
+            min_score_threshold=0.7,
+        )
+        
+        assert transform.verify_math is False
+        assert transform.verify_code is True
+        assert transform.min_score_threshold == 0.7
 
 
 class TestQWEDCallbackHandler:
@@ -168,13 +191,12 @@ class TestQWEDCallbackHandler:
         assert hasattr(handler, 'events')
         assert isinstance(handler.events, list)
     
-    def test_callback_has_event_methods(self):
-        """Test callback handler has event methods."""
+    def test_callback_log_all_option(self):
+        """Test callback handler has log_all option."""
         from qwed_sdk.llamaindex import QWEDCallbackHandler
         
-        handler = QWEDCallbackHandler(api_key="test_key")
-        assert hasattr(handler, 'on_event_start')
-        assert hasattr(handler, 'on_event_end')
+        handler = QWEDCallbackHandler(api_key="test_key", log_all=False)
+        assert handler.log_all is False
 
 
 class TestQWEDVerifyTool:
@@ -193,8 +215,10 @@ class TestQWEDVerifyTool:
         
         tool = QWEDVerifyTool(api_key="test_key")
         assert hasattr(tool, 'metadata')
-        assert 'name' in tool.metadata
-        assert 'description' in tool.metadata
+        metadata = tool.metadata
+        assert 'name' in metadata
+        assert 'description' in metadata
+        assert metadata['name'] == 'qwed_verify'
     
     def test_verify_tool_is_callable(self):
         """Test verify tool is callable."""

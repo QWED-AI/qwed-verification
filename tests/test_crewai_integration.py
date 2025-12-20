@@ -2,10 +2,10 @@
 Tests for QWED CrewAI Integration.
 
 Tests the QWED verified agents, crews, and tools for CrewAI.
+These are simple import and initialization tests - no mocks needed.
 """
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
 
 
 class TestQWEDCrewAIImports:
@@ -119,6 +119,24 @@ class TestQWEDCodeTool:
         assert "code" in tool.description.lower() or "security" in tool.description.lower()
 
 
+class TestQWEDSQLTool:
+    """Test QWEDSQLTool functionality."""
+    
+    def test_sql_tool_initialization(self):
+        """Test sql tool initializes correctly."""
+        from qwed_sdk.crewai import QWEDSQLTool
+        
+        tool = QWEDSQLTool(api_key="test_key")
+        assert "SQL" in tool.name
+    
+    def test_sql_tool_description(self):
+        """Test sql tool has appropriate description."""
+        from qwed_sdk.crewai import QWEDSQLTool
+        
+        tool = QWEDSQLTool(api_key="test_key")
+        assert "sql" in tool.description.lower()
+
+
 class TestVerificationConfig:
     """Test VerificationConfig dataclass."""
     
@@ -130,6 +148,7 @@ class TestVerificationConfig:
         assert config.enabled is True
         assert config.verify_math is True
         assert config.verify_code is True
+        assert config.verify_sql is True
     
     def test_config_customization(self):
         """Test config can be customized."""
@@ -139,11 +158,13 @@ class TestVerificationConfig:
             enabled=False,
             verify_math=False,
             auto_correct=True,
+            block_on_failure=True,
         )
         
         assert config.enabled is False
         assert config.verify_math is False
         assert config.auto_correct is True
+        assert config.block_on_failure is True
 
 
 class TestQWEDVerifiedAgent:
@@ -199,6 +220,7 @@ class TestQWEDVerifiedAgent:
         )
         
         assert hasattr(agent, 'verify_output')
+        assert callable(agent.verify_output)
     
     def test_verified_agent_verification_summary(self):
         """Test verified agent can produce summary."""
@@ -214,6 +236,7 @@ class TestQWEDVerifiedAgent:
         assert 'total_outputs' in summary
         assert 'verified' in summary
         assert 'failed' in summary
+        assert 'verification_rate' in summary
 
 
 class TestCrewVerifiedResult:
@@ -260,6 +283,21 @@ class TestCrewVerifiedResult:
         )
         
         assert result.total_verifications == 8
+    
+    def test_result_overall_verification_rate(self):
+        """Test CrewVerifiedResult overall_verification_rate property."""
+        from qwed_sdk.crewai import CrewVerifiedResult
+        
+        result = CrewVerifiedResult(
+            output="Task completed",
+            verified=True,
+            status="VERIFIED",
+            agent_summaries=[
+                {"total_outputs": 10, "verified": 8},
+            ]
+        )
+        
+        assert result.overall_verification_rate == 0.8
 
 
 class TestVerifiedTaskDecorator:
@@ -274,6 +312,18 @@ class TestVerifiedTaskDecorator:
             return output.upper()
         
         assert callable(my_task)
+    
+    def test_decorator_preserves_function(self):
+        """Test decorator preserves original function behavior."""
+        from qwed_sdk.crewai import verified_task
+        
+        @verified_task(verify_output=False, api_key="test")
+        def my_task(output):
+            return output.upper()
+        
+        # Since verify_output is False, it should just run the function
+        result = my_task("hello")
+        assert result == "HELLO"
 
 
 class TestModuleAvailability:
