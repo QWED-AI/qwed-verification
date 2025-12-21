@@ -420,7 +420,7 @@ Every agent action is logged:
 ### 7.2 Audit Query API
 
 ```http
-GET /agents/{agent_id}/activity?from=2025-12-01&to=2025-12-20
+GET /agents/:agent_id/activity?from=2025-12-01&to=2025-12-20
 ```
 
 Response:
@@ -445,7 +445,7 @@ Response:
 ### 7.3 Compliance Export
 
 ```http
-GET /agents/{agent_id}/compliance-report?format=pdf
+GET /agents/:agent_id/compliance-report?format=pdf
 ```
 
 ---
@@ -591,12 +591,12 @@ verified_agent = QWEDVerifiedAgent(
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/agents/register` | POST | Register new agent |
-| `/agents/{id}` | GET | Get agent details |
-| `/agents/{id}/verify` | POST | Verify agent action |
-| `/agents/{id}/tools/{tool}` | POST | Verify tool call |
-| `/agents/{id}/activity` | GET | Get activity log |
-| `/agents/{id}/budget` | GET | Get budget status |
-| `/agents/{id}/trust` | POST | Request trust change |
+| `/agents/:id` | GET | Get agent details |
+| `/agents/:id/verify` | POST | Verify agent action |
+| `/agents/:id/tools/:tool` | POST | Verify tool call |
+| `/agents/:id/activity` | GET | Get activity log |
+| `/agents/:id/budget` | GET | Get budget status |
+| `/agents/:id/trust` | POST | Request trust change |
 
 ---
 

@@ -241,7 +241,7 @@ Verify an agent action before execution.
 
 ## Attestation Endpoints
 
-### GET /attestation/{id}
+### GET /attestation/:id
 
 Get an attestation by ID.
 
@@ -264,7 +264,7 @@ Verify an attestation JWT.
 
 Get a verified badge SVG.
 
-### GET /badge/status/{status}
+### GET /badge/status/:status
 
 Get a badge for any status.
 
