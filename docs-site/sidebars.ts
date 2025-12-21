@@ -10,6 +10,7 @@ const sidebars: SidebarsConfig = {
         'getting-started/installation',
         'getting-started/quickstart',
         'getting-started/concepts',
+        'getting-started/llm-configuration',
       ],
     },
     {
@@ -57,6 +58,7 @@ const sidebars: SidebarsConfig = {
         'api/overview',
         'api/endpoints',
         'api/authentication',
+        'api/dsl-reference',
         'api/errors',
         'api/rate-limits',
       ],
