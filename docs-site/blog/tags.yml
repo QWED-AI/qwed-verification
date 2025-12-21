@@ -1,19 +1,19 @@
-facebook:
-  label: Facebook
-  permalink: /facebook
-  description: Facebook tag description
+verification:
+  label: Verification
+  description: Posts about AI verification and deterministic systems
 
-hello:
-  label: Hello
-  permalink: /hello
-  description: Hello tag description
+ai-safety:
+  label: AI Safety
+  description: AI safety, guardrails, and trust
 
-docusaurus:
-  label: Docusaurus
-  permalink: /docusaurus
-  description: Docusaurus tag description
+announcements:
+  label: Announcements
+  description: Product announcements and updates
 
-hola:
-  label: Hola
-  permalink: /hola
-  description: Hola tag description
+engineering:
+  label: Engineering
+  description: Technical deep-dives and architecture
+
+research:
+  label: Research
+  description: Research papers and findings

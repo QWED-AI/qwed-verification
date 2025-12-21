@@ -169,12 +169,12 @@ const config: Config = {
               href: 'https://github.com/QWED-AI/qwed-verification',
             },
             {
-              label: 'Discord',
-              href: 'https://discord.gg/qwed',
-            },
-            {
               label: 'Twitter',
               href: 'https://twitter.com/qwed_ai',
+            },
+            {
+              label: 'Contact',
+              href: 'mailto:rahul@qwedai.com',
             },
           ],
         },
