@@ -1,0 +1,80 @@
+name: 💡 Feature Request
+description: Suggest a new feature for QWED
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Before You Submit
+        
+        ⚠️ **Read the [CONTRIBUTING.md](https://github.com/QWED-AI/qwed-verification/blob/main/CONTRIBUTING.md)** to understand QWED's philosophy.
+        
+        - QWED is **deterministic-first** - LLMs are translators, not verifiers
+        - Enterprise features (audit, SSO, RBAC) belong in a separate repo
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Which engine does this affect?
+      options:
+        - Math Verifier
+        - Logic Verifier
+        - Code Verifier
+        - SQL Verifier
+        - Stats Verifier
+        - Fact Verifier
+        - Image Verifier
+        - Reasoning Verifier
+        - Consensus Engine
+        - New Engine (Propose)
+        - SDK (Python/TS/Go/Rust)
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deterministic
+    attributes:
+      label: Is this feature deterministic?
+      description: Can it be implemented without LLM calls?
+      options:
+        - "Yes - Pure symbolic/math/logic"
+        - "Partially - LLM for translation only"
+        - "No - Requires LLM reasoning"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem does this solve?
+      placeholder: "Currently, QWED cannot verify..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How should this work?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What other approaches did you consider?
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Checklist
+      options:
+        - label: I have read CONTRIBUTING.md
+          required: true
+        - label: This is NOT an enterprise feature (audit, SSO, RBAC)
+          required: true

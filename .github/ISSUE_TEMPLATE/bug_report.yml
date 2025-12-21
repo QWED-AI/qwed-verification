@@ -1,0 +1,95 @@
+name: 🐛 Bug Report
+description: Report a bug in QWED
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please fill in the details below.
+
+  - type: input
+    id: version
+    attributes:
+      label: QWED Version
+      description: Run `pip show qwed` to get this
+      placeholder: "2.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python Version
+      description: Run `python --version`
+      placeholder: "3.11.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Docker
+    validations:
+      required: true
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Which engine is affected?
+      options:
+        - Math Verifier
+        - Logic Verifier
+        - Code Verifier
+        - SQL Verifier
+        - Stats Verifier
+        - Fact Verifier
+        - Image Verifier
+        - Reasoning Verifier
+        - Consensus Engine
+        - Control Plane / API
+        - SDK (Python/TS/Go/Rust)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: input
+    attributes:
+      label: Input that caused the bug
+      description: Share the query/code that triggered the issue
+      placeholder: |
+        ```python
+        from qwed_sdk import QWEDClient
+        client = QWEDClient()
+        result = client.verify_math("2 + 2 = 5")
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened? Include full traceback if applicable.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Any other information that might help
