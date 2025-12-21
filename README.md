@@ -221,6 +221,6 @@ Apache 2.0 - See [LICENSE](LICENSE)
   <p><i>"Safe AI is the only AI that scales."</i></p>
   <br>
   <a href="CONTRIBUTING.md">Contribute</a> · 
-  <a href="docs/architecture.md">Architecture</a> · 
+  <a href="docs/ARCHITECTURE.md">Architecture</a> · 
   <a href="SECURITY.md">Security</a>
 </div>
