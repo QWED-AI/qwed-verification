@@ -1,333 +1,153 @@
-```
- ██████╗ ██╗    ██╗███████╗██████╗        █████╗ ██╗
-██╔═══██╗██║    ██║██╔════╝██╔══██╗      ██╔══██╗██║
-██║   ██║██║ █╗ ██║█████╗  ██║  ██║█████╗███████║██║
-██║▄▄ ██║██║███╗██║██╔══╝  ██║  ██║╚════╝██╔══██║██║
-╚██████╔╝╚███╔███╔╝███████╗██████╔╝      ██║  ██║██║
- ╚══▀▀═╝  ╚══╝╚══╝ ╚══════╝╚═════╝       ╚═╝  ╚═╝╚═╝
-```
+<div align="center">
+  <h1>🛡️ QWED Protocol</h1>
+  <h3>The Deterministic Verification Layer for AI</h3>
+  
+  <p>
+    <b>Don't fix the liar. Verify the lie.</b><br>
+    Stop relying on "probability" for critical tasks. Use <b>Symbolic Math & Logic</b> to guarantee correctness.
+  </p>
 
-# QWED-AI: Query with Evidence and Determinism 🛡️
+  [![CI](https://github.com/QWED-AI/qwed-verification/actions/workflows/ci.yml/badge.svg)](https://github.com/QWED-AI/qwed-verification/actions/workflows/ci.yml)
+  [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
+  [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+  [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](Dockerfile)
 
-[![CI](https://github.com/QWED-AI/qwed-verification/actions/workflows/ci.yml/badge.svg)](https://github.com/QWED-AI/qwed-verification/actions/workflows/ci.yml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://docker.com)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Redis](https://img.shields.io/badge/redis-enabled-red.svg)](https://redis.io)
-[![Prometheus](https://img.shields.io/badge/prometheus-metrics-orange.svg)](https://prometheus.io)
-
-> **The Deterministic Verification Protocol for AI.** QWED treats LLMs as untrusted translators and uses symbolic engines as trusted verifiers.
-
----
-
-## 🆕 What's New in v2.0
-
-| Engine | Upgrade | Impact |
-|--------|---------|--------|
-| **Math** | Calculus, Matrix, Finance, Statistics | 10x more use cases |
-| **Logic** | ForAll/Exists quantifiers, BitVectors, Arrays | Crypto & formal proofs |
-| **Code** | JavaScript, Java, Go support | 4 languages total |
-| **SQL** | Complexity limits, Cost estimation | Production-ready |
-| **Fact** | TF-IDF semantic matching | No LLM needed! |
-| **Image** | Deterministic size verification | 100% accurate |
-| **Consensus** | Async + Circuit breaker | Fault-tolerant |
-| **Stats** | Wasm sandbox | Works anywhere |
+  <br>
+  <a href="#-quick-start">Quick Start</a> · 
+  <a href="#-the-philosophy">The Philosophy</a> · 
+  <a href="#-the-8-engines">The 8 Engines</a> · 
+  <a href="#-integrations">Integrations</a>
+</div>
 
 ---
 
-## ⚡ Quick Start (30 Seconds)
+## 🚨 The Problem: AI "Thinking" is an Illusion
 
-```bash
-# Install the SDK
-pip install qwed-new
+Everyone is trying to fix AI hallucinations by **Fine-Tuning** (teaching it more data).
 
-# Verify math instantly
-qwed verify "Is 2+2=5?"
-# -> ❌ CORRECTED: The answer is 4, not 5.
+This is like forcing a student to memorize 1,000,000 math problems.
 
-# Verify a logic puzzle
-qwed verify-logic "(AND (GT x 5) (LT y 10))"
-# -> ✅ SAT: {x=6, y=9}
-
-# Verify code security
-qwed verify-code -f script.py
-# -> ⚠️ DANGEROUS: Found eval() on line 12
-```
-
-**That's it.** Deterministic verification in one line.
+**What happens when they see the 1,000,001st problem? They guess.**
 
 ---
 
-## 🎯 What QWED Does
+## ✅ The Solution: Give the AI a Calculator
 
-QWED is a **verification firewall** that sits between your LLM and your business logic:
+**QWED** doesn't try to make the LLM "smarter". 
+
+It treats the LLM as an **untrusted translator** and verifies its output using **Deterministic Engines** (SymPy, Z3, SQLGlot, AST).
+
+> *"If an AI writes code, QWED runs the security audit.*  
+> *If an AI does math, QWED runs the calculus."*
 
 ```mermaid
 graph LR
-    User[User Query] --> LLM[LLM - Translator]
-    LLM -->|Probabilistic Guess| QWED[QWED - Verifier]
-    QWED -->|Deterministic Proof| Result[Trusted Result]
+    User[User Query] --> LLM[LLM - The Guesser]
+    LLM -.->|Unverified Output| QWED{QWED Protocol}
+    QWED -->|❌ Hallucination| LLM
+    QWED -->|✅ Mathematically Proven| App[Your Application]
+    
     style QWED fill:#00C853,stroke:#333,stroke-width:2px,color:white
     style LLM fill:#FF5252,stroke:#333,stroke-width:2px,color:white
 ```
 
-**The Problem:** LLMs hallucinate. `0.1 + 0.2 = 0.30000000004`.
+---
 
-**The Solution:** QWED uses **symbolic engines** (Z3, SymPy) to guarantee correctness.
+## 🧠 The Philosophy
 
+| ❌ Wrong Approach | ✅ QWED Approach |
+|-------------------|------------------|
+| "Let's fine-tune the model to be more accurate" | "Let's verify the output with math" |
+| "Trust the AI's confidence score" | "Trust the symbolic proof" |
+| "Add more training data" | "Add a verification layer" |
+| "Hope it doesn't hallucinate" | "Catch hallucinations deterministically" |
+
+**QWED = Query with Evidence and Determinism**
 
 ---
 
-## ✅ Features
+## ⚡ Quick Start
 
-### Open Source (This Repo)
-
-| Feature | Status | Description |
-|---------|--------|-------------|
-| **8 Verification Engines** | ✅ | Math, Logic, Stats, Fact, Code, SQL, Image, Reasoning |
-| **SQL Injection Firewall** | ✅ | AST-based parsing blocks `DROP`, `DELETE`, `; --` |
-| **Rate Limiting** | ✅ | Configurable per-key and global limits |
-| **Batch Processing** | ✅ | Up to 100 concurrent verifications |
-| **Multi-Language SDKs** | ✅ | Python, TypeScript, Go, Rust |
-
-### Enterprise (Separate Repo)
-
-| Feature | Description |
-|---------|-------------|
-| **Real-time Observability** | Prometheus + Grafana dashboards |
-| **Distributed Tracing** | OpenTelemetry + Jaeger |
-| **Multi-Tenancy** | Per-organization isolation |
-| **Cryptographic Attestations** | JWT/ES256 verification proofs |
-| **Compliance Exports** | SOC 2 / GDPR reports |
-
-> 📧 Contact dev@qwed.ai for enterprise features
-
-
----
-
-## 🛠️ Installation
-
-### Option 1: SDK (Recommended)
+Don't change your model. Just wrap your output.
 
 ```bash
-pip install qwed-new
+pip install qwed
 ```
-
-### Option 2: From Source
-
-```bash
-git clone https://github.com/QWED-AI/qwed-verification.git
-cd qwed-verification
-pip install -e .
-```
-
----
-
-## 🚀 Quick Start (Full Stack)
-
-### 1. Start Infrastructure
-
-```bash
-docker-compose up -d
-```
-
-This starts: **PostgreSQL** | **Redis** | **Jaeger** | **Prometheus** | **Grafana**
-
-### 2. Configure Environment
-
-```bash
-cp .env.example .env
-# Edit .env with your LLM credentials
-```
-
-### 3. Run the API
-
-```bash
-uvicorn qwed_new.api.main:app --reload
-```
-
-### 4. Access Dashboards
-
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| **QWED API** | http://localhost:8000/docs | - |
-| **Grafana** | http://localhost:3000 | admin / qwed_admin |
-| **Jaeger** | http://localhost:16686 | - |
-| **Prometheus** | http://localhost:9090 | - |
-
----
-
-## 📖 SDK Usage
-
-### Sync Client
 
 ```python
 from qwed_sdk import QWEDClient
 
-client = QWEDClient(api_key="qwed_...", base_url="http://localhost:8000")
+client = QWEDClient(api_key="your_key")
 
-# Verify math
-result = client.verify("What is 15% of 200?")
-print(result.status)  # "VERIFIED"
-print(result.result)  # {"answer": 30}
+# The LLM says: "Derivative of x^2 is 3x" (Hallucination!)
+response = client.verify_math(
+    query="What is the derivative of x^2?",
+    llm_output="3x" 
+)
 
-# Verify code security
-result = client.verify_code("import os; os.system('rm -rf /')")
-print(result.is_verified)  # False - dangerous code blocked!
+print(response)
+# -> ❌ CORRECTED: The derivative is 2x. (Verified by SymPy)
 ```
 
-### Async Client
+---
+
+## 🔧 The 8 Deterministic Engines
+
+We don't use another LLM to check your LLM. **That's circular logic.**
+
+We use **Hard Engineering**:
+
+| Engine | Tech Stack | What it Solves |
+|--------|------------|----------------|
+| **🧮 Math** | `SymPy` + `NumPy` | Calculus, Linear Algebra, Finance. No more `$1 + $1 = $3`. |
+| **⚖️ Logic** | `Z3 Prover` | Formal Verification. Checks for logical contradictions. |
+| **🛡️ Code** | `AST` + `Semgrep` | Catches `eval()`, secrets, vulnerabilities before code runs. |
+| **📊 Stats** | `Pandas` + `Wasm` | Sandboxed execution for trusted data analysis. |
+| **🗄️ SQL** | `SQLGlot` | Prevents Injection & validates schema. |
+| **🔍 Fact** | `TF-IDF` + `NLI` | Checks grounding against source docs. |
+| **👁️ Image** | `OpenCV` + `Metadata` | Verifies image dimensions, format, pixel data. |
+| **🤝 Consensus** | `Multi-Provider` | Cross-checks GPT-4 vs Claude vs Gemini. |
+
+---
+
+## 🔌 Integrations
+
+Already using an Agent framework? QWED drops right in.
+
+### 🦜 LangChain
 
 ```python
-from qwed_sdk import QWEDAsyncClient
+from qwed_sdk.langchain import QWEDTool
 
-async with QWEDAsyncClient(api_key="qwed_...") as client:
-    result = await client.verify("Is 2+2=4?")
+tools = [QWEDTool(verification_type="math"), QWEDTool(verification_type="sql")]
 ```
 
-### Batch Verification
+### 🤖 CrewAI
 
 ```python
-result = client.verify_batch([
-    {"query": "2+2=4", "type": "math"},
-    {"query": "3*3=9", "type": "math"},
-    {"query": "(AND (GT x 5))", "type": "logic"}
-])
-print(f"Success rate: {result.success_rate}%")
+from qwed_sdk.crewai import QWEDVerifiedAgent
+
+agent = QWEDVerifiedAgent(role="Analyst", allow_dangerous_code=False)
 ```
 
 ---
 
-## 🧠 The 8 Verification Engines
-
-QWED uses **8 Specialized Deterministic Engines**, each a master of its domain.
-
-| # | Engine | Technology | Capabilities |
-|---|--------|------------|--------------|
-| 1 | **Math & Finance** | `SymPy` + `Decimal` | Calculus, Matrix ops, NPV/IRR, Statistics, Unit conversion |
-| 2 | **Logic & Constraint** | `Z3` + `QWED-DSL` | ForAll/Exists quantifiers, BitVectors, Arrays, Theorem proving |
-| 3 | **Statistics** | `Pandas` + Wasm Sandbox | Secure code execution, Docker/Wasm/Restricted sandboxes |
-| 4 | **Fact Checker** | `TF-IDF` + `NLP` | Semantic similarity, Entity matching, Citation extraction |
-| 5 | **Code Security** | `AST` Multi-Language | Python, JavaScript, Java, Go security analysis |
-| 6 | **SQL Safety** | `SQLGlot` AST | Complexity limits, Cost estimation, Schema validation |
-| 7 | **Image Verification** | Deterministic + VLM | Metadata extraction, Size verification, Multi-VLM consensus |
-| 8 | **Reasoning** | `Multi-LLM` + Cache | Chain-of-thought validation, Result caching, Cross-provider |
-
-### Engine Feature Matrix
-
-```
-┌─────────────────┬───────────────────────────────────────────────────────┐
-│ Engine          │ Key Feature                                           │
-├─────────────────┼───────────────────────────────────────────────────────┤
-│ Math            │ Calculus (derivatives, integrals, limits)             │
-│                 │ Matrix operations (determinant, inverse, eigenvalues) │
-│                 │ Financial (NPV, IRR, compound interest)               │
-│                 │ Statistics (mean, median, variance, correlation)      │
-├─────────────────┼───────────────────────────────────────────────────────┤
-│ Logic           │ Quantifiers: ForAll(∀), Exists(∃)                     │
-│                 │ BitVector operations (for crypto verification)        │
-│                 │ Array theory (Select, Store)                          │
-│                 │ Theorem proving with counterexamples                  │
-├─────────────────┼───────────────────────────────────────────────────────┤
-│ Code            │ Python: eval, exec, pickle, weak crypto               │
-│                 │ JavaScript: XSS, prototype pollution, eval            │
-│                 │ Java: SQL injection, deserialization                  │
-│                 │ Go: command injection, path traversal                 │
-│                 │ Secret detection: AWS, GitHub, OpenAI keys            │
-├─────────────────┼───────────────────────────────────────────────────────┤
-│ SQL             │ Complexity limits (tables, joins, subqueries)         │
-│                 │ Query cost estimation                                 │
-│                 │ Injection pattern detection                           │
-│                 │ Schema validation                                     │
-├─────────────────┼───────────────────────────────────────────────────────┤
-│ Fact            │ TF-IDF semantic similarity (no LLM needed!)           │
-│                 │ Keyword overlap analysis                              │
-│                 │ Entity matching (numbers, dates, names)               │
-│                 │ Citation extraction with relevance scoring            │
-├─────────────────┼───────────────────────────────────────────────────────┤
-│ Consensus       │ Async parallel engine execution                       │
-│                 │ Circuit breaker for failing engines                   │
-│                 │ Engine health monitoring                              │
-│                 │ Weighted consensus calculation                        │
-└─────────────────┴───────────────────────────────────────────────────────┘
-```
-
----
-
-## 🛡️ Security (OWASP LLM Top 10 2025)
-
-| Vulnerability | QWED Defense |
-|---------------|--------------|
-| **LLM01: Prompt Injection** | Pre-flight scanning |
-| **LLM02: Insecure Output** | Schema validation |
-| **LLM04: DoS** | Rate limiting (Redis) |
-| **LLM06: Sensitive Info** | PII redaction |
-| **LLM07: Insecure Plugin** | Sandboxed execution |
-| **LLM08: Excessive Agency** | Symbolic verification |
-
----
-
-## 📚 Documentation
-
-| Document | Description |
-|----------|-------------|
-| [Architecture](docs/architecture.md) | System design & data flow |
-| [API Reference](docs/api.md) | Endpoint documentation |
-| [Security](docs/security.md) | Security features & compliance |
-| [Contributing](CONTRIBUTING.md) | How to contribute |
-
-### 📦 SDKs
+## 🌍 SDK Support
 
 | Language | Package | Install |
-|----------|---------|---------
-| Python | `qwed` | `pip install qwed` |
-| TypeScript | `@qwed-ai/sdk` | `npm install @qwed-ai/sdk` |
-| Go | `qwed-go` | `go get github.com/qwed-ai/qwed-go` |
-| Rust | `qwed` | `cargo add qwed` |
+|----------|---------|---------|
+| 🐍 Python | `qwed` | `pip install qwed` |
+| 🟦 TypeScript | `@qwed-ai/sdk` | `npm install @qwed-ai/sdk` |
+| 🐹 Go | `qwed-go` | `go get github.com/qwed-ai/qwed-go` |
+| 🦀 Rust | `qwed` | `cargo add qwed` |
 
 ---
 
-## 🏢 Enterprise Features
+## 🏢 Enterprise
 
-Need **observability** (Prometheus, Grafana), **multi-tenancy**, **cryptographic attestations**, or **compliance exports**?
+Need **observability**, **multi-tenancy**, **audit logs**, or **compliance exports**?
 
 📧 Contact: **dev@qwed.ai**
-
----
-
-### 🔌 Framework Integrations
-
-| Framework | Import | Description |
-|-----------|--------|-------------|
-| **LangChain** | `from qwed_sdk.langchain import QWEDTool` | Tools, callbacks, chain wrapper |
-| **LlamaIndex** | `from qwed_sdk.llamaindex import QWEDQueryEngine` | Query engine, transforms |
-| **CrewAI** | `from qwed_sdk.crewai import QWEDVerifiedAgent` | Verified agents, crews |
-
-### 📖 Interactive Documentation
-
-| Resource | URL |
-|----------|-----|
-| **Docusaurus Docs** | http://localhost:3030 (local) |
-| **API Docs (FastAPI)** | http://localhost:8000/docs |
-
-Run the docs site locally:
-```bash
-cd docs-site
-npm install
-npm start  # Opens at http://localhost:3030
-```
-
----
-
-## 🤝 Contributing
-
-```bash
-# Run tests
-pytest tests/ -v
-
-# Run with coverage
-pytest tests/ --cov=qwed_new
-```
 
 ---
 
@@ -337,7 +157,11 @@ Apache 2.0 - See [LICENSE](LICENSE)
 
 ---
 
-<p align="center">
-  <strong>Built with ❤️ for a deterministic future.</strong><br>
-  <em>"Safe AI is the only AI that can change the world."</em>
-</p>
+<div align="center">
+  <h3>Ready to trust your AI?</h3>
+  <p><i>"Safe AI is the only AI that scales."</i></p>
+  <br>
+  <a href="CONTRIBUTING.md">Contribute</a> · 
+  <a href="docs/architecture.md">Architecture</a> · 
+  <a href="SECURITY.md">Security</a>
+</div>
