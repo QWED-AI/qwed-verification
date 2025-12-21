@@ -28,6 +28,66 @@ QWED is built on a fundamental insight:
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## How Translation Works
+
+This is the key to understanding QWED. Let's walk through a real example:
+
+### Example: Verifying a Mathematical Claim
+
+**User asks:** *"Is it true that the sum of interior angles in a triangle equals 180 degrees?"*
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  STEP 1: Natural Language Query                                     │
+│  ────────────────────────────────────────────────────────────────── │
+│  "Is it true that the sum of interior angles in a triangle          │
+│   equals 180 degrees?"                                               │
+└────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  STEP 2: LLM Translation (Untrusted)                                │
+│  ────────────────────────────────────────────────────────────────── │
+│  LLM converts to QWED-Logic DSL:                                    │
+│                                                                     │
+│  (EQ (PLUS angle_a angle_b angle_c) 180)                           │
+│                                                                     │
+│  ⚠️ This translation MIGHT be wrong - LLM is not trusted!          │
+└─────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  STEP 3: QWED Verification (Deterministic)                          │
+│  ────────────────────────────────────────────────────────────────── │
+│  Z3 Solver: Given angle_a + angle_b + angle_c = 180                 │
+│             Is this satisfiable? → YES (SAT)                        │
+│             Model: {angle_a: 60, angle_b: 60, angle_c: 60}          │
+│                                                                     │
+│  ✅ Mathematically proven. Deterministic. Repeatable.               │
+└─────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  STEP 4: Response                                                   │
+│  ────────────────────────────────────────────────────────────────── │
+│  {                                                                  │
+│    "verified": true,                                                │
+│    "status": "SAT",                                                 │
+│    "model": {"angle_a": 60, "angle_b": 60, "angle_c": 60},          │
+│    "proof": "Sum of angles = 60 + 60 + 60 = 180 ✓"                  │
+│  }                                                                  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Translation Examples
+
+| Natural Language | QWED-Logic DSL | Engine |
+|------------------|----------------|--------|
+| "x is greater than 5" | `(GT x 5)` | Z3 |
+| "Is 2+2 equal to 5?" | `(EQ (PLUS 2 2) 5)` | SymPy |
+| "x squared plus y squared = 25" | `(EQ (PLUS (POW x 2) (POW y 2)) 25)` | Z3 |
+| "If raining, take umbrella" | `(IMPLIES raining umbrella)` | Z3 |
+
 ## Key Principles
 
 ### 1. Determinism over Probability
