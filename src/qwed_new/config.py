@@ -17,6 +17,15 @@ class ProviderType(str, Enum):
     AUTO = "auto"
 
 class Settings:
+    # Database Config
+    DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./qwed.db")
+
+    # Redis Config
+    REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+    # Security
+    API_KEY_SECRET = os.getenv("API_KEY_SECRET", "change-me-in-production")
+
     # Default to Azure OpenAI if not specified
     ACTIVE_PROVIDER = os.getenv("ACTIVE_PROVIDER", ProviderType.AZURE_OPENAI)
     
