@@ -6,13 +6,14 @@ import bcrypt
 import jwt
 import secrets
 import hashlib
+import os
 from datetime import datetime, timedelta
 from typing import Optional
 
 # Configuration (move to .env later)
 SECRET_KEY = "your-secret-key-change-this-in-production"  # TODO: Move to env
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 60))
 
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt."""
