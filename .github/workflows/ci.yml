@@ -46,7 +46,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e .
+        pip install -e ".[server,dev]"
         pip install pytest pytest-asyncio
 
     - name: Check Dependencies
