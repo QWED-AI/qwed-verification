@@ -1,9 +1,35 @@
 [project]
-name = "qwed-new"
-version = "0.1.0"
-description = "Enterprise-grade deterministic verification engine for AI."
+name = "qwed"
+version = "2.0.0"
+description = "The Deterministic Verification Protocol for AI - 8 verification engines for math, logic, code, SQL, facts, images, and more."
 authors = [
-    {name = "QWED Team", email = "dev@qwed.tech"},
+    {name = "QWED Team", email = "dev@qwed.ai"},
+]
+license = {text = "Apache-2.0"}
+keywords = [
+    "ai",
+    "verification",
+    "llm",
+    "deterministic",
+    "symbolic",
+    "math",
+    "logic",
+    "code-security",
+    "sql-validation",
+    "fact-checking"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
 ]
 dependencies = [
     "fastapi>=0.100.0",
@@ -23,28 +49,36 @@ dependencies = [
     "pandas>=2.0.0",
     "numpy>=1.24.0",
     "scipy>=1.10.0",
-    "psycopg2-binary>=2.9.9",
     "sqlglot>=20.0.0",
     "requests>=2.31.0",
-    "PyYAML>=6.0.1",
-    "matplotlib>=3.7.0",
-    "docker>=7.0.0",
-    "locust>=2.24.0",
-    "pytest-timeout>=2.3.1",
-    "pytest-xdist>=3.3.0",
-    "jinja2>=3.1.3",
-    "freezegun>=1.4.0",
+    "httpx>=0.24.0",
+]
+requires-python = ">=3.10"
+readme = "README.md"
+
+[project.urls]
+Homepage = "https://qwed.ai"
+Documentation = "https://docs.qwed.ai"
+Repository = "https://github.com/QWED-AI/qwed-verification"
+Changelog = "https://github.com/QWED-AI/qwed-verification/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+server = [
+    "psycopg2-binary>=2.9.9",
     "redis>=5.0.0",
+    "prometheus-client>=0.19.0",
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp>=1.20.0",
     "opentelemetry-instrumentation-fastapi>=0.41b0",
     "opentelemetry-instrumentation-requests>=0.41b0",
-    "prometheus-client>=0.19.0",
-    "httpx>=0.24.0"
 ]
-requires-python = ">=3.10"
-readme = "README.md"
+dev = [
+    "pytest>=7.0.0",
+    "pytest-timeout>=2.3.1",
+    "pytest-xdist>=3.3.0",
+    "freezegun>=1.4.0",
+]
 
 [build-system]
 requires = ["hatchling"]

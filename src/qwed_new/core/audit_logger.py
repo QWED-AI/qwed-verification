@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 from typing import Any, Dict, Optional
 from datetime import datetime
 from sqlmodel import Session
@@ -22,8 +23,11 @@ from qwed_new.core.database import engine
 
 logger = logging.getLogger(__name__)
 
-# Secret key for HMAC (should be in environment variable in production)
-AUDIT_SECRET_KEY = "qwed_audit_secret_key_change_in_production"
+# Secret key for HMAC - MUST be set in production via environment variable
+AUDIT_SECRET_KEY = os.environ.get("QWED_AUDIT_SECRET_KEY", "dev_only_change_in_production")
+if AUDIT_SECRET_KEY == "dev_only_change_in_production":
+    logger.warning("⚠️ QWED_AUDIT_SECRET_KEY not set! Using insecure default. Set this in production!")
+
 
 
 class AuditLogger:

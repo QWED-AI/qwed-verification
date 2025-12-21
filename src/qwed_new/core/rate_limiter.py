@@ -12,12 +12,17 @@ from typing import Dict, Optional
 from collections import defaultdict
 from fastapi import HTTPException, Request
 import time
+import os
 
 class RateLimiter:
     """
     Simple in-memory rate limiter using sliding window algorithm.
     
     For production with multiple servers, consider using Redis instead.
+    
+    Environment Variables:
+        QWED_RATE_LIMIT_PER_KEY: Requests per minute per API key (default: 100)
+        QWED_RATE_LIMIT_GLOBAL: Requests per minute globally (default: 1000)
     """
     
     def __init__(self):
@@ -27,11 +32,11 @@ class RateLimiter:
         # Global request timestamps: [timestamp1, timestamp2, ...]
         self.global_requests: list = []
         
-        # Rate limit configurations
-        self.PER_KEY_LIMIT = 100  # requests per minute per API key
+        # Rate limit configurations - configurable via env vars
+        self.PER_KEY_LIMIT = int(os.environ.get("QWED_RATE_LIMIT_PER_KEY", "100"))
         self.PER_KEY_WINDOW = 60  # seconds
         
-        self.GLOBAL_LIMIT = 1000  # requests per minute total
+        self.GLOBAL_LIMIT = int(os.environ.get("QWED_RATE_LIMIT_GLOBAL", "1000"))
         self.GLOBAL_WINDOW = 60  # seconds
     
     def _clean_old_requests(self, requests: list, window_seconds: int) -> list:

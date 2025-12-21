@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 from sqlmodel import Session
+import os
 
 from qwed_new.core.control_plane import ControlPlane
 from qwed_new.core.tenant_context import get_current_tenant, TenantContext
@@ -18,14 +19,16 @@ from qwed_new.auth.middleware import get_api_key
 
 app = FastAPI(
     title="QWED API",
-    description="The Verification Platform for AI",
-    version="1.0.0"
+    description="The Deterministic Verification Protocol for AI",
+    version="2.0.0"
 )
 
-# CORS
+# CORS - configurable via environment variable
+# Default allows all origins for development, restrict in production
+CORS_ORIGINS = os.environ.get("QWED_CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS if CORS_ORIGINS != ["*"] else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
