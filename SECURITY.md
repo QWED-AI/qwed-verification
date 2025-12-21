@@ -16,7 +16,7 @@ We take the security of QWED very seriously. If you discover a security vulnerab
 Please do **not** report security vulnerabilities through public GitHub issues.
 
 Instead, please report them via email to:
-**security@qwed.tech**
+**rahul@qwedai.com**
 
 Please include as much information as possible to help us reproduce and fix the issue, including:
 *   Steps to reproduce the vulnerability.

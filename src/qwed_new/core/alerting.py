@@ -39,7 +39,7 @@ class AlertManager:
         self.smtp_port = int(os.getenv("SMTP_PORT", "587"))
         self.smtp_user = os.getenv("SMTP_USER")
         self.smtp_password = os.getenv("SMTP_PASSWORD")
-        self.alert_email_to = os.getenv("ALERT_EMAIL_TO", "security@qwed.tech")
+        self.alert_email_to = os.getenv("ALERT_EMAIL_TO", "rahul@qwedai.com")
         
         # Alert throttling (prevent spam)
         self.recent_alerts = defaultdict(list)  # alert_key -> [timestamps]

@@ -156,6 +156,6 @@ The **QWED Verification Dashboard** includes:
 
 If you discover a security vulnerability, please report it responsibly:
 
-📧 **security@qwed.tech**
+📧 **rahul@qwedai.com**
 
 We will respond within 24 hours and work with you to resolve the issue.

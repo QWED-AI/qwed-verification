@@ -7,7 +7,7 @@ name = "qwed"
 version = "0.1.0"
 description = "Official Python Client for QWED Verification Engine"
 authors = [
-    {name = "QWED Team", email = "dev@qwed.tech"},
+    {name = "QWED Team", email = "rahul@qwedai.com"},
 ]
 dependencies = [
     "requests>=2.25.0",

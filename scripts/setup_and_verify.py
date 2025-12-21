@@ -3,7 +3,7 @@ import time
 import sys
 
 BASE_URL = "http://localhost:8000"
-EMAIL = "admin@qwed.tech"
+EMAIL = "rahul@qwedai.com"
 PASSWORD = "secure_password_123"
 ORG_NAME = "QWED Internal"
 

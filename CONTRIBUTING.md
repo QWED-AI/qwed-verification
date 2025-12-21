@@ -141,7 +141,7 @@ These features are in a **separate enterprise repo** and not accepted here:
 - ❌ Telemetry / observability
 - ❌ Enterprise RBAC
 
-If you're interested in enterprise features, contact us at dev@qwed.ai.
+If you're interested in enterprise features, contact us at rahul@qwedai.com.
 
 ---
 
@@ -155,4 +155,4 @@ By contributing, you agree that your contributions will be licensed under the [A
 
 - Open an issue with the `question` label
 - Join discussions in GitHub Discussions
-- Email: dev@qwed.ai
+- Email: rahul@qwedai.com

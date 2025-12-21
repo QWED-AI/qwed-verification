@@ -147,7 +147,7 @@ agent = QWEDVerifiedAgent(role="Analyst", allow_dangerous_code=False)
 
 Need **observability**, **multi-tenancy**, **audit logs**, or **compliance exports**?
 
-📧 Contact: **dev@qwed.ai**
+📧 Contact: **rahul@qwedai.com**
 
 ---
 
