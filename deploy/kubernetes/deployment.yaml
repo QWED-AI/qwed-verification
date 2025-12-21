@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qwed-core
+  namespace: qwed
+  labels:
+    app: qwed-core
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: qwed-core
+  template:
+    metadata:
+      labels:
+        app: qwed-core
+    spec:
+      containers:
+        - name: qwed-core
+          image: qwed-core:2.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: qwed-config
+            - secretRef:
+                name: qwed-secrets
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5

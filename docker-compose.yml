@@ -1,6 +1,33 @@
 
-
 services:
+  qwed-core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: qwed_core
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      jaeger:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://qwed:qwed_secret@postgres:5432/qwed_db
+      - REDIS_URL=redis://redis:6379/0
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - API_KEY_SECRET=dev_secret_key
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+      - /var/run/docker.sock:/var/run/docker.sock  # Required for Stats Verification engine
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   postgres:
     image: postgres:15
     container_name: qwed_postgres

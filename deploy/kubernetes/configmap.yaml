@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: qwed-config
+  namespace: qwed
+data:
+  DATABASE_URL: "postgresql://qwed:qwed_secret@postgres:5432/qwed_db"
+  REDIS_URL: "redis://redis:6379/0"
+  ACTIVE_PROVIDER: "azure_openai"
+  AZURE_OPENAI_ENDPOINT: "https://your-resource.openai.azure.com/"
+  AZURE_OPENAI_DEPLOYMENT: "gpt-4"
+  AZURE_OPENAI_API_VERSION: "2023-05-15"
