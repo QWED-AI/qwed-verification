@@ -48,6 +48,8 @@ Access the services:
 - **Grafana**: http://localhost:3000 (admin/qwed_admin)
 - **Jaeger**: http://localhost:16686
 
+> 🏢 **Enterprise Support Coming Soon:** Managed hosting, dedicated support, and SLA guarantees. Contact rahul@qwedai.com
+
 ### Notes on Stats Verification
 The Stats Verification engine (Engine 3) executes code securely inside Docker containers. For this to work in a Docker Compose environment, the `qwed-core` container mounts the host's Docker socket (`/var/run/docker.sock`). Ensure the user running Docker Compose has appropriate permissions.
 

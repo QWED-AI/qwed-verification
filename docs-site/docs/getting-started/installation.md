@@ -70,21 +70,9 @@ python -m uvicorn qwed_new.api.main:app --reload
 | Prometheus | http://localhost:9090 |
 | Jaeger | http://localhost:16686 |
 
+> 🏢 **Enterprise Support Coming Soon:** Managed hosting and dedicated support. Contact rahul@qwedai.com
+
 ---
-
-## qwed-core (Minimal)
-
-For embedding verification in your application without external dependencies:
-
-```bash
-pip install qwed-core
-```
-
-Or run as Docker:
-
-```bash
-docker run -p 8080:8080 qwed/qwed-core
-```
 
 ## Next Steps
 

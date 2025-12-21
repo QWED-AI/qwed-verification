@@ -210,6 +210,8 @@ docker-compose up -d
 | **Redis** | localhost:6379 | Caching |
 | **PostgreSQL** | localhost:5432 | Database |
 
+> 🏢 **Enterprise Support Coming Soon:** Managed dashboards, hosted observability, and SLA guarantees. Contact rahul@qwedai.com
+
 ### Grafana Dashboards
 
 - **QWED Verification Dashboard**: Real-time metrics, latency percentiles, cache hit rates
