@@ -267,29 +267,6 @@ QWED uses **8 Specialized Deterministic Engines**, each a master of its domain.
 
 ---
 
-## 📊 Real-time Observability
-
-### Grafana Dashboard
-
-The **QWED Verification Dashboard** includes:
-- Verification Requests/sec
-- Latency Percentiles (p50, p95, p99)
-- Active Tenants
-- Security Blocks
-- Cache Hit Rate
-- LLM Latency by Provider
-
-### Prometheus Metrics
-
-```
-qwed_verification_total{engine="math", status="verified"}
-qwed_verification_latency_seconds{quantile="0.95"}
-qwed_security_blocks_total{type="prompt_injection"}
-qwed_cache_operations{operation="hit"}
-```
-
----
-
 ## 📚 Documentation
 
 | Document | Description |
@@ -297,34 +274,26 @@ qwed_cache_operations{operation="hit"}
 | [Architecture](docs/architecture.md) | System design & data flow |
 | [API Reference](docs/api.md) | Endpoint documentation |
 | [Security](docs/security.md) | Security features & compliance |
-| [Codebase Structure](architecture/CODEBASE_STRUCTURE.md) | Full code documentation |
-
-### 📜 Protocol Specifications
-
-| Spec | Description |
-|------|-------------|
-| [QWED-SPEC v1.0](specs/QWED-SPEC-v1.0.md) | Core protocol specification |
-| [QWED-Attestation](specs/QWED-ATTESTATION-v1.0.md) | Cryptographic proofs |
-| [QWED-Agent](specs/QWED-AGENT-v1.0.md) | AI agent verification |
+| [Contributing](CONTRIBUTING.md) | How to contribute |
 
 ### 📦 SDKs
 
 | Language | Package | Install |
-|----------|---------|---------|
-| Python | `qwed-new` | `pip install qwed-new` |
+|----------|---------|---------
+| Python | `qwed` | `pip install qwed` |
 | TypeScript | `@qwed-ai/sdk` | `npm install @qwed-ai/sdk` |
 | Go | `qwed-go` | `go get github.com/qwed-ai/qwed-go` |
 | Rust | `qwed` | `cargo add qwed` |
 
-### 🔧 Reference Implementation
+---
 
-[**qwed-core**](qwed-core/) - Minimal, embeddable verification library
+## 🏢 Enterprise Features
 
-```bash
-pip install qwed-core
-# or
-docker run -p 8080:8080 qwed/qwed-core
-```
+Need **observability** (Prometheus, Grafana), **multi-tenancy**, **cryptographic attestations**, or **compliance exports**?
+
+📧 Contact: **dev@qwed.ai**
+
+---
 
 ### 🔌 Framework Integrations
 
