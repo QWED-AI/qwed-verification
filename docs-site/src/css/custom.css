@@ -1,22 +1,24 @@
 /**
  * QWED Documentation Theme
- * Premium font: Inter (Google Fonts)
- * Brand colors: Gradient blue-purple
+ * Brand: Dark theme with green accents (matching qwedai.com)
+ * Font: Inter for modern, clean look
  */
 
 /* Import Inter font */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
-/* QWED Brand Colors */
+/* ================================
+   QWED Brand Colors
+   ================================ */
 :root {
-  /* Primary: Professional blue */
-  --ifm-color-primary: #3b82f6;
-  --ifm-color-primary-dark: #2563eb;
-  --ifm-color-primary-darker: #1d4ed8;
-  --ifm-color-primary-darkest: #1e40af;
-  --ifm-color-primary-light: #60a5fa;
-  --ifm-color-primary-lighter: #93c5fd;
-  --ifm-color-primary-lightest: #bfdbfe;
+  /* Primary: QWED Green */
+  --ifm-color-primary: #22c55e;
+  --ifm-color-primary-dark: #16a34a;
+  --ifm-color-primary-darker: #15803d;
+  --ifm-color-primary-darkest: #166534;
+  --ifm-color-primary-light: #4ade80;
+  --ifm-color-primary-lighter: #86efac;
+  --ifm-color-primary-lightest: #bbf7d0;
 
   /* Typography */
   --ifm-font-family-base: 'Inter', system-ui, -apple-system, sans-serif;
@@ -26,51 +28,181 @@
 
   /* Code */
   --ifm-code-font-size: 90%;
-  --docusaurus-highlighted-code-line-bg: rgba(59, 130, 246, 0.1);
+  --docusaurus-highlighted-code-line-bg: rgba(34, 197, 94, 0.1);
 
-  /* Navbar */
+  /* Navbar - Light mode (will use dark mode by default) */
   --ifm-navbar-background-color: #ffffff;
   --ifm-navbar-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
 
   /* Footer */
-  --ifm-footer-background-color: #f8fafc;
+  --ifm-footer-background-color: #0a0a0a;
 }
 
-/* Dark mode - Premium dark theme */
+/* ================================
+   Dark Mode (Primary Theme)
+   ================================ */
 [data-theme='dark'] {
-  --ifm-color-primary: #60a5fa;
-  --ifm-color-primary-dark: #3b82f6;
-  --ifm-color-primary-darker: #2563eb;
-  --ifm-color-primary-darkest: #1d4ed8;
-  --ifm-color-primary-light: #93c5fd;
-  --ifm-color-primary-lighter: #bfdbfe;
-  --ifm-color-primary-lightest: #dbeafe;
+  /* Green accents on dark */
+  --ifm-color-primary: #22c55e;
+  --ifm-color-primary-dark: #16a34a;
+  --ifm-color-primary-darker: #15803d;
+  --ifm-color-primary-darkest: #166534;
+  --ifm-color-primary-light: #4ade80;
+  --ifm-color-primary-lighter: #86efac;
+  --ifm-color-primary-lightest: #bbf7d0;
 
-  --docusaurus-highlighted-code-line-bg: rgba(96, 165, 250, 0.15);
-  --ifm-background-color: #0f172a;
-  --ifm-navbar-background-color: #1e293b;
-  --ifm-footer-background-color: #1e293b;
+  /* Background - pure black like qwedai.com */
+  --ifm-background-color: #0a0a0a;
+  --ifm-background-surface-color: #111111;
+
+  /* Navbar */
+  --ifm-navbar-background-color: #0a0a0a;
+  --ifm-navbar-link-color: #e5e5e5;
+  --ifm-navbar-link-hover-color: #22c55e;
+
+  /* Footer */
+  --ifm-footer-background-color: #0a0a0a;
+  --ifm-footer-link-color: #a3a3a3;
+  --ifm-footer-link-hover-color: #22c55e;
+
+  /* Text */
+  --ifm-font-color-base: #e5e5e5;
+  --ifm-heading-color: #ffffff;
+
+  /* Code blocks */
+  --docusaurus-highlighted-code-line-bg: rgba(34, 197, 94, 0.15);
+
+  /* Cards and surfaces */
+  --ifm-card-background-color: #111111;
 }
 
-/* Smooth font rendering */
+/* ================================
+   Global Styles
+   ================================ */
 body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Navbar styling */
+/* ================================
+   Navbar
+   ================================ */
 .navbar {
-  backdrop-filter: blur(8px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-/* Hero section enhancement */
-.hero--primary {
-  background: linear-gradient(135deg, #1e40af 0%, #7c3aed 100%);
+.navbar__brand {
+  font-weight: 600;
 }
 
-/* Code blocks */
+/* Logo hover effect - green */
+.navbar__brand:hover {
+  opacity: 1;
+}
+
+.navbar__brand:hover .navbar__logo {
+  filter: brightness(0) saturate(100%) invert(61%) sepia(52%) saturate(501%) hue-rotate(93deg) brightness(95%) contrast(91%);
+}
+
+.navbar__brand:hover .navbar__title {
+  color: #22c55e;
+}
+
+/* Nav links hover - green */
+.navbar__link {
+  font-weight: 500;
+  transition: color 0.2s ease;
+}
+
+.navbar__link:hover,
+.navbar__link--active {
+  color: #22c55e !important;
+}
+
+/* ================================
+   Mobile Menu Fix
+   ================================ */
+.navbar-sidebar {
+  background-color: #0a0a0a;
+}
+
+.navbar-sidebar__brand {
+  background-color: #0a0a0a;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.navbar-sidebar__items {
+  background-color: #0a0a0a;
+}
+
+.navbar-sidebar .menu__link {
+  color: #e5e5e5;
+  padding: 0.75rem 1rem;
+}
+
+.navbar-sidebar .menu__link:hover {
+  color: #22c55e;
+  background-color: rgba(34, 197, 94, 0.1);
+}
+
+/* Toggle button */
+.navbar__toggle {
+  color: #e5e5e5;
+}
+
+/* ================================
+   Sidebar
+   ================================ */
+.menu__link {
+  font-weight: 500;
+  transition: all 0.2s ease;
+  border-radius: 6px;
+}
+
+.menu__link:hover {
+  color: #22c55e;
+  background-color: rgba(34, 197, 94, 0.1);
+}
+
+.menu__link--active {
+  font-weight: 600;
+  color: #22c55e !important;
+  background-color: rgba(34, 197, 94, 0.15) !important;
+}
+
+/* Sidebar category labels */
+.menu__list-item-collapsible:hover {
+  background-color: rgba(34, 197, 94, 0.1);
+}
+
+/* ================================
+   Links
+   ================================ */
+a {
+  transition: color 0.2s ease;
+}
+
+a:hover {
+  color: #22c55e;
+  text-decoration: none;
+}
+
+/* Content links */
+.markdown a {
+  color: #22c55e;
+}
+
+.markdown a:hover {
+  color: #4ade80;
+  text-decoration: underline;
+}
+
+/* ================================
+   Code Blocks
+   ================================ */
 pre {
   border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 code {
@@ -78,22 +210,218 @@ code {
   font-weight: 500;
 }
 
-/* Links */
-a {
+/* Inline code */
+:not(pre)>code {
+  background-color: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  color: #4ade80;
+}
+
+/* ================================
+   Buttons
+   ================================ */
+.button--primary {
+  background-color: #22c55e;
+  border-color: #22c55e;
+  color: #000000;
+}
+
+.button--primary:hover {
+  background-color: #16a34a;
+  border-color: #16a34a;
+  color: #000000;
+}
+
+.button--secondary {
+  border-color: #22c55e;
+  color: #22c55e;
+}
+
+.button--secondary:hover {
+  background-color: rgba(34, 197, 94, 0.1);
+  border-color: #4ade80;
+  color: #4ade80;
+}
+
+/* ================================
+   Hero Section
+   ================================ */
+.hero--primary {
+  background: #0a0a0a;
+}
+
+.hero__title {
+  color: #ffffff;
+}
+
+.hero__subtitle {
+  color: #a3a3a3;
+}
+
+/* ================================
+   Footer
+   ================================ */
+.footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.footer__title {
+  color: #ffffff;
+}
+
+.footer__link-item {
   transition: color 0.2s ease;
 }
 
-/* Sidebar */
-.menu__link {
-  font-weight: 500;
+.footer__link-item:hover {
+  color: #22c55e;
+  text-decoration: none;
+}
+
+.footer__copyright {
+  color: #a3a3a3;
+}
+
+/* ================================
+   Search
+   ================================ */
+.DocSearch-Button {
+  border-radius: 8px !important;
+  background-color: #111111 !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.DocSearch-Button:hover {
+  border-color: #22c55e !important;
+  box-shadow: 0 0 0 1px #22c55e !important;
+}
+
+.DocSearch-Button-Keys {
+  display: none;
+}
+
+/* ================================
+   Tables
+   ================================ */
+table {
+  border-collapse: collapse;
+}
+
+table th {
+  background-color: #111111;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+table td {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+table tr:hover {
+  background-color: rgba(34, 197, 94, 0.05);
+}
+
+/* ================================
+   Blockquotes
+   ================================ */
+blockquote {
+  border-left-color: #22c55e;
+  background-color: rgba(34, 197, 94, 0.05);
+}
+
+/* ================================
+   Tabs
+   ================================ */
+.tabs__item {
+  border-radius: 6px 6px 0 0;
+}
+
+.tabs__item:hover {
+  background-color: rgba(34, 197, 94, 0.1);
+}
+
+.tabs__item--active {
+  border-bottom-color: #22c55e !important;
+  color: #22c55e !important;
+}
+
+/* ================================
+   Pagination
+   ================================ */
+.pagination-nav__link {
+  border-color: rgba(255, 255, 255, 0.1);
   transition: all 0.2s ease;
 }
 
-.menu__link--active {
-  font-weight: 600;
+.pagination-nav__link:hover {
+  border-color: #22c55e;
+  background-color: rgba(34, 197, 94, 0.05);
 }
 
-/* Search bar enhancement */
-.DocSearch-Button {
-  border-radius: 8px !important;
+.pagination-nav__sublabel {
+  color: #a3a3a3;
+}
+
+/* ================================
+   TOC (Table of Contents)
+   ================================ */
+.table-of-contents__link {
+  color: #a3a3a3;
+}
+
+.table-of-contents__link:hover,
+.table-of-contents__link--active {
+  color: #22c55e;
+}
+
+/* ================================
+   Alerts/Admonitions
+   ================================ */
+.alert {
+  border-radius: 8px;
+}
+
+.alert--success {
+  --ifm-alert-background-color: rgba(34, 197, 94, 0.1);
+  --ifm-alert-border-color: #22c55e;
+}
+
+/* ================================
+   Blog
+   ================================ */
+.blog-post-date {
+  color: #a3a3a3;
+}
+
+/* ================================
+   Version Badge
+   ================================ */
+.badge {
+  border-radius: 4px;
+}
+
+.badge--secondary {
+  background-color: rgba(34, 197, 94, 0.1);
+  color: #22c55e;
+  border-color: rgba(34, 197, 94, 0.2);
+}
+
+/* ================================
+   Scrollbar (Webkit)
+   ================================ */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a0a0a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #333333;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #22c55e;
 }
