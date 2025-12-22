@@ -149,6 +149,7 @@ body {
   z-index: 9999 !important;
   display: flex !important;
   flex-direction: column !important;
+  justify-content: flex-start !important;
 }
 
 .navbar-sidebar--show {
@@ -159,13 +160,15 @@ body {
   background-color: #09090b !important;
   border-bottom: 1px solid #27272a;
   padding: 1rem;
-  flex-shrink: 0;
+  flex-shrink: 0 !important;
+  flex-grow: 0 !important;
 }
 
 .navbar-sidebar__items {
   background-color: #09090b !important;
-  padding: 1rem 0;
-  flex: 1;
+  padding: 1rem 0 !important;
+  flex-shrink: 0 !important;
+  flex-grow: 0 !important;
   overflow-y: auto;
 }
 
