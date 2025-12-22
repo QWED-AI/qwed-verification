@@ -142,17 +142,31 @@ body {
 .navbar-sidebar {
   background-color: #09090b !important;
   width: 100% !important;
+  height: 100vh !important;
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  z-index: 9999 !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.navbar-sidebar--show {
+  height: 100vh !important;
 }
 
 .navbar-sidebar__brand {
   background-color: #09090b !important;
   border-bottom: 1px solid #27272a;
   padding: 1rem;
+  flex-shrink: 0;
 }
 
 .navbar-sidebar__items {
   background-color: #09090b !important;
   padding: 1rem 0;
+  flex: 1;
+  overflow-y: auto;
 }
 
 .navbar-sidebar__item {
