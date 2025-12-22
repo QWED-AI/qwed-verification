@@ -4,7 +4,11 @@
   
   <p>
     <b>Don't fix the liar. Verify the lie.</b><br>
-    Stop relying on "probability" for critical tasks. Use <b>Symbolic Math & Logic</b> to guarantee correctness.
+    <i>QWED does not reduce hallucinations. It makes them irrelevant.</i>
+  </p>
+
+  <p>
+    <b>If an AI output cannot be proven, QWED will not allow it into production.</b>
   </p>
 
   [![CI](https://github.com/QWED-AI/qwed-verification/actions/workflows/ci.yml/badge.svg)](https://github.com/QWED-AI/qwed-verification/actions/workflows/ci.yml)
@@ -68,6 +72,37 @@ graph LR
     style QWED fill:#00C853,stroke:#333,stroke-width:2px,color:white
     style LLM fill:#FF5252,stroke:#333,stroke-width:2px,color:white
 ```
+
+### ✅ What QWED Is
+
+- **A deterministic verification layer for AI outputs**
+- Treats the LLM as an *untrusted translator*
+- Verifies output using **symbolic math, logic, and formal systems**
+- Answers one question: **"Can this output be proven correct?"**
+
+> **QWED is an enabler, not a competitor.**  
+> It allows LLMs to be safely deployed in banks, hospitals, legal systems, and critical infrastructure.
+
+### ❌ What QWED Is NOT
+
+- QWED does **not** make models smarter
+- QWED does **not** fine-tune or retrain LLMs
+- QWED does **not** reduce hallucination rates
+- QWED does **not** rely on memory, RAG, or prompts
+- QWED does **not** replace LLMs
+
+> **QWED assumes hallucinations are inevitable in probabilistic systems.**  
+> That's why we verify, not correct.
+
+### 💡 The Core Philosophy
+
+> **Probabilistic systems should not be trusted with deterministic tasks.**
+
+> Training an LLM harder is not a proof of correctness.
+
+> Memory changes failure modes. **Verification removes them.**
+
+> **If it can't be verified, it doesn't ship.**
 
 ---
 
