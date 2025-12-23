@@ -16,6 +16,10 @@
   [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
   [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
   [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](Dockerfile)
+  
+  [![GitHub stars](https://img.shields.io/github/stars/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification)
+  [![GitHub forks](https://img.shields.io/github/forks/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification/fork)
+  [![GitHub watchers](https://img.shields.io/github/watchers/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification)
 
   <br>
   <a href="#-quick-start">Quick Start</a> · 
@@ -270,6 +274,20 @@ Apache 2.0 - See [LICENSE](LICENSE)
 
 ---
 
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=QWED-AI/qwed-verification&type=Date)](https://star-history.com/#QWED-AI/qwed-verification&Date)
+
+---
+
+## 👥 Contributors
+
+<a href="https://github.com/QWED-AI/qwed-verification/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=QWED-AI/qwed-verification" />
+</a>
+
+---
+
 <div align="center">
   
   ### ⭐ Star us if you believe AI needs verification
@@ -287,4 +305,5 @@ Apache 2.0 - See [LICENSE](LICENSE)
   <a href="docs/ARCHITECTURE.md">Architecture</a> · 
   <a href="SECURITY.md">Security</a>
 </div>
+
 
