@@ -41,12 +41,6 @@ app.include_router(audit_router)
 @app.on_event("startup")
 def on_startup():
     create_db_and_tables()
-    # Debug: Inspect user table
-    from sqlalchemy import inspect
-    from qwed_new.core.database import engine
-    inspector = inspect(engine)
-    columns = [c["name"] for c in inspector.get_columns("user")]
-    print(f"DEBUG: User table columns: {columns}")
 
 # Initialize Kernel (Control Plane)
 control_plane = ControlPlane()
