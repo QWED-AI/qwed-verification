@@ -1,0 +1,36 @@
+# QWED Core Dependencies
+# Generated from pyproject.toml
+
+# API Framework
+fastapi>=0.100.0
+uvicorn>=0.20.0
+pydantic[email]>=2.0.0
+python-multipart>=0.0.6
+
+# LLM Providers
+openai>=1.0.0
+anthropic>=0.1.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# Verification Engines
+sympy>=1.12
+z3-solver>=4.12.0
+networkx>=3.0
+sqlglot>=20.0.0
+
+# Database & Auth
+sqlmodel>=0.0.14
+bcrypt>=4.0.1
+passlib[bcrypt]>=1.7.4
+pyjwt>=2.8.0
+
+# Data Processing
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# HTTP
+requests>=2.31.0
+httpx>=0.24.0
