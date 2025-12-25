@@ -22,6 +22,12 @@
   [![GitHub watchers](https://img.shields.io/github/watchers/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification)
 
   <br>
+  
+  [![Twitter](https://img.shields.io/badge/Twitter-@rahuldass29-1DA1F2?style=flat&logo=twitter&logoColor=white)](https://x.com/rahuldass29)
+  [![LinkedIn](https://img.shields.io/badge/LinkedIn-Rahul%20Dass-0077B5?style=flat&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/rahul-dass-23b370b0/)
+  [![Blog](https://img.shields.io/badge/Blog-Unreadable%20Code%20Benchmark-FF5722?style=flat&logo=docusaurus&logoColor=white)](https://docs.qwedai.com/blog/unreadable-code-agi-benchmark)
+
+  <br>
   <a href="#-quick-start">Quick Start</a> · 
   <a href="#-the-philosophy">The Philosophy</a> · 
   <a href="#-the-8-engines">The 8 Engines</a> · 
