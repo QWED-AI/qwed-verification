@@ -59,6 +59,20 @@ pytest tests/ -v
 
 ---
 
+## 🎯 Current Focus (Phase 1: Logic Verification)
+
+We are building **symbolic execution capabilities**. Here are the priority issues:
+
+| Priority | Issue | Description |
+|----------|-------|-------------|
+| 🔴 High | [#15 CrossHair Integration](https://github.com/QWED-AI/qwed-verification/issues/15) | Python-native symbolic execution |
+| 🟡 Medium | [#16 Bounded Model Checking](https://github.com/QWED-AI/qwed-verification/issues/16) | Loop depth limits for path explosion |
+| 🟢 Easy | Documentation improvements | Help improve docs |
+
+**Pick an issue labeled `good first issue` or `help wanted` to get started!**
+
+---
+
 ## 🚀 How to Contribute
 
 ### 1. Reporting Bugs
@@ -125,8 +139,7 @@ qwed-verification/
 ├── sdk-rust/           # Rust SDK
 ├── tests/              # Unit tests
 ├── examples/           # Usage examples
-├── docs/               # Documentation
-└── docs-site/          # Docusaurus website
+└── docs/               # Documentation
 ```
 
 ---
