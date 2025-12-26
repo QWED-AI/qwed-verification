@@ -73,6 +73,9 @@ server = [
     "opentelemetry-instrumentation-fastapi>=0.41b0",
     "opentelemetry-instrumentation-requests>=0.41b0",
 ]
+symbolic = [
+    "crosshair-tool>=0.0.100",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-timeout>=2.3.1",
