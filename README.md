@@ -18,6 +18,7 @@
   [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
   [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
   [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](Dockerfile)
+  [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18075235.svg)](https://doi.org/10.5281/zenodo.18075235)
   [![Contributors](https://img.shields.io/github/contributors/QWED-AI/qwed-verification)](https://github.com/QWED-AI/qwed-verification/graphs/contributors)
   
   [![GitHub stars](https://img.shields.io/github/stars/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification)
