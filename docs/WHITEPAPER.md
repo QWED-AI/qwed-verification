@@ -17,7 +17,8 @@ slug: /whitepaper
 **Email:** rahul@qwedai.com  
 **Version:** 1.0.1  
 **Date:** 28 December 2025  
-**License:** Apache 2.0
+**License:** Apache 2.0  
+**DOI:** [10.5281/zenodo.18075235](https://doi.org/10.5281/zenodo.18075235)
 
 ---
 
@@ -726,7 +727,8 @@ If you use QWED in your research or production systems, please cite:
   title = {QWED Protocol: Deterministic Verification for Large Language Models},
   year = {2025},
   publisher = {QWED-AI},
-  url = {https://github.com/QWED-AI/qwed-verification},
+  doi = {10.5281/zenodo.18075235},
+  url = {https://doi.org/10.5281/zenodo.18075235},
   note = {Open Source, Apache 2.0 License},
   orcid = {0009-0000-2088-7487}
 }
