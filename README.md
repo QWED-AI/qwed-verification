@@ -35,6 +35,7 @@
   <a href="#-the-llm-hallucination-problem-why-ai-cant-be-trusted">The Problem</a> · 
   <a href="#-the-8-verification-engines-how-qwed-validates-llm-outputs">The 8 Engines</a> · 
   <a href="#-frequently-asked-questions">FAQ</a> · 
+  <a href="docs/WHITEPAPER.md">📄 Whitepaper</a> · 
   <a href="https://docs.qwedai.com">📚 Docs</a>
 </div>
 
