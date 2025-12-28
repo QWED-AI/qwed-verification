@@ -7,25 +7,29 @@ slug: /whitepaper
 
 # QWED Protocol: Deterministic Verification for Large Language Models
 
-**A Formal Methods Approach to Eliminating AI Hallucinations in Production Systems**
+**A Formal Methods Approach to Eliminating the Impact of AI Hallucinations in Production Systems**
 
 ---
 
 **Authors:** Rahul Dass  
 **Organization:** QWED-AI  
-**Version:** 1.0.0  
-**Date:** December 2024  
+**Version:** 1.0.1  
+**Date:** 28 December 2025  
 **License:** Apache 2.0
 
 ---
 
 ## Abstract
 
-Large Language Models (LLMs) have demonstrated remarkable capabilities across diverse tasks, yet their probabilistic nature makes them fundamentally unsuitable for deterministic computations in production environments. This paper introduces **QWED** (Query with Evidence and Determinism), a deterministic verification protocol that treats LLMs as untrusted translators and validates their outputs using symbolic mathematics, satisfiability modulo theories (SMT) solvers, and static analysis.
+Large Language Models (LLMs) exhibit fundamental unreliability in deterministic tasks due to their probabilistic architecture. Hallucinations, arithmetic errors, logical inconsistencies, and unsafe code generation persist despite fine-tuning, prompting strategies, or retrieval augmentation.
 
-We present eight specialized verification engines built on established formal methods tools including SymPy, Z3 Prover, and SQLGlot. In benchmarks against Claude Opus 4.5 across 215 critical tasks, QWED achieved **100% error detection** in domains where the LLM exhibited 73-85% accuracy, including a compound interest miscalculation representing a **$12,889 error per transaction**.
+We introduce QWED (Query with Evidence & Determinism), a deterministic verification protocol that treats LLMs as untrusted translators rather than reliable oracles. QWED validates model outputs using established formal methods—symbolic mathematics (SymPy), SMT solving (Z3), static analysis, and bounded model checking—across eight specialized engines: mathematics, logic, code security, SQL safety, statistics, fact checking, image validation, and multi-model consensus.
 
-QWED does not attempt to reduce hallucinations—it makes them irrelevant by ensuring no unverified output reaches production. The protocol is open-source under Apache 2.0 and designed for integration with existing AI agent frameworks including LangChain, CrewAI, and LlamaIndex.
+In benchmarks against Claude Opus 4.5 across 215 adversarial and domain-specific test cases, QWED achieved 100% error detection in verifiable domains where the model exhibited 73–85% accuracy. Critical failures included a compound interest miscalculation representing $12,889 per transaction—a systematic error pattern undetectable through prompting or confidence scoring.
+
+QWED does not reduce hallucinations; it eliminates their production impact by rejecting all unverifiable outputs. The protocol is open-source (Apache 2.0) and designed for integration with LangChain, CrewAI, and autonomous agent frameworks.
+
+Our results demonstrate that deterministic verification—not probabilistic improvement—is the viable path for deploying LLMs in regulated, high-stakes, and autonomous systems.
 
 **Keywords:** AI Verification, Large Language Models, Formal Verification, Symbolic Execution, SMT Solving, Hallucination Detection, AI Safety, Deterministic Systems
 
@@ -356,6 +360,8 @@ def verify_sql_safety(query: str, schema: Dict) -> Dict[str, Any]:
 3. Apply NLI model to check entailment
 4. Return grounding score
 
+> **Important:** The Fact Engine does not attempt semantic understanding or deep meaning resolution. It verifies grounding and entailment consistency against provided sources, not truth of language.
+
 ### 4.7 Image Verification Engine
 
 **Technology Stack:** OpenCV, Pillow, Metadata extraction
@@ -459,7 +465,19 @@ We evaluated QWED against **Claude Opus 4.5** across 215 test cases in four cate
 
 **Key Finding:** QWED detected all 22 errors that Claude Opus 4.5 produced across the benchmark suite. No false negatives were observed in verifiable domains.
 
-### 6.3 Case Study: The $12,889 Bug
+> **Economic Insight:** In high-stakes systems, expected loss is dominated by rare but severe errors. A 73% accuracy rate is acceptable in conversational AI but catastrophic in financial systems where a single error costs thousands.
+
+### 6.3 Comparison with Existing Approaches
+
+| Approach | Deterministic | Provable | Latency | Coverage |
+|----------|---------------|----------|---------|----------|
+| **QWED** | Yes | Yes | ~100ms | 8 domains |
+| Guardrails AI | No | No | ~50ms | Pattern-based |
+| RLHF/Fine-tuning | No | No | 0ms | Training-time |
+| RAG | No | No | ~200ms | Knowledge only |
+| Prompt Engineering | No | No | 0ms | None |
+
+### 6.4 Case Study: The $12,889 Bug
 
 **Scenario:** Financial application calculating compound interest
 
@@ -481,6 +499,18 @@ assert FV_claimed != FV_actual
 ```
 
 **Business Impact:** $12,889 error per transaction. At 1,000 transactions/day = **$4.7M annual loss**.
+
+### 6.5 Benchmark Dataset Availability
+
+The complete benchmark suite (215 test cases) is available at:
+
+**Repository:** https://github.com/QWED-AI/qwed-verification/tree/main/benchmarks
+
+Includes:
+- Financial calculations with ground truth
+- Mathematical reasoning tests (derivatives, integrals)
+- Adversarial prompts collection
+- Security-vulnerable code snippets
 
 ---
 
@@ -550,7 +580,23 @@ X-API-Key: qwed_...
 
 ## 8. Limitations and Transparency
 
-### 8.1 Structured Output Requirement
+> **Explicit Limitation:** QWED does not verify free-form natural language reasoning, subjective analysis, or creative text. Any claim that cannot be reduced to a formal artifact is intentionally rejected.
+
+### 8.1 Threat Model
+
+**QWED defends against:**
+- ✓ Mathematical computation errors
+- ✓ Code injection attacks (eval, exec, SQL injection)
+- ✓ Logical inconsistencies and contradictions
+- ✓ Schema violations in SQL queries
+
+**QWED does NOT defend against:**
+- ✗ Adversarial inputs specifically designed to fool verifiers
+- ✗ Social engineering attacks
+- ✗ Model extraction or membership inference attacks
+- ✗ Semantic deception within valid formal structures
+
+### 8.2 Structured Output Requirement
 
 QWED requires LLM outputs to be in parseable formats (JSON, code blocks, mathematical notation). This means:
 
@@ -558,34 +604,38 @@ QWED requires LLM outputs to be in parseable formats (JSON, code blocks, mathema
 - Freeform text responses cannot be directly verified
 - Integration requires output formatting configuration
 
-### 8.2 Latency Considerations
+### 8.3 Latency Considerations
 
 Verification introduces latency overhead:
 
 | Operation | Typical Latency |
 |-----------|-----------------|
-| Simple math verification | <10ms |
+| Simple math verification | Under 10ms |
 | SQL parsing and validation | 10-50ms |
 | Z3 logic solving | 50-200ms |
 | Full symbolic execution | 5-30 seconds |
 
 QWED provides a `get_verification_budget()` API to estimate feasibility before execution.
 
-### 8.3 Domain Coverage
+### 8.4 Domain Coverage
 
 QWED currently supports eight verification domains. Outputs outside these domains (creative writing, subjective opinions, open-ended analysis) cannot be verified deterministically.
 
-### 8.4 SDK Availability
+### 8.5 Code and Data Availability
 
-As of December 2024, SDKs are **not yet published** to PyPI, npm, or other package registries. Installation requires cloning from GitHub:
+- **Source Code:** https://github.com/QWED-AI/qwed-verification
+- **License:** Apache 2.0
+- **Benchmarks:** https://github.com/QWED-AI/qwed-verification/tree/main/benchmarks
+- **Installation:** `pip install qwed` (PyPI publication pending)
+- **Docker:** `docker pull qwedai/qwed-verification:latest` (coming soon)
+
+As of December 2025, SDKs must be installed from source:
 
 ```bash
 git clone https://github.com/QWED-AI/qwed-verification
 cd qwed-verification
 pip install -r requirements.txt
 ```
-
-Package registry publication is pending organization approval.
 
 ---
 
@@ -632,15 +682,21 @@ This work is licensed under the **Apache License 2.0**.
 If you use QWED in your research or production systems, please cite:
 
 ```bibtex
-@misc{dass2024qwed,
+@misc{dass2025qwed,
   author = {Dass, Rahul},
   title = {QWED Protocol: Deterministic Verification for Large Language Models},
-  year = {2024},
+  year = {2025},
   publisher = {QWED-AI},
   url = {https://github.com/QWED-AI/qwed-verification},
   note = {Open Source, Apache 2.0 License}
 }
 ```
+
+---
+
+## Funding
+
+This research received no external funding.
 
 ---
 
@@ -663,6 +719,12 @@ If you use QWED in your research or production systems, please cite:
 [8] National Institute of Standards and Technology. (2023). *AI Risk Management Framework (AI RMF 1.0)*. U.S. Department of Commerce.
 
 [9] European Parliament. (2024). *Regulation on Artificial Intelligence (AI Act)*. Official Journal of the European Union.
+
+[10] Cobbe, K., et al. (2021). Training Verifiers to Solve Math Word Problems. *arXiv:2110.14168*.
+
+[11] Uesato, J., et al. (2022). Solving Math Word Problems with Process- and Outcome-based Feedback. *arXiv:2211.14275*.
+
+[12] Pei, K., et al. (2017). DeepXplore: Automated Whitebox Testing of Deep Learning Systems. *SOSP*.
 
 ---
 
