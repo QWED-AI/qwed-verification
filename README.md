@@ -42,6 +42,18 @@
 
 ---
 
+> **⚠️ What QWED Is (and Isn't)**
+> 
+> **QWED is:** An open-source engineering tool that combines existing verification libraries (SymPy, Z3, SQLGlot, AST) into a unified API for LLM output validation.
+> 
+> **QWED is NOT:** Novel research. We don't claim algorithmic innovation. We claim practical integration for production use cases.
+> 
+> **Works when:** Developer provides ground truth (expected values, schemas, contracts) and LLM generates structured output.
+> 
+> **Doesn't work when:** Specs come from natural language, outputs are freeform text, or verification domain is unsupported.
+
+---
+
 ## 🚀 Quick Start: Install & Verify in 30 Seconds
 
 > ⚠️ **Note:** SDK is coming soon to PyPI. For now, install from source:

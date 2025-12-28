@@ -402,7 +402,7 @@ def verify_sql_safety(query: str, schema: Dict) -> Dict[str, Any]:
 - Metadata consistency checking
 - Basic content validation (faces detected, colors present)
 
-### 4.8 Consensus Engine
+### 4.8 Consensus Engine (Consistency Checker)
 
 **Technology Stack:** Multi-provider API calls
 
@@ -413,6 +413,8 @@ def verify_sql_safety(query: str, schema: Dict) -> Dict[str, Any]:
 2. Compare responses for consistency
 3. Flag disagreements for human review
 4. Return majority consensus with confidence
+
+> **⚠️ Caveat:** Unlike the other 7 engines, Consensus uses LLMs to check LLMs. This is NOT deterministic verification—it's disagreement detection. It should be considered a utility, not a formal verifier.
 
 ---
 
