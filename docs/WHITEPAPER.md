@@ -13,6 +13,8 @@ slug: /whitepaper
 
 **Authors:** Rahul Dass  
 **Organization:** QWED-AI  
+**ORCID:** [0009-0000-2088-7487](https://orcid.org/0009-0000-2088-7487)  
+**Email:** rahul@qwedai.com  
 **Version:** 1.0.1  
 **Date:** 28 December 2025  
 **License:** Apache 2.0
@@ -159,6 +161,32 @@ QWED's deterministic verification provides the formal guarantees these regulatio
               ▼                           ▼
         ✅ VERIFIED                  ❌ REJECTED
         (Proceed)                    (Halt + Log)
+```
+
+**Figure 2: QWED Protocol Architecture**
+
+```mermaid
+flowchart TD
+    A[User Application] --> B[LLM - Untrusted Translator]
+    B --> C{QWED Protocol}
+    C --> D[Math Engine - SymPy]
+    C --> E[Logic Engine - Z3]
+    C --> F[Code Engine - AST]
+    C --> G[SQL Engine - SQLGlot]
+    C --> H[Stats Engine]
+    C --> I[Fact Engine]
+    C --> J[Image Engine]
+    C --> K[Consensus Engine]
+    D --> L{Verification Result}
+    E --> L
+    F --> L
+    G --> L
+    H --> L
+    I --> L
+    J --> L
+    K --> L
+    L -->|Valid| M[✅ VERIFIED - Proceed]
+    L -->|Invalid| N[❌ REJECTED - Halt + Log]
 ```
 
 ### 3.2 Core Principles
@@ -465,6 +493,17 @@ We evaluated QWED against **Claude Opus 4.5** across 215 test cases in four cate
 
 **Key Finding:** QWED detected all 22 errors that Claude Opus 4.5 produced across the benchmark suite. No false negatives were observed in verifiable domains.
 
+**Figure 1: Error Detection Comparison (LLM vs QWED)**
+
+```mermaid
+xychart-beta
+    title "LLM Accuracy vs QWED Detection Rate"
+    x-axis [Financial, Mathematical, Adversarial, Code]
+    y-axis "Accuracy %" 0 --> 100
+    bar [73, 81, 85, 78]
+    bar [100, 100, 100, 100]
+```
+
 > **Economic Insight:** In high-stakes systems, expected loss is dominated by rare but severe errors. A 73% accuracy rate is acceptable in conversational AI but catastrophic in financial systems where a single error costs thousands.
 
 ### 6.3 Comparison with Existing Approaches
@@ -688,7 +727,8 @@ If you use QWED in your research or production systems, please cite:
   year = {2025},
   publisher = {QWED-AI},
   url = {https://github.com/QWED-AI/qwed-verification},
-  note = {Open Source, Apache 2.0 License}
+  note = {Open Source, Apache 2.0 License},
+  orcid = {0009-0000-2088-7487}
 }
 ```
 
