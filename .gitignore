@@ -52,3 +52,9 @@ Thumbs.db
 *.db
 *.sqlite
 *.sqlite3
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+.pnpm-debug.log
