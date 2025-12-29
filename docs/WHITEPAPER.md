@@ -703,7 +703,7 @@ QWED currently supports eight verification domains. Outputs outside these domain
 - **Source Code:** https://github.com/QWED-AI/qwed-verification
 - **License:** Apache 2.0
 - **Benchmarks:** https://github.com/QWED-AI/qwed-verification/tree/main/benchmarks
-- **Installation:** `pip install qwed` (PyPI publication pending)
+- **Installation:** `pip install qwed`
 - **Docker:** `docker pull qwedai/qwed-verification:latest` (coming soon)
 
 As of December 2025, SDKs must be installed from source:

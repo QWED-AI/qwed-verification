@@ -20,6 +20,7 @@
   [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](Dockerfile)
   [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18075235.svg)](https://doi.org/10.5281/zenodo.18075235)
   [![status](https://joss.theoj.org/papers/385abbd3a6733fc907f1780eb5b6c927/status.svg)](https://joss.theoj.org/papers/385abbd3a6733fc907f1780eb5b6c927)
+  [![PyPI version](https://img.shields.io/pypi/v/qwed.svg)](https://pypi.org/project/qwed/)
   [![Contributors](https://img.shields.io/github/contributors/QWED-AI/qwed-verification)](https://github.com/QWED-AI/qwed-verification/graphs/contributors)
   
   [![GitHub stars](https://img.shields.io/github/stars/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification)
@@ -57,13 +58,14 @@
 
 ## 🚀 Quick Start: Install & Verify in 30 Seconds
 
-> ⚠️ **Note:** SDK is coming soon to PyPI. For now, install from source:
-
 ```bash
-# Clone and install
+# Install from PyPI (Recommended)
+pip install qwed
+
+# Or install from source
 git clone https://github.com/QWED-AI/qwed-verification.git
 cd qwed-verification
-pip install -r requirements.txt
+pip install -e .
 ```
 
 ```python
@@ -220,17 +222,13 @@ agent = QWEDVerifiedAgent(role="Analyst", allow_dangerous_code=False)
 
 ## 🌍 Multi-Language SDK Support
 
-> ⚠️ **Note:** SDKs are in development. PyPI/npm packages coming soon after organization approval.
-
 | Language | Package | Status |
 |----------|---------|--------|
-| 🐍 Python | `qwed` | 🟡 Coming Soon |
+| 🐍 Python | `qwed` | ✅ Available on PyPI |
 | 🟦 TypeScript | `@qwed-ai/sdk` | 🟡 Coming Soon |
 | 🐹 Go | `qwed-go` | 🟡 Coming Soon |
 | 🦀 Rust | `qwed` | 🟡 Coming Soon |
 
-**Install from source now:**
-```bash
 git clone https://github.com/QWED-AI/qwed-verification.git
 cd qwed-verification
 pip install -r requirements.txt
