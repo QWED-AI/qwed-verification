@@ -317,6 +317,42 @@ Apache 2.0 - See [LICENSE](LICENSE)
 
 ---
 
+## 📄 Citation
+
+If you use QWED in your research or project, please cite our archived paper:
+
+```bibtex
+@software{dass2025qwed,
+  author = {Dass, Rahul},
+  title = {QWED Protocol: Deterministic Verification for Large Language Models},
+  year = {2025},
+  publisher = {Zenodo},
+  version = {v1.0.0},
+  doi = {10.5281/zenodo.18075235},
+  url = {https://doi.org/10.5281/zenodo.18075235}
+}
+```
+
+**Plain text:**
+> Dass, R. (2025). QWED Protocol: Deterministic Verification for Large Language Models. Zenodo. https://doi.org/10.5281/zenodo.18075235
+
+---
+
+## ✅ Using QWED in Your Project?
+
+Add this badge to your README to show you're using verified AI:
+
+```markdown
+[![Verified by QWED](https://img.shields.io/badge/Verified_by-QWED-00C853?style=flat&logo=checkmarx)](https://github.com/QWED-AI/qwed-verification)
+```
+
+**Preview:**  
+[![Verified by QWED](https://img.shields.io/badge/Verified_by-QWED-00C853?style=flat&logo=checkmarx)](https://github.com/QWED-AI/qwed-verification)
+
+This badge tells users that your LLM outputs are deterministically verified, not just "hallucination-prone guesses."
+
+---
+
 <div align="center">
   
   ### ⭐ Star us if you believe AI needs verification
