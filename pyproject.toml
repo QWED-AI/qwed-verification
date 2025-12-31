@@ -1,6 +1,6 @@
 [project]
 name = "qwed"
-version = "2.0.0"
+version = "2.0.1"
 description = "The Deterministic Verification Protocol for AI - 8 verification engines for math, logic, code, SQL, facts, images, and more."
 authors = [
     {name = "QWED Team", email = "rahul@qwedai.com"},
