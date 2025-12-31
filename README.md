@@ -136,15 +136,32 @@ It treats the LLM as an **untrusted translator** and verifies its output using *
 > *"If an AI writes code, QWED runs the security audit.*  
 > *If an AI does math, QWED runs the calculus."*
 
-```mermaid
-graph LR
-    User[User Query] --> LLM[LLM - The Guesser]
-    LLM -.->|Unverified Output| QWED{QWED Protocol}
-    QWED -->|❌ Hallucination| LLM
-    QWED -->|✅ Mathematically Proven| App[Your Application]
-    
-    style QWED fill:#00C853,stroke:#333,stroke-width:2px,color:white
-    style LLM fill:#FF5252,stroke:#333,stroke-width:2px,color:white
+
+```
+┌──────────────┐
+│  User Query  │
+└──────┬───────┘
+       │
+       ▼
+┌──────────────────┐
+│ LLM (The Guesser)│
+│ GPT-4 / Claude   │
+└──────┬───────────┘
+       │ Unverified Output
+       ▼
+┌────────────────────┐
+│  QWED Protocol     │
+│  (Verification)    │
+└──────┬─────────────┘
+       │
+   ┌───┴────┐
+   ▼        ▼
+❌ Reject  ✅ Verified
+            │
+            ▼
+   ┌────────────────┐
+   │ Your Application│
+   └────────────────┘
 ```
 
 ---
