@@ -307,6 +307,15 @@ Apache 2.0 - See [LICENSE](LICENSE)
 
 [![Star History Chart](https://api.star-history.com/svg?repos=QWED-AI/qwed-verification&type=Date)](https://star-history.com/#QWED-AI/qwed-verification&Date)
 
+<details>
+<summary>If chart doesn't load, click here for alternatives</summary>
+
+**Current Stars:** [![GitHub stars](https://img.shields.io/github/stars/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification/stargazers)
+
+**View trend:** [Star History Page](https://star-history.com/#QWED-AI/qwed-verification&Date)
+
+</details>
+
 ---
 
 ## 👥 Contributors
