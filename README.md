@@ -202,7 +202,7 @@ The LLM is an **Untrusted Translator**. The Symbolic Engine is the **Trusted Ver
 
 ---
 
-## 🆚 Competitive Landscape
+## 💡 How QWED Compares
 
 ### The "Judge" Problem
 
