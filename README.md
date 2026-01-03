@@ -28,6 +28,12 @@
   [![GitHub watchers](https://img.shields.io/github/watchers/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification)
 
   <br>
+
+  **💖 Support QWED Development:**
+  
+  <a href="https://github.com/sponsors/rahuldass19"><img src="https://img.shields.io/github/sponsors/rahuldass19?style=for-the-badge&logo=githubsponsors&label=Sponsor&color=EA4AAA" alt="Sponsor on GitHub"></a>
+
+  <br>
   
   [![Twitter](https://img.shields.io/badge/Twitter-@rahuldass29-1DA1F2?style=flat&logo=twitter&logoColor=white)](https://x.com/rahuldass29)
   [![LinkedIn](https://img.shields.io/badge/LinkedIn-Rahul%20Dass-0077B5?style=flat&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/rahul-dass-23b370b0/)
