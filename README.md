@@ -1,9 +1,9 @@
 <div align="center">
   <img src="assets/logo.svg" alt="QWED Logo - AI Verification Engine" width="80" height="80">
   <h1>QWED Protocol</h1>
-  <h3>The Deterministic Verification Layer for AI</h3>
+  <h3>Model Agnostic Verification Layer for AI</h3>
   
-  > **QWED Verification** - Production-grade deterministic verification layer for Large Language Models (LLMs). Detect and prevent AI hallucinations through 8 specialized verification engines. Open-source Python framework for AI safety, LLM accuracy testing, and model output validation.
+  > **QWED Verification** - Production-grade deterministic verification layer for Large Language Models. Works with **ANY LLM** - OpenAI, Anthropic, Gemini, Llama (via Ollama), or any local model. Detect and prevent AI hallucinations through 8 specialized verification engines. **Your LLM, Your Choice, Our Verification.**
   
   <p>
     <b>Don't fix the liar. Verify the lie.</b><br>
@@ -12,6 +12,10 @@
 
   <p>
     <b>If an AI output cannot be proven, QWED will not allow it into production.</b>
+  </p>
+
+  <p>
+    <b>🌐 Model Agnostic:</b> Local ($0) • Budget ($5/mo) • Premium ($100/mo) - You choose!
   </p>
 
   [![CI](https://github.com/QWED-AI/qwed-verification/actions/workflows/ci.yml/badge.svg)](https://github.com/QWED-AI/qwed-verification/actions/workflows/ci.yml)
@@ -44,7 +48,9 @@
   <a href="#-the-llm-hallucination-problem-why-ai-cant-be-trusted">The Problem</a> · 
   <a href="#-the-8-verification-engines-how-qwed-validates-llm-outputs">The 8 Engines</a> ·
   <a href="docs/INTEGRATION.md">🔌 Integration Guide</a> ·
-  <a href="#-frequently-asked-questions">FAQ</a> · 
+  <a href="docs/OLLAMA_INTEGRATION.md">🆓 Ollama Integration (FREE!)</a> ·
+  <a href="docs/LLM_CONFIGURATION.md">⚙️ LLM Configuration</a> ·
+  <a href="https://docs.qwedai.com">📖 Full Docs</a> · 
   <a href="docs/WHITEPAPER.md">📄 Whitepaper</a> · 
   <a href="https://docs.qwedai.com">📚 Docs</a>
 </div>
