@@ -1,206 +1,224 @@
 """
-QWED CLI - Command-line interface for QWED Verification Platform.
+QWED CLI - Beautiful command-line interface for verification.
 
 Usage:
     qwed verify "What is 2+2?"
-    qwed verify-math "x**2 + 2*x + 1 = (x+1)**2"
-    qwed verify-logic "(AND (GT x 5) (LT y 10))"
-    qwed batch input.json -o output.json
-    qwed health
+    qwed verify "derivative of x^2" --provider ollama
+    qwed cache stats
+    qwed config set provider openai
 """
 
-import argparse
-import json
+import click
 import sys
-import os
 from typing import Optional
 
-# Try to import the SDK
+# Import after path setup
 try:
-    from qwed_sdk import QWEDClient, VerificationResult, BatchResult
+    from qwed_sdk import QWEDLocal, __version__
+    from qwed_sdk.qwed_local import QWED, HAS_COLOR
 except ImportError:
-    # Fallback for development
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from qwed_sdk import QWEDClient, VerificationResult, BatchResult
+    click.echo("Error: QWED SDK not installed. Run: pip install qwed", err=True)
+    sys.exit(1)
 
 
-def get_client() -> QWEDClient:
-    """Get a configured QWED client from environment."""
-    api_key = os.getenv("QWED_API_KEY", "")
-    base_url = os.getenv("QWED_API_URL", "http://localhost:8000")
+@click.group()
+@click.version_option(__version__, prog_name="qwed")
+def cli():
+    """
+    🔬 QWED - Model Agnostic AI Verification
     
-    if not api_key:
-        print("Error: QWED_API_KEY environment variable not set", file=sys.stderr)
-        print("Set it with: export QWED_API_KEY='qwed_...'", file=sys.stderr)
-        sys.exit(1)
+    Verify LLM outputs with mathematical precision.
+    Works with Ollama, OpenAI, Anthropic, Gemini, and more!
+    """
+    pass
+
+
+@cli.command()
+@click.argument('query')
+@click.option('--provider', '-p', default=None, help='LLM provider (openai/anthropic/gemini)')
+@click.option('--model', '-m', default=None, help='Model name (e.g., gpt-4o-mini, llama3)')
+@click.option('--base-url', default=None, help='Custom API endpoint (e.g., http://localhost:11434/v1)')
+@click.option('--api-key', default=None, envvar='QWED_API_KEY', help='API key (or set QWED_API_KEY env var)')
+@click.option('--no-cache', is_flag=True, help='Disable caching')
+@click.option('--quiet', '-q', is_flag=True, help='Minimal output')
+def verify(query: str, provider: Optional[str], model: Optional[str], 
+           base_url: Optional[str], api_key: Optional[str], 
+           no_cache: bool, quiet: bool):
+    """
+    Verify a query using QWED.
     
-    return QWEDClient(api_key=api_key, base_url=base_url)
-
-
-def cmd_health(args):
-    """Check API health."""
-    with get_client() as client:
-        result = client.health()
-        print(json.dumps(result, indent=2))
-
-
-def cmd_verify(args):
-    """Verify a natural language query."""
-    with get_client() as client:
-        result = client.verify(args.query, provider=args.provider)
-        _print_result(result, args.json)
-
-
-def cmd_verify_math(args):
-    """Verify a mathematical expression."""
-    with get_client() as client:
-        result = client.verify_math(args.expression)
-        _print_result(result, args.json)
-
-
-def cmd_verify_logic(args):
-    """Verify a logic expression."""
-    with get_client() as client:
-        result = client.verify_logic(args.query)
-        _print_result(result, args.json)
-
-
-def cmd_verify_code(args):
-    """Verify code for security issues."""
-    code = args.code
-    
-    # Read from file if provided
-    if args.file:
-        with open(args.file, "r") as f:
-            code = f.read()
-    
-    with get_client() as client:
-        result = client.verify_code(code, language=args.language)
-        _print_result(result, args.json)
-
-
-def cmd_batch(args):
-    """Process a batch of verifications from a JSON file."""
-    # Read input file
-    with open(args.input, "r") as f:
-        items = json.load(f)
-    
-    if not isinstance(items, list):
-        print("Error: Input file must contain a JSON array of items", file=sys.stderr)
-        sys.exit(1)
-    
-    with get_client() as client:
-        result = client.verify_batch(items)
-        
-        output = {
-            "job_id": result.job_id,
-            "status": result.status,
-            "total_items": result.total_items,
-            "completed_items": result.completed_items,
-            "failed_items": result.failed_items,
-            "success_rate": f"{result.success_rate:.1f}%",
-            "items": [
-                {
-                    "id": item.id,
-                    "query": item.query,
-                    "status": item.status,
-                    "result": item.result,
-                    "error": item.error
-                }
-                for item in result.items
-            ]
-        }
-        
-        if args.output:
-            with open(args.output, "w") as f:
-                json.dump(output, f, indent=2)
-            print(f"Results written to {args.output}")
-        else:
-            print(json.dumps(output, indent=2))
-
-
-def _print_result(result: VerificationResult, as_json: bool = False):
-    """Print verification result."""
-    if as_json:
-        print(json.dumps(result.result, indent=2))
-    else:
-        status_emoji = "✅" if result.is_verified else "❌"
-        print(f"{status_emoji} Status: {result.status}")
-        
-        if result.error:
-            print(f"   Error: {result.error}")
-        
-        if result.provider_used:
-            print(f"   Provider: {result.provider_used}")
-        
-        if result.latency_ms > 0:
-            print(f"   Latency: {result.latency_ms:.0f}ms")
-        
-        # Print key result fields
-        if result.result:
-            for key in ["is_valid", "simplified", "verdict", "is_safe"]:
-                if key in result.result:
-                    print(f"   {key}: {result.result[key]}")
-
-
-def main():
-    """Main CLI entry point."""
-    parser = argparse.ArgumentParser(
-        prog="qwed",
-        description="QWED Verification Platform CLI"
-    )
-    subparsers = parser.add_subparsers(dest="command", help="Available commands")
-    
-    # health command
-    health_parser = subparsers.add_parser("health", help="Check API health")
-    health_parser.set_defaults(func=cmd_health)
-    
-    # verify command
-    verify_parser = subparsers.add_parser("verify", help="Verify natural language query")
-    verify_parser.add_argument("query", help="Query to verify")
-    verify_parser.add_argument("--provider", "-p", help="LLM provider preference")
-    verify_parser.add_argument("--json", "-j", action="store_true", help="Output as JSON")
-    verify_parser.set_defaults(func=cmd_verify)
-    
-    # verify-math command
-    math_parser = subparsers.add_parser("verify-math", help="Verify mathematical expression")
-    math_parser.add_argument("expression", help="Math expression to verify")
-    math_parser.add_argument("--json", "-j", action="store_true", help="Output as JSON")
-    math_parser.set_defaults(func=cmd_verify_math)
-    
-    # verify-logic command
-    logic_parser = subparsers.add_parser("verify-logic", help="Verify logic expression")
-    logic_parser.add_argument("query", help="Logic query to verify")
-    logic_parser.add_argument("--json", "-j", action="store_true", help="Output as JSON")
-    logic_parser.set_defaults(func=cmd_verify_logic)
-    
-    # verify-code command
-    code_parser = subparsers.add_parser("verify-code", help="Verify code for security")
-    code_parser.add_argument("code", nargs="?", help="Code to verify")
-    code_parser.add_argument("--file", "-f", help="Read code from file")
-    code_parser.add_argument("--language", "-l", default="python", help="Programming language")
-    code_parser.add_argument("--json", "-j", action="store_true", help="Output as JSON")
-    code_parser.set_defaults(func=cmd_verify_code)
-    
-    # batch command
-    batch_parser = subparsers.add_parser("batch", help="Process batch from JSON file")
-    batch_parser.add_argument("input", help="Input JSON file with items")
-    batch_parser.add_argument("--output", "-o", help="Output JSON file for results")
-    batch_parser.set_defaults(func=cmd_batch)
-    
-    # Parse and execute
-    args = parser.parse_args()
-    
-    if not args.command:
-        parser.print_help()
-        sys.exit(1)
+    Examples:
+        qwed verify "What is 2+2?"
+        qwed verify "derivative of x^2" --provider openai
+        qwed verify "5!" --base-url http://localhost:11434/v1 --model llama3
+    """
+    if quiet:
+        import os
+        os.environ["QWED_QUIET"] = "1"
     
     try:
-        args.func(args)
+        # Auto-detect provider/base_url
+        if not provider and not base_url:
+            # Try Ollama first (FREE!)
+            base_url = "http://localhost:11434/v1"
+            model = model or "llama3"
+            
+            if HAS_COLOR and not quiet:
+                click.echo(f"{QWED.INFO}ℹ️  No provider specified, trying Ollama...{QWED.RESET}")
+        
+        # Create client
+        if base_url:
+            client = QWEDLocal(
+                base_url=base_url,
+                model=model or "llama3",
+                cache=not no_cache
+            )
+        elif provider:
+            if not api_key:
+                click.echo(f"{QWED.ERROR}❌ API key required for {provider}{QWED.RESET}", err=True)
+                click.echo(f"Set QWED_API_KEY env var or use --api-key", err=True)
+                sys.exit(1)
+            
+            client = QWEDLocal(
+                provider=provider,
+                api_key=api_key,
+                model=model or "gpt-3.5-turbo",
+                cache=not no_cache
+            )
+        else:
+            click.echo("Error: Specify either --provider or --base-url", err=True)
+            sys.exit(1)
+        
+        # Verify!
+        result = client.verify(query)
+        
+        # Show result (if not already shown by branded output)
+        if quiet or not HAS_COLOR:
+            if result.verified:
+                click.echo(f"✅ VERIFIED: {result.value}")
+            else:
+                click.echo(f"❌ {result.error or 'Verification failed'}", err=True)
+                sys.exit(1)
+    
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        click.echo(f"{QWED.ERROR if HAS_COLOR else ''}❌ Error: {str(e)}{QWED.RESET if HAS_COLOR else ''}", err=True)
         sys.exit(1)
 
 
-if __name__ == "__main__":
-    main()
+@cli.group()
+def cache():
+    """Manage verification cache."""
+    pass
+
+
+@cache.command('stats')
+def cache_stats():
+    """Show cache statistics."""
+    try:
+        from qwed_sdk.cache import VerificationCache
+        cache_obj = VerificationCache()
+        cache_obj.print_stats()
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cache.command('clear')
+@click.confirmation_option(prompt='Are you sure you want to clear the cache?')
+def cache_clear():
+    """Clear all cached verifications."""
+    try:
+        from qwed_sdk.cache import VerificationCache
+        cache_obj = VerificationCache()
+        cache_obj.clear()
+        click.echo(f"{QWED.SUCCESS if HAS_COLOR else ''}✅ Cache cleared!{QWED.RESET if HAS_COLOR else ''}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option('--provider', '-p', default=None, help='Default provider')
+@click.option('--model', '-m', default=None, help='Default model')
+def interactive(provider: Optional[str], model: Optional[str]):
+    """
+    Start interactive verification session.
+    
+    Example:
+        qwed interactive
+        > What is 2+2?
+        ✅ VERIFIED → 4
+        > derivative of x^2
+        ✅ VERIFIED → 2*x
+    """
+    if HAS_COLOR:
+        click.echo(f"\n{QWED.BRAND}🔬 QWED Interactive Mode{QWED.RESET}")
+        click.echo(f"{QWED.INFO}Type 'exit' or 'quit' to quit{QWED.RESET}\n")
+    else:
+        click.echo("\n🔬 QWED Interactive Mode")
+        click.echo("Type 'exit' or 'quit' to quit\n")
+    
+    # Create client once
+    try:
+        if provider:
+            api_key = click.prompt("API Key", hide_input=True)
+            client = QWEDLocal(
+                provider=provider,
+                api_key=api_key,
+                model=model or "gpt-3.5-turbo"
+            )
+        else:
+            # Default to Ollama
+            client = QWEDLocal(
+                base_url="http://localhost:11434/v1",
+                model=model or "llama3"
+            )
+    except Exception as e:
+        click.echo(f"Error initializing client: {e}", err=True)
+        sys.exit(1)
+    
+    # Interactive loop
+    while True:
+        try:
+            query = click.prompt(f"{QWED.BRAND if HAS_COLOR else ''}>{QWED.RESET if HAS_COLOR else ''}", 
+                               prompt_suffix=" ")
+            
+            if query.lower() in ['exit', 'quit', 'q']:
+                break
+            
+            if query.strip() == '':
+                continue
+            
+            # Special commands
+            if query.lower() == 'stats':
+                client.print_cache_stats()
+                continue
+            
+            # Verify
+            result = client.verify(query)
+            
+            # Result already shown by branded output
+            if not HAS_COLOR:
+                if result.verified:
+                    click.echo(f"✅ {result.value}")
+                else:
+                    click.echo(f"❌ {result.error or 'Failed'}")
+            
+            click.echo()  # Blank line
+            
+        except KeyboardInterrupt:
+            click.echo("\n\nGoodbye!")
+            break
+        except EOFError:
+            break
+        except Exception as e:
+            click.echo(f"Error: {e}", err=True)
+    
+    # Show final stats
+    if HAS_COLOR:
+        click.echo(f"\n{QWED.BRAND}Session Stats:{QWED.RESET}")
+    client.print_cache_stats()
+
+
+if __name__ == '__main__':
+    cli()

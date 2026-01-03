@@ -153,6 +153,8 @@ class QWEDLocal:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model: str = "gpt-3.5-turbo",
+        cache: bool = True,  # NEW: Enable caching by default
+        cache_ttl: int = 86400,  # 24 hours
         **kwargs
     ):
         """
@@ -163,33 +165,38 @@ class QWEDLocal:
             api_key: API key for cloud providers (not needed for Ollama)
             base_url: Custom endpoint (e.g., http://localhost:11434/v1 for Ollama)
             model: Model name (e.g., 'llama3', 'gpt-4o-mini', 'claude-3-opus')
+            cache: Enable smart caching (default: True)
+            cache_ttl: Cache time-to-live in seconds (default: 24 hours)
             **kwargs: Additional arguments for LLM client
         
         Examples:
-            # Ollama (FREE)
+            # Ollama (FREE) with caching
             client = QWEDLocal(
                 base_url="http://localhost:11434/v1",
-                model="llama3"
+                model="llama3",
+                cache=True  # Saves API calls!
             )
             
-            # OpenAI
+            # OpenAI without caching
             client = QWEDLocal(
                 provider="openai",
                 api_key="sk-...",
-                model="gpt-4o-mini"
-            )
-            
-            # Anthropic
-            client = QWEDLocal(
-                provider="anthropic",
-                api_key="sk-ant-...",
-                model="claude-3-opus"
+                model="gpt-4o-mini",
+                cache=False  # Always fresh
             )
         """
         self.provider = provider
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
+        self.use_cache = cache
+        
+        # Initialize cache if enabled
+        if self.use_cache:
+            from qwed_sdk.cache import VerificationCache
+            self._cache = VerificationCache(ttl=cache_ttl)
+        else:
+            self._cache = None
         
         # Initialize LLM client
         self._init_llm_client(**kwargs)
@@ -259,6 +266,20 @@ class QWEDLocal:
         if not self.has_z3:
             print("⚠️  Z3 not found. Logic verification disabled. Install: pip install z3-solver")
     
+    @property
+    def cache_stats(self):
+        """Get cache statistics."""
+        if self._cache:
+            return self._cache.get_stats()
+        return None
+    
+    def print_cache_stats(self):
+        """Print cache statistics with colors."""
+        if self._cache:
+            self._cache.print_stats()
+        else:
+            print("⚠️  Caching is disabled.")
+    
     def _call_llm(self, prompt: str, system: Optional[str] = None) -> str:
         """
         Call the LLM with a prompt.
@@ -320,12 +341,21 @@ class QWEDLocal:
         Verify mathematical query.
         
         Uses SymPy for symbolic verification.
+        Checks cache first to save API costs!
         """
         if not self.has_sympy:
             return VerificationResult(
                 verified=False,
                 error="SymPy not installed. Run: pip install sympy"
             )
+        
+        # Check cache first (save $$!)
+        if self._cache:
+            cached_result = self._cache.get(query)
+            if cached_result:
+                if HAS_COLOR and os.getenv("QWED_QUIET") != "1":
+                    print(f"{QWED.SUCCESS}⚡ Cache HIT{QWED.RESET} {QWED.INFO}(saved API call!){QWED.RESET}")
+                return VerificationResult(**cached_result)
         
         # Show QWED branding
         if HAS_COLOR and os.getenv("QWED_QUIET") != "1":
@@ -380,6 +410,16 @@ SymPy code:"""
                         "method": "sympy_eval"
                     }
                 )
+                
+                # Save to cache for future use
+                if self._cache and is_correct:
+                    cache_data = {
+                        "verified": result.verified,
+                        "value": result.value,
+                        "confidence": result.confidence,
+                        "evidence": result.evidence
+                    }
+                    self._cache.set(query, cache_data)
                 
                 # Show result with branding
                 if HAS_COLOR and os.getenv("QWED_QUIET") != "1":
