@@ -95,5 +95,5 @@ build-backend = "hatchling.build"
 packages = ["src/qwed_new", "qwed_sdk"]
 
 [project.scripts]
-qwed = "qwed_sdk.cli:main"
+qwed = "qwed_sdk.cli:cli"  # Fixed: cli not main!
 
