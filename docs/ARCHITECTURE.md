@@ -189,6 +189,41 @@ sequenceDiagram
 !!! tip "Explore the Specs"
     For deep-dive technical documentation, including file structures and API schemas, check out the [API Reference](api.md).
 
+### 🆕 QWEDLocal: Client-Side Deployment (v2.1.0)
+
+For use cases that don't need a backend server, **QWEDLocal** provides client-side verification:
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant SDK as QWEDLocal (Client-Side)
+    participant LLM as User's LLM (Direct)
+    participant Engine as Local Verifiers
+    
+    User->>SDK: verify("What is 2+2?")
+    SDK->>LLM: API call (OpenAI/Ollama/etc)
+    LLM-->>SDK: "4"
+    SDK->>Engine: SymPy/Z3/AST (Local)
+    Engine-->>SDK: Verified ✓
+    SDK->>SDK: Cache result (SQLite)
+    SDK-->>User: VerificationResult(verified=True, value=4)
+    
+    Note over SDK,Engine: No QWED backend!<br/>Data stays on user's machine
+```
+
+**Key Differences:**
+- **Backend API**: Needs server infrastructure, centralized audit logs, enterprise features
+- **QWEDLocal**: No infrastructure, 100% privacy, works offline, $0 with Ollama
+
+**Use Cases:**
+- Privacy-first applications (HIPAA, GDPR)
+- Individual developers / prototyping
+- Offline environments
+- Cost-sensitive projects
+- Edge computing
+
+📖 **[QWEDLocal Guide →](QWED_LOCAL.md)**
+
 ---
 
 ## 🖥️ Developer Tools & Infrastructure

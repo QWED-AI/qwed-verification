@@ -96,6 +96,39 @@ print(response)
 # -> ❌ CORRECTED: The derivative is 2x. (Verified by SymPy)
 ```
 
+### 🆕 **NEW:** Client-Side Verification (v2.1.0)
+
+No backend server? No problem! Use **QWEDLocal**:
+
+```python
+from qwed_sdk import QWEDLocal
+
+# FREE with Ollama (local LLMs)
+client = QWEDLocal(
+    base_url="http://localhost:11434/v1",
+    model="llama3"
+)
+
+# Or use OpenAI
+client = QWEDLocal(
+    provider="openai",
+    api_key="sk-...",
+    model="gpt-4o-mini"
+)
+
+result = client.verify_math("What is 2+2?")
+print(result.verified)  # True
+print(result.value)  # 4
+```
+
+**Features:**
+- ✅ Works with **ANY LLM** (Ollama, OpenAI, Anthropic, Gemini)
+- ✅ **$0 cost** with local models
+- ✅ **Smart caching** (50-80% cost savings)
+- ✅ **100% private** (data never leaves your machine)
+
+📖 **[Full QWEDLocal Guide →](docs/QWED_LOCAL.md)** | **[CLI Reference →](docs/CLI.md)**
+
 ---
 
 ## 🚨 The LLM Hallucination Problem: Why AI Can't Be Trusted
