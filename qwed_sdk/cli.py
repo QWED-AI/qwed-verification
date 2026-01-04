@@ -41,9 +41,10 @@ def cli():
 @click.option('--api-key', default=None, envvar='QWED_API_KEY', help='API key (or set QWED_API_KEY env var)')
 @click.option('--no-cache', is_flag=True, help='Disable caching')
 @click.option('--quiet', '-q', is_flag=True, help='Minimal output')
+@click.option('--mask-pii', is_flag=True, help='Mask PII (emails, phones, etc.) before sending to LLM')
 def verify(query: str, provider: Optional[str], model: Optional[str], 
            base_url: Optional[str], api_key: Optional[str], 
-           no_cache: bool, quiet: bool):
+           no_cache: bool, quiet: bool, mask_pii: bool):
     """
     Verify a query using QWED.
     
@@ -71,7 +72,8 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
             client = QWEDLocal(
                 base_url=base_url,
                 model=model or "llama3",
-                cache=not no_cache
+                cache=not no_cache,
+                mask_pii=mask_pii
             )
         elif provider:
             if not api_key:
@@ -83,7 +85,8 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
                 provider=provider,
                 api_key=api_key,
                 model=model or "gpt-3.5-turbo",
-                cache=not no_cache
+                cache=not no_cache,
+                mask_pii=mask_pii
             )
         else:
             click.echo("Error: Specify either --provider or --base-url", err=True)
@@ -218,6 +221,50 @@ def interactive(provider: Optional[str], model: Optional[str]):
     if HAS_COLOR:
         click.echo(f"\n{QWED.BRAND}Session Stats:{QWED.RESET}")
     client.print_cache_stats()
+
+
+@cli.command()
+@click.argument('text')
+def pii(text: str):
+    """
+    Test PII detection on text (requires qwed[pii]).
+    
+    Examples:
+        qwed pii "My email is john@example.com"
+        qwed pii "Card: 4532-1234-5678-9010"
+    """
+    try:
+        from qwed_sdk.pii_detector import PIIDetector
+        
+        detector = PIIDetector()
+        masked, info = detector.detect_and_mask(text)
+        
+        # Show results
+        if HAS_COLOR:
+            click.echo(f"\n{QWED.INFO}Original:{QWED.RESET} {text}")
+            click.echo(f"{QWED.SUCCESS}Masked:{QWED.RESET}   {masked}")
+            click.echo(f"\n{QWED.VALUE}Detected: {info['pii_detected']} entities{QWED.RESET}")
+        
+        else:
+            click.echo(f"\nOriginal: {text}")
+            click.echo(f"Masked:   {masked}")
+            click.echo(f"\nDetected: {info['pii_detected']} entities")
+        
+        # Show types
+        if info['pii_detected'] > 0:
+            for entity_type in set(info.get('types', [])):
+                count = info['types'].count(entity_type)
+                click.echo(f"  - {entity_type}: {count}")
+        
+    except ImportError:
+        click.echo(f"{QWED.ERROR if HAS_COLOR else ''}❌ PII features not installed{QWED.RESET if HAS_COLOR else ''}", err=True)
+        click.echo("\n📦 Install with:", err=True)
+        click.echo("   pip install 'qwed[pii]'", err=True)
+        click.echo("   python -m spacy download en_core_web_lg", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
 
 
 if __name__ == '__main__':
