@@ -127,7 +127,40 @@ print(result.value)  # 4
 - ✅ **Smart caching** (50-80% cost savings)
 - ✅ **100% private** (data never leaves your machine)
 
-📖 **[Full QWEDLocal Guide →](docs/QWED_LOCAL.md)** | **[CLI Reference →](docs/CLI.md)**
+### 🔒 **NEW in v2.2.0:** PII Masking (Enterprise Privacy)
+
+Automatically mask sensitive data before sending to LLMs:
+
+```python
+from qwed_sdk import QWEDLocal
+
+# Enable PII masking (requires pip install 'qwed[pii]')
+client = QWEDLocal(
+    provider="openai",
+    api_key="sk-...",
+    mask_pii=True  # 🔒 Privacy protection
+)
+
+result = client.verify("My email is john@example.com")
+# LLM sees: "My email is <EMAIL_ADDRESS>"
+
+# Check what was masked
+print(result.evidence['pii_masked'])
+# {'pii_detected': 1, 'types': ['EMAIL_ADDRESS']}
+```
+
+**Compliance:**
+- 🏥 **HIPAA** (Healthcare)
+- 🏦 **PCI-DSS** (Finance)
+- 🇪🇺 **GDPR** (EU Privacy)
+
+**CLI:**
+```bash
+qwed verify "Email: user@example.com" --mask-pii
+qwed pii "My SSN is 123-45-6789"  # Test detection
+```
+
+📖 **[PII Masking Guide →](docs/PII_MASKING.md)** | **[QWEDLocal Guide →](docs/QWED_LOCAL.md)** | **[CLI Reference →](docs/CLI.md)**
 
 ---
 
