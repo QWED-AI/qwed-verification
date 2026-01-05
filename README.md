@@ -350,12 +350,24 @@ We use **Hard Engineering**:
 
 Already using an Agent framework? QWED drops right in.
 
-### 🦜 LangChain
+### 🦜 LangChain (Native Integration)
+
+**Install:** `pip install 'qwed[langchain]'`
 
 ```python
-from qwed_sdk.langchain import QWEDTool
+from qwed_sdk.integrations.langchain import QWEDTool
+from langchain.agents import initialize_agent
+from langchain_openai import ChatOpenAI
 
-tools = [QWEDTool(verification_type="math"), QWEDTool(verification_type="sql")]
+# Initialize QWED verification tool
+tool = QWEDTool(provider="openai", model="gpt-4o-mini")
+
+# Add to your agent
+llm = ChatOpenAI()
+agent = initialize_agent(tools=[tool], llm=llm)
+
+# Agent automatically uses QWED for verification
+agent.run("Verify: what is the derivative of x^2?")
 ```
 
 ### 🤖 CrewAI
