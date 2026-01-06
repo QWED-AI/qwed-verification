@@ -218,7 +218,7 @@ We benchmarked **Claude Opus 4.5** (one of the world's best LLMs) on 215 critica
 
 > **QWED doesn't compete with LLMs. We ENABLE them for production use.**
 
-📄 [Full Benchmark Report →](BENCHMARKS.md)
+📄 [Full Benchmark Report →](docs/benchmarks.md)
 
 ---
 
@@ -468,14 +468,33 @@ response = client.verify_math(
 
 ## 📚 Documentation & Resources
 
+**Main Documentation:**
 | Resource | Description |
 |----------|-------------|
 | [📖 Full Documentation](https://docs.qwedai.com) | Complete API reference and guides |
 | [🔧 API Reference](https://docs.qwedai.com/docs/api/overview) | Endpoints and schemas |
-| [📊 Benchmarks](https://docs.qwedai.com/blog/unreadable-code-agi-benchmark) | LLM accuracy testing results |
-| [🤝 Contributing Guide](./CONTRIBUTING.md) | How to contribute to QWED |
-| [🏗️ Architecture](./docs/ARCHITECTURE.md) | System design and engine internals |
-| [🔒 Security Policy](./SECURITY.md) | Reporting vulnerabilities |
+| [⚡ QWEDLocal Guide](docs/QWED_LOCAL.md) | Client-side verification setup |
+| [🖥️ CLI Reference](docs/CLI.md) | Command-line interface |
+| [🔒 PII Masking Guide](docs/PII_MASKING.md) | HIPAA/GDPR compliance |
+| [🆓 Ollama Integration](docs/OLLAMA_INTEGRATION.md) | Free local LLM setup |
+
+**Project Documentation:**
+| Resource | Description |
+|----------|-------------|
+| [📊 Benchmarks](docs/benchmarks.md) | LLM accuracy testing results |
+| [🗺️ Project Roadmap](docs/roadmap.md) | Future features and timeline |
+| [📋 Changelog](docs/changelog.md) | Version history summary |
+| [📜 Release Notes](docs/releases/) | Detailed version release notes |
+| [🎬 GitHub Action Guide](docs/github-action.md) | CI/CD integration |
+| [🏗️ Architecture](docs/ARCHITECTURE.md) | System design and engine internals |
+
+**Community:**
+| Resource | Description |
+|----------|-------------|
+| [🤝 Contributing Guide](CONTRIBUTING.md) | How to contribute to QWED |
+| [📜 Code of Conduct](CODE_OF_CONDUCT.md) | Community guidelines |
+| [🔒 Security Policy](SECURITY.md) | Reporting vulnerabilities |
+| [📖 Citation](docs/CITATION.cff) | Academic citation format |
 
 ---
 
