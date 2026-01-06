@@ -49,12 +49,25 @@ outputs:
     description: 'JSON evidence of verification process'
 
 runs:
-  using: 'docker'
-  image: 'Dockerfile'
-  env:
-    QWED_QUERY: ${{ inputs.query }}
-    QWED_PROVIDER: ${{ inputs.provider }}
-    QWED_API_KEY: ${{ inputs.api-key }}
-    QWED_MODEL: ${{ inputs.model }}
-    QWED_MASK_PII: ${{ inputs.mask-pii }}
-    QWED_TYPE: ${{ inputs.verification-type }}
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install QWED
+      shell: bash
+      run: |
+        pip install qwed
+    
+    - name: Run QWED Verification
+      shell: bash
+      run: ./.github/scripts/action_entrypoint.sh
+      env:
+        QWED_QUERY: ${{ inputs.query }}
+        QWED_PROVIDER: ${{ inputs.provider }}
+        QWED_API_KEY: ${{ inputs.api-key }}
+        QWED_MODEL: ${{ inputs.model }}
+        QWED_MASK_PII: ${{ inputs.mask-pii }}
+        QWED_TYPE: ${{ inputs.verification-type }}
