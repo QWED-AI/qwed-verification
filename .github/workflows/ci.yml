@@ -55,10 +55,18 @@ jobs:
         python -c "import qwed_new; print('Package qwed_new imported successfully')"
         python -c "import redis; r = redis.from_url('redis://localhost:6379'); print('Redis ping:', r.ping())"
 
-    - name: Run Tests
+    - name: Run Tests with Coverage
       env:
         DATABASE_URL: postgresql://qwed:qwed_secret@localhost:5432/qwed_db
         REDIS_URL: redis://localhost:6379/0
         ACTIVE_PROVIDER: mock
       run: |
-        pytest tests/ -v
+        pytest tests/ -v --cov=qwed_sdk --cov=src/qwed_new --cov-report=xml --cov-report=term
+
+    - name: Upload Coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
