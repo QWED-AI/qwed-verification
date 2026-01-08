@@ -55,6 +55,32 @@ jobs:
         python -c "import qwed_new; print('Package qwed_new imported successfully')"
         python -c "import redis; r = redis.from_url('redis://localhost:6379'); print('Redis ping:', r.ping())"
 
+    - name: Create .env file
+      run: |
+        echo "DATABASE_URL=postgresql://qwed:qwed_secret@localhost:5432/qwed_db" >> .env
+        echo "REDIS_URL=redis://localhost:6379/0" >> .env
+        echo "ACTIVE_PROVIDER=mock" >> .env
+        echo "OPENAI_API_KEY=mock_key" >> .env
+        echo "ANTHROPIC_API_KEY=mock_key" >> .env
+
+    - name: Start QWED API Server
+      run: |
+        # Start API server in background
+        python -m qwed_sdk.cli &
+        API_PID=$!
+        echo "API_PID=$API_PID" >> $GITHUB_ENV
+        
+        # Wait for server to be ready (max 30 seconds)
+        for i in {1..30}; do
+          if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+            echo "API server is ready!"
+            break
+          fi
+          echo "Waiting for API server... ($i/30)"
+          sleep 1
+        done
+      continue-on-error: true  # Don't fail CI if API doesn't start
+
     - name: Run Tests with Coverage
       env:
         DATABASE_URL: postgresql://qwed:qwed_secret@localhost:5432/qwed_db
