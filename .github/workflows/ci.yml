@@ -59,9 +59,11 @@ jobs:
       run: |
         echo "DATABASE_URL=postgresql://qwed:qwed_secret@localhost:5432/qwed_db" >> .env
         echo "REDIS_URL=redis://localhost:6379/0" >> .env
-        echo "ACTIVE_PROVIDER=mock" >> .env
-        echo "OPENAI_API_KEY=mock_key" >> .env
-        echo "ANTHROPIC_API_KEY=mock_key" >> .env
+        echo "ACTIVE_PROVIDER=azure_openai" >> .env
+        echo "AZURE_OPENAI_ENDPOINT=${{ secrets.AZURE_OPENAI_ENDPOINT }}" >> .env
+        echo "AZURE_OPENAI_API_KEY=${{ secrets.AZURE_OPENAI_API_KEY }}" >> .env
+        echo "AZURE_OPENAI_DEPLOYMENT=${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" >> .env
+        echo "AZURE_OPENAI_API_VERSION=2024-12-01-preview" >> .env
 
     - name: Start QWED API Server
       run: |
