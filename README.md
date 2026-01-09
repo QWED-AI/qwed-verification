@@ -36,7 +36,7 @@
 
   **💖 Support QWED Development:**
   
-  <a href="https://github.com/sponsors/rahuldass19"><img src="https://img.shields.io/github/sponsors/rahuldass19?style=for-the-badge&logo=githubsponsors&label=Sponsor&color=EA4AAA" alt="Sponsor on GitHub"></a>
+  <a href="https://github.com/sponsors/QWED-AI"><img src="https://img.shields.io/github/sponsors/QWED-AI?style=for-the-badge&logo=githubsponsors&label=Sponsor&color=EA4AAA" alt="Sponsor QWED on GitHub"></a>
 
   <br>
   
