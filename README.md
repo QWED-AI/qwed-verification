@@ -363,14 +363,20 @@ agent = QWEDVerifiedAgent(role="Analyst", allow_dangerous_code=False)
 
 | Language | Package | Status |
 |----------|---------|--------|
-| 🐍 Python | `qwed` | ✅ Available on PyPI |
-| 🟦 TypeScript | `@qwed-ai/sdk` | ✅ Available on npm |
-| 🐹 Go | `qwed-go` | 🟡 Coming Soon |
+| [🐍 Python](./qwed_sdk/) | `qwed` | ✅ Available on PyPI |
+| [🟦 TypeScript](./sdk-ts/) | `@qwed-ai/sdk` | ✅ Available on npm |
+| [🐹 Go](./sdk-go/) | `qwed-go` | ✅ Available |
 | 🦀 Rust | `qwed` | 🟡 Coming Soon |
 
-git clone https://github.com/QWED-AI/qwed-verification.git
-cd qwed-verification
-pip install -r requirements.txt
+```bash
+# Python
+pip install qwed
+
+# Go
+go get github.com/QWED-AI/qwed-verification/sdk-go
+
+# TypeScript
+npm install @qwed-ai/sdk
 ```
 
 ---
