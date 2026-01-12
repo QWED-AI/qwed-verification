@@ -32,6 +32,8 @@
   [![GitHub forks](https://img.shields.io/github/forks/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification/fork)
   [![GitHub watchers](https://img.shields.io/github/watchers/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification)
 
+  <a href="https://www.nvidia.com/en-us/startups/"><img src="./assets/badges/nvidia-inception.png" alt="NVIDIA Inception Program" height="40"></a>
+
   <br>
 
   **💖 Support QWED Development:**
