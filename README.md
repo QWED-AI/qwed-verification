@@ -229,15 +229,15 @@ Most AI safety tools use **"LLM-as-a-Judge"** (asking GPT-4 to grade GPT-3.5). T
 
 ### Comparison Table
 
-| Feature | **QWED Protocol** | NeMo Guardrails | LangChain Evaluators |
-|---------|-------------------|-----------------|----------------------|
-| **The "Judge"** | Deterministic Solver (Z3/SymPy) | Semantic Matcher | Another LLM (GPT-4) |
-| **Mechanism** | Translation to DSL | Vector Similarity | Prompt Engineering |
-| **Verification Type** | Mathematical Proof | Policy Adherence | Consensus/Opinion |
-| **Primary Goal** | Correctness (Truth) | Safety (Appropriateness) | Quality Score |
-| **False Positives** | Near Zero (Logic-based) | Medium (Semantic drift) | High (Subjectivity) |
-| **Works Offline** | ✅ Yes (QWEDLocal) | ❌ No | ❌ No |
-| **Privacy** | ✅ 100% Local | ❌ Cloud-based | ❌ Cloud-based |
+| Feature | **QWED Protocol** | BEAVER | NeMo Guardrails | LangChain Evaluators |
+|---------|-------------------|--------|-----------------|----------------------|
+| **The "Judge"** | Deterministic Solver (Z3/SymPy) | Probability Bounds | Semantic Matcher | Another LLM (GPT-4) |
+| **Mechanism** | Translation to DSL | Token Trie Search | Vector Similarity | Prompt Engineering |
+| **Verification Type** | Mathematical Proof | Probabilistic Bounds | Policy Adherence | Consensus/Opinion |
+| **Primary Goal** | Correctness (Truth) | Constraint Satisfaction | Safety (Appropriateness) | Quality Score |
+| **False Positives** | Near Zero (Logic-based) | Low (Statistical) | Medium (Semantic drift) | High (Subjectivity) |
+| **Works Offline** | ✅ Yes (QWEDLocal) | ✅ Yes | ❌ No | ❌ No |
+| **Privacy** | ✅ 100% Local | ✅ Local | ❌ Cloud-based | ❌ Cloud-based |
 
 **QWED's Advantage:** When you need **proof**, not opinion.
 
@@ -367,7 +367,7 @@ QWED extends beyond core verification with specialized integrations:
 | Integration | Description | Repo |
 |-------------|-------------|------|
 | **🛒 QWED-UCP** | Unified Commerce Protocol - Verify e-commerce AI (prices, inventory, transactions) | [![GitHub](https://img.shields.io/badge/GitHub-qwed--ucp-181717?logo=github)](https://github.com/QWED-AI/qwed-ucp) |
-| **🤖 Open Responses** | OpenAI Responses API integration with QWED verification guards | [![Docs](https://img.shields.io/badge/Docs-Open_Responses-blue)](https://docs.qwedai.com/docs/open-responses/overview) |
+| **🤖 Open Responses** | OpenAI Responses API integration with QWED verification guards | [![GitHub](https://img.shields.io/badge/GitHub-qwed--open--responses-181717?logo=github)](https://github.com/QWED-AI/qwed-open-responses) |
 | **🔌 QWED-MCP** | Model Context Protocol server - Use QWED as Claude Desktop tool | [![GitHub](https://img.shields.io/badge/GitHub-qwed--mcp-181717?logo=github)](https://github.com/QWED-AI/qwed-mcp) |
 
 ### 🛒 QWED-UCP (Commerce Verification)
