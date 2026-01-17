@@ -360,6 +360,50 @@ agent = QWEDVerifiedAgent(role="Analyst", allow_dangerous_code=False)
 
 ---
 
+## 🛒 QWED Integrations & Extensions
+
+QWED extends beyond core verification with specialized integrations:
+
+| Integration | Description | Repo |
+|-------------|-------------|------|
+| **🛒 QWED-UCP** | Unified Commerce Protocol - Verify e-commerce AI (prices, inventory, transactions) | [![GitHub](https://img.shields.io/badge/GitHub-qwed--ucp-181717?logo=github)](https://github.com/QWED-AI/qwed-ucp) |
+| **🤖 Open Responses** | OpenAI Responses API integration with QWED verification guards | [![Docs](https://img.shields.io/badge/Docs-Open_Responses-blue)](https://docs.qwedai.com/docs/open-responses/overview) |
+| **🔌 QWED-MCP** | Model Context Protocol server - Use QWED as Claude Desktop tool | [![GitHub](https://img.shields.io/badge/GitHub-qwed--mcp-181717?logo=github)](https://github.com/QWED-AI/qwed-mcp) |
+
+### 🛒 QWED-UCP (Commerce Verification)
+
+Prevent AI hallucinations in e-commerce: wrong prices, fake inventory, invalid transactions.
+
+```python
+from qwed_ucp import UCPGuard
+
+guard = UCPGuard()
+result = guard.verify_transaction({
+    "product": "iPhone 15",
+    "price": 999.00,
+    "quantity": 2,
+    "total": 1998.00  # AI calculated this
+})
+# ✅ VERIFIED: total = price × quantity
+```
+
+### 🔌 QWED-MCP (Claude Desktop)
+
+Use QWED verification directly in Claude Desktop via MCP:
+
+```json
+{
+  "mcpServers": {
+    "qwed": {
+      "command": "uvx",
+      "args": ["qwed-mcp"]
+    }
+  }
+}
+```
+
+---
+
 ## 🌍 Multi-Language SDK Support
 
 | Language | Package | Status |
