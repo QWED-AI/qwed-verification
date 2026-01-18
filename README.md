@@ -519,6 +519,23 @@ Need **observability**, **multi-tenancy**, **audit logs**, or **compliance expor
 
 ---
 
+## 🛡️ What does "Verified by QWED" mean?
+
+When you see the **[Verified by QWED]** badge on a repository or application, it is a **technical guarantee**, not a marketing claim.
+
+It certifies that the software adheres to the **QWED Protocol** for AI Safety:
+
+1.  **The Zero-Hallucination Warranty:**
+    The application does not rely on LLM probabilities for Math, Logic, or Code. It uses **Deterministic Engines** (SymPy, Z3, AST) to prove correctness before outputting data.
+
+2.  **The "Untrusted Translator" Architecture:**
+    The system treats the LLM solely as a translator (Natural Language → DSL), never as a judge. If the translation cannot be mathematically proven, the system refuses to answer rather than guessing.
+
+3.  **Cryptographic Accountability:**
+    The application generates **JWT-based Attestations** (ES256 signatures) for its critical operations. Every "Verified" output comes with a cryptographic receipt proving a solver validated it.
+
+**In short: The badge means "We don't trust the AI. We trust the Math."**
+
 ## 📄 License
 
 Apache 2.0 - See [LICENSE](LICENSE)
