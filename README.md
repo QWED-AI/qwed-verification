@@ -357,9 +357,18 @@ agent.run("Verify: what is the derivative of x^2?")
 ### 🤖 CrewAI
 
 ```python
-from qwed_sdk.crewai import QWEDVerifiedAgent
+from qwed_sdk.integrations.crewai import QWEDVerifiedAgent
 
-agent = QWEDVerifiedAgent(role="Analyst", allow_dangerous_code=False)
+agent = QWEDVerifiedAgent(role="Analyst", verify_math=True)
+```
+
+### 🦙 LlamaIndex
+
+```python
+from qwed_sdk.integrations.llamaindex import QWEDQueryEngine
+
+# Add Fact Guard verification to any query engine
+verified_engine = QWEDQueryEngine(base_engine, verify_facts=True)
 ```
 
 ---

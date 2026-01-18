@@ -77,6 +77,9 @@ server = [
 symbolic = [
     "crosshair-tool>=0.0.100",
 ]
+langchain = ["langchain>=0.1.0", "langchain-core"]
+crewai = ["crewai>=0.1.0"]
+llamaindex = ["llama-index-core>=0.10.0"]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.1.0",
