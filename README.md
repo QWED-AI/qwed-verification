@@ -69,6 +69,10 @@
 > 
 > **Doesn't work when:** Specs come from natural language, outputs are freeform text, or verification domain is unsupported.
 
+> **🔬 On "Deterministic" Verification**
+> 
+> QWED uses **deterministic computation** (no neural networks, no embeddings, no vibes) wherever possible. Math, Logic, SQL, Code, and Schema engines produce 100% reproducible results using symbolic solvers. For fact-checking, we use TF-IDF (not embeddings) because it's transparent and inspectable—same query always returns same score. For image/reasoning domains that require LLM fallback, we clearly mark outputs as `HEURISTIC` in the response.
+
 ---
 
 ## 🚀 Quick Start: Install & Verify in 30 Seconds
