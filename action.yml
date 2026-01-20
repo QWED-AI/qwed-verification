@@ -1,73 +1,37 @@
-name: 'QWED Neurosymbolic Verification'
-description: 'Verify LLM outputs with deterministic proof in your CI/CD pipeline. Neural Networks + Symbolic Reasoning = Verifiable AI'
-author: 'Rahul Dass (QWED-AI)'
-
+# Source: Matching the qwed-verification file list structure
+name: 'QWED Protocol Verification'
+description: 'Deterministically verify LLM outputs using Z3 and SymPy to prevent hallucinations.'
+author: 'QWED-AI'
 branding:
-  icon: 'shield'
-  color: 'purple'
+  icon: 'check-circle'
+  color: 'blue'
 
 inputs:
+  api_key:
+    description: 'QWED API Key (Optional for local mode)'
+    required: false
   query:
-    description: 'Query to verify (e.g., "What is the derivative of x^2?")'
+    description: 'The user query (e.g. "Derivative of x^2")'
     required: true
-  
-  provider:
-    description: 'LLM provider: openai, anthropic, gemini, or custom base_url'
+  llm_output:
+    description: 'The LLM output to verify'
+    required: true
+  engine:
+    description: 'Verification Engine to use (math, logic, code)'
     required: false
-    default: 'openai'
-  
-  api-key:
-    description: 'LLM API key (use GitHub secrets!)'
-    required: false
-  
-  model:
-    description: 'LLM model name (e.g., gpt-4o-mini, claude-3-haiku)'
-    required: false
-    default: 'gpt-4o-mini'
-  
-  mask-pii:
-    description: 'Enable PII masking for privacy (true/false)'
-    required: false
-    default: 'false'
-  
-  verification-type:
-    description: 'Type of verification: auto, math, logic, or code'
-    required: false
-    default: 'auto'
+    default: 'math'
 
 outputs:
   verified:
-    description: 'Verification result (true/false)'
-  
-  value:
-    description: 'Verified value or result'
-  
-  confidence:
-    description: 'Confidence score (0.0-1.0)'
-  
-  evidence:
-    description: 'JSON evidence of verification process'
+    description: 'True if the output is mathematically correct'
+  explanation:
+    description: 'Detailed proof or error explanation'
 
 runs:
-  using: 'composite'
-  steps:
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
-    
-    - name: Install QWED
-      shell: bash
-      run: |
-        pip install qwed
-    
-    - name: Run QWED Verification
-      shell: bash
-      run: ./.github/scripts/action_entrypoint.sh
-      env:
-        QWED_QUERY: ${{ inputs.query }}
-        QWED_PROVIDER: ${{ inputs.provider }}
-        QWED_API_KEY: ${{ inputs.api-key }}
-        QWED_MODEL: ${{ inputs.model }}
-        QWED_MASK_PII: ${{ inputs.mask-pii }}
-        QWED_TYPE: ${{ inputs.verification-type }}
+  using: 'docker'
+  image: 'Dockerfile' # Points to the Dockerfile in the root
+  args:
+    - ${{ inputs.api_key }}
+    - ${{ inputs.query }}
+    - ${{ inputs.llm_output }}
+    - ${{ inputs.engine }}

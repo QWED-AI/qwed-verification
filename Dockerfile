@@ -1,20 +1,15 @@
+# Source: Standardizing environment for Z3/SymPy engines
 FROM python:3.11-slim
 
-WORKDIR /app
+# Prevent python from writing pyc files to disc
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+# Install QWED SDK from PyPI to ensure stable release version
+RUN pip install --no-cache-dir qwed
 
-# Copy project files
-COPY . .
+# Copy the entrypoint script
+COPY action_entrypoint.py /action_entrypoint.py
+RUN chmod +x /action_entrypoint.py
 
-# Install QWED and dependencies
-RUN pip install --no-cache-dir -e .
-
-# GitHub Action entrypoint script
-COPY action_entrypoint.sh /action_entrypoint.sh
-RUN chmod +x /action_entrypoint.sh
-
-ENTRYPOINT ["/action_entrypoint.sh"]
+ENTRYPOINT ["python", "/action_entrypoint.py"]

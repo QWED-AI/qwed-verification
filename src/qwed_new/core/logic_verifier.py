@@ -641,3 +641,107 @@ class LogicVerifier:
                 
         except Exception as e:
             return LogicResult(status="ERROR", error=str(e))
+
+    # =========================================================================
+    # Advanced: Optimization & Vacuity
+    # =========================================================================
+
+    def verify_optimization(
+        self,
+        variables: Dict[str, str],
+        constraints: List[str],
+        objective: str,
+        maximize: bool = True
+    ) -> LogicResult:
+        """
+        Optimize an objective function subject to constraints.
+        
+        Args:
+            variables: Variable declarations.
+            constraints: Hard constraints.
+            objective: Expression to maximize/minimize.
+            maximize: True for maximize, False for minimize.
+            
+        Returns:
+            LogicResult with model containing optimal values.
+        """
+        try:
+            opt = Optimize()
+            opt.set("timeout", self.timeout_ms)
+            
+            z3_vars = self._create_z3_variables(variables)
+            if isinstance(z3_vars, LogicResult):
+                return z3_vars
+                
+            # Add constraints
+            for constr in constraints:
+                z3_constraint = self._parse_constraint(constr, z3_vars)
+                if z3_constraint is not None:
+                    opt.add(z3_constraint)
+            
+            # Set objective
+            obj_expr = self._parse_constraint(objective, z3_vars)
+            if maximize:
+                opt.maximize(obj_expr)
+            else:
+                opt.minimize(obj_expr)
+                
+            # Check
+            result = opt.check()
+            
+            if result == sat:
+                model = opt.model()
+                solution = {d.name(): str(model[d]) for d in model.decls()}
+                return LogicResult(status="OPTIMAL", model=solution)
+            elif result == unsat:
+                return LogicResult(status="UNSAT", explanation="Constraints cannot be satisfied")
+            else:
+                return LogicResult(status="UNKNOWN")
+                
+        except Exception as e:
+            return LogicResult(status="ERROR", error=str(e))
+
+    def check_vacuity(
+        self,
+        variables: Dict[str, str],
+        antecedent: str,
+        consequent: str
+    ) -> LogicResult:
+        """
+        Check for vacuous truth (e.g., "If False then Anything").
+        
+        A rule P -> Q is vacuously true if P is never true given current constraints.
+        
+        Returns:
+            LogicResult: 
+            - status="VACUOUS" (P never holds)
+            - status="NON-VACUOUS" (P holds at least once)
+        """
+        try:
+            solver = Solver()
+            solver.set("timeout", self.timeout_ms)
+            
+            z3_vars = self._create_z3_variables(variables)
+            if isinstance(z3_vars, LogicResult):
+                return z3_vars
+            
+            # Check if antecedent can EVER be true
+            # We treat antecedent as a constraint itself
+            ant_expr = self._parse_constraint(antecedent, z3_vars)
+            solver.add(ant_expr)
+            
+            result = solver.check()
+            
+            if result == unsat:
+                return LogicResult(
+                    status="VACUOUS",
+                    explanation=f"Antecedent '{antecedent}' is mutually contradictory or impossible. The rule is vacuously true."
+                )
+            else:
+                return LogicResult(
+                    status="NON-VACUOUS",
+                    explanation="Antecedent is satisfiable (rule is not vacuous)."
+                )
+                
+        except Exception as e:
+            return LogicResult(status="ERROR", error=str(e))
