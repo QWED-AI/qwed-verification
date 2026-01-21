@@ -4,14 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      - 'sdk_legacy/**'
+      - 'qwed_sdk/**'
       - 'sdk-ts/**'
       - 'sdk-go/**'
       - 'sdk-rust/**'
   pull_request:
     branches: [main]
     paths:
-      - 'sdk_legacy/**'
+      - 'qwed_sdk/**'
       - 'sdk-ts/**'
       - 'sdk-go/**'
       - 'sdk-rust/**'
@@ -34,18 +34,16 @@ jobs:
       
       - name: Install SDK
         run: |
-          cd sdk_legacy/python
           pip install -e .
       
       - name: Test Import
         run: |
-          python -c "from qwed import QwedClient; print('✅ Python SDK: Import OK')"
+          python -c "from qwed_sdk import QWEDLocal; print('✅ Python SDK: Import OK')"
       
       - name: Check Types (optional)
         run: |
           pip install mypy
-          cd sdk_legacy/python
-          mypy qwed --ignore-missing-imports || true
+          mypy qwed_sdk --ignore-missing-imports || true
 
   # ============================================
   # TypeScript SDK
