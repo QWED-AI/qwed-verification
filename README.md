@@ -618,6 +618,41 @@ It certifies that the software adheres to the **QWED Protocol** for AI Safety:
 
 ---
 
+## 🌐 The QWED Ecosystem
+
+QWED verification is available as domain-specific packages for different industries:
+
+| Package | Description | Install |
+|---------|-------------|---------|
+| **[qwed](https://github.com/QWED-AI/qwed-verification)** | Core 8-engine verification protocol | `pip install qwed` |
+| **[qwed-finance](https://github.com/QWED-AI/qwed-finance)** 🏦 | Banking, loans, tax, compliance | `pip install qwed-finance` |
+| **[qwed-legal](https://github.com/QWED-AI/qwed-legal)** 🏛️ | Contracts, deadlines, citations, clauses | `pip install qwed-legal` |
+| **[qwed-ucp](https://github.com/QWED-AI/qwed-ucp)** 🛒 | E-commerce cart verification | `pip install qwed-ucp` |
+| **[qwed-mcp](https://github.com/QWED-AI/qwed-mcp)** 🔌 | Claude Desktop MCP integration | `pip install qwed-mcp` |
+
+### GitHub Actions
+
+Use QWED in your CI/CD pipelines:
+
+```yaml
+# Verify legal contracts
+- uses: QWED-AI/qwed-legal@v1
+  with:
+    mode: deadline
+    signing_date: "2026-01-15"
+    term: "30 business days"
+    claimed_deadline: "2026-02-14"
+
+# Verify financial calculations
+- uses: QWED-AI/qwed-finance@v1
+  with:
+    mode: compliance
+```
+
+📖 [Full Ecosystem Documentation](https://docs.qwedai.com)
+
+---
+
 ## 🙏 Contributors Wanted
 
 We're actively looking for contributors! Whether you're a first-timer or experienced developer, there's a place for you.
