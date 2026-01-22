@@ -618,6 +618,27 @@ It certifies that the software adheres to the **QWED Protocol** for AI Safety:
 
 ---
 
+## 🙏 Contributors Wanted
+
+We're actively looking for contributors! Whether you're a first-timer or experienced developer, there's a place for you.
+
+[![Good First Issues](https://img.shields.io/github/issues/QWED-AI/qwed-verification/good%20first%20issue?label=good%20first%20issues&color=7057ff)](https://github.com/QWED-AI/qwed-verification/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+[![Help Wanted](https://img.shields.io/github/issues/QWED-AI/qwed-verification/help%20wanted?label=help%20wanted&color=008672)](https://github.com/QWED-AI/qwed-verification/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22)
+
+### 🎯 Ways to Contribute
+
+| Area | What We Need |
+|------|-------------|
+| 🧪 **Testing** | Add test cases for edge scenarios |
+| 📝 **Docs** | Improve examples and tutorials |
+| 🌍 **i18n** | Translate docs to other languages |
+| 🔧 **SDKs** | Enhance Go/Rust/TypeScript SDKs |
+| 🐛 **Bugs** | Fix issues or report new ones |
+
+**[→ Read CONTRIBUTING.md](CONTRIBUTING.md)** | **[→ Browse Good First Issues](https://github.com/QWED-AI/qwed-verification/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)**
+
+---
+
 <div align="center">
   
   ### ⭐ Star us if you believe AI needs verification
