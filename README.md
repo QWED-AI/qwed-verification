@@ -102,45 +102,6 @@ pip install -e .
 
 ---
 
-## 🧩 Specialized Editions
-
-QWED is available in specialized flavors for specific industry verticals:
-
-| Edition | Target | Use Case | Link |
-| :--- | :--- | :--- | :--- |
-| **QWED Finance** | 🏦 Banking | Loan Origination, NPV, ISO 20022 Checks | [View on Marketplace](https://github.com/marketplace/actions/qwed-finance-guard) |
-| **QWED UCP** | 🛒 Commerce | Universal Commerce Protocol, Tax Compliance | [View on Marketplace](https://github.com/marketplace/actions/qwed-commerce-auditor) |
-
----
-
-## 🎓 **NEW: Free Course on AI Verification**
-
-**Learning Path: From Zero to Production-Ready AI Verification**
-
-[![Course](https://img.shields.io/badge/🎓_Free_Course-AI_Verification-4CAF50?style=for-the-badge)](https://github.com/QWED-AI/qwed-learning)
-
-<div align="center">
-  <a href="https://github.com/QWED-AI/qwed-learning">
-    <img src="https://img.shields.io/github/stars/QWED-AI/qwed-learning?style=social" alt="Course Stars">
-  </a>
-</div>
-
-**🚀 [Start the Free Course →](https://github.com/QWED-AI/qwed-learning)**
-
-### What You'll Learn:
-
-- 💡 **Artist vs. Accountant:** Why LLMs are creative but terrible at math
-- 🧮 **Neurosymbolic AI:** How deterministic verification catches 100% of errors*
-- 🏗️ **Production Patterns:** Build guardrails that actually work
-- 🔒 **HIPAA/GDPR Compliance:** PII masking for regulated industries
-- 🦜 **Framework Integration:** LangChain, LlamaIndex, and more
-
-**Total Time:** ~3 hours | **Modules:** 4 | **Examples:** Production-ready code
-
-**Perfect for:**  Developers integrating LLMs, ML engineers, Tech leads evaluating AI safety
-
----
-
 ```python
 from qwed_sdk import QWEDClient
 
@@ -389,28 +350,46 @@ verified_engine = QWEDQueryEngine(base_engine, verify_facts=True)
 
 QWED verification is available as specialized packages for different industries:
 
+### 📦 Packages
+
 | Package | Description | Install | Repo |
-|---------|-------------|---------| -----|
+|---------|-------------|---------|------|
 | **qwed** | Core 8-engine verification protocol | `pip install qwed` | [GitHub](https://github.com/QWED-AI/qwed-verification) |
-| **qwed-finance** 🏦 | Banking, loans, tax, compliance | `pip install qwed-finance` | [GitHub](https://github.com/QWED-AI/qwed-finance) |
-| **qwed-legal** 🏛️ | Contracts, deadlines, citations, clauses | `pip install qwed-legal` | [GitHub](https://github.com/QWED-AI/qwed-legal) |
+| **qwed-finance** 🏦 | Banking, loans, NPV, ISO 20022 | `pip install qwed-finance` | [GitHub](https://github.com/QWED-AI/qwed-finance) |
+| **qwed-legal** 🏛️ | Contracts, deadlines, citations, jurisdiction | `pip install qwed-legal` | [GitHub](https://github.com/QWED-AI/qwed-legal) |
 | **qwed-ucp** 🛒 | E-commerce cart/transaction verification | `pip install qwed-ucp` | [GitHub](https://github.com/QWED-AI/qwed-ucp) |
 | **qwed-mcp** 🔌 | Claude Desktop MCP integration | `pip install qwed-mcp` | [GitHub](https://github.com/QWED-AI/qwed-mcp) |
 | **open-responses** 🤖 | OpenAI Responses API + QWED guards | `pip install qwed-open-responses` | [GitHub](https://github.com/QWED-AI/qwed-open-responses) |
 
-### GitHub Actions
+### 🎬 GitHub Actions
 
-Use QWED in your CI/CD pipelines:
+Use QWED verification in your CI/CD pipelines:
+
+| Action | Use Case | Marketplace |
+|--------|----------|-------------|
+| `QWED-AI/qwed-legal@v0.2.0` | Contract deadline, jurisdiction, citations | [View](https://github.com/marketplace/actions/qwed-legal-verification) |
+| `QWED-AI/qwed-finance@v1` | NPV, loan calculations, compliance | [View](https://github.com/marketplace/actions/qwed-finance-guard) |
+| `QWED-AI/qwed-ucp@v1` | E-commerce transactions | [View](https://github.com/marketplace/actions/qwed-commerce-auditor) |
 
 ```yaml
-# Verify legal contracts
-- uses: QWED-AI/qwed-legal@v1
+# Example: Verify legal contracts in CI
+- uses: QWED-AI/qwed-legal@v0.2.0
   with:
-    mode: deadline
-    signing_date: "2026-01-15"
-    term: "30 business days"
-    claimed_deadline: "2026-02-14"
+    mode: all
 ```
+
+### 🎓 Free Course on AI Verification
+
+**Learning Path: From Zero to Production-Ready AI Verification**
+
+[![Course](https://img.shields.io/badge/🎓_Free_Course-AI_Verification-4CAF50?style=for-the-badge)](https://github.com/QWED-AI/qwed-learning)
+
+- 💡 Artist vs. Accountant: Why LLMs are creative but terrible at math
+- 🧮 Neurosymbolic AI: How deterministic verification catches errors
+- 🏗️ Production Patterns: Build guardrails that actually work
+- 🦜 Framework Integration: LangChain, LlamaIndex, and more
+
+**🚀 [Start the Free Course →](https://github.com/QWED-AI/qwed-learning)**
 
 📖 [Full Ecosystem Documentation](https://docs.qwedai.com)
 
