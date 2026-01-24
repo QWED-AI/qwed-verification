@@ -423,6 +423,7 @@ QWED verification is available as specialized packages for different industries:
 | **qwed** | Core 8-engine verification protocol | `pip install qwed` | [GitHub](https://github.com/QWED-AI/qwed-verification) |
 | **qwed-finance** 🏦 | Banking, loans, NPV, ISO 20022 | `pip install qwed-finance` | [GitHub](https://github.com/QWED-AI/qwed-finance) |
 | **qwed-legal** 🏛️ | Contracts, deadlines, citations, jurisdiction | `pip install qwed-legal` | [GitHub](https://github.com/QWED-AI/qwed-legal) |
+| **qwed-infra** ☁️ | IaC verification (Terraform, IAM, Cost) | `pip install qwed-infra` | [GitHub](https://github.com/QWED-AI/qwed-infra) |
 | **qwed-ucp** 🛒 | E-commerce cart/transaction verification | `pip install qwed-ucp` | [GitHub](https://github.com/QWED-AI/qwed-ucp) |
 | **qwed-mcp** 🔌 | Claude Desktop MCP integration | `pip install qwed-mcp` | [GitHub](https://github.com/QWED-AI/qwed-mcp) |
 | **open-responses** 🤖 | OpenAI Responses API + QWED guards | `pip install qwed-open-responses` | [GitHub](https://github.com/QWED-AI/qwed-open-responses) |
