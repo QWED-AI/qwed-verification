@@ -66,7 +66,7 @@ class TestPIIDetector:
         from qwed_sdk.pii_detector import PIIDetector
         
         detector = PIIDetector()
-        text = "My card is 4532-1234-5678-9010"
+        text = "My card is 4111-1111-1111-1111"
         masked, info = detector.detect_and_mask(text)
         
         assert "<CREDIT_CARD>" in masked

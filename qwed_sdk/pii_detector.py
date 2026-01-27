@@ -7,6 +7,10 @@ except ImportError:
     AnalyzerEngine = None
     AnonymizerEngine = None
 
+def check_pii_dependencies() -> bool:
+    """Check if Presidio dependencies are available."""
+    return AnalyzerEngine is not None and AnonymizerEngine is not None
+
 class PIIDetector:
     """
     Microsoft Presidio-based PII detection and masking.
@@ -72,13 +76,18 @@ class PIIDetector:
             analyzer_results=results,
             operators={
                 "DEFAULT": OperatorConfig("replace", {"new_value": "<REDACTED>"}),
-                # Optional: Use specific masks per type
-                # "PHONE_NUMBER": OperatorConfig("replace", {"new_value": "<PHONE_NUMBER>"}),
+                "EMAIL_ADDRESS": OperatorConfig("replace", {"new_value": "<EMAIL_ADDRESS>"}),
+                "CREDIT_CARD": OperatorConfig("replace", {"new_value": "<CREDIT_CARD>"}),
+                "PHONE_NUMBER": OperatorConfig("replace", {"new_value": "<PHONE_NUMBER>"}),
+                "US_SSN": OperatorConfig("replace", {"new_value": "<US_SSN>"}),
+                "IBAN_CODE": OperatorConfig("replace", {"new_value": "<IBAN_CODE>"}),
+                "IP_ADDRESS": OperatorConfig("replace", {"new_value": "<IP_ADDRESS>"}),
             }
         )
         
         return anonymized_result.text, {
             "pii_detected": pii_count,
             "types": detected_types,
-            "items": [str(r) for r in results]
+            "items": [str(r) for r in results],
+            "positions": [{"start": r.start, "end": r.end, "type": r.entity_type} for r in results]
         }
