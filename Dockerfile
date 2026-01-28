@@ -11,8 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies (but NOT qwed - we'll use local copy)
-RUN pip install --no-cache-dir sympy z3-solver colorama
+# Install dependencies (including httpx needed by qwed_sdk import chain)
+RUN pip install --no-cache-dir sympy z3-solver colorama httpx
 
 # Copy the entire QWED SDK (local version with guards)
 COPY qwed_sdk /app/qwed_sdk/
