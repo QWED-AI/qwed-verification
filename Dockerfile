@@ -11,19 +11,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install QWED SDK with all features
-# Note: Using editable install for guards access (will be replaced with pip install qwed[full] after release)
-RUN pip install --no-cache-dir qwed sympy z3-solver
+# Install dependencies (but NOT qwed - we'll use local copy)
+RUN pip install --no-cache-dir sympy z3-solver colorama
 
-# Copy the SDK guards (needed for scan-secrets, verify-shell)
-COPY qwed_sdk/guards /app/qwed_sdk/guards/
-COPY qwed_sdk/__init__.py /app/qwed_sdk/
+# Copy the entire QWED SDK (local version with guards)
+COPY qwed_sdk /app/qwed_sdk/
 
 # Copy the entrypoint script
 COPY action_entrypoint.py /action_entrypoint.py
 RUN chmod +x /action_entrypoint.py
 
-# Set Python path
+# Set Python path to use local SDK
 ENV PYTHONPATH=/app
 
 WORKDIR /github/workspace
