@@ -460,9 +460,38 @@ QWED verification is available as specialized packages for different industries:
 
 Use QWED verification in your CI/CD pipelines:
 
+```yaml
+# Secret Scanning - Detect leaked API keys
+- uses: QWED-AI/qwed-verification@v3
+  with:
+    action: scan-secrets
+    paths: "**/*.env,**/*.json"
+
+# Code Security - Find dangerous patterns (eval, exec, subprocess)
+- uses: QWED-AI/qwed-verification@v3
+  with:
+    action: scan-code
+    paths: "**/*.py"
+    output_format: sarif  # Integrates with GitHub Security tab
+
+# Shell Script Linting - Block RCE patterns (curl|bash, rm -rf)
+- uses: QWED-AI/qwed-verification@v3
+  with:
+    action: verify-shell
+    paths: "**/*.sh"
+
+# LLM Output Verification (Math, Logic, Code)
+- uses: QWED-AI/qwed-verification@v3
+  with:
+    action: verify
+    engine: math
+    query: "Integral of x^2"
+    llm_output: "x^3/3"
+```
+
 | Action | Use Case | Marketplace |
 |--------|----------|-------------|
-| `QWED-AI/qwed-verification@v1` | Core 8-engine LLM verification | [View](https://github.com/marketplace/actions/qwed-protocol-verification) |
+| `QWED-AI/qwed-verification@v3` | **NEW!** Secret scanning, code analysis, SARIF output | [View](https://github.com/marketplace/actions/qwed-protocol-verification) |
 | `QWED-AI/qwed-legal@v0.2.0` | Contract deadline, jurisdiction, citations | [View](https://github.com/marketplace/actions/qwed-legal-verification) |
 | `QWED-AI/qwed-finance@v1` | NPV, loan calculations, compliance | [View](https://github.com/marketplace/actions/qwed-finance-guard) |
 | `QWED-AI/qwed-ucp@v1` | E-commerce transactions | [View](https://github.com/marketplace/actions/qwed-commerce-auditor) |

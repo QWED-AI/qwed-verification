@@ -1,37 +1,73 @@
 # Source: Matching the qwed-verification file list structure
 name: 'QWED Protocol Verification'
-description: 'Deterministically verify LLM outputs using Z3 and SymPy to prevent hallucinations.'
+description: 'Deterministically verify LLM outputs and scan for security issues using Z3, SymPy, and AST. Supports secret scanning, code analysis, and SARIF output.'
 author: 'QWED-AI'
 branding:
-  icon: 'check-circle'
-  color: 'blue'
+  icon: 'shield'
+  color: 'purple'
 
 inputs:
   api_key:
     description: 'QWED API Key (Optional for local mode)'
     required: false
+  
+  # New: Action type selector
+  action:
+    description: 'Action type: verify, scan-secrets, scan-code, verify-shell'
+    required: false
+    default: 'verify'
+  
+  # Legacy inputs for single verification
   query:
-    description: 'The user query (e.g. "Derivative of x^2")'
-    required: true
+    description: 'The user query (e.g. "Derivative of x^2") - used with action=verify'
+    required: false
   llm_output:
-    description: 'The LLM output to verify'
-    required: true
+    description: 'The LLM output to verify - used with action=verify'
+    required: false
   engine:
-    description: 'Verification Engine to use (math, logic, code)'
+    description: 'Verification Engine: math, logic, code, sql, shell'
     required: false
     default: 'math'
+  
+  # New: Batch scan inputs
+  paths:
+    description: 'Glob patterns for files to scan (e.g. "**/*.py,**/*.env")'
+    required: false
+    default: '.'
+  
+  # New: Output format
+  output_format:
+    description: 'Output format: text, json, sarif'
+    required: false
+    default: 'text'
+  
+  # New: Fail on findings
+  fail_on_findings:
+    description: 'Fail the action if security issues are found'
+    required: false
+    default: 'true'
 
 outputs:
   verified:
-    description: 'True if the output is mathematically correct'
+    description: 'True if verification passed or no issues found'
   explanation:
     description: 'Detailed proof or error explanation'
+  findings_count:
+    description: 'Number of security issues found (for scan modes)'
+  badge_url:
+    description: 'URL for QWED verified badge'
+  sarif_file:
+    description: 'Path to SARIF output file (if output_format=sarif)'
 
 runs:
   using: 'docker'
-  image: 'Dockerfile' # Points to the Dockerfile in the root
-  args:
-    - ${{ inputs.api_key }}
-    - ${{ inputs.query }}
-    - ${{ inputs.llm_output }}
-    - ${{ inputs.engine }}
+  image: 'Dockerfile'
+  env:
+    INPUT_API_KEY: ${{ inputs.api_key }}
+    INPUT_ACTION: ${{ inputs.action }}
+    INPUT_QUERY: ${{ inputs.query }}
+    INPUT_LLM_OUTPUT: ${{ inputs.llm_output }}
+    INPUT_ENGINE: ${{ inputs.engine }}
+    INPUT_PATHS: ${{ inputs.paths }}
+    INPUT_OUTPUT_FORMAT: ${{ inputs.output_format }}
+    INPUT_FAIL_ON_FINDINGS: ${{ inputs.fail_on_findings }}
