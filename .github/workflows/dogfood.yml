@@ -8,66 +8,66 @@ on:
     branches: [ main ]
 
 jobs:
-  verify-math:
-    name: Verify Mathematical Calculations
+  scan-secrets:
+    name: 🔐 Scan for Leaked Secrets
     runs-on: ubuntu-latest
     
     steps:
-      - name: Verify Derivative
-        uses: QWED-AI/qwed-verification@v2.4.1
-        with:
-          query: "What is the derivative of x^2?"
-          provider: "openai"
-          api-key: ${{ secrets.OPENAI_API_KEY }}
-          model: "gpt-4o-mini"
+      - uses: actions/checkout@v4
       
-      - name: Verify Integration
-        uses: QWED-AI/qwed-verification@v2.4.1
+      - name: Scan for API keys and tokens
+        uses: ./  # Use local action
         with:
-          query: "What is the integral of 2x?"
-          provider: "openai"
-          api-key: ${{ secrets.OPENAI_API_KEY }}
+          action: scan-secrets
+          paths: "**/*.env,**/*.json,**/*.yaml,**/*.yml"
+          fail_on_findings: "false"  # Don't fail demo workflow
 
-  verify-logic:
-    name: Verify Logical Statements
+  scan-code:
+    name: 🛡️ Scan Code for Security Issues
     runs-on: ubuntu-latest
     
     steps:
-      - name: Verify SAT Problem
-        uses: QWED-AI/qwed-verification@v2.4.1
+      - uses: actions/checkout@v4
+      
+      - name: Scan Python files for dangerous patterns
+        uses: ./
         with:
-          query: "Is (A AND B) OR (NOT A) always true?"
-          provider: "anthropic"
-          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          model: "claude-3-haiku-20240307"
+          action: scan-code
+          paths: "**/*.py"
+          output_format: text
+          fail_on_findings: "false"
 
-  verify-code-security:
-    name: Check Code for Security Issues
+  verify-shell:
+    name: 💻 Verify Shell Scripts
     runs-on: ubuntu-latest
     
     steps:
-      - name: Verify Code Safety
-        uses: QWED-AI/qwed-verification@v2.4.1
+      - uses: actions/checkout@v4
+      
+      - name: Check shell scripts for RCE patterns
+        uses: ./
         with:
-          query: |
-            Is this code safe?
-            ```python
-            def process_user_input(data):
-                return eval(data)
-            ```
-          verification-type: "code"
-          provider: "openai"
-          api-key: ${{ secrets.OPENAI_API_KEY }}
+          action: verify-shell
+          paths: "**/*.sh"
+          fail_on_findings: "false"
 
-  verify-with-pii-masking:
-    name: Verify with Privacy Protection
+  sarif-demo:
+    name: 📊 SARIF Output Demo
     runs-on: ubuntu-latest
     
     steps:
-      - name: Secure Verification
-        uses: QWED-AI/qwed-verification@v2.4.1
+      - uses: actions/checkout@v4
+      
+      - name: Scan with SARIF output
+        uses: ./
         with:
-          query: "Calculate: my email is john@example.com, what is 2+2?"
-          mask-pii: "true"
-          provider: "openai"
-          api-key: ${{ secrets.OPENAI_API_KEY }}
+          action: scan-code
+          paths: "**/*.py"
+          output_format: sarif
+          fail_on_findings: "false"
+      
+      # Upload SARIF to GitHub Security tab (optional)
+      # - name: Upload SARIF
+      #   uses: github/codeql-action/upload-sarif@v2
+      #   with:
+      #     sarif_file: qwed-results.sarif
