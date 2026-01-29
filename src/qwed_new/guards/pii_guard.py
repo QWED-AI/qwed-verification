@@ -18,8 +18,8 @@ class PIIGuard:
             # Identifying common password declarations (heuristic)
             "password_assignment": re.compile(r"(?i)(password|passwd|pwd|secret)\s*[:=]\s*['\"]?(\S{6,})['\"]?"),
             
-            # Obfuscated Keys (e.g. "sk - proj - ...")
-            "obfuscated_api_key": re.compile(r"sk\s*-\s*(?:proj|ant)\s*-\s*[a-zA-Z0-9]+"),
+            # Obfuscated Keys (e.g. "sk - proj - ...") - require long suffix to avoid placeholders like XXXX
+            "obfuscated_api_key": re.compile(r"sk\s*-\s*(?:proj|ant)\s*-\s*[a-zA-Z0-9]{15,}"),
             
             # Additional PII (Stricter Phone Number: Word boundaries to avoid matching inside API keys)
             "phone_number": re.compile(r"\b(?:\+\d{1,3}[-.]?)?\(?\d{3}\)?[-.]?\d{3}[-.]?\d{4}\b"),
