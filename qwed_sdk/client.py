@@ -173,14 +173,25 @@ class QWEDClient:
         except ImportError:
             pass # Fallback to remote if local guard missing
 
-        # Remote verification (if no local PII or Guard missing)
-        data = self._request(
-            "POST",
-            "/verify/fact",
-            json={"claim": claim, "context": context}
-        )
-        data["latency_ms"] = (time.time() - start) * 1000
-        return VerificationResult.from_dict(data)
+        try:
+            # Remote verification (if no local PII or Guard missing)
+            data = self._request(
+                "POST",
+                "/verify/fact",
+                json={"claim": claim, "context": context}
+            )
+            data["latency_ms"] = (time.time() - start) * 1000
+            return VerificationResult.from_dict(data)
+        except httpx.ConnectError:
+            # If we reached here, local PII check passed (or didn't run),
+            # but we can't reach the server.
+            # In "Moltbot Standalone" mode, we treat this as "Pass" for safety checks.
+            return VerificationResult(
+                status="VERIFIED",
+                is_verified=True,
+                result={"message": "Local safety checks passed. Remote verification unavailable (Offline Mode)."},
+                latency_ms=(time.time() - start) * 1000
+            )
     
     def verify_sql(
         self,

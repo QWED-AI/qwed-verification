@@ -34,16 +34,21 @@ class PIIGuard:
         for name, pattern in self.patterns.items():
             matches = pattern.findall(content)
             if matches:
-                # Special handling for password heuristic to avoid false positives on simple words
+                # Special handling for password heuristic
                 if name == "password_assignment":
-                    # matches will be list of tuples (key, value)
-                    # We accept it if the value part looks like a secret
-                    valid_matches = [m for m in matches if len(m[1]) > 5]  # simple length check
+                    valid_matches = [m for m in matches if len(m[1]) > 5]
                     if not valid_matches:
+                        continue
+                        
+                # Special handling for public emails
+                if name == "email":
+                    public_prefixes = ('support@', 'contact@', 'info@', 'sales@', 'help@', 'hello@', 'marketing@', 'jobs@', 'careers@')
+                    matches = [m for m in matches if not m.lower().startswith(public_prefixes)]
+                    if not matches:
                         continue
 
                 detected_types.append(name)
-                # Redact content for safe logging (showing first few chars only)
+                # Redact content for safe logging
                 for m in matches:
                     snippet = str(m)[:10] + "..." 
                     violations.append(f"Potential {name} detected: {snippet}")
