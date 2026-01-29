@@ -128,7 +128,7 @@ class QWEDClient:
         try:
             from qwed_new.guards.code_guard import CodeGuard
             guard = CodeGuard()
-            result_dict = guard.verify_safety(code)
+            result_dict = guard.verify_safety(code, language=language)
             
             result = VerificationResult(
                 status="VERIFIED" if result_dict["verified"] else "UNVERIFIED",
