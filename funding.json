@@ -8,16 +8,16 @@
         "email": "rahul@qwedai.com",
         "description": "Founder & Core Maintainer of QWED Protocol, building the deterministic verification layer for AI.",
         "webpageUrl": {
-            "url": "https://qwedai.com"
+            "url": "https://docs.qwedai.com"
         }
     },
     "projects": [
         {
             "guid": "qwed-verification",
-            "name": "QWED Protocol",
+            "name": "QWED Protocol (Core)",
             "description": "The first open-source Neurosymbolic AI Verification Layer. QWED prevents hallucinations in high-stakes LLM applications (Math, Finance, Logic) by using deterministic engines (SymPy, Z3, AST) to verify AI outputs.",
             "webpageUrl": {
-                "url": "https://qwedai.com"
+                "url": "https://docs.qwedai.com"
             },
             "repositoryUrl": {
                 "url": "https://github.com/QWED-AI/qwed-verification"
@@ -31,6 +31,82 @@
                 "neurosymbolic",
                 "guardrails",
                 "llm-ops"
+            ]
+        },
+        {
+            "guid": "qwed-tax",
+            "name": "QWED Tax",
+            "description": "Specialized tax compliance verification guards for Cross-Border Tax, Transfer Pricing, and GST/VAT.",
+            "webpageUrl": {
+                "url": "https://docs.qwedai.com/docs/category/tax-ai-agents"
+            },
+            "repositoryUrl": {
+                "url": "https://github.com/QWED-AI/qwed-tax"
+            },
+            "licenses": [
+                "spdx:Apache-2.0"
+            ],
+            "tags": [
+                "tax-tech",
+                "compliance",
+                "fintech-ai"
+            ]
+        },
+        {
+            "guid": "qwed-legal",
+            "name": "QWED Legal",
+            "description": "Legal reasoning verification using IRAC framework and citation checking for AI lawyers.",
+            "webpageUrl": {
+                "url": "https://docs.qwedai.com/docs/category/legal-ai-agents"
+            },
+            "repositoryUrl": {
+                "url": "https://github.com/QWED-AI/qwed-legal"
+            },
+            "licenses": [
+                "spdx:Apache-2.0"
+            ],
+            "tags": [
+                "legal-tech",
+                "law-ai",
+                "hallucination-check"
+            ]
+        },
+        {
+            "guid": "qwed-finance",
+            "name": "QWED Finance",
+            "description": "Financial statement verification, formula checks (NPV/IRR), and ISO 20022 compliance.",
+            "webpageUrl": {
+                "url": "https://docs.qwedai.com/docs/category/finance-ai-agents"
+            },
+            "repositoryUrl": {
+                "url": "https://github.com/QWED-AI/qwed-finance"
+            },
+            "licenses": [
+                "spdx:Apache-2.0"
+            ],
+            "tags": [
+                "fintech",
+                "defi-security",
+                "accounting-ai"
+            ]
+        },
+        {
+            "guid": "qwed-ucp",
+            "name": "QWED UCP (Unified Compliance)",
+            "description": "Unified Compliance Platform integration for regulatory reporting and real-time auditing.",
+            "webpageUrl": {
+                "url": "https://docs.qwedai.com/docs/ucp/overview"
+            },
+            "repositoryUrl": {
+                "url": "https://github.com/QWED-AI/qwed-ucp"
+            },
+            "licenses": [
+                "spdx:Apache-2.0"
+            ],
+            "tags": [
+                "regtech",
+                "compliance",
+                "audit-ai"
             ]
         }
     ],
@@ -54,7 +130,7 @@
                 "guid": "developer-sponsorship",
                 "status": "active",
                 "name": "Core Maintainer Support",
-                "description": "Support the full-time development of QWED Protocol.",
+                "description": "Support the full-time development of QWED Protocol and Ecosystem.",
                 "amount": 0,
                 "currency": "USD",
                 "frequency": "monthly",
@@ -66,12 +142,12 @@
         ],
         "history": [
             {
-                "year": 2024,
+                "year": 2025,
                 "income": 0,
                 "expenses": 0,
                 "taxes": 0,
                 "currency": "USD",
-                "description": "Project launched. Currently bootstrapping."
+                "description": "Scaling the ecosystem (Tax, Legal, Finance) and v2.0 verification engines."
             }
         ]
     }
