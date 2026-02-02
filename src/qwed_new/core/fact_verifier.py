@@ -212,25 +212,42 @@ class FactVerifier:
     # Sentence Segmentation
     # =========================================================================
     
-    def _segment_sentences(self, text: str) -> List[Tuple[str, int, int]]:
-        """
-        Segment text into sentences with their positions.
-        
-        Returns:
-            List of (sentence, start_index, end_index)
-        """
-        # Simple sentence boundary detection
-        # Handles: period, question mark, exclamation, followed by space and capital
-        sentence_pattern = r'(?<=[.!?])\s+(?=[A-Z])'
+        if len(text) > 100000:
+            text = text[:100000]  # Hard cap to prevent ReDoS on massive inputs
+            
+        # Optimized sentence boundary: avoid lookbehind/ahead complexity if possible
+        # Standard ReDoS-safe pattern for English sentences
+        # Limit the whitespace match to avoid catastrophic backtracking
+        sentence_pattern = r'[.!?]\s{1,50}(?=[A-Z])'
         
         sentences = []
         current_pos = 0
-        parts = re.split(sentence_pattern, text)
+        
+        # Using split with a simpler pattern is safer
+        # Find all delimiters first
+        matches = list(re.finditer(sentence_pattern, text))
+        
+        last_end = 0
+        for match in matches:
+            end = match.end() - 1 # Keep the delimiter with the sentence usually, or adjust
+            # Actually, re.split behavior is tricky to replicate exactly safely
+            # Let's use the pattern but with a limit
+            pass
+            
+        # Reverting to re.split but with SAFE regex
+        # The issue was \s+ which is unbounded. \s{1,50} limits backtracking.
+        safe_pattern = r'(?<=[.!?])\s{1,50}(?=[A-Z])'
+        
+        parts = re.split(safe_pattern, text)
         
         for part in parts:
             part = part.strip()
             if part:
+                # Find the part in text efficiently
                 start = text.find(part, current_pos)
+                if start == -1:
+                    # Fallback if strip() messed up strict finding
+                     start = current_pos
                 end = start + len(part)
                 sentences.append((part, start, end))
                 current_pos = end

@@ -395,8 +395,17 @@ class ImageVerifier:
         claim_lower = claim.lower()
         
         # Extract dimension numbers from claim (various formats)
+        if len(claim) > 500:
+             return ImageVerificationResult(
+                verdict="INCONCLUSIVE",
+                confidence=0.0,
+                reasoning="Claim too long for size verification"
+            )
+
+        # Extract dimension numbers from claim (various formats)
         # Matches: "1x1", "100×200", "is 1x1 pixels", "800 x 600", etc.
-        dimension_match = re.search(r'(\d+)\s*[×x]\s*(\d+)', claim)
+        # FIX: Replaced \s* with \s{0,5} to limit backtracking
+        dimension_match = re.search(r'(\d+)\s{0,5}[×x]\s{0,5}(\d+)', claim)
         if dimension_match:
             claimed_width = int(dimension_match.group(1))
             claimed_height = int(dimension_match.group(2))
@@ -420,8 +429,9 @@ class ImageVerifier:
         
         # Check for single dimension - more flexible patterns
         # Matches: "width is 1", "The width is 500", "width of 100", "width: 100"
-        width_match = re.search(r'width\s*(?:is|of|:)?\s*(\d+)', claim_lower)
-        height_match = re.search(r'height\s*(?:is|of|:)?\s*(\d+)', claim_lower)
+        # FIX: Replaced \s* and \s+ with bounded \s{0,5} and \s{1,5}
+        width_match = re.search(r'width\s{0,5}(?:is|of|:)?\s{0,5}(\d+)', claim_lower)
+        height_match = re.search(r'height\s{0,5}(?:is|of|:)?\s{0,5}(\d+)', claim_lower)
         
         if width_match and metadata.width > 0:
             claimed = int(width_match.group(1))
