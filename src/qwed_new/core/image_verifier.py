@@ -404,8 +404,8 @@ class ImageVerifier:
 
         # Extract dimension numbers from claim (various formats)
         # Matches: "1x1", "100×200", "is 1x1 pixels", "800 x 600", etc.
-        # FIX: Replaced \s* with \s{0,5} to limit backtracking
-        dimension_match = re.search(r'(\d+)\s{0,5}[×x]\s{0,5}(\d+)', claim)
+        # FIX: Replaced \d+ with \d{1,10} to fully bound the regex complexity
+        dimension_match = re.search(r'(\d{1,10})\s{0,5}[×x]\s{0,5}(\d{1,10})', claim)
         if dimension_match:
             claimed_width = int(dimension_match.group(1))
             claimed_height = int(dimension_match.group(2))
@@ -429,9 +429,9 @@ class ImageVerifier:
         
         # Check for single dimension - more flexible patterns
         # Matches: "width is 1", "The width is 500", "width of 100", "width: 100"
-        # FIX: Replaced \s* and \s+ with bounded \s{0,5} and \s{1,5}
-        width_match = re.search(r'width\s{0,5}(?:is|of|:)?\s{0,5}(\d+)', claim_lower)
-        height_match = re.search(r'height\s{0,5}(?:is|of|:)?\s{0,5}(\d+)', claim_lower)
+        # FIX: Replaced \d+ with \d{1,10}
+        width_match = re.search(r'width\s{0,5}(?:is|of|:)?\s{0,5}(\d{1,10})', claim_lower)
+        height_match = re.search(r'height\s{0,5}(?:is|of|:)?\s{0,5}(\d{1,10})', claim_lower)
         
         if width_match and metadata.width > 0:
             claimed = int(width_match.group(1))

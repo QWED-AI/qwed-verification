@@ -406,9 +406,9 @@ class FactVerifier:
         """
         Extract and match entities (numbers, dates, names).
         """
-        # Extract numbers
-        claim_numbers = set(re.findall(r'\b\d+(?:\.\d+)?\b', claim))
-        context_numbers = set(re.findall(r'\b\d+(?:\.\d+)?\b', context))
+        # Extract numbers (Max 20 digits to avoid ReDoS)
+        claim_numbers = set(re.findall(r'\b\d{1,20}(?:\.\d{1,10})?\b', claim))
+        context_numbers = set(re.findall(r'\b\d{1,20}(?:\.\d{1,10})?\b', context))
         
         # Extract years (4-digit numbers starting with 1 or 2)
         claim_years = set(re.findall(r'\b[12]\d{3}\b', claim))
