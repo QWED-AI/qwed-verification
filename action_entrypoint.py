@@ -275,7 +275,11 @@ def output_results(findings: list, format: str, scan_type: str):
             print(f"\n❌ Found {len(findings)} issue(s):\n")
             for f in findings[:20]:  # Limit output
                 print(f"   [{f['type']}] {f['file']}:{f.get('line', '?')}")
-                print(f"   └── {f['message']}\n")
+                count = f.get("count")
+                if count is not None:
+                    print(f"   └── Detected {count} instance(s) of {f['type']}.\n")
+                else:
+                    print(f"   └── Detected potential {f['type']} issue.\n")
             if len(findings) > 20:
                 print(f"   ... and {len(findings) - 20} more issues.")
         else:
