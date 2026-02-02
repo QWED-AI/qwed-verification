@@ -1,4 +1,3 @@
-import pytest
 from qwed_new.core.fact_verifier import FactVerifier
 from qwed_new.core.image_verifier import ImageVerifier, ImageAnalysisResult
 
@@ -34,14 +33,16 @@ def test_image_verifier_bounded_regex():
     Test that ImageVerifier's bounded regexes match valid dimensions
     and reject excessively long claims.
     """
-    verifier = ImageVerifier(use_llm_fallback=False)
+    verifier = ImageVerifier(use_vlm_fallback=False)
     dummy_meta = ImageAnalysisResult(
-        description="test", objects=[], text=[], valid=True,
-        width=800, height=600, format="PNG", mode="RGB"
+        width=800, height=600, format="PNG", 
+        has_text=False, extracted_text=[], 
+        dominant_colors=[], detected_elements=[]
     )
     
     # 1. Valid Dimensions - Should match using the new \d{1,10} regex
     claim_valid = "The image is 800x600 pixels."
+    # Use internal method for regex test, but ensure logic holds
     result_valid = verifier._verify_size_claim(claim_valid, dummy_meta)
     
     assert result_valid.verdict == "SUPPORTED"
@@ -49,10 +50,12 @@ def test_image_verifier_bounded_regex():
     
     # 2. ReDoS Attempt - Should be blocked by length check
     long_claim = "a" * 600
-    result_blocked = verifier._verify_size_claim(long_claim, dummy_meta)
+    # Must call verify_image to hit the length guard
+    result_blocked = verifier.verify_image(b"fake_bytes", long_claim)
     
-    assert result_blocked.verdict == "INCONCLUSIVE"
-    assert "Claim too long" in result_blocked.reasoning
+    # Note: result_blocked is dict from verify_image, NOT object
+    assert result_blocked["verdict"] == "INCONCLUSIVE"
+    assert "Claim too long" in result_blocked["reasoning"]
     
     # 3. Mixed spaces - Should match with bounded \s{0,5}
     claim_spaces = "800   x   600"
