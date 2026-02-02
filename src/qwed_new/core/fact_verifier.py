@@ -212,29 +212,20 @@ class FactVerifier:
     # Sentence Segmentation
     # =========================================================================
     
+    def _segment_sentences(self, text: str) -> List[Tuple[str, int, int]]:
+        """
+        Segment text into sentences with their positions.
+        
+        Returns:
+            List of (sentence, start_index, end_index)
+        """
         if len(text) > 100000:
             text = text[:100000]  # Hard cap to prevent ReDoS on massive inputs
             
-        # Optimized sentence boundary: avoid lookbehind/ahead complexity if possible
-        # Standard ReDoS-safe pattern for English sentences
-        # Limit the whitespace match to avoid catastrophic backtracking
-        sentence_pattern = r'[.!?]\s{1,50}(?=[A-Z])'
-        
         sentences = []
         current_pos = 0
-        
-        # Using split with a simpler pattern is safer
-        # Find all delimiters first
-        matches = list(re.finditer(sentence_pattern, text))
-        
-        last_end = 0
-        for match in matches:
-            end = match.end() - 1 # Keep the delimiter with the sentence usually, or adjust
-            # Actually, re.split behavior is tricky to replicate exactly safely
-            # Let's use the pattern but with a limit
-            pass
-            
-        # Reverting to re.split but with SAFE regex
+
+        # Standard ReDoS-safe pattern for English sentences
         # The issue was \s+ which is unbounded. \s{1,50} limits backtracking.
         safe_pattern = r'(?<=[.!?])\s{1,50}(?=[A-Z])'
         
