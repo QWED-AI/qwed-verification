@@ -1,4 +1,3 @@
-import pytest
 from qwed_new.auth.security import hash_api_key
 from qwed_new.core.image_verifier import ImageVerifier
 
