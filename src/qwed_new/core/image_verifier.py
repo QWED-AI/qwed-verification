@@ -395,14 +395,6 @@ class ImageVerifier:
         claim_lower = claim.lower()
         
         # Extract dimension numbers from claim (various formats)
-        if len(claim) > 500:
-             return ImageVerificationResult(
-                verdict="INCONCLUSIVE",
-                confidence=0.0,
-                reasoning="Claim too long for size verification"
-            )
-
-        # Extract dimension numbers from claim (various formats)
         # Matches: "1x1", "100×200", "is 1x1 pixels", "800 x 600", etc.
         # FIX: Replaced \d+ with \d{1,10} to fully bound the regex complexity
         dimension_match = re.search(r'(\d{1,10})\s{0,5}[×x]\s{0,5}(\d{1,10})', claim)
