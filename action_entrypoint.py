@@ -260,7 +260,26 @@ def action_verify_shell():
 def output_results(findings: list, format: str, scan_type: str):
     """Output findings in requested format."""
     if format == "json":
-        print(json.dumps({"findings": findings, "count": len(findings)}, indent=2))
+        # Emit a sanitized summary to avoid logging potentially sensitive details.
+        safe_findings = []
+        for f in findings:
+            safe_entry = {
+                "type": f.get("type", "UNKNOWN"),
+            }
+            if "file" in f:
+                # Only log the basename of the file to avoid leaking full paths.
+                safe_entry["file"] = os.path.basename(f["file"])
+            if "line" in f:
+                safe_entry["line"] = f["line"]
+            safe_findings.append(safe_entry)
+        print(json.dumps(
+            {
+                "scan_type": scan_type,
+                "count": len(findings),
+                "findings": safe_findings,
+            },
+            indent=2,
+        ))
         
     elif format == "sarif":
         sarif = generate_sarif(findings, scan_type)
@@ -274,8 +293,10 @@ def output_results(findings: list, format: str, scan_type: str):
         if findings:
             print(f"\n❌ Found {len(findings)} issue(s):\n")
             for f in findings[:20]:  # Limit output
-                print(f"   [{f['type']}] {f['file']}:{f.get('line', '?')}")
-                print(f"   └── {f['message']}\n")
+                file_display = os.path.basename(f.get("file", "?"))
+                line_display = f.get("line", "?")
+                # Only show type and a minimally identifying file/line to avoid exposing secrets.
+                print(f"   [{f.get('type', 'UNKNOWN')}] {file_display}:{line_display}")
             if len(findings) > 20:
                 print(f"   ... and {len(findings) - 20} more issues.")
         else:
