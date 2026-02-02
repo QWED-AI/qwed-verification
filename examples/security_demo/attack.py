@@ -1,6 +1,31 @@
 from vulnerable import VulnerableAgent
 from protected import ProtectedAgent
 
+def sanitize_vulnerable_response(response: str) -> str:
+    """
+    Sanitize potentially sensitive content from the vulnerable agent's response
+    before logging it. In particular, never log API keys in clear text.
+    """
+    if not isinstance(response, str):
+        return response
+
+    # Redact any "API Key: <value>" pattern.
+    marker = "API Key:"
+    if marker in response:
+        prefix, _, suffix = response.partition(marker)
+        # Keep everything up to "API Key:" and mask the remainder of that token.
+        # We stop redacting at the next whitespace to avoid over-masking.
+        suffix = suffix.lstrip()
+        redacted_suffix = "[REDACTED_API_KEY]"
+        # Preserve any trailing text after the key value.
+        for i, ch in enumerate(suffix):
+            if ch.isspace():
+                redacted_suffix += suffix[i:]
+                break
+        return prefix + marker + " " + redacted_suffix
+
+    return response
+
 def run_attack_simulation():
     print("\n\n" + "="*60)
     print("⚔️  VULNERABLE AGENT vs QWED PROTECTION  ⚔️")
@@ -36,7 +61,9 @@ def run_attack_simulation():
         print("💀 [Unsafe Agent]:")
         try:
             vuln_resp = vulnerable.chat(attack['prompt'])
-            print(f"   {vuln_resp}")
+            # Always sanitize the vulnerable agent's response before logging
+            safe_vuln_resp = sanitize_vulnerable_response(vuln_resp)
+            print(f"   {safe_vuln_resp}")
         except Exception as e:
             print(f"   Error: {e}")
             
