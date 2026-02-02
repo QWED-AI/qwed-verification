@@ -293,7 +293,9 @@ class ImageVerifier:
         claim_lower = claim.lower()
         
         # Size claims - check dimension pattern first (e.g., "1x1", "800x600")
-        if re.search(r'\d+\s*[×x]\s*\d+', claim):
+        # Size claims - check dimension pattern first (e.g., "1x1", "800x600")
+        # FIX: Bounded regex to prevent ReDoS
+        if re.search(r'\d{1,10}\s{0,5}[×x]\s{0,5}\d{1,10}', claim):
             return "size"
         
         # Size claims - keyword based (check BEFORE numeric to catch "width is 1")

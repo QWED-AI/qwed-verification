@@ -61,3 +61,35 @@ def test_image_verifier_bounded_regex():
     claim_spaces = "800   x   600"
     result_spaces = verifier._verify_size_claim(claim_spaces, dummy_meta)
     assert result_spaces.verdict == "SUPPORTED"
+
+def test_graph_verifier_bounded_regex():
+    """
+    Test that GraphFactVerifier's new bounded regexes correctly extract triples
+    and handle long inputs without crashing.
+    """
+    from qwed_new.core.graph_fact_verifier import GraphFactVerifier, Triple
+    
+    verifier = GraphFactVerifier(use_spacy=False)
+    
+    # 1. Normal Input - Should extract triples correctly
+    # Pattern 1: X is Y
+    text1 = "Narendra Modi is the Prime Minister of India."
+    triples1 = verifier._extract_triples_rules(text1)
+    assert any(t.subject == "Narendra Modi" and t.object == "Prime Minister of India" for t in triples1)
+    
+    # Pattern 2: X bought Y
+    text2 = "Elon Musk bought Twitter."
+    triples2 = verifier._extract_triples_rules(text2)
+    assert any(t.subject == "Elon Musk" and t.object == "Twitter" for t in triples2)
+
+    # 2. Long Input (ReDoS Probe) - Should be handled safely
+    # Create a string that would explode a bad regex: "A " * 1000 + "is B"
+    # The old regex (nested +*) would choke here.
+    long_input = ("A " * 2000) + "is B"
+    
+    # Limit input length if necessary (GraphVerifier default split is by sentence)
+    # The new regexes are bounded {1,20} so they shouldn't match "A " * 2000 as a single name,
+    # avoiding the pathologically long match attempt.
+    triples_long = verifier._extract_triples_rules(long_input)
+    # Should finish quickly
+    assert isinstance(triples_long, list)

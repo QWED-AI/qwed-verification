@@ -262,9 +262,12 @@ class GraphFactVerifier:
                 continue
             
             # Pattern 1: "X is/was/are Y" or "X is/was/are the Y of Z" (identity)
-            # Fixed: Use greedy match with word boundary check
+            # Pattern 1: "X is/was/are Y" or "X is/was/are the Y of Z" (identity)
+            # Fixed: Flattened and bounded patterns to prevent ReDoS
+            # Subject: Capitalized words, max 10 parts
+            # Object: Words, max 10 parts
             match = re.search(
-                r'([A-Z][a-zA-Z]+(?:\s+[A-Z]?[a-zA-Z]+)*?)\s+(?:is|was|are|were)\s+(?:the\s+)?(?:a\s+|an\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)*)(?:\s+of\s+([A-Z][a-zA-Z]+(?:\s+[A-Za-z]+)*))?',
+                r'([A-Z][a-zA-Z]{1,20}(?:\s{1,5}[A-Z]?[a-zA-Z]{1,20}){0,10})\s+(?:is|was|are|were)\s+(?:the\s+)?(?:a\s+|an\s+)?([A-Za-z]{1,20}(?:\s{1,5}[A-Za-z]{1,20}){0,10})(?:\s+of\s+([A-Z][a-zA-Z]{1,20}(?:\s{1,5}[A-Za-z]{1,20}){0,10}))?',
                 sentence
             )
             if match:
@@ -282,7 +285,7 @@ class GraphFactVerifier:
             
             # Pattern 2: "X verb Y" (action)
             match = re.search(
-                r'([A-Z][a-zA-Z]+(?:\s+[A-Z]?[a-zA-Z]+)*?)\s+(bought|sold|acquired|founded|created|wrote|launched|leads?|manages?|runs?)\s+([A-Za-z]+(?:\s+[A-Za-z]+)*)',
+                r'([A-Z][a-zA-Z]{1,20}(?:\s{1,5}[A-Z]?[a-zA-Z]{1,20}){0,10})\s+(bought|sold|acquired|founded|created|wrote|launched|leads?|manages?|runs?)\s+([A-Za-z]{1,20}(?:\s{1,5}[A-Za-z]{1,20}){0,10})',
                 sentence,
                 re.IGNORECASE
             )
@@ -296,7 +299,7 @@ class GraphFactVerifier:
             
             # Pattern 3: "X serves as Y" / "X works as Y"
             match = re.search(
-                r'([A-Z][a-zA-Z\s]+?)\s+(?:serves?|works?)\s+as\s+(?:the\s+)?([A-Za-z\s]+)',
+                r'([A-Z][a-zA-Z\s]{1,100})\s+(?:serves?|works?)\s+as\s+(?:the\s+)?([A-Za-z\s]{1,100})',
                 sentence,
                 re.IGNORECASE
             )
@@ -310,7 +313,7 @@ class GraphFactVerifier:
             
             # Pattern 4: "X, the Y of Z" (appositive)
             match = re.search(
-                r'([A-Z][a-zA-Z\s]+?),\s+(?:the\s+)?([A-Za-z\s]+?)\s+of\s+([A-Z][a-zA-Z\s]+)',
+                r'([A-Z][a-zA-Z\s]{1,100}),\s+(?:the\s+)?([A-Za-z\s]{1,100})\s+of\s+([A-Z][a-zA-Z\s]{1,100})',
                 sentence
             )
             if match:
