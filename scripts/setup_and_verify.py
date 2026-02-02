@@ -57,7 +57,7 @@ def run_setup():
         resp = requests.post(f"{BASE_URL}/auth/api-keys", json={"name": "Integration Test Key"}, headers=headers)
         resp.raise_for_status()
         api_key = resp.json()["key"]
-        print(f"✅ API Key generated: {api_key}")
+        print("✅ API Key generated successfully.")
     except Exception as e:
         print(f"❌ API Key generation failed: {e}")
         return

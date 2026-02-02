@@ -66,11 +66,11 @@ def seed_database():
         
         print("✅ Database seeded successfully!")
         print(f"   Organization: {demo_org.display_name}")
-        print(f"   API Key: {raw_api_key}")
+        print(f"   API Key Preview: {api_key_obj.key_preview} (store the full key securely; it is only shown once at creation)")
         print(f"   Key Expires: {api_key_obj.expires_at}")
         print(f"   Tier: {demo_org.tier}")
-        print(f"\n   Use this in your requests:")
-        print(f"   curl -H 'x-api-key: {raw_api_key}' http://13.71.22.94:8000/verify/natural_language")
+        print(f"\n   Use this in your requests (replace <YOUR_API_KEY_HERE> with the full key you stored securely):")
+        print("   curl -H 'x-api-key: <YOUR_API_KEY_HERE>' http://13.71.22.94:8000/verify/natural_language")
 
 if __name__ == "__main__":
     seed_database()

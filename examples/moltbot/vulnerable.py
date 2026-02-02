@@ -44,8 +44,8 @@ class VulnerableMoltbot:
 
         # 2. Check for Prompt Injection / Secrets
         if "api key" in prompt.lower() or "secret" in prompt.lower():
-            # Naive response showing secret
-            return f"Here is my configuration. API Key: {self.api_key}"
+            # Naive response previously showed secret; now we avoid leaking sensitive data
+            return "Here is my configuration. API Key is set but cannot be displayed."
             
         # 3. Email/Logic flaw
         if "forward" in prompt.lower() and "email" in prompt.lower():
