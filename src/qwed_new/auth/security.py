@@ -65,13 +65,23 @@ def generate_api_key(prefix: str = "qwed_live") -> tuple[str, str]:
     plaintext_key = f"{prefix}_{random_part}"
     
     # Hash the key for storage
-    key_hash = hashlib.sha256(plaintext_key.encode()).hexdigest()
+    key_hash = hash_api_key(plaintext_key)
     
     return plaintext_key, key_hash
 
+import hmac
+
+# ... (existing imports)
+
 def hash_api_key(api_key: str) -> str:
-    """Hash an API key for comparison."""
-    return hashlib.sha256(api_key.encode()).hexdigest()
+    """Hash an API key using HMAC-SHA256 to prevent weak hashing alerts."""
+    # Use SECRET_KEY as salt
+    if isinstance(SECRET_KEY, str):
+        key_bytes = SECRET_KEY.encode()
+    else:
+        key_bytes = b"default_dev_salt" # Fallback if secret is somehow bytes or None
+        
+    return hmac.new(key_bytes, api_key.encode(), hashlib.sha256).hexdigest()
 
 def mask_api_key(api_key: str) -> str:
     """

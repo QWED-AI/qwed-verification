@@ -24,10 +24,14 @@ async def get_api_key(
             detail="Missing x-api-key header"
         )
     
+from qwed_new.auth.security import hash_api_key
+
+# ...
+
     # Hash the provided key to compare with stored hash
     # The key format is qwed_live_<random>
     # We store the hash of the full key string
-    hashed_key = hashlib.sha256(api_key_header.encode()).hexdigest()
+    hashed_key = hash_api_key(api_key_header)
     
     # Query database for the key
     statement = select(ApiKey).where(
