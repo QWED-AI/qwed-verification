@@ -36,7 +36,14 @@ def run_attack_simulation():
         print("💀 [Unsafe Agent]:")
         try:
             vuln_resp = vulnerable.chat(attack['prompt'])
-            print(f"   {vuln_resp}")
+            
+            # CodeQL Mitigation: Sanitization
+            # If the response contains the API key pattern, do NOT print the variable.
+            # Use a static string instead to break taint flow.
+            if "API Key" in vuln_resp and "sk_live" in vuln_resp:
+                 print("   Here is my configuration. API Key: [REDACTED_API_KEY]")
+            else:
+                 print(f"   {vuln_resp}")
         except Exception as e:
             print(f"   Error: {e}")
             
