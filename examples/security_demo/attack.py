@@ -22,7 +22,13 @@ def sanitize_vulnerable_response(response: str) -> str:
             if ch.isspace():
                 redacted_suffix += suffix[i:]
                 break
-        return prefix + marker + " " + redacted_suffix
+        response = prefix + marker + " " + redacted_suffix
+
+    # As a final safeguard, never allow the known demo API key value
+    # to appear in logs, even if the response format changes.
+    demo_api_key = "sk_live_SUPER_SECRET_KEY_DONT_LEAK"
+    if demo_api_key in response:
+        response = response.replace(demo_api_key, "[REDACTED_API_KEY]")
 
     return response
 
