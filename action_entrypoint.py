@@ -120,7 +120,10 @@ def action_scan_secrets():
                     findings.append({
                         "file": str(filepath),
                         "type": secret["type"],
-                        "message": secret["message"]
+                        "file": str(filepath),
+                        "type": secret["type"],
+                        # "message": secret["message"] # REMOVED: Tainted source
+                        "message": "Potential secret detected (see SARIF for details)"
                     })
         except Exception as e:
             print(f"   ⚠️  Could not scan {filepath}: {e}")
@@ -311,8 +314,15 @@ def output_results(findings: list, format: str, scan_type: str):
             print(f"\n❌ Found {len(findings)} issue(s):\n")
             for f in findings[:20]:  # Limit output
                 safe_file = os.path.basename(f.get("file", "?"))
-                print(f"   [{f['type']}] {safe_file}:{f.get('line', '?')}")
-                print(f"   └── Detected potential {f['type']} issue.\n")
+                # Sanitize output variables to prevent injection/leakage (CodeQL Requirement)
+                raw_type = str(f.get("type", "UNKNOWN"))
+                safe_type = "".join(ch for ch in raw_type if ch.isalnum() or ch in ("_", "-")) or "UNKNOWN"
+                
+                raw_line = f.get("line", "?")
+                safe_line = str(raw_line) if isinstance(raw_line, (int, str)) else "?"
+                
+                print(f"   [{safe_type}] {safe_file}:{safe_line}")
+                print(f"   └── Detected potential {safe_type} issue.\n")
             if len(findings) > 20:
                 print(f"   ... and {len(findings) - 20} more issues.")
         else:
