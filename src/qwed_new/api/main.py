@@ -223,7 +223,6 @@ async def verify_fact(
         return result
         
     except Exception as e:
-    except Exception as e:
         logger.error(f"Fact verification error: {redact_pii(str(e))}", exc_info=True)
         return {
             "status": "ERROR",
@@ -273,7 +272,6 @@ async def verify_code(
         
         return result
         
-    except Exception as e:
     except Exception as e:
         logger.error(f"Code verification error: {redact_pii(str(e))}", exc_info=True)
         return {
@@ -443,7 +441,6 @@ async def verify_math(
         return result
         
     except Exception as e:
-    except Exception as e:
         logger.error(f"Math verification error: {redact_pii(str(e))}", exc_info=True)
         return {
             "status": "ERROR",
@@ -495,7 +492,6 @@ async def verify_sql(
         
         return result
         
-    except Exception as e:
     except Exception as e:
         logger.error(f"SQL verification error: {redact_pii(str(e))}", exc_info=True)
         return {
@@ -753,7 +749,6 @@ async def agent_verify(
             organization_id=agent.organization_id,
             preferred_provider=request.provider
         )
-    except Exception as e:
     except Exception as e:
         logger.error(f"Agent verification failed: {redact_pii(str(e))}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal agent verification error")
