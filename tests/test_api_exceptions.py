@@ -1,11 +1,30 @@
 from fastapi.testclient import TestClient
-from unittest.mock import patch
-from qwed_new.api.main import app
+from unittest.mock import patch, MagicMock
+from qwed_new.api.main import app, get_current_tenant, get_session, check_rate_limit, TenantContext
+from sqlmodel import Session
+
+# Mock dependencies
+async def mock_get_current_tenant():
+    # Return a dummy context
+    mock_ctx = MagicMock(spec=TenantContext)
+    mock_ctx.organization_id = 123
+    mock_ctx.api_key = "dummy_key"
+    mock_ctx.user_id = 456
+    return mock_ctx
+
+def mock_get_session():
+    # Return a dummy session
+    return MagicMock(spec=Session)
+
+def mock_check_rate_limit(api_key: str):
+    pass # No-op
+
+# Apply overrides
+app.dependency_overrides[get_current_tenant] = mock_get_current_tenant
+app.dependency_overrides[get_session] = mock_get_session
+app.dependency_overrides[check_rate_limit] = mock_check_rate_limit
 
 client = TestClient(app)
-
-# Mock dependencies to bypass auth/rate-limiting/db for pure logic testing
-# Note: In a real integration test we might want these, but here we want to force localized errors.
 
 def test_verify_math_exception_handling():
     """
