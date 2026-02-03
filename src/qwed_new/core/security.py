@@ -12,6 +12,27 @@ from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
 
+# Module-level PII Constants
+PII_PATTERNS = {
+    "EMAIL": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
+    "PHONE": r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b", # Simple US format
+    "SSN": r"\b\d{3}-\d{2}-\d{4}\b",
+    "IP": r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"
+}
+
+def redact_pii(text: str) -> str:
+    """
+    Redacts PII from text using module-level patterns.
+    Functions as a standalone utility.
+    """
+    if not isinstance(text, str):
+        return str(text)
+        
+    redacted = text
+    for p_type, pattern in PII_PATTERNS.items():
+        redacted = re.sub(pattern, f"[{p_type}_REDACTED]", redacted)
+    return redacted
+
 
 class SecurityGateway:
     """
@@ -43,13 +64,10 @@ class SecurityGateway:
             r"disregard.*prompt"
         ]
         
-        # PII Patterns (Regex)
-        self.pii_patterns = {
-            "EMAIL": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
-            "PHONE": r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b", # Simple US format
-            "SSN": r"\b\d{3}-\d{2}-\d{4}\b",
-            "IP": r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"
-        }
+        
+        # PII Patterns (Regex) are now module-level constants
+        self.pii_patterns = PII_PATTERNS
+
 
     def detect_injection(self, prompt: str) -> Tuple[bool, Optional[str]]:
         """
@@ -76,11 +94,9 @@ class SecurityGateway:
     def redact_pii(self, text: str) -> str:
         """
         Redacts PII from text.
+        Wraps module-level function.
         """
-        redacted = text
-        for p_type, pattern in self.pii_patterns.items():
-            redacted = re.sub(pattern, f"[{p_type}_REDACTED]", redacted)
-        return redacted
+        return redact_pii(text)
 
 
 class EnhancedSecurityGateway:
