@@ -120,13 +120,38 @@ def action_scan_secrets():
                     findings.append({
                         "file": str(filepath),
                         "type": secret["type"],
-                        "message": secret["message"]
+                        # "message": secret["message"] # REMOVED: Tainted source
+                        "message": "Potential secret detected (see SARIF for details)"
                     })
         except Exception as e:
             print(f"   ⚠️  Could not scan {filepath}: {e}")
     
     # Output results
-    output_results(findings, output_format, "secrets")
+    # Output results manually to prevent tainting output_results with secret data
+    if output_format == "sarif":
+        sarif = generate_sarif(findings, "secrets")
+        sarif_path = "qwed-results.sarif"
+        with open(sarif_path, "w") as f:
+            json.dump(sarif, f, indent=2)
+        print(f"📊 SARIF output written to: {sarif_path}")
+        set_output("sarif_file", sarif_path)
+    
+    elif output_format == "json":
+        # SECURE JSON OUTPUT: Only counts, no details to console
+        print(json.dumps({
+            "scan_type": "secrets",
+            "count": len(findings),
+            "message": "Details omitted for security. Check SARIF report."
+        }, indent=2))
+        
+    else:
+        # SECURE TEXT OUTPUT: Only counts, no details to console
+        if findings:
+            print(f"\n❌ Found {len(findings)} secret(s).")
+            print("   ⚠️  Details omitted from logs to prevent leakage.")
+            print("   📄 Check the 'Security' tab or 'qwed-results.sarif' artifact.")
+        else:
+            print("\n✅ No secrets found!\n")
     
     set_output("verified", "true" if len(findings) == 0 else "false")
     set_output("findings_count", str(len(findings)))
@@ -259,8 +284,23 @@ def action_verify_shell():
 # ============== OUTPUT HELPERS ==============
 def output_results(findings: list, format: str, scan_type: str):
     """Output findings in requested format."""
+    
+    """Output findings in requested format."""
+    
+    # NOTE: This function is NO LONGER called for "secrets" scan type.
+    # Secret scanning handles its own output to prevent taint flow.
+
+    # For valid non-secret scans (code, shell), we can show safe details
     if format == "json":
-        print(json.dumps({"findings": findings, "count": len(findings)}, indent=2))
+        # Sanitize findings for JSON output
+        safe_findings = []
+        for f in findings:
+            safe_findings.append({
+                "type": f.get("type", "UNKNOWN"),
+                "file": os.path.basename(f.get("file", "")), # Only show basename
+                "line": f.get("line", "?")
+            })
+        print(json.dumps({"findings": safe_findings, "count": len(findings)}, indent=2))
         
     elif format == "sarif":
         sarif = generate_sarif(findings, scan_type)
@@ -274,8 +314,16 @@ def output_results(findings: list, format: str, scan_type: str):
         if findings:
             print(f"\n❌ Found {len(findings)} issue(s):\n")
             for f in findings[:20]:  # Limit output
-                print(f"   [{f['type']}] {f['file']}:{f.get('line', '?')}")
-                print(f"   └── {f['message']}\n")
+                safe_file = os.path.basename(f.get("file", "?"))
+                # Sanitize output variables to prevent injection/leakage (CodeQL Requirement)
+                raw_type = str(f.get("type", "UNKNOWN"))
+                safe_type = "".join(ch for ch in raw_type if ch.isalnum() or ch in ("_", "-")) or "UNKNOWN"
+                
+                raw_line = f.get("line", "?")
+                safe_line = str(raw_line) if isinstance(raw_line, (int, str)) else "?"
+                
+                print(f"   [{safe_type}] {safe_file}:{safe_line}")
+                print(f"   └── Detected potential {safe_type} issue.\n")
             if len(findings) > 20:
                 print(f"   ... and {len(findings) - 20} more issues.")
         else:
