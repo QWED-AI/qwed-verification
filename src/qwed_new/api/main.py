@@ -6,6 +6,8 @@ from sqlmodel import Session
 import os
 import logging
 
+from qwed_new.core.security import redact_pii
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -221,7 +223,8 @@ async def verify_fact(
         return result
         
     except Exception as e:
-        logger.error(f"Fact verification error: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Fact verification error: {redact_pii(str(e))}", exc_info=True)
         return {
             "status": "ERROR",
             "error": "Internal verification error",
@@ -271,7 +274,8 @@ async def verify_code(
         return result
         
     except Exception as e:
-        logger.error(f"Code verification error: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Code verification error: {redact_pii(str(e))}", exc_info=True)
         return {
             "status": "ERROR",
             "error": "Internal verification error",
@@ -439,7 +443,8 @@ async def verify_math(
         return result
         
     except Exception as e:
-        logger.error(f"Math verification error: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Math verification error: {redact_pii(str(e))}", exc_info=True)
         return {
             "status": "ERROR",
             "error": "Internal verification error",
@@ -491,7 +496,8 @@ async def verify_sql(
         return result
         
     except Exception as e:
-        logger.error(f"SQL verification error: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"SQL verification error: {redact_pii(str(e))}", exc_info=True)
         return {
             "status": "ERROR",
             "error": "Internal verification error",
@@ -748,7 +754,8 @@ async def agent_verify(
             preferred_provider=request.provider
         )
     except Exception as e:
-        logger.error(f"Agent verification failed: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Agent verification failed: {redact_pii(str(e))}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal agent verification error")
     
     # 4. Log activity
@@ -827,7 +834,7 @@ async def agent_tool_call(
     )
     
     if not success:
-        logger.error(f"Tool execution failed: {error}")
+        logger.error(f"Tool execution failed: {redact_pii(str(error))}")
         raise HTTPException(status_code=500, detail="Tool execution failed")
     
     return {

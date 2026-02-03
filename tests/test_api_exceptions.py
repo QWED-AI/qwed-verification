@@ -1,7 +1,5 @@
-
-import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from qwed_new.api.main import app
 
 client = TestClient(app)
@@ -15,9 +13,10 @@ def test_verify_math_exception_handling():
     """
     # Force an exception during parsing/processing
     with patch('sympy.parsing.sympy_parser.parse_expr', side_effect=ValueError("CRITICAL SENSITIVE STACK TRACE")):
+        # Providing valid minimal input to pass Pydantic validation
         response = client.post(
             "/verify/math",
-            json={"expression": "1/0"} # Payload doesn't matter much as we mock the internal call
+            json={"expression": "1+1"} 
         )
         
         # It should return 200 OK (soft failure) as per our logic, or handle it gracefully
@@ -36,7 +35,8 @@ def test_verify_sql_exception_handling():
             "/verify/sql",
             json={
                 "query": "SELECT *",
-                "schema_ddl": "CREATE TABLE t(id int)"
+                "schema_ddl": "CREATE TABLE t(id int)", # Required field
+                "type": "postgres" # Valid type
             }
         )
         
@@ -72,7 +72,7 @@ def test_verify_code_exception_handling():
     with patch('qwed_new.core.code_verifier.CodeVerifier.verify_code', side_effect=Exception("INTERNAL_PATH_LEAK")):
         response = client.post(
             "/verify/code",
-            json={"code": "print('hello')"}
+            json={"code": "print('hello')", "language": "python"}
         )
         
         assert response.status_code == 200
