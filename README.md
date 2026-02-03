@@ -747,4 +747,8 @@ We're actively looking for contributors! Whether you're a first-timer or experie
   <a href="https://www.netlify.com">
     <img src="https://www.netlify.com/img/global/badges/netlify-color-accent.svg" alt="Deploys by Netlify" />
   </a>
+  <br>
+  <a href="https://snyk.io">
+    <img src="https://img.shields.io/badge/Security-Snyk-4C4A73?style=for-the-badge&logo=snyk&logoColor=white" alt="Secured by Snyk" />
+  </a>
 </div>
