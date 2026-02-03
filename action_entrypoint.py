@@ -259,15 +259,42 @@ def action_verify_shell():
 # ============== OUTPUT HELPERS ==============
 def output_results(findings: list, format: str, scan_type: str):
     """Output findings in requested format."""
+    
+    # SECURITY: For secret scanning, never output details to console logs.
+    # CodeQL flags any data flow from secret scanner as tainted.
+    # Details are preserved in the SARIF file (uploaded as artifact).
+    if scan_type == "secrets":
+        if format == "json":
+            print(json.dumps({
+                "scan_type": scan_type,
+                "count": len(findings),
+                "message": "Details omitted for security. Check SARIF report."
+            }, indent=2))
+        elif format == "sarif":
+            sarif = generate_sarif(findings, scan_type)
+            sarif_path = "qwed-results.sarif"
+            with open(sarif_path, "w") as f:
+                json.dump(sarif, f, indent=2)
+            print(f"📊 SARIF output written to: {sarif_path}")
+            set_output("sarif_file", sarif_path)
+        else:  # text
+            if findings:
+                print(f"\n❌ Found {len(findings)} secret(s).")
+                print("   ⚠️  Details omitted from logs to prevent leakage.")
+                print("   📄 Check the 'Security' tab or 'qwed-results.sarif' artifact.")
+            else:
+                print("\n✅ No secrets found!\n")
+        return
+
+    # For valid non-secret scans (code, shell), we can show safe details
     if format == "json":
-        # Sanitize findings for JSON output to prevent secret leakage
+        # Sanitize findings for JSON output
         safe_findings = []
         for f in findings:
             safe_findings.append({
                 "type": f.get("type", "UNKNOWN"),
                 "file": os.path.basename(f.get("file", "")), # Only show basename
                 "line": f.get("line", "?")
-                # Intentionally omitting 'message' which may contain secrets
             })
         print(json.dumps({"findings": safe_findings, "count": len(findings)}, indent=2))
         
@@ -285,7 +312,6 @@ def output_results(findings: list, format: str, scan_type: str):
             for f in findings[:20]:  # Limit output
                 safe_file = os.path.basename(f.get("file", "?"))
                 print(f"   [{f['type']}] {safe_file}:{f.get('line', '?')}")
-                # Use generic message instead of potentially tainted f['message']
                 print(f"   └── Detected potential {f['type']} issue.\n")
             if len(findings) > 20:
                 print(f"   ... and {len(findings) - 20} more issues.")
