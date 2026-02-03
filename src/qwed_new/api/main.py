@@ -4,6 +4,11 @@ from pydantic import BaseModel
 from typing import Optional
 from sqlmodel import Session
 import os
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 from qwed_new.core.control_plane import ControlPlane
 from qwed_new.core.tenant_context import get_current_tenant, TenantContext
@@ -216,9 +221,10 @@ async def verify_fact(
         return result
         
     except Exception as e:
+        logger.error(f"Fact verification error: {e}", exc_info=True)
         return {
             "status": "ERROR",
-            "error": str(e),
+            "error": "Internal verification error",
             "verdict": "ERROR"
         }
 
@@ -265,9 +271,10 @@ async def verify_code(
         return result
         
     except Exception as e:
+        logger.error(f"Code verification error: {e}", exc_info=True)
         return {
             "status": "ERROR",
-            "error": str(e),
+            "error": "Internal verification error",
             "is_safe": False
         }
 
@@ -432,9 +439,10 @@ async def verify_math(
         return result
         
     except Exception as e:
+        logger.error(f"Math verification error: {e}", exc_info=True)
         return {
             "status": "ERROR",
-            "error": str(e),
+            "error": "Internal verification error",
             "is_valid": False
         }
 
@@ -483,9 +491,10 @@ async def verify_sql(
         return result
         
     except Exception as e:
+        logger.error(f"SQL verification error: {e}", exc_info=True)
         return {
             "status": "ERROR",
-            "error": str(e),
+            "error": "Internal verification error",
             "is_valid": False
         }
 
@@ -546,7 +555,7 @@ async def verify_image(
     except Exception as e:
         return {
             "status": "ERROR",
-            "error": str(e),
+            "error": "Internal processing error",
             "verdict": "INCONCLUSIVE",
             "confidence": 0.0
         }
@@ -732,11 +741,15 @@ async def agent_verify(
         raise HTTPException(status_code=403, detail=budget_reason)
     
     # 3. Process via control plane
-    result = await control_plane.process_natural_language(
-        request.query,
-        organization_id=agent.organization_id,
-        preferred_provider=request.provider
-    )
+    try:
+        result = await control_plane.process_natural_language(
+            request.query,
+            organization_id=agent.organization_id,
+            preferred_provider=request.provider
+        )
+    except Exception as e:
+        logger.error(f"Agent verification failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal agent verification error")
     
     # 4. Log activity
     latency = (time.time() - start_time) * 1000
@@ -814,7 +827,8 @@ async def agent_tool_call(
     )
     
     if not success:
-        raise HTTPException(status_code=500, detail=error)
+        logger.error(f"Tool execution failed: {error}")
+        raise HTTPException(status_code=500, detail="Tool execution failed")
     
     return {
         "tool": tool_name,
