@@ -120,8 +120,6 @@ def action_scan_secrets():
                     findings.append({
                         "file": str(filepath),
                         "type": secret["type"],
-                        "file": str(filepath),
-                        "type": secret["type"],
                         # "message": secret["message"] # REMOVED: Tainted source
                         "message": "Potential secret detected (see SARIF for details)"
                     })
