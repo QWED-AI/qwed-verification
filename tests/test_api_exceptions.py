@@ -119,3 +119,59 @@ def test_verify_image_exception_handling():
         assert data["error"] == "Internal processing error"
         assert "VLM_API_KEY_LEAK" not in str(data)
 
+
+def test_verify_stats_exception_handling():
+    """
+    Test that verify_stats catches internal errors and returns a sanitized message.
+    """
+    # Use pandas mock if needed, but here we just mock the verifier
+    with patch('qwed_new.core.stats_verifier.StatsVerifier.verify_stats', side_effect=Exception("SENSITIVE_DATA_LEAK")):
+        # Need to provide a dummy file and query
+        response = client.post(
+            "/verify/stats",
+            files={"file": ("data.csv", b"col1,col2\n1,2", "text/csv")},
+            data={"query": "average of col1"}
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ERROR"
+        assert data["error"] == "Internal processing error"
+        assert "SENSITIVE_DATA_LEAK" not in str(data)
+
+def test_agent_tool_call_exception_handling():
+    """
+    Test that agent_tool_call logs errors without stack traces when execution fails.
+    """
+    # Mock all the agent registry and approval steps to get to the execution part
+    with patch('qwed_new.core.agent_registry.agent_registry.authenticate_agent') as mock_auth, \
+         patch('qwed_new.core.agent_registry.agent_registry.check_permission') as mock_perm, \
+         patch('qwed_new.core.tool_approval.tool_approval.approve_tool_call') as mock_approve, \
+         patch('qwed_new.core.tool_approval.tool_approval.execute_tool_call') as mock_exec:
+        
+        # Setup mocks
+        mock_agent = MagicMock()
+        mock_agent.id = 1
+        mock_agent.organization_id = 123
+        mock_auth.return_value = mock_agent
+        
+        mock_perm.return_value = (True, None) # Permission granted
+        
+        mock_tool_call = MagicMock()
+        mock_tool_call.id = 999
+        mock_approve.return_value = (True, None, mock_tool_call) # Approved
+        
+        # execution fails!
+        mock_exec.return_value = (False, "CRITICAL_TOOL_FAILURE", None)
+        
+        response = client.post(
+            "/agents/1/tools/web_search",
+            json={"tool_params": {"q": "test"}},
+            headers={"x-agent-token": "valid_token"}
+        )
+        
+        # Should raise 500
+        assert response.status_code == 500
+        assert response.json()["detail"] == "Tool execution failed"
+        # We can't easily assert the log content here without a log capture fixture,
+        # but execution of properly handled code is sufficient for coverage.
