@@ -209,9 +209,14 @@ class ControlPlane:
             return response
                     
         except Exception as e:
+            # Log detailed error server-side, with PII redaction
+            logger.error(
+                f"Logic pipeline failure for org {organization_id}: {redact_pii(str(e))}",
+                exc_info=False
+            )
             return {
                 "status": "ERROR",
-                "error": f"Pipeline failure: {str(e)}",
+                "error": "Internal pipeline error",
                 "latency_ms": (time.time() - start_time) * 1000
             }
 
