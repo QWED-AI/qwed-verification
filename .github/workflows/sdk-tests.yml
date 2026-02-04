@@ -17,6 +17,9 @@ on:
       - 'sdk-rust/**'
   workflow_dispatch:  # Manual trigger
 
+permissions:
+  contents: read
+
 jobs:
   # ============================================
   # Python SDK
