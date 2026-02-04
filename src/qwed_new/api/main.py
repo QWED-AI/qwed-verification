@@ -173,9 +173,10 @@ async def verify_stats(
         return result
         
     except Exception as e:
+        logger.error(f"Stats verification error: {redact_pii(str(e))}", exc_info=False)
         return {
             "status": "ERROR",
-            "error": str(e)
+            "error": "Internal processing error"
         }
 
 
@@ -830,7 +831,7 @@ async def agent_tool_call(
     )
     
     if not success:
-        logger.error(f"Tool execution failed: {redact_pii(str(error))}")
+        logger.error(f"Tool execution failed: {redact_pii(str(error))}", exc_info=False)
         raise HTTPException(status_code=500, detail="Tool execution failed")
     
     return {
