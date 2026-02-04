@@ -5,6 +5,9 @@ on:
     types: [published]
   workflow_dispatch:  # Manual trigger for testing
 
+permissions:
+  contents: read
+
 jobs:
   # ============================================
   # Python SDK → PyPI
