@@ -113,27 +113,38 @@ async def verify_logic(
     """
     # Check rate limits
     check_rate_limit(tenant.api_key)
-    result = await control_plane.process_logic_query(
-        request.query,
-        organization_id=tenant.organization_id,
-        preferred_provider=request.provider
-    )
     
-    if result["status"] == "BLOCKED":
-        raise HTTPException(status_code=403, detail=result["error"])
-    
-    # Log to database
-    log = VerificationLog(
-        organization_id=tenant.organization_id,
-        query=request.query,
-        result=str(result),
-        is_verified=(result["status"] == "SAT" or result["status"] == "UNSAT"),
-        domain="LOGIC"
-    )
-    session.add(log)
-    session.commit()
+    try:
+        result = await control_plane.process_logic_query(
+            request.query,
+            organization_id=tenant.organization_id,
+            preferred_provider=request.provider
+        )
         
-    return result
+        if result["status"] == "BLOCKED":
+            raise HTTPException(status_code=403, detail=result["error"])
+        
+        # Log to database
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=request.query,
+            result=str(result),
+            is_verified=(result["status"] == "SAT" or result["status"] == "UNSAT"),
+            domain="LOGIC"
+        )
+        session.add(log)
+        session.commit()
+            
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Logic verification error: {redact_pii(str(e))}", exc_info=False)
+        return {
+            "status": "ERROR",
+            "error": "Internal verification error"
+        }
 
 @app.post("/verify/stats")
 async def verify_stats(
