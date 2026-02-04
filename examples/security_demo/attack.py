@@ -26,8 +26,11 @@ def sanitize_vulnerable_response(response: str) -> str:
     ):
         return "[REDACTED_API_KEY] (Sensitive content masked)"
 
-    # If no sensitive patterns are detected, it is safe to return the original string.
-    return response
+    # Even when no obvious sensitive patterns are detected, avoid logging the
+    # raw vulnerable-agent response to prevent accidental secret leakage.
+    # Return a constant summary string instead so that no tainted content
+    # reaches the logging sink.
+    return "[SAFE_CONTENT] (Vulnerable agent response content not logged in full)"
 
 def run_attack_simulation():
     print("\n\n" + "="*60)
