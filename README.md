@@ -673,16 +673,34 @@ If you use QWED in your research or project, please cite our archived paper:
 
 ## ✅ Using QWED in Your Project?
 
-Add this badge to your README to show you're using verified AI:
+Add these badges to your README to show you're using verified AI:
 
+### Badge Variants
+
+| Badge | Use Case | Markdown |
+|-------|----------|----------|
+| [![Verified by QWED](https://img.shields.io/badge/Verified_by-QWED-00C853?style=flat&logo=checkmarx)](https://github.com/QWED-AI/qwed-verification#%EF%B8%8F-what-does-verified-by-qwed-mean) | **General** - Any QWED integration | See below |
+| [![100% Deterministic](https://img.shields.io/badge/100%25_Deterministic-QWED-0066CC?style=flat&logo=checkmarx)](https://docs.qwedai.com/docs/engines/overview#deterministic-first-philosophy) | **Math/Logic/Code/SQL/Schema** - No LLM fallback | See below |
+| [![AI + Verification](https://img.shields.io/badge/AI_%2B_Verification-QWED-9933CC?style=flat&logo=checkmarx)](https://docs.qwedai.com/docs/engines/overview#deterministic-first-philosophy) | **Fact/Image/Consensus** - Hybrid approach | See below |
+
+### Markdown Code
+
+**General Badge:**
 ```markdown
 [![Verified by QWED](https://img.shields.io/badge/Verified_by-QWED-00C853?style=flat&logo=checkmarx)](https://github.com/QWED-AI/qwed-verification#%EF%B8%8F-what-does-verified-by-qwed-mean)
 ```
 
-**Preview:**  
-[![Verified by QWED](https://img.shields.io/badge/Verified_by-QWED-00C853?style=flat&logo=checkmarx)](https://github.com/QWED-AI/qwed-verification#%EF%B8%8F-what-does-verified-by-qwed-mean)
+**100% Deterministic (for Math, Logic, Code, SQL, Schema engines):**
+```markdown
+[![100% Deterministic](https://img.shields.io/badge/100%25_Deterministic-QWED-0066CC?style=flat&logo=checkmarx)](https://docs.qwedai.com/docs/engines/overview#deterministic-first-philosophy)
+```
 
-This badge tells users that your LLM outputs are deterministically verified, not just "hallucination-prone guesses."
+**AI + Verification (for Fact, Image, Consensus engines):**
+```markdown
+[![AI + Verification](https://img.shields.io/badge/AI_%2B_Verification-QWED-9933CC?style=flat&logo=checkmarx)](https://docs.qwedai.com/docs/engines/overview#deterministic-first-philosophy)
+```
+
+These badges tell users exactly what level of verification your application uses.
 
 ## 🛡️ What does "Verified by QWED" mean?
 
