@@ -22,7 +22,7 @@
   [![codecov](https://codecov.io/gh/QWED-AI/qwed-verification/branch/main/graph/badge.svg)](https://codecov.io/gh/QWED-AI/qwed-verification)
   [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
   [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-  [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](Dockerfile)
+  [![Docker Hub](https://img.shields.io/docker/pulls/qwedai/qwed-verification?logo=docker)](https://hub.docker.com/r/qwedai/qwed-verification)
   [![DOI](https://zenodo.org/badge/1115581942.svg)](https://doi.org/10.5281/zenodo.18111675)
   [![PyPI version](https://img.shields.io/pypi/v/qwed.svg)](https://pypi.org/project/qwed/)
   [![Contributors](https://img.shields.io/github/contributors/QWED-AI/qwed-verification)](https://github.com/QWED-AI/qwed-verification/graphs/contributors)
