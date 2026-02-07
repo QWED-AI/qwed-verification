@@ -31,7 +31,7 @@ QWED is a **Model-Agnostic Verification Middleware** that acts as a firewall bet
 
 ---
 
-## 🧠 The 8 Verification Engines
+## 🧠 The 11 Verification Engines
 
 | # | Engine | Technology | Function |
 |---|--------|------------|----------|

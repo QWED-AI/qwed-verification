@@ -4,7 +4,7 @@ Ablation Tracker for QWED Verification Engines.
 Tracks per-engine verification statistics to answer the question:
 "Which engine caught which errors?"
 
-This module collects real-time statistics from all 8 verification engines
+This module collects real-time statistics from all 11 verification engines
 and provides detailed breakdowns for transparency and ablation studies.
 
 Usage:
@@ -28,7 +28,7 @@ import threading
 
 
 class EngineType(Enum):
-    """The 8 verification engines in QWED."""
+    """The 11 verification engines in QWED."""
     MATH = "math"
     LOGIC = "logic"
     CODE = "code"

@@ -1,7 +1,7 @@
 """
 QWED Usage Examples
 
-This module demonstrates all 8 verification engines with practical examples.
+This module demonstrates all 11 verification engines with practical examples.
 Run this file to see QWED in action:
 
     python examples/demo_all_engines.py

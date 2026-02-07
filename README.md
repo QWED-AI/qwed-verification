@@ -3,7 +3,7 @@
   <h1>QWED Protocol</h1>
   <h3>Model Agnostic Verification Layer for AI</h3>
   
-  > **QWED Verification** - Production-grade deterministic verification layer for Large Language Models. Works with **ANY LLM** - OpenAI, Anthropic, Gemini, Llama (via Ollama), or any local model. Detect and prevent AI hallucinations through 8 specialized verification engines. **Your LLM, Your Choice, Our Verification.**
+  > **QWED Verification** - Production-grade deterministic verification layer for Large Language Models. Works with **ANY LLM** - OpenAI, Anthropic, Gemini, Llama (via Ollama), or any local model. Detect and prevent AI hallucinations through 11 specialized verification engines. **Your LLM, Your Choice, Our Verification.**
   
   <p>
     <b>Don't fix the liar. Verify the lie.</b><br>
@@ -50,7 +50,7 @@
   <a href="#-quick-start-install--verify-in-30-seconds">Quick Start</a> · 
   <a href="#-new-in-v210-client-side-verification">🆕 QWEDLocal</a> ·
   <a href="#-the-llm-hallucination-problem-why-ai-cant-be-trusted">The Problem</a> · 
-  <a href="#-the-8-verification-engines-how-qwed-validates-llm-outputs">The 8 Engines</a> ·
+  <a href="#-the-11-verification-engines-how-qwed-validates-llm-outputs">The 11 Engines</a> ·
   <a href="docs/INTEGRATION.md">🔌 Integration</a> ·
   <a href="docs/QWED_LOCAL.md">⚡ QWEDLocal</a> ·
   <a href="docs/CLI.md">🖥️ CLI</a> ·
@@ -94,6 +94,11 @@ go get github.com/QWED-AI/qwed-verification/sdk-go
 ### TypeScript SDK (npm)
 ```bash
 npm install @qwed-ai/sdk
+```
+
+### Docker
+```bash
+docker pull qwedai/qwed-verification
 ```
 
 ### From Source
