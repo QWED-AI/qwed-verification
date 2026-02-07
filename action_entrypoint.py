@@ -28,7 +28,12 @@ def set_output(name: str, value: str):
     """Set GitHub Action output."""
     output_file = os.environ.get("GITHUB_OUTPUT")
     if output_file:
-        with open(output_file, "a") as f:
+        # Validate path to prevent path traversal (defense-in-depth)
+        output_path = os.path.realpath(output_file)
+        if not output_path.startswith(("/home/runner", "/github", os.getcwd())):
+            print(f"⚠️  Suspicious GITHUB_OUTPUT path: {output_file}")
+            return
+        with open(output_path, "a") as f:  # noqa: PTH123 - GitHub Actions standard pattern
             f.write(f"{name}={value}\n")
     print(f"::set-output name={name}::{value}")  # Legacy fallback
 

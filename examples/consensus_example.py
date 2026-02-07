@@ -7,9 +7,10 @@ Demonstrates:
 """
 
 from qwed_sdk import QWEDClient
+import os
 
 def main():
-    client = QWEDClient(api_key="qwed_test_key")
+    client = QWEDClient(api_key=os.environ.get("QWED_API_KEY", "qwed_test_key"))
 
     print("--- Consensus Verification ---")
     query = "Is the square root of 16 equal to 4?"

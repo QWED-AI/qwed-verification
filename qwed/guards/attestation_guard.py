@@ -2,6 +2,7 @@ import jwt
 import time
 import json
 import hashlib
+import os
 from typing import Dict, Any, Optional
 
 class AttestationGuard:
@@ -9,8 +10,8 @@ class AttestationGuard:
     Generates cryptographic proofs (JWTs) for verification results.
     Acts as a 'Digital Notary' for AI safety checks.
     """
-    def __init__(self, secret_key: str = "default-dev-secret-do-not-use-in-prod"):
-        self.secret = secret_key
+    def __init__(self, secret_key: str = None):
+        self.secret = secret_key or os.environ.get("QWED_ATTESTATION_SECRET", "dev-secret-change-in-prod")
 
     def sign_verification(self, input_query: str, guard_result: Dict[str, Any], engine: str = "QWED-Deterministic-v1") -> str:
         """

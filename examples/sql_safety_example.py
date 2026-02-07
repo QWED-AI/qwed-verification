@@ -7,9 +7,10 @@ Demonstrates:
 """
 
 from qwed_sdk import QWEDClient
+import os
 
 def main():
-    client = QWEDClient(api_key="qwed_test_key")
+    client = QWEDClient(api_key=os.environ.get("QWED_API_KEY", "qwed_test_key"))
 
     schema = "CREATE TABLE users (id INT, name TEXT, email TEXT);"
 

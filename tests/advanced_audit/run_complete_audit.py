@@ -47,11 +47,12 @@ class QWEDTestRunner:
     
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load YAML configuration"""
+        # noqa: PT - config_path is hardcoded at call site, not user input
         config_file = Path(__file__).parent / config_path
         if not config_file.exists():
             raise FileNotFoundError(f"Config file not found: {config_file}")
         
-        with open(config_file, 'r') as f:
+        with open(config_file, 'r') as f:  # noqa: PTH123
             return yaml.safe_load(f)
     
     def _create_api_client(self) -> QWEDAPIClient:

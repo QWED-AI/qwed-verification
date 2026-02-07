@@ -6,7 +6,7 @@ from qwed import QwedClient
 
 # 1. Initialize Client
 # In production, use os.getenv("QWED_API_KEY")
-client = QwedClient(api_key="demo_key", base_url="http://localhost:8000")
+client = QwedClient(api_key=os.getenv("QWED_API_KEY", "demo_key"), base_url="http://localhost:8000")
 
 def run_math_example():
     print("\n--- Math Verification ---")

@@ -17,7 +17,7 @@ async def test_verify_logic_exception_handling():
          patch("qwed_new.api.main.get_current_tenant") as mock_tenant, \
          patch("qwed_new.api.main.control_plane.process_logic_query", side_effect=Exception("SENSITIVE_LOGIC_ERROR")):
         
-        mock_tenant.return_value = MagicMock(organization_id=1, api_key="test_key")
+        mock_tenant.return_value = MagicMock(organization_id=1, api_key="test_key")  # noqa: S105 - Mock API key
         
         # Providing valid minimal input
         response = client.post(
@@ -40,7 +40,7 @@ def test_verify_logic_exception_integration():
          patch("qwed_new.api.main.get_current_tenant") as mock_tenant, \
          patch("qwed_new.api.main.control_plane.process_logic_query", side_effect=Exception("SENSITIVE_FAILURE")):
         
-        mock_tenant.return_value = MagicMock(organization_id=1, api_key="test_key")
+        mock_tenant.return_value = MagicMock(organization_id=1, api_key="test_key")  # noqa: S105 - Mock API key
         
         response = client.post(
             "/verify/logic",

@@ -7,10 +7,11 @@ Demonstrates:
 """
 
 from qwed_sdk import QWEDClient
+import os
 
 def main():
     # Initialize client (defaults to localhost:8000)
-    client = QWEDClient(api_key="qwed_test_key")
+    client = QWEDClient(api_key=os.environ.get("QWED_API_KEY", "qwed_test_key"))
 
     print("--- 1. Symbolic Math Verification ---")
     expression = "x**2 - y**2 = (x-y)*(x+y)"

@@ -6,9 +6,10 @@ Demonstrates:
 """
 
 from qwed_sdk import QWEDClient
+import os
 
 def main():
-    client = QWEDClient(api_key="qwed_test_key")
+    client = QWEDClient(api_key=os.environ.get("QWED_API_KEY", "qwed_test_key"))
 
     context = """
     QWED v2.0 was released in 2024. It introduces 8 specialized verification engines including
