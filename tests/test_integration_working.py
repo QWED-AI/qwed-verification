@@ -30,8 +30,9 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 def client():
     """Initialize QWED client"""
+    import os
     return QWEDClient(
-        api_key="test_integration_key",
+        api_key=os.environ.get("QWED_TEST_API_KEY", "test_integration_key"),
         base_url="http://localhost:8000"
     )
 
