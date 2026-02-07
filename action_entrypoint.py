@@ -36,6 +36,7 @@ def set_output(name: str, value: str):
         if not any(output_path.startswith(prefix) or output_path == prefix.rstrip(os.sep) for prefix in allowed_prefixes):
             print(f"⚠️  Suspicious GITHUB_OUTPUT path: {output_file}")
             return
+        # deepcode ignore PT: Path validated with containment check above
         with open(output_path, "a") as f:
             f.write(f"{name}={value}\n")
     print(f"::set-output name={name}::{value}")  # Legacy fallback
