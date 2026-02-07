@@ -9,7 +9,7 @@ import os
 from qwed_sdk import QWEDClient
 
 def main():
-    client = QWEDClient(api_key="qwed_test_key")
+    client = QWEDClient(api_key=os.environ.get("QWED_API_KEY", "qwed_test_key"))
 
     # Create a dummy CSV file for the example
     csv_path = "sales_data.csv"

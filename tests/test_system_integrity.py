@@ -100,7 +100,7 @@ class TestConfigGuard:
         guard = ConfigGuard()
         
         config = {
-            "api_key": "sk-proj-1234567890abcdefghijklmnopqrstuvwxyz1234567890"
+            "api_key": "sk-proj-1234567890abcdefghijklmnopqrstuvwxyz1234567890"  # noqa: S105 - Intentional test fixture
         }
         
         result = guard.verify_config_safety(config)
@@ -114,7 +114,7 @@ class TestConfigGuard:
         
         config = {
             "cloud": {
-                "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE"
+                "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE"  # noqa: S105 - Intentional test fixture
             }
         }
         

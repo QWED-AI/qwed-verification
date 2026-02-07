@@ -28,7 +28,21 @@ def set_output(name: str, value: str):
     """Set GitHub Action output."""
     output_file = os.environ.get("GITHUB_OUTPUT")
     if output_file:
-        with open(output_file, "a") as f:
+        # Validate path to prevent path traversal (defense-in-depth)
+        output_path = os.path.realpath(output_file)
+        cwd = os.path.realpath(os.getcwd())
+        # Canonical containment check using commonpath
+        allowed_roots = ["/home/runner", "/github", cwd]
+        try:
+            if not any(os.path.commonpath([root, output_path]) == root for root in allowed_roots):
+                print(f"⚠️  Suspicious GITHUB_OUTPUT path: {output_file}")
+                return
+        except ValueError:
+            # commonpath raises ValueError if paths are on different drives (Windows)
+            print(f"⚠️  Invalid GITHUB_OUTPUT path: {output_file}")
+            return
+        # deepcode ignore PT: Path validated with commonpath containment check
+        with open(output_path, "a") as f:
             f.write(f"{name}={value}\n")
     print(f"::set-output name={name}::{value}")  # Legacy fallback
 

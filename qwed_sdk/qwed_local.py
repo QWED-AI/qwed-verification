@@ -230,9 +230,10 @@ class QWEDLocal:
             if OpenAI is None:
                 raise ImportError("openai package required. Install: pip install openai")
             
+            # deepcode ignore HardcodedSecret: Placeholder for local LLMs (Ollama), not a real secret
             self.llm_client = OpenAI(
                 base_url=self.base_url,
-                api_key=self.api_key or "dummy",  # Ollama doesn't need real key
+                api_key=self.api_key or "not-needed",  # Local LLMs don't need real keys
                 **kwargs
             )
             self.client_type = "openai"

@@ -47,11 +47,17 @@ class QWEDTestRunner:
     
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load YAML configuration"""
-        config_file = Path(__file__).parent / config_path
+        base_dir = Path(__file__).parent.resolve()
+        config_file = (base_dir / config_path).resolve()
+        
+        # Path containment check - config must be within base directory
+        if not str(config_file).startswith(str(base_dir) + os.sep) and config_file != base_dir:
+            raise ValueError(f"Config path must be within {base_dir}")
+        
         if not config_file.exists():
             raise FileNotFoundError(f"Config file not found: {config_file}")
         
-        with open(config_file, 'r') as f:
+        with config_file.open('r') as f:
             return yaml.safe_load(f)
     
     def _create_api_client(self) -> QWEDAPIClient:

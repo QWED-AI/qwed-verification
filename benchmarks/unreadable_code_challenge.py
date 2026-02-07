@@ -300,7 +300,7 @@ def execute_code(code: str, timeout: int = 10) -> Tuple[bool, Any]:
     f = io.StringIO()
     try:
         with redirect_stdout(f):
-            exec(code, {"__builtins__": __builtins__})
+            exec(code, {"__builtins__": __builtins__})  # noqa: S102 - Intentional for benchmark testing
         output = f.getvalue().strip()
         return True, output
     except Exception as e:
@@ -551,6 +551,7 @@ def run_benchmark(models: List[str] = None, tests: List[str] = None):
     for model in models:
         for test_id in tests:
             if test_id in PROMPTS:
+                # noqa: S102 - test_id comes from PROMPTS keys (hardcoded), not user input
                 result = run_single_test(client, model, test_id, PROMPTS[test_id])
                 results.append(result)
     
