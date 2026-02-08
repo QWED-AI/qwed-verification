@@ -26,6 +26,7 @@
   [![DOI](https://zenodo.org/badge/1115581942.svg)](https://doi.org/10.5281/zenodo.18111675)
   [![PyPI version](https://img.shields.io/pypi/v/qwed.svg)](https://pypi.org/project/qwed/)
   [![Contributors](https://img.shields.io/github/contributors/QWED-AI/qwed-verification)](https://github.com/QWED-AI/qwed-verification/graphs/contributors)
+  [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/11903/badge)](https://www.bestpractices.dev/projects/11903)
   
   [![GitHub stars](https://img.shields.io/github/stars/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification)
   [![GitHub forks](https://img.shields.io/github/forks/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification/fork)
