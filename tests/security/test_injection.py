@@ -6,15 +6,14 @@ def test_no_eval_injection():
     """Verify that the logic engine does not execute arbitrary code."""
     verifier = LogicVerifier()
     
-    # Attempt to inject code via logic expression variables
-    # LogicVerifier.verify_logic takes variables dict and constraints list
-    malicious_input = {"x": "__import__('os').system('echo pwned')"}
-    constraints = ["x"]
+    # Attempt to inject code via logic expression
+    # LogicVerifier.verify_logic catches exceptions and returns status="ERROR"
+    variables = {"x": "Int"}
+    constraints = ["x == __import__('os').system('echo pwned')"]
     
-    # Should raise error (likely a syntax or validation error), not execute
-    # Using generic Exception for now as specific error might vary, but verify_logic calls safe_eval
-    with pytest.raises(Exception):
-        verifier.verify_logic(malicious_input, constraints, prove_unsat=False)
+    # Should return ERROR status, not execute
+    result = verifier.verify_logic(variables, constraints, prove_unsat=False)
+    assert result.status == "ERROR"
 
 def test_path_traversal_prevention():
     """Ensure file paths cannot be manipulated."""
