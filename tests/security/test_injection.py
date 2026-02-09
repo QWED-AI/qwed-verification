@@ -1,5 +1,5 @@
 
-import pytest
+
 from qwed_new.core.logic_verifier import LogicVerifier
 
 def test_no_eval_injection():
