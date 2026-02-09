@@ -30,6 +30,10 @@ We are committed to addressing security issues promptly.
 *   We will work with you to understand and resolve the issue.
 *   We will keep you updated on our progress.
 
+### Reporter Credit
+
+We value the security community and will publicly credit vulnerability reporters who responsibly disclose issues and do not request anonymity. Credit will be given in our release notes and SECURITY.md history.
+
 ## Security Issue vs. Bug
 
 To help us triage issues effectively, please distinguish between security issues and bugs:

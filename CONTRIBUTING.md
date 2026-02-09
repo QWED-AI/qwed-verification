@@ -164,6 +164,28 @@ By contributing, you agree that your contributions will be licensed under the [A
 
 ---
 
+## ⚖️ Governance & Legal
+
+### Developer Certificate of Origin (DCO)
+
+To contribute to this project, you must sign off on your commits, certifying that you have the right to submit the code under the project's license. This is done by adding a `Signed-off-by` line to your commit messages.
+
+```
+Signed-off-by: Random J. Developer <random@developer.example.org>
+```
+
+By signing off, you certify the following:
+
+> I certify that the contribution is original work, or I have the right to submit it under the  open source license. I understand that my contribution and personal information (including name and email) will be permanently recorded in the project's commit history.
+
+Build tools and bots may enforce this requirement. You can sign off commits automatically with `git commit -s`.
+
+### Project Governance
+
+This project is governed under a BDFL model. See [GOVERNANCE.md](./GOVERNANCE.md) for details on decision making, roles, and continuity planning.
+
+---
+
 ## 💬 Questions?
 
 - Open an issue with the `question` label

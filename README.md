@@ -662,6 +662,8 @@ See [`.github/workflows/ci.yml`](.github/workflows/ci.yml) for details.
 | Resource | Description |
 |----------|-------------|
 | [🤝 Contributing Guide](CONTRIBUTING.md) | How to contribute to QWED |
+| [GOVERNANCE.md](GOVERNANCE.md) | Project governance & roles |
+| [ROADMAP.md](ROADMAP.md) | Future plans & vision |
 | [📜 Code of Conduct](CODE_OF_CONDUCT.md) | Community guidelines |
 | [🔒 Security Policy](SECURITY.md) | Reporting vulnerabilities |
 | [📖 Citation](docs/CITATION.cff) | Academic citation format |

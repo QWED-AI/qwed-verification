@@ -1,325 +1,61 @@
-# QWED: The Global Standard for Verifiable AI 🛡️
+# System Architecture
 
-> **The Future of AI is Not Just Intelligence—It is Trust.**
+## Overview
+QWED is a **Neurosymbolic Verification Engine** that combines the flexibility of Large Language Models (LLMs) with the determinism of symbolic execution engines (SymPy, Z3, SQLGlot, etc.).
 
-In a world increasingly driven by probabilistic models, QWED (Query With Evidence & Determinism) serves as the **Critical Verification Layer**. We bridge the gap between AI intuition and mathematical reality.
+## High-Level Design
 
----
-
-## 🌟 The Vision: A Safe, Auditable AI Future
-
-QWED is more than just a verifier; it is an **Infrastructure for Accountability**. Our mission is to make the most powerful AIs in the world safe for enterprise, compliant for regulators, and trusted by humanity.
-
-### The Problem: The "Hallucination Gap"
-LLMs are brilliant translators but unreliable calculators. They can generate perfect-sounding code that deletes your database, or convincing financial reports with subtle math errors.
-
-### The Solution: The Symbolic Firewall
-QWED treats LLMs as **Untrusted Translators** and Symbolic Engines as **Trusted Verifiers**.
+The system operates in three layers:
+1.  **Translation Layer (Neural)**: LLMs convert natural language queries into structured intermediate representations (IR).
+2.  **Verification Layer (Symbolic)**: Specialized engines execute the IR deterministically to produce a result or proof.
+3.  **Cross-Validation Layer**: Results are checked against constraints and safety policies before being returned.
 
 ```mermaid
-graph LR
-    User([User Query]) --> LLM[(LLM Adapter)]
-    LLM -- Translates to Symbolic Logic --> Firewall{{Symbolic Firewall}}
-    Firewall -- Verified by --> Engine[[Deterministic Engines]]
-    Engine -- Proof & Evidence --> Result([Trustworthy Result])
+graph TD
+    User[User/Application] --> API[QWED API / SDK]
+    API --> Controller[Control Plane]
     
-    style User fill:#4A90E2,color:#fff
-    style LLM fill:#F5A623,color:#fff
-    style Firewall fill:#7ED321,color:#fff
-    style Engine fill:#9B59B6,color:#fff
-    style Result fill:#50E3C2,color:#fff
-```
-
----
-
-## 🏛️ The 11-Engine Specialized Architecture
-
-We don't rely on one engine for everything. QWED uses **11 Specialized Deterministic Engines**, each a master of its domain.
-
-```mermaid
-mindmap
-  root((QWED Core))
-    Deterministic Verification
-      Math & Finance
-        SymPy Calculus
-        Matrix Operations
-        NPV/IRR/Compound Interest
-        Unit Conversion
-      Logic & Constraints
-        Z3 Theorem Prover
-        ForAll/Exists Quantifiers
-        BitVectors & Arrays
-        Counter-Model Generation
-      SQL Safety
-        SQLGlot AST
-        Complexity Limits
-        Cost Estimation
-        Schema Validation
-    Enterprise Compliance
-      Audit Logger
-        Cryptographic Proofs
-        Immutability
-      Consensus Verifier
-        Async Parallel Execution
-        Circuit Breaker
-        Health Monitoring
-    Data & Evidence
-      Stats & Tabular
-        Wasm Sandbox
-        Docker Isolation
-        Restricted Executor
-      Fact Checking
-        TF-IDF Similarity
-        Entity Matching
-        Citation Extraction
-      Code Analysis
-        Python Security
-        JavaScript XSS
-        Java/Go Patterns
-        Secret Detection
-      Vision/Image
-        Metadata Extraction
-        Size Verification
-        Multi-VLM Consensus
-      Taint Analyzer
-        Data Flow Tracking
-        Source-Sink Analysis
-        Sanitizer Detection
-      Schema Verifier
-        JSON Schema Validation
-        Type Checking
-        Constraint Enforcement
-      Graph Fact Checker
-        Triple Extraction
-        Entity Matching
-        Claim Verification
-```
-
----
-
-## Engine Deep Dives
-
-### 1. 🏦 Math & Finance Engine
-Supports **calculus** (derivatives, integrals, limits), **matrix operations** (determinant, inverse, eigenvalues), **financial formulas** (NPV, IRR, compound interest), **statistics** (mean, variance, correlation), and **unit conversion**.
-
-!!! success "Example"
-    ```python
-    # Calculus: derivative of x^2 = 2x ✓
-    # Matrix: det([[1,2],[3,4]]) = -2 ✓
-    # Finance: NPV at 10% for [100,200,300] = $481.59 ✓
-    ```
-
-### 2. 🧠 Formal Logic Engine
-Using the **Microsoft Z3 Theorem Prover** with support for:
-- **Quantifiers**: ForAll(∀), Exists(∃)
-- **BitVectors**: 8/16/32/64-bit operations for crypto verification
-- **Array Theory**: Select/Store operations
-- **Theorem Proving**: Equivalence, implication, counter-models
-
-!!! example "Counter-Model Example"
-    > *"UNSAT. Violation: ForAll x. (x > 0) => (x * 2 > x) - Cannot prove for x = 0"*
-
-### 3. 🛡️ SQL Armor Engine
-We parse AI-generated SQL through an AST firewall with:
-- **Complexity Limits**: Max tables, joins, subqueries, columns
-- **Cost Estimation**: Query cost scoring
-- **Injection Detection**: Tautologies, stacked queries, comments
-- **Schema Validation**: Table/column existence checks
-
-### 4. 📊 Statistics Engine
-Executes statistical queries in secure sandboxes:
-- **Docker**: Full isolation (production)
-- **Wasm**: Portable (works anywhere)
-- **Restricted**: AST-validated Python subset (fallback)
-
-### 5. ✅ Fact Checker Engine
-**No LLM required for most claims!** Uses deterministic methods:
-- TF-IDF semantic similarity
-- Keyword overlap analysis
-- Entity matching (numbers, dates, names)
-- Citation extraction with relevance scoring
-
-### 6. 🔐 Code Security Engine
-Multi-language AST analysis:
-- **Python**: eval, exec, pickle, weak crypto
-- **JavaScript/TypeScript**: XSS, prototype pollution, eval
-- **Java**: SQL injection, deserialization
-- **Go**: Command injection, path traversal
-- **Secret Detection**: AWS keys, GitHub tokens, OpenAI keys
-
-### 7. 🖼️ Image Verification Engine
-**Deterministic first, VLM fallback:**
-- Metadata extraction (dimensions, format)
-- Size/dimension claim verification (100% accurate)
-- Multi-VLM consensus for semantic claims
-
-### 8. 🤖 Reasoning & Consensus Engine
-- **Chain-of-Thought Validation**: Parse and verify reasoning steps
-- **Result Caching**: LRU + Redis for repeated queries
-- **Multi-Provider**: Anthropic, Azure, OpenAI
-- **Circuit Breaker**: Auto-disable failing engines
-- **Async Parallel**: Execute engines concurrently
-
-### 9. 🔍 Taint Analyzer Engine (NEW in v2.1.0)
-**AST-based data flow analysis for Python security:**
-- **Source Detection**: user input, request.args, environment variables
-- **Sink Detection**: eval, exec, subprocess, SQL queries
-- **Flow Tracking**: Variable assignment, function calls, returns
-- **Sanitizer Recognition**: Input validation, type casting, escaping
-
-### 10. 📋 Schema Verifier Engine (NEW in v2.1.0)
-**Deterministic JSON schema validation:**
-- **Type Checking**: string, number, boolean, array, object
-- **Constraint Validation**: min/max, pattern, enum, required
-- **Math Delegation**: Computed field verification via SymPy
-- **UCP Integration**: E-commerce transaction validation
-
-### 11. 📈 Graph Fact Verifier Engine (NEW in v2.1.0)
-**Triple-based fact checking without LLM:**
-- **Triple Extraction**: Subject-Predicate-Object from text
-- **Entity Matching**: Fuzzy matching for names, dates, numbers
-- **Claim Verification**: Compare extracted triples against knowledge base
-- **Confidence Scoring**: Match quality assessment
-
----
-
-## 🔒 Enterprise Safeguards: The Foundation of Trust
-
-QWED is designed for the most regulated industries on Earth.
-
-| Feature | Description |
-|---------|-------------|
-| **Auditable Proofs** | Every verification result comes with a "Proof of Correctness" |
-| **Cryptographic Audit Logs** | Every action is logged with immutable hashes, ready for regulatory audits |
-| **Shadow Execution** | Code verification happens in an ephemeral, isolated sandbox |
-| **Policy Engine** | Define granular "Golden Rules" that the AI can never cross |
-
----
-
-## 🛠️ Deep Technical Integration
-
-For developers, QWED is an integrated protocol that fits seamlessly into your stack.
-
-### The Integration Flow
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant API as QWED API
-    participant LLM as LLM Adapter
-    participant Engine as Verification Engine
-    participant Audit as Audit Logger
+    subgraph "Neural Layer"
+        Controller --> Prompting[Prompt Engineering]
+        Prompting --> LLM[External LLM (OpenAI/Anthropic/Local)]
+        LLM --> Parser[Response Parser]
+    end
     
-    User->>API: Natural Language Query
-    API->>LLM: Translate to Symbolic
-    LLM-->>API: QWED-DSL Expression
-    API->>Engine: Verify Deterministically
-    Engine-->>API: Proof + Result
-    API->>Audit: Log with Hash
-    API-->>User: Verified Response
-```
-
-!!! tip "Explore the Specs"
-    For deep-dive technical documentation, including file structures and API schemas, check out the [API Reference](api.md).
-
-### 🆕 QWEDLocal: Client-Side Deployment (v2.1.0)
-
-For use cases that don't need a backend server, **QWEDLocal** provides client-side verification:
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant SDK as QWEDLocal (Client-Side)
-    participant LLM as User's LLM (Direct)
-    participant Engine as Local Verifiers
+    subgraph "Symbolic Layer"
+        Parser --> Math[Math Engine (SymPy)]
+        Parser --> Logic[Logic Engine (Z3)]
+        Parser --> SQL[SQL Engine (SQLGlot)]
+        Parser --> Code[Code Engine (AST Analysis)]
+    end
     
-    User->>SDK: verify("What is 2+2?")
-    SDK->>LLM: API call (OpenAI/Ollama/etc)
-    LLM-->>SDK: "4"
-    SDK->>Engine: SymPy/Z3/AST (Local)
-    Engine-->>SDK: Verified ✓
-    SDK->>SDK: Cache result (SQLite)
-    SDK-->>User: VerificationResult(verified=True, value=4)
+    Math --> Verifier[Result Verifier]
+    Logic --> Verifier
+    SQL --> Verifier
+    Code --> Verifier
     
-    Note over SDK,Engine: No QWED backend!<br/>Data stays on user's machine
+    Verifier --> PII[PII / Safety Guard]
+    PII --> User
 ```
 
-**Key Differences:**
-- **Backend API**: Needs server infrastructure, centralized audit logs, enterprise features
-- **QWEDLocal**: No infrastructure, 100% privacy, works offline, $0 with Ollama
+## Core Components
 
-**Use Cases:**
-- Privacy-first applications (HIPAA, GDPR)
-- Individual developers / prototyping
-- Offline environments
-- Cost-sensitive projects
-- Edge computing
+### 1. Control Plane
+Orchestrates the request lifecycle. It identifies the query domain (Math, Code, SQL, etc.) and routes it to the appropriate engine.
 
-📖 **[QWEDLocal Guide →](QWED_LOCAL.md)**
+### 2. Engines
+Each domain has a dedicated engine:
+- **Math**: Uses `SymPy` for symbolic mathematics.
+- **Logic**: Uses `Z3` theorem prover for propositional and first-order logic.
+- **Code**: Uses Python's `ast` module for static analysis and safe execution environments.
+- **SQL**: Uses `SQLGlot` and `DuckDB` for schema-aware query verification.
 
----
+### 3. Safety Guards
+- **PII Masking**: Detects and obfuscates minimal PII using `Presidio` before sending data to LLMs.
+- **Injection Protection**: Static analysis prevents prompt injection and code injection attacks.
 
-## 🖥️ Developer Tools & Infrastructure
-
-### Local Development Stack
-
-Start the full stack with Docker Compose:
-
-```bash
-docker-compose up -d
-```
-
-| Service | URL | Purpose |
-|---------|-----|---------|
-| **QWED API** | http://localhost:8000/docs | API Documentation |
-| **Jaeger** | http://localhost:16686 | Distributed Tracing |
-| **Prometheus** | http://localhost:9090 | Metrics |
-| **Grafana** | http://localhost:3000 | Dashboards (admin/qwed_admin) |
-| **Redis** | localhost:6379 | Caching |
-| **PostgreSQL** | localhost:5432 | Database |
-
-> 🏢 **Enterprise Support Coming Soon:** Managed dashboards, hosted observability, and SLA guarantees. Contact rahul@qwedai.com
-
-### Grafana Dashboards
-
-- **QWED Verification Dashboard**: Real-time metrics, latency percentiles, cache hit rates
-
-### Python SDK
-
-```bash
-pip install qwed
-```
-
-```python
-from qwed_sdk import QWEDClient
-
-client = QWEDClient(api_key="qwed_...")
-result = client.verify("What is 2+2?")
-```
-
-### CLI Tool
-
-```bash
-export QWED_API_KEY="qwed_..."
-qwed verify "Is 2+2 equal to 4?"
-qwed verify-math "x**2 - y**2 = (x-y)*(x+y)"
-qwed batch queries.json -o results.json
-```
-
----
-
-## 🔌 QWED Extensions & Integrations
-
-QWED extends beyond core verification with specialized integrations:
-
-| Extension | Description |
-|-----------|-------------|
-| **[QWED-UCP](https://github.com/QWED-AI/qwed-ucp)** | Unified Commerce Protocol - E-commerce verification |
-| **[QWED-MCP](https://github.com/QWED-AI/qwed-mcp)** | Model Context Protocol - Claude Desktop integration |
-| **[Open Responses](https://github.com/QWED-AI/qwed-open-responses)** | OpenAI Responses API guards |
-
----
-
-### "Safe AI is the only AI that can change the world."
-
-*Built with ❤️ for a deterministic future.*
+## Data Flow
+1.  User sends a query (e.g., "What is the integral of x^2?").
+2.  Control Plane detects "Math" domain.
+3.  LLM is prompted to translate "integral of x^2" to SymPy code: `integrate(x**2, x)`.
+4.  Math Engine executes the SymPy code safely.
+5.  Result (`x**3/3`) is formatted and returned to the user.
