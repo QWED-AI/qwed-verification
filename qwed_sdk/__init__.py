@@ -1,3 +1,6 @@
+# Copyright (c) 2024 QWED Team
+# SPDX-License-Identifier: Apache-2.0
+
 """
 QWED SDK - Python Client for the QWED Verification Platform.
 

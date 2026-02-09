@@ -110,3 +110,14 @@ packages = ["src/qwed_new", "qwed_sdk"]
 [project.scripts]
 qwed = "qwed_sdk.cli:cli"  # Fixed: cli not main!
 
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --cov=src/qwed_new --cov=qwed_sdk"
+testpaths = [
+    "tests",
+]
+pythonpath = [
+    "src",
+    ".",
+]
+

@@ -112,6 +112,21 @@ git commit -m "feat(engine): add capability X"
 git push origin feat/your-feature
 ```
 
+### 4. Code Review Standards
+
+To maintain high code quality and security, all Pull Requests (PRs) must undergo a rigorous review process:
+
+- **Two-Person Review**: All non-trivial changes (features, bug fixes, refactors) require validation from at least one maintainer other than the author.
+- **Automated Checks**: All CI checks (linting, testing, security scans) must pass.
+- **Review Checklist**:
+    - [ ] Logic correctness and edge case handling
+    - [ ] Test coverage (tests added for new features)
+    - [ ] Security implications (no hardcoded secrets, safe input handling)
+    - [ ] Documentation updates
+    - [ ] Compliance with coding standards (PEP 8, type hints)
+
+Self-merging is restricted to documentation fixes, minor typos, or urgent hotfixes by the BDFL.
+
 ### Commit Message Format
 
 ```

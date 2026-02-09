@@ -1,3 +1,6 @@
+# Copyright (c) 2024 QWED Team
+# SPDX-License-Identifier: Apache-2.0
+
 
 
 from qwed_new.core.logic_verifier import LogicVerifier
