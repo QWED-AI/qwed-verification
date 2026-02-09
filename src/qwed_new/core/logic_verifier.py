@@ -1,4 +1,4 @@
-# Copyright (c) 2024 QWED Team
+# Copyright (c) 2024-2026 QWED Team
 # SPDX-License-Identifier: Apache-2.0
 
 """

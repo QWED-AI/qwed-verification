@@ -45,4 +45,4 @@ The security review was conducted using a combination of:
 
 ## Conclusion
 
-The QWED Verification Protocol meets the security requirements for the OpenSSF Gold Badge. Continuous monitoring is enabled via GitHub Actions and Snyk.
+The QWED Verification Protocol is intended to align with the OpenSSF Best Practices Gold criteria. Continuous monitoring is enabled via GitHub Actions CodeQL and Snyk workflows.
