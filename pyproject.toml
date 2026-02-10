@@ -40,7 +40,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "sympy>=1.12",
     "click>=8.1.0",  # CLI framework
-    "z3-solver>=4.12.0",
+    "z3-solver==4.13.3.0",
     "networkx>=3.0",
     "sqlmodel>=0.0.14",
     "bcrypt>=4.0.1",

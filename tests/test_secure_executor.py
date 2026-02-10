@@ -25,6 +25,7 @@ result = 2 + 2
         assert error is None
         assert result == 4
     
+    @pytest.mark.skipif(not SecureCodeExecutor().is_available(), reason="Docker not available")
     def test_dangerous_import_blocked(self):
         """Test that dangerous imports are blocked before execution."""
         code = """
@@ -36,6 +37,7 @@ result = os.system('ls')
         assert not success
         assert "security" in error.lower() or "dangerous" in error.lower()
     
+    @pytest.mark.skipif(not SecureCodeExecutor().is_available(), reason="Docker not available")
     def test_eval_blocked(self):
         """Test that eval() is blocked."""
         code = """
@@ -46,6 +48,7 @@ result = eval('2+2')
         assert not success
         assert "eval" in error.lower() or "dangerous" in error.lower()
     
+    @pytest.mark.skipif(not SecureCodeExecutor().is_available(), reason="Docker not available")
     def test_exec_blocked(self):
         """Test that exec() is blocked."""
         code = """
@@ -55,6 +58,7 @@ exec('result = 5')
         success, error, result = self.executor.execute(code, context)
         assert not success
     
+    @pytest.mark.skipif(not SecureCodeExecutor().is_available(), reason="Docker not available")
     def test_subprocess_blocked(self):
         """Test that subprocess is blocked."""
         code = """
@@ -121,6 +125,7 @@ result = urllib.request.urlopen('https://google.com').read()
         self.executor.execute(code, {})
         assert self.executor.get_execution_count() > initial_count
     
+    @pytest.mark.skipif(not SecureCodeExecutor().is_available(), reason="Docker not available")
     def test_file_operations_blocked(self):
         """Test that file operations are blocked."""
         code = """
