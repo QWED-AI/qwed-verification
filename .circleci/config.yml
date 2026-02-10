@@ -1,0 +1,35 @@
+version: 2.1
+
+orbs:
+  python: circleci/python@2.1.1
+
+jobs:
+  build-and-test:
+    parameters:
+      python-version:
+        type: string
+    docker:
+      - image: cimg/python:<< parameters.python-version >>
+    steps:
+      - checkout
+      - python/install-packages:
+          pkg-manager: pip
+          # Install dependencies with extra groups for dev, server, and symbolic support
+          args: .[dev,server,symbolic]
+      - run:
+          name: Run Tests
+          command: |
+            # Run pytest with coverage as configured in pyproject.toml
+            pytest
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: htmlcov
+
+workflows:
+  main:
+    jobs:
+      - build-and-test:
+          matrix:
+            parameters:
+              python-version: ["3.10", "3.11", "3.12"]
