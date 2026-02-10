@@ -36,10 +36,23 @@ COPY --chown=appuser:appuser qwed_sdk /app/qwed_sdk/
 COPY --chown=appuser:appuser action_entrypoint.py /action_entrypoint.py
 RUN chmod +x /action_entrypoint.py
 
-# Copy and setup runtime entrypoint
-COPY --chown=appuser:appuser entrypoint.sh /entrypoint.sh
-# Checksum and fix line endings
-RUN dos2unix /entrypoint.sh && chmod +x /entrypoint.sh
+# Create entrypoint.sh directly to avoid Windows line ending issues (CRLF)
+RUN printf '#!/bin/bash\n\
+set -e\n\
+\n\
+# Fix permissions for workspace\n\
+if [ -d "/github/workspace" ]; then\n\
+    chown -R appuser:appuser /github/workspace\n\
+fi\n\
+\n\
+# Fix permissions for file commands\n\
+if [ -d "/github/file_commands" ]; then\n\
+    chmod -R 777 /github/file_commands\n\
+fi\n\
+\n\
+# Switch to appuser and run the main entrypoint\n\
+exec gosu appuser python /action_entrypoint.py "$@"\n\
+' > /entrypoint.sh && chmod +x /entrypoint.sh
 
 # Set Python path to use local SDK
 ENV PYTHONPATH=/app
