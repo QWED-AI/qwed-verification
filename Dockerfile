@@ -19,8 +19,8 @@ RUN useradd -m -u 1000 appuser
 # Fix permissions for GitHub Actions workspace
 RUN mkdir -p /github/workspace && chown -R appuser:appuser /github
 
-# Install gosu for easy step-down from root
-RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
+# Install gosu and dos2unix for entrypoint management
+RUN apt-get update && apt-get install -y --no-install-recommends gosu dos2unix && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements file first to leverage cache
 COPY requirements.txt /app/requirements.txt
@@ -38,8 +38,8 @@ RUN chmod +x /action_entrypoint.py
 
 # Copy and setup runtime entrypoint
 COPY --chown=appuser:appuser entrypoint.sh /entrypoint.sh
-# Fix Windows line endings (CRLF) which cause "exec format error"
-RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
+# Checksum and fix line endings
+RUN dos2unix /entrypoint.sh && chmod +x /entrypoint.sh
 
 # Set Python path to use local SDK
 ENV PYTHONPATH=/app
