@@ -38,7 +38,8 @@ RUN chmod +x /action_entrypoint.py
 
 # Copy and setup runtime entrypoint
 COPY --chown=appuser:appuser entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Fix Windows line endings (CRLF) which cause "exec format error"
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 # Set Python path to use local SDK
 ENV PYTHONPATH=/app
