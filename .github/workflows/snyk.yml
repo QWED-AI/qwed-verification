@@ -39,7 +39,7 @@ jobs:
         continue-on-error: true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: snyk test --severity-threshold=high --sarif-file-output=snyk.sarif
+        run: snyk test --org=${{ secrets.SNYK_ORG_ID }} --severity-threshold=high --sarif-file-output=snyk.sarif
 
       - name: Upload Snyk results to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
@@ -60,7 +60,7 @@ jobs:
         continue-on-error: true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: snyk code test --sarif-file-output=snyk-code.sarif
+        run: snyk code test --org=${{ secrets.SNYK_ORG_ID }} --sarif-file-output=snyk-code.sarif
 
       - name: Upload Snyk Code results
         uses: github/codeql-action/upload-sarif@v4
