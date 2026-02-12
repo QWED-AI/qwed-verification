@@ -14,15 +14,16 @@ jobs:
       - checkout
       - restore_cache:
           keys:
-            - pip-{{ checksum "pyproject.toml" }}-<< parameters.python-version >>
-            - pip-
+            - pip-v1-{{ checksum "pyproject.toml" }}-<< parameters.python-version >>
+            - pip-v1-
       - run:
           name: Install Dependencies
           command: pip install .[dev,server,symbolic]
       - save_cache:
-          key: pip-{{ checksum "pyproject.toml" }}-<< parameters.python-version >>
+          key: pip-v1-{{ checksum "pyproject.toml" }}-<< parameters.python-version >>
           paths:
-            - ~/.local/lib
+            - ~/.local/lib/python<< parameters.python-version >>/site-packages
+            - ~/.cache/pip
       - run:
           name: Run Tests
           command: |
@@ -44,8 +45,9 @@ jobs:
       - run:
           name: Run pip-audit
           command: |
+            set -o pipefail
             pip install pip-audit
-            pip-audit --strict --desc 2>&1 | tee audit-results.txt || true
+            pip-audit --strict --desc 2>&1 | tee audit-results.txt
       - store_artifacts:
           path: audit-results.txt
 
@@ -64,7 +66,7 @@ jobs:
       - run:
           name: Verify Image
           command: |
-            docker run --rm qwedai/qwed-verification:ci-${CIRCLE_SHA1:0:7} python -c "import qwed_sdk; print('QWED SDK loaded successfully')"
+            docker run --rm --entrypoint python qwedai/qwed-verification:ci-${CIRCLE_SHA1:0:7} -c "import qwed_sdk; print('QWED SDK loaded successfully')"
 
 workflows:
   ci:
