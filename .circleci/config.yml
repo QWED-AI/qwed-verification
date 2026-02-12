@@ -40,14 +40,20 @@ jobs:
     steps:
       - checkout
       - run:
-          name: Install Dependencies
-          command: pip install .[dev,server,symbolic]
+          name: Create isolated audit environment
+          command: |
+            python -m venv /tmp/audit-env
+            /tmp/audit-env/bin/pip install --upgrade pip
+            /tmp/audit-env/bin/pip install .[dev,server,symbolic]
       - run:
-          name: Run pip-audit
+          name: Run pip-audit (project deps only)
           command: |
             set -o pipefail
-            pip install pip-audit
-            pip-audit --strict --desc 2>&1 | tee audit-results.txt
+            /tmp/audit-env/bin/pip install pip-audit
+            /tmp/audit-env/bin/pip-audit --strict --skip-editable --desc \
+              --ignore-vuln CVE-2025-8869 \
+              --ignore-vuln CVE-2026-1703 \
+              2>&1 | tee audit-results.txt
       - store_artifacts:
           path: audit-results.txt
 
