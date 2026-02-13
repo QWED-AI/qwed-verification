@@ -19,8 +19,8 @@ RUN useradd -m -u 1000 appuser
 # Fix permissions for GitHub Actions workspace
 RUN mkdir -p /github/workspace && chown -R appuser:appuser /github
 
-# Install gosu and dos2unix for entrypoint management
-RUN apt-get update && apt-get install -y --no-install-recommends gosu dos2unix && rm -rf /var/lib/apt/lists/*
+# Install dos2unix for entrypoint management (runuser is native in base image)
+RUN apt-get update && apt-get install -y --no-install-recommends dos2unix && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements file first to leverage cache
 COPY requirements.txt /app/requirements.txt
@@ -56,7 +56,7 @@ if [ -d "/github/file_commands" ]; then\n\
 fi\n\
 \n\
 # Switch to appuser and run the main entrypoint\n\
-exec gosu appuser python /action_entrypoint.py "$@"\n\
+exec runuser -u appuser -- python /action_entrypoint.py "$@"\n\
 ' > /entrypoint.sh && chmod +x /entrypoint.sh
 
 # Set Python path to use local SDK
@@ -65,5 +65,5 @@ ENV PYTHONPATH=/app
 WORKDIR /github/workspace
 
 # NOTE: We do NOT switch USER here. We start as root to fix permissions on mounted volumes
-# in entrypoint.sh, then drop privileges to appuser using gosu.
+# in entrypoint.sh, then drop privileges to appuser using runuser.
 ENTRYPOINT ["/entrypoint.sh"]
