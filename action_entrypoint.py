@@ -11,7 +11,6 @@ import os
 import sys
 import json
 import glob
-import glob
 from pathlib import Path
 
 try:
@@ -447,4 +446,4 @@ if __name__ == "__main__":
     except Exception as e:
         if sentry_dsn and sentry_sdk:
             sentry_sdk.capture_exception(e)
-        raise e
+        raise
