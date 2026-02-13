@@ -11,7 +11,13 @@ import os
 import sys
 import json
 import glob
+import glob
 from pathlib import Path
+
+try:
+    import sentry_sdk
+except ImportError:
+    sentry_sdk = None
 
 # QWED SDK imports - only guards (no heavy dependencies)
 sys.path.insert(0, "/app")
@@ -415,4 +421,30 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Initialize Sentry if DSN is provided
+    sentry_dsn = get_env("SENTRY_DSN") or os.environ.get("SENTRY_DSN")
+    if sentry_dsn and sentry_sdk:
+        print("🔭 Initializing Sentry SDK...")
+        sentry_sdk.init(
+            dsn=sentry_dsn,
+            traces_sample_rate=1.0,  # Capture 100% of transactions for performance monitoring
+            environment="production",
+            release=os.environ.get("GITHUB_SHA", "unknown"),
+        )
+        sentry_sdk.set_tag("repository", os.environ.get("GITHUB_REPOSITORY", "unknown"))
+        sentry_sdk.set_tag("actor", os.environ.get("GITHUB_ACTOR", "unknown"))
+        sentry_sdk.set_tag("run_id", os.environ.get("GITHUB_RUN_ID", "unknown"))
+        
+        # Capture strictly necessary context, avoid PII unless explicitly enabled
+        sentry_sdk.set_context("github", {
+            "ref": os.environ.get("GITHUB_REF"),
+            "workflow": os.environ.get("GITHUB_WORKFLOW"),
+            "action": os.environ.get("GITHUB_ACTION"),
+        })
+
+    try:
+        main()
+    except Exception as e:
+        if sentry_dsn and sentry_sdk:
+            sentry_sdk.capture_exception(e)
+        raise e
