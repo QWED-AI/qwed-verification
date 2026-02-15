@@ -1,5 +1,5 @@
 
-import pytest
+
 from qwed_new.guards.process_guard import ProcessVerifier
 
 class TestProcessVerifier:
