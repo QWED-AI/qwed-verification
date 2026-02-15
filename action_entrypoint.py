@@ -22,6 +22,7 @@ except ImportError:
 sys.path.insert(0, "/app")
 from qwed_sdk.guards.system_guard import SystemGuard
 from qwed_sdk.guards.config_guard import ConfigGuard
+from qwed_new.guards.process_guard import ProcessVerifier
 
 
 def get_env(name: str, default: str = "") -> str:
@@ -300,6 +301,72 @@ def action_verify_shell():
         sys.exit(1)
 
 
+
+# ============== VERIFY-PROCESS MODE ==============
+def action_verify_process():
+    """Verify reasoning process integrity (IRAC & Milestones)."""
+    llm_output = get_env("LLM_OUTPUT")
+    milestones = get_env("MILESTONES", "")  # Comma-separated
+    output_format = get_env("OUTPUT_FORMAT", "text")
+    
+    if not llm_output:
+        print("❌ Error: 'llm_output' is required for verify-process mode.")
+        sys.exit(1)
+        
+    print("🧠 QWED Process Integrity Verifier v3.0")
+    verifier = ProcessVerifier()
+    
+    # Check IRAC Structure
+    irac_result = verifier.verify_irac_structure(llm_output)
+    
+    # Check Milestones (if provided)
+    milestone_list = [m.strip() for m in milestones.split(",") if m.strip()]
+    milestone_result = verifier.verify_trace(llm_output, milestone_list)
+    
+    # Combined Verdict
+    authorized = irac_result["verified"] and milestone_result["verified"]
+    
+    findings = []
+    if not irac_result["verified"]:
+        findings.append({
+            "type": "MISSING_STRUCTURE",
+            "message": f"Missing IRAC steps: {', '.join(irac_result['missing_steps'])}",
+            "score": irac_result["score"]
+        })
+        
+    if not milestone_result["verified"]:
+        findings.append({
+            "type": "MISSED_MILESTONE",
+            "message": f"Missed required milestones: {', '.join(milestone_result['missed_milestones'])}",
+            "process_rate": milestone_result["process_rate"]
+        })
+    
+    # Output
+    if output_format == "json":
+        print(json.dumps({
+            "verified": authorized,
+            "irac_score": irac_result["score"],
+            "process_rate": milestone_result["process_rate"],
+            "findings": findings
+        }, indent=2))
+    else:
+        print(f"   🔍 Integration Score: {irac_result['score']:.0%}")
+        print(f"   📉 Process Rate:     {milestone_result['process_rate']:.0%}")
+        
+        if findings:
+            print("\n❌ Process Integrity Issues:")
+            for f in findings:
+                print(f"   - [{f['type']}] {f['message']}")
+        else:
+            print("\n✅ Reasoning Process Verified (IRAC Compliant)")
+            
+    set_output("verified", str(authorized).lower())
+    set_output("badge_url", generate_badge_url(authorized))
+    
+    if not authorized and get_env("FAIL_ON_FINDINGS", "true") == "true":
+        sys.exit(1)
+
+
 # ============== OUTPUT HELPERS ==============
 def output_results(findings: list, format: str, scan_type: str):
     """Output findings in requested format."""
@@ -413,6 +480,8 @@ def main():
         action_scan_code()
     elif action == "verify-shell":
         action_verify_shell()
+    elif action == "verify-process":
+        action_verify_process()
     else:
         print(f"❌ Unknown action: {action}")
         print("   Supported: verify, scan-secrets, scan-code, verify-shell")
