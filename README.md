@@ -20,7 +20,6 @@
 
   [![Docker Verified](https://img.shields.io/badge/Docker-Verified_Publisher-blue.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-verification)
 [![Docker Scout](https://img.shields.io/badge/Docker-Scout_Analyzed-1D63ED.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-verification/tags)
-[![Snyk](https://img.shields.io/badge/Security-Snyk_Monitored-4C4A73?style=flat&logo=snyk&logoColor=white)](https://snyk.io/test/github/QWED-AI/qwed-verification)
 [![Cloudflare](https://img.shields.io/badge/Protected_by-Cloudflare-F38020?style=flat&logo=cloudflare&logoColor=white)](https://www.cloudflare.com/)
 [![CircleCI](https://img.shields.io/badge/CircleCI-Active-343434?style=flat&logo=circleci&logoColor=white)](https://circleci.com/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
@@ -77,10 +76,8 @@
 > 
 > QWED uses **deterministic computation** (no neural networks, no embeddings, no vibes) wherever possible. Math, Logic, SQL, Code, and Schema engines produce 100% reproducible results using symbolic solvers. For fact-checking, we use TF-IDF (not embeddings) because it's transparent and inspectable—same query always returns same score. For image/reasoning domains that require LLM fallback, we clearly mark outputs as `HEURISTIC` in the response.
 
----
 
 
----
 
 ## 🔐 Ecosystem Trust & Infrastructure
 
@@ -97,7 +94,7 @@ QWED is supported by leading open-source infrastructure and security ecosystems,
 *   **Cloudflare Project Alexandria**
     Edge compute (Workers), CDN, and security infrastructure sponsorship.
 *   **Sentry (Source-Available)**
-    Observability, error tracking, and verification risk monitoring (Self-Hosted/FSL).
+    Observability, error tracking, and verification risk monitoring ([Self-Hosted/FSL](https://github.com/getsentry/sentry/blob/master/LICENSE.md)).
 *   **Netlify Open Source Plan**
     Frontend hosting and deployment infrastructure.
 *   **Mintlify OSS Program**
