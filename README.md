@@ -18,14 +18,15 @@
     <b>🌐 Model Agnostic:</b> Local ($0) • Budget ($5/mo) • Premium ($100/mo) - You choose!
   </p>
 
-  [![CI](https://github.com/QWED-AI/qwed-verification/actions/workflows/ci.yml/badge.svg)](https://github.com/QWED-AI/qwed-verification/actions/workflows/ci.yml)
-  [![Snyk Security](https://snyk.io/test/github/QWED-AI/qwed-verification/badge.svg)](https://snyk.io/test/github/QWED-AI/qwed-verification)
-  [![codecov](https://codecov.io/gh/QWED-AI/qwed-verification/branch/main/graph/badge.svg)](https://codecov.io/gh/QWED-AI/qwed-verification)
-  [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
-  [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-  [![Docker Hub](https://img.shields.io/docker/pulls/qwedai/qwed-verification?logo=docker)](https://hub.docker.com/r/qwedai/qwed-verification)
-  [![DOI](https://zenodo.org/badge/1115581942.svg)](https://doi.org/10.5281/zenodo.18111675)
-  [![PyPI version](https://img.shields.io/pypi/v/qwed.svg)](https://pypi.org/project/qwed/)
+  [![Docker Verified](https://img.shields.io/badge/Docker-Verified_Publisher-blue.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-verification)
+[![Docker Scout](https://img.shields.io/badge/Docker-Scout_Analyzed-1D63ED.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-verification/tags)
+[![Snyk](https://img.shields.io/badge/Security-Snyk_Monitored-4C4A73?style=flat&logo=snyk&logoColor=white)](https://snyk.io/test/github/QWED-AI/qwed-verification)
+[![Cloudflare](https://img.shields.io/badge/Protected_by-Cloudflare-F38020?style=flat&logo=cloudflare&logoColor=white)](https://www.cloudflare.com/)
+[![CircleCI](https://img.shields.io/badge/CircleCI-Active-343434?style=flat&logo=circleci&logoColor=white)](https://circleci.com/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![DOI](https://zenodo.org/badge/1115581942.svg)](https://doi.org/10.5281/zenodo.18111675)
+[![PyPI version](https://img.shields.io/pypi/v/qwed.svg)](https://pypi.org/project/qwed/)
   [![Contributors](https://img.shields.io/github/contributors/QWED-AI/qwed-verification)](https://github.com/QWED-AI/qwed-verification/graphs/contributors)
   [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/11903/badge)](https://www.bestpractices.dev/projects/11903)
   
@@ -75,6 +76,44 @@
 > **🔬 On "Deterministic" Verification**
 > 
 > QWED uses **deterministic computation** (no neural networks, no embeddings, no vibes) wherever possible. Math, Logic, SQL, Code, and Schema engines produce 100% reproducible results using symbolic solvers. For fact-checking, we use TF-IDF (not embeddings) because it's transparent and inspectable—same query always returns same score. For image/reasoning domains that require LLM fallback, we clearly mark outputs as `HEURISTIC` in the response.
+
+---
+
+
+---
+
+## 🔐 Ecosystem Trust & Infrastructure
+
+QWED is supported by leading open-source infrastructure and security ecosystems, ensuring production-grade reliability for AI verification workloads.
+
+### Sponsored & Supported Programs
+
+*   **Docker Sponsored Open Source (DSOS)**
+    Verified container distribution, Docker Scout security insights, autobuilds, and pull rate-limit removal.
+*   **Snyk Open Source Security Program**
+    Enterprise-grade SAST, dependency scanning, and container vulnerability monitoring.
+*   **CircleCI Open Source Program**
+    Scalable CI/CD pipelines with high-volume build credits.
+*   **Cloudflare Project Alexandria**
+    Edge compute (Workers), CDN, and security infrastructure sponsorship.
+*   **Sentry (Source-Available)**
+    Observability, error tracking, and verification risk monitoring (Self-Hosted/FSL).
+*   **Netlify Open Source Plan**
+    Frontend hosting and deployment infrastructure.
+*   **Mintlify OSS Program**
+    Documentation hosting and developer experience tooling.
+
+### Why This Matters
+
+Verification infrastructure must itself be verifiable. These ecosystem partnerships ensure that:
+
+*   Containers are securely built and distributed
+*   Code is continuously scanned for vulnerabilities
+*   Supply chain risks are minimized
+*   Verification failures are observable and auditable
+*   Deployments scale reliably across environments
+
+> **QWED’s mission is to provide deterministic trust for AI systems — and that trust begins with the infrastructure it runs on.**
 
 ---
 
@@ -820,13 +859,5 @@ We're actively looking for contributors! Whether you're a first-timer or experie
   <a href="SECURITY.md">Security</a> · 
   <a href="https://docs.qwedai.com">Documentation</a>
   
-  <br><br>
-  <p>Proudly supported by</p>
-  <a href="https://www.netlify.com">
-    <img src="https://www.netlify.com/img/global/badges/netlify-color-accent.svg" alt="Deploys by Netlify" />
-  </a>
-  <br>
-  <a href="https://snyk.io">
-    <img src="https://img.shields.io/badge/Security-Snyk-4C4A73?style=for-the-badge&logo=snyk&logoColor=white" alt="Secured by Snyk" />
-  </a>
+
 </div>
