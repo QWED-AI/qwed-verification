@@ -84,7 +84,7 @@
 
 ## 🔐 Ecosystem Trust & Infrastructure
 
-QWED is supported by leading open source infrastructure and security ecosystems, ensuring production-grade reliability for AI verification workloads.
+QWED is supported by leading open-source infrastructure and security ecosystems, ensuring production-grade reliability for AI verification workloads.
 
 ### Sponsored & Supported Programs
 
@@ -96,8 +96,8 @@ QWED is supported by leading open source infrastructure and security ecosystems,
     Scalable CI/CD pipelines with high-volume build credits.
 *   **Cloudflare Project Alexandria**
     Edge compute (Workers), CDN, and security infrastructure sponsorship.
-*   **Sentry Open Source Program**
-    Observability, error tracking, and verification risk monitoring.
+*   **Sentry (Source-Available)**
+    Observability, error tracking, and verification risk monitoring (Self-Hosted/FSL).
 *   **Netlify Open Source Plan**
     Frontend hosting and deployment infrastructure.
 *   **Mintlify OSS Program**
