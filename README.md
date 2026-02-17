@@ -116,6 +116,7 @@ Verification infrastructure must itself be verifiable. These ecosystem partnersh
 > **QWED’s mission is to provide deterministic trust for AI systems — and that trust begins with the infrastructure it runs on.**
 
 ---
+## 📦 Installation
 
 ## 🚀 Quick Start: Install & Verify in 30 Seconds
 
@@ -176,8 +177,6 @@ print(response)
 *   **No More Fake Cases:** `CitationGuard` (Legal) verifies legal citations against valid reporter formats (e.g., Bluebook).
 *   **Banking Ready:** `ISOGuard` (Finance) ensures AI payments meet ISO 20022 standards.
 *   **Ethical AI:** `DisclaimerGuard` (Core) enforces safety warnings in regulated outputs.
-
-## 📦 Installation
 
 ---
 
