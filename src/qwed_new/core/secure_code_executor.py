@@ -123,8 +123,9 @@ class SecureCodeExecutor:
                     return False, f"Container execution failed: {str(e)}", None
                     
                 except docker.errors.ImageNotFound:
-                    logger.error(f"Docker image not found: {self.image}")
-                    return False, f"Docker image '{self.image}' not found. Please pull it first.", None
+                    safe_image = _sanitize_log_msg(str(self.image))
+                    logger.error("Docker image not found: %s", safe_image)
+                    return False, f"Docker image '{safe_image}' not found. Please pull it first.", None
                     
                 except Exception as e:
                     logger.exception("Unexpected execution error: %s", _sanitize_log_msg(e))
