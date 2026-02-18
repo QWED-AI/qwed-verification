@@ -7,6 +7,7 @@ Uses JWT with ES256 (ECDSA P-256) for signing attestations.
 
 import hashlib
 import json
+import base64
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -284,11 +285,10 @@ class AttestationService:
                 # Add padding if needed
                 # Correct padding logic: (-n) % 4 gives us the number of '=' needed
                 padding = '=' * (-len(payload_segment) % 4)
-                import base64
                 payload_data = base64.urlsafe_b64decode(payload_segment + padding)
                 unverified = json.loads(payload_data)
             except Exception:
-                 return False, None, "Invalid token format"
+                return False, None, "Invalid token format"
 
             issuer = unverified.get("iss")
             

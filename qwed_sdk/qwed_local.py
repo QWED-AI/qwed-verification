@@ -87,6 +87,86 @@ except ImportError:
     Solver = None
 
 
+
+# Validators
+import ast
+
+def _is_safe_sympy_expr(expr_str: str) -> bool:
+    """
+    Validate that expression only contains allowed SymPy operations.
+    Strictly whitelists safe functions to prevent code injection.
+    """
+    ALLOWED_SYMPY_FUNCS = {
+        'simplify', 'expand', 'factor', 'diff', 'integrate',
+        'solve', 'limit', 'series', 'summation',
+        'sin', 'cos', 'tan', 'exp', 'log', 'sqrt',
+        'Symbol', 'symbols', 'Rational', 'Integer',
+        'pi', 'E', 'oo', 'zoo', 'nan',
+    }
+    try:
+        tree = ast.parse(expr_str, mode='eval')
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                # Check calls like sympy.diff(...)
+                if isinstance(node.func, ast.Attribute):
+                    # Ensure base is 'sympy'
+                    if getattr(node.func.value, 'id', '') != 'sympy':
+                        return False
+                    # Check specific function against whitelist
+                    if node.func.attr not in ALLOWED_SYMPY_FUNCS:
+                        return False
+                elif isinstance(node.func, ast.Name):
+                    # Explicitly block direct calls unless safe builtins
+                    safe_funcs = {'abs', 'float', 'int', 'complex'}
+                    if node.func.id not in safe_funcs:
+                        return False
+                else:
+                    return False
+            elif isinstance(node, (ast.Name, ast.Constant, ast.Expression, 
+                                   ast.Load, ast.BinOp, ast.UnaryOp,
+                                   ast.operator, ast.unaryop, ast.Attribute)):
+                pass
+            # Deprecated check for older Python versions if needed, but modern ast uses Constant
+            elif hasattr(ast, 'Str') and isinstance(node, ast.Str): pass
+            elif hasattr(ast, 'Num') and isinstance(node, ast.Num): pass
+            else:
+                return False
+        return True
+    except SyntaxError:
+        return False
+
+def _is_safe_z3_expr(expr_str: str) -> bool:
+    """Validate that expression only contains allowed Z3 operations."""
+    allowed_names = {
+        'Bool', 'And', 'Or', 'Not', 'Implies', 
+        'True', 'False'
+    }
+    
+    try:
+        tree = ast.parse(expr_str, mode='eval')
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    if node.func.id not in allowed_names:
+                        return False
+                else:
+                    return False # Reject complex calls
+            elif isinstance(node, ast.Name):
+                if node.id not in allowed_names:
+                    return False
+            elif isinstance(node, (ast.Constant, ast.Expression, ast.Load)):
+                pass
+            # Deprecated check
+            elif hasattr(ast, 'Str') and isinstance(node, ast.Str): pass
+            elif hasattr(ast, 'Num') and isinstance(node, ast.Num): pass
+            else:
+                # Reject operations, attributes, etc.
+                return False
+        return True
+    except SyntaxError:
+        return False
+
+
 @dataclass
 class VerificationResult:
     """Result from verification."""
@@ -423,38 +503,7 @@ SymPy code:"""
             local_vars = {"sympy": sympy, "x": sympy.Symbol('x')}
             
             try:
-                # Use safe eval with AST whitelist instead of sympify
-                # This allows sympy function calls like sympy.diff(x**2, x) which sympify blocks
-                import ast
-                
-                def _is_safe_sympy_expr(expr_str):
-                    """Validate that expression only contains allowed operations."""
-                    try:
-                        tree = ast.parse(expr_str, mode='eval')
-                        for node in ast.walk(tree):
-                            if isinstance(node, ast.Call):
-                                # Allow calls like sympy.diff(...)
-                                if isinstance(node.func, ast.Attribute):
-                                    # Ensure the base object is 'sympy'
-                                    if getattr(node.func.value, 'id', '') != 'sympy':
-                                        return False
-                                elif isinstance(node.func, ast.Name):
-                                    # BLOCK all direct function calls unless whitelisted
-                                    # This prevents __import__, eval, etc.
-                                    safe_funcs = {'abs', 'float', 'int', 'complex'}
-                                    if node.func.id not in safe_funcs:
-                                        return False
-                                else:
-                                    return False
-                            elif isinstance(node, (ast.Name, ast.Constant, ast.Str, ast.Num, 
-                                                 ast.Expression, ast.Load, ast.BinOp, ast.UnaryOp,
-                                                 ast.operator, ast.unaryop, ast.Attribute)):
-                                pass
-                            else:
-                                return False
-                        return True
-                    except SyntaxError:
-                        return False
+                # Use safe eval with AST whitelist (module-level validator)
 
                 if not _is_safe_sympy_expr(llm_expr.strip()):
                     raise ValueError("Unsafe SymPy expression detected")
@@ -592,37 +641,7 @@ Z3 code:"""
                     "__builtins__": {}
                 }
                 
-                # Validate Z3 expression safety using AST
-                import ast
-                
-                def _is_safe_z3_expr(expr_str):
-                    """Validate that expression only contains allowed Z3 operations."""
-                    allowed_names = {
-                        'Bool', 'And', 'Or', 'Not', 'Implies', 
-                        'Solver', 'sat', 'unsat', 'unknown',
-                        'True', 'False'
-                    }
-                    
-                    try:
-                        tree = ast.parse(expr_str, mode='eval')
-                        for node in ast.walk(tree):
-                            if isinstance(node, ast.Call):
-                                if isinstance(node.func, ast.Name):
-                                    if node.func.id not in allowed_names:
-                                        return False
-                                else:
-                                    return False # Reject complex calls
-                            elif isinstance(node, ast.Name):
-                                if node.id not in allowed_names:
-                                    return False
-                            elif isinstance(node, (ast.Constant, ast.Str, ast.Num, ast.Expression, ast.Load)):
-                                pass
-                            else:
-                                # Reject operations, attributes, etc.
-                                return False
-                        return True
-                    except SyntaxError:
-                        return False
+                # Validate using module-level validator
 
                 if not _is_safe_z3_expr(llm_expr.strip()):
                      raise ValueError("Unsafe Z3 expression detected")

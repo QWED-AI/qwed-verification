@@ -15,9 +15,13 @@ import json
 import os
 import logging
 from typing import Any, Dict, Tuple, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+def _sanitize_log_msg(msg: str) -> str:
+    """Strip newline characters to prevent log injection."""
+    return str(msg).replace('\n', ' ').replace('\r', ' ')
 
 
 class SecureCodeExecutor:
@@ -71,7 +75,7 @@ class SecureCodeExecutor:
             return False, f"Code safety validation failed: {safety_reason}", None
         
         self.execution_count += 1
-        execution_id = f"exec_{self.execution_count}_{int(datetime.utcnow().timestamp())}"
+        execution_id = f"exec_{self.execution_count}_{int(datetime.now(timezone.utc).timestamp())}"
         
         logger.info(f"Starting secure code execution: {execution_id}")
         
@@ -104,7 +108,7 @@ class SecureCodeExecutor:
                             result_data = json.load(f)
                         
                         if 'error' in result_data:
-                            error_msg = str(result_data['error']).replace('\n', ' ').replace('\r', ' ')
+                            error_msg = _sanitize_log_msg(result_data['error'])
                             # Use lazy formatting for logging (safer and standard practice)
                             logger.warning("Code execution error: %s", error_msg)
                             return False, result_data['error'], None
@@ -115,7 +119,7 @@ class SecureCodeExecutor:
                         return False, "No result file generated", None
                         
                 except docker.errors.ContainerError as e:
-                    logger.error(f"Container error: {e}")
+                    logger.error("Container error: %s", _sanitize_log_msg(e))
                     return False, f"Container execution failed: {str(e)}", None
                     
                 except docker.errors.ImageNotFound:
@@ -123,11 +127,11 @@ class SecureCodeExecutor:
                     return False, f"Docker image '{self.image}' not found. Please pull it first.", None
                     
                 except Exception as e:
-                    logger.error(f"Unexpected execution error: {e}")
+                    logger.error("Unexpected execution error: %s", _sanitize_log_msg(e))
                     return False, f"Execution error: {str(e)}", None
                     
         except Exception as e:
-            logger.error(f"Failed to create temporary directory: {e}")
+            logger.error("Failed to create temporary directory: %s", _sanitize_log_msg(e))
             return False, f"Setup error: {str(e)}", None
     
     def _run_in_container(self, tmpdir: str, execution_id: str) -> Any:

@@ -1,11 +1,13 @@
 
 import unittest
-import base64
-import json
 import ast
-import sympy
-# Import the actual classes to test integration if possible, 
-# or copy the validator logic for component testing if we can't easily import private methods.
+import sys
+import os
+
+# Adjust path to allow imports from qwed_sdk if not installed as package
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from qwed_sdk.qwed_local import _is_safe_sympy_expr, _is_safe_z3_expr
 
 class TestSecurityFixes(unittest.TestCase):
     
@@ -36,51 +38,32 @@ class TestSecurityFixes(unittest.TestCase):
         print("Base64 padding logic verified.")
 
     def test_safe_sympy_validator(self):
-        """Test the AST validator for SymPy expressions."""
+        """Test the AST validator for SymPy expressions using REAL implementation."""
         
-        def _is_safe(expr_str):
-            try:
-                tree = ast.parse(expr_str, mode='eval')
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Call):
-                        if isinstance(node.func, ast.Attribute):
-                            if getattr(node.func.value, 'id', '') != 'sympy':
-                                return False
-                        elif isinstance(node.func, ast.Name):
-                            safe_funcs = {'abs', 'float', 'int', 'complex'}
-                            if node.func.id not in safe_funcs:
-                                return False
-                        else:
-                            return False
-                    elif isinstance(node, (ast.Name, ast.Constant, ast.Str, ast.Num, 
-                                            ast.Expression, ast.Load, ast.BinOp, ast.UnaryOp,
-                                            ast.operator, ast.unaryop, ast.Attribute)):
-                        pass
-                    else:
-                        return False
-                return True
-            except SyntaxError:
-                return False
-
         # Safe expressions
-        self.assertTrue(_is_safe("sympy.diff(x**2, x)"))
-        self.assertTrue(_is_safe("sympy.sin(x) + 1"))
-        self.assertTrue(_is_safe("x + 2"))
+        self.assertTrue(_is_safe_sympy_expr("sympy.diff(x**2, x)"))
+        self.assertTrue(_is_safe_sympy_expr("sympy.sin(x) + 1"))
+        self.assertTrue(_is_safe_sympy_expr("x + 2"))
         
         # Unsafe expressions
-        self.assertFalse(_is_safe("import os"))
-        self.assertFalse(_is_safe("__import__('os')"))
-        self.assertFalse(_is_safe("eval('print(1)')"))
-        self.assertFalse(_is_safe("exec('print(1)')"))
-        self.assertFalse(_is_safe("open('/etc/passwd')"))
+        self.assertFalse(_is_safe_sympy_expr("import os"))
+        self.assertFalse(_is_safe_sympy_expr("__import__('os')"))
+        self.assertFalse(_is_safe_sympy_expr("eval('print(1)')"))
+        self.assertFalse(_is_safe_sympy_expr("exec('print(1)')"))
+        self.assertFalse(_is_safe_sympy_expr("open('/etc/passwd')"))
+        
+        # Adversarial cases (bypass attempts)
+        self.assertFalse(_is_safe_sympy_expr("sympy.sympify('__import__(\"os\")')"))
+        self.assertFalse(_is_safe_sympy_expr("sympy.os.system('id')"))
         
         print("SymPy AST validator verified.")
 
     def test_log_sanitization(self):
         """Test that newlines are stripped from log messages."""
-        # Simulate the logic in secure_code_executor.py
+        from src.qwed_new.core.secure_code_executor import _sanitize_log_msg
+        
         raw_error = "Error occurred\nwith malicious\rnewline injection"
-        sanitized = str(raw_error).replace('\n', ' ').replace('\r', ' ')
+        sanitized = _sanitize_log_msg(raw_error)
         
         self.assertNotIn('\n', sanitized)
         self.assertNotIn('\r', sanitized)
