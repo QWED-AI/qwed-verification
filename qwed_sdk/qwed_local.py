@@ -511,7 +511,7 @@ SymPy code:"""
 
                 # S307: eval() is guarded by _is_safe_sympy_expr AST whitelist
                 # and restricted namespace (no __builtins__, only sympy + Symbol('x'))
-                verified_result = eval(llm_expr.strip(), {"__builtins__": {}}, local_vars)  # noqa: S307
+                verified_result = eval(llm_expr.strip(), {"__builtins__": {}}, local_vars)  # noqa: S307 # NOSONAR
                 
                 # If it's an expression (like 2+2), evaluate it
                 if hasattr(verified_result, 'evalf'):

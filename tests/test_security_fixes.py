@@ -10,8 +10,8 @@ from qwed_sdk.qwed_local import _is_safe_sympy_expr, _is_safe_z3_expr
 
 def _has_attestation_deps():
     try:
-        from src.qwed_new.core.attestation import AttestationService
-        return True
+        from src.qwed_new.core.attestation import AttestationService, HAS_CRYPTO
+        return HAS_CRYPTO
     except ImportError:
         return False
 
