@@ -92,95 +92,125 @@ except ImportError:
 # Validators
 import ast
 
+def _has_string_arg(node: ast.Call) -> bool:
+    """Check if a Call node has any string literal arguments."""
+    for arg in node.args:
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            return True
+        if hasattr(ast, 'Str') and isinstance(arg, ast.Str):
+            return True
+    for kw in node.keywords:
+        if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+            return True
+        if hasattr(ast, 'Str') and isinstance(kw.value, ast.Str):
+            return True
+    return False
+
+
+_ALLOWED_SYMPY_FUNCS = {
+    'simplify', 'expand', 'factor', 'diff', 'integrate',
+    'solve', 'limit', 'series', 'summation',
+    'sin', 'cos', 'tan', 'exp', 'log', 'sqrt',
+    'Symbol', 'symbols', 'Rational', 'Integer',
+    'pi', 'E', 'oo', 'zoo', 'nan',
+}
+
+_SAFE_SYMPY_NODE_TYPES = (
+    ast.Name, ast.Constant, ast.Expression,
+    ast.Load, ast.BinOp, ast.UnaryOp,
+    ast.Attribute, ast.Call, ast.keyword, ast.Pow,
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.USub,
+)
+
+
+def _is_safe_sympy_call(node: ast.Call) -> bool:
+    """Validate a single Call node against sympy allow-list."""
+    if isinstance(node.func, ast.Attribute):
+        if getattr(node.func.value, 'id', '') != 'sympy':
+            return False
+        if node.func.attr not in _ALLOWED_SYMPY_FUNCS:
+            return False
+    elif isinstance(node.func, ast.Name):
+        if node.func.id not in {'abs', 'int'}:
+            return False
+    else:
+        return False
+    # Reject string arguments (sympify injection vector)
+    return not _has_string_arg(node)
+
+
+def _is_safe_sympy_node(node: ast.AST) -> bool:
+    """Validate a single AST node for sympy expression safety."""
+    if isinstance(node, ast.Call):
+        return _is_safe_sympy_call(node)
+    if isinstance(node, _SAFE_SYMPY_NODE_TYPES):
+        return True
+    if hasattr(ast, 'Str') and isinstance(node, ast.Str):
+        return True
+    if hasattr(ast, 'Num') and isinstance(node, ast.Num):
+        return True
+    return False
+
+
 def _is_safe_sympy_expr(expr_str: str) -> bool:
     """
     Validate that expression only contains allowed SymPy operations.
     Strictly whitelists safe functions to prevent code injection.
     """
-    ALLOWED_SYMPY_FUNCS = {
-        'simplify', 'expand', 'factor', 'diff', 'integrate',
-        'solve', 'limit', 'series', 'summation',
-        'sin', 'cos', 'tan', 'exp', 'log', 'sqrt',
-        'Symbol', 'symbols', 'Rational', 'Integer',
-        'pi', 'E', 'oo', 'zoo', 'nan',
-    }
     try:
         tree = ast.parse(expr_str, mode='eval')
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                # Check calls like sympy.diff(...)
-                if isinstance(node.func, ast.Attribute):
-                    # Ensure base is 'sympy'
-                    if getattr(node.func.value, 'id', '') != 'sympy':
-                        return False
-                    # Check specific function against whitelist
-                    if node.func.attr not in ALLOWED_SYMPY_FUNCS:
-                        return False
-                elif isinstance(node.func, ast.Name):
-                    # Explicitly block direct calls unless safe builtins
-                    # float and complex removed to reduce attack surface
-                    safe_funcs = {'abs', 'int'}
-                    if node.func.id not in safe_funcs:
-                        return False
-                else:
-                    return False
-                
-                # Critical Security Check: Reject string arguments in function calls
-                # Whitelisted functions like simplify() call sympify() internally on strings,
-                # which uses eval() and creates an injection vector.
-                for arg in node.args:
-                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                        return False
-                    # Check for legacy ast.Str (Python < 3.8)
-                    if hasattr(ast, 'Str') and isinstance(arg, ast.Str):
-                        return False
-                        
-                for kw in node.keywords:
-                    if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
-                        return False
-                    # Check for legacy ast.Str (Python < 3.8)
-                    if hasattr(ast, 'Str') and isinstance(kw.value, ast.Str):
-                        return False
-            elif isinstance(node, (ast.Name, ast.Constant, ast.Expression, 
-                                   ast.Load, ast.BinOp, ast.UnaryOp,
-                                   ast.Attribute, ast.Call, ast.keyword, ast.Pow,
-                                   ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.USub)):
-                pass
-            # Deprecated check for older Python versions if needed, but modern ast uses Constant
-            elif hasattr(ast, 'Str') and isinstance(node, ast.Str): pass
-            elif hasattr(ast, 'Num') and isinstance(node, ast.Num): pass
-            else:
-                return False
-        return True
+        return all(_is_safe_sympy_node(node) for node in ast.walk(tree))
     except SyntaxError:
         return False
 
+
+def _safe_eval_sympy_expr(expr_str: str, local_vars: dict):
+    """Safely evaluate a SymPy expression using AST compilation.
+
+    Mirrors _safe_eval_z3_expr for the SymPy/math verification path.
+    Parses once, validates AST, compiles, executes in restricted namespace.
+    """
+    stripped = expr_str.strip()
+
+    try:
+        tree = ast.parse(stripped, mode='eval')
+    except SyntaxError as exc:
+        raise ValueError(f"Invalid SymPy expression syntax: {exc}") from exc
+    if not all(_is_safe_sympy_node(node) for node in ast.walk(tree)):
+        raise ValueError("Unsafe SymPy expression detected")
+
+    code = compile(tree, '<sympy_expr>', 'eval')
+
+    # Defensively enforce no builtins
+    restricted_ns = {k: v for k, v in local_vars.items() if k != "__builtins__"}
+    restricted_ns["__builtins__"] = {}
+
+    return eval(code, restricted_ns)  # noqa: S307  # nosec - AST-validated
+
+
+_ALLOWED_Z3_NAMES = {'Bool', 'And', 'Or', 'Not', 'Implies'}
+
+_SAFE_Z3_NODE_TYPES = (ast.Constant, ast.Expression, ast.Load)
+
+
+def _is_safe_z3_node(node: ast.AST) -> bool:
+    """Validate a single AST node for Z3 expression safety."""
+    if isinstance(node, ast.Call):
+        return isinstance(node.func, ast.Name) and node.func.id in _ALLOWED_Z3_NAMES
+    if isinstance(node, ast.Name):
+        return node.id in _ALLOWED_Z3_NAMES
+    if isinstance(node, _SAFE_Z3_NODE_TYPES):
+        return True
+    if hasattr(ast, 'Str') and isinstance(node, ast.Str):
+        return True
+    if hasattr(ast, 'Num') and isinstance(node, ast.Num):
+        return True
+    return False
+
+
 def _is_safe_z3_ast(tree: ast.AST) -> bool:
     """Validate that an AST tree only contains allowed Z3 operations."""
-    allowed_names = {
-        'Bool', 'And', 'Or', 'Not', 'Implies', 
-        # Note: True/False are ast.Constant on Python 3.8+, handled separately
-    }
-    
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name):
-                if node.func.id not in allowed_names:
-                    return False
-            else:
-                return False # Reject complex calls
-        elif isinstance(node, ast.Name):
-            if node.id not in allowed_names:
-                return False
-        elif isinstance(node, (ast.Constant, ast.Expression, ast.Load)):
-            pass
-        # Deprecated check
-        elif hasattr(ast, 'Str') and isinstance(node, ast.Str): pass
-        elif hasattr(ast, 'Num') and isinstance(node, ast.Num): pass
-        else:
-            # Reject operations, attributes, etc.
-            return False
-    return True
+    return all(_is_safe_z3_node(node) for node in ast.walk(tree))
 
 
 def _is_safe_z3_expr(expr_str: str) -> bool:
@@ -209,7 +239,10 @@ def _safe_eval_z3_expr(expr_str: str, z3_namespace: dict):
     stripped = expr_str.strip()
     
     # Parse once and validate the AST
-    tree = ast.parse(stripped, mode='eval')
+    try:
+        tree = ast.parse(stripped, mode='eval')
+    except SyntaxError as exc:
+        raise ValueError(f"Invalid Z3 expression syntax: {exc}") from exc
     if not _is_safe_z3_ast(tree):
         raise ValueError("Unsafe Z3 expression detected")
     
@@ -367,10 +400,9 @@ class QWEDLocal:
             if OpenAI is None:
                 raise ImportError("openai package required. Install: pip install openai")
             
-            # deepcode ignore HardcodedSecret: Placeholder for local LLMs (Ollama), not a real secret
             self.llm_client = OpenAI(
                 base_url=self.base_url,
-                api_key=self.api_key or "not-needed",  # Local LLMs don't need real keys
+                api_key=self.api_key or "not-needed",  # deepcode ignore HardcodedSecret: Placeholder for local LLMs (Ollama), not a real secret
                 **kwargs
             )
             self.client_type = "openai"
@@ -562,12 +594,8 @@ SymPy code:"""
             try:
                 # Use safe eval with AST whitelist (module-level validator)
 
-                if not _is_safe_sympy_expr(llm_expr.strip()):
-                    raise ValueError("Unsafe SymPy expression detected")
-
-                # S307: eval() is guarded by _is_safe_sympy_expr AST whitelist
-                # and restricted namespace (no __builtins__, only sympy + Symbol('x'))
-                verified_result = eval(llm_expr.strip(), {"__builtins__": {}}, local_vars)  # noqa: S307 # NOSONAR
+                # AST-validated eval via _safe_eval_sympy_expr (fixes S5334)
+                verified_result = _safe_eval_sympy_expr(llm_expr, local_vars)
                 
                 # If it's an expression (like 2+2), evaluate it
                 if hasattr(verified_result, 'evalf'):
