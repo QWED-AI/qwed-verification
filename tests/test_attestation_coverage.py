@@ -229,7 +229,10 @@ class TestAttestationCoverage(unittest.TestCase):
         """Test verification with tampered signature."""
         result = VerificationResult(status="ok", verified=True, engine="test")
         att = self.service.create_attestation(result, "query")
-        tampered = att.jwt_token[:-1] + ("A" if att.jwt_token[-1] != "A" else "B")
+        # Replace entire signature portion with garbage to guarantee failure
+        parts = att.jwt_token.split(".")
+        parts[2] = "AAAA_tampered_signature_BBBB"
+        tampered = ".".join(parts)
 
         is_valid, _, _ = self.service.verify_attestation(tampered)
         self.assertFalse(is_valid)
