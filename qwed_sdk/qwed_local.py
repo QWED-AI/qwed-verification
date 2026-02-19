@@ -92,6 +92,10 @@ except ImportError:
 # Validators
 import ast
 
+
+class UnsafeExpressionError(ValueError):
+    """Raised when an expression fails AST safety validation."""
+
 def _has_string_arg(node: ast.Call) -> bool:
     """Check if a Call node has any string literal arguments."""
     for arg in node.args:
@@ -118,9 +122,12 @@ _ALLOWED_SYMPY_FUNCS = {
 _SAFE_SYMPY_NODE_TYPES = (
     ast.Name, ast.Constant, ast.Expression,
     ast.Load, ast.BinOp, ast.UnaryOp,
-    ast.Attribute, ast.Call, ast.keyword, ast.Pow,
+    ast.Call, ast.keyword, ast.Pow,
     ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.USub,
 )
+
+# Builtins whitelisted in AST validation — must match _is_safe_sympy_call
+_SAFE_SYMPY_BUILTINS = {"abs": abs, "int": int}
 
 
 def _is_safe_sympy_call(node: ast.Call) -> bool:
@@ -139,10 +146,19 @@ def _is_safe_sympy_call(node: ast.Call) -> bool:
     return not _has_string_arg(node)
 
 
+def _is_safe_sympy_attribute(node: ast.Attribute) -> bool:
+    """Validate attribute access — only allow sympy.X pattern."""
+    if not isinstance(node.value, ast.Name):
+        return False
+    return node.value.id == 'sympy'
+
+
 def _is_safe_sympy_node(node: ast.AST) -> bool:
     """Validate a single AST node for sympy expression safety."""
     if isinstance(node, ast.Call):
         return _is_safe_sympy_call(node)
+    if isinstance(node, ast.Attribute):
+        return _is_safe_sympy_attribute(node)
     if isinstance(node, _SAFE_SYMPY_NODE_TYPES):
         return True
     if hasattr(ast, 'Str') and isinstance(node, ast.Str):
@@ -175,15 +191,15 @@ def _safe_eval_sympy_expr(expr_str: str, local_vars: dict):
     try:
         tree = ast.parse(stripped, mode='eval')
     except SyntaxError as exc:
-        raise ValueError(f"Invalid SymPy expression syntax: {exc}") from exc
+        raise UnsafeExpressionError(f"Invalid SymPy expression syntax: {exc}") from exc
     if not all(_is_safe_sympy_node(node) for node in ast.walk(tree)):
-        raise ValueError("Unsafe SymPy expression detected")
+        raise UnsafeExpressionError("Unsafe SymPy expression detected")
 
     code = compile(tree, '<sympy_expr>', 'eval')
 
-    # Defensively enforce no builtins
+    # Defensively enforce restricted builtins (only abs, int)
     restricted_ns = {k: v for k, v in local_vars.items() if k != "__builtins__"}
-    restricted_ns["__builtins__"] = {}
+    restricted_ns["__builtins__"] = _SAFE_SYMPY_BUILTINS
 
     return eval(code, restricted_ns)  # noqa: S307  # nosec - AST-validated
 
@@ -242,9 +258,9 @@ def _safe_eval_z3_expr(expr_str: str, z3_namespace: dict):
     try:
         tree = ast.parse(stripped, mode='eval')
     except SyntaxError as exc:
-        raise ValueError(f"Invalid Z3 expression syntax: {exc}") from exc
+        raise UnsafeExpressionError(f"Invalid Z3 expression syntax: {exc}") from exc
     if not _is_safe_z3_ast(tree):
-        raise ValueError("Unsafe Z3 expression detected")
+        raise UnsafeExpressionError("Unsafe Z3 expression detected")
     
     # Compile the already-validated AST (no re-parse)
     code = compile(tree, '<z3_expr>', 'eval')
