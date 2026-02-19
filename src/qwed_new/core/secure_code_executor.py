@@ -108,10 +108,9 @@ class SecureCodeExecutor:
                             result_data = json.load(f)
                         
                         if 'error' in result_data:
-                            error_msg = _sanitize_log_msg(result_data['error'])
-                            # Use lazy formatting for logging (safer and standard practice)
-                            logger.warning("Code execution error: %s", error_msg)
-                            return False, result_data['error'], None
+                            # Log a static message (S5145: don't log user-controlled data)
+                            logger.warning("Code execution returned an error for %s", execution_id)
+                            return False, _sanitize_log_msg(str(result_data['error'])), None
                         
                         logger.info(f"Code execution successful: {execution_id}")
                         return True, None, result_data.get('result')

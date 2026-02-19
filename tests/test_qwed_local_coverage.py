@@ -1,8 +1,8 @@
 
 import unittest
-import sys
 from unittest.mock import MagicMock, patch
 from qwed_sdk.qwed_local import QWEDLocal
+
 
 class TestQWEDLocalCoverage(unittest.TestCase):
     """Targeted tests to improve coverage of qwed_local.py"""
@@ -73,26 +73,25 @@ class TestQWEDLocalCoverage(unittest.TestCase):
     def test_show_github_nudge(self):
         """Test the github nudge logic."""
         import qwed_sdk.qwed_local as mod
-        from qwed_sdk.qwed_local import _show_github_nudge
         
         # Reset counters
         mod._verification_count = 0
         mod._has_shown_nudge = False
         
         # 1st time - no show
-        _show_github_nudge()
+        mod._show_github_nudge()
         self.assertFalse(mod._has_shown_nudge)
         
         # 2nd time - no show
-        _show_github_nudge()
+        mod._show_github_nudge()
         
         # 3rd time - SHOW
-        _show_github_nudge()
+        mod._show_github_nudge()
         self.assertTrue(mod._has_shown_nudge)
         
         # 10th time - SHOW again
         mod._verification_count = 9
-        _show_github_nudge()
+        mod._show_github_nudge()
 
     def test_show_github_nudge_no_color(self):
         """Test nudge without color (non-colored fallback path)."""
@@ -164,33 +163,33 @@ class TestQWEDLocalCoverage(unittest.TestCase):
 
     def test_is_safe_sympy_expr_complex(self):
         """Test safe sympy validator with various node types."""
-        from qwed_sdk.qwed_local import _is_safe_sympy_expr
+        import qwed_sdk.qwed_local as mod
         
         # Valid cases - bare expressions and safe builtins
-        self.assertTrue(_is_safe_sympy_expr("1 + 2"))
-        self.assertTrue(_is_safe_sympy_expr("abs(x)"))
-        self.assertTrue(_is_safe_sympy_expr("int(1.5)"))
+        self.assertTrue(mod._is_safe_sympy_expr("1 + 2"))
+        self.assertTrue(mod._is_safe_sympy_expr("abs(x)"))
+        self.assertTrue(mod._is_safe_sympy_expr("int(1.5)"))
         # Attribute-style calls (e.g., sympy.sin) ARE allowed
-        self.assertTrue(_is_safe_sympy_expr("sympy.sin(x)"))
-        self.assertTrue(_is_safe_sympy_expr("sympy.simplify(x**2 + 2*x + 1)"))
+        self.assertTrue(mod._is_safe_sympy_expr("sympy.sin(x)"))
+        self.assertTrue(mod._is_safe_sympy_expr("sympy.simplify(x**2 + 2*x + 1)"))
         
         # Invalid cases - bare function calls NOT in safe_funcs
         # Security design: only abs/int allowed as bare calls.
         # sin(x), simplify(x) etc are rejected (must use sympy.sin(x))
-        self.assertFalse(_is_safe_sympy_expr("sin(x)"))
-        self.assertFalse(_is_safe_sympy_expr("simplify(x**2)"))
+        self.assertFalse(mod._is_safe_sympy_expr("sin(x)"))
+        self.assertFalse(mod._is_safe_sympy_expr("simplify(x**2)"))
         
         # Import/exec-style attacks
-        self.assertFalse(_is_safe_sympy_expr("import os"))
-        self.assertFalse(_is_safe_sympy_expr("open('file')"))
-        self.assertFalse(_is_safe_sympy_expr("print('hi')"))
+        self.assertFalse(mod._is_safe_sympy_expr("import os"))
+        self.assertFalse(mod._is_safe_sympy_expr("open('file')"))
+        self.assertFalse(mod._is_safe_sympy_expr("print('hi')"))
         
         # String arg injection (sympy.simplify internally calls eval on strings)
-        self.assertFalse(_is_safe_sympy_expr("sympy.simplify('rm -rf')"))
-        self.assertFalse(_is_safe_sympy_expr("sympy.simplify(x, nice='rm -rf')"))
+        self.assertFalse(mod._is_safe_sympy_expr("sympy.simplify('rm -rf')"))
+        self.assertFalse(mod._is_safe_sympy_expr("sympy.simplify(x, nice='rm -rf')"))
         
         # float/complex removed from whitelist
-        self.assertFalse(_is_safe_sympy_expr("float(1.0)"))
+        self.assertFalse(mod._is_safe_sympy_expr("float(1.0)"))
         
     def test_call_llm_routes(self):
         """Test _call_llm routing to different clients."""
