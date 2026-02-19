@@ -24,6 +24,9 @@
 [![CircleCI](https://img.shields.io/badge/CircleCI-Active-343434?style=flat&logo=circleci&logoColor=white)](https://circleci.com/)
 [![Build status](https://badge.buildkite.com/b9b04e34874761e0583874d1354ee7428e13dfaad2bba81121.svg)](https://buildkite.com/qwed-ai/qwed-verification)
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=QWED-AI_qwed-verification&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=QWED-AI_qwed-verification)
+[![codecov](https://codecov.io/gh/QWED-AI/qwed-verification/graph/badge.svg?token=JBSW29Q1KQ)](https://codecov.io/gh/QWED-AI/qwed-verification)
+[![Snyk Security](https://snyk.io/test/github/QWED-AI/qwed-verification/badge.svg)](https://snyk.io/test/github/QWED-AI/qwed-verification)
+[![Sentry](https://img.shields.io/badge/Sentry-Monitored-362D59?style=flat&logo=sentry&logoColor=white)](https://qwed-ai.sentry.io)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![DOI](https://zenodo.org/badge/1115581942.svg)](https://doi.org/10.5281/zenodo.18111675)
@@ -95,8 +98,8 @@ QWED is supported by leading open-source infrastructure and security ecosystems,
     Scalable CI/CD pipelines with high-volume build credits.
 *   **Cloudflare Project Alexandria**
     Edge compute (Workers), CDN, and security infrastructure sponsorship.
-*   **Sentry (Source-Available)**
-    Observability, error tracking, and verification risk monitoring ([Self-Hosted/FSL](https://github.com/getsentry/sentry/blob/master/LICENSE.md)).
+*   **Sentry**
+    Observability, error tracking, and verification risk monitoring.
 *   **Netlify Open Source Plan**
     Frontend hosting and deployment infrastructure.
 *   **Mintlify OSS Program**
