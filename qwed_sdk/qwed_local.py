@@ -89,7 +89,6 @@ except ImportError:
 
 
 
-import os
 
 # Validators
 import ast
@@ -132,7 +131,7 @@ _ALLOWED_SYMPY_FUNCS = {
 _SAFE_SYMPY_NODE_TYPES = (
     ast.Name, ast.Constant, ast.Expression,
     ast.Load, ast.BinOp, ast.UnaryOp,
-    ast.Call, ast.keyword, ast.Pow,
+    ast.keyword, ast.Pow,
     ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.USub,
 )
 
