@@ -105,9 +105,16 @@ class MCPPoisonGuard:
         """Return True if the URL's hostname is in the allow-list."""
         url_clean = url.strip().rstrip(_TRAILING_PUNCT)
         try:
-            host = urlparse(url_clean).hostname or ""
+            _parsed = urlparse(url_clean)
+            host = _parsed.hostname or ""
+            scheme = _parsed.scheme
         except ValueError:
             return False
+
+        # Protocol enforcement: schemeless domain allowlist only matches http/https
+        if scheme and scheme not in ("http", "https"):
+            return False
+
         for domain in self.allowed_domains:
             if host == domain:
                 return True

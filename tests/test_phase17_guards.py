@@ -572,6 +572,33 @@ class TestSecurityGapsRound5(unittest.TestCase):
         self.assertFalse(result["verified"])
         self.assertTrue(any("UNAUTHORIZED_URL: https://evil.com" in f for f in result["flags"]))
 
+    def test_exfiltration_guard_protocol_wildcard_blocked(self):
+        """Schemeless entries should only match http/https."""
+        # Allow entry is just a hostname
+        guard = ExfiltrationGuard(allowed_endpoints=["api.openai.com"])
+        
+        # http/https should be ALLOWED
+        self.assertTrue(guard.verify_outbound_call("https://api.openai.com")["verified"])
+        self.assertTrue(guard.verify_outbound_call("http://api.openai.com")["verified"])
+        
+        # ftp/file should be BLOCKED
+        res_ftp = guard.verify_outbound_call("ftp://api.openai.com/data.zip")
+        self.assertFalse(res_ftp["verified"])
+        self.assertEqual(res_ftp["risk"], "DATA_EXFILTRATION")
+        
+        res_file = guard.verify_outbound_call("file:///etc/passwd")
+        self.assertFalse(res_file["verified"])
+
+    def test_mcp_poison_guard_unsupported_protocol_blocked(self):
+        """MCP guard should only authorize http/https for domain matches."""
+        # Using a pattern that might match other protocols if we weren't careful
+        guard = MCPPoisonGuard(allowed_domains=["api.github.com"])
+        
+        # Manual scan with ftp (bypass pattern for a moment to test logic)
+        # Even if detected, it should be unauthorized
+        self.assertFalse(guard._is_allowed_url("ftp://api.github.com/payload.sh"))
+        self.assertTrue(guard._is_allowed_url("https://api.github.com/info"))
+
 
 if __name__ == "__main__":
     unittest.main()

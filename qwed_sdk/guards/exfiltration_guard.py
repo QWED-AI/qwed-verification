@@ -164,7 +164,11 @@ class ExfiltrationGuard:
         # Exact match only — no implicit subdomain matching.
         # Require scheme compatibility if the allowlist entry specifies one.
         if parsed_host == allowed_host:
-            if not allowed_scheme or url_scheme == allowed_scheme:
+            if allowed_scheme:
+                if url_scheme == allowed_scheme:
+                    return True
+            elif url_scheme in ("http", "https"):
+                # Schemeless allowlist entry: default to safe web protocols only
                 return True
         return False
 
