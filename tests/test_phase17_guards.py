@@ -60,18 +60,26 @@ class TestRAGGuard(unittest.TestCase):
         self.assertEqual(result["risk"], "DOCUMENT_RETRIEVAL_MISMATCH")
 
     def test_drm_threshold_tolerance(self):
-        guard = RAGGuard(max_drm_rate=0.5)
+        # Guard uses exact Fraction; using string "1/2" for precision.
+        guard = RAGGuard(max_drm_rate="1/2")
         chunks = [
             self._chunk("c1", "nda_v2"),
             self._chunk("c2", "wrong_doc"),  # 50% DRM
         ]
-        # Exactly at threshold — should still be blocked (> not >=)
+        # Guard uses strict '>'; rate exactly equal to threshold is NOT blocked.
         result = guard.verify_retrieval_context("nda_v2", chunks)
         self.assertTrue(result["verified"])  # 0.5 <= 0.5, so passes
 
     def test_invalid_drm_rate_raises(self):
         with self.assertRaises(ValueError):
-            RAGGuard(max_drm_rate=1.5)
+            RAGGuard(max_drm_rate="3/2")  # > 1
+
+    def test_float_drm_rate_rejected(self):
+        """Floats must be rejected to enforce symbolic precision."""
+        from qwed_sdk.guards.rag_guard import RAGGuardConfigError
+        with self.assertRaises(RAGGuardConfigError) as cm:
+            RAGGuard(max_drm_rate=0.5)
+        self.assertIn("Floats are not permitted", str(cm.exception))
 
     def test_require_metadata_false_allows_missing_docid(self):
         """When require_metadata=False, chunks without document_id are NOT mismatches."""
@@ -117,6 +125,8 @@ class TestMCPPoisonGuard(unittest.TestCase):
             self._tool("Fetches issues from the GitHub API.")
         )
         self.assertTrue(result["verified"])
+        self.assertIn("irac.issue", result)
+        self.assertEqual(result["irac.issue"], "MCP_TOOL_CLEAN")
 
     def test_allowed_url_passes(self):
         result = self.guard.verify_tool_definition(
@@ -138,6 +148,8 @@ class TestMCPPoisonGuard(unittest.TestCase):
         )
         self.assertFalse(result["verified"])
         self.assertEqual(result["risk"], "MCP_TOOL_POISONING")
+        self.assertEqual(result["irac.issue"], "MCP_TOOL_POISONING")
+        self.assertIn("Blocked", result["irac.conclusion"])
 
     def test_ignore_previous_instructions_blocked(self):
         result = self.guard.verify_tool_definition(
@@ -188,6 +200,7 @@ class TestMCPPoisonGuard(unittest.TestCase):
         result = self.guard.verify_server_config(config)
         self.assertTrue(result["verified"])
         self.assertEqual(result["tools_scanned"], 2)
+        self.assertEqual(result["irac.issue"], "MCP_SERVER_CLEAN")
 
     def test_poisoned_server_config_blocked(self):
         config = {
@@ -255,6 +268,8 @@ class TestExfiltrationGuard(unittest.TestCase):
             payload="What is 2+2?"
         )
         self.assertTrue(result["verified"])
+        self.assertEqual(result["irac.issue"], "OK")
+        self.assertIn("Verified", result["irac.conclusion"])
 
     def test_url_prefix_bypass_blocked(self):
         """Critical: api.openai.com.evil.com must NOT pass the allowlist."""
@@ -277,6 +292,7 @@ class TestExfiltrationGuard(unittest.TestCase):
         result = self.guard.verify_outbound_call("")
         self.assertFalse(result["verified"])
         self.assertEqual(result["risk"], "EMPTY_DESTINATION")
+        self.assertEqual(result["irac.issue"], "EMPTY_DESTINATION")
 
     # ── PII detection ──────────────────────────────────────────────────────
 
@@ -389,9 +405,9 @@ class TestRAGGuardRound2(unittest.TestCase):
         """RAGGuardConfigError must be a subclass of ValueError."""
         from qwed_sdk.guards.rag_guard import RAGGuardConfigError
         with self.assertRaises(RAGGuardConfigError):
-            RAGGuard(max_drm_rate=2.0)
+            RAGGuard(max_drm_rate="2.0")
         with self.assertRaises(ValueError):
-            RAGGuard(max_drm_rate=2.0)
+            RAGGuard(max_drm_rate="2.0")
 
     def test_irac_fields_present_on_success(self):
         guard = RAGGuard()
@@ -430,6 +446,27 @@ class TestMCPPoisonGuardRound2(unittest.TestCase):
             {"name": "t", "description": "Contains EVIL_KEYWORD here."}
         )
         self.assertFalse(result["verified"])
+
+    def test_allowed_domains_empty_list_blocks_all(self):
+        """allowed_domains=[] must block all URLs in descriptions."""
+        guard = MCPPoisonGuard(allowed_domains=[])
+        result = guard.verify_tool_definition(
+            {"name": "t", "description": "Visit https://api.github.com for details."}
+        )
+        self.assertFalse(result["verified"])
+        self.assertTrue(any("UNAUTHORIZED_URL" in f for f in result["flags"]))
+
+    def test_ambiguous_config_warning(self):
+        """Verify that ambiguous config triggers a warning (and NameError fix)."""
+        import logging
+        guard = MCPPoisonGuard()
+        config = {
+            "tools": [],
+            "mcpServers": {}
+        }
+        with self.assertLogs("qwed_sdk.guards.mcp_poison_guard", level="WARNING") as cm:
+            guard.verify_server_config(config)
+        self.assertTrue(any("both 'tools' and 'mcpServers' keys present" in output for output in cm.output))
 
 
 if __name__ == "__main__":

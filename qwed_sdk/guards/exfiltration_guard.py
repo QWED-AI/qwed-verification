@@ -45,11 +45,11 @@ _PII_PATTERNS: Dict[str, re.Pattern] = {
     # (?:[A-Z0-9]{1}){0,16} avoids matching the empty string
     "IBAN": re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}(?:[A-Z0-9]{1}){0,16}\b"),
     # AKIA = long-term, ASIA = temporary/session credentials
-    "AWS_ACCESS_KEY": re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
+    "AWS_ACCESS_KEY": re.compile(r"\b(?:AKIA|ASIA)[A-Z\d]{16}\b"),
     "PRIVATE_KEY": re.compile(r"-----BEGIN (?:RSA |EC )?PRIVATE KEY-----"),
-    # \- is a literal hyphen; use \- only once per class (S5869)
-    "JWT": re.compile(r"\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\b"),
-    "BEARER_TOKEN": re.compile(r"Bearer\s+[a-zA-Z0-9_.-]{20,}", re.IGNORECASE),
+    # \- is a literal hyphen; use - at end of class. a-z covers A-Z with IGNORECASE.
+    "JWT": re.compile(r"\beyJ[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]+\b", re.IGNORECASE),
+    "BEARER_TOKEN": re.compile(r"Bearer\s+[a-z0-9_.-]{20,}", re.IGNORECASE),
 }
 
 _DEFAULT_PII_CHECKS = frozenset(k for k in _PII_PATTERNS if k != "PASSPORT")
@@ -154,14 +154,20 @@ class ExfiltrationGuard:
             method: HTTP method (for logging). Default: ``"POST"``.
 
         Returns:
-            ``{"verified": True, "destination": url}`` on success, or
-            ``{"verified": False, "risk": str, "message": str}`` on failure.
+            Dict with ``verified`` bool plus IRAC audit fields.
         """
+        _rule_endpoint = "Destination URL must appear in the configured endpoint allowlist."
+        _rule_pii = "Outbound payloads must not contain unmasked PII or secrets."
+
         if not destination_url:
             return {
                 "verified": False,
                 "risk": "EMPTY_DESTINATION",
                 "message": "Outbound call has no destination URL.",
+                "irac.issue": "EMPTY_DESTINATION",
+                "irac.rule": "Outbound calls must have a non-empty destination URL.",
+                "irac.application": "Destination URL is empty or None.",
+                "irac.conclusion": "Blocked: invalid destination.",
             }
 
         # 1. Endpoint allowlist check
@@ -174,6 +180,10 @@ class ExfiltrationGuard:
                     f"Agent attempted to send data to unauthorized endpoint: "
                     f"{destination_url}. Call blocked by ExfiltrationGuard."
                 ),
+                "irac.issue": "DATA_EXFILTRATION",
+                "irac.rule": _rule_endpoint,
+                "irac.application": f"'{destination_url}' is not in the allowlist.",
+                "irac.conclusion": "Blocked: unauthorized destination.",
             }
             logger.warning(
                 "ExfiltrationGuard blocked outbound call",
@@ -196,6 +206,10 @@ class ExfiltrationGuard:
                         f"contains unmasked PII: {pii_types}. "
                         "Mask or redact before sending."
                     ),
+                    "irac.issue": "PII_LEAK",
+                    "irac.rule": _rule_pii,
+                    "irac.application": f"Detected PII types in payload: {pii_types}.",
+                    "irac.conclusion": "Blocked: payload contains sensitive data.",
                 }
                 logger.warning(
                     "ExfiltrationGuard blocked PII in payload",
@@ -213,6 +227,10 @@ class ExfiltrationGuard:
             "destination": destination_url,
             "method": method,
             "message": f"Outbound {method} to '{destination_url}' approved.",
+            "irac.issue": "OK",
+            "irac.rule": f"{_rule_endpoint} AND {_rule_pii}",
+            "irac.application": f"Destination verified AND payload is clean for '{destination_url}'.",
+            "irac.conclusion": "Verified: call is compliant.",
         }
 
     def _scan_payload_for_pii(self, payload: str) -> List[Dict[str, Any]]:
@@ -243,9 +261,9 @@ class ExfiltrationGuard:
             payload: String content to scan.
 
         Returns:
-            ``{"verified": True}`` or
-            ``{"verified": False, "risk": "PII_DETECTED", "pii_detected": [...]}``.
+            Dict with ``verified`` bool plus IRAC audit fields.
         """
+        _rule = "Payloads must not contain unmasked PII or secrets."
         findings = self._scan_payload_for_pii(payload)
         if findings:
             pii_types = ", ".join(f["type"] for f in findings)
@@ -254,5 +272,16 @@ class ExfiltrationGuard:
                 "risk": "PII_DETECTED",
                 "pii_detected": findings,
                 "message": f"Payload contains unmasked PII: {pii_types}.",
+                "irac.issue": "PII_DETECTED",
+                "irac.rule": _rule,
+                "irac.application": f"Scan detected {len(findings)} PII type(s): {pii_types}.",
+                "irac.conclusion": "Violates: PII detected in content.",
             }
-        return {"verified": True, "message": "No PII detected in payload."}
+        return {
+            "verified": True,
+            "message": "No PII detected in payload.",
+            "irac.issue": "OK",
+            "irac.rule": _rule,
+            "irac.application": "PII scan returned zero matches.",
+            "irac.conclusion": "Compliant: content is clean.",
+        }

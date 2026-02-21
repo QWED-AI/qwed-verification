@@ -41,18 +41,28 @@ class RAGGuard:
 
     def __init__(
         self,
-        max_drm_rate: Union[Fraction, float, int] = Fraction(0),
+        max_drm_rate: Union[Fraction, str, int] = Fraction(0),
         require_metadata: bool = True,
     ):
         """
         Args:
             max_drm_rate: Maximum tolerable fraction of mismatched chunks
                 (0 = zero tolerance, 1 = allow all). Accepts ``Fraction``,
-                ``float``, or ``int``. Default: ``Fraction(0)``.
+                ``str`` (e.g., "1/10"), or ``int``. Floats are rejected to
+                enforce symbolic precision. Default: ``Fraction(0)``.
             require_metadata: If True, chunks missing ``document_id`` in
                 metadata are treated as mismatches. Default: True.
         """
-        threshold = Fraction(max_drm_rate)
+        if isinstance(max_drm_rate, float):
+            raise RAGGuardConfigError(
+                "max_drm_rate must be Fraction, str, or int to ensure symbolic precision. "
+                "Floats are not permitted."
+            )
+        try:
+            threshold = Fraction(max_drm_rate)
+        except Exception as e:
+            raise RAGGuardConfigError(f"Invalid max_drm_rate: {e}")
+
         if not Fraction(0) <= threshold <= Fraction(1):
             raise RAGGuardConfigError("max_drm_rate must be between 0 and 1")
         # Store as exact Fraction — no IEEE-754 round-trip at comparison time
