@@ -16,6 +16,12 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+# --- Audit Constants ---
+AUDIT_ISSUE = "irac.issue"
+AUDIT_RULE = "irac.rule"
+AUDIT_APP = "irac.application"
+AUDIT_CONCL = "irac.conclusion"
+
 
 # Prompt injection patterns — manipulative tags and override attempts
 _DEFAULT_INJECTION_PATTERNS: List[str] = [
@@ -185,20 +191,20 @@ class MCPPoisonGuard:
                     f"Found {len(all_flags)} issue(s)."
                 ),
                 "flags": all_flags,
-                "irac.issue": "MCP_TOOL_POISONING",
-                "irac.rule": _rule,
-                "irac.application": f"Detected {len(all_flags)} security flag(s) in tool schema.",
-                "irac.conclusion": "Blocked: tool definition is poisoned.",
+                AUDIT_ISSUE: "MCP_TOOL_POISONING",
+                AUDIT_RULE: _rule,
+                AUDIT_APP: f"Detected {len(all_flags)} security flag(s) in tool schema.",
+                AUDIT_CONCL: "Blocked: tool definition is poisoned.",
             }
 
         return {
             "verified": True,
             "tool_name": tool_name,
             "message": f"Tool '{tool_name}' passed MCP poison scan.",
-            "irac.issue": "MCP_TOOL_CLEAN",
-            "irac.rule": _rule,
-            "irac.application": "No injection patterns or unauthorized URLs detected in tool schema.",
-            "irac.conclusion": "Verified: tool definition is compliant.",
+            AUDIT_ISSUE: "MCP_TOOL_CLEAN",
+            AUDIT_RULE: _rule,
+            AUDIT_APP: "No injection patterns or unauthorized URLs detected in tool schema.",
+            AUDIT_CONCL: "Verified: tool definition is compliant.",
         }
 
     def verify_server_config(
@@ -216,37 +222,9 @@ class MCPPoisonGuard:
             ``{"verified": False, "risk": "MCP_SERVER_POISONING",
             "poisoned_tools": [...], "message": str}``.
         """
-        tools: List[Dict[str, Any]] = []
-
-        # Support both flat tool list and Claude Desktop mcpServers format.
-        # Warn if both keys present — "tools" takes precedence.
-        has_tools = "tools" in server_config
-        has_mcp = "mcpServers" in server_config
-        if has_tools and has_mcp:
-            logger.warning(
-                "verify_server_config: both 'tools' and 'mcpServers' keys present; "
-                "'tools' takes precedence and 'mcpServers' will be ignored."
-            )
-        if has_tools:
-            raw = server_config["tools"]
-            if not isinstance(raw, list):
-                raise ValueError(
-                    f"'tools' must be a list, got {type(raw).__name__!r}"
-                )
-            tools = raw
-        elif has_mcp:
-            mcp_servers = server_config["mcpServers"]
-            if not isinstance(mcp_servers, dict):
-                raise ValueError(
-                    f"'mcpServers' must be a dict, got {type(mcp_servers).__name__!r}"
-                )
-            for _server_name, server_def in mcp_servers.items():
-                if isinstance(server_def, dict):
-                    server_tools = server_def.get("tools")
-                    if isinstance(server_tools, list):
-                        tools.extend(server_tools)
-
+        tools = self._get_tools_from_config(server_config)
         poisoned: List[Dict[str, Any]] = []
+
         for tool in tools:
             result = self.verify_tool_definition(tool)
             if not result["verified"]:
@@ -264,18 +242,54 @@ class MCPPoisonGuard:
                     f"Blocked {len(poisoned)}/{len(tools)} poisoned tool(s) "
                     "in MCP server configuration."
                 ),
-                "irac.issue": "MCP_SERVER_POISONING",
-                "irac.rule": _rule,
-                "irac.application": f"Detected poisoning in {len(poisoned)} tool definitions.",
-                "irac.conclusion": "Blocked: server configuration is poisoned.",
+                AUDIT_ISSUE: "MCP_SERVER_POISONING",
+                AUDIT_RULE: _rule,
+                AUDIT_APP: f"Detected poisoning in {len(poisoned)} tool definitions.",
+                AUDIT_CONCL: "Blocked: server configuration is poisoned.",
             }
 
         return {
             "verified": True,
             "tools_scanned": len(tools),
             "message": f"All {len(tools)} tool(s) passed MCP poison scan.",
-            "irac.issue": "MCP_SERVER_CLEAN",
-            "irac.rule": _rule,
-            "irac.application": f"All {len(tools)} tool(s) verified clean.",
-            "irac.conclusion": "Verified: server configuration is compliant.",
+            AUDIT_ISSUE: "MCP_SERVER_CLEAN",
+            AUDIT_RULE: _rule,
+            AUDIT_APP: f"All {len(tools)} tool(s) verified clean.",
+            AUDIT_CONCL: "Verified: server configuration is compliant.",
         }
+
+    def _get_tools_from_config(self, config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract flat list of tools from multiple config formats."""
+        has_tools = "tools" in config
+        has_mcp = "mcpServers" in config
+
+        if has_tools and has_mcp:
+            logger.warning(
+                "verify_server_config: both 'tools' and 'mcpServers' keys present; "
+                "'tools' takes precedence and 'mcpServers' will be ignored."
+            )
+
+        if has_tools:
+            raw = config["tools"]
+            if not isinstance(raw, list):
+                raise ValueError(f"'tools' must be a list, got {type(raw).__name__!r}")
+            return raw
+
+        if has_mcp:
+            return self._extract_mcp_server_tools(config["mcpServers"])
+
+        return []
+
+    def _extract_mcp_server_tools(self, mcp_servers: Any) -> List[Dict[str, Any]]:
+        """Extract tools from Claude-style mcpServers dict."""
+        if not isinstance(mcp_servers, dict):
+            raise ValueError(
+                f"'mcpServers' must be a dict, got {type(mcp_servers).__name__!r}"
+            )
+        tools = []
+        for server_def in mcp_servers.values():
+            if isinstance(server_def, dict):
+                server_tools = server_def.get("tools")
+                if isinstance(server_tools, list):
+                    tools.extend(server_tools)
+        return tools

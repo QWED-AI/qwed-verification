@@ -15,6 +15,13 @@ from fractions import Fraction
 from typing import Dict, Any, List, Union
 
 
+# --- Audit Constants ---
+AUDIT_ISSUE = "irac.issue"
+AUDIT_RULE = "irac.rule"
+AUDIT_APP = "irac.application"
+AUDIT_CONCL = "irac.conclusion"
+
+
 class RAGGuardConfigError(ValueError):
     """Raised when RAGGuard is constructed with invalid configuration."""
 
@@ -105,10 +112,10 @@ class RAGGuard:
                 "drm_rate": 0.0,
                 "chunks_checked": 0,
                 "message": "No chunks to verify.",
-                "irac.issue": "None — no chunks to evaluate.",
-                "irac.rule": _rule,
-                "irac.application": "Zero chunks provided; check vacuously passes.",
-                "irac.conclusion": "Verified: no chunks to evaluate.",
+                AUDIT_ISSUE: "None — no chunks to evaluate.",
+                AUDIT_RULE: _rule,
+                AUDIT_APP: "Zero chunks provided; check vacuously passes.",
+                AUDIT_CONCL: "Verified: no chunks to evaluate.",
             }
 
         mismatched: List[Dict[str, Any]] = []
@@ -150,13 +157,13 @@ class RAGGuard:
                     f"{float(self._threshold):.1%}. This will cause hallucinations."
                 ),
                 "details": mismatched,
-                "irac.issue": "Document-level retrieval mismatch detected in RAG context.",
-                "irac.rule": _rule,
-                "irac.application": (
+                AUDIT_ISSUE: "Document-level retrieval mismatch detected in RAG context.",
+                AUDIT_RULE: _rule,
+                AUDIT_APP: (
                     f"{len(mismatched)} of {total} chunks originated from "
                     "wrong or unidentified source documents."
                 ),
-                "irac.conclusion": f"Blocked: DRM rate {drm_float:.1%} exceeds threshold.",
+                AUDIT_CONCL: f"Blocked: DRM rate {drm_float:.1%} exceeds threshold.",
             }
 
         _success_message = (
@@ -180,10 +187,10 @@ class RAGGuard:
             "mismatched_count": len(mismatched),
             "details": mismatched,
             "message": _success_message,
-            "irac.issue": "None — all chunks evaluated.",
-            "irac.rule": _rule,
-            "irac.application": _app_message,
-            "irac.conclusion": "Verified: DRM rate within acceptable threshold.",
+            AUDIT_ISSUE: "None — all chunks evaluated.",
+            AUDIT_RULE: _rule,
+            AUDIT_APP: _app_message,
+            AUDIT_CONCL: "Verified: DRM rate within acceptable threshold.",
         }
 
     def filter_valid_chunks(

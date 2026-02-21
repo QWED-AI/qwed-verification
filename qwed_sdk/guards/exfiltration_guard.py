@@ -15,6 +15,12 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+# --- Audit Constants ---
+AUDIT_ISSUE = "irac.issue"
+AUDIT_RULE = "irac.rule"
+AUDIT_APP = "irac.application"
+AUDIT_CONCL = "irac.conclusion"
+
 
 # --- PII Detection Patterns ---
 
@@ -125,27 +131,40 @@ class ExfiltrationGuard:
             return False
 
         for allowed in self.allowed_endpoints:
-            allowed_lower = allowed.lower()
-            # Prefix match — require path boundary to prevent
-            # 'https://api.openai.com.evil.com' bypassing the allowlist
-            if url_lower.startswith(allowed_lower):
-                rest = url_lower[len(allowed_lower):]
-                if not rest or rest[0] in ('/', '?', '#', ':'):
-                    return True
-            # Hostname-only / exact match
-            try:
-                _allowed_parsed = urlparse(allowed)
-                allowed_host = _allowed_parsed.hostname or allowed_lower
-                allowed_scheme = _allowed_parsed.scheme
-            except ValueError:
-                allowed_host = allowed_lower
-                allowed_scheme = ""
+            if self._matches_allowed_entry(url_lower, parsed_host, url_scheme, allowed):
+                return True
+        return False
 
-            # Exact match only — no implicit subdomain matching.
-            # Require scheme compatibility if the allowlist entry specifies one.
-            if parsed_host == allowed_host:
-                if not allowed_scheme or url_scheme == allowed_scheme:
-                    return True
+    def _matches_allowed_entry(
+        self, url_lower: str, parsed_host: str, url_scheme: str, allowed: str
+    ) -> bool:
+        """
+        Check if URL matches one specific allowlist entry.
+
+        Refactored to reduce complexity of _is_allowed_endpoint.
+        """
+        allowed_lower = allowed.lower()
+        # Prefix match — require path boundary to prevent
+        # 'https://api.openai.com.evil.com' bypassing the allowlist
+        if url_lower.startswith(allowed_lower):
+            rest = url_lower[len(allowed_lower) :]
+            if not rest or rest[0] in ("/", "?", "#", ":"):
+                return True
+
+        # Hostname-only / exact match
+        try:
+            _allowed_parsed = urlparse(allowed)
+            allowed_host = _allowed_parsed.hostname or allowed_lower
+            allowed_scheme = _allowed_parsed.scheme
+        except ValueError:
+            allowed_host = allowed_lower
+            allowed_scheme = ""
+
+        # Exact match only — no implicit subdomain matching.
+        # Require scheme compatibility if the allowlist entry specifies one.
+        if parsed_host == allowed_host:
+            if not allowed_scheme or url_scheme == allowed_scheme:
+                return True
         return False
 
     def verify_outbound_call(
@@ -173,10 +192,10 @@ class ExfiltrationGuard:
                 "verified": False,
                 "risk": "EMPTY_DESTINATION",
                 "message": "Outbound call has no destination URL.",
-                "irac.issue": "EMPTY_DESTINATION",
-                "irac.rule": "Outbound calls must have a non-empty destination URL.",
-                "irac.application": "Destination URL is empty or None.",
-                "irac.conclusion": "Blocked: invalid destination.",
+                AUDIT_ISSUE: "EMPTY_DESTINATION",
+                AUDIT_RULE: "Outbound calls must have a non-empty destination URL.",
+                AUDIT_APP: "Destination URL is empty or None.",
+                AUDIT_CONCL: "Blocked: invalid destination.",
             }
 
         # 1. Endpoint allowlist check
@@ -189,10 +208,10 @@ class ExfiltrationGuard:
                     f"Agent attempted to send data to unauthorized endpoint: "
                     f"{destination_url}. Call blocked by ExfiltrationGuard."
                 ),
-                "irac.issue": "DATA_EXFILTRATION",
-                "irac.rule": _rule_endpoint,
-                "irac.application": f"'{destination_url}' is not in the allowlist.",
-                "irac.conclusion": "Blocked: unauthorized destination.",
+                AUDIT_ISSUE: "DATA_EXFILTRATION",
+                AUDIT_RULE: _rule_endpoint,
+                AUDIT_APP: f"'{destination_url}' is not in the allowlist.",
+                AUDIT_CONCL: "Blocked: unauthorized destination.",
             }
             logger.warning(
                 "ExfiltrationGuard blocked outbound call",
@@ -215,10 +234,10 @@ class ExfiltrationGuard:
                         f"contains unmasked PII: {pii_types}. "
                         "Mask or redact before sending."
                     ),
-                    "irac.issue": "PII_LEAK",
-                    "irac.rule": _rule_pii,
-                    "irac.application": f"Detected PII types in payload: {pii_types}.",
-                    "irac.conclusion": "Blocked: payload contains sensitive data.",
+                    AUDIT_ISSUE: "PII_LEAK",
+                    AUDIT_RULE: _rule_pii,
+                    AUDIT_APP: f"Detected PII types in payload: {pii_types}.",
+                    AUDIT_CONCL: "Blocked: payload contains sensitive data.",
                 }
                 logger.warning(
                     "ExfiltrationGuard blocked PII in payload",
@@ -236,10 +255,10 @@ class ExfiltrationGuard:
             "destination": destination_url,
             "method": method,
             "message": f"Outbound {method} to '{destination_url}' approved.",
-            "irac.issue": "OK",
-            "irac.rule": f"{_rule_endpoint} AND {_rule_pii}",
-            "irac.application": f"Destination verified AND payload is clean for '{destination_url}'.",
-            "irac.conclusion": "Verified: call is compliant.",
+            AUDIT_ISSUE: "OK",
+            AUDIT_RULE: f"{_rule_endpoint} AND {_rule_pii}",
+            AUDIT_APP: f"Destination verified AND payload is clean for '{destination_url}'.",
+            AUDIT_CONCL: "Verified: call is compliant.",
         }
 
     def _scan_payload_for_pii(self, payload: str) -> List[Dict[str, Any]]:
@@ -281,16 +300,16 @@ class ExfiltrationGuard:
                 "risk": "PII_DETECTED",
                 "pii_detected": findings,
                 "message": f"Payload contains unmasked PII: {pii_types}.",
-                "irac.issue": "PII_DETECTED",
-                "irac.rule": _rule,
-                "irac.application": f"Scan detected {len(findings)} PII type(s): {pii_types}.",
-                "irac.conclusion": "Violates: PII detected in content.",
+                AUDIT_ISSUE: "PII_DETECTED",
+                AUDIT_RULE: _rule,
+                AUDIT_APP: f"Scan detected {len(findings)} PII type(s): {pii_types}.",
+                AUDIT_CONCL: "Violates: PII detected in content.",
             }
         return {
             "verified": True,
             "message": "No PII detected in payload.",
-            "irac.issue": "OK",
-            "irac.rule": _rule,
-            "irac.application": "PII scan returned zero matches.",
-            "irac.conclusion": "Compliant: content is clean.",
+            AUDIT_ISSUE: "OK",
+            AUDIT_RULE: _rule,
+            AUDIT_APP: "PII scan returned zero matches.",
+            AUDIT_CONCL: "Compliant: content is clean.",
         }
