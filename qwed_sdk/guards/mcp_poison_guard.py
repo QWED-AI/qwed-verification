@@ -141,7 +141,7 @@ class MCPPoisonGuard:
 
         return flags
 
-    def _scan_parameter(self, param_name: str, param_def: dict) -> List[str]:
+    def _scan_parameter(self, param_name: str, param_def: Any) -> List[str]:
         """Scan a single parameter definition for injections."""
         flags: List[str] = []
         if not isinstance(param_def, dict):
@@ -150,10 +150,13 @@ class MCPPoisonGuard:
         if param_desc:
             for f in self._scan_text(param_desc):
                 flags.append(f"[param:{param_name}] {f}")
-        for enum_val in param_def.get("enum", []):
-            if isinstance(enum_val, str):
-                for f in self._scan_text(enum_val):
-                    flags.append(f"[param:{param_name}/enum] {f}")
+        
+        enum_vals = param_def.get("enum")
+        if isinstance(enum_vals, list):
+            for enum_val in enum_vals:
+                if isinstance(enum_val, str):
+                    for f in self._scan_text(enum_val):
+                        flags.append(f"[param:{param_name}/enum] {f}")
         return flags
 
     def verify_tool_definition(
@@ -183,9 +186,13 @@ class MCPPoisonGuard:
         # Optionally scan parameter descriptions
         if self.scan_parameters:
             for _schema_key in ("inputSchema", "parameters"):
-                _schema = tool_schema.get(_schema_key) or {}
+                _schema = tool_schema.get(_schema_key)
+                if not isinstance(_schema, dict):
+                    continue
                 # inputSchema in MCP is often an object with a 'properties' key
-                props = _schema.get("properties") or {}
+                props = _schema.get("properties")
+                if not isinstance(props, dict):
+                    continue
                 for param_name, param_def in props.items():
                     all_flags.extend(self._scan_parameter(param_name, param_def))
 

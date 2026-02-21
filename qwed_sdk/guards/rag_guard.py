@@ -124,7 +124,9 @@ class RAGGuard:
 
         for chunk in retrieved_chunks:
             chunk_id = chunk.get("id", "unknown")
-            metadata = chunk.get("metadata") or {}
+            metadata = chunk.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
             chunk_doc_id = metadata.get(KEY_DOC_ID)
 
             if chunk_doc_id is None:
@@ -217,7 +219,10 @@ class RAGGuard:
             raise ValueError("target_document_id must be a non-empty string.")
 
         def _chunk_matches(chunk: Dict[str, Any]) -> bool:
-            doc_id = chunk.get("metadata", {}).get(KEY_DOC_ID)
+            metadata = chunk.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            doc_id = metadata.get(KEY_DOC_ID)
             if doc_id == target_document_id:
                 return True
             # When require_metadata=False, chunks with no document_id are kept

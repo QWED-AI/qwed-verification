@@ -600,5 +600,54 @@ class TestSecurityGapsRound5(unittest.TestCase):
         self.assertTrue(guard._is_allowed_url("https://api.github.com/info"))
 
 
+class TestSecurityGapsRound6(unittest.TestCase):
+    """Round-6 specific tests for robust type checking of untrusted input."""
+
+    def test_mcp_poison_guard_non_dict_properties_blocked(self):
+        """MCP guard must not crash on truthy non-dict properties."""
+        guard = MCPPoisonGuard()
+        
+        # inputSchema is a string (malformed)
+        tool_bad_schema = {
+            "name": "crash_test",
+            "inputSchema": "I am a string, not a dict"
+        }
+        # Should NOT crash with AttributeError
+        result = guard.verify_tool_definition(tool_bad_schema)
+        self.assertTrue(result["verified"])
+        
+        # properties is a string
+        tool_bad_props = {
+            "name": "crash_test_2",
+            "inputSchema": {
+                "properties": "Not a dict"
+            }
+        }
+        result2 = guard.verify_tool_definition(tool_bad_props)
+        self.assertTrue(result2["verified"])
+
+    def test_rag_guard_non_dict_metadata_handled(self):
+        """RAG guard must not crash on truthy non-dict metadata."""
+        guard = RAGGuard(require_metadata=True)
+        
+        # metadata is a string
+        chunks = [
+            {
+                "id": "c1",
+                "content": "some text",
+                "metadata": "I should be a dict but I am a string"
+            }
+        ]
+        
+        # verify_retrieval_context should treat it as missing metadata (verify then fails if required)
+        result = guard.verify_retrieval_context("doc-1", chunks)
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["risk"], "DOCUMENT_RETRIEVAL_MISMATCH")
+        
+        # filter_valid_chunks should just skip it (or treat as mismatch)
+        filtered = guard.filter_valid_chunks("doc-1", chunks)
+        self.assertEqual(len(filtered), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
