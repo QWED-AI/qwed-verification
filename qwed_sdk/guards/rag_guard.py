@@ -60,8 +60,8 @@ class RAGGuard:
             )
         try:
             threshold = Fraction(max_drm_rate)
-        except Exception as e:
-            raise RAGGuardConfigError(f"Invalid max_drm_rate: {e}")
+        except (ValueError, TypeError) as e:
+            raise RAGGuardConfigError(f"Invalid max_drm_rate: {e}") from e
 
         if not Fraction(0) <= threshold <= Fraction(1):
             raise RAGGuardConfigError("max_drm_rate must be between 0 and 1")
@@ -159,11 +159,20 @@ class RAGGuard:
                 "irac.conclusion": f"Blocked: DRM rate {drm_float:.1%} exceeds threshold.",
             }
 
+        _success_message = (
+            f"{len(mismatched)}/{total} mismatch(es) tolerated "
+            f"(DRM rate {drm_float:.1%} ≤ threshold {float(self._threshold):.1%})."
+            if mismatched else
+            f"All {total} chunk(s) verified from correct source document."
+        )
+
         return {
             "verified": True,
             "drm_rate": drm_float,
             "chunks_checked": total,
-            "message": f"All {total} chunk(s) verified from correct source document.",
+            "mismatched_count": len(mismatched),
+            "details": mismatched,
+            "message": _success_message,
             "irac.issue": "None — all chunks evaluated.",
             "irac.rule": _rule,
             "irac.application": f"All {total} chunk(s) passed document_id equality check.",
@@ -188,6 +197,9 @@ class RAGGuard:
         Returns:
             Filtered list containing only matching chunks.
         """
+        if not target_document_id:
+            raise ValueError("target_document_id must be a non-empty string.")
+
         def _chunk_matches(chunk: Dict[str, Any]) -> bool:
             doc_id = chunk.get("metadata", {}).get("document_id")
             if doc_id == target_document_id:

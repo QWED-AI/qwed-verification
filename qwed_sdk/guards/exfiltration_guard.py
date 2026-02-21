@@ -38,8 +38,9 @@ _PII_PATTERNS: Dict[str, re.Pattern] = {
     # PASSPORT: opt-in only — too broad by default (matches version strings etc.)
     # Enable via pii_checks=[..., 'PASSPORT'] in ExfiltrationGuard.__init__
     "PASSPORT": re.compile(
-        # [:\s]+ — requires at least one separator before the number
-        r"\bpassport\s*(?:no|number|#)?[:\s]+[A-Z]{1,2}\d{6,9}\b",
+        # Refactored for ReDoS safety: avoid overlapping quantifiers.
+        # Requires at least one separator char ([:\s]) before the number.
+        r"\bpassport(?:[\s#]+(?:no|number|#))?[:\s]+[a-z]{1,2}\d{6,9}\b",
         re.IGNORECASE,
     ),
     # (?:[A-Z0-9]{1}){0,16} avoids matching the empty string
@@ -117,7 +118,9 @@ class ExfiltrationGuard:
         """Check if URL matches any allowed endpoint prefix or hostname."""
         url_lower = url.lower()
         try:
-            parsed_host = urlparse(url).hostname or ""
+            _parsed_url = urlparse(url)
+            parsed_host = _parsed_url.hostname or ""
+            url_scheme = _parsed_url.scheme
         except ValueError:
             return False
 
@@ -131,12 +134,18 @@ class ExfiltrationGuard:
                     return True
             # Hostname-only / exact match
             try:
-                allowed_host = urlparse(allowed).hostname or allowed_lower
+                _allowed_parsed = urlparse(allowed)
+                allowed_host = _allowed_parsed.hostname or allowed_lower
+                allowed_scheme = _allowed_parsed.scheme
             except ValueError:
                 allowed_host = allowed_lower
-            # Exact match only — no implicit subdomain matching
+                allowed_scheme = ""
+
+            # Exact match only — no implicit subdomain matching.
+            # Require scheme compatibility if the allowlist entry specifies one.
             if parsed_host == allowed_host:
-                return True
+                if not allowed_scheme or url_scheme == allowed_scheme:
+                    return True
         return False
 
     def verify_outbound_call(

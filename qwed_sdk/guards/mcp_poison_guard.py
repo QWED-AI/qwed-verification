@@ -34,7 +34,7 @@ _DEFAULT_INJECTION_PATTERNS: List[str] = [
 # URL pattern — catches http(s):// URLs; excludes trailing punctuation
 _URL_PATTERN = re.compile(r"https?://[^\s<>\"',;)\}\]]+", re.IGNORECASE)
 # Centralised trailing-punctuation strip used at both URL-cleaning sites
-_TRAILING_PUNCT = '.,;:!?)>\'"_}]'
+_TRAILING_PUNCT = '.,;:!?)>\'"}]'
 
 
 
@@ -236,8 +236,16 @@ class MCPPoisonGuard:
                 )
             tools = raw
         elif has_mcp:
-            for _server_name, server_def in server_config["mcpServers"].items():
-                tools.extend(server_def.get("tools", []))
+            mcp_servers = server_config["mcpServers"]
+            if not isinstance(mcp_servers, dict):
+                raise ValueError(
+                    f"'mcpServers' must be a dict, got {type(mcp_servers).__name__!r}"
+                )
+            for _server_name, server_def in mcp_servers.items():
+                if isinstance(server_def, dict):
+                    server_tools = server_def.get("tools")
+                    if isinstance(server_tools, list):
+                        tools.extend(server_tools)
 
         poisoned: List[Dict[str, Any]] = []
         for tool in tools:
