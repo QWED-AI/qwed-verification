@@ -461,7 +461,7 @@ verified_engine = QWEDQueryEngine(base_engine, verify_facts=True)
 
 ---
 
-## 🔒 Security & Privacy: Why Banks Use QWED
+## 🔒 Security & Privacy
 
 In high-stakes industries (Finance, Legal, Healthcare), you cannot send sensitive data to an external API for verification.
 
