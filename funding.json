@@ -120,12 +120,6 @@
                 "type": "payment-provider",
                 "address": "https://github.com/sponsors/QWED-AI",
                 "description": "Corporate Sponsorship via GitHub Sponsors."
-            },
-            {
-                "guid": "github-sponsors-rahul",
-                "type": "payment-provider",
-                "address": "https://github.com/sponsors/rahuldass19",
-                "description": "Individual Developer Sponsorship."
             }
         ],
         "plans": [
@@ -154,15 +148,6 @@
                 ]
             }
         ],
-        "history": [
-            {
-                "year": 2026,
-                "income": 0,
-                "expenses": 0,
-                "taxes": 0,
-                "currency": "USD",
-                "description": "Active development phase. Infrastructure hardened via OSS ecosystem programs (Docker DSOS, Snyk, CircleCI, Cloudflare, Sonar, CodeRabbit). Scaling deterministic verification engines and compliance readiness."
-            }
-        ]
+        "history": []
     }
 }
