@@ -26,9 +26,16 @@ class SelfInitiatedCoTGuard:
         """
         if not required_elements:
             raise ValueError("required_elements must be a non-empty list of strings.")
+        if not all(isinstance(e, str) for e in required_elements):
+            raise TypeError("All required_elements must be strings.")
         self.required_elements = required_elements
         self._compiled_patterns = [
-            re.compile(rf"(?i)\b{re.escape(element)}\b") for element in required_elements
+            re.compile(
+                rf"(?i)(?<!\w){re.escape(element)}(?!\w)"
+                if element[0].isalnum() or element[0] == '_' else
+                rf"(?i){re.escape(element)}"
+            )
+            for element in required_elements
         ]
 
     def verify_autonomous_path(self, generated_reasoning_plan: str) -> Dict[str, Any]:
@@ -46,7 +53,7 @@ class SelfInitiatedCoTGuard:
             raise TypeError("generated_reasoning_plan must be a string")
 
         missing_elements = []
-        for element, pattern in zip(self.required_elements, self._compiled_patterns):
+        for element, pattern in zip(self.required_elements, self._compiled_patterns, strict=True):
             if not pattern.search(generated_reasoning_plan):
                 missing_elements.append(element)
 

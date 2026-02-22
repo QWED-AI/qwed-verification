@@ -14,9 +14,12 @@ class TestPhase18ReasoningGuard(unittest.TestCase):
         self.guard = SelfInitiatedCoTGuard(self.milestones)
 
     def test_initialization_validation(self):
-        """Guard should reject empty milestone lists."""
+        """Guard should reject empty milestone lists or non-string elements."""
         with self.assertRaises(ValueError):
             SelfInitiatedCoTGuard([])
+            
+        with self.assertRaises(TypeError):
+            SelfInitiatedCoTGuard(["Information", 123])
 
     def test_verify_autonomous_path_success(self):
         """A complete reasoning plan should be verified."""
@@ -29,6 +32,9 @@ class TestPhase18ReasoningGuard(unittest.TestCase):
         self.assertTrue(result["verified"])
         self.assertIn("irac.issue", result)
         self.assertEqual(result["irac.issue"], "REASONING_FRAMEWORK_VERIFIED")
+        self.assertIn("irac.rule", result)
+        self.assertIn("irac.application", result)
+        self.assertIn("irac.conclusion", result)
 
     def test_verify_autonomous_path_missing_elements(self):
         """An incomplete reasoning plan should be blocked and flag missing elements."""
@@ -57,6 +63,16 @@ class TestPhase18ReasoningGuard(unittest.TestCase):
         with self.assertRaises(TypeError):
             self.guard.verify_autonomous_path({"plan": "Information Formation"})
 
+
+    def test_verify_autonomous_path_rejects_partial_matches(self):
+        """Milestones must be whole-word matches, not substrings."""
+        plan = (
+            "We examine Information Formations, Tradings patterns, "
+            "and Illegal Gainss."
+        )
+        result = self.guard.verify_autonomous_path(plan)
+        self.assertFalse(result["verified"])
+        self.assertEqual(len(result["missing_elements"]), 3)
 
 if __name__ == "__main__":
     unittest.main()
