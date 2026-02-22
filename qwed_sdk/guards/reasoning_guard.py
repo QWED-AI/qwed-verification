@@ -7,6 +7,11 @@ AUDIT_RULE = "irac.rule"
 AUDIT_APP = "irac.application"
 AUDIT_CONCL = "irac.conclusion"
 
+class InvalidElementsConfigError(ValueError):
+    """Raised when required_elements is misconfigured."""
+
+class InvalidPlanInputError(TypeError):
+    """Raised when verify_autonomous_path receives a non-string plan."""
 
 class SelfInitiatedCoTGuard:
     """
@@ -25,9 +30,11 @@ class SelfInitiatedCoTGuard:
                 in the AI's autonomously generated reasoning plan.
         """
         if not required_elements:
-            raise ValueError("required_elements must be a non-empty list of strings.")
+            raise InvalidElementsConfigError("required_elements must be a non-empty list of strings.")
         if not all(isinstance(e, str) for e in required_elements):
-            raise TypeError("All required_elements must be strings.")
+            raise InvalidElementsConfigError("All required_elements must be strings.")
+        if not all(len(e) > 0 for e in required_elements):
+            raise InvalidElementsConfigError("All required_elements must be non-empty strings.")
         self.required_elements = required_elements
         self._compiled_patterns = [
             re.compile(
@@ -50,7 +57,7 @@ class SelfInitiatedCoTGuard:
             IRAC-compliant verification result dict.
         """
         if not isinstance(generated_reasoning_plan, str):
-            raise TypeError("generated_reasoning_plan must be a string")
+            raise InvalidPlanInputError("generated_reasoning_plan must be a string")
 
         missing_elements = []
         for element, pattern in zip(self.required_elements, self._compiled_patterns, strict=True):

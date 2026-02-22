@@ -1,6 +1,9 @@
 import unittest
-from qwed_sdk.guards.reasoning_guard import SelfInitiatedCoTGuard
-
+from qwed_sdk.guards.reasoning_guard import (
+    SelfInitiatedCoTGuard,
+    InvalidElementsConfigError,
+    InvalidPlanInputError,
+)
 
 class TestPhase18ReasoningGuard(unittest.TestCase):
     """
@@ -14,12 +17,15 @@ class TestPhase18ReasoningGuard(unittest.TestCase):
         self.guard = SelfInitiatedCoTGuard(self.milestones)
 
     def test_initialization_validation(self):
-        """Guard should reject empty milestone lists or non-string elements."""
-        with self.assertRaises(ValueError):
+        """Guard should reject empty milestone lists, non-string elements, or empty strings."""
+        with self.assertRaises(InvalidElementsConfigError):
             SelfInitiatedCoTGuard([])
             
-        with self.assertRaises(TypeError):
+        with self.assertRaises(InvalidElementsConfigError):
             SelfInitiatedCoTGuard(["Information", 123])
+
+        with self.assertRaises(InvalidElementsConfigError):
+            SelfInitiatedCoTGuard(["Information", ""])
 
     def test_verify_autonomous_path_success(self):
         """A complete reasoning plan should be verified."""
@@ -59,8 +65,8 @@ class TestPhase18ReasoningGuard(unittest.TestCase):
         self.assertTrue(result["verified"])
 
     def test_verify_autonomous_path_invalid_input(self):
-        """The guard should handle non-string inputs gracefully via TypeError."""
-        with self.assertRaises(TypeError):
+        """The guard should handle non-string inputs gracefully via InvalidPlanInputError."""
+        with self.assertRaises(InvalidPlanInputError):
             self.guard.verify_autonomous_path({"plan": "Information Formation"})
 
 
