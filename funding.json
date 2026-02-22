@@ -8,7 +8,7 @@
         "email": "rahul@qwedai.com",
         "description": "Founder & Core Maintainer of QWED Protocol, building the deterministic verification layer for AI.",
         "webpageUrl": {
-            "url": "https://docs.qwedai.com"
+            "url": "https://qwedai.com"
         }
     },
     "projects": [
@@ -17,7 +17,7 @@
             "name": "QWED Protocol (Core)",
             "description": "The first open-source Neurosymbolic AI Verification Layer. QWED prevents hallucinations in high-stakes LLM applications (Math, Finance, Logic) by using deterministic engines (SymPy, Z3, AST) to verify AI outputs.",
             "webpageUrl": {
-                "url": "https://docs.qwedai.com"
+                "url": "https://qwedai.com"
             },
             "repositoryUrl": {
                 "url": "https://github.com/QWED-AI/qwed-verification"
@@ -30,7 +30,10 @@
                 "verification",
                 "neurosymbolic",
                 "guardrails",
-                "llm-ops"
+                "llm-ops",
+                "machine-learning",
+                "formal-verification",
+                "hallucination-detection"
             ]
         },
         {
@@ -127,27 +130,38 @@
         ],
         "plans": [
             {
-                "guid": "developer-sponsorship",
+                "guid": "sustainability-grant",
                 "status": "active",
-                "name": "Core Maintainer Support",
-                "description": "Support the full-time development of QWED Protocol and Ecosystem.",
-                "amount": 0,
+                "name": "QWED Infrastructure Sustainability Grant",
+                "description": "QWED is currently maintained primarily by a single core maintainer. Funding supports long-term sustainability of this deterministic AI verification infrastructure, including security hardening, threat modeling, CI/CD enforcement, SBOM generation, supply-chain protection, documentation improvements, and ecosystem integrations. External funding directly increases reliability and reduces downstream risk for organizations relying on QWED in high-stakes AI deployments.",
+                "amount": 10000,
                 "currency": "USD",
-                "frequency": "monthly",
+                "frequency": "one-time",
                 "channels": [
-                    "github-sponsors-rahul",
+                    "github-sponsors-org"
+                ]
+            },
+            {
+                "guid": "extended-sustainability",
+                "status": "active",
+                "name": "Extended Security & Audit Support",
+                "description": "Supports extended runway for infrastructure stability, third-party security reviews, container hardening, deterministic engine validation, compliance preparation (OpenSSF Gold, SBOM attestation), and contributor onboarding. Enables structured security audits and long-term ecosystem growth.",
+                "amount": 25000,
+                "currency": "USD",
+                "frequency": "one-time",
+                "channels": [
                     "github-sponsors-org"
                 ]
             }
         ],
         "history": [
             {
-                "year": 2025,
+                "year": 2026,
                 "income": 0,
                 "expenses": 0,
                 "taxes": 0,
                 "currency": "USD",
-                "description": "Scaling the ecosystem (Tax, Legal, Finance) and v2.0 verification engines."
+                "description": "Active development phase. Infrastructure hardened via OSS ecosystem programs (Docker DSOS, Snyk, CircleCI, Cloudflare, Sonar, CodeRabbit). Scaling deterministic verification engines and compliance readiness."
             }
         ]
     }
