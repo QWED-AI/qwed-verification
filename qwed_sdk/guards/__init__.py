@@ -7,6 +7,7 @@ Provides deterministic guards for:
 - RAG retrieval mismatch prevention (RAGGuard)
 - MCP tool poisoning detection (MCPPoisonGuard)
 - Runtime data exfiltration prevention (ExfiltrationGuard)
+- S-CoT logic path verification (SelfInitiatedCoTGuard)
 """
 
 from .system_guard import SystemGuard
@@ -14,6 +15,7 @@ from .config_guard import ConfigGuard
 from .rag_guard import RAGGuard
 from .mcp_poison_guard import MCPPoisonGuard
 from .exfiltration_guard import ExfiltrationGuard
+from .reasoning_guard import SelfInitiatedCoTGuard
 
 __all__ = [
     "SystemGuard",
@@ -21,4 +23,5 @@ __all__ = [
     "RAGGuard",
     "MCPPoisonGuard",
     "ExfiltrationGuard",
+    "SelfInitiatedCoTGuard",
 ]
