@@ -86,3 +86,21 @@ def test_sovereignty_guard_custom_local_provider():
     assert result_external["verified"] is False
     assert result_external["risk"] == "DATA_SOVEREIGNTY_VIOLATION"
     assert "message" in result_external
+
+import pytest
+
+def test_sovereignty_guard_raises_on_empty_prompt():
+    guard = SovereigntyGuard()
+    with pytest.raises(ValueError, match="prompt must be a non-empty string"):
+        guard.verify_routing(prompt="", target_provider="ollama")
+        
+    with pytest.raises(ValueError, match="prompt must be a non-empty string"):
+        guard.verify_routing(prompt=None, target_provider="ollama")
+
+def test_sovereignty_guard_raises_on_empty_provider():
+    guard = SovereigntyGuard()
+    with pytest.raises(ValueError, match="target_provider must be a non-empty string"):
+        guard.verify_routing(prompt="Valid prompt", target_provider="")
+        
+    with pytest.raises(ValueError, match="target_provider must be a non-empty string"):
+        guard.verify_routing(prompt="Valid prompt", target_provider=None)

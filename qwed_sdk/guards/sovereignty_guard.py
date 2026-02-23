@@ -20,6 +20,11 @@ class SovereigntyGuard:
         ]
 
     def verify_routing(self, prompt: str, target_provider: str) -> dict:
+        if not prompt:
+            raise ValueError("prompt must be a non-empty string.")
+        if not target_provider:
+            raise ValueError("target_provider must be a non-empty string.")
+
         # ISSUE: Does this prompt contain sensitive data destined for an external provider?
         is_sensitive = any(p.search(prompt) for p in self.sensitive_patterns)
         
