@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from qwed_new.guards.process_guard import ProcessVerifier
@@ -20,6 +22,7 @@ class TestProcessVerifier:
         """
         result = self.verifier.verify_irac_structure(trace)
         assert result["verified"] is True
+        # Float exemption: score is (4-n)/4.0; multiples of 0.25 are exact in IEEE 754.
         assert result["score"] == 1.0
         assert len(result["missing_steps"]) == 0
 
@@ -30,7 +33,8 @@ class TestProcessVerifier:
         """
         result = self.verifier.verify_irac_structure(trace)
         assert result["verified"] is False
-        assert result["score"] == 0.5  # 2 out of 4 present
+        # Float exemption: 2/4.0 = 0.5, exact in IEEE 754.
+        assert result["score"] == 0.5
         assert "rule" in result["missing_steps"]
         assert "application" in result["missing_steps"]
 
@@ -102,27 +106,31 @@ class TestProcessVerifier:
 
     def test_irac_single_step_only(self):
         result = self.verifier.verify_irac_structure("The issue is important.")
+        # Float exemption: 1/4.0 = 0.25, exact in IEEE 754.
         assert result["score"] == 0.25
         assert result["verified"] is False
-        assert result["missing_steps"] == ["rule", "application", "conclusion"]
+        assert set(result["missing_steps"]) == {"rule", "application", "conclusion"}
 
     def test_irac_three_of_four(self):
         trace = "The issue is X. The rule says Y. Therefore Z."
         result = self.verifier.verify_irac_structure(trace)
+        # Float exemption: 3/4.0 = 0.75, exact in IEEE 754.
         assert result["score"] == 0.75
         assert result["verified"] is False
-        assert result["missing_steps"] == ["application"]
+        assert set(result["missing_steps"]) == {"application"}
 
     def test_irac_case_insensitive_mixed(self):
         trace = "ISSUE found. rUlE applies. APPLICATION done. CONCLUSION reached."
         result = self.verifier.verify_irac_structure(trace)
         assert result["verified"] is True
+        # Float exemption: 4/4.0 = 1.0, exact in IEEE 754.
         assert result["score"] == 1.0
 
     def test_irac_keywords_mid_sentence(self):
         trace = "We note the issue, identify the rule, perform analysis, and reach a conclusion."
         result = self.verifier.verify_irac_structure(trace)
         assert result["verified"] is True
+        # Float exemption: 4/4.0 = 1.0, exact in IEEE 754.
         assert result["score"] == 1.0
 
     # ------------------------------------------------------------------
@@ -159,20 +167,14 @@ class TestProcessVerifier:
         assert "conclusion" in result["missing_steps"]
 
     def test_false_positive_reapplication_not_application(self):
-        # "reapplication" contains "application" but \b should prevent match...
-        # Actually \b(application) WILL match inside "reapplication" because
-        # "application" starts at a non-word boundary. Let's verify the actual
-        # behavior: "reapplication" -> \b matches at start of "application"?
-        # No: in "reapplication", before 'a' of 'application' there is 'e' which
-        # is a word char. So \b does NOT fire before the 'a'. The regex won't match.
+        # In "reapplication", 'e' precedes 'a' of "application" — both word chars,
+        # so \b does NOT fire. The regex correctly rejects this substring match.
         result = self.verifier.verify_irac_structure("Submit a reapplication form.")
         assert "application" in result["missing_steps"]
 
     def test_false_positive_bylaw_not_law(self):
-        # "bylaw" contains "law" but \b boundary should prevent bare "law" match
-        # Actually in "bylaw", 'l' is preceded by 'y' (word char) -> no \b before 'l'
-        # and after 'w' comes end-of-word, so \b fires after 'w'. The pattern
-        # \b(law)\b would need \b before 'l' which doesn't exist in "bylaw".
+        # In "bylaw", 'y' precedes 'l' of "law" — both word chars, so \b does
+        # NOT fire before 'l'. The regex correctly rejects this substring match.
         result = self.verifier.verify_irac_structure("Check the bylaw provisions.")
         assert "rule" in result["missing_steps"]
 
@@ -353,7 +355,10 @@ class TestProcessVerifier:
     def test_irac_very_long_input(self):
         # Ensure no performance issues with large input
         trace = "The issue is X. " * 10000
+        start = time.monotonic()
         result = self.verifier.verify_irac_structure(trace)
+        elapsed = time.monotonic() - start
+        assert elapsed < 2.0, f"verify_irac_structure took {elapsed:.2f}s on large input"
         assert "issue" not in result["missing_steps"]
 
     def test_trace_numeric_milestones(self):
