@@ -1,5 +1,6 @@
 
 import re
+from decimal import Decimal
 from typing import List, Dict, Any
 
 class ProcessVerifier:
@@ -38,9 +39,8 @@ class ProcessVerifier:
             else:
                 missing_steps.append(step)
         
-        # Calculate score (0.0 to 1.0)
-        # 4 steps total
-        score = (4 - len(missing_steps)) / 4.0
+        # Calculate score (0 to 1) using Decimal for deterministic arithmetic
+        score = Decimal(4 - len(missing_steps)) / Decimal(4)
         
         return {
             "verified": len(missing_steps) == 0,
@@ -64,7 +64,7 @@ class ProcessVerifier:
         if not key_middle:
             return {
                 "verified": True,
-                "process_rate": 1.0,
+                "process_rate": Decimal(1),
                 "missed_milestones": []
             }
             
@@ -73,10 +73,10 @@ class ProcessVerifier:
             kw for kw in key_middle 
             if re.search(rf"\b{re.escape(kw.lower())}\b", text_lc)
         ]
-        process_rate = len(found_milestones) / len(key_middle)
-        
+        process_rate = Decimal(len(found_milestones)) / Decimal(len(key_middle))
+
         return {
-            "verified": process_rate == 1.0,
+            "verified": process_rate == Decimal(1),
             "process_rate": process_rate,
             "missed_milestones": list(set(key_middle) - set(found_milestones))
         }
