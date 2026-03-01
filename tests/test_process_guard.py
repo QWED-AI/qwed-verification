@@ -1,6 +1,8 @@
 import os
 import time
 
+import pytest
+
 from qwed_new.guards.process_guard import ProcessVerifier
 
 
@@ -286,7 +288,7 @@ class TestProcessVerifier:
         milestones = ["jurisdiction", "jurisdiction", "liability"]
         result = self.verifier.verify_trace(trace, milestones)
         assert result["verified"] is False
-        assert result["process_rate"] == float(2) / float(3)
+        assert result["process_rate"] == pytest.approx(2 / 3)
         assert set(result["missed_milestones"]) == {"liability"}
 
     # ------------------------------------------------------------------
@@ -373,7 +375,7 @@ class TestProcessVerifier:
         milestones = ["1", "2", "3"]
         result = self.verifier.verify_trace(trace, milestones)
         # "1" and "2" appear as word-bounded numbers
-        assert result["process_rate"] == float(2) / float(3)
+        assert result["process_rate"] == pytest.approx(2 / 3)
         assert "3" in result["missed_milestones"]
 
     def test_trace_special_char_milestone(self):
