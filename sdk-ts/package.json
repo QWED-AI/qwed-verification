@@ -42,5 +42,8 @@
     "files": [
         "dist",
         "README.md"
-    ]
+    ],
+    "overrides": {
+        "minimatch": "^9.0.7"
+    }
 }
