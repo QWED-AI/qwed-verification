@@ -44,6 +44,6 @@
         "README.md"
     ],
     "overrides": {
-        "minimatch": "^9.0.7"
+        "minimatch": "9.0.9"
     }
 }
