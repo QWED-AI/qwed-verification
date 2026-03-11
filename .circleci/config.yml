@@ -49,8 +49,11 @@ jobs:
           name: Run pip-audit (project deps only)
           command: |
             set -o pipefail
+            # Snapshot only project dependencies before adding audit tooling
+            /tmp/audit-env/bin/pip freeze --exclude qwed > /tmp/audit-requirements.txt
             /tmp/audit-env/bin/pip install pip-audit
-            /tmp/audit-env/bin/pip-audit --strict --skip-editable --desc \
+            /tmp/audit-env/bin/pip-audit --strict --desc \
+              -r /tmp/audit-requirements.txt \
               `# CVE-2025-8869: pip tar extraction vuln — build-only tool, not in runtime image` \
               --ignore-vuln CVE-2025-8869 \
               `# CVE-2026-1703: pip wheel path traversal (CVSS 2.0 Low) — build-only, pinned hashes used` \
