@@ -1,42 +1,32 @@
 <div align="center">
   <img src="assets/logo.svg" alt="QWED Logo - AI Verification Engine" width="80" height="80">
   <h1>QWED Protocol</h1>
-  <h3>Model Agnostic Verification Layer for AI</h3>
+  <h3>Model-Agnostic Trust Boundary for AI Systems</h3>
   
-  > **QWED Verification** - Production-grade deterministic verification layer for Large Language Models. Works with **ANY LLM** - OpenAI, Anthropic, Gemini, Llama (via Ollama), or any local model. Detect and prevent AI hallucinations through 11 specialized verification engines. **Your LLM, Your Choice, Our Verification.**
+  > **QWED Verification** - Production-grade deterministic trust boundary for LLMs, AI agents, and tool-driven systems. Works with **ANY LLM** - OpenAI, Anthropic, Gemini, Llama (via Ollama), or any local model. Detect and prevent AI hallucinations through 11 verification engines • agentic security guards • process determinism. **Your LLM, Your Choice, Our Verification.**
   
   <p>
     <b>Don't fix the liar. Verify the lie.</b><br>
+    <i>QWED verifies outputs, processes, and tool interactions before they enter production.</i><br>
     <i>QWED does not reduce hallucinations. It makes them irrelevant.</i>
   </p>
 
   <p>
-    <b>If an AI output cannot be proven, QWED will not allow it into production.</b>
+    <b>If critical AI output cannot be verified, QWED can block it before production.</b>
   </p>
 
   <p>
     <b>🌐 Model Agnostic:</b> Local ($0) • Budget ($5/mo) • Premium ($100/mo) - You choose!
   </p>
 
+  [![PyPI version](https://img.shields.io/pypi/v/qwed.svg)](https://pypi.org/project/qwed/)
   [![Docker Verified](https://img.shields.io/badge/Docker-Verified_Publisher-blue.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-verification)
-[![Docker Scout](https://img.shields.io/badge/Docker-Scout_Analyzed-1D63ED.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-verification/tags)
-[![Cloudflare](https://img.shields.io/badge/Protected_by-Cloudflare-F38020?style=flat&logo=cloudflare&logoColor=white)](https://www.cloudflare.com/)
-[![CircleCI](https://img.shields.io/badge/CircleCI-Active-343434?style=flat&logo=circleci&logoColor=white)](https://circleci.com/)
-[![Build status](https://badge.buildkite.com/b9b04e34874761e0583874d1354ee7428e13dfaad2bba81121.svg)](https://buildkite.com/qwed-ai/qwed-verification)
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=QWED-AI_qwed-verification&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=QWED-AI_qwed-verification)
-[![codecov](https://codecov.io/gh/QWED-AI/qwed-verification/graph/badge.svg?token=JBSW29Q1KQ)](https://codecov.io/gh/QWED-AI/qwed-verification)
-[![Snyk Security](https://snyk.io/test/github/QWED-AI/qwed-verification/badge.svg)](https://snyk.io/test/github/QWED-AI/qwed-verification)
-[![Sentry](https://img.shields.io/badge/Sentry-Monitored-362D59?style=flat&logo=sentry&logoColor=white)](https://qwed-ai.sentry.io)
-[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![DOI](https://zenodo.org/badge/1115581942.svg)](https://doi.org/10.5281/zenodo.18111675)
-[![PyPI version](https://img.shields.io/pypi/v/qwed.svg)](https://pypi.org/project/qwed/)
-  [![Contributors](https://img.shields.io/github/contributors/QWED-AI/qwed-verification)](https://github.com/QWED-AI/qwed-verification/graphs/contributors)
+  [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
   [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/11903/badge)](https://www.bestpractices.dev/projects/11903)
-  
+  [![Snyk Security](https://snyk.io/test/github/QWED-AI/qwed-verification/badge.svg)](https://snyk.io/test/github/QWED-AI/qwed-verification)
+  [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=QWED-AI_qwed-verification&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=QWED-AI_qwed-verification)
+  [![DOI](https://zenodo.org/badge/1115581942.svg)](https://doi.org/10.5281/zenodo.18111675)
   [![GitHub stars](https://img.shields.io/github/stars/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification)
-  [![GitHub forks](https://img.shields.io/github/forks/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification/fork)
-  [![GitHub watchers](https://img.shields.io/github/watchers/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification)
 
   <a href="https://www.nvidia.com/en-us/startups/"><img src="./assets/badges/nvidia-inception.png" alt="NVIDIA Inception Program" height="40"></a>
   <a href="https://github.com/developer-program"><img src="https://img.shields.io/badge/GitHub_Developer_Program-Member-4183C4?style=for-the-badge&logo=github&logoColor=white" alt="GitHub Developer Program" height="40"></a>
@@ -67,9 +57,32 @@
 
 ---
 
+## 🎯 Where QWED Fits First
+
+Use QWED when an LLM or AI agent must not guess:
+
+- Verify AI-generated math, logic, SQL, code, and schemas before execution  
+- Protect RAG pipelines against prompt injection and poisoned context  
+- Inspect AI agent tool calls before they reach external systems  
+- Enforce deterministic process steps in high-stakes workflows  
+
+**QWED is strongest when AI output touches money, code, tools, policy, or production systems.**
+
+## ⚡ One-Line Example
+
+LLM says: `DELETE FROM users WHERE id=1 OR 1=1`
+
+QWED says: ❌ Blocked — SQL injection detected before execution.
+
+---
+
+**QWED does not just validate answers — it defines what AI is allowed to trust.**
+
+---
+
 > **⚠️ What QWED Is (and Isn't)**
 > 
-> **QWED is:** An open-source engineering tool that combines existing verification libraries (SymPy, Z3, SQLGlot, AST) into a unified API for LLM output validation.
+> **QWED is:** An open-source engineering layer that combines symbolic verification, security guards, and deterministic process checks for AI systems.
 > 
 > **QWED is NOT:** Novel research. We don't claim algorithmic innovation. We claim practical integration for production use cases.
 > 
@@ -87,6 +100,13 @@
 ## 🔐 Ecosystem Trust & Infrastructure
 
 QWED is supported by leading open-source infrastructure and security ecosystems, ensuring production-grade reliability for AI verification workloads.
+
+[![Docker Scout](https://img.shields.io/badge/Docker-Scout_Analyzed-1D63ED.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-verification/tags)
+[![Cloudflare](https://img.shields.io/badge/Protected_by-Cloudflare-F38020?style=flat&logo=cloudflare&logoColor=white)](https://www.cloudflare.com/)
+[![CircleCI](https://img.shields.io/badge/CircleCI-Active-343434?style=flat&logo=circleci&logoColor=white)](https://circleci.com/)
+[![Build status](https://badge.buildkite.com/b9b04e34874761e0583874d1354ee7428e13dfaad2bba81121.svg)](https://buildkite.com/qwed-ai/qwed-verification)
+[![codecov](https://codecov.io/gh/QWED-AI/qwed-verification/graph/badge.svg?token=JBSW29Q1KQ)](https://codecov.io/gh/QWED-AI/qwed-verification)
+[![Sentry](https://img.shields.io/badge/Sentry-Monitored-362D59?style=flat&logo=sentry&logoColor=white)](https://qwed-ai.sentry.io)
 
 ### Sponsored & Supported Programs
 
@@ -173,8 +193,6 @@ print(response)
 
 ---
 
-**Trustworthiness**: `SACChunker` prevents retrieval mismatch.
-
 ## 🏛️ Authority Verification (Phase 9)
 *   **No More Fake Cases:** `CitationGuard` (Legal) verifies legal citations against valid reporter formats (e.g., Bluebook).
 *   **Banking Ready:** `ISOGuard` (Finance) ensures AI payments meet ISO 20022 standards.
@@ -190,25 +208,7 @@ This is like forcing a student to memorize 1,000,000 math problems.
 
 **What happens when they see the 1,000,001st problem? They guess.**
 
----
 
-## 📊 The Proof: Why Enterprise AI Needs QWED Verification
-
-We benchmarked **Claude Opus 4.5** (one of the world's best LLMs) on 215 critical tasks.
-
-![QWED Benchmark Results - LLM Accuracy Testing](assets/benchmark_chart.png)
-
-| Finding | Implication |
-|---------|-------------|
-| **Finance:** 73% accuracy | Banks can't use raw LLM for calculations |
-| **Adversarial:** 85% accuracy | LLMs fall for authority bias tricks |
-| **QWED:** 100% error detection | All 22 errors caught before production |
-
-> **QWED doesn't compete with LLMs. We ENABLE them for production use.**
-
-📄 [Full Benchmark Report →](docs/benchmarks.md)
-
----
 
 ## 🎯 Use Cases & Applications
 
@@ -216,6 +216,7 @@ QWED is designed for industries where AI errors have real consequences:
 
 | Industry | Use Case | Risk Without QWED |
 |----------|----------|-------------------|
+| 🤖 **AI Agents** | Tool-call verification, MCP defense, process checks | Unsafe tool execution |
 | 🏦 **Financial Services** | Transaction validation, fraud detection | $12,889 error per miscalculation |
 | 🏥 **Healthcare AI** | Drug interaction checking, diagnosis verification | Patient safety risks |
 | ⚖️ **Legal Tech** | Contract analysis, compliance checking | Regulatory violations |
@@ -224,13 +225,22 @@ QWED is designed for industries where AI errors have real consequences:
 
 ---
 
-## ✅ The Solution: Verification Layer
+## ✅ The Solution: Deterministic Trust Boundary
 
-**QWED** is the first open-source **Neurosymbolic AI Verification Layer**.
+**QWED** is an open-source deterministic verification layer combining symbolic solvers and practical security guards for LLM systems.
 
 We combine:
 - **Neural Networks** (LLMs) for natural language understanding
 - **Symbolic Reasoning** (SymPy, Z3, AST) for deterministic verification
+
+## 🛡️ New in v4: Agent Security
+
+QWED now verifies not only outputs, but agent toolchains:
+
+- MCP Poison Guard
+- RAGGuard
+- ExfiltrationGuard
+- ProcessVerifier
 
 ### The Core Philosophy: "The Untrusted Translator"
 
@@ -402,6 +412,24 @@ client.verify_config({"api_key": "sk-proj-abc123..."})
 
 ---
 
+## 📊 The Proof: Why Enterprise AI Needs QWED Verification
+
+We benchmarked **Claude Opus 4.5** (one of the world's best LLMs) on 215 critical tasks.
+
+![QWED Benchmark Results - LLM Accuracy Testing](assets/benchmark_chart.png)
+
+| Finding | Implication |
+|---------|-------------|
+| **Finance:** 73% accuracy | Banks can't use raw LLM for calculations |
+| **Adversarial:** 85% accuracy | LLMs fall for authority bias tricks |
+| **QWED:** 100% error detection | All 22 errors caught before production |
+
+> **QWED doesn't compete with LLMs. We ENABLE them for production use.**
+
+📄 [Full Benchmark Report →](docs/benchmarks.md)
+
+---
+
 ## 🧠 The QWED Philosophy: Verification Over Correction
 
 | ❌ Wrong Approach | ✅ QWED Approach |
@@ -480,10 +508,9 @@ In high-stakes industries (Finance, Legal, Healthcare), you cannot send sensitiv
 
 We are building the **Universal Verification Standard** for the agentic web.
 
-*   **v1.0 (Live):** Core 8 Engines (Math, Logic, Code, SQL, etc).
-*   **v2.0 (Live):** Specialized Industry Packages (`qwed-finance`, `qwed-legal`).
-*   **v2.1 (Q2 2025):** **QWED Client-Side** (WebAssembly) - Run verification in the browser.
-*   **v2.2 (Q3 2025):** **Distributed Verification Network** - A decentralized network of verifier nodes.
+*   **v4.0 (Live):** Agentic Security Guards (MCP, RAG, Exfiltration), Process Determinism, and Core Engines.
+*   **v4.1 (Q2 2026):** **QWED Client-Side** (WebAssembly) - Run verification in the browser.
+*   **v4.2 (Q3 2026):** **Distributed Verification Network** - A decentralized network of verifier nodes.
 
 ---
 
@@ -495,7 +522,7 @@ QWED verification is available as specialized packages for different industries:
 
 | Package | Description | Install | Repo |
 |---------|-------------|---------|------|
-| **qwed** | Core 8-engine verification protocol | `pip install qwed` | [GitHub](https://github.com/QWED-AI/qwed-verification) |
+| **qwed** | Core verification + security guards | `pip install qwed` | [GitHub](https://github.com/QWED-AI/qwed-verification) |
 | **qwed-finance** 🏦 | Banking, loans, NPV, ISO 20022 | `pip install qwed-finance` | [GitHub](https://github.com/QWED-AI/qwed-finance) |
 | **qwed-legal** 🏛️ | Contracts, deadlines, citations, jurisdiction | `pip install qwed-legal` | [GitHub](https://github.com/QWED-AI/qwed-legal) |
 | **qwed-infra** ☁️ | IaC verification (Terraform, IAM, Cost) | `pip install qwed-infra` | [GitHub](https://github.com/QWED-AI/qwed-infra) |
@@ -659,6 +686,9 @@ See [`.github/workflows/ci.yml`](.github/workflows/ci.yml) for details.
 ---
 
 ## ❓ Frequently Asked Questions
+
+### Q: Is QWED for AI agents or only LLM outputs?
+**A:** Both. QWED started as deterministic output verification and now includes trust guards for agent toolchains, RAG pipelines, and process validation.
 
 ### Q: How does QWED differ from RAG (Retrieval Augmented Generation)?
 **A:** RAG improves the *input* to the LLM by grounding it in documents. QWED verifies the *output* deterministically. RAG adds knowledge; QWED adds certainty.
