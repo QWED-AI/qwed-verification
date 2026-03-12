@@ -8,6 +8,7 @@ Provides deterministic guards for:
 - MCP tool poisoning detection (MCPPoisonGuard)
 - Runtime data exfiltration prevention (ExfiltrationGuard)
 - S-CoT logic path verification (SelfInitiatedCoTGuard)
+- Deterministic process validation (ProcessVerifier)
 """
 
 from .system_guard import SystemGuard

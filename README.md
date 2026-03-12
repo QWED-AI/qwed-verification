@@ -3,7 +3,7 @@
   <h1>QWED Protocol</h1>
   <h3>Model-Agnostic Trust Boundary for AI Systems</h3>
   
-  > **QWED Verification** - Production-grade deterministic trust boundary for LLMs, AI agents, and tool-driven systems. Works with **ANY LLM** - OpenAI, Anthropic, Gemini, Llama (via Ollama), or any local model. Detect and prevent AI hallucinations through 11 verification engines • agentic security guards • process determinism. **Your LLM, Your Choice, Our Verification.**
+  > **QWED Verification** - Production-grade deterministic trust boundary for LLMs, AI agents, and tool-driven systems. Works with **ANY LLM** - OpenAI, Anthropic, Gemini, Llama (via Ollama), or any local model. Detect and prevent AI hallucinations through multiple verification engines • agentic security guards • process determinism. **Your LLM, Your Choice, Our Verification.**
   
   <p>
     <b>Don't fix the liar. Verify the lie.</b><br>
@@ -414,7 +414,7 @@ client.verify_config({"api_key": "sk-proj-abc123..."})
 
 ## 📊 The Proof: Why Enterprise AI Needs QWED Verification
 
-We benchmarked **Claude Opus 4.5 (snapshot as of 2026-02-04)** (one of the world's best LLMs) on 215 critical tasks.
+We benchmarked **Claude Opus 4.5** (one of the world's best LLMs) on 215 critical tasks.
 
 ![QWED Benchmark Results - LLM Accuracy Testing](assets/benchmark_chart.png)
 
