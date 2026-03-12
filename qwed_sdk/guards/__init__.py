@@ -17,6 +17,9 @@ from .mcp_poison_guard import MCPPoisonGuard
 from .exfiltration_guard import ExfiltrationGuard
 from .reasoning_guard import SelfInitiatedCoTGuard
 
+# Import from core qwed_new package
+from qwed_new.guards.process_guard import ProcessVerifier
+
 __all__ = [
     "SystemGuard",
     "ConfigGuard",
@@ -24,4 +27,5 @@ __all__ = [
     "MCPPoisonGuard",
     "ExfiltrationGuard",
     "SelfInitiatedCoTGuard",
+    "ProcessVerifier",
 ]

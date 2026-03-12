@@ -414,7 +414,7 @@ client.verify_config({"api_key": "sk-proj-abc123..."})
 
 ## 📊 The Proof: Why Enterprise AI Needs QWED Verification
 
-We benchmarked **Claude Opus 4.5** (one of the world's best LLMs) on 215 critical tasks.
+We benchmarked **Claude Opus 4.5 (snapshot as of 2026-02-04)** (one of the world's best LLMs) on 215 critical tasks.
 
 ![QWED Benchmark Results - LLM Accuracy Testing](assets/benchmark_chart.png)
 
@@ -509,8 +509,8 @@ In high-stakes industries (Finance, Legal, Healthcare), you cannot send sensitiv
 We are building the **Universal Verification Standard** for the agentic web.
 
 *   **v4.0 (Live):** Agentic Security Guards (MCP, RAG, Exfiltration), Process Determinism, and Core Engines.
-*   **v4.1 (Q2 2026):** **QWED Client-Side** (WebAssembly) - Run verification in the browser.
-*   **v4.2 (Q3 2026):** **Distributed Verification Network** - A decentralized network of verifier nodes.
+*   **Q2 2026 - v4.1:** **QWED Client-Side** (WebAssembly) enables verification in the browser.
+*   **Q3 2026 - v4.2:** **Distributed Verification Network** introduces a decentralized network of verifier nodes.
 
 ---
 
