@@ -265,21 +265,27 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
         os.environ["QWED_QUIET"] = "1"
     
     try:
-        # Auto-detect provider/base_url
+        # Auto-detect provider/base_url from ACTIVE_PROVIDER
         if not provider and not base_url:
-            # Check ACTIVE_PROVIDER from .env / qwed init
             import os as _os
             active = _os.getenv("ACTIVE_PROVIDER", "").strip()
-            if active and active != "ollama":
+            if active == "ollama" or not active:
+                # Use Ollama (LOCAL): respect user-configured env vars
+                base_url = _os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+                model = model or _os.getenv("OLLAMA_MODEL", "llama3")
+                if HAS_COLOR and not quiet:
+                    click.echo(f"{QWED.INFO}\u2139\ufe0f  Using Ollama at {base_url}{QWED.RESET}")
+            elif active == "openai-compatible" or active == "openai_compat":
+                base_url = _os.getenv("CUSTOM_BASE_URL", "")
+                api_key = api_key or _os.getenv("CUSTOM_API_KEY", "")
+                model = model or _os.getenv("CUSTOM_MODEL", "gpt-4o-mini")
+                if HAS_COLOR and not quiet:
+                    click.echo(f"{QWED.INFO}\u2139\ufe0f  Using configured provider: {active}{QWED.RESET}")
+            else:
+                # Named provider (openai, anthropic, etc.)
                 provider = active
                 if HAS_COLOR and not quiet:
-                    click.echo(f"{QWED.INFO}ℹ️  Using configured provider: {active}{QWED.RESET}")
-            else:
-                # Fallback: try Ollama (FREE!)
-                base_url = "http://localhost:11434/v1"
-                model = model or "llama3"
-                if HAS_COLOR and not quiet:
-                    click.echo(f"{QWED.INFO}ℹ️  No provider specified, trying Ollama...{QWED.RESET}")
+                    click.echo(f"{QWED.INFO}\u2139\ufe0f  Using configured provider: {active}{QWED.RESET}")
         
         # Create client
         if base_url:

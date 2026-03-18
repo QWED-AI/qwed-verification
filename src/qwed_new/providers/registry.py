@@ -41,6 +41,10 @@ class ProviderMeta:
     default_model: str = "gpt-4o-mini"
 
 
+# Shared descriptions
+_MODEL_DESC = "Model name"
+
+
 # ─────────────────────────────────────────────────────────────
 # Release 1 Providers
 # ─────────────────────────────────────────────────────────────
@@ -52,7 +56,7 @@ PROVIDER_REGISTRY: Dict[str, ProviderMeta] = {
         auth_type=AuthType.API_KEY,
         env_vars=[
             EnvVar("OPENAI_API_KEY", "Your OpenAI API key"),
-            EnvVar("OPENAI_MODEL", "Model name", required=False, default="gpt-4o-mini"),
+            EnvVar("OPENAI_MODEL", _MODEL_DESC, required=False, default="gpt-4o-mini"),
         ],
         key_pattern=r"^sk-(proj-)?[A-Za-z0-9_-]{20,}$",
         key_hint="sk-... or sk-proj-...",
@@ -67,7 +71,7 @@ PROVIDER_REGISTRY: Dict[str, ProviderMeta] = {
         auth_type=AuthType.API_KEY,
         env_vars=[
             EnvVar("ANTHROPIC_API_KEY", "Your Anthropic API key"),
-            EnvVar("ANTHROPIC_MODEL", "Model name", required=False, default="claude-sonnet-4-20250514"),
+            EnvVar("ANTHROPIC_MODEL", _MODEL_DESC, required=False, default="claude-sonnet-4-20250514"),
         ],
         key_pattern=r"^sk-ant-[A-Za-z0-9_-]{20,}$",
         key_hint="sk-ant-...",
@@ -82,7 +86,7 @@ PROVIDER_REGISTRY: Dict[str, ProviderMeta] = {
         auth_type=AuthType.LOCAL,
         env_vars=[
             EnvVar("OLLAMA_BASE_URL", "Ollama endpoint", required=False, default="http://localhost:11434/v1"),
-            EnvVar("OLLAMA_MODEL", "Model name", required=False, default="llama3"),
+            EnvVar("OLLAMA_MODEL", _MODEL_DESC, required=False, default="llama3"),
         ],
         key_hint="No API key needed — runs locally",
         install_cmd="ollama pull llama3",
@@ -98,7 +102,7 @@ PROVIDER_REGISTRY: Dict[str, ProviderMeta] = {
         env_vars=[
             EnvVar("CUSTOM_BASE_URL", "API endpoint URL (e.g., https://inference.do-ai.run/v1)"),
             EnvVar("CUSTOM_API_KEY", "API key for the endpoint"),
-            EnvVar("CUSTOM_MODEL", "Model name", required=False, default="gpt-4o-mini"),
+            EnvVar("CUSTOM_MODEL", _MODEL_DESC, required=False, default="gpt-4o-mini"),
         ],
         key_hint="Any bearer token format",
         install_cmd="pip install openai",

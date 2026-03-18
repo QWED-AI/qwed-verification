@@ -173,7 +173,11 @@ Write Python code using Pandas to verify a claim about a dataset.
 The dataset is loaded into `df`. Assign final result to `result`.
 Output ONLY Python code. No markdown."""
 
-        return self._call_text(system, f"Columns: {columns}\nQuery: {query}")
+        try:
+            return self._call_text(system, f"Columns: {columns}\nQuery: {query}")
+        except Exception as e:
+            logger.debug("OpenAI stats translation error: %s", e)
+            raise ValueError("OpenAI stats translation failed.") from None
 
     def verify_fact(self, claim: str, context: str) -> Dict[str, Any]:
         tool = {
@@ -195,10 +199,14 @@ Output ONLY Python code. No markdown."""
         system = """You are a Fact Checking Engine. Verify the Claim against the Context.
 Find EXACT QUOTES. Return SUPPORTED, REFUTED, or NOT_ENOUGH_INFO."""
 
-        return self._call_with_tool(
-            system, f"Context:\n{context}\n\nClaim:\n{claim}",
-            tool, "submit_fact_verification"
-        )
+        try:
+            return self._call_with_tool(
+                system, f"Context:\n{context}\n\nClaim:\n{claim}",
+                tool, "submit_fact_verification"
+            )
+        except Exception as e:
+            logger.debug("OpenAI fact verification error: %s", e)
+            raise ValueError("OpenAI fact verification failed.") from None
 
     def verify_image(self, image_bytes: bytes, claim: str) -> Dict[str, Any]:
         import base64

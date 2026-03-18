@@ -49,9 +49,12 @@ class OpenAICompatProvider(LLMProvider):
                 "Base URL not found. Set CUSTOM_BASE_URL env var or run: qwed init"
             )
 
+        # Handle no-auth endpoints: use dummy key if None
+        client_api_key = self.api_key if self.api_key else "dummy"
+
         self.client = OpenAI(
             base_url=self.base_url,
-            api_key=self.api_key,
+            api_key=client_api_key,
         )
 
     def _call_text(self, system: str, user_msg: str) -> str:
@@ -90,7 +93,8 @@ class OpenAICompatProvider(LLMProvider):
                 content = content.split("```")[1].split("```")[0].strip()
             return json.loads(content)
         except json.JSONDecodeError as e:
-            raise ValueError(f"Failed to parse JSON from endpoint: {str(e)}")
+            logger.debug("OpenAI-Compatible JSON parse error: %s", e)
+            raise ValueError("Failed to parse JSON from endpoint.") from None
 
     # ── LLMProvider Interface ──────────────────────────────────────
 
@@ -137,7 +141,11 @@ Respond with JSON: {{"variables": {{}}, "constraints": [], "goal": "SATISFIABILI
 Write code using Pandas. Dataset is in `df`. Assign result to `result`.
 Output ONLY Python code."""
 
-        return self._call_text(system, f"Columns: {columns}\nQuery: {query}")
+        try:
+            return self._call_text(system, f"Columns: {columns}\nQuery: {query}")
+        except Exception as e:
+            logger.debug("OpenAI-Compatible stats translation error: %s", e)
+            raise ValueError("OpenAI-Compatible stats translation failed.") from None
 
     def verify_fact(self, claim: str, context: str) -> Dict[str, Any]:
         system = """Verify the Claim against the Context. Find EXACT QUOTES.

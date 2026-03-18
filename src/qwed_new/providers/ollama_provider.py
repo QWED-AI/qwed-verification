@@ -35,10 +35,11 @@ class OllamaProvider(LLMProvider):
         ollama_key = os.getenv("OLLAMA_API_KEY", "")
         self.client = OpenAI(
             base_url=self.base_url,
-            api_key=ollama_key or None,
+            api_key=ollama_key,
         )
 
-        logger.info(f"Ollama provider initialized: {self.base_url} / {self.model}")
+        logger.info("Ollama provider initialized for model '%s'", self.model)
+        logger.debug("Ollama base_url: %s", self.base_url)
 
     def _call_text(self, system: str, user_msg: str) -> str:
         """Call Ollama for plain text response."""

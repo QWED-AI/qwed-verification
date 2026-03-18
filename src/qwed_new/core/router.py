@@ -37,7 +37,7 @@ class Router:
             try:
                 return ProviderType(normalized)
             except ValueError:
-                return preferred_provider  # Allow raw string for flexibility
+                return self.default_provider
             
         # Simple heuristic routing (Phase 1)
         # In the future, this could use a small classifier model
