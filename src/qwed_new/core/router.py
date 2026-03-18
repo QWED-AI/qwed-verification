@@ -27,9 +27,15 @@ class Router:
         4. Fallback to default.
         """
         if preferred_provider:
+            # Normalize registry slugs to ProviderType values
+            aliases = {
+                "openai-compatible": "openai_compat",
+                "openai-direct": "openai_direct",
+            }
+            normalized = aliases.get(preferred_provider, preferred_provider)
             # Validate the preferred provider is a known type
             try:
-                return ProviderType(preferred_provider)
+                return ProviderType(normalized)
             except ValueError:
                 return preferred_provider  # Allow raw string for flexibility
             

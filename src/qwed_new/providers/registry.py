@@ -5,7 +5,7 @@ This is the single source of truth for provider configuration.
 Used by: CLI init wizard, key validator, .env.example generator.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional, Dict
 from enum import Enum
 

@@ -51,7 +51,7 @@ class OpenAICompatProvider(LLMProvider):
 
         self.client = OpenAI(
             base_url=self.base_url,
-            api_key=self.api_key or "not-needed",
+            api_key=self.api_key,
         )
 
     def _call_text(self, system: str, user_msg: str) -> str:
@@ -103,7 +103,8 @@ Respond with JSON: {"expression": "...", "claimed_answer": ..., "reasoning": "..
             result = self._call_json(system, user_query)
             return MathVerificationTask(**result)
         except Exception as e:
-            raise ValueError(f"OpenAI-Compatible translation failed: {str(e)}")
+            logger.debug("OpenAI-Compatible translation error: %s", e)
+            raise ValueError("OpenAI-Compatible translation failed.") from None
 
     def translate_logic(self, user_query: str) -> 'LogicVerificationTask':
         from qwed_new.core.schemas import LogicVerificationTask
@@ -115,7 +116,8 @@ Respond with JSON: {"variables": {"x": "Int"}, "constraints": ["x > 0"], "goal":
             result = self._call_json(system, user_query)
             return LogicVerificationTask(**result)
         except Exception as e:
-            raise ValueError(f"Logic translation failed: {str(e)}")
+            logger.debug("OpenAI-Compatible logic translation error: %s", e)
+            raise ValueError("OpenAI-Compatible logic translation failed.") from None
 
     def refine_logic(self, user_query: str, previous_error: str) -> 'LogicVerificationTask':
         from qwed_new.core.schemas import LogicVerificationTask
@@ -127,7 +129,8 @@ Respond with JSON: {{"variables": {{}}, "constraints": [], "goal": "SATISFIABILI
             result = self._call_json(system, user_query)
             return LogicVerificationTask(**result)
         except Exception as e:
-            raise ValueError(f"Logic refinement failed: {str(e)}")
+            logger.debug("OpenAI-Compatible logic refinement error: %s", e)
+            raise ValueError("OpenAI-Compatible logic refinement failed.") from None
 
     def translate_stats(self, query: str, columns: List[str]) -> str:
         system = """You are a Python Data Science Expert.
@@ -143,7 +146,8 @@ Respond with JSON: {"verdict": "SUPPORTED|REFUTED|NOT_ENOUGH_INFO", "reasoning":
         try:
             return self._call_json(system, f"Context:\n{context}\n\nClaim:\n{claim}")
         except Exception as e:
-            raise ValueError(f"Fact verification failed: {str(e)}")
+            logger.debug("OpenAI-Compatible fact verification error: %s", e)
+            raise ValueError("OpenAI-Compatible fact verification failed.") from None
 
     def verify_image(self, image_bytes: bytes, claim: str) -> Dict[str, Any]:
         # Most OpenAI-compat endpoints don't support vision — return graceful error

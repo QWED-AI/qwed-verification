@@ -14,7 +14,6 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional
 
-from qwed_new.providers.key_validator import mask_key
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +45,12 @@ def write_env_file(
     """
     root = project_root or _find_project_root()
     env_path = root / ".env"
+
+    # Security: refuse symlinks and non-regular files
+    if env_path.is_symlink():
+        raise ValueError(f"Refusing to write symlinked .env: {env_path}")
+    if env_path.exists() and not env_path.is_file():
+        raise ValueError(f"Refusing to write non-regular .env path: {env_path}")
 
     # Read existing .env content (preserve other vars)
     existing_vars: Dict[str, str] = {}
@@ -80,19 +85,30 @@ def write_env_file(
 
     lines.append("")  # trailing newline
 
-    with open(env_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+    content = "\n".join(lines)
 
-    # Set restrictive permissions (0600 on Unix, best-effort on Windows)
+    # Atomic write with restrictive permissions from the start
     try:
-        if os.name != "nt":
-            os.chmod(env_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
-            logger.info(f".env written with 0600 permissions: {env_path}")
-        else:
-            # Windows: remove group/other read via icacls (best effort)
-            logger.info(f".env written: {env_path} (Windows — set permissions manually)")
-    except OSError as e:
-        logger.warning(f"Could not set .env permissions: {e}")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(str(env_path), flags, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        logger.info(f".env written with 0600 permissions: {env_path}")
+    except OSError:
+        # Fallback for systems without O_NOFOLLOW (some Windows)
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        # Best-effort permission tightening
+        try:
+            if os.name != "nt":
+                os.chmod(env_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+                logger.info(f".env written with 0600 permissions (fallback): {env_path}")
+            else:
+                logger.info(f".env written: {env_path} (Windows — set permissions manually)")
+        except OSError as e:
+            logger.warning(f"Could not set .env permissions: {e}")
 
     return env_path
 

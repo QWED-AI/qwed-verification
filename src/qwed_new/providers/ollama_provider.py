@@ -8,7 +8,7 @@ No API key required. Aligns with QWED sovereignty/offline philosophy.
 import os
 import json
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
 from openai import OpenAI
 from qwed_new.core.schemas import MathVerificationTask
@@ -31,9 +31,11 @@ class OllamaProvider(LLMProvider):
         self.base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
         self.model = model or os.getenv("OLLAMA_MODEL", "llama3")
 
+        # Ollama doesn't require auth — use env var or empty token
+        ollama_key = os.getenv("OLLAMA_API_KEY", "")
         self.client = OpenAI(
             base_url=self.base_url,
-            api_key="not-needed",  # Ollama doesn't require auth
+            api_key=ollama_key or None,
         )
 
         logger.info(f"Ollama provider initialized: {self.base_url} / {self.model}")
@@ -74,7 +76,8 @@ Respond with JSON: {"expression": "...", "claimed_answer": ..., "reasoning": "..
             result = self._call_json(system, user_query)
             return MathVerificationTask(**result)
         except Exception as e:
-            raise ValueError(f"Ollama translation failed: {str(e)}")
+            logger.debug("Ollama translation error: %s", e)
+            raise ValueError("Ollama translation failed.") from None
 
     def translate_logic(self, user_query: str) -> 'LogicVerificationTask':
         from qwed_new.core.schemas import LogicVerificationTask
@@ -86,7 +89,8 @@ Respond with JSON: {"variables": {"x": "Int"}, "constraints": ["x > 0"], "goal":
             result = self._call_json(system, user_query)
             return LogicVerificationTask(**result)
         except Exception as e:
-            raise ValueError(f"Ollama logic translation failed: {str(e)}")
+            logger.debug("Ollama logic translation error: %s", e)
+            raise ValueError("Ollama logic translation failed.") from None
 
     def refine_logic(self, user_query: str, previous_error: str) -> 'LogicVerificationTask':
         from qwed_new.core.schemas import LogicVerificationTask
@@ -98,7 +102,8 @@ Respond with JSON: {{"variables": {{}}, "constraints": [], "goal": "SATISFIABILI
             result = self._call_json(system, user_query)
             return LogicVerificationTask(**result)
         except Exception as e:
-            raise ValueError(f"Ollama logic refinement failed: {str(e)}")
+            logger.debug("Ollama logic refinement error: %s", e)
+            raise ValueError("Ollama logic refinement failed.") from None
 
     def translate_stats(self, query: str, columns: List[str]) -> str:
         system = """You are a Python Data Science Expert.
@@ -114,7 +119,8 @@ Respond with JSON: {"verdict": "SUPPORTED|REFUTED|NOT_ENOUGH_INFO", "reasoning":
         try:
             return self._call_json(system, f"Context:\n{context}\n\nClaim:\n{claim}")
         except Exception as e:
-            raise ValueError(f"Ollama fact verification failed: {str(e)}")
+            logger.debug("Ollama fact verification error: %s", e)
+            raise ValueError("Ollama fact verification failed.") from None
 
     def verify_image(self, image_bytes: bytes, claim: str) -> Dict[str, Any]:
         # Most Ollama models don't support vision

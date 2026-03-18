@@ -101,7 +101,10 @@ def init():
     collected_base_url = None
 
     for env_var in provider.env_vars:
-        if not env_var.required and env_var.default:
+        if provider.auth_type == AuthType.LOCAL and not env_var.required:
+            # Ollama: use defaults silently (no prompting)
+            env_vars[env_var.name] = env_var.default or ""
+        elif not env_var.required and env_var.default:
             # Optional with default — ask with default shown
             val = click.prompt(
                 f"  {env_var.description}",
@@ -109,9 +112,6 @@ def init():
                 show_default=True,
             )
             env_vars[env_var.name] = val
-        elif provider.auth_type == AuthType.LOCAL and not env_var.required:
-            # Ollama: use defaults silently
-            env_vars[env_var.name] = env_var.default or ""
         elif "KEY" in env_var.name or "key" in env_var.name.lower() or "API" in env_var.name:
             # API key field — HIDE INPUT
             click.echo()
@@ -197,7 +197,28 @@ def init():
         }
         active_slug = slug_map.get(provider.slug, provider.slug)
 
-    # ── Write .env ──────────────────────────────────────────────
+    # ── Verify .gitignore FIRST (before writing secrets) ─────────
+    if verify_gitignore():
+        if HAS_COLOR:
+            click.echo(f"\n{QWED.SUCCESS}🔒 Verified: .gitignore includes .env{QWED.RESET}")
+        else:
+            click.echo("\n🔒 Verified: .gitignore includes .env")
+    else:
+        if HAS_COLOR:
+            click.echo(f"\n{QWED.WARNING}⚠️  .env NOT found in .gitignore!{QWED.RESET}")
+        else:
+            click.echo("\n⚠️  .env NOT found in .gitignore!")
+        if click.confirm("   Add .env to .gitignore?", default=True):
+            if add_env_to_gitignore():
+                click.echo("   ✅ Added .env to .gitignore")
+            else:
+                click.echo("   ❌ Failed to update .gitignore — aborting to protect secrets", err=True)
+                sys.exit(1)
+        else:
+            click.echo("   ⚠️  Aborting: refusing to write secrets without .gitignore protection", err=True)
+            sys.exit(1)
+
+    # ── Write .env (only after .gitignore is confirmed) ─────────
     click.echo()
     env_path = write_env_file(env_vars, active_provider=active_slug)
 
@@ -205,23 +226,6 @@ def init():
         click.echo(f"{QWED.SUCCESS}📁 Written to {env_path}{QWED.RESET}")
     else:
         click.echo(f"📁 Written to {env_path}")
-
-    # ── Verify .gitignore ───────────────────────────────────────
-    if verify_gitignore():
-        if HAS_COLOR:
-            click.echo(f"{QWED.SUCCESS}🔒 Verified: .gitignore includes .env{QWED.RESET}")
-        else:
-            click.echo("🔒 Verified: .gitignore includes .env")
-    else:
-        if HAS_COLOR:
-            click.echo(f"{QWED.WARNING}⚠️  .env NOT found in .gitignore!{QWED.RESET}")
-        else:
-            click.echo("⚠️  .env NOT found in .gitignore!")
-        if click.confirm("   Add .env to .gitignore?", default=True):
-            if add_env_to_gitignore():
-                click.echo("   ✅ Added .env to .gitignore")
-            else:
-                click.echo("   ❌ Failed to update .gitignore", err=True)
 
     # ── Done ────────────────────────────────────────────────────
     click.echo()
@@ -263,12 +267,19 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
     try:
         # Auto-detect provider/base_url
         if not provider and not base_url:
-            # Try Ollama first (FREE!)
-            base_url = "http://localhost:11434/v1"
-            model = model or "llama3"
-            
-            if HAS_COLOR and not quiet:
-                click.echo(f"{QWED.INFO}ℹ️  No provider specified, trying Ollama...{QWED.RESET}")
+            # Check ACTIVE_PROVIDER from .env / qwed init
+            import os as _os
+            active = _os.getenv("ACTIVE_PROVIDER", "").strip()
+            if active and active != "ollama":
+                provider = active
+                if HAS_COLOR and not quiet:
+                    click.echo(f"{QWED.INFO}ℹ️  Using configured provider: {active}{QWED.RESET}")
+            else:
+                # Fallback: try Ollama (FREE!)
+                base_url = "http://localhost:11434/v1"
+                model = model or "llama3"
+                if HAS_COLOR and not quiet:
+                    click.echo(f"{QWED.INFO}ℹ️  No provider specified, trying Ollama...{QWED.RESET}")
         
         # Create client
         if base_url:

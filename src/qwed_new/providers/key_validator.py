@@ -37,10 +37,10 @@ def validate_key_format(key: str, pattern: Optional[str]) -> Tuple[bool, str]:
         # No pattern defined (e.g., generic endpoint) — accept anything non-empty
         return True, f"Key accepted: {mask_key(key)}"
 
-    if re.match(pattern, key):
+    if re.fullmatch(pattern, key):
         return True, f"Key format valid: {mask_key(key)}"
     else:
-        return False, f"Key format invalid. Expected pattern like the provider's standard format."
+        return False, "Key format invalid. Expected pattern like the provider's standard format."
 
 
 def test_connection(
@@ -115,6 +115,8 @@ def test_connection(
         elif provider_slug == "openai-compatible":
             # Generic: try GET /models on the custom endpoint
             url = (base_url or "").rstrip("/")
+            if not url:
+                return False, "Base URL is required for openai-compatible connection test."
             resp = httpx.get(
                 f"{url}/models",
                 headers={"Authorization": f"Bearer {api_key}"},

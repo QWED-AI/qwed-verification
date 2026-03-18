@@ -90,7 +90,8 @@ You MUST use the submit_math_expression tool."""
             result = self._call_with_tool(system, user_query, self.math_tool, "submit_math_expression")
             return MathVerificationTask(**result)
         except Exception as e:
-            raise ValueError(f"OpenAI translation failed: {str(e)}")
+            logger.debug("OpenAI translation error: %s", e)
+            raise ValueError("OpenAI translation failed.") from None
 
     def translate_logic(self, user_query: str) -> 'LogicVerificationTask':
         from qwed_new.core.schemas import LogicVerificationTask
@@ -127,7 +128,8 @@ Use And(...), Or(...), Not(...) for logic. DO NOT use &, |, ~."""
             result = self._call_with_tool(system, user_query, tool, "submit_z3_problem")
             return LogicVerificationTask(**result)
         except Exception as e:
-            raise ValueError(f"OpenAI logic translation failed: {str(e)}")
+            logger.debug("OpenAI logic translation error: %s", e)
+            raise ValueError("OpenAI logic translation failed.") from None
 
     def refine_logic(self, user_query: str, previous_error: str) -> 'LogicVerificationTask':
         from qwed_new.core.schemas import LogicVerificationTask
@@ -162,7 +164,8 @@ Use And(...), Or(...), Not(...) for logic."""
             result = self._call_with_tool(system, user_query, tool, "submit_z3_problem")
             return LogicVerificationTask(**result)
         except Exception as e:
-            raise ValueError(f"OpenAI logic refinement failed: {str(e)}")
+            logger.debug("OpenAI logic refinement error: %s", e)
+            raise ValueError("OpenAI logic refinement failed.") from None
 
     def translate_stats(self, query: str, columns: List[str]) -> str:
         system = """You are a Python Data Science Expert.
@@ -201,24 +204,26 @@ Find EXACT QUOTES. Return SUPPORTED, REFUTED, or NOT_ENOUGH_INFO."""
         import base64
         b64 = base64.b64encode(image_bytes).decode("utf-8")
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Verify if the CLAIM is supported by the IMAGE. Return JSON: {verdict, reasoning, confidence}",
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                        {"type": "text", "text": f"CLAIM: {claim}"},
-                    ],
-                },
-            ],
-            temperature=0.0,
-        )
         try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Verify if the CLAIM is supported by the IMAGE. Return JSON: {verdict, reasoning, confidence}",
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                            {"type": "text", "text": f"CLAIM: {claim}"},
+                        ],
+                    },
+                ],
+                temperature=0.0,
+            )
             return json.loads(response.choices[0].message.content)
         except json.JSONDecodeError:
             return {"verdict": "ERROR", "reasoning": "Failed to parse response", "confidence": 0.0}
+        except Exception:
+            return {"verdict": "ERROR", "reasoning": "Image verification request failed", "confidence": 0.0}

@@ -61,7 +61,7 @@ class TranslationLayer:
         expr_lower = task.expression.lower()
         for keyword in dangerous_keywords:
             if keyword in expr_lower:
-                raise SecurityError(f"Code execution attempt detected in expression: {task.expression}")
+                raise ValueError(f"Security: code execution attempt detected in expression: {task.expression}")
         
         # 2. Validate expression contains only safe characters
         import re
