@@ -67,7 +67,7 @@ class TestOllamaProvider:
         """Ollama initializes with empty string api_key, not None."""
         from qwed_new.providers.ollama_provider import OllamaProvider
         with patch.dict("os.environ", {}, clear=False):
-            provider = OllamaProvider()
+            OllamaProvider()
         # Verify OpenAI was called with empty string, not None
         call_kwargs = mock_openai_cls.call_args
         assert call_kwargs is not None
@@ -78,7 +78,7 @@ class TestOllamaProvider:
         """Ollama uses env var key when set."""
         from qwed_new.providers.ollama_provider import OllamaProvider
         with patch.dict("os.environ", {"OLLAMA_API_KEY": "test-ollama-key-12345"}, clear=False):
-            provider = OllamaProvider()
+            OllamaProvider()
         call_kwargs = mock_openai_cls.call_args
         assert call_kwargs.kwargs.get("api_key") == "test-ollama-key-12345" or call_kwargs[1].get("api_key") == "test-ollama-key-12345"
 
@@ -214,7 +214,7 @@ class TestOpenAICompatProvider:
         """No API key → uses 'dummy' for no-auth endpoints."""
         from qwed_new.providers.openai_compat import OpenAICompatProvider
         with patch.dict("os.environ", {}, clear=True):
-            provider = OpenAICompatProvider(base_url="http://localhost:8080/v1")
+            OpenAICompatProvider(base_url="http://localhost:8080/v1")
         call_kwargs = mock_openai_cls.call_args
         assert call_kwargs.kwargs.get("api_key") == "dummy" or call_kwargs[1].get("api_key") == "dummy"
 
@@ -222,7 +222,7 @@ class TestOpenAICompatProvider:
     def test_init_with_key(self, mock_openai_cls):
         """Provided key is passed through."""
         from qwed_new.providers.openai_compat import OpenAICompatProvider
-        provider = OpenAICompatProvider(base_url="http://example.com/v1", api_key="test-fake-key-12345")
+        OpenAICompatProvider(base_url="http://example.com/v1", api_key="test-fake-key-12345")
         call_kwargs = mock_openai_cls.call_args
         assert call_kwargs.kwargs.get("api_key") == "test-fake-key-12345" or call_kwargs[1].get("api_key") == "test-fake-key-12345"
 

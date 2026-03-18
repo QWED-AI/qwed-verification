@@ -80,11 +80,16 @@ def _write_secure(env_path: Path, content: str) -> None:
             os.replace(tmp_path, str(env_path))
             logger.info(".env written securely with 0600 permissions")
         except Exception:
+            # Ensure fd is closed if os.fchmod failed
+            try:
+                os.close(fd)
+            except OSError:
+                pass
             # Clean up temp file on failure
             try:
                 os.unlink(tmp_path)
-            except OSError:
-                pass
+            except OSError as cleanup_err:
+                logger.debug("Failed to clean up temp file %s: %s", tmp_path, cleanup_err)
             raise
     else:
         # Windows: direct write (no symlink risk, no O_NOFOLLOW)

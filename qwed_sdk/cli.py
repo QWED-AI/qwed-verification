@@ -269,7 +269,8 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
         from dotenv import load_dotenv
         load_dotenv()
     except ImportError:
-        pass
+        if HAS_COLOR and not quiet:
+            click.echo(f"{QWED.ERROR}⚠️  python-dotenv not installed. Run 'pip install python-dotenv' for auto-loading .env{QWED.RESET}")
     
     try:
         # Auto-detect provider/base_url from ACTIVE_PROVIDER
