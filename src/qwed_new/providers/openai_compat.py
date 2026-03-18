@@ -93,7 +93,7 @@ class OpenAICompatProvider(LLMProvider):
                 content = content.split("```")[1].split("```")[0].strip()
             return json.loads(content)
         except json.JSONDecodeError as e:
-            logger.debug("OpenAI-Compatible JSON parse error: %s", e)
+            logger.debug("OpenAI-Compatible JSON parse error: %s", type(e).__name__)
             raise ValueError("Failed to parse JSON from endpoint.") from None
 
     # ── LLMProvider Interface ──────────────────────────────────────
@@ -107,7 +107,7 @@ Respond with JSON: {"expression": "...", "claimed_answer": ..., "reasoning": "..
             result = self._call_json(system, user_query)
             return MathVerificationTask(**result)
         except Exception as e:
-            logger.debug("OpenAI-Compatible translation error: %s", e)
+            logger.debug("OpenAI-Compatible translation error: %s", type(e).__name__)
             raise ValueError("OpenAI-Compatible translation failed.") from None
 
     def translate_logic(self, user_query: str) -> 'LogicVerificationTask':
@@ -120,7 +120,7 @@ Respond with JSON: {"variables": {"x": "Int"}, "constraints": ["x > 0"], "goal":
             result = self._call_json(system, user_query)
             return LogicVerificationTask(**result)
         except Exception as e:
-            logger.debug("OpenAI-Compatible logic translation error: %s", e)
+            logger.debug("OpenAI-Compatible logic translation error: %s", type(e).__name__)
             raise ValueError("OpenAI-Compatible logic translation failed.") from None
 
     def refine_logic(self, user_query: str, previous_error: str) -> 'LogicVerificationTask':
@@ -133,7 +133,7 @@ Respond with JSON: {{"variables": {{}}, "constraints": [], "goal": "SATISFIABILI
             result = self._call_json(system, user_query)
             return LogicVerificationTask(**result)
         except Exception as e:
-            logger.debug("OpenAI-Compatible logic refinement error: %s", e)
+            logger.debug("OpenAI-Compatible logic refinement error: %s", type(e).__name__)
             raise ValueError("OpenAI-Compatible logic refinement failed.") from None
 
     def translate_stats(self, query: str, columns: List[str]) -> str:
@@ -144,7 +144,7 @@ Output ONLY Python code."""
         try:
             return self._call_text(system, f"Columns: {columns}\nQuery: {query}")
         except Exception as e:
-            logger.debug("OpenAI-Compatible stats translation error: %s", e)
+            logger.debug("OpenAI-Compatible stats translation error: %s", type(e).__name__)
             raise ValueError("OpenAI-Compatible stats translation failed.") from None
 
     def verify_fact(self, claim: str, context: str) -> Dict[str, Any]:
@@ -154,7 +154,7 @@ Respond with JSON: {"verdict": "SUPPORTED|REFUTED|NOT_ENOUGH_INFO", "reasoning":
         try:
             return self._call_json(system, f"Context:\n{context}\n\nClaim:\n{claim}")
         except Exception as e:
-            logger.debug("OpenAI-Compatible fact verification error: %s", e)
+            logger.debug("OpenAI-Compatible fact verification error: %s", type(e).__name__)
             raise ValueError("OpenAI-Compatible fact verification failed.") from None
 
     def verify_image(self, image_bytes: bytes, claim: str) -> Dict[str, Any]:

@@ -6,10 +6,7 @@ protection, atomic write, _find_project_root, _build_env_content, _read_existing
 """
 
 import os
-import stat
 import pytest
-from pathlib import Path
-from unittest.mock import patch
 
 from qwed_new.providers.credential_store import (
     write_env_file,
@@ -53,8 +50,7 @@ class TestFindProjectRoot:
         empty = tmp_path / "empty"
         empty.mkdir()
         result = _find_project_root(empty)
-        # Falls back to the start directory (actually walks up)
-        assert result.exists()
+        assert result == empty
 
 
 class TestBuildEnvContent:
@@ -75,6 +71,12 @@ class TestBuildEnvContent:
         idx_a = content.index("AAA=a")
         idx_z = content.index("ZZZ=z")
         assert idx_a < idx_z
+
+    def test_no_mutation(self):
+        """_build_env_content should not mutate caller's dict."""
+        original = {"ACTIVE_PROVIDER": "openai", "KEY": "val"}
+        _build_env_content(original)
+        assert "ACTIVE_PROVIDER" in original
 
 
 class TestReadExistingEnv:
@@ -148,6 +150,15 @@ class TestWriteEnvFile:
         with pytest.raises(ValueError, match="non-regular"):
             write_env_file({"K": "v"}, project_root=tmp_project)
 
+    def test_permissions_unix(self, tmp_project):
+        """Verify 0600 permissions on Unix."""
+        if os.name == "nt":
+            pytest.skip("Permission test not applicable on Windows")
+        import stat
+        result = write_env_file({"KEY": "val"}, project_root=tmp_project)
+        mode = os.stat(result).st_mode & 0o777
+        assert mode == 0o600, f"Expected 0600, got {oct(mode)}"
+
 
 class TestVerifyGitignore:
     def test_present(self, tmp_project):
@@ -165,6 +176,18 @@ class TestVerifyGitignore:
     def test_wildcard_match(self, tmp_path):
         (tmp_path / "pyproject.toml").touch()
         (tmp_path / ".gitignore").write_text("*.env\n")
+        assert verify_gitignore(tmp_path) is True
+
+    def test_dotenv_star_match(self, tmp_path):
+        """Broader pattern .env* should also be accepted."""
+        (tmp_path / "pyproject.toml").touch()
+        (tmp_path / ".gitignore").write_text(".env*\n")
+        assert verify_gitignore(tmp_path) is True
+
+    def test_globstar_match(self, tmp_path):
+        """Pattern **/.env should also be accepted."""
+        (tmp_path / "pyproject.toml").touch()
+        (tmp_path / ".gitignore").write_text("**/.env\n")
         assert verify_gitignore(tmp_path) is True
 
 

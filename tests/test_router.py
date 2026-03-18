@@ -5,8 +5,7 @@ Covers: Router.__init__, route() with valid/invalid/unknown providers,
 slug normalization, heuristic routing, default fallback.
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 class TestRouter:
@@ -23,7 +22,8 @@ class TestRouter:
         from qwed_new.core.router import Router
         r = Router()
         result = r.route("test query", preferred_provider="ollama")
-        assert result.value == "ollama" or result == "ollama"
+        result_str = getattr(result, "value", result)
+        assert result_str == "ollama"
 
     @patch("qwed_new.core.router.settings")
     def test_route_unknown_provider_fallback(self, mock_settings):
@@ -32,7 +32,8 @@ class TestRouter:
         from qwed_new.core.router import Router
         r = Router()
         result = r.route("test query", preferred_provider="nonexistent-typo")
-        assert result == "openai"
+        result_str = getattr(result, "value", result)
+        assert result_str == "openai"
 
     @patch("qwed_new.core.router.settings")
     def test_route_slug_normalization(self, mock_settings):
@@ -41,7 +42,8 @@ class TestRouter:
         from qwed_new.core.router import Router
         r = Router()
         result = r.route("test", preferred_provider="openai-compatible")
-        assert str(result) == "openai_compat" or result.value == "openai_compat"
+        result_str = getattr(result, "value", result)
+        assert result_str == "openai_compat"
 
     @patch("qwed_new.core.router.settings")
     def test_route_no_preferred(self, mock_settings):
@@ -50,7 +52,8 @@ class TestRouter:
         from qwed_new.core.router import Router
         r = Router()
         result = r.route("calculate 2+2")
-        assert result == "anthropic"
+        result_str = getattr(result, "value", result)
+        assert result_str == "anthropic"
 
     @patch("qwed_new.core.router.settings")
     def test_route_math_keywords(self, mock_settings):
@@ -59,4 +62,5 @@ class TestRouter:
         from qwed_new.core.router import Router
         r = Router()
         result = r.route("calculate the equation for x")
-        assert result == "openai"
+        result_str = getattr(result, "value", result)
+        assert result_str == "openai"

@@ -19,7 +19,7 @@ _TIMEOUT_MSG = "Connection timed out (5s). Check endpoint URL."
 _CONNECT_FAIL = "Cannot connect to endpoint. Check URL and network."
 
 
-def mask_key(key: str) -> str:
+def mask_key(key: Optional[str]) -> str:
     """Mask API key for safe display. Shows first 8 chars + ****."""
     if not key or len(key) <= 8:
         return "****"
@@ -55,6 +55,8 @@ def _test_ollama(base_url: Optional[str], timeout: float) -> Tuple[bool, str]:
     url = (base_url or "http://localhost:11434").rstrip("/")
     if url.endswith("/v1"):
         url = url[:-3]
+    elif url.endswith("/v1/"):
+        url = url[:-4]
     try:
         resp = httpx.get(f"{url}/api/tags", timeout=timeout)
     except httpx.ConnectError:
@@ -97,21 +99,15 @@ def _test_openai(api_key: Optional[str], timeout: float) -> Tuple[bool, str]:
 def _test_anthropic(
     api_key: Optional[str], model: Optional[str], timeout: float
 ) -> Tuple[bool, str]:
-    """Test Anthropic API connectivity."""
+    """Test Anthropic API connectivity via read-only /v1/models endpoint."""
     import httpx
 
     try:
-        resp = httpx.post(
-            "https://api.anthropic.com/v1/messages",
+        resp = httpx.get(
+            "https://api.anthropic.com/v1/models",
             headers={
                 "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": model or "claude-sonnet-4-20250514",
-                "max_tokens": 1,
-                "messages": [{"role": "user", "content": "hi"}],
             },
             timeout=timeout,
         )

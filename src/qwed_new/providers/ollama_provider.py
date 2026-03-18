@@ -77,7 +77,7 @@ Respond with JSON: {"expression": "...", "claimed_answer": ..., "reasoning": "..
             result = self._call_json(system, user_query)
             return MathVerificationTask(**result)
         except Exception as e:
-            logger.debug("Ollama translation error: %s", e)
+            logger.debug("Ollama translation error: %s", type(e).__name__)
             raise ValueError("Ollama translation failed.") from None
 
     def translate_logic(self, user_query: str) -> 'LogicVerificationTask':
@@ -90,7 +90,7 @@ Respond with JSON: {"variables": {"x": "Int"}, "constraints": ["x > 0"], "goal":
             result = self._call_json(system, user_query)
             return LogicVerificationTask(**result)
         except Exception as e:
-            logger.debug("Ollama logic translation error: %s", e)
+            logger.debug("Ollama logic translation error: %s", type(e).__name__)
             raise ValueError("Ollama logic translation failed.") from None
 
     def refine_logic(self, user_query: str, previous_error: str) -> 'LogicVerificationTask':
@@ -103,7 +103,7 @@ Respond with JSON: {{"variables": {{}}, "constraints": [], "goal": "SATISFIABILI
             result = self._call_json(system, user_query)
             return LogicVerificationTask(**result)
         except Exception as e:
-            logger.debug("Ollama logic refinement error: %s", e)
+            logger.debug("Ollama logic refinement error: %s", type(e).__name__)
             raise ValueError("Ollama logic refinement failed.") from None
 
     def translate_stats(self, query: str, columns: List[str]) -> str:
@@ -120,7 +120,7 @@ Respond with JSON: {"verdict": "SUPPORTED|REFUTED|NOT_ENOUGH_INFO", "reasoning":
         try:
             return self._call_json(system, f"Context:\n{context}\n\nClaim:\n{claim}")
         except Exception as e:
-            logger.debug("Ollama fact verification error: %s", e)
+            logger.debug("Ollama fact verification error: %s", type(e).__name__)
             raise ValueError("Ollama fact verification failed.") from None
 
     def verify_image(self, image_bytes: bytes, claim: str) -> Dict[str, Any]:

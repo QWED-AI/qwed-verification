@@ -264,6 +264,13 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
         import os
         os.environ["QWED_QUIET"] = "1"
     
+    # Load .env file so credentials from qwed init are available
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+    
     try:
         # Auto-detect provider/base_url from ACTIVE_PROVIDER
         if not provider and not base_url:
@@ -292,6 +299,7 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
             client = QWEDLocal(
                 base_url=base_url,
                 model=model or "llama3",
+                api_key=api_key or None,
                 cache=not no_cache,
                 mask_pii=mask_pii
             )

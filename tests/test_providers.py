@@ -6,8 +6,7 @@ Covers: initialization, API key handling, exception sanitization, translate/veri
 """
 
 import pytest
-from unittest.mock import patch, MagicMock, PropertyMock
-import json
+from unittest.mock import patch, MagicMock
 
 from qwed_new.providers.registry import PROVIDER_REGISTRY, get_provider, list_providers, AuthType
 
@@ -78,10 +77,10 @@ class TestOllamaProvider:
     def test_init_with_key(self, mock_openai_cls):
         """Ollama uses env var key when set."""
         from qwed_new.providers.ollama_provider import OllamaProvider
-        with patch.dict("os.environ", {"OLLAMA_API_KEY": "test-key"}, clear=False):
+        with patch.dict("os.environ", {"OLLAMA_API_KEY": "test-ollama-key-12345"}, clear=False):
             provider = OllamaProvider()
         call_kwargs = mock_openai_cls.call_args
-        assert call_kwargs.kwargs.get("api_key") == "test-key" or call_kwargs[1].get("api_key") == "test-key"
+        assert call_kwargs.kwargs.get("api_key") == "test-ollama-key-12345" or call_kwargs[1].get("api_key") == "test-ollama-key-12345"
 
     @patch("qwed_new.providers.ollama_provider.OpenAI")
     def test_translate_error_sanitized(self, mock_openai_cls):
@@ -160,17 +159,51 @@ class TestOpenAIDirectProvider:
         assert "FACT_ERROR" not in str(exc_info.value)
 
     @patch("qwed_new.providers.openai_direct.OpenAI")
-    def test_verify_image_error_handled(self, mock_openai_cls):
-        """Image verification errors return controlled response."""
+    def test_verify_image_jpeg(self, mock_openai_cls):
+        """Image verification detects JPEG MIME type."""
         from qwed_new.providers.openai_direct import OpenAIDirectProvider
         mock_client = MagicMock()
         mock_openai_cls.return_value = mock_client
-        mock_client.chat.completions.create.side_effect = Exception("IMAGE_ERROR")
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = '{"verdict": "SUPPORTED", "reasoning": "test", "confidence": 0.9}'
+        mock_client.chat.completions.create.return_value = mock_response
 
         provider = OpenAIDirectProvider(api_key="sk-proj-" + "D" * 30)
-        result = provider.verify_image(b"fake-image", "test claim")
+        # JPEG magic bytes
+        result = provider.verify_image(b"\xff\xd8\xff\xe0" + b"\x00" * 100, "test claim")
+        assert result["verdict"] == "SUPPORTED"
+        # Verify the data URI uses image/jpeg
+        call_args = mock_client.chat.completions.create.call_args
+        messages = call_args.kwargs.get("messages") or call_args[1].get("messages")
+        user_content = messages[1]["content"]
+        image_url = user_content[0]["image_url"]["url"]
+        assert "data:image/jpeg;base64," in image_url
+
+    @patch("qwed_new.providers.openai_direct.OpenAI")
+    def test_verify_image_png(self, mock_openai_cls):
+        """Image verification detects PNG MIME type."""
+        from qwed_new.providers.openai_direct import OpenAIDirectProvider
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = '{"verdict": "SUPPORTED", "reasoning": "test", "confidence": 0.9}'
+        mock_client.chat.completions.create.return_value = mock_response
+
+        provider = OpenAIDirectProvider(api_key="sk-proj-" + "E" * 30)
+        # PNG magic bytes
+        result = provider.verify_image(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100, "test claim")
+        assert result["verdict"] == "SUPPORTED"
+
+    @patch("qwed_new.providers.openai_direct.OpenAI")
+    def test_verify_image_unsupported_format(self, mock_openai_cls):
+        """Unsupported image format returns ERROR."""
+        from qwed_new.providers.openai_direct import OpenAIDirectProvider
+        provider = OpenAIDirectProvider(api_key="sk-proj-" + "F" * 30)
+        result = provider.verify_image(b"not-an-image-format", "test claim")
         assert result["verdict"] == "ERROR"
-        assert "IMAGE_ERROR" not in result["reasoning"]
+        assert "Unsupported" in result["reasoning"]
 
 
 # ── OpenAI Compat Provider Tests ───────────────────────────
@@ -189,9 +222,9 @@ class TestOpenAICompatProvider:
     def test_init_with_key(self, mock_openai_cls):
         """Provided key is passed through."""
         from qwed_new.providers.openai_compat import OpenAICompatProvider
-        provider = OpenAICompatProvider(base_url="http://example.com/v1", api_key="real-key")
+        provider = OpenAICompatProvider(base_url="http://example.com/v1", api_key="test-fake-key-12345")
         call_kwargs = mock_openai_cls.call_args
-        assert call_kwargs.kwargs.get("api_key") == "real-key" or call_kwargs[1].get("api_key") == "real-key"
+        assert call_kwargs.kwargs.get("api_key") == "test-fake-key-12345" or call_kwargs[1].get("api_key") == "test-fake-key-12345"
 
     def test_init_no_base_url_raises(self):
         """Missing base URL raises clear error."""
@@ -208,7 +241,7 @@ class TestOpenAICompatProvider:
         mock_openai_cls.return_value = mock_client
         mock_client.chat.completions.create.side_effect = Exception("COMPAT_ERROR")
 
-        provider = OpenAICompatProvider(base_url="http://localhost/v1", api_key="key")
+        provider = OpenAICompatProvider(base_url="http://localhost/v1", api_key="test-key-xyz")
         with pytest.raises(ValueError) as exc_info:
             provider.translate("test")
         assert "COMPAT_ERROR" not in str(exc_info.value)
@@ -217,7 +250,7 @@ class TestOpenAICompatProvider:
     def test_verify_image_not_supported(self, mock_openai_cls):
         """Image verification returns NOT_SUPPORTED."""
         from qwed_new.providers.openai_compat import OpenAICompatProvider
-        provider = OpenAICompatProvider(base_url="http://localhost/v1", api_key="key")
+        provider = OpenAICompatProvider(base_url="http://localhost/v1", api_key="test-key-xyz")
         result = provider.verify_image(b"image", "claim")
         assert result["verdict"] == "NOT_SUPPORTED"
 
@@ -229,7 +262,7 @@ class TestOpenAICompatProvider:
         mock_openai_cls.return_value = mock_client
         mock_client.chat.completions.create.side_effect = Exception("STATS_COMPAT_ERR")
 
-        provider = OpenAICompatProvider(base_url="http://localhost/v1", api_key="key")
+        provider = OpenAICompatProvider(base_url="http://localhost/v1", api_key="test-key-xyz")
         with pytest.raises(ValueError) as exc_info:
             provider.translate_stats("query", ["col"])
         assert "STATS_COMPAT_ERR" not in str(exc_info.value)
@@ -247,7 +280,7 @@ class TestOpenAICompatProvider:
         mock_response.choices[0].message.content = "not valid json at all"
         mock_client.chat.completions.create.return_value = mock_response
 
-        provider = OpenAICompatProvider(base_url="http://localhost/v1", api_key="key")
+        provider = OpenAICompatProvider(base_url="http://localhost/v1", api_key="test-key-xyz")
         with pytest.raises(ValueError) as exc_info:
             provider.translate("test query")
         error_msg = str(exc_info.value)

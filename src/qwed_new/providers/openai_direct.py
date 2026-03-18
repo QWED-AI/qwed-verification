@@ -90,7 +90,7 @@ You MUST use the submit_math_expression tool."""
             result = self._call_with_tool(system, user_query, self.math_tool, "submit_math_expression")
             return MathVerificationTask(**result)
         except Exception as e:
-            logger.debug("OpenAI translation error: %s", e)
+            logger.debug("OpenAI translation error: %s", type(e).__name__)
             raise ValueError("OpenAI translation failed.") from None
 
     def translate_logic(self, user_query: str) -> 'LogicVerificationTask':
@@ -128,7 +128,7 @@ Use And(...), Or(...), Not(...) for logic. DO NOT use &, |, ~."""
             result = self._call_with_tool(system, user_query, tool, "submit_z3_problem")
             return LogicVerificationTask(**result)
         except Exception as e:
-            logger.debug("OpenAI logic translation error: %s", e)
+            logger.debug("OpenAI logic translation error: %s", type(e).__name__)
             raise ValueError("OpenAI logic translation failed.") from None
 
     def refine_logic(self, user_query: str, previous_error: str) -> 'LogicVerificationTask':
@@ -164,7 +164,7 @@ Use And(...), Or(...), Not(...) for logic."""
             result = self._call_with_tool(system, user_query, tool, "submit_z3_problem")
             return LogicVerificationTask(**result)
         except Exception as e:
-            logger.debug("OpenAI logic refinement error: %s", e)
+            logger.debug("OpenAI logic refinement error: %s", type(e).__name__)
             raise ValueError("OpenAI logic refinement failed.") from None
 
     def translate_stats(self, query: str, columns: List[str]) -> str:
@@ -176,7 +176,7 @@ Output ONLY Python code. No markdown."""
         try:
             return self._call_text(system, f"Columns: {columns}\nQuery: {query}")
         except Exception as e:
-            logger.debug("OpenAI stats translation error: %s", e)
+            logger.debug("OpenAI stats translation error: %s", type(e).__name__)
             raise ValueError("OpenAI stats translation failed.") from None
 
     def verify_fact(self, claim: str, context: str) -> Dict[str, Any]:
@@ -205,11 +205,26 @@ Find EXACT QUOTES. Return SUPPORTED, REFUTED, or NOT_ENOUGH_INFO."""
                 tool, "submit_fact_verification"
             )
         except Exception as e:
-            logger.debug("OpenAI fact verification error: %s", e)
+            logger.debug("OpenAI fact verification error: %s", type(e).__name__)
             raise ValueError("OpenAI fact verification failed.") from None
 
     def verify_image(self, image_bytes: bytes, claim: str) -> Dict[str, Any]:
         import base64
+
+        # Detect MIME type from magic bytes
+        if image_bytes.startswith(b"\xff\xd8\xff"):
+            mime_type = "image/jpeg"
+        elif image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            mime_type = "image/png"
+        elif image_bytes.startswith(b"RIFF") and len(image_bytes) > 12 and image_bytes[8:12] == b"WEBP":
+            mime_type = "image/webp"
+        else:
+            return {
+                "verdict": "ERROR",
+                "reasoning": "Unsupported image format",
+                "confidence": 0.0,
+            }
+
         b64 = base64.b64encode(image_bytes).decode("utf-8")
 
         try:
@@ -223,7 +238,7 @@ Find EXACT QUOTES. Return SUPPORTED, REFUTED, or NOT_ENOUGH_INFO."""
                     {
                         "role": "user",
                         "content": [
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                            {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}},
                             {"type": "text", "text": f"CLAIM: {claim}"},
                         ],
                     },

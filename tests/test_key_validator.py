@@ -1,20 +1,17 @@
 """
 Tests for key_validator.py — Key format validation and connection testing.
 
-Covers: mask_key, validate_key_format, test_connection, per-provider test 
+Covers: mask_key, validate_key_format, test_connection, per-provider test
 handlers, error paths, timeout handling.
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from qwed_new.providers.key_validator import (
     mask_key,
     validate_key_format,
     test_connection as check_connection,
     _AUTH_FAILED,
-    _TIMEOUT_MSG,
-    _CONNECT_FAIL,
 )
 
 
@@ -51,7 +48,7 @@ class TestValidateKeyFormat:
         assert "invalid" in msg.lower()
 
     def test_no_pattern(self):
-        is_valid, msg = validate_key_format("anything", None)
+        is_valid, _ = validate_key_format("anything", None)
         assert is_valid
 
     def test_empty_key(self):
@@ -60,7 +57,7 @@ class TestValidateKeyFormat:
         assert "empty" in msg.lower()
 
     def test_whitespace_only(self):
-        is_valid, msg = validate_key_format("   ", r"^sk-.*$")
+        is_valid, _ = validate_key_format("   ", r"^sk-.*$")
         assert not is_valid
 
     def test_fullmatch_not_prefix(self):
@@ -109,14 +106,14 @@ class TestConnectionOpenAI:
         with patch.dict("qwed_new.providers.key_validator._TEST_HANDLERS", {
             "openai": lambda key, url, model, t: (True, "Connected to OpenAI API.")
         }):
-            success, msg = check_connection("openai", api_key="sk-fake")
+            success, msg = check_connection("openai", api_key="TEST_fake_key_not_real")
             assert success
 
     def test_openai_auth_fail(self):
         with patch.dict("qwed_new.providers.key_validator._TEST_HANDLERS", {
             "openai": lambda key, url, model, t: (False, _AUTH_FAILED)
         }):
-            success, msg = check_connection("openai", api_key="bad")
+            success, msg = check_connection("openai", api_key="TEST_invalid_key")
             assert not success
             assert "Authentication" in msg
 
@@ -126,7 +123,7 @@ class TestConnectionAnthropic:
         with patch.dict("qwed_new.providers.key_validator._TEST_HANDLERS", {
             "anthropic": lambda key, url, model, t: (True, "Connected to Anthropic API.")
         }):
-            success, msg = check_connection("anthropic", api_key="sk-ant-fake")
+            success, msg = check_connection("anthropic", api_key="TEST_ant_fake_key")
             assert success
 
 
