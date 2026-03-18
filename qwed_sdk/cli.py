@@ -37,6 +37,206 @@ def cli():
 
 
 @cli.command()
+def init():
+    """
+    🔒 Configure your LLM provider securely.
+
+    Interactive wizard to set up API keys and provider configuration.
+    Writes credentials to .env with restrictive permissions.
+
+    Example:
+        qwed init
+    """
+    try:
+        from qwed_new.providers.registry import list_providers, get_provider, AuthType
+        from qwed_new.providers.key_validator import validate_key_format, mask_key, test_connection
+        from qwed_new.providers.credential_store import write_env_file, verify_gitignore, add_env_to_gitignore
+    except ImportError:
+        # Fallback imports for when running from SDK only
+        click.echo(f"{QWED.ERROR if HAS_COLOR else ''}❌ QWED core not found. Make sure qwed is installed.{QWED.RESET if HAS_COLOR else ''}", err=True)
+        sys.exit(1)
+
+    # ── Header ──────────────────────────────────────────────────
+    click.echo()
+    if HAS_COLOR:
+        click.echo(f"{QWED.BRAND}{'━' * 50}{QWED.RESET}")
+        click.echo(f"{QWED.BRAND}🔬 QWED — Secure LLM Configuration{QWED.RESET}")
+        click.echo(f"{QWED.BRAND}{'━' * 50}{QWED.RESET}")
+    else:
+        click.echo("━" * 50)
+        click.echo("🔬 QWED — Secure LLM Configuration")
+        click.echo("━" * 50)
+    click.echo()
+
+    # ── Provider Selection ──────────────────────────────────────
+    providers = list_providers()
+    click.echo("Select your LLM provider:\n")
+    for i, p in enumerate(providers, 1):
+        hint = f" ({p.key_hint})" if p.key_hint else ""
+        if HAS_COLOR:
+            click.echo(f"  {QWED.VALUE}{i}.{QWED.RESET} {p.name}{QWED.INFO}{hint}{QWED.RESET}")
+        else:
+            click.echo(f"  {i}. {p.name}{hint}")
+    click.echo()
+
+    choice = click.prompt("Enter number", type=int)
+    if choice < 1 or choice > len(providers):
+        click.echo(f"{QWED.ERROR if HAS_COLOR else ''}❌ Invalid choice{QWED.RESET if HAS_COLOR else ''}", err=True)
+        sys.exit(1)
+
+    provider = providers[choice - 1]
+    click.echo()
+    if HAS_COLOR:
+        click.echo(f"{QWED.SUCCESS}✓ Selected: {provider.name}{QWED.RESET}")
+    else:
+        click.echo(f"✓ Selected: {provider.name}")
+
+    # ── Install Check ───────────────────────────────────────────
+    if provider.install_cmd:
+        click.echo(f"\n📦 Requires: {provider.install_cmd}")
+
+    # ── Collect Credentials ─────────────────────────────────────
+    env_vars = {}
+    collected_key = None
+    collected_base_url = None
+
+    for env_var in provider.env_vars:
+        if not env_var.required and env_var.default:
+            # Optional with default — ask with default shown
+            val = click.prompt(
+                f"  {env_var.description}",
+                default=env_var.default,
+                show_default=True,
+            )
+            env_vars[env_var.name] = val
+        elif provider.auth_type == AuthType.LOCAL and not env_var.required:
+            # Ollama: use defaults silently
+            env_vars[env_var.name] = env_var.default or ""
+        elif "KEY" in env_var.name or "key" in env_var.name.lower() or "API" in env_var.name:
+            # API key field — HIDE INPUT
+            click.echo()
+            val = click.prompt(
+                f"  🔑 {env_var.description}",
+                hide_input=True,
+            )
+            env_vars[env_var.name] = val
+            collected_key = val
+        elif "URL" in env_var.name or "ENDPOINT" in env_var.name:
+            val = click.prompt(
+                f"  🌐 {env_var.description}",
+                default=env_var.default or "",
+                show_default=True,
+            )
+            env_vars[env_var.name] = val
+            collected_base_url = val
+        else:
+            val = click.prompt(
+                f"  {env_var.description}",
+                default=env_var.default or "",
+                show_default=True,
+            )
+            env_vars[env_var.name] = val
+
+    # ── Key Format Validation (Mandatory) ───────────────────────
+    if collected_key and provider.key_pattern:
+        is_valid, msg = validate_key_format(collected_key, provider.key_pattern)
+        click.echo()
+        if is_valid:
+            if HAS_COLOR:
+                click.echo(f"{QWED.SUCCESS}✅ {msg}{QWED.RESET}")
+            else:
+                click.echo(f"✅ {msg}")
+        else:
+            if HAS_COLOR:
+                click.echo(f"{QWED.WARNING}⚠️  {msg}{QWED.RESET}")
+                click.echo(f"{QWED.INFO}   Proceeding anyway (some providers have non-standard key formats){QWED.RESET}")
+            else:
+                click.echo(f"⚠️  {msg}")
+                click.echo("   Proceeding anyway (some providers have non-standard key formats)")
+
+    # ── Connection Test (Optional) ──────────────────────────────
+    if provider.auth_type != AuthType.LOCAL:
+        should_test = click.confirm("\n🔍 Would you like to test the connection?", default=False)
+    else:
+        should_test = True  # Always check Ollama availability
+
+    if should_test:
+        click.echo("   Testing... ", nl=False)
+        success, msg = test_connection(
+            provider_slug=provider.slug,
+            api_key=collected_key,
+            base_url=collected_base_url,
+        )
+        if success:
+            if HAS_COLOR:
+                click.echo(f"{QWED.SUCCESS}✅ {msg}{QWED.RESET}")
+            else:
+                click.echo(f"✅ {msg}")
+        else:
+            if HAS_COLOR:
+                click.echo(f"{QWED.ERROR}❌ {msg}{QWED.RESET}")
+            else:
+                click.echo(f"❌ {msg}")
+            if not click.confirm("   Continue anyway?", default=True):
+                sys.exit(1)
+
+    # ── Set as Default Provider ─────────────────────────────────
+    set_default = click.confirm(
+        f"\n⚙️  Set {provider.name} as default active provider?",
+        default=True,
+    )
+
+    active_slug = None
+    if set_default:
+        # Map registry slug to config ProviderType value
+        slug_map = {
+            "openai": "openai",
+            "anthropic": "anthropic",
+            "ollama": "ollama",
+            "openai-compatible": "openai_compat",
+        }
+        active_slug = slug_map.get(provider.slug, provider.slug)
+
+    # ── Write .env ──────────────────────────────────────────────
+    click.echo()
+    env_path = write_env_file(env_vars, active_provider=active_slug)
+
+    if HAS_COLOR:
+        click.echo(f"{QWED.SUCCESS}📁 Written to {env_path}{QWED.RESET}")
+    else:
+        click.echo(f"📁 Written to {env_path}")
+
+    # ── Verify .gitignore ───────────────────────────────────────
+    if verify_gitignore():
+        if HAS_COLOR:
+            click.echo(f"{QWED.SUCCESS}🔒 Verified: .gitignore includes .env{QWED.RESET}")
+        else:
+            click.echo("🔒 Verified: .gitignore includes .env")
+    else:
+        if HAS_COLOR:
+            click.echo(f"{QWED.WARNING}⚠️  .env NOT found in .gitignore!{QWED.RESET}")
+        else:
+            click.echo("⚠️  .env NOT found in .gitignore!")
+        if click.confirm("   Add .env to .gitignore?", default=True):
+            if add_env_to_gitignore():
+                click.echo("   ✅ Added .env to .gitignore")
+            else:
+                click.echo("   ❌ Failed to update .gitignore", err=True)
+
+    # ── Done ────────────────────────────────────────────────────
+    click.echo()
+    if HAS_COLOR:
+        click.echo(f"{QWED.BRAND}{'━' * 50}{QWED.RESET}")
+        click.echo(f"{QWED.SUCCESS}🚀 Ready! Try: qwed verify \"What is 2+2?\"{QWED.RESET}")
+        click.echo(f"{QWED.BRAND}{'━' * 50}{QWED.RESET}")
+    else:
+        click.echo("━" * 50)
+        click.echo("🚀 Ready! Try: qwed verify \"What is 2+2?\"")
+        click.echo("━" * 50)
+    click.echo()
+
+
+@cli.command()
 @click.argument('query')
 @click.option('--provider', '-p', default=None, help='LLM provider (openai/anthropic/gemini)')
 @click.option('--model', '-m', default=None, help='Model name (e.g., gpt-4o-mini, llama3)')

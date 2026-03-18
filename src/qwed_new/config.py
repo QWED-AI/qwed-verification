@@ -12,10 +12,13 @@ load_dotenv()
 
 class ProviderType(str, Enum):
     OPENAI = "openai"
+    OPENAI_DIRECT = "openai_direct"
     AZURE_OPENAI = "azure_openai"
     ANTHROPIC = "anthropic"
     CLAUDE_OPUS = "claude_opus"
     GEMINI = "gemini"
+    OLLAMA = "ollama"
+    OPENAI_COMPAT = "openai_compat"
     AUTO = "auto"
 
 class Settings:
@@ -55,5 +58,14 @@ class Settings:
     # Google Gemini Config
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-pro")
+
+    # Ollama Config (Local)
+    OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
+
+    # OpenAI-Compatible Config (DO, Groq, Together, etc.)
+    CUSTOM_BASE_URL = os.getenv("CUSTOM_BASE_URL")
+    CUSTOM_API_KEY = os.getenv("CUSTOM_API_KEY")
+    CUSTOM_MODEL = os.getenv("CUSTOM_MODEL", "gpt-4o-mini")
 
 settings = Settings()
