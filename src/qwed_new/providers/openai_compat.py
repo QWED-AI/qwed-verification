@@ -160,7 +160,7 @@ Respond with JSON: {"verdict": "SUPPORTED|REFUTED|NOT_ENOUGH_INFO", "reasoning":
     def verify_image(self, image_bytes: bytes, claim: str) -> Dict[str, Any]:
         # Most OpenAI-compat endpoints don't support vision — return graceful error
         return {
-            "verdict": "NOT_SUPPORTED",
+            "verdict": "INCONCLUSIVE",
             "reasoning": "Image verification not available on this endpoint.",
             "confidence": 0.0,
         }

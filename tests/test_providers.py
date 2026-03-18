@@ -59,6 +59,8 @@ class TestProviderRegistry:
         assert re.fullmatch(p.key_pattern, fake_key)
 
 
+FAKE_TEST_KEY = "test-fixture-not-a-real-key-00000"
+
 # ── Ollama Provider Tests ──────────────────────────────────
 
 class TestOllamaProvider:
@@ -77,10 +79,10 @@ class TestOllamaProvider:
     def test_init_with_key(self, mock_openai_cls):
         """Ollama uses env var key when set."""
         from qwed_new.providers.ollama_provider import OllamaProvider
-        with patch.dict("os.environ", {"OLLAMA_API_KEY": "test-ollama-key-12345"}, clear=False):
+        with patch.dict("os.environ", {"OLLAMA_API_KEY": FAKE_TEST_KEY}, clear=False):
             OllamaProvider()
         call_kwargs = mock_openai_cls.call_args
-        assert call_kwargs.kwargs.get("api_key") == "test-ollama-key-12345" or call_kwargs[1].get("api_key") == "test-ollama-key-12345"
+        assert call_kwargs.kwargs.get("api_key") == FAKE_TEST_KEY or call_kwargs[1].get("api_key") == FAKE_TEST_KEY
 
     @patch("qwed_new.providers.ollama_provider.OpenAI")
     def test_translate_error_sanitized(self, mock_openai_cls):
@@ -222,9 +224,9 @@ class TestOpenAICompatProvider:
     def test_init_with_key(self, mock_openai_cls):
         """Provided key is passed through."""
         from qwed_new.providers.openai_compat import OpenAICompatProvider
-        OpenAICompatProvider(base_url="http://example.com/v1", api_key="test-fake-key-12345")
+        OpenAICompatProvider(base_url="http://example.com/v1", api_key=FAKE_TEST_KEY)
         call_kwargs = mock_openai_cls.call_args
-        assert call_kwargs.kwargs.get("api_key") == "test-fake-key-12345" or call_kwargs[1].get("api_key") == "test-fake-key-12345"
+        assert call_kwargs.kwargs.get("api_key") == FAKE_TEST_KEY or call_kwargs[1].get("api_key") == FAKE_TEST_KEY
 
     def test_init_no_base_url_raises(self):
         """Missing base URL raises clear error."""
@@ -241,18 +243,18 @@ class TestOpenAICompatProvider:
         mock_openai_cls.return_value = mock_client
         mock_client.chat.completions.create.side_effect = Exception("COMPAT_ERROR")
 
-        provider = OpenAICompatProvider(base_url="http://localhost/v1", api_key="test-key-xyz")
+        provider = OpenAICompatProvider(base_url="http://localhost/v1", api_key=FAKE_TEST_KEY)
         with pytest.raises(ValueError) as exc_info:
             provider.translate("test")
         assert "COMPAT_ERROR" not in str(exc_info.value)
 
     @patch("qwed_new.providers.openai_compat.OpenAI")
     def test_verify_image_not_supported(self, mock_openai_cls):
-        """Image verification returns NOT_SUPPORTED."""
+        """Image verification returns INCONCLUSIVE."""
         from qwed_new.providers.openai_compat import OpenAICompatProvider
-        provider = OpenAICompatProvider(base_url="http://localhost/v1", api_key="test-key-xyz")
+        provider = OpenAICompatProvider(base_url="http://localhost/v1", api_key=FAKE_TEST_KEY)
         result = provider.verify_image(b"image", "claim")
-        assert result["verdict"] == "NOT_SUPPORTED"
+        assert result["verdict"] == "INCONCLUSIVE"
 
     @patch("qwed_new.providers.openai_compat.OpenAI")
     def test_translate_stats_error_sanitized(self, mock_openai_cls):
@@ -262,7 +264,7 @@ class TestOpenAICompatProvider:
         mock_openai_cls.return_value = mock_client
         mock_client.chat.completions.create.side_effect = Exception("STATS_COMPAT_ERR")
 
-        provider = OpenAICompatProvider(base_url="http://localhost/v1", api_key="test-key-xyz")
+        provider = OpenAICompatProvider(base_url="http://localhost/v1", api_key=FAKE_TEST_KEY)
         with pytest.raises(ValueError) as exc_info:
             provider.translate_stats("query", ["col"])
         assert "STATS_COMPAT_ERR" not in str(exc_info.value)
@@ -280,7 +282,7 @@ class TestOpenAICompatProvider:
         mock_response.choices[0].message.content = "not valid json at all"
         mock_client.chat.completions.create.return_value = mock_response
 
-        provider = OpenAICompatProvider(base_url="http://localhost/v1", api_key="test-key-xyz")
+        provider = OpenAICompatProvider(base_url="http://localhost/v1", api_key=FAKE_TEST_KEY)
         with pytest.raises(ValueError) as exc_info:
             provider.translate("test query")
         error_msg = str(exc_info.value)

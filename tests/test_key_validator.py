@@ -106,14 +106,14 @@ class TestConnectionOpenAI:
         with patch.dict("qwed_new.providers.key_validator._TEST_HANDLERS", {
             "openai": lambda key, url, model, t: (True, "Connected to OpenAI API.")
         }):
-            success, msg = check_connection("openai", api_key="TEST_fake_key_not_real")
+            success, _ = check_connection("openai", api_key="UNIT_TEST_TOKEN_A")
             assert success
 
     def test_openai_auth_fail(self):
         with patch.dict("qwed_new.providers.key_validator._TEST_HANDLERS", {
             "openai": lambda key, url, model, t: (False, _AUTH_FAILED)
         }):
-            success, msg = check_connection("openai", api_key="TEST_invalid_key")
+            success, msg = check_connection("openai", api_key="UNIT_TEST_TOKEN_INVALID")
             assert not success
             assert "Authentication" in msg
 
@@ -123,7 +123,7 @@ class TestConnectionAnthropic:
         with patch.dict("qwed_new.providers.key_validator._TEST_HANDLERS", {
             "anthropic": lambda key, url, model, t: (True, "Connected to Anthropic API.")
         }):
-            success, msg = check_connection("anthropic", api_key="TEST_ant_fake_key")
+            success, _ = check_connection("anthropic", api_key="UNIT_TEST_TOKEN_B")
             assert success
 
 

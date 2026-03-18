@@ -126,7 +126,7 @@ Respond with JSON: {"verdict": "SUPPORTED|REFUTED|NOT_ENOUGH_INFO", "reasoning":
     def verify_image(self, image_bytes: bytes, claim: str) -> Dict[str, Any]:
         # Most Ollama models don't support vision
         return {
-            "verdict": "NOT_SUPPORTED",
+            "verdict": "INCONCLUSIVE",
             "reasoning": "Image verification not available with this Ollama model.",
             "confidence": 0.0,
         }

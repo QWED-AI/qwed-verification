@@ -8,7 +8,7 @@ NOT for Azure OpenAI (use azure_openai.py for that).
 import os
 import json
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from openai import OpenAI
 from qwed_new.core.schemas import MathVerificationTask
@@ -23,7 +23,7 @@ class OpenAIDirectProvider(LLMProvider):
     Uses function calling (tools) for structured output.
     """
 
-    def __init__(self, api_key: str = None, model: str = None):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
@@ -33,7 +33,11 @@ class OpenAIDirectProvider(LLMProvider):
                 "Set OPENAI_API_KEY env var or run: qwed init"
             )
 
-        self.client = OpenAI(api_key=self.api_key)
+        self.client = OpenAI(
+            api_key=self.api_key,
+            timeout=30.0,
+            max_retries=2,
+        )
 
         # Tool schema for structured math output
         self.math_tool = {
@@ -72,7 +76,14 @@ class OpenAIDirectProvider(LLMProvider):
             ],
             temperature=0.0,
         )
-        return response.choices[0].message.content
+        if not response.choices or not response.choices[0].message:
+            raise ValueError("OpenAI returned an empty or invalid response in self.client.chat.completions.create.")
+        
+        content = response.choices[0].message.content
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("OpenAI returned empty text response in self.client.chat.completions.create.")
+            
+        return content
 
     # ── LLMProvider Interface ──────────────────────────────────────
 

@@ -170,5 +170,5 @@ def add_env_to_gitignore(project_root: Optional[Path] = None) -> bool:
             f.write("\n# Environment variables (contains secrets)\n.env\n")
         return True
     except OSError as e:
-        logger.error(f"Could not update .gitignore: {e}")
+        logger.error("Could not update .gitignore: %s", e)
         return False
