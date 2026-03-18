@@ -347,7 +347,9 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
                 click.echo(f"✅ VERIFIED: {result.value}")
             else:
                 click.echo(f"❌ {result.error or 'Verification failed'}", err=True)
-                sys.exit(1)
+        
+        if not result.verified:
+            sys.exit(1)
     
     except Exception as e:
         click.echo(f"{QWED.ERROR if HAS_COLOR else ''}❌ Error: {str(e)}{QWED.RESET if HAS_COLOR else ''}", err=True)
