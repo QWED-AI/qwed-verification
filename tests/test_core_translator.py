@@ -1,5 +1,4 @@
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from qwed_new.core.translator import TranslationLayer
 from qwed_new.config import ProviderType

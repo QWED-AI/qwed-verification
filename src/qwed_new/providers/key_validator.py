@@ -97,7 +97,7 @@ def _test_openai(api_key: Optional[str], timeout: float) -> Tuple[bool, str]:
 
 
 def _test_anthropic(
-    api_key: Optional[str], model: Optional[str], timeout: float
+    api_key: Optional[str], timeout: float
 ) -> Tuple[bool, str]:
     """Test Anthropic API connectivity via read-only /v1/models endpoint."""
     import httpx
@@ -155,7 +155,7 @@ def _test_openai_compat(
 _TEST_HANDLERS = {
     "ollama": lambda key, url, model, t: _test_ollama(url, t),
     "openai": lambda key, url, model, t: _test_openai(key, t),
-    "anthropic": lambda key, url, model, t: _test_anthropic(key, model, t),
+    "anthropic": lambda key, url, model, t: _test_anthropic(key, t),
     "openai-compatible": lambda key, url, model, t: _test_openai_compat(key, url, t),
 }
 

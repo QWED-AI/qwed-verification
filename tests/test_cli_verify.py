@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
-from qwed_sdk.cli import cli, verify
+from qwed_sdk.cli import verify
 import os
 
 @pytest.fixture
@@ -77,7 +77,6 @@ def test_verify_missing_provider_and_base_url(runner):
         # Should default to ollama local since active is empty
         assert result.exit_code == 1
         # Because we didn't mock QWEDLocal, it will try to hit localhost, or maybe it fails on import
-        pass
 
 @patch("qwed_sdk.cli.QWEDLocal")
 def test_verify_active_provider_ollama(mock_qwedlocal, runner):

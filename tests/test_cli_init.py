@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
-from qwed_sdk.cli import cli, init
+from qwed_sdk.cli import init
 import sys
 
 @pytest.fixture

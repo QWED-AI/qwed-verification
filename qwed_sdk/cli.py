@@ -78,14 +78,14 @@ def _select_provider(providers) -> Any:
         click.echo(f"\n📦 Requires: {provider.install_cmd}")
     return provider
 
-def _collect_credentials(provider, AuthType) -> tuple:
+def _collect_credentials(provider, auth_type_enum) -> tuple:
     """Collect env vars, key, and base_url from user input."""
     env_vars = {}
     collected_key = None
     collected_base_url = None
 
     for env_var in provider.env_vars:
-        if provider.auth_type == AuthType.LOCAL and not env_var.required:
+        if provider.auth_type == auth_type_enum.LOCAL and not env_var.required:
             env_vars[env_var.name] = env_var.default or ""
         elif not env_var.required and env_var.default:
             val = click.prompt(
@@ -119,25 +119,21 @@ def _collect_credentials(provider, AuthType) -> tuple:
             env_vars[env_var.name] = val
     return env_vars, collected_key, collected_base_url
 
-def _validate_and_test_connection(provider, collected_key, collected_base_url, validate_key_format, test_connection, AuthType) -> bool:
+def _validate_and_test_connection(provider, collected_key, collected_base_url, validate_key_format, test_connection, auth_type_enum) -> bool:
     """Run format validation and optional connection test."""
     if collected_key and provider.key_pattern:
         is_valid, msg = validate_key_format(collected_key, provider.key_pattern)
         click.echo()
         if is_valid:
-            if HAS_COLOR:
-                click.echo(f"{QWED.SUCCESS}✅ {msg}{QWED.RESET}")
-            else:
-                click.echo(f"✅ {msg}")
+            c_msg = f"{QWED.SUCCESS}✅ {msg}{QWED.RESET}" if HAS_COLOR else f"✅ {msg}"
+            click.echo(c_msg)
         else:
-            if HAS_COLOR:
-                click.echo(f"{QWED.WARNING}⚠️  {msg}{QWED.RESET}")
-                click.echo(f"{QWED.INFO}   Proceeding anyway (some providers have non-standard key formats){QWED.RESET}")
-            else:
-                click.echo(f"⚠️  {msg}")
-                click.echo("   Proceeding anyway (some providers have non-standard key formats)")
+            w_msg = f"{QWED.WARNING}⚠️  {msg}{QWED.RESET}" if HAS_COLOR else f"⚠️  {msg}"
+            p_msg = f"{QWED.INFO}   Proceeding anyway (some providers have non-standard key formats){QWED.RESET}" if HAS_COLOR else "   Proceeding anyway (some providers have non-standard key formats)"
+            click.echo(w_msg)
+            click.echo(p_msg)
 
-    if provider.auth_type != AuthType.LOCAL:
+    if provider.auth_type != auth_type_enum.LOCAL:
         should_test = click.confirm("\n🔍 Would you like to test the connection?", default=False)
     else:
         should_test = True
@@ -150,15 +146,11 @@ def _validate_and_test_connection(provider, collected_key, collected_base_url, v
             base_url=collected_base_url,
         )
         if success:
-            if HAS_COLOR:
-                click.echo(f"{QWED.SUCCESS}✅ {msg}{QWED.RESET}")
-            else:
-                click.echo(f"✅ {msg}")
+            c_msg = f"{QWED.SUCCESS}✅ {msg}{QWED.RESET}" if HAS_COLOR else f"✅ {msg}"
+            click.echo(c_msg)
         else:
-            if HAS_COLOR:
-                click.echo(f"{QWED.ERROR}❌ {msg}{QWED.RESET}")
-            else:
-                click.echo(f"❌ {msg}")
+            e_msg = f"{QWED.ERROR}❌ {msg}{QWED.RESET}" if HAS_COLOR else f"❌ {msg}"
+            click.echo(e_msg)
             if not click.confirm("   Continue anyway?", default=True):
                 sys.exit(1)
     return True
@@ -279,8 +271,9 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
         # python-dotenv is optional; credentials can still be passed via CLI args or env
         import logging
         logging.getLogger(__name__).debug("python-dotenv not installed, skipping auto-load")
-        if HAS_COLOR and not quiet:
-            click.echo(f"{QWED.ERROR}⚠️  python-dotenv not installed. Run 'pip install python-dotenv' for auto-loading .env{QWED.RESET}")
+        if not quiet:
+            err_msg = f"{QWED.ERROR}⚠️  python-dotenv not installed. Run 'pip install python-dotenv' for auto-loading .env{QWED.RESET}" if HAS_COLOR else "⚠️  python-dotenv not installed. Run 'pip install python-dotenv' for auto-loading .env"
+            click.echo(err_msg, err=True)
     
     try:
         # Auto-detect provider/base_url from ACTIVE_PROVIDER
@@ -295,6 +288,11 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
                     click.echo(f"{QWED.INFO}\u2139\ufe0f  Using Ollama at {base_url}{QWED.RESET}")
             elif active == "openai-compatible" or active == "openai_compat":
                 base_url = _os.getenv("CUSTOM_BASE_URL", "")
+                if not base_url:
+                    err_msg = f"{QWED.ERROR}❌ CUSTOM_BASE_URL is required for openai-compatible provider{QWED.RESET}" if HAS_COLOR else "❌ CUSTOM_BASE_URL is required for openai-compatible provider"
+                    click.echo(err_msg, err=True)
+                    click.echo("Set CUSTOM_BASE_URL env var or run: qwed init", err=True)
+                    sys.exit(1)
                 api_key = api_key or _os.getenv("CUSTOM_API_KEY", "")
                 model = model or _os.getenv("CUSTOM_MODEL", "gpt-4o-mini")
                 if HAS_COLOR and not quiet:

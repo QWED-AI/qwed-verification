@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import patch, MagicMock
 import httpx
 
@@ -114,7 +113,7 @@ class TestAnthropicReal:
         mock_resp.status_code = 200
         mock_get.return_value = mock_resp
         
-        success, msg = _test_anthropic("sk-ant-test", None, 5.0)
+        success, msg = _test_anthropic("sk-ant-test", 5.0)
         assert success
         assert "Connected" in msg
         mock_get.assert_called_once_with(
@@ -128,13 +127,13 @@ class TestAnthropicReal:
         mock_resp = MagicMock()
         mock_resp.status_code = 401
         mock_get.return_value = mock_resp
-        success, msg = _test_anthropic("sk-ant-test", None, 5.0)
+        success, msg = _test_anthropic("sk-ant-test", 5.0)
         assert not success
         assert "Authentication failed" in msg
         
         mock_resp.status_code = 500
         mock_get.return_value = mock_resp
-        success, msg = _test_anthropic("sk-ant-test", "model", 5.0)
+        success, msg = _test_anthropic("sk-ant-test", 5.0)
         assert not success
         assert "status 500" in msg
 
