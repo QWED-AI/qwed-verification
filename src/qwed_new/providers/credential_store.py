@@ -77,12 +77,12 @@ def _write_secure(env_path: Path, content: str) -> None:
         except Exception:
             try:
                 os.close(fd)
-            except OSError:
-                pass
+            except OSError as close_err:
+                logger.debug("Failed to close temp file descriptor %s: %s", fd, close_err)
             try:
                 os.unlink(tmp_path)
-            except OSError:
-                pass
+            except OSError as cleanup_err:
+                logger.debug("Failed to clean up temp file %s: %s", tmp_path, cleanup_err)
             raise
             
         try:
