@@ -236,7 +236,10 @@ def init():
             "ollama": "ollama",
             "openai-compatible": "openai_compat",
         }
-        active_slug = slug_map.get(provider.slug, provider.slug)
+        if provider.slug.startswith("yaml-"):
+            active_slug = "openai_compat"
+        else:
+            active_slug = slug_map.get(provider.slug, provider.slug)
 
     _ensure_gitignore_protection(verify_gitignore, add_env_to_gitignore)
 
@@ -342,7 +345,7 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
         elif provider:
             if not api_key:
                 click.echo(f"{QWED.ERROR}❌ API key required for {provider}{QWED.RESET}", err=True)
-                click.echo(f"Set QWED_API_KEY env var or use --api-key", err=True)
+                click.echo("Set QWED_API_KEY env var or use --api-key", err=True)
                 sys.exit(1)
             
             client = QWEDLocal(
@@ -530,6 +533,45 @@ def pii(text: str):
         sys.exit(1)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.group()
+def provider():
+    """Manage dynamic LLM providers."""
+    pass
+
+
+@provider.command(name="import")
+@click.argument("url")
+def import_provider(url: str):
+    """Import a custom provider from a YAML URL."""
+    try:
+        from qwed_new.providers.config_manager import ProviderConfigManager
+    except ImportError:
+        click.echo(f"{QWED.ERROR if HAS_COLOR else ''}❌ Core config manager not found{QWED.RESET if HAS_COLOR else ''}", err=True)
+        sys.exit(1)
+        
+    try:
+        if HAS_COLOR:
+            click.echo(f"{QWED.INFO}\u2139\ufe0f  Downloading provider from {url}...{QWED.RESET}")
+        else:
+            click.echo(f"\u2139\ufe0f  Downloading provider from {url}...")
+            
+        manager = ProviderConfigManager()
+        slug = manager.import_provider_from_url(url)
+        
+        if HAS_COLOR:
+            click.echo(f"{QWED.SUCCESS}✅ Successfully imported provider '{slug}'!{QWED.RESET}")
+            click.echo(f"{QWED.INFO}   You can now run 'qwed init' and select it from the interactive menu.{QWED.RESET}")
+        else:
+            click.echo(f"✅ Successfully imported provider '{slug}'!")
+            click.echo("   You can now run 'qwed init' and select it from the interactive menu.")
+    except Exception as e:
+        if HAS_COLOR:
+            click.echo(f"{QWED.ERROR}❌ Failed to import provider: {str(e)}{QWED.RESET}", err=True)
+        else:
+            click.echo(f"❌ Failed to import provider: {str(e)}", err=True)
         sys.exit(1)
 
 

@@ -11,6 +11,7 @@ from fastapi import Header, HTTPException, Depends
 from sqlmodel import Session, select
 from qwed_new.core.database import get_session
 from qwed_new.core.models import ApiKey, Organization
+from qwed_new.auth.security import hash_api_key
 
 class TenantContext:
     """
