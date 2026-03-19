@@ -111,30 +111,30 @@ class ProviderConfigManager:
                 _get_dynamic_providers.cache_clear()
         except ImportError as e:
             logger.debug(f"Registry module unavailable; skipping cache invalidation: {e}")
-        
+
+    def _sanitize_slug(self, raw_slug: Any) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "-", str(raw_slug or "").strip().lower())
+        slug = re.sub(r"-{2,}", "-", slug).strip("-")
+        if not slug:
+            slug = "imported-provider"
+
+        # Keep custom slugs from shadowing canonical built-in providers.
+        try:
+            from qwed_new.providers.registry import PROVIDER_REGISTRY
+            if slug in PROVIDER_REGISTRY:
+                slug = "imported-provider"
+        except Exception as e:
+            logger.debug(
+                f"Could not check builtin registry for slug collision: {type(e).__name__}"
+            )
+
+        return slug
+         
     def import_provider_from_url(self, url: str) -> str:
         """
         Download and validate a community provider YAML.
         Returns the imported provider slug.
         """
-        def _sanitize_slug(raw_slug: Any) -> str:
-            slug = re.sub(r"[^a-z0-9]+", "-", str(raw_slug or "").strip().lower())
-            slug = re.sub(r"-{2,}", "-", slug).strip("-")
-            if not slug:
-                slug = "imported-provider"
-
-            # Keep custom slugs from shadowing canonical built-in providers.
-            try:
-                from qwed_new.providers.registry import PROVIDER_REGISTRY
-                if slug in PROVIDER_REGISTRY:
-                    slug = "imported-provider"
-            except Exception as e:
-                logger.debug(
-                    f"Could not check builtin registry for slug collision: {type(e).__name__}"
-                )
-
-            return slug
-
         from urllib.parse import urlparse
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
@@ -155,13 +155,20 @@ class ProviderConfigManager:
                 slugs = list(data["providers"].keys())
                 if not slugs:
                     raise ValueError("No providers found in YAML")
+                if len(slugs) > 1:
+                    logger.warning(
+                        "YAML contains %d providers; only importing first: %s. Ignoring: %s",
+                        len(slugs),
+                        slugs[0],
+                        ", ".join(slugs[1:]),
+                    )
                 raw_slug = slugs[0]
-                slug = _sanitize_slug(raw_slug)
+                slug = self._sanitize_slug(raw_slug)
                 config = data["providers"][raw_slug]
             else:
                 # Direct format
                 config = data
-                slug = _sanitize_slug(config.get("name", "imported-provider"))
+                slug = self._sanitize_slug(config.get("name", "imported-provider"))
             
             # Validate security fields
             required_fields = ["base_url", "api_key_env"]

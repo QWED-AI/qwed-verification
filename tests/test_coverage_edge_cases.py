@@ -1,4 +1,5 @@
 import builtins
+import logging
 import os
 import urllib.error
 from unittest.mock import MagicMock, patch
@@ -88,6 +89,36 @@ def test_config_manager_import_nested_providers_block(tmp_path):
     assert loaded["demo"]["base_url"] == "https://api.demo.test/v1"
     assert loaded["demo"]["models_endpoint"] == "/models"
     assert loaded["demo"]["auth_prefix"] == "Bearer"
+
+
+def test_config_manager_warns_when_yaml_has_multiple_providers(tmp_path, caplog):
+    config_path = tmp_path / "providers.yaml"
+    manager = ProviderConfigManager(config_path)
+
+    response = _mock_http_response(
+        yaml.dump(
+            {
+                "providers": {
+                    "alpha": {
+                        "base_url": "https://alpha.test/v1",
+                        "api_key_env": "ALPHA_KEY",
+                    },
+                    "beta": {
+                        "base_url": "https://beta.test/v1",
+                        "api_key_env": "BETA_KEY",
+                    },
+                }
+            }
+        )
+    )
+
+    with patch("urllib.request.urlopen", return_value=response):
+        with caplog.at_level(logging.WARNING, logger="qwed.providers.config"):
+            slug = manager.import_provider_from_url("https://example.com/multi.yaml")
+
+    assert slug == "alpha"
+    assert "only importing first: alpha" in caplog.text
+    assert "beta" in caplog.text
 
 
 def test_config_manager_sanitizes_direct_format_slug(tmp_path):
