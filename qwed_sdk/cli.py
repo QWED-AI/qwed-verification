@@ -85,38 +85,44 @@ def _collect_credentials(provider, auth_type_enum) -> tuple:
     collected_base_url = None
 
     for env_var in provider.env_vars:
-        if provider.auth_type == auth_type_enum.LOCAL and not env_var.required:
+        if provider.auth_type == auth_type_enum.LOCAL and not env_var.required and "URL" not in env_var.name and "ENDPOINT" not in env_var.name:
             env_vars[env_var.name] = env_var.default or ""
-        elif not env_var.required and env_var.default:
-            val = click.prompt(
-                f"  {env_var.description}",
-                default=env_var.default,
-                show_default=True,
-            )
+            continue
+
+        while True:
+            if "KEY" in env_var.name or "key" in env_var.name.lower() or "API" in env_var.name:
+                click.echo()
+                val = click.prompt(
+                    f"  🔑 {env_var.description}",
+                    hide_input=True,
+                    default=env_var.default or "",
+                )
+            elif "URL" in env_var.name or "ENDPOINT" in env_var.name:
+                val = click.prompt(
+                    f"  🌐 {env_var.description}",
+                    default=env_var.default or "",
+                    show_default=True,
+                )
+            else:
+                val = click.prompt(
+                    f"  {env_var.description}",
+                    default=env_var.default or "",
+                    show_default=True,
+                )
+
+            val = val.strip() if val else ""
+
+            if env_var.required and not val:
+                click.echo(f"  ❌ {env_var.name} is required. Please provide a valid value.", err=True)
+                continue
+
             env_vars[env_var.name] = val
-        elif "KEY" in env_var.name or "key" in env_var.name.lower() or "API" in env_var.name:
-            click.echo()
-            val = click.prompt(
-                f"  🔑 {env_var.description}",
-                hide_input=True,
-            )
-            env_vars[env_var.name] = val
-            collected_key = val
-        elif "URL" in env_var.name or "ENDPOINT" in env_var.name:
-            val = click.prompt(
-                f"  🌐 {env_var.description}",
-                default=env_var.default or "",
-                show_default=True,
-            )
-            env_vars[env_var.name] = val
-            collected_base_url = val
-        else:
-            val = click.prompt(
-                f"  {env_var.description}",
-                default=env_var.default or "",
-                show_default=True,
-            )
-            env_vars[env_var.name] = val
+            if ("KEY" in env_var.name or "key" in env_var.name.lower() or "API" in env_var.name) and val:
+                collected_key = val
+            elif ("URL" in env_var.name or "ENDPOINT" in env_var.name) and val:
+                collected_base_url = val
+            break
+
     return env_vars, collected_key, collected_base_url
 
 def _validate_key(provider, collected_key, validate_key_format):
