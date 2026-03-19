@@ -119,40 +119,48 @@ def _collect_credentials(provider, auth_type_enum) -> tuple:
             env_vars[env_var.name] = val
     return env_vars, collected_key, collected_base_url
 
-def _validate_and_test_connection(provider, collected_key, collected_base_url, validate_key_format, test_connection, auth_type_enum) -> bool:
-    """Run format validation and optional connection test."""
-    if collected_key and provider.key_pattern:
-        is_valid, msg = validate_key_format(collected_key, provider.key_pattern)
-        click.echo()
-        if is_valid:
-            c_msg = f"{QWED.SUCCESS}✅ {msg}{QWED.RESET}" if HAS_COLOR else f"✅ {msg}"
-            click.echo(c_msg)
-        else:
-            w_msg = f"{QWED.WARNING}⚠️  {msg}{QWED.RESET}" if HAS_COLOR else f"⚠️  {msg}"
-            p_msg = f"{QWED.INFO}   Proceeding anyway (some providers have non-standard key formats){QWED.RESET}" if HAS_COLOR else "   Proceeding anyway (some providers have non-standard key formats)"
-            click.echo(w_msg)
-            click.echo(p_msg)
+def _validate_key(provider, collected_key, validate_key_format):
+    if not (collected_key and provider.key_pattern):
+        return
+    is_valid, msg = validate_key_format(collected_key, provider.key_pattern)
+    click.echo()
+    if is_valid:
+        c_msg = f"{QWED.SUCCESS}✅ {msg}{QWED.RESET}" if HAS_COLOR else f"✅ {msg}"
+        click.echo(c_msg)
+    else:
+        w_msg = f"{QWED.WARNING}⚠️  {msg}{QWED.RESET}" if HAS_COLOR else f"⚠️  {msg}"
+        p_msg = f"{QWED.INFO}   Proceeding anyway (some providers have non-standard key formats){QWED.RESET}" if HAS_COLOR else "   Proceeding anyway (some providers have non-standard key formats)"
+        click.echo(w_msg)
+        click.echo(p_msg)
 
+def _test_connection_interactive(provider, collected_key, collected_base_url, test_connection, auth_type_enum):
     if provider.auth_type != auth_type_enum.LOCAL:
         should_test = click.confirm("\n🔍 Would you like to test the connection?", default=False)
     else:
         should_test = True
 
-    if should_test:
-        click.echo("   Testing... ", nl=False)
-        success, msg = test_connection(
-            provider_slug=provider.slug,
-            api_key=collected_key,
-            base_url=collected_base_url,
-        )
-        if success:
-            c_msg = f"{QWED.SUCCESS}✅ {msg}{QWED.RESET}" if HAS_COLOR else f"✅ {msg}"
-            click.echo(c_msg)
-        else:
-            e_msg = f"{QWED.ERROR}❌ {msg}{QWED.RESET}" if HAS_COLOR else f"❌ {msg}"
-            click.echo(e_msg)
-            if not click.confirm("   Continue anyway?", default=True):
-                sys.exit(1)
+    if not should_test:
+        return
+
+    click.echo("   Testing... ", nl=False)
+    success, msg = test_connection(
+        provider_slug=provider.slug,
+        api_key=collected_key,
+        base_url=collected_base_url,
+    )
+    if success:
+        c_msg = f"{QWED.SUCCESS}✅ {msg}{QWED.RESET}" if HAS_COLOR else f"✅ {msg}"
+        click.echo(c_msg)
+    else:
+        e_msg = f"{QWED.ERROR}❌ {msg}{QWED.RESET}" if HAS_COLOR else f"❌ {msg}"
+        click.echo(e_msg)
+        if not click.confirm("   Continue anyway?", default=True):
+            sys.exit(1)
+
+def _validate_and_test_connection(provider, collected_key, collected_base_url, validate_key_format, test_connection, auth_type_enum) -> bool:
+    """Run format validation and optional connection test."""
+    _validate_key(provider, collected_key, validate_key_format)
+    _test_connection_interactive(provider, collected_key, collected_base_url, test_connection, auth_type_enum)
     return True
 
 def _ensure_gitignore_protection(verify_gitignore, add_env_to_gitignore) -> bool:

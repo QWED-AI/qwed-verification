@@ -1,5 +1,4 @@
 import pytest
-import json
 from unittest.mock import patch, MagicMock
 
 from qwed_new.providers.openai_direct import OpenAIDirectProvider
