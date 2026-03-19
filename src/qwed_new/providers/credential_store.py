@@ -71,8 +71,21 @@ def _write_secure(env_path: Path, content: str) -> None:
     if hasattr(os, "O_NOFOLLOW"):
         # Unix: atomic write via temp file with 0600 + os.replace
         fd, tmp_path = tempfile.mkstemp(dir=parent_dir, prefix=".env.", suffix=".tmp")
+        
         try:
             os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+            
+        try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(content)
                 f.flush()
@@ -80,12 +93,7 @@ def _write_secure(env_path: Path, content: str) -> None:
             os.replace(tmp_path, str(env_path))
             logger.info(".env written securely with 0600 permissions")
         except Exception:
-            # Ensure fd is closed if os.fchmod failed
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-            # Clean up temp file on failure
+            # os.fdopen context manager handled closing the fd for us
             try:
                 os.unlink(tmp_path)
             except OSError as cleanup_err:
