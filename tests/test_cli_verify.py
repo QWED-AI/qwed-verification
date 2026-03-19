@@ -166,3 +166,45 @@ def test_verify_exception_handling(mock_qwedlocal, runner):
     result = runner.invoke(verify, ["query", "--provider", "openai", "--api-key", "key"])
     assert result.exit_code == 1
     assert "Error: Surprise Crash" in result.output
+
+
+@patch("qwed_sdk.cli.QWEDLocal")
+def test_verify_active_provider_openai_compat_missing_base_url(mock_qwedlocal, runner):
+    """openai_compat must fail fast when CUSTOM_BASE_URL is missing."""
+    with patch.dict(os.environ, {"ACTIVE_PROVIDER": "openai_compat"}, clear=True):
+        result = runner.invoke(verify, ["query"])
+
+    assert result.exit_code == 1
+    assert "CUSTOM_BASE_URL is required for openai-compatible provider" in result.output
+    mock_qwedlocal.assert_not_called()
+
+
+@patch("qwed_sdk.cli.QWEDLocal")
+def test_verify_active_provider_openai_compat_success(mock_qwedlocal, runner):
+    """openai_compat should hydrate base_url/key/model from env."""
+    mock_instance = MagicMock()
+    mock_result = MagicMock()
+    mock_result.verified = True
+    mock_instance.verify.return_value = mock_result
+    mock_qwedlocal.return_value = mock_instance
+
+    with patch.dict(
+        os.environ,
+        {
+            "ACTIVE_PROVIDER": "openai-compatible",
+            "CUSTOM_BASE_URL": "https://compat.test/v1",
+            "CUSTOM_API_KEY": "compat-key",
+            "CUSTOM_MODEL": "compat-model",
+        },
+        clear=True,
+    ):
+        result = runner.invoke(verify, ["query"])
+
+    assert result.exit_code == 0
+    mock_qwedlocal.assert_called_once_with(
+        base_url="https://compat.test/v1",
+        model="compat-model",
+        api_key="compat-key",
+        cache=True,
+        mask_pii=False,
+    )

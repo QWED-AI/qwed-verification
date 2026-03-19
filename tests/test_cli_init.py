@@ -145,3 +145,35 @@ def test_init_connection_fail_abort(mock_test, mock_validate, mock_verify, mock_
     result = runner.invoke(init, input="1\nsk-test\ny\nn\n")
     assert result.exit_code == 1
     assert "Auth Failed" in result.output
+
+
+@patch("qwed_new.providers.registry.list_providers")
+@patch("qwed_new.providers.credential_store.write_env_file")
+@patch("qwed_new.providers.credential_store.verify_gitignore")
+@patch("qwed_new.providers.key_validator.validate_key_format")
+@patch("qwed_new.providers.key_validator.test_connection")
+def test_init_yaml_provider_maps_to_openai_compat(
+    mock_test, mock_validate, mock_verify, mock_write, mock_list, runner
+):
+    """yaml-* providers should persist as ACTIVE_PROVIDER=openai_compat."""
+    mock_provider = MagicMock()
+    mock_provider.name = "My YAML Provider"
+    mock_provider.slug = "yaml-my-provider"
+    mock_provider.key_hint = ""
+    mock_provider.install_cmd = None
+    mock_provider.env_vars = []
+
+    from qwed_new.providers.registry import AuthType
+
+    mock_provider.auth_type = AuthType.LOCAL
+
+    mock_list.return_value = [mock_provider]
+    mock_verify.return_value = True
+    mock_validate.return_value = (True, "OK")
+    mock_test.return_value = (True, "OK")
+    mock_write.return_value = ".env"
+
+    result = runner.invoke(init, input="1\ny\n")
+
+    assert result.exit_code == 0
+    mock_write.assert_called_once_with({}, active_provider="openai_compat")
