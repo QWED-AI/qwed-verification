@@ -27,18 +27,25 @@ class Router:
         4. Fallback to default.
         """
         if preferred_provider:
-            return preferred_provider
+            # Normalize registry slugs to ProviderType values
+            aliases = {
+                "openai-compatible": "openai_compat",
+                "openai-direct": "openai_direct",
+            }
+            normalized = aliases.get(preferred_provider, preferred_provider)
+            # Validate the preferred provider is a known type
+            try:
+                return ProviderType(normalized)
+            except ValueError:
+                return self.default_provider
             
         # Simple heuristic routing (Phase 1)
         # In the future, this could use a small classifier model
         query_lower = query.lower()
         
-        # Math/Logic keywords -> GPT-4 (Azure)
+        # Math/Logic keywords -> prioritize precise providers
         if any(k in query_lower for k in ['calculate', 'solve', 'math', 'equation', 'logic', 'proof']):
-            return ProviderType.AZURE_OPENAI
-            
-        # Creative/Writing keywords -> Claude (Anthropic)
-        if any(k in query_lower for k in ['write', 'compose', 'essay', 'creative', 'story']):
-            return ProviderType.ANTHROPIC
+            # Use default provider (user's configured choice)
+            return self.default_provider
             
         return self.default_provider

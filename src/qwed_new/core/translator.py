@@ -12,6 +12,9 @@ from qwed_new.providers.azure_openai import AzureOpenAIProvider
 from qwed_new.providers.anthropic import AnthropicProvider
 from qwed_new.providers.claude_opus import ClaudeOpusProvider
 from qwed_new.providers.auto_shift import AutoShiftProvider
+from qwed_new.providers.openai_direct import OpenAIDirectProvider
+from qwed_new.providers.openai_compat import OpenAICompatProvider
+from qwed_new.providers.ollama_provider import OllamaProvider
 
 class TranslationLayer:
     """
@@ -26,7 +29,11 @@ class TranslationLayer:
             ProviderType.AZURE_OPENAI: AzureOpenAIProvider,
             ProviderType.ANTHROPIC: AnthropicProvider,
             ProviderType.CLAUDE_OPUS: ClaudeOpusProvider,
-            ProviderType.AUTO: AutoShiftProvider
+            ProviderType.AUTO: AutoShiftProvider,
+            ProviderType.OPENAI: OpenAIDirectProvider,
+            ProviderType.OPENAI_DIRECT: OpenAIDirectProvider,
+            ProviderType.OLLAMA: OllamaProvider,
+            ProviderType.OPENAI_COMPAT: OpenAICompatProvider,
         }
         # Default fallback
         self.default_provider = settings.ACTIVE_PROVIDER
@@ -54,7 +61,7 @@ class TranslationLayer:
         expr_lower = task.expression.lower()
         for keyword in dangerous_keywords:
             if keyword in expr_lower:
-                raise SecurityError(f"Code execution attempt detected in expression: {task.expression}")
+                raise ValueError(f"Security: code execution attempt detected in expression: {task.expression}")
         
         # 2. Validate expression contains only safe characters
         import re

@@ -36,6 +36,229 @@ def cli():
     pass
 
 
+from typing import Any
+
+def _print_init_header():
+    """Print branded init wizard header."""
+    click.echo()
+    if HAS_COLOR:
+        click.echo(f"{QWED.BRAND}{'━' * 50}{QWED.RESET}")
+        click.echo(f"{QWED.BRAND}🔬 QWED — Secure LLM Configuration{QWED.RESET}")
+        click.echo(f"{QWED.BRAND}{'━' * 50}{QWED.RESET}")
+    else:
+        click.echo("━" * 50)
+        click.echo("🔬 QWED — Secure LLM Configuration")
+        click.echo("━" * 50)
+    click.echo()
+
+def _select_provider(providers) -> Any:
+    """Prompt user to select a provider."""
+    click.echo("Select your LLM provider:\n")
+    for i, p in enumerate(providers, 1):
+        hint = f" ({p.key_hint})" if p.key_hint else ""
+        if HAS_COLOR:
+            click.echo(f"  {QWED.VALUE}{i}.{QWED.RESET} {p.name}{QWED.INFO}{hint}{QWED.RESET}")
+        else:
+            click.echo(f"  {i}. {p.name}{hint}")
+    click.echo()
+
+    choice = click.prompt("Enter number", type=int)
+    if choice < 1 or choice > len(providers):
+        click.echo(f"{QWED.ERROR if HAS_COLOR else ''}❌ Invalid choice{QWED.RESET if HAS_COLOR else ''}", err=True)
+        sys.exit(1)
+
+    provider = providers[choice - 1]
+    click.echo()
+    if HAS_COLOR:
+        click.echo(f"{QWED.SUCCESS}✓ Selected: {provider.name}{QWED.RESET}")
+    else:
+        click.echo(f"✓ Selected: {provider.name}")
+
+    if provider.install_cmd:
+        click.echo(f"\n📦 Requires: {provider.install_cmd}")
+    return provider
+
+def _is_url_env(name: str) -> bool:
+    return "URL" in name or "ENDPOINT" in name
+
+def _is_key_env(name: str) -> bool:
+    return "KEY" in name or "key" in name.lower() or "API" in name
+
+def _prompt_for_env_var(env_var):
+    name = env_var.name
+    desc = env_var.description
+    default = env_var.default or ""
+    
+    if _is_key_env(name):
+        click.echo()
+        return click.prompt(f"  🔑 {desc}", hide_input=True, default=default)
+    elif _is_url_env(name):
+        return click.prompt(f"  🌐 {desc}", default=default, show_default=True)
+    else:
+        return click.prompt(f"  {desc}", default=default, show_default=True)
+
+def _collect_single_credential(env_var, is_local_auth: bool):
+    """Prompt user for a single env var until valid. Returns (val, is_key, is_url)."""
+    if is_local_auth and not env_var.required and not _is_url_env(env_var.name):
+        return env_var.default or "", False, False
+
+    while True:
+        val = _prompt_for_env_var(env_var)
+        val = val.strip() if val else ""
+
+        if env_var.required and not val:
+            click.echo(f"  ❌ {env_var.name} is required. Please provide a valid value.", err=True)
+            continue
+            
+        is_key = bool(_is_key_env(env_var.name) and val)
+        is_url = bool(_is_url_env(env_var.name) and val)
+        return val, is_key, is_url
+
+def _collect_credentials(provider, auth_type_enum) -> tuple:
+    """Collect env vars, key, and base_url from user input."""
+    env_vars = {}
+    collected_key = None
+    collected_base_url = None
+    is_local = (provider.auth_type == auth_type_enum.LOCAL)
+
+    for env_var in provider.env_vars:
+        val, is_key, is_url = _collect_single_credential(env_var, is_local)
+        env_vars[env_var.name] = val
+        if is_key:
+            collected_key = val
+        elif is_url:
+            collected_base_url = val
+
+    return env_vars, collected_key, collected_base_url
+
+def _validate_key(provider, collected_key, validate_key_format):
+    if not (collected_key and provider.key_pattern):
+        return
+    is_valid, msg = validate_key_format(collected_key, provider.key_pattern)
+    click.echo()
+    if is_valid:
+        c_msg = f"{QWED.SUCCESS}✅ {msg}{QWED.RESET}" if HAS_COLOR else f"✅ {msg}"
+        click.echo(c_msg)
+    else:
+        w_msg = f"{QWED.WARNING}⚠️  {msg}{QWED.RESET}" if HAS_COLOR else f"⚠️  {msg}"
+        p_msg = f"{QWED.INFO}   Proceeding anyway (some providers have non-standard key formats){QWED.RESET}" if HAS_COLOR else "   Proceeding anyway (some providers have non-standard key formats)"
+        click.echo(w_msg)
+        click.echo(p_msg)
+
+def _test_connection_interactive(provider, collected_key, collected_base_url, test_connection, auth_type_enum):
+    if provider.auth_type != auth_type_enum.LOCAL:
+        should_test = click.confirm("\n🔍 Would you like to test the connection?", default=False)
+    else:
+        should_test = True
+
+    if not should_test:
+        return
+
+    click.echo("   Testing... ", nl=False)
+    success, msg = test_connection(
+        provider_slug=provider.slug,
+        api_key=collected_key,
+        base_url=collected_base_url,
+    )
+    if success:
+        c_msg = f"{QWED.SUCCESS}✅ {msg}{QWED.RESET}" if HAS_COLOR else f"✅ {msg}"
+        click.echo(c_msg)
+    else:
+        e_msg = f"{QWED.ERROR}❌ {msg}{QWED.RESET}" if HAS_COLOR else f"❌ {msg}"
+        click.echo(e_msg)
+        if not click.confirm("   Continue anyway?", default=True):
+            sys.exit(1)
+
+def _validate_and_test_connection(provider, collected_key, collected_base_url, validate_key_format, test_connection, auth_type_enum) -> bool:
+    """Run format validation and optional connection test."""
+    _validate_key(provider, collected_key, validate_key_format)
+    _test_connection_interactive(provider, collected_key, collected_base_url, test_connection, auth_type_enum)
+    return True
+
+def _ensure_gitignore_protection(verify_gitignore, add_env_to_gitignore) -> bool:
+    """Verify or add .env to .gitignore, abort if cannot protect."""
+    if verify_gitignore():
+        if HAS_COLOR:
+            click.echo(f"\n{QWED.SUCCESS}🔒 Verified: .gitignore includes .env{QWED.RESET}")
+        else:
+            click.echo("\n🔒 Verified: .gitignore includes .env")
+    else:
+        if HAS_COLOR:
+            click.echo(f"\n{QWED.WARNING}⚠️  .env NOT found in .gitignore!{QWED.RESET}")
+        else:
+            click.echo("\n⚠️  .env NOT found in .gitignore!")
+        if click.confirm("   Add .env to .gitignore?", default=True):
+            if add_env_to_gitignore():
+                click.echo("   ✅ Added .env to .gitignore")
+            else:
+                click.echo("   ❌ Failed to update .gitignore — aborting to protect secrets", err=True)
+                sys.exit(1)
+        else:
+            click.echo("   ⚠️  Aborting: refusing to write secrets without .gitignore protection", err=True)
+            sys.exit(1)
+    return True
+
+@cli.command()
+def init():
+    """
+    🔒 Configure your LLM provider securely.
+
+    Interactive wizard to set up API keys and provider configuration.
+    Writes credentials to .env with restrictive permissions.
+
+    Example:
+        qwed init
+    """
+    try:
+        from qwed_new.providers.registry import list_providers, get_provider, AuthType
+        from qwed_new.providers.key_validator import validate_key_format, mask_key, test_connection
+        from qwed_new.providers.credential_store import write_env_file, verify_gitignore, add_env_to_gitignore
+    except ImportError:
+        click.echo(f"{QWED.ERROR if HAS_COLOR else ''}❌ QWED core not found. Make sure qwed is installed.{QWED.RESET if HAS_COLOR else ''}", err=True)
+        sys.exit(1)
+
+    _print_init_header()
+    provider = _select_provider(list_providers())
+    env_vars, collected_key, collected_base_url = _collect_credentials(provider, AuthType)
+    _validate_and_test_connection(provider, collected_key, collected_base_url, validate_key_format, test_connection, AuthType)
+
+    set_default = click.confirm(
+        f"\n⚙️  Set {provider.name} as default active provider?",
+        default=True,
+    )
+    active_slug = None
+    if set_default:
+        # Note: "openai_compat" used in env vars for shell compatibility
+        # (hyphens can cause issues in some shells when sourcing .env)
+        slug_map = {
+            "openai": "openai",
+            "anthropic": "anthropic",
+            "ollama": "ollama",
+            "openai-compatible": "openai_compat",
+        }
+        active_slug = slug_map.get(provider.slug, provider.slug)
+
+    _ensure_gitignore_protection(verify_gitignore, add_env_to_gitignore)
+
+    click.echo()
+    env_path = write_env_file(env_vars, active_provider=active_slug)
+    if HAS_COLOR:
+        click.echo(f"{QWED.SUCCESS}📁 Written to {env_path}{QWED.RESET}")
+    else:
+        click.echo(f"📁 Written to {env_path}")
+
+    click.echo()
+    if HAS_COLOR:
+        click.echo(f"{QWED.BRAND}{'━' * 50}{QWED.RESET}")
+        click.echo(f"{QWED.SUCCESS}🚀 Ready! Try: qwed verify \"What is 2+2?\"{QWED.RESET}")
+        click.echo(f"{QWED.BRAND}{'━' * 50}{QWED.RESET}")
+    else:
+        click.echo("━" * 50)
+        click.echo("🚀 Ready! Try: qwed verify \"What is 2+2?\"")
+        click.echo("━" * 50)
+    click.echo()
+
+
 @cli.command()
 @click.argument('query')
 @click.option('--provider', '-p', default=None, help='LLM provider (openai/anthropic/gemini)')
@@ -60,21 +283,59 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
         import os
         os.environ["QWED_QUIET"] = "1"
     
+    # Load .env file so credentials from qwed init are available
     try:
-        # Auto-detect provider/base_url
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        # python-dotenv is optional; credentials can still be passed via CLI args or env
+        import logging
+        logging.getLogger(__name__).debug("python-dotenv not installed, skipping auto-load")
+        if not quiet:
+            err_msg = f"{QWED.ERROR}⚠️  python-dotenv not installed. Run 'pip install python-dotenv' for auto-loading .env{QWED.RESET}" if HAS_COLOR else "⚠️  python-dotenv not installed. Run 'pip install python-dotenv' for auto-loading .env"
+            click.echo(err_msg, err=True)
+    
+    try:
+        # Auto-detect provider/base_url from ACTIVE_PROVIDER
         if not provider and not base_url:
-            # Try Ollama first (FREE!)
-            base_url = "http://localhost:11434/v1"
-            model = model or "llama3"
-            
-            if HAS_COLOR and not quiet:
-                click.echo(f"{QWED.INFO}ℹ️  No provider specified, trying Ollama...{QWED.RESET}")
+            import os as _os
+            active = _os.getenv("ACTIVE_PROVIDER", "").strip()
+            if active == "ollama" or not active:
+                # Use Ollama (LOCAL): respect user-configured env vars
+                base_url = _os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+                model = model or _os.getenv("OLLAMA_MODEL", "llama3")
+                if HAS_COLOR and not quiet:
+                    click.echo(f"{QWED.INFO}\u2139\ufe0f  Using Ollama at {base_url}{QWED.RESET}")
+            elif active == "openai-compatible" or active == "openai_compat":
+                base_url = _os.getenv("CUSTOM_BASE_URL", "")
+                if not base_url:
+                    err_msg = f"{QWED.ERROR}❌ CUSTOM_BASE_URL is required for openai-compatible provider{QWED.RESET}" if HAS_COLOR else "❌ CUSTOM_BASE_URL is required for openai-compatible provider"
+                    click.echo(err_msg, err=True)
+                    click.echo("Set CUSTOM_BASE_URL env var or run: qwed init", err=True)
+                    sys.exit(1)
+                api_key = api_key or _os.getenv("CUSTOM_API_KEY", "")
+                model = model or _os.getenv("CUSTOM_MODEL", "gpt-4o-mini")
+                if HAS_COLOR and not quiet:
+                    click.echo(f"{QWED.INFO}\u2139\ufe0f  Using configured provider: {active}{QWED.RESET}")
+            else:
+                # Named provider (openai, anthropic, etc.)
+                provider = active
+                provider_key_env = {
+                    "openai": "OPENAI_API_KEY",
+                    "anthropic": "ANTHROPIC_API_KEY",
+                }
+                if not api_key:
+                    env_key = provider_key_env.get(provider, "QWED_API_KEY")
+                    api_key = _os.getenv(env_key, _os.getenv("QWED_API_KEY", ""))
+                if HAS_COLOR and not quiet:
+                    click.echo(f"{QWED.INFO}ℹ️  Using configured provider: {active}{QWED.RESET}")
         
         # Create client
         if base_url:
             client = QWEDLocal(
                 base_url=base_url,
                 model=model or "llama3",
+                api_key=api_key or None,
                 cache=not no_cache,
                 mask_pii=mask_pii
             )
@@ -104,7 +365,9 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
                 click.echo(f"✅ VERIFIED: {result.value}")
             else:
                 click.echo(f"❌ {result.error or 'Verification failed'}", err=True)
-                sys.exit(1)
+        
+        if not result.verified:
+            sys.exit(1)
     
     except Exception as e:
         click.echo(f"{QWED.ERROR if HAS_COLOR else ''}❌ Error: {str(e)}{QWED.RESET if HAS_COLOR else ''}", err=True)
