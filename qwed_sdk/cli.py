@@ -78,50 +78,56 @@ def _select_provider(providers) -> Any:
         click.echo(f"\n📦 Requires: {provider.install_cmd}")
     return provider
 
+def _is_url_env(name: str) -> bool:
+    return "URL" in name or "ENDPOINT" in name
+
+def _is_key_env(name: str) -> bool:
+    return "KEY" in name or "key" in name.lower() or "API" in name
+
+def _prompt_for_env_var(env_var):
+    name = env_var.name
+    desc = env_var.description
+    default = env_var.default or ""
+    
+    if _is_key_env(name):
+        click.echo()
+        return click.prompt(f"  🔑 {desc}", hide_input=True, default=default)
+    elif _is_url_env(name):
+        return click.prompt(f"  🌐 {desc}", default=default, show_default=True)
+    else:
+        return click.prompt(f"  {desc}", default=default, show_default=True)
+
+def _collect_single_credential(env_var, is_local_auth: bool):
+    """Prompt user for a single env var until valid. Returns (val, is_key, is_url)."""
+    if is_local_auth and not env_var.required and not _is_url_env(env_var.name):
+        return env_var.default or "", False, False
+
+    while True:
+        val = _prompt_for_env_var(env_var)
+        val = val.strip() if val else ""
+
+        if env_var.required and not val:
+            click.echo(f"  ❌ {env_var.name} is required. Please provide a valid value.", err=True)
+            continue
+            
+        is_key = bool(_is_key_env(env_var.name) and val)
+        is_url = bool(_is_url_env(env_var.name) and val)
+        return val, is_key, is_url
+
 def _collect_credentials(provider, auth_type_enum) -> tuple:
     """Collect env vars, key, and base_url from user input."""
     env_vars = {}
     collected_key = None
     collected_base_url = None
+    is_local = (provider.auth_type == auth_type_enum.LOCAL)
 
     for env_var in provider.env_vars:
-        if provider.auth_type == auth_type_enum.LOCAL and not env_var.required and "URL" not in env_var.name and "ENDPOINT" not in env_var.name:
-            env_vars[env_var.name] = env_var.default or ""
-            continue
-
-        while True:
-            if "KEY" in env_var.name or "key" in env_var.name.lower() or "API" in env_var.name:
-                click.echo()
-                val = click.prompt(
-                    f"  🔑 {env_var.description}",
-                    hide_input=True,
-                    default=env_var.default or "",
-                )
-            elif "URL" in env_var.name or "ENDPOINT" in env_var.name:
-                val = click.prompt(
-                    f"  🌐 {env_var.description}",
-                    default=env_var.default or "",
-                    show_default=True,
-                )
-            else:
-                val = click.prompt(
-                    f"  {env_var.description}",
-                    default=env_var.default or "",
-                    show_default=True,
-                )
-
-            val = val.strip() if val else ""
-
-            if env_var.required and not val:
-                click.echo(f"  ❌ {env_var.name} is required. Please provide a valid value.", err=True)
-                continue
-
-            env_vars[env_var.name] = val
-            if ("KEY" in env_var.name or "key" in env_var.name.lower() or "API" in env_var.name) and val:
-                collected_key = val
-            elif ("URL" in env_var.name or "ENDPOINT" in env_var.name) and val:
-                collected_base_url = val
-            break
+        val, is_key, is_url = _collect_single_credential(env_var, is_local)
+        env_vars[env_var.name] = val
+        if is_key:
+            collected_key = val
+        elif is_url:
+            collected_base_url = val
 
     return env_vars, collected_key, collected_base_url
 
