@@ -71,3 +71,6 @@ WORKDIR /github/workspace
 # NOTE: We do NOT switch USER here. We start as root to fix permissions on mounted volumes
 # in entrypoint.sh, then drop privileges to appuser using runuser.
 ENTRYPOINT ["/entrypoint.sh"]
+
+# Set the default API Server command
+CMD ["python3", "-m", "uvicorn", "qwed_new.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
