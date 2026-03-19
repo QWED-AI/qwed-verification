@@ -345,7 +345,7 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
         elif provider:
             if not api_key:
                 click.echo(f"{QWED.ERROR}❌ API key required for {provider}{QWED.RESET}", err=True)
-                click.echo(f"Set QWED_API_KEY env var or use --api-key", err=True)
+                click.echo("Set QWED_API_KEY env var or use --api-key", err=True)
                 sys.exit(1)
             
             client = QWEDLocal(
@@ -566,7 +566,7 @@ def import_provider(url: str):
             click.echo(f"{QWED.INFO}   You can now run 'qwed init' and select it from the interactive menu.{QWED.RESET}")
         else:
             click.echo(f"✅ Successfully imported provider '{slug}'!")
-            click.echo(f"   You can now run 'qwed init' and select it from the interactive menu.")
+            click.echo("   You can now run 'qwed init' and select it from the interactive menu.")
     except Exception as e:
         if HAS_COLOR:
             click.echo(f"{QWED.ERROR}❌ Failed to import provider: {str(e)}{QWED.RESET}", err=True)

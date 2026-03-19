@@ -61,14 +61,14 @@ def test_import_provider_from_url():
         with patch('urllib.request.urlopen', return_value=mock_response):
             slug = manager.import_provider_from_url("http://fake-github.com/do.yaml")
         
-        # Should default to the 'name' field if raw dict
-        assert slug == "TestingDO"
+        # Raw name is normalized to a safe slug
+        assert slug == "testingdo"
         
         # Validate saved
         loaded = manager.load_providers()
-        assert "TestingDO" in loaded
-        assert loaded["TestingDO"]["base_url"] == "https://do.run/v1"
-        assert loaded["TestingDO"]["default_model"] == "do-latest"
+        assert "testingdo" in loaded
+        assert loaded["testingdo"]["base_url"] == "https://do.run/v1"
+        assert loaded["testingdo"]["default_model"] == "do-latest"
         
 def test_import_invalid_yaml():
     """Prevent execution of malformed YAML."""

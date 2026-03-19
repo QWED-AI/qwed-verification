@@ -16,6 +16,9 @@ def test_security_raises_runtime_error_if_no_secret(monkeypatch):
         / "security.py"
     )
     spec = importlib.util.spec_from_file_location("security_missing_secret_test", security_path)
+    assert spec is not None and spec.loader is not None, (
+        f"Unable to load module spec for {security_path}"
+    )
     module = importlib.util.module_from_spec(spec)
 
     with pytest.raises(RuntimeError, match="QWED_JWT_SECRET_KEY must be set"):

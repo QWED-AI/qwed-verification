@@ -6,6 +6,7 @@ with strict 0600 permissions and secrets-separation per PR #85.
 """
 
 import os
+import re
 import yaml
 import stat
 import tempfile
@@ -107,6 +108,22 @@ class ProviderConfigManager:
         Download and validate a community provider YAML.
         Returns the imported provider slug.
         """
+        def _sanitize_slug(raw_slug: Any) -> str:
+            slug = re.sub(r"[^a-z0-9]+", "-", str(raw_slug or "").strip().lower())
+            slug = re.sub(r"-{2,}", "-", slug).strip("-")
+            if not slug:
+                slug = "imported-provider"
+
+            # Keep custom slugs from shadowing canonical built-in providers.
+            try:
+                from qwed_new.providers.registry import PROVIDER_REGISTRY
+                if slug in PROVIDER_REGISTRY:
+                    slug = "imported-provider"
+            except Exception:
+                pass
+
+            return slug
+
         from urllib.parse import urlparse
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
@@ -127,12 +144,13 @@ class ProviderConfigManager:
                 slugs = list(data["providers"].keys())
                 if not slugs:
                     raise ValueError("No providers found in YAML")
-                slug = slugs[0]
-                config = data["providers"][slug]
+                raw_slug = slugs[0]
+                slug = _sanitize_slug(raw_slug)
+                config = data["providers"][raw_slug]
             else:
                 # Direct format
                 config = data
-                slug = config.get("name", "imported-provider")
+                slug = _sanitize_slug(config.get("name", "imported-provider"))
             
             # Validate security fields
             required_fields = ["base_url", "api_key_env"]

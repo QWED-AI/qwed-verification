@@ -1,7 +1,6 @@
 import builtins
 import os
 import urllib.error
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -89,6 +88,52 @@ def test_config_manager_import_nested_providers_block(tmp_path):
     assert loaded["demo"]["base_url"] == "https://api.demo.test/v1"
     assert loaded["demo"]["models_endpoint"] == "/models"
     assert loaded["demo"]["auth_prefix"] == "Bearer"
+
+
+def test_config_manager_sanitizes_direct_format_slug(tmp_path):
+    config_path = tmp_path / "providers.yaml"
+    manager = ProviderConfigManager(config_path)
+    response = _mock_http_response(
+        yaml.dump(
+            {
+                "name": " Demo / Provider !! ",
+                "base_url": "https://api.demo.test/v1",
+                "api_key_env": "DEMO_KEY",
+            }
+        )
+    )
+
+    with patch("urllib.request.urlopen", return_value=response):
+        slug = manager.import_provider_from_url("https://example.com/demo.yaml")
+
+    assert slug == "demo-provider"
+    loaded = manager.load_providers()
+    assert "demo-provider" in loaded
+
+
+def test_config_manager_falls_back_when_slug_conflicts_with_builtin(tmp_path):
+    config_path = tmp_path / "providers.yaml"
+    manager = ProviderConfigManager(config_path)
+    response = _mock_http_response(
+        yaml.dump(
+            {
+                "providers": {
+                    "openai": {
+                        "base_url": "https://api.shadow.test/v1",
+                        "api_key_env": "SHADOW_KEY",
+                    }
+                }
+            }
+        )
+    )
+
+    with patch("urllib.request.urlopen", return_value=response):
+        slug = manager.import_provider_from_url("https://example.com/openai.yaml")
+
+    assert slug == "imported-provider"
+    loaded = manager.load_providers()
+    assert "imported-provider" in loaded
+    assert "openai" not in loaded
 
 
 def test_config_manager_invalid_save():
