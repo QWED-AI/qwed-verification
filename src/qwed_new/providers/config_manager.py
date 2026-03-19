@@ -99,8 +99,8 @@ class ProviderConfigManager:
             from qwed_new.providers.registry import _get_dynamic_providers
             if hasattr(_get_dynamic_providers, "cache_clear"):
                 _get_dynamic_providers.cache_clear()
-        except ImportError:
-            pass
+        except ImportError as e:
+            logger.debug(f"Registry module unavailable; skipping cache invalidation: {e}")
         
     def import_provider_from_url(self, url: str) -> str:
         """
