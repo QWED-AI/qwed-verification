@@ -218,6 +218,9 @@ def test_registry_dynamic_provider_happy_path():
     meta = dynamic["yaml-do"]
     assert meta.default_model == "do-latest"
     assert meta.env_vars[0].default == "https://inference.do-ai.run/v1"
+    assert meta.env_vars[0].name == "CUSTOM_BASE_URL"
+    assert meta.env_vars[1].name == "CUSTOM_API_KEY"
+    assert meta.env_vars[2].name == "CUSTOM_MODEL"
     assert "DO_API_KEY" in meta.key_hint
 
 

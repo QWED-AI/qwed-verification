@@ -43,8 +43,17 @@ class ProviderConfigManager:
         try:
             with open(self.config_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
-                return data.get("providers", {}) if data else {}
-        except Exception as e:
+
+            if not data:
+                return {}
+
+            if not isinstance(data, dict):
+                logger.debug(f"Providers YAML root is {type(data).__name__}; expected dict")
+                return {}
+
+            providers = data.get("providers", {})
+            return providers if isinstance(providers, dict) else {}
+        except (OSError, yaml.YAMLError, UnicodeError) as e:
             logger.debug(f"Failed to load providers YAML: {type(e).__name__}")
             return {}
 
@@ -119,8 +128,10 @@ class ProviderConfigManager:
                 from qwed_new.providers.registry import PROVIDER_REGISTRY
                 if slug in PROVIDER_REGISTRY:
                     slug = "imported-provider"
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(
+                    f"Could not check builtin registry for slug collision: {type(e).__name__}"
+                )
 
             return slug
 
