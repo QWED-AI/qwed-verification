@@ -31,8 +31,8 @@ class OllamaProvider(LLMProvider):
         self.base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
         self.model = model or os.getenv("OLLAMA_MODEL", "llama3")
 
-        # Ollama doesn't require auth — use env var or empty token
-        ollama_key = os.getenv("OLLAMA_API_KEY", "")
+        # Ollama doesn't require auth — use env var or dummy token
+        ollama_key = os.getenv("OLLAMA_API_KEY") or "not-needed"
         self.client = OpenAI(
             base_url=self.base_url,
             api_key=ollama_key,

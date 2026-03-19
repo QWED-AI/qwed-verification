@@ -66,14 +66,14 @@ FAKE_TEST_KEY = "test-fixture-not-a-real-key-00000"
 class TestOllamaProvider:
     @patch("qwed_new.providers.ollama_provider.OpenAI")
     def test_init_no_key(self, mock_openai_cls):
-        """Ollama initializes with empty string api_key, not None."""
+        """Ollama initializes with 'not-needed' dummy string api_key, not None."""
         from qwed_new.providers.ollama_provider import OllamaProvider
         with patch.dict("os.environ", {}, clear=False):
             OllamaProvider()
-        # Verify OpenAI was called with empty string, not None
+        # Verify OpenAI was called with 'not-needed', not None or empty
         call_kwargs = mock_openai_cls.call_args
         assert call_kwargs is not None
-        assert call_kwargs.kwargs.get("api_key") == "" or call_kwargs[1].get("api_key") == ""
+        assert call_kwargs.kwargs.get("api_key") == "not-needed" or call_kwargs[1].get("api_key") == "not-needed"
 
     @patch("qwed_new.providers.ollama_provider.OpenAI")
     def test_init_with_key(self, mock_openai_cls):
