@@ -112,14 +112,48 @@ PROVIDER_REGISTRY: Dict[str, ProviderMeta] = {
 }
 
 
+def _get_dynamic_providers() -> Dict[str, ProviderMeta]:
+    """Load dynamic providers from Universal Provider Config YAML."""
+    dynamic_registry = {}
+    try:
+        from qwed_new.providers.config_manager import ProviderConfigManager
+        manager = ProviderConfigManager()
+        customs = manager.load_providers()
+        
+        for slug, config in customs.items():
+            name = slug.capitalize()
+            base_url = config.get("base_url", "")
+            api_key_env = config.get("api_key_env", "CUSTOM_API_KEY")
+            def_model = config.get("default_model", "gpt-4o-mini")
+            
+            p = ProviderMeta(
+                slug=f"yaml-{slug}",
+                name=f"{name} (Auto-Configured via YAML)",
+                auth_type=AuthType.ENDPOINT_KEY,
+                env_vars=[
+                    EnvVar("CUSTOM_BASE_URL", f"Base URL (default: {base_url})", default=base_url),
+                    EnvVar("CUSTOM_API_KEY", f"API Key for {name} (Maps to {api_key_env})"),
+                    EnvVar("CUSTOM_MODEL", _MODEL_DESC, required=False, default=def_model),
+                ],
+                key_hint=f"Mapped to {api_key_env}",
+                default_model=def_model,
+            )
+            dynamic_registry[f"yaml-{slug}"] = p
+    except Exception:
+        pass
+    return dynamic_registry
+
+
 def get_provider(slug: str) -> ProviderMeta:
     """Get provider metadata by slug. Raises KeyError if not found."""
-    if slug not in PROVIDER_REGISTRY:
-        valid = ", ".join(PROVIDER_REGISTRY.keys())
+    combined_registry = {**PROVIDER_REGISTRY, **_get_dynamic_providers()}
+    if slug not in combined_registry:
+        valid = ", ".join(combined_registry.keys())
         raise KeyError(f"Unknown provider '{slug}'. Valid: {valid}")
-    return PROVIDER_REGISTRY[slug]
+    return combined_registry[slug]
 
 
 def list_providers() -> List[ProviderMeta]:
     """Return all registered providers in display order."""
-    return list(PROVIDER_REGISTRY.values())
+    combined_registry = {**PROVIDER_REGISTRY, **_get_dynamic_providers()}
+    return list(combined_registry.values())
