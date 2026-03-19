@@ -30,9 +30,10 @@ def test_save_and_load_provider():
         assert config_path.exists()
         
         # Check permissions if supported
-        if hasattr(os, "stat") and hasattr(os, "chmod"):
+        if hasattr(os, "stat") and hasattr(os, "chmod") and hasattr(os, "O_NOFOLLOW"):
             st = os.stat(config_path)
-            # Depending on platform, mask might be different, but it should be written successfully
+            mode = st.st_mode & 0o777
+            assert mode == 0o600, f"Expected 0600 permissions, got {oct(mode)}"
         
         # Load
         loaded = manager.load_providers()
@@ -55,6 +56,7 @@ def test_import_provider_from_url():
         mock_response = MagicMock()
         mock_response.read.return_value = yaml.dump(mock_yaml).encode('utf-8')
         mock_response.__enter__.return_value = mock_response
+        mock_response.__exit__.return_value = False
         
         with patch('urllib.request.urlopen', return_value=mock_response):
             slug = manager.import_provider_from_url("http://fake-github.com/do.yaml")
@@ -70,12 +72,15 @@ def test_import_provider_from_url():
         
 def test_import_invalid_yaml():
     """Prevent execution of malformed YAML."""
-    manager = ProviderConfigManager()
-    
-    mock_response = MagicMock()
-    mock_response.read.return_value = b"::: invalid :: yaml\n"
-    mock_response.__enter__.return_value = mock_response
-    
-    with patch('urllib.request.urlopen', return_value=mock_response):
-        with pytest.raises(ValueError, match="Invalid YAML"):
-            manager.import_provider_from_url("http://fake")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_path = Path(tmpdir) / "providers.yaml"
+        manager = ProviderConfigManager(config_path)
+        
+        mock_response = MagicMock()
+        mock_response.read.return_value = b"::: invalid :: yaml\n"
+        mock_response.__enter__.return_value = mock_response
+        mock_response.__exit__.return_value = False
+        
+        with patch('urllib.request.urlopen', return_value=mock_response):
+            with pytest.raises(ValueError, match="Invalid YAML"):
+                manager.import_provider_from_url("http://fake")

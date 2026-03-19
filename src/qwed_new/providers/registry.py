@@ -8,6 +8,10 @@ Used by: CLI init wizard, key validator, .env.example generator.
 from dataclasses import dataclass
 from typing import List, Optional, Dict
 from enum import Enum
+import logging
+from functools import lru_cache
+
+logger = logging.getLogger("qwed.providers.registry")
 
 
 class AuthType(str, Enum):
@@ -112,6 +116,7 @@ PROVIDER_REGISTRY: Dict[str, ProviderMeta] = {
 }
 
 
+@lru_cache(maxsize=1)
 def _get_dynamic_providers() -> Dict[str, ProviderMeta]:
     """Load dynamic providers from Universal Provider Config YAML."""
     dynamic_registry = {}
@@ -139,8 +144,8 @@ def _get_dynamic_providers() -> Dict[str, ProviderMeta]:
                 default_model=def_model,
             )
             dynamic_registry[f"yaml-{slug}"] = p
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to load dynamic providers: {e}")
     return dynamic_registry
 
 

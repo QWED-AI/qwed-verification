@@ -70,10 +70,14 @@ class ProviderConfigManager:
             except Exception as e:
                 logger.debug(f"Failed to write providers config: {type(e).__name__}")
                 try:
-                    if Path(tmp_path).exists():
-                        os.unlink(tmp_path)
+                    os.close(fd)
                 except OSError:
                     pass
+                try:
+                    if Path(tmp_path).exists():
+                        os.unlink(tmp_path)
+                except OSError as cleanup_err:
+                    logger.debug(f"Non-fatal error removing temp file: {cleanup_err}")
         else:
             # Fallback for Windows
             with open(self.config_path, "w", encoding="utf-8") as f:
@@ -94,6 +98,11 @@ class ProviderConfigManager:
         Download and validate a community provider YAML.
         Returns the imported provider slug.
         """
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(f"Unsupported URL scheme '{parsed.scheme}'. Only http/https allowed.")
+            
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'QWED-CLI'})
             with urllib.request.urlopen(req, timeout=10) as response:
@@ -136,6 +145,6 @@ class ProviderConfigManager:
             return slug
             
         except urllib.error.URLError as e:
-            raise ValueError(f"Failed to fetch URL: {type(e).__name__}")
-        except yaml.YAMLError:
-            raise ValueError("Invalid YAML syntax in community file")
+            raise ValueError(f"Failed to fetch URL: {type(e).__name__}") from e
+        except yaml.YAMLError as e:
+            raise ValueError("Invalid YAML syntax in community file") from e
