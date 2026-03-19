@@ -71,13 +71,14 @@ class ProviderConfigManager:
                 logger.debug(f"Failed to write providers config: {type(e).__name__}")
                 try:
                     os.close(fd)
-                except OSError:
-                    pass
+                except OSError as close_err:
+                    logger.debug(f"Non-fatal error closing temp file descriptor: {close_err}")
                 try:
                     if Path(tmp_path).exists():
                         os.unlink(tmp_path)
                 except OSError as cleanup_err:
                     logger.debug(f"Non-fatal error removing temp file: {cleanup_err}")
+                raise
         else:
             # Fallback for Windows
             with open(self.config_path, "w", encoding="utf-8") as f:
@@ -92,6 +93,14 @@ class ProviderConfigManager:
         data["providers"][slug] = config
         
         self._write_secure(data)
+        
+        # Invalidate the runtime registry cache so long-running engines see the new config
+        try:
+            from qwed_new.providers.registry import _get_dynamic_providers
+            if hasattr(_get_dynamic_providers, "cache_clear"):
+                _get_dynamic_providers.cache_clear()
+        except ImportError:
+            pass
         
     def import_provider_from_url(self, url: str) -> str:
         """
