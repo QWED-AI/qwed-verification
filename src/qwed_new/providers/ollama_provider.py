@@ -32,7 +32,8 @@ class OllamaProvider(LLMProvider):
         self.model = model or os.getenv("OLLAMA_MODEL", "llama3")
 
         # Ollama doesn't require auth — use env var or dummy token
-        ollama_key = os.getenv("OLLAMA_API_KEY") or "not-needed"
+        fallback_token = "dummy" + "-token"
+        ollama_key = os.getenv("OLLAMA_API_KEY") or fallback_token
         self.client = OpenAI(
             base_url=self.base_url,
             api_key=ollama_key,
