@@ -71,20 +71,20 @@ class CodeVerifier:
         {
             "pattern": (
                 r"subprocess\.(?:run|Popen|call|check_output)\s*\([^)]*"
-                r"(?:curl|wget)[^)]*(?:\||;|&&)[^)]*(?:bash|sh)"
-            ),
-            "issue_type": "remote_code_execution",
-            "description": "Suspicious curl/wget pipe-to-shell pattern detected (heuristic).",
-            "recommendation": "Never pipe remote content directly into a shell.",
-        },
-        {
-            "pattern": (
-                r"subprocess\.(?:run|Popen|call|check_output)\s*\([^)]*"
                 r"(?:curl|wget)[^)]*(?:\||;|&&)[^)]*(?:bash|sh)[^)]*shell\s*=\s*True"
             ),
             "issue_type": "remote_code_execution",
             "description": "Remote code execution via shell=True with curl/wget pipe to shell.",
             "recommendation": "Never execute remote pipe commands with shell=True.",
+        },
+        {
+            "pattern": (
+                r"subprocess\.(?:run|Popen|call|check_output)\s*\([^)]*"
+                r"(?:curl|wget)[^)]*(?:\||;|&&)[^)]*(?:bash|sh)"
+            ),
+            "issue_type": "remote_code_execution",
+            "description": "Suspicious curl/wget pipe-to-shell pattern detected (heuristic).",
+            "recommendation": "Never pipe remote content directly into a shell.",
         },
     )
     
@@ -395,7 +395,6 @@ class CodeVerifier:
                 if any(
                     i.issue_type == rule["issue_type"]
                     and i.line_number == line_num
-                    and i.description == rule["description"]
                     for i in issues
                 ):
                     continue

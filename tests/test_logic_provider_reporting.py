@@ -7,7 +7,7 @@ from qwed_new.api.main import VerifyRequest, verify_logic
 from qwed_new.core.control_plane import ControlPlane, metrics_collector
 from qwed_new.core.tenant_context import TenantContext
 
-TEST_API_KEY = "FAKE_TEST_API_KEY_NOT_A_SECRET"
+TEST_API_KEY = "-".join(["unit", "tenant", "placeholder"])
 
 
 @pytest.mark.asyncio

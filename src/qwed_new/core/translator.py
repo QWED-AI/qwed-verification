@@ -38,6 +38,8 @@ class TranslationLayer:
             ProviderType.ANTHROPIC.value: AnthropicProvider,
             ProviderType.CLAUDE_OPUS.value: ClaudeOpusProvider,
             ProviderType.AUTO.value: AutoShiftProvider,
+            # Gemini support is currently routed through auto-shift until a dedicated provider is added.
+            ProviderType.GEMINI.value: AutoShiftProvider,
             ProviderType.OLLAMA.value: OllamaProvider,
         }
         # Default fallback
@@ -85,22 +87,22 @@ class TranslationLayer:
         expr_lower = task.expression.lower()
         for keyword in dangerous_keywords:
             if keyword in expr_lower:
-                raise SecurityError(f"Code execution attempt detected in expression: {task.expression}")
+                raise SecurityError("Expression rejected by safety validator")
         
         # 2. Validate expression contains only safe characters
         import re
         # Allow: numbers, operators, parentheses, decimals, e/pi, common math functions
         safe_pattern = r'^[0-9+\-*/().epi \ssqrtsincostandlogexpabsln]+$'
         if not re.match(safe_pattern, task.expression.replace(' ', ''), re.IGNORECASE):
-            raise ValueError(f"Expression contains unsafe characters: {task.expression}")
+            raise SecurityError("Expression rejected by safety validator")
         
         # 3. Check for excessive length (possible DoS)
         if len(task.expression) > 500:
-            raise ValueError(f"Expression too long ({len(task.expression)} chars, max 500)")
+            raise SecurityError("Expression rejected by safety validator")
         
         # 4. Validate confidence is in valid range
         if not (0.0 <= task.confidence <= 1.0):
-            raise ValueError(f"Invalid confidence score: {task.confidence}")
+            raise SecurityError("Invalid confidence value")
 
     def translate(self, user_query: str, provider: str | None = None) -> MathVerificationTask:
         """

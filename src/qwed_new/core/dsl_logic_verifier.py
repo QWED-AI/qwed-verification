@@ -295,96 +295,120 @@ class DSLLogicVerifier:
         """Convert Python booleans to DSL bool literals."""
         return "True" if value else "False"
 
-    def _ast_to_dsl(self, node: ast.AST) -> str:
-        """Convert Python AST node to QWED DSL."""
-        if isinstance(node, ast.BoolOp):
-            op = "AND" if isinstance(node.op, ast.And) else "OR"
-            parts = [self._ast_to_dsl(v) for v in node.values]
-            if len(parts) == 1:
-                return parts[0]
-            return f"({op} {' '.join(parts)})"
+    def _join_dsl(self, operator: str, parts: List[str]) -> str:
+        """Join one or more DSL terms with a logical operator."""
+        if len(parts) == 1:
+            return parts[0]
+        return f"({operator} {' '.join(parts)})"
 
-        if isinstance(node, ast.UnaryOp):
-            if isinstance(node.op, ast.Not):
-                return f"(NOT {self._ast_to_dsl(node.operand)})"
-            if isinstance(node.op, ast.USub):
-                if isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, int):
-                    return str(-node.operand.value)
-                if isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, float):
-                    raise ValueError(
-                        "Floating-point literals are not allowed in verification logic; use exact integer input."
-                    )
-                return f"(MINUS 0 {self._ast_to_dsl(node.operand)})"
-            raise ValueError(f"Unsupported unary operator: {type(node.op).__name__}")
+    def _boolop_to_dsl(self, node: ast.BoolOp) -> str:
+        """Convert boolean operations to DSL."""
+        operator = "AND" if isinstance(node.op, ast.And) else "OR"
+        parts = [self._ast_to_dsl(value) for value in node.values]
+        return self._join_dsl(operator, parts)
 
-        if isinstance(node, ast.BinOp):
-            op_map = {
-                ast.Add: "PLUS",
-                ast.Sub: "MINUS",
-                ast.Mult: "MUL",
-                ast.Div: "DIV",
-                ast.Mod: "MOD",
-                ast.Pow: "POW",
-            }
-            op = op_map.get(type(node.op))
-            if not op:
-                raise ValueError(f"Unsupported arithmetic operator: {type(node.op).__name__}")
-            return f"({op} {self._ast_to_dsl(node.left)} {self._ast_to_dsl(node.right)})"
-
-        if isinstance(node, ast.Compare):
-            cmp_map = {
-                ast.Eq: "EQ",
-                ast.NotEq: "NE",
-                ast.Gt: "GT",
-                ast.Lt: "LT",
-                ast.GtE: "GE",
-                ast.LtE: "LE",
-            }
-            if len(node.ops) != len(node.comparators):
-                raise ValueError("Invalid comparison expression")
-            comparisons = []
-            left = node.left
-            for op_node, right in zip(node.ops, node.comparators, strict=False):
-                op = cmp_map.get(type(op_node))
-                if not op:
-                    raise ValueError(f"Unsupported comparison operator: {type(op_node).__name__}")
-                comparisons.append(f"({op} {self._ast_to_dsl(left)} {self._ast_to_dsl(right)})")
-                left = right
-            if len(comparisons) == 1:
-                return comparisons[0]
-            return f"(AND {' '.join(comparisons)})"
-
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            func = node.func.id
-            if func in {"And", "Or"}:
-                op = "AND" if func == "And" else "OR"
-                args = [self._ast_to_dsl(arg) for arg in node.args]
-                if len(args) == 1:
-                    return args[0]
-                return f"({op} {' '.join(args)})"
-            if func == "Not":
-                if len(node.args) != 1:
-                    raise ValueError("Not(...) requires one argument")
-                return f"(NOT {self._ast_to_dsl(node.args[0])})"
-
-        if isinstance(node, ast.Name):
-            return node.id
-
-        if isinstance(node, ast.Constant):
-            value = node.value
-            if isinstance(value, bool):
-                return self._bool_literal(value)
-            if isinstance(value, int):
-                return str(value)
-            if isinstance(value, float):
+    def _unary_to_dsl(self, node: ast.UnaryOp) -> str:
+        """Convert unary operations to DSL."""
+        if isinstance(node.op, ast.Not):
+            return f"(NOT {self._ast_to_dsl(node.operand)})"
+        if isinstance(node.op, ast.USub):
+            if isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, int):
+                return str(-node.operand.value)
+            if isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, float):
                 raise ValueError(
                     "Floating-point literals are not allowed in verification logic; use exact integer input."
                 )
-            if isinstance(value, str):
-                token = re.sub(r"\W+", "_", value).strip("_")
-                return token or "value"
-            return str(value)
+            return f"(MINUS 0 {self._ast_to_dsl(node.operand)})"
+        raise ValueError(f"Unsupported unary operator: {type(node.op).__name__}")
 
+    def _binop_to_dsl(self, node: ast.BinOp) -> str:
+        """Convert arithmetic binary operations to DSL."""
+        op_map = {
+            ast.Add: "PLUS",
+            ast.Sub: "MINUS",
+            ast.Mult: "MUL",
+            ast.Div: "DIV",
+            ast.Mod: "MOD",
+            ast.Pow: "POW",
+        }
+        op = op_map.get(type(node.op))
+        if not op:
+            raise ValueError(f"Unsupported arithmetic operator: {type(node.op).__name__}")
+        return f"({op} {self._ast_to_dsl(node.left)} {self._ast_to_dsl(node.right)})"
+
+    def _compare_to_dsl(self, node: ast.Compare) -> str:
+        """Convert comparison expressions (including chains) to DSL."""
+        cmp_map = {
+            ast.Eq: "EQ",
+            ast.NotEq: "NE",
+            ast.Gt: "GT",
+            ast.Lt: "LT",
+            ast.GtE: "GE",
+            ast.LtE: "LE",
+        }
+        if len(node.ops) != len(node.comparators):
+            raise ValueError("Invalid comparison expression")
+
+        comparisons: List[str] = []
+        left = node.left
+        for op_node, right in zip(node.ops, node.comparators, strict=False):
+            op = cmp_map.get(type(op_node))
+            if not op:
+                raise ValueError(f"Unsupported comparison operator: {type(op_node).__name__}")
+            comparisons.append(f"({op} {self._ast_to_dsl(left)} {self._ast_to_dsl(right)})")
+            left = right
+        return self._join_dsl("AND", comparisons)
+
+    def _call_to_dsl(self, node: ast.Call) -> str:
+        """Convert supported helper-call syntax to DSL."""
+        if not isinstance(node.func, ast.Name):
+            raise ValueError(f"Unsupported constraint node: {type(node).__name__}")
+
+        func = node.func.id
+        if func in {"And", "Or"}:
+            op = "AND" if func == "And" else "OR"
+            args = [self._ast_to_dsl(arg) for arg in node.args]
+            return self._join_dsl(op, args)
+        if func == "Not":
+            if len(node.args) != 1:
+                raise ValueError("Not(...) requires one argument")
+            return f"(NOT {self._ast_to_dsl(node.args[0])})"
+        raise ValueError(f"Unsupported constraint node: {type(node).__name__}")
+
+    def _constant_to_dsl(self, node: ast.Constant) -> str:
+        """Convert constant literals to DSL-safe tokens."""
+        value = node.value
+        if isinstance(value, bool):
+            return self._bool_literal(value)
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, float):
+            raise ValueError(
+                "Floating-point literals are not allowed in verification logic; use exact integer input."
+            )
+        if isinstance(value, str):
+            token = re.sub(r"\W+", "_", value).strip("_")
+            return token or "value"
+        return str(value)
+
+    def _name_to_dsl(self, node: ast.Name) -> str:
+        """Convert identifier nodes to DSL variable names."""
+        return node.id
+
+    def _ast_to_dsl(self, node: ast.AST) -> str:
+        """Convert Python AST node to QWED DSL."""
+        handlers = (
+            (ast.BoolOp, self._boolop_to_dsl),
+            (ast.UnaryOp, self._unary_to_dsl),
+            (ast.BinOp, self._binop_to_dsl),
+            (ast.Compare, self._compare_to_dsl),
+            (ast.Call, self._call_to_dsl),
+            (ast.Name, self._name_to_dsl),
+            (ast.Constant, self._constant_to_dsl),
+        )
+        for node_type, handler in handlers:
+            if isinstance(node, node_type):
+                return handler(node)
         raise ValueError(f"Unsupported constraint node: {type(node).__name__}")
 
     def _constraint_to_dsl(self, constraint: str, var_types: Optional[Dict[str, str]] = None) -> str:

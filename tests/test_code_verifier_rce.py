@@ -20,6 +20,7 @@ def test_subprocess_shell_true_curl_pipe_detected():
 
     assert result["critical_count"] >= 1
     assert any(issue["type"] == "remote_code_execution" for issue in result["issues"])
+    assert sum(1 for issue in result["issues"] if issue["type"] == "remote_code_execution") == 1
 
 
 def test_subprocess_multiline_shell_true_curl_pipe_detected():
