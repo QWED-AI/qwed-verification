@@ -7,7 +7,6 @@ import os
 import logging
 
 from qwed_new.core.security import redact_pii
-from qwed_new.config import settings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -142,10 +141,16 @@ async def verify_logic(
         raise
     except Exception as e:
         logger.error(f"Logic verification error: {redact_pii(str(e))}", exc_info=False)
+        response_result = locals().get("result")
+        provider_used = (
+            response_result.get("provider_used")
+            if isinstance(response_result, dict) and response_result.get("provider_used")
+            else control_plane.router.route(request.query, request.provider)
+        )
         return {
             "status": "ERROR",
             "error": "Internal verification error",
-            "provider_used": request.provider or str(getattr(settings.ACTIVE_PROVIDER, "value", settings.ACTIVE_PROVIDER))
+            "provider_used": provider_used,
         }
 
 @app.post("/verify/stats")

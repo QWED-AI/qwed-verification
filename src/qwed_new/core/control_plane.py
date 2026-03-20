@@ -172,6 +172,7 @@ class ControlPlane:
 
         # 2. Routing
         provider = self.router.route(query, preferred_provider)
+        last_known_provider = provider
 
         # 3. DSL Logic Pipeline
         try:
@@ -181,13 +182,15 @@ class ControlPlane:
                 query=query,
                 provider=provider
             )
+            resolved_provider = result.provider_used or provider
+            last_known_provider = resolved_provider
             
             response = {
                 "status": result.status,
                 "model": result.model,
                 "dsl_code": result.dsl_code, # Expose DSL for transparency
                 "error": result.error,
-                "provider_used": result.provider_used or provider,
+                "provider_used": resolved_provider,
                 "latency_ms": (time.time() - start_time) * 1000
             }
             
@@ -203,7 +206,7 @@ class ControlPlane:
                     organization_id=organization_id,
                     status=response["status"],
                     latency_ms=response["latency_ms"],
-                    provider=provider
+                    provider=resolved_provider
                 )
             
             return response
@@ -217,7 +220,7 @@ class ControlPlane:
             return {
                 "status": "ERROR",
                 "error": "Internal pipeline error",
-                "provider_used": provider,
+                "provider_used": last_known_provider,
                 "latency_ms": (time.time() - start_time) * 1000
             }
 
