@@ -444,39 +444,51 @@ class CodeVerifier:
 
         issues: List[SecurityIssue] = []
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not self._is_subprocess_call(node):
+            if not isinstance(node, ast.Call):
                 continue
 
-            command_text = self._extract_subprocess_command_text(node)
-            if not command_text:
+            if not self._is_subprocess_call(node):
                 continue
 
-            command_lower = command_text.lower()
-            has_downloader = "curl" in command_lower or "wget" in command_lower
-            has_shell_target = "bash" in command_lower or "sh" in command_lower
-            has_chain_op = "|" in command_text or ";" in command_text or "&&" in command_text
-
-            if not (has_downloader and has_shell_target and has_chain_op):
-                continue
-
-            shell_true = self._call_has_shell_true(node)
-            issues.append(SecurityIssue(
-                severity="CRITICAL",
-                issue_type="remote_code_execution",
-                pattern="subprocess + curl|wget pipe to shell",
-                description=(
-                    "Remote code execution via shell=True with curl/wget pipe to shell."
-                    if shell_true
-                    else "Suspicious curl/wget pipe-to-shell pattern detected (heuristic)."
-                ),
-                line_number=getattr(node, "lineno", None),
-                recommendation=(
-                    "Never execute remote pipe commands with shell=True."
-                    if shell_true
-                    else "Never pipe remote content directly into a shell."
-                ),
-            ))
+            issue = self._build_subprocess_pipe_issue(node)
+            if issue:
+                issues.append(issue)
         return issues
+
+    def _build_subprocess_pipe_issue(self, node: ast.Call) -> SecurityIssue | None:
+        """Build a subprocess pipe-to-shell issue when the command payload is dangerous."""
+        command_text = self._extract_subprocess_command_text(node)
+        if not self._is_pipe_to_shell_payload(command_text):
+            return None
+
+        shell_true = self._call_has_shell_true(node)
+        return SecurityIssue(
+            severity="CRITICAL",
+            issue_type="remote_code_execution",
+            pattern="subprocess + curl|wget pipe to shell",
+            description=(
+                "Remote code execution via shell=True with curl/wget pipe to shell."
+                if shell_true
+                else "Suspicious curl/wget pipe-to-shell pattern detected (heuristic)."
+            ),
+            line_number=getattr(node, "lineno", None),
+            recommendation=(
+                "Never execute remote pipe commands with shell=True."
+                if shell_true
+                else "Never pipe remote content directly into a shell."
+            ),
+        )
+
+    def _is_pipe_to_shell_payload(self, command_text: str) -> bool:
+        """Check whether command text resembles curl/wget pipe-to-shell execution."""
+        if not command_text:
+            return False
+
+        command_lower = command_text.lower()
+        has_downloader = "curl" in command_lower or "wget" in command_lower
+        has_shell_target = "bash" in command_lower or "sh" in command_lower
+        has_chain_op = "|" in command_text or ";" in command_text or "&&" in command_text
+        return has_downloader and has_shell_target and has_chain_op
 
     def _is_subprocess_call(self, node: ast.Call) -> bool:
         """Return True when call is subprocess.run/call/Popen/check_output."""
