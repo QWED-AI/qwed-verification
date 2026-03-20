@@ -1,3 +1,5 @@
+from typing import Any
+
 from qwed_new.config import ProviderType
 from qwed_new.core.router import Router
 from qwed_new.core.schemas import MathVerificationTask
@@ -13,10 +15,10 @@ class _DummyCompatProvider:
             confidence=1.0,
         )
 
-    def translate_logic(self, user_query: str):
+    def translate_logic(self, user_query: str) -> dict[str, str]:
         return {"logic": user_query}
 
-    def refine_logic(self, user_query: str, previous_error: str):
+    def refine_logic(self, user_query: str, previous_error: str) -> dict[str, str]:
         return {"refined": user_query, "error": previous_error}
 
     def translate_stats(self, query: str, columns: list[str]) -> str:
@@ -27,6 +29,11 @@ class _DummyCompatProvider:
 
     def verify_image(self, image_bytes: bytes, claim: str) -> dict:
         raise NotImplementedError
+
+
+class _DummyDirectProvider(_DummyCompatProvider):
+    def verify_fact(self, claim: str, context: str) -> dict[str, Any]:
+        return {"claim": claim, "context": context}
 
 
 def test_provider_enum_includes_openai_compat():
@@ -52,13 +59,15 @@ def test_translation_layer_normalize_none_returns_none(monkeypatch):
     assert layer._normalize_provider_key(None) is None
 
 
-def test_translation_layer_openai_alias_uses_compat_provider(monkeypatch):
-    monkeypatch.setattr("qwed_new.core.translator.OpenAICompatProvider", _DummyCompatProvider)
+def test_translation_layer_openai_uses_direct_provider(monkeypatch):
+    monkeypatch.setattr("qwed_new.core.translator.OpenAIDirectProvider", _DummyDirectProvider)
     monkeypatch.setattr("qwed_new.core.translator.settings.ACTIVE_PROVIDER", "openai")
 
     layer = TranslationLayer()
     task = layer.translate("2+2", provider="openai")
+
     assert task.claimed_answer == 4.0
+    assert layer.last_resolved_provider == "openai"
 
 
 def test_translation_layer_normalizes_openai_compatible_alias(monkeypatch):

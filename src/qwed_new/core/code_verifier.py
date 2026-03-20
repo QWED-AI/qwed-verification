@@ -376,18 +376,6 @@ class CodeVerifier:
                         line_number=line_num,
                         recommendation="Verify input source is trusted"
                     ))
-
-            # Explicit CRITICAL patterns for curl/wget pipe-to-shell via subprocess.
-            for rule in self.PYTHON_CRITICAL_REGEX:
-                if re.search(rule["pattern"], line, re.IGNORECASE):
-                    issues.append(SecurityIssue(
-                        severity="CRITICAL",
-                        issue_type=rule["issue_type"],
-                        pattern="subprocess + curl|wget pipe to shell",
-                        description=rule["description"],
-                        line_number=line_num,
-                        recommendation=rule["recommendation"],
-                    ))
             
             # Dangerous attributes
             for attr in self.PYTHON_DANGEROUS_ATTRS:
@@ -399,6 +387,27 @@ class CodeVerifier:
                         description=f"Dangerous attribute access: {attr}",
                         line_number=line_num
                     ))
+
+        # Critical subprocess regex checks over full code to catch multi-line invocations.
+        for rule in self.PYTHON_CRITICAL_REGEX:
+            for match in re.finditer(rule["pattern"], code, re.IGNORECASE | re.DOTALL):
+                line_num = code[:match.start()].count("\n") + 1
+                if any(
+                    i.issue_type == rule["issue_type"]
+                    and i.line_number == line_num
+                    and i.description == rule["description"]
+                    for i in issues
+                ):
+                    continue
+
+                issues.append(SecurityIssue(
+                    severity="CRITICAL",
+                    issue_type=rule["issue_type"],
+                    pattern="subprocess + curl|wget pipe to shell",
+                    description=rule["description"],
+                    line_number=line_num,
+                    recommendation=rule["recommendation"],
+                ))
         
         # Weak crypto in password context
         code_lower = code.lower()

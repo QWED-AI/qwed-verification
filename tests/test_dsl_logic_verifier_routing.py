@@ -1,4 +1,5 @@
 import ast
+from typing import Optional
 
 import pytest
 
@@ -7,12 +8,12 @@ from qwed_new.core.schemas import LogicVerificationTask
 
 
 class _StubTranslator:
-    def __init__(self, task: LogicVerificationTask, resolved_provider: str | None = None):
+    def __init__(self, task: LogicVerificationTask, resolved_provider: Optional[str] = None):
         self.task = task
         self.calls = []
         self.last_resolved_provider = resolved_provider
 
-    def translate_logic(self, user_query: str, provider: str = None):
+    def translate_logic(self, user_query: str, provider: Optional[str] = None):
         self.calls.append((user_query, provider))
         if self.last_resolved_provider is None:
             self.last_resolved_provider = provider
@@ -136,7 +137,7 @@ def test_verify_from_natural_language_sanitizes_translation_error(monkeypatch):
     class _FailingTranslator:
         last_resolved_provider = "openai_compat"
 
-        def translate_logic(self, user_query: str, provider: str = None):
+        def translate_logic(self, user_query: str, provider: Optional[str] = None):
             raise RuntimeError("sensitive upstream details")
 
     monkeypatch.setattr("qwed_new.core.dsl_logic_verifier.TranslationLayer", lambda: _FailingTranslator())

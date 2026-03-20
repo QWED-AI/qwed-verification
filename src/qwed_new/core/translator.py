@@ -12,7 +12,9 @@ from qwed_new.providers.azure_openai import AzureOpenAIProvider
 from qwed_new.providers.anthropic import AnthropicProvider
 from qwed_new.providers.claude_opus import ClaudeOpusProvider
 from qwed_new.providers.auto_shift import AutoShiftProvider
+from qwed_new.providers.openai_direct import OpenAIDirectProvider
 from qwed_new.providers.openai_compat import OpenAICompatProvider
+from qwed_new.providers.ollama_provider import OllamaProvider
 
 
 class SecurityError(ValueError):
@@ -29,12 +31,14 @@ class TranslationLayer:
         # Lazy loading: providers are instantiated on first use
         self._providers = {}
         self._provider_classes = {
-            ProviderType.OPENAI.value: OpenAICompatProvider,
+            ProviderType.OPENAI.value: OpenAIDirectProvider,
+            ProviderType.OPENAI_DIRECT.value: OpenAIDirectProvider,
             ProviderType.OPENAI_COMPAT.value: OpenAICompatProvider,
             ProviderType.AZURE_OPENAI.value: AzureOpenAIProvider,
             ProviderType.ANTHROPIC.value: AnthropicProvider,
             ProviderType.CLAUDE_OPUS.value: ClaudeOpusProvider,
-            ProviderType.AUTO.value: AutoShiftProvider
+            ProviderType.AUTO.value: AutoShiftProvider,
+            ProviderType.OLLAMA.value: OllamaProvider,
         }
         # Default fallback
         configured_default = self._normalize_provider_key(
@@ -51,6 +55,7 @@ class TranslationLayer:
         normalized = normalized.replace("-", "_").replace(" ", "_")
         aliases = {
             "openai_compatible": ProviderType.OPENAI_COMPAT.value,
+            "openai_direct": ProviderType.OPENAI_DIRECT.value,
             "azure_openai": ProviderType.AZURE_OPENAI.value,
         }
         return aliases.get(normalized, normalized)

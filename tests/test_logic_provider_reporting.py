@@ -7,10 +7,12 @@ from qwed_new.api.main import VerifyRequest, verify_logic
 from qwed_new.core.control_plane import ControlPlane, metrics_collector
 from qwed_new.core.tenant_context import TenantContext
 
+TEST_API_KEY = "FAKE_TEST_API_KEY_NOT_A_SECRET"
+
 
 @pytest.mark.asyncio
 async def test_verify_logic_error_uses_routed_provider(monkeypatch):
-    tenant = TenantContext(organization_id=1, organization_name="demo", tier="free", api_key="test-key")
+    tenant = TenantContext(organization_id=1, organization_name="demo", tier="free", api_key=TEST_API_KEY)
     session = MagicMock()
 
     monkeypatch.setattr("qwed_new.api.main.check_rate_limit", lambda _: None)
@@ -83,10 +85,13 @@ async def test_control_plane_logic_exception_keeps_last_known_provider(monkeypat
     monkeypatch.setattr(cp.security_gateway, "detect_advanced_injection", lambda _: (True, ""))
     monkeypatch.setattr(cp.policy, "check_policy", lambda _query, organization_id=None: (True, ""))
     monkeypatch.setattr(cp.router, "route", lambda _query, preferred_provider=None: "openai_compat")
+    def _raise_runtime_error(query, provider):
+        raise RuntimeError("boom")
+
     monkeypatch.setattr(
         cp.logic_verifier,
         "verify_from_natural_language",
-        lambda query, provider: (_ for _ in ()).throw(RuntimeError("boom")),
+        _raise_runtime_error,
     )
 
     result = await cp.process_logic_query("x > 5", organization_id=42)
