@@ -21,6 +21,9 @@ class SecurityError(ValueError):
     """Raised when LLM output violates safety checks."""
 
 
+SAFETY_VALIDATOR_REJECTION = "Expression rejected by safety validator"
+
+
 class TranslationLayer:
     """
     The main entry point for translation.
@@ -70,10 +73,11 @@ class TranslationLayer:
             # Fallback to default if key is invalid/unknown.
             key = self.default_provider
         
+        self.last_resolved_provider = key
+
         # Lazy instantiation: only create provider when first requested
         if key not in self._providers:
             self._providers[key] = self._provider_classes[key]()
-        self.last_resolved_provider = key
         
         return self._providers[key]
     
@@ -87,18 +91,18 @@ class TranslationLayer:
         expr_lower = task.expression.lower()
         for keyword in dangerous_keywords:
             if keyword in expr_lower:
-                raise SecurityError("Expression rejected by safety validator")
+                raise SecurityError(SAFETY_VALIDATOR_REJECTION)
         
         # 2. Validate expression contains only safe characters
         import re
         # Allow: numbers, operators, parentheses, decimals, e/pi, common math functions
         safe_pattern = r'^[0-9+\-*/().epi \ssqrtsincostandlogexpabsln]+$'
         if not re.match(safe_pattern, task.expression.replace(' ', ''), re.IGNORECASE):
-            raise SecurityError("Expression rejected by safety validator")
+            raise SecurityError(SAFETY_VALIDATOR_REJECTION)
         
         # 3. Check for excessive length (possible DoS)
         if len(task.expression) > 500:
-            raise SecurityError("Expression rejected by safety validator")
+            raise SecurityError(SAFETY_VALIDATOR_REJECTION)
         
         # 4. Validate confidence is in valid range
         if not (0.0 <= task.confidence <= 1.0):

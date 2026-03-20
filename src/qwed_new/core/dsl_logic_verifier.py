@@ -218,7 +218,7 @@ class DSLLogicVerifier:
                     constraints.extend(self._extract_constraints_from_ast(operand))
             
             # Arithmetic (just describe)
-            elif op in ("PLUS", "MINUS", "MUL", "MULT", "DIV"):
+            elif op in ("PLUS", "MINUS", "MUL", "MULT", "DIV", "MOD", "POW"):
                 constraints.append("Arithmetic expression constraint")
         
         return constraints
@@ -228,8 +228,16 @@ class DSLLogicVerifier:
         if isinstance(operand, tuple):
             # Nested expression
             op = operand[0]
-            if op in ("PLUS", "MINUS", "MUL", "MULT", "DIV"):
-                op_symbols = {"PLUS": "+", "MINUS": "-", "MUL": "*", "MULT": "*", "DIV": "/"}
+            if op in ("PLUS", "MINUS", "MUL", "MULT", "DIV", "MOD", "POW"):
+                op_symbols = {
+                    "PLUS": "+",
+                    "MINUS": "-",
+                    "MUL": "*",
+                    "MULT": "*",
+                    "DIV": "/",
+                    "MOD": "%",
+                    "POW": "**",
+                }
                 if len(operand) >= 3:
                     left = self._format_operand(operand[1])
                     right = self._format_operand(operand[2])
@@ -435,13 +443,13 @@ class DSLLogicVerifier:
 
         # Normalize common natural-language boolean phrases.
         text = re.sub(
-            r"\b([A-Za-z_]\w*)\s+is\s+not\s+required\b",
+            r"\b([a-z_]\w*)\s+is\s+not\s+required\b",
             _replace_not_required,
             text,
             flags=re.IGNORECASE,
         )
         text = re.sub(
-            r"\b([A-Za-z_]\w*)\s+is\s+required\b",
+            r"\b([a-z_]\w*)\s+is\s+required\b",
             _replace_required,
             text,
             flags=re.IGNORECASE,
@@ -507,12 +515,18 @@ class DSLLogicVerifier:
                     provider_used=resolved_provider,
                 )
         except ValueError as e:
+            resolved_provider = self._provider_label(
+                getattr(translator, "last_resolved_provider", None) or resolved_provider
+            )
             return DSLVerificationResult(
                 status="ERROR",
                 error=str(e) if str(e).startswith("Unsupported logic goal:") else "LLM translation failed",
                 provider_used=resolved_provider,
             )
         except Exception:
+            resolved_provider = self._provider_label(
+                getattr(translator, "last_resolved_provider", None) or resolved_provider
+            )
             return DSLVerificationResult(
                 status="ERROR",
                 error="LLM translation failed",
