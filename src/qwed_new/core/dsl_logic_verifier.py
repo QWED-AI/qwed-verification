@@ -5,13 +5,18 @@ This module provides a new logic verifier that uses the QWED-DSL
 for secure, validated constraint parsing.
 """
 
+import ast
+import logging
+import re
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 
 from z3 import Solver, sat, unsat
 
 from qwed_new.core.dsl import parse_and_validate, compile_to_z3
-from qwed_new.core.schemas import LogicResult
+from qwed_new.core.translator import TranslationLayer
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -23,6 +28,7 @@ class DSLVerificationResult:
     parsed_ast: Optional[Any] = None
     error: Optional[str] = None
     rejection_reason: Optional[str] = None  # Human-readable explanation for UNSAT
+    provider_used: Optional[str] = None
 
 
 class DSLLogicVerifier:
@@ -192,8 +198,18 @@ class DSLLogicVerifier:
             op = ast[0]
             
             # Comparison operators
-            if op in ("GT", "LT", "GE", "LE", "EQ", "NE"):
-                op_symbols = {"GT": ">", "LT": "<", "GE": ">=", "LE": "<=", "EQ": "==", "NE": "!="}
+            if op in ("GT", "LT", "GE", "LE", "GTE", "LTE", "EQ", "NE", "NEQ"):
+                op_symbols = {
+                    "GT": ">",
+                    "LT": "<",
+                    "GE": ">=",
+                    "LE": "<=",
+                    "GTE": ">=",
+                    "LTE": "<=",
+                    "EQ": "==",
+                    "NE": "!=",
+                    "NEQ": "!=",
+                }
                 if len(ast) >= 3:
                     left = self._format_operand(ast[1])
                     right = self._format_operand(ast[2])
@@ -205,8 +221,8 @@ class DSLLogicVerifier:
                     constraints.extend(self._extract_constraints_from_ast(operand))
             
             # Arithmetic (just describe)
-            elif op in ("PLUS", "MINUS", "MUL", "DIV"):
-                constraints.append(f"Arithmetic: {dsl_code}")
+            elif op in ("PLUS", "MINUS", "MUL", "MULT", "DIV", "MOD", "POW"):
+                constraints.append("Arithmetic expression constraint")
         
         return constraints
     
@@ -215,8 +231,16 @@ class DSLLogicVerifier:
         if isinstance(operand, tuple):
             # Nested expression
             op = operand[0]
-            if op in ("PLUS", "MINUS", "MUL", "DIV"):
-                op_symbols = {"PLUS": "+", "MINUS": "-", "MUL": "*", "DIV": "/"}
+            if op in ("PLUS", "MINUS", "MUL", "MULT", "DIV", "MOD", "POW"):
+                op_symbols = {
+                    "PLUS": "+",
+                    "MINUS": "-",
+                    "MUL": "*",
+                    "MULT": "*",
+                    "DIV": "/",
+                    "MOD": "%",
+                    "POW": "**",
+                }
                 if len(operand) >= 3:
                     left = self._format_operand(operand[1])
                     right = self._format_operand(operand[2])
@@ -270,6 +294,196 @@ class DSLLogicVerifier:
                     return True
         
         return False
+
+    def _provider_label(self, provider: Any) -> str:
+        """Normalize provider enum/string to a plain string label."""
+        if provider is None:
+            return "unknown"
+        value = str(getattr(provider, "value", provider)).strip().lower()
+        return value or "unknown"
+
+    def _bool_literal(self, value: bool) -> str:
+        """Convert Python booleans to DSL bool literals."""
+        return "True" if value else "False"
+
+    def _join_dsl(self, operator: str, parts: List[str]) -> str:
+        """Join one or more DSL terms with a logical operator."""
+        if len(parts) == 1:
+            return parts[0]
+        return f"({operator} {' '.join(parts)})"
+
+    def _boolop_to_dsl(self, node: ast.BoolOp) -> str:
+        """Convert boolean operations to DSL."""
+        operator = "AND" if isinstance(node.op, ast.And) else "OR"
+        parts = [self._ast_to_dsl(value) for value in node.values]
+        return self._join_dsl(operator, parts)
+
+    def _unary_to_dsl(self, node: ast.UnaryOp) -> str:
+        """Convert unary operations to DSL."""
+        if isinstance(node.op, ast.Not):
+            return f"(NOT {self._ast_to_dsl(node.operand)})"
+        if isinstance(node.op, ast.USub):
+            if isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, int):
+                return str(-node.operand.value)
+            if isinstance(node.operand, ast.Constant) and isinstance(node.operand.value, float):
+                raise ValueError(
+                    "Floating-point literals are not allowed in verification logic; use exact integer input."
+                )
+            return f"(MINUS 0 {self._ast_to_dsl(node.operand)})"
+        raise ValueError(f"Unsupported unary operator: {type(node.op).__name__}")
+
+    def _binop_to_dsl(self, node: ast.BinOp) -> str:
+        """Convert arithmetic binary operations to DSL."""
+        op_map = {
+            ast.Add: "PLUS",
+            ast.Sub: "MINUS",
+            ast.Mult: "MUL",
+            ast.Div: "DIV",
+            ast.Mod: "MOD",
+            ast.Pow: "POW",
+        }
+        op = op_map.get(type(node.op))
+        if not op:
+            raise ValueError(f"Unsupported arithmetic operator: {type(node.op).__name__}")
+        return f"({op} {self._ast_to_dsl(node.left)} {self._ast_to_dsl(node.right)})"
+
+    def _compare_to_dsl(self, node: ast.Compare) -> str:
+        """Convert comparison expressions (including chains) to DSL."""
+        cmp_map = {
+            ast.Eq: "EQ",
+            ast.NotEq: "NE",
+            ast.Gt: "GT",
+            ast.Lt: "LT",
+            ast.GtE: "GE",
+            ast.LtE: "LE",
+        }
+        if len(node.ops) != len(node.comparators):
+            raise ValueError("Invalid comparison expression")
+
+        comparisons: List[str] = []
+        left = node.left
+        for op_node, right in zip(node.ops, node.comparators, strict=False):
+            op = cmp_map.get(type(op_node))
+            if not op:
+                raise ValueError(f"Unsupported comparison operator: {type(op_node).__name__}")
+            comparisons.append(f"({op} {self._ast_to_dsl(left)} {self._ast_to_dsl(right)})")
+            left = right
+        return self._join_dsl("AND", comparisons)
+
+    def _call_to_dsl(self, node: ast.Call) -> str:
+        """Convert supported helper-call syntax to DSL."""
+        if not isinstance(node.func, ast.Name):
+            raise ValueError(f"Unsupported constraint node: {type(node).__name__}")
+
+        func = node.func.id
+        if func in {"And", "Or"}:
+            op = "AND" if func == "And" else "OR"
+            args = [self._ast_to_dsl(arg) for arg in node.args]
+            return self._join_dsl(op, args)
+        if func == "Not":
+            if len(node.args) != 1:
+                raise ValueError("Not(...) requires one argument")
+            return f"(NOT {self._ast_to_dsl(node.args[0])})"
+        raise ValueError(f"Unsupported constraint node: {type(node).__name__}")
+
+    def _constant_to_dsl(self, node: ast.Constant) -> str:
+        """Convert constant literals to DSL-safe tokens."""
+        value = node.value
+        if isinstance(value, bool):
+            return self._bool_literal(value)
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, float):
+            raise ValueError(
+                "Floating-point literals are not allowed in verification logic; use exact integer input."
+            )
+        if isinstance(value, str):
+            token = re.sub(r"\W+", "_", value).strip("_")
+            return token or "value"
+        return str(value)
+
+    def _name_to_dsl(self, node: ast.Name) -> str:
+        """Convert identifier nodes to DSL variable names."""
+        return node.id
+
+    def _ast_to_dsl(self, node: ast.AST) -> str:
+        """Convert Python AST node to QWED DSL."""
+        handlers = (
+            (ast.BoolOp, self._boolop_to_dsl),
+            (ast.UnaryOp, self._unary_to_dsl),
+            (ast.BinOp, self._binop_to_dsl),
+            (ast.Compare, self._compare_to_dsl),
+            (ast.Call, self._call_to_dsl),
+            (ast.Name, self._name_to_dsl),
+            (ast.Constant, self._constant_to_dsl),
+        )
+        for node_type, handler in handlers:
+            if isinstance(node, node_type):
+                return handler(node)
+        raise ValueError(f"Unsupported constraint node: {type(node).__name__}")
+
+    def _constraint_to_dsl(self, constraint: str, var_types: Optional[Dict[str, str]] = None) -> str:
+        """Convert one Python-like logical constraint to DSL."""
+        text = str(constraint or "").strip()
+        if not text:
+            raise ValueError("Empty constraint")
+
+        var_types = var_types or {}
+
+        def _required_literal(var_name: str, required: bool) -> str:
+            var_type = str(var_types.get(var_name, "")).lower()
+            if var_type == "bool":
+                return self._bool_literal(required)
+            return "1" if required else "0"
+
+        def _replace_not_required(match: re.Match) -> str:
+            var_name = match.group(1)
+            return f"{var_name} == {_required_literal(var_name, required=False)}"
+
+        def _replace_required(match: re.Match) -> str:
+            var_name = match.group(1)
+            return f"{var_name} == {_required_literal(var_name, required=True)}"
+
+        # Normalize common natural-language boolean phrases.
+        text = re.sub(
+            r"\b([a-z_]\w*)\s+is\s+not\s+required\b",
+            _replace_not_required,
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\b([a-z_]\w*)\s+is\s+required\b",
+            _replace_required,
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # Normalize uppercase keywords from LLM outputs.
+        text = re.sub(r"\bAND\b", "and", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bOR\b", "or", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bNOT\b", "not", text, flags=re.IGNORECASE)
+
+        # Replace accidental assignment-style "=" with comparison "==".
+        text = re.sub(r"(?<![<>=!])=(?!=)", "==", text)
+
+        parsed = ast.parse(text, mode="eval")
+        return self._ast_to_dsl(parsed.body)
+
+    def _logic_task_to_dsl(self, logic_task: Any) -> tuple[str, List[Dict[str, str]]]:
+        """Convert LogicVerificationTask to DSL code and variable declarations."""
+        goal = str(getattr(logic_task, "goal", "SATISFIABILITY")).strip().upper()
+        if goal != "SATISFIABILITY":
+            raise ValueError(f"Unsupported logic goal: {goal}")
+
+        constraints = [str(c).strip() for c in getattr(logic_task, "constraints", []) if str(c).strip()]
+        if not constraints:
+            return "", []
+
+        variables_dict = getattr(logic_task, "variables", {}) or {}
+        dsl_parts = [self._constraint_to_dsl(c, variables_dict) for c in constraints]
+        dsl_code = dsl_parts[0] if len(dsl_parts) == 1 else f"(AND {' '.join(dsl_parts)})"
+        variables = [{"name": str(name), "type": str(vtype)} for name, vtype in variables_dict.items()]
+        return dsl_code, variables
     
     def verify_from_natural_language(
         self,
@@ -286,29 +500,54 @@ class DSLLogicVerifier:
         Returns:
             DSLVerificationResult
         """
-        # 1. Translate to DSL
+        provider_label = self._provider_label(provider)
+        resolved_provider = provider_label
+        translator = TranslationLayer()
+
+        # 1. Translate to structured logic constraints
         try:
-            if provider == "azure_openai":
-                from qwed_new.providers.azure_openai import AzureOpenAIProvider
-                llm = AzureOpenAIProvider()
-                dsl_result = llm.translate_logic_dsl(query)
-            else:
-                # Fallback to Azure
-                from qwed_new.providers.azure_openai import AzureOpenAIProvider
-                llm = AzureOpenAIProvider()
-                dsl_result = llm.translate_logic_dsl(query)
-            
-            dsl_code = dsl_result.get('dsl_code', '')
-            variables = dsl_result.get('variables', [])
-            
-        except Exception as e:
+            logic_result = translator.translate_logic(query, provider=provider_label)
+            resolved_provider = self._provider_label(
+                getattr(translator, "last_resolved_provider", None) or provider_label
+            )
+            dsl_code, variables = self._logic_task_to_dsl(logic_result)
+            if not dsl_code:
+                return DSLVerificationResult(
+                    status="ERROR",
+                    error="No constraints generated from natural language query",
+                    provider_used=resolved_provider,
+                )
+        except ValueError as e:
+            resolved_provider = self._provider_label(
+                getattr(translator, "last_resolved_provider", None) or resolved_provider
+            )
             return DSLVerificationResult(
                 status="ERROR",
-                error=f"LLM translation failed: {str(e)}"
+                error=str(e) if str(e).startswith("Unsupported logic goal:") else "LLM translation failed",
+                provider_used=resolved_provider,
             )
-        
+        except Exception:
+            logger.debug(
+                "Translation failed with unexpected error (last_resolved_provider=%s, resolved_provider=%s)",
+                getattr(translator, "last_resolved_provider", None),
+                resolved_provider,
+                exc_info=True,
+            )
+            resolved_provider = self._provider_label(
+                getattr(translator, "last_resolved_provider", None) or resolved_provider
+            )
+            return DSLVerificationResult(
+                status="ERROR",
+                error="LLM translation failed",
+                provider_used=resolved_provider,
+            )
+
         # 2. Verify from DSL
-        return self.verify_from_dsl(dsl_code, variables)
+        verification_result = self.verify_from_dsl(dsl_code, variables)
+        verification_result.provider_used = resolved_provider
+        if not verification_result.dsl_code:
+            verification_result.dsl_code = dsl_code
+        return verification_result
 
 
 # Singleton for convenience

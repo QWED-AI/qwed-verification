@@ -11,6 +11,7 @@ from qwed_new.core.security import redact_pii
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+INTERNAL_VERIFICATION_ERROR = "Internal verification error"
 
 from qwed_new.core.control_plane import ControlPlane
 from qwed_new.core.tenant_context import get_current_tenant, TenantContext
@@ -141,9 +142,16 @@ async def verify_logic(
         raise
     except Exception as e:
         logger.error(f"Logic verification error: {redact_pii(str(e))}", exc_info=False)
+        response_result = locals().get("result")
+        provider_used = (
+            response_result.get("provider_used")
+            if isinstance(response_result, dict) and response_result.get("provider_used")
+            else control_plane.router.route(request.query, request.provider)
+        )
         return {
             "status": "ERROR",
-            "error": "Internal verification error"
+            "error": INTERNAL_VERIFICATION_ERROR,
+            "provider_used": provider_used,
         }
 
 @app.post("/verify/stats")
@@ -238,7 +246,7 @@ async def verify_fact(
         logger.error(f"Fact verification error: {redact_pii(str(e))}", exc_info=False)
         return {
             "status": "ERROR",
-            "error": "Internal verification error",
+            "error": INTERNAL_VERIFICATION_ERROR,
             "verdict": "ERROR"
         }
 
@@ -288,7 +296,7 @@ async def verify_code(
         logger.error(f"Code verification error: {redact_pii(str(e))}", exc_info=False)
         return {
             "status": "ERROR",
-            "error": "Internal verification error",
+            "error": INTERNAL_VERIFICATION_ERROR,
             "is_safe": False
         }
 
@@ -456,7 +464,7 @@ async def verify_math(
         logger.error(f"Math verification error: {redact_pii(str(e))}", exc_info=False)
         return {
             "status": "ERROR",
-            "error": "Internal verification error",
+            "error": INTERNAL_VERIFICATION_ERROR,
             "is_valid": False
         }
 
@@ -508,7 +516,7 @@ async def verify_sql(
         logger.error(f"SQL verification error: {redact_pii(str(e))}", exc_info=False)
         return {
             "status": "ERROR",
-            "error": "Internal verification error",
+            "error": INTERNAL_VERIFICATION_ERROR,
             "is_valid": False
         }
 

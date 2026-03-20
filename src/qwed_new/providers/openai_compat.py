@@ -114,6 +114,12 @@ Respond with JSON: {"expression": "...", "claimed_answer": ..., "reasoning": "..
         from qwed_new.core.schemas import LogicVerificationTask
 
         system = """You are a Logic Translator for Z3. Convert to variables and constraints.
+Rules:
+- Return constraints using Python comparison syntax (use ==, !=, >=, <=, >, <).
+- Convert requirement phrases to explicit binary constraints:
+  - "approval is required" -> "approval == 1"
+  - "approval is not required" -> "approval == 0"
+- Avoid natural-language constraints.
 Respond with JSON: {"variables": {"x": "Int"}, "constraints": ["x > 0"], "goal": "SATISFIABILITY"}"""
 
         try:
