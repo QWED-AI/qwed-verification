@@ -6,6 +6,7 @@ for secure, validated constraint parsing.
 """
 
 import ast
+import logging
 import re
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
@@ -14,6 +15,8 @@ from z3 import Solver, sat, unsat
 
 from qwed_new.core.dsl import parse_and_validate, compile_to_z3
 from qwed_new.core.translator import TranslationLayer
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -524,6 +527,12 @@ class DSLLogicVerifier:
                 provider_used=resolved_provider,
             )
         except Exception:
+            logger.debug(
+                "Translation failed with unexpected error (last_resolved_provider=%s, resolved_provider=%s)",
+                getattr(translator, "last_resolved_provider", None),
+                resolved_provider,
+                exc_info=True,
+            )
             resolved_provider = self._provider_label(
                 getattr(translator, "last_resolved_provider", None) or resolved_provider
             )
