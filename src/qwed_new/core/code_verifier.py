@@ -86,6 +86,15 @@ class CodeVerifier:
         "random.random": "Not cryptographically secure (use secrets)",
         "random.randint": "Not cryptographically secure (use secrets)",
     }
+
+    PYTHON_CRITICAL_REGEX = [
+        {
+            "pattern": r"subprocess\.(?:run|call|Popen|check_output)\s*\([^)]*(?:curl|wget)[^)]*\|[^)]*(?:bash|sh)",
+            "issue_type": "remote_code_execution",
+            "description": "Remote code execution via curl/wget pipe to shell",
+            "recommendation": "Never pipe remote content directly into shell",
+        }
+    ]
     
     PYTHON_DANGEROUS_ATTRS = {
         "__class__", "__base__", "__subclasses__", "__globals__",
@@ -365,6 +374,18 @@ class CodeVerifier:
                         pattern=attr,
                         description=f"Dangerous attribute access: {attr}",
                         line_number=line_num
+                    ))
+
+            # High-confidence RCE regex patterns
+            for rule in self.PYTHON_CRITICAL_REGEX:
+                if re.search(rule["pattern"], line, re.IGNORECASE):
+                    issues.append(SecurityIssue(
+                        severity="CRITICAL",
+                        issue_type=rule["issue_type"],
+                        pattern=rule["pattern"],
+                        description=rule["description"],
+                        line_number=line_num,
+                        recommendation=rule["recommendation"],
                     ))
         
         # Weak crypto in password context

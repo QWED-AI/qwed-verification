@@ -14,7 +14,7 @@ class Router:
     """
     
     def __init__(self):
-        self.default_provider = settings.ACTIVE_PROVIDER
+        self.default_provider = str(getattr(settings.ACTIVE_PROVIDER, "value", settings.ACTIVE_PROVIDER))
         
     def route(self, query: str, preferred_provider: Optional[str] = None) -> str:
         """
@@ -35,7 +35,7 @@ class Router:
             normalized = aliases.get(preferred_provider, preferred_provider)
             # Validate the preferred provider is a known type
             try:
-                return ProviderType(normalized)
+                return ProviderType(normalized).value
             except ValueError:
                 return self.default_provider
             

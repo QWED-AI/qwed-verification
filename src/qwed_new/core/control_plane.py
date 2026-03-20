@@ -187,7 +187,7 @@ class ControlPlane:
                 "model": result.model,
                 "dsl_code": result.dsl_code, # Expose DSL for transparency
                 "error": result.error,
-                "provider_used": provider,
+                "provider_used": result.provider_used or provider,
                 "latency_ms": (time.time() - start_time) * 1000
             }
             
@@ -217,6 +217,7 @@ class ControlPlane:
             return {
                 "status": "ERROR",
                 "error": "Internal pipeline error",
+                "provider_used": provider,
                 "latency_ms": (time.time() - start_time) * 1000
             }
 

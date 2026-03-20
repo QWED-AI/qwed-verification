@@ -31,8 +31,8 @@ class Settings:
     # Security
     API_KEY_SECRET = os.getenv("API_KEY_SECRET", "change-me-in-production")
 
-    # Default to Azure OpenAI if not specified
-    ACTIVE_PROVIDER = os.getenv("ACTIVE_PROVIDER", ProviderType.AZURE_OPENAI)
+    # Default to Ollama if not specified (safer local fallback)
+    ACTIVE_PROVIDER = os.getenv("ACTIVE_PROVIDER", ProviderType.OLLAMA)
     
     # OpenAI Config (Direct API)
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")

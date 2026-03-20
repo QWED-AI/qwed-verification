@@ -5,6 +5,8 @@ This module now uses the Provider Pattern to support multiple LLMs.
 It selects the active provider based on configuration.
 """
 
+from typing import Optional
+
 from qwed_new.config import settings, ProviderType
 from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.providers.base import LLMProvider
@@ -26,24 +28,37 @@ class TranslationLayer:
         # Lazy loading: providers are instantiated on first use
         self._providers = {}
         self._provider_classes = {
-            ProviderType.AZURE_OPENAI: AzureOpenAIProvider,
-            ProviderType.ANTHROPIC: AnthropicProvider,
-            ProviderType.CLAUDE_OPUS: ClaudeOpusProvider,
-            ProviderType.AUTO: AutoShiftProvider,
-            ProviderType.OPENAI: OpenAIDirectProvider,
-            ProviderType.OPENAI_DIRECT: OpenAIDirectProvider,
-            ProviderType.OLLAMA: OllamaProvider,
-            ProviderType.OPENAI_COMPAT: OpenAICompatProvider,
+            ProviderType.AZURE_OPENAI.value: AzureOpenAIProvider,
+            ProviderType.ANTHROPIC.value: AnthropicProvider,
+            ProviderType.CLAUDE_OPUS.value: ClaudeOpusProvider,
+            ProviderType.AUTO.value: AutoShiftProvider,
+            ProviderType.OPENAI.value: OpenAIDirectProvider,
+            ProviderType.OPENAI_DIRECT.value: OpenAIDirectProvider,
+            ProviderType.OLLAMA.value: OllamaProvider,
+            ProviderType.OPENAI_COMPAT.value: OpenAICompatProvider,
         }
         # Default fallback
-        self.default_provider = settings.ACTIVE_PROVIDER
+        self.default_provider = str(getattr(settings.ACTIVE_PROVIDER, "value", settings.ACTIVE_PROVIDER))
+
+    def _normalize_provider_key(self, provider_key: str = None) -> Optional[str]:
+        """Normalize enum/string providers to a stable string key."""
+        if provider_key is None:
+            return None
+        return str(getattr(provider_key, "value", provider_key)).strip()
     
     def _get_provider(self, provider_key: str = None) -> LLMProvider:
         """Get the requested provider or default (lazy initialization)."""
-        key = provider_key or self.default_provider
+        requested = self._normalize_provider_key(provider_key) or self.default_provider
+        key = requested
         if key not in self._provider_classes:
-            # Fallback to default if key is invalid/unknown
-            key = self.default_provider
+            # Fallback to default if key is invalid/unknown and default is supported.
+            if self.default_provider in self._provider_classes:
+                key = self.default_provider
+            else:
+                supported = ", ".join(sorted(self._provider_classes.keys()))
+                raise ValueError(
+                    f"Unsupported provider '{requested}'. Supported providers: {supported}"
+                )
         
         # Lazy instantiation: only create provider when first requested
         if key not in self._providers:
