@@ -12,7 +12,9 @@ from qwed_sdk.cli import (
     _bootstrap_api_key,
     _ensure_gitignore_protection_noninteractive,
     _ensure_local_server_running,
+    _looks_like_placeholder_api_key,
     _required_engine_report,
+    _resolve_provider_api_key,
     _run_init_smoke_suite,
     _test_gemini_connection,
     _validate_local_server_target,
@@ -717,6 +719,107 @@ def test_init_non_interactive_openai_does_not_use_nvidia_fallback(
 
     assert result.exit_code == 1
     assert "OPENAI_API_KEY is required" in result.output
+
+
+def test_resolve_provider_api_key_ignores_nvidia_placeholder_env(monkeypatch):
+    profile = OnboardingProvider(
+        slug="nvidia",
+        name="NVIDIA NIM",
+        active_provider="openai_compat",
+        key_env="CUSTOM_API_KEY",
+        model_env="CUSTOM_MODEL",
+        base_url_env="CUSTOM_BASE_URL",
+        default_model="nvidia/nemotron-3-super-120b-a12b",
+        default_base_url="https://integrate.api.nvidia.com/v1",
+        connection_slug="openai-compatible",
+        key_pattern=None,
+    )
+    monkeypatch.setenv("CUSTOM_API_KEY", "nvapi-xxxx")
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    assert _resolve_provider_api_key(profile, None) == ""
+
+
+def test_resolve_provider_api_key_uses_nvidia_fallback_when_primary_is_placeholder(monkeypatch):
+    profile = OnboardingProvider(
+        slug="nvidia",
+        name="NVIDIA NIM",
+        active_provider="openai_compat",
+        key_env="CUSTOM_API_KEY",
+        model_env="CUSTOM_MODEL",
+        base_url_env="CUSTOM_BASE_URL",
+        default_model="nvidia/nemotron-3-super-120b-a12b",
+        default_base_url="https://integrate.api.nvidia.com/v1",
+        connection_slug="openai-compatible",
+        key_pattern=None,
+    )
+    monkeypatch.setenv("CUSTOM_API_KEY", "nvapi-xxxx")
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-real-key-0123456789abcdef")
+    assert _resolve_provider_api_key(profile, None) == "nvapi-real-key-0123456789abcdef"
+
+
+def test_resolve_provider_api_key_ignores_generic_placeholder_for_any_provider(monkeypatch):
+    profile = OnboardingProvider(
+        slug="openai",
+        name="OpenAI",
+        active_provider="openai",
+        key_env="OPENAI_API_KEY",
+        model_env="OPENAI_MODEL",
+        base_url_env=None,
+        default_model="gpt-4o-mini",
+        default_base_url=None,
+        connection_slug="openai",
+        key_pattern=None,
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "your-api-key")
+    assert _resolve_provider_api_key(profile, None) == ""
+
+
+def test_resolve_provider_api_key_ignores_placeholder_cli_argument(monkeypatch):
+    profile = OnboardingProvider(
+        slug="openai",
+        name="OpenAI",
+        active_provider="openai",
+        key_env="OPENAI_API_KEY",
+        model_env="OPENAI_MODEL",
+        base_url_env=None,
+        default_model="gpt-4o-mini",
+        default_base_url=None,
+        connection_slug="openai",
+        key_pattern=None,
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-from-env")
+    assert _resolve_provider_api_key(profile, "your-api-key") == "sk-real-from-env"
+
+
+def test_resolve_provider_api_key_ignores_placeholder_nvidia_fallback(monkeypatch):
+    profile = OnboardingProvider(
+        slug="nvidia",
+        name="NVIDIA NIM",
+        active_provider="openai_compat",
+        key_env="CUSTOM_API_KEY",
+        model_env="CUSTOM_MODEL",
+        base_url_env="CUSTOM_BASE_URL",
+        default_model="nvidia/nemotron-3-super-120b-a12b",
+        default_base_url="https://integrate.api.nvidia.com/v1",
+        connection_slug="openai-compatible",
+        key_pattern=None,
+    )
+    monkeypatch.delenv("CUSTOM_API_KEY", raising=False)
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-xxxx")
+    assert _resolve_provider_api_key(profile, None) == ""
+
+
+@pytest.mark.parametrize(
+    ("candidate", "provider_slug"),
+    [
+        ("token-placeholder-value", "openai"),
+        ("please-changeme-now", "openai"),
+        ("replace-prod-key-now", "openai"),
+        ("x*x", "openai"),
+    ],
+)
+def test_placeholder_detector_catches_pattern_variants(candidate, provider_slug):
+    assert _looks_like_placeholder_api_key(candidate, provider_slug) is True
 
 
 @patch("qwed_sdk.cli._build_onboarding_provider_map", return_value={"custom": _custom_provider_map()["custom"]})
