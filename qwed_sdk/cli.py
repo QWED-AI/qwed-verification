@@ -789,7 +789,6 @@ def _test_provider_connection_loop(
             raise RuntimeError("Connection test aborted by user.")
         resolved_key, resolved_base_url, resolved_model = _prompt_retry_credentials(
             profile=profile,
-            resolved_key=resolved_key,
             resolved_base_url=resolved_base_url,
             resolved_model=resolved_model,
         )
@@ -821,7 +820,6 @@ def _raise_if_no_retry(non_interactive: bool, message: str) -> None:
 
 def _prompt_retry_credentials(
     profile: OnboardingProvider,
-    resolved_key: str,
     resolved_base_url: str,
     resolved_model: str,
 ) -> tuple[str, str, str]:
