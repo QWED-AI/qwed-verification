@@ -45,7 +45,8 @@
 
   <br>
   <a href="#-quick-start-install--verify-in-30-seconds">Quick Start</a> · 
-  <a href="#-new-in-v210-client-side-verification">🆕 QWEDLocal</a> ·
+  <a href="#-first-time-setup-qwed-init">🆕 qwed init</a> ·
+  <a href="#-new-in-v210-client-side-verification">⚡ QWEDLocal</a> ·
   <a href="#-the-llm-hallucination-problem-why-ai-cant-be-trusted">The Problem</a> · 
   <a href="#-the-11-verification-engines-how-qwed-validates-llm-outputs">The 11 Engines</a> ·
   <a href="docs/INTEGRATION.md">🔌 Integration</a> ·
@@ -135,12 +136,11 @@ Verification infrastructure must itself be verifiable. These ecosystem partnersh
 *   Verification failures are observable and auditable
 *   Deployments scale reliably across environments
 
-> **QWED’s mission is to provide deterministic trust for AI systems — and that trust begins with the infrastructure it runs on.**
+> **QWED's mission is to provide deterministic trust for AI systems — and that trust begins with the infrastructure it runs on.**
 
 ---
-## 📦 Installation
 
-## 🚀 Quick Start: Install & Verify in 30 Seconds
+## 📦 Installation & Quick Start
 
 ### Python SDK (PyPI)
 ```bash
@@ -193,10 +193,92 @@ print(response)
 
 ---
 
-## 🏛️ Authority Verification (Phase 9)
-*   **No More Fake Cases:** `CitationGuard` (Legal) verifies legal citations against valid reporter formats (e.g., Bluebook).
-*   **Banking Ready:** `ISOGuard` (Finance) ensures AI payments meet ISO 20022 standards.
-*   **Ethical AI:** `DisclaimerGuard` (Core) enforces safety warnings in regulated outputs.
+## 🚀 First-Time Setup: `qwed init`
+
+The fastest way to get QWED running with your LLM provider:
+
+```bash
+mkdir my-project && cd my-project
+qwed init
+```
+
+What happens:
+
+```
+[QWED] Initializing verification engines...
+  [ok] SymPy    math engine ready
+  [ok] Z3       logic engine ready
+  [ok] AST      code engine ready
+  [ok] SQLGlot  sql engine ready
+
+Running verification suite...
+  [ok] 2+2=5                    -> BLOCKED
+  [ok] x>5 AND x<3              -> UNSAT
+  [ok] SELECT * WHERE 1=1       -> BLOCKED
+  [ok] eval(user_input)         -> BLOCKED
+
+All engines verified. QWED is operational.
+
+Step 1/3: Select your LLM provider (NVIDIA, OpenAI, Anthropic, Gemini, Custom)
+Step 2/3: Enter API key — tested with 5s timeout, stored securely (.env, 0600)
+Step 3/3: QWED API key generated — shown once, save it
+
+QWED is ready.
+```
+
+After init, verify your setup:
+
+```bash
+qwed doctor
+```
+
+```
+[QWED Doctor] Health Report
+  [ok] ACTIVE_PROVIDER  openai_compat
+  [ok] DATABASE_URL     sqlite:///qwed.db
+  [ok] API key          valid (tested)
+  [ok] SymPy            math engine ready
+  [ok] Z3               logic engine ready
+  [ok] SQLGlot          sql engine ready
+  [ok] AST              code engine ready
+
+All checks passed.
+```
+
+```bash
+qwed test     # 12 deterministic tests — all must pass before production
+```
+
+```
+[QWED Test] Running verification suite...
+  [pass] Math:   derivative of x^2 → 2x
+  [pass] Math:   integral of x^2 → x^3/3
+  [pass] Logic:  x>5 AND x<3 → UNSAT
+  [pass] SQL:    SELECT * WHERE 1=1 → BLOCKED
+  [pass] Code:   eval(user_input) → BLOCKED
+  ... 7 more
+12/12 passed ✅
+```
+
+**Supported providers:**
+
+```bash
+qwed init --provider nvidia     # NVIDIA NIM
+qwed init --provider openai     # OpenAI
+qwed init --provider anthropic  # Anthropic Claude
+qwed init --provider gemini     # Google Gemini
+qwed init --provider custom     # Any OpenAI-compatible API
+```
+
+**CI/CD friendly — no interactive prompts:**
+
+```bash
+# Using flags
+qwed init --non-interactive --provider nvidia
+
+# Using env vars
+NVIDIA_API_KEY=xxx qwed init --non-interactive
+```
 
 ---
 
@@ -504,6 +586,14 @@ In high-stakes industries (Finance, Legal, Healthcare), you cannot send sensitiv
 
 ---
 
+## 🏛️ Authority Verification (Phase 9)
+
+*   **No More Fake Cases:** `CitationGuard` (Legal) verifies legal citations against valid reporter formats (e.g., Bluebook).
+*   **Banking Ready:** `ISOGuard` (Finance) ensures AI payments meet ISO 20022 standards.
+*   **Ethical AI:** `DisclaimerGuard` (Core) enforces safety warnings in regulated outputs.
+
+---
+
 ## 🗺️ Roadmap
 
 We are building the **Universal Verification Standard** for the agentic web.
@@ -704,6 +794,9 @@ See [`.github/workflows/ci.yml`](.github/workflows/ci.yml) for details.
 
 ### Q: What's the latency overhead?
 **A:** Typically <100ms for most verifications. Math and logic proofs are instant. Consensus checks take longer (multiple API calls).
+
+### Q: Do I need to run `qwed init` every time?
+**A:** No. Once initialized, QWED reads from `.env`. Re-run only when changing providers or rotating keys.
 
 ---
 
