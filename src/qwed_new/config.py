@@ -5,6 +5,7 @@ This module handles environment variables and provider selection.
 """
 
 import os
+import secrets
 from dotenv import load_dotenv
 from enum import Enum
 
@@ -67,5 +68,20 @@ class Settings:
     CUSTOM_BASE_URL = os.getenv("CUSTOM_BASE_URL")
     CUSTOM_API_KEY = os.getenv("CUSTOM_API_KEY")
     CUSTOM_MODEL = os.getenv("CUSTOM_MODEL", "gpt-4o-mini")
+
+
+def ensure_jwt_secret(min_bytes: int = 32) -> str:
+    """
+    Ensure QWED_JWT_SECRET_KEY exists for local auth bootstrap.
+    Generates and exports a strong secret when missing.
+    """
+    existing = os.getenv("QWED_JWT_SECRET_KEY", "").strip()
+    if existing:
+        return existing
+
+    # token_urlsafe(48) gives >= 32 bytes entropy and an env-safe string.
+    secret = secrets.token_urlsafe(max(min_bytes, 48))
+    os.environ["QWED_JWT_SECRET_KEY"] = secret
+    return secret
 
 settings = Settings()
