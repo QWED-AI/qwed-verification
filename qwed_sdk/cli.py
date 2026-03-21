@@ -825,19 +825,20 @@ def _prompt_retry_credentials(
     resolved_base_url: str,
     resolved_model: str,
 ) -> tuple[str, str, str]:
-    resolved_key = click.prompt(f"{profile.name} API key", hide_input=True).strip()
+    updated_key = click.prompt(f"{profile.name} API key", hide_input=True).strip()
+    updated_base_url = resolved_base_url
     if profile.base_url_env:
-        resolved_base_url = click.prompt(
+        updated_base_url = click.prompt(
             f"{profile.name} base URL",
             default=resolved_base_url or profile.default_base_url or "",
             show_default=True,
         ).strip()
-    resolved_model = click.prompt(
+    updated_model = click.prompt(
         f"{profile.name} default model",
         default=resolved_model or profile.default_model,
         show_default=True,
     ).strip()
-    return resolved_key, resolved_base_url, resolved_model
+    return updated_key, updated_base_url, updated_model
 
 
 def _persist_onboarding_env(
