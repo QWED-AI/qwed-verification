@@ -1,4 +1,4 @@
-# Copyright (c) 2024 QWED Team
+# Copyright (c) 2026 QWED Team
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -418,7 +418,7 @@ def _bootstrap_api_key(server_url: str, organization_name: str) -> tuple[str, st
 
     base = server_url.rstrip("/")
     org_slug = _sanitize_org_slug(organization_name)
-    email = f"{org_slug}-{secrets.token_hex(4)}@qwed.local"
+    email = f"{org_slug}-{secrets.token_hex(4)}@qwed-init.dev"
     password = secrets.token_urlsafe(24)
     signup_payload = {
         "email": email,
