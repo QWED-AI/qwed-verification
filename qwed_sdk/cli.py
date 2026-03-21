@@ -1588,7 +1588,7 @@ def doctor(as_json: bool):
     else:
         _print_doctor_report(report)
 
-    if report["status"].startswith("DEGRADED"):
+    if report.get("status") == "DEGRADED":
         sys.exit(1)
 
 
