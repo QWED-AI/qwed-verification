@@ -13,6 +13,7 @@ from qwed_sdk.cli import (
     _ensure_gitignore_protection_noninteractive,
     _ensure_local_server_running,
     _required_engine_report,
+    _resolve_provider_api_key,
     _run_init_smoke_suite,
     _test_gemini_connection,
     _validate_local_server_target,
@@ -717,6 +718,59 @@ def test_init_non_interactive_openai_does_not_use_nvidia_fallback(
 
     assert result.exit_code == 1
     assert "OPENAI_API_KEY is required" in result.output
+
+
+def test_resolve_provider_api_key_ignores_nvidia_placeholder_env(monkeypatch):
+    profile = OnboardingProvider(
+        slug="nvidia",
+        name="NVIDIA NIM",
+        active_provider="openai_compat",
+        key_env="CUSTOM_API_KEY",
+        model_env="CUSTOM_MODEL",
+        base_url_env="CUSTOM_BASE_URL",
+        default_model="nvidia/nemotron-3-super-120b-a12b",
+        default_base_url="https://integrate.api.nvidia.com/v1",
+        connection_slug="openai-compatible",
+        key_pattern=None,
+    )
+    monkeypatch.setenv("CUSTOM_API_KEY", "nvapi-xxxx")
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    assert _resolve_provider_api_key(profile, None) == ""
+
+
+def test_resolve_provider_api_key_uses_nvidia_fallback_when_primary_is_placeholder(monkeypatch):
+    profile = OnboardingProvider(
+        slug="nvidia",
+        name="NVIDIA NIM",
+        active_provider="openai_compat",
+        key_env="CUSTOM_API_KEY",
+        model_env="CUSTOM_MODEL",
+        base_url_env="CUSTOM_BASE_URL",
+        default_model="nvidia/nemotron-3-super-120b-a12b",
+        default_base_url="https://integrate.api.nvidia.com/v1",
+        connection_slug="openai-compatible",
+        key_pattern=None,
+    )
+    monkeypatch.setenv("CUSTOM_API_KEY", "nvapi-xxxx")
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-real-key-0123456789abcdef")
+    assert _resolve_provider_api_key(profile, None) == "nvapi-real-key-0123456789abcdef"
+
+
+def test_resolve_provider_api_key_ignores_generic_placeholder_for_any_provider(monkeypatch):
+    profile = OnboardingProvider(
+        slug="openai",
+        name="OpenAI",
+        active_provider="openai",
+        key_env="OPENAI_API_KEY",
+        model_env="OPENAI_MODEL",
+        base_url_env=None,
+        default_model="gpt-4o-mini",
+        default_base_url=None,
+        connection_slug="openai",
+        key_pattern=None,
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "your-api-key")
+    assert _resolve_provider_api_key(profile, None) == ""
 
 
 @patch("qwed_sdk.cli._build_onboarding_provider_map", return_value={"custom": _custom_provider_map()["custom"]})
