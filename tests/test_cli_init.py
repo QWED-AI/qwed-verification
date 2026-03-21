@@ -569,13 +569,24 @@ def test_resolve_server_runtime_dir_prefers_cwd_when_writable(monkeypatch):
 def test_resolve_server_runtime_dir_falls_back_to_home_when_unwritable(monkeypatch):
     cwd_path = Path("readonly-dir")
     home_path = Path("home-dir")
+    mkdir_calls = []
+
     monkeypatch.setattr("qwed_sdk.cli.Path.cwd", lambda: cwd_path)
     monkeypatch.setattr("qwed_sdk.cli.Path.home", lambda: home_path)
     monkeypatch.setattr("qwed_sdk.cli.os.access", lambda _path, _mode: False)
-    monkeypatch.setattr("qwed_sdk.cli.Path.mkdir", lambda self, parents=True, exist_ok=True: None)
+
+    def _fake_mkdir(self, parents=True, exist_ok=True):
+        mkdir_calls.append((self, parents, exist_ok))
+
+    monkeypatch.setattr("qwed_sdk.cli.Path.mkdir", _fake_mkdir)
 
     expected = (home_path / "qwed-demo").resolve()
     assert _resolve_server_runtime_dir() == expected
+    assert len(mkdir_calls) == 1
+    created_path, parents, exist_ok = mkdir_calls[0]
+    assert created_path.resolve() == expected
+    assert parents is True
+    assert exist_ok is True
 
 
 def test_validate_local_server_target_rejects_non_loopback():
