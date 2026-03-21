@@ -100,10 +100,15 @@ def _src_path() -> str:
     return str(_project_root() / "src")
 
 
-def _load_dotenv_if_available() -> None:
+def _load_dotenv_if_available(*, override: bool = False) -> None:
     try:
-        from dotenv import load_dotenv
-        load_dotenv()
+        from dotenv import find_dotenv, load_dotenv
+
+        dotenv_path = find_dotenv(usecwd=True)
+        if dotenv_path:
+            load_dotenv(dotenv_path=dotenv_path, override=override)
+        else:
+            load_dotenv(override=override)
     except ImportError:
         return
 
@@ -1319,10 +1324,14 @@ def _active_provider_status() -> dict:
     return {"ok": bool(ok), "label": profile["label"], "message": message}
 
 
-def _database_url_components() -> tuple[str, Any, str]:
-    from qwed_new.config import settings
+def _database_url_components(*, prefer_env: bool = False) -> tuple[str, Any, str]:
+    db_url = ""
+    if prefer_env:
+        db_url = os.getenv("DATABASE_URL", "").strip()
+    if not db_url:
+        from qwed_new.config import settings
 
-    db_url = str(getattr(settings, "DATABASE_URL", DEFAULT_DATABASE_URL))
+        db_url = str(getattr(settings, "DATABASE_URL", DEFAULT_DATABASE_URL))
     parsed = urlparse(db_url)
     base_scheme = parsed.scheme.split("+")[0] if parsed.scheme else ""
     return db_url, parsed, base_scheme
@@ -1370,9 +1379,9 @@ def _probe_database_socket(hostname: str, port: int, base_scheme: str, path: str
         }
 
 
-def _database_health() -> dict:
+def _database_health(*, prefer_env: bool = False) -> dict:
     try:
-        db_url, parsed, base_scheme = _database_url_components()
+        db_url, parsed, base_scheme = _database_url_components(prefer_env=prefer_env)
         sqlite_health = _sqlite_database_health(db_url, parsed, base_scheme)
         if sqlite_health is not None:
             return sqlite_health
@@ -1403,10 +1412,11 @@ def _doctor_server_url() -> str:
 
 
 def _doctor_report() -> dict:
+    _load_dotenv_if_available(override=True)
     required_ok, required_engines = _required_engine_report()
     optional_engines = _optional_engine_report()
     provider = _active_provider_status()
-    db = _database_health()
+    db = _database_health(prefer_env=True)
 
     server_url = _doctor_server_url()
     server_running = _check_server_health(server_url)
