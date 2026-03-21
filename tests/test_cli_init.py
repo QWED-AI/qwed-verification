@@ -12,6 +12,8 @@ from qwed_sdk.cli import (
     init,
 )
 
+TEST_JWT_VALUE = "test-value-123"
+
 
 @pytest.fixture
 def runner():
@@ -49,17 +51,19 @@ def _provider_map():
 @patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
 @patch("qwed_sdk.cli._required_engine_report", return_value=(True, _engine_report()))
 @patch("qwed_sdk.cli._ensure_gitignore_protection_noninteractive")
+@patch("qwed_sdk.cli._ensure_gitignore_protection")
 @patch("qwed_sdk.cli._load_dotenv_if_available")
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value="jwt-secret-value")
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
 def test_init_non_interactive_success(
     _mock_jwt,
     _mock_write_env,
     _mock_test_connection,
     _mock_validate,
     _mock_load_dotenv,
+    _mock_gitignore_interactive,
     _mock_gitignore,
     _mock_required_engines,
     _mock_provider_map,
@@ -123,17 +127,19 @@ def test_init_non_interactive_connection_failure(
 @patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
 @patch("qwed_sdk.cli._required_engine_report", return_value=(True, _engine_report()))
 @patch("qwed_sdk.cli._ensure_gitignore_protection_noninteractive")
+@patch("qwed_sdk.cli._ensure_gitignore_protection")
 @patch("qwed_sdk.cli._load_dotenv_if_available")
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value="jwt-secret-value")
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
 def test_init_persists_jwt_secret_in_env_write(
     _mock_jwt,
     mock_write_env,
     _mock_test_connection,
     _mock_validate,
     _mock_load_dotenv,
+    _mock_gitignore_interactive,
     _mock_gitignore,
     _mock_required_engines,
     _mock_provider_map,
@@ -158,7 +164,7 @@ def test_init_persists_jwt_secret_in_env_write(
     assert result.exit_code == 0
     args, kwargs = mock_write_env.call_args
     env_vars = args[0]
-    assert env_vars["QWED_JWT_SECRET_KEY"] == "jwt-secret-value"
+    assert env_vars["QWED_JWT_SECRET_KEY"] == TEST_JWT_VALUE
     assert kwargs["active_provider"] == "openai"
 
 
@@ -204,10 +210,11 @@ def test_bootstrap_api_key_success(monkeypatch):
 def test_ensure_local_server_running_applies_pythonpath_guard(monkeypatch):
     checks = iter([False, True])
     popen_capture = {}
+    expected_src = str(Path("repo") / "src")
 
     monkeypatch.setattr("qwed_sdk.cli._check_server_health", lambda _url, timeout=2.0: next(checks))
-    monkeypatch.setattr("qwed_sdk.cli._src_path", lambda: "C:/repo/src")
-    monkeypatch.setattr("qwed_sdk.cli._project_root", lambda: Path("C:/repo"))
+    monkeypatch.setattr("qwed_sdk.cli._src_path", lambda: expected_src)
+    monkeypatch.setattr("qwed_sdk.cli._project_root", lambda: Path("repo"))
     monkeypatch.setattr("qwed_sdk.cli.time.sleep", lambda _s: None)
 
     def _fake_popen(command, **kwargs):
@@ -217,13 +224,14 @@ def test_ensure_local_server_running_applies_pythonpath_guard(monkeypatch):
 
     monkeypatch.setattr("qwed_sdk.cli.subprocess.Popen", _fake_popen)
 
-    ready, started = _ensure_local_server_running("http://127.0.0.1:9001", "jwt-secret")
+    jwt_value = "test-token-value"
+    ready, started = _ensure_local_server_running("http://127.0.0.1:9001", jwt_value)
     assert ready is True
     assert started is True
     assert popen_capture["command"][-2:] == ["--port", "9001"]
     env = popen_capture["kwargs"]["env"]
-    assert env["QWED_JWT_SECRET_KEY"] == "jwt-secret"
-    assert env["PYTHONPATH"].split(os.pathsep)[0] == "C:/repo/src"
+    assert env["QWED_JWT_SECRET_KEY"] == jwt_value
+    assert env["PYTHONPATH"].split(os.pathsep)[0] == expected_src
 
 
 @patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
@@ -231,6 +239,7 @@ def test_ensure_local_server_running_applies_pythonpath_guard(monkeypatch):
 @patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
 @patch("qwed_sdk.cli._required_engine_report", return_value=(True, _engine_report()))
 @patch("qwed_sdk.cli._ensure_gitignore_protection_noninteractive")
+@patch("qwed_sdk.cli._ensure_gitignore_protection")
 @patch("qwed_sdk.cli._load_dotenv_if_available")
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
 @patch(
@@ -238,13 +247,14 @@ def test_ensure_local_server_running_applies_pythonpath_guard(monkeypatch):
     side_effect=[(False, "Auth failed"), (True, "Connected")],
 )
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value="jwt-secret-value")
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
 def test_init_interactive_retries_connection_until_success(
     _mock_jwt,
     _mock_write_env,
     mock_test_connection,
     _mock_validate,
     _mock_load_dotenv,
+    _mock_gitignore_interactive,
     _mock_gitignore,
     _mock_required_engines,
     _mock_provider_map,

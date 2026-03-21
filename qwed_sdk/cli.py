@@ -12,6 +12,7 @@ Usage:
 """
 
 import json
+import logging
 import os
 import secrets
 import subprocess
@@ -31,12 +32,14 @@ except ImportError:
     click.echo("Error: QWED SDK not installed. Run: pip install qwed", err=True)
     sys.exit(1)
 
+logger = logging.getLogger(__name__)
+
 
 @click.group()
 @click.version_option(__version__, prog_name="qwed")
 def cli():
     """
-    ðŸ”¬ QWED - Model Agnostic AI Verification
+    ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â¬ QWED - Model Agnostic AI Verification
     
     Verify LLM outputs with mathematical precision.
     Works with Ollama, OpenAI, Anthropic, Gemini, and more!
@@ -301,14 +304,26 @@ def _check_server_health(server_url: str, timeout: float = 2.0) -> bool:
     return response.status_code == 200
 
 
+def _validate_local_server_target(server_url: str) -> tuple[str, str]:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(server_url)
+    host = parsed.hostname or "127.0.0.1"
+    port_value = parsed.port or 8000
+    allowed_hosts = {"127.0.0.1", "localhost", "::1"}
+
+    if host not in allowed_hosts:
+        raise ValueError(f"Local server host must be loopback; got '{host}'")
+    if not (1024 <= int(port_value) <= 65535):
+        raise ValueError(f"Local server port must be in range 1024-65535; got '{port_value}'")
+    return host, str(port_value)
+
+
 def _ensure_local_server_running(server_url: str, jwt_secret: str) -> tuple[bool, bool]:
     if _check_server_health(server_url):
         return True, False
 
-    from urllib.parse import urlparse
-    parsed = urlparse(server_url)
-    host = parsed.hostname or "127.0.0.1"
-    port = str(parsed.port or 8000)
+    host, port = _validate_local_server_target(server_url)
 
     env = os.environ.copy()
     src = _src_path()
@@ -341,7 +356,7 @@ def _ensure_local_server_running(server_url: str, jwt_secret: str) -> tuple[bool
     else:
         popen_kwargs["start_new_session"] = True
 
-    subprocess.Popen(command, **popen_kwargs)
+    subprocess.Popen(command, **popen_kwargs)  # noqa: S603  # nosec - fixed command with validated loopback host/port
     for _ in range(15):
         if _check_server_health(server_url):
             return True, True
@@ -399,15 +414,14 @@ def _print_init_header():
     """Print branded init wizard header."""
     click.echo()
     if HAS_COLOR:
-        click.echo(f"{QWED.BRAND}{'â”' * 50}{QWED.RESET}")
-        click.echo(f"{QWED.BRAND}ðŸ”¬ QWED â€” Secure LLM Configuration{QWED.RESET}")
-        click.echo(f"{QWED.BRAND}{'â”' * 50}{QWED.RESET}")
+        click.echo(f"{QWED.BRAND}{'-' * 50}{QWED.RESET}")
+        click.echo(f"{QWED.BRAND}QWED - Secure LLM Configuration{QWED.RESET}")
+        click.echo(f"{QWED.BRAND}{'-' * 50}{QWED.RESET}")
     else:
-        click.echo("â”" * 50)
-        click.echo("ðŸ”¬ QWED â€” Secure LLM Configuration")
-        click.echo("â”" * 50)
+        click.echo("-" * 50)
+        click.echo("QWED - Secure LLM Configuration")
+        click.echo("-" * 50)
     click.echo()
-
 def _select_provider(providers) -> Any:
     """Prompt user to select a provider."""
     click.echo("Select your LLM provider:\n")
@@ -421,20 +435,22 @@ def _select_provider(providers) -> Any:
 
     choice = click.prompt("Enter number", type=int)
     if choice < 1 or choice > len(providers):
-        click.echo(f"{QWED.ERROR if HAS_COLOR else ''}âŒ Invalid choice{QWED.RESET if HAS_COLOR else ''}", err=True)
+        click.echo(
+            f"{QWED.ERROR if HAS_COLOR else ''}ERROR: Invalid choice{QWED.RESET if HAS_COLOR else ''}",
+            err=True,
+        )
         sys.exit(1)
 
     provider = providers[choice - 1]
     click.echo()
     if HAS_COLOR:
-        click.echo(f"{QWED.SUCCESS}âœ“ Selected: {provider.name}{QWED.RESET}")
+        click.echo(f"{QWED.SUCCESS}OK: Selected: {provider.name}{QWED.RESET}")
     else:
-        click.echo(f"âœ“ Selected: {provider.name}")
+        click.echo(f"OK: Selected: {provider.name}")
 
     if provider.install_cmd:
-        click.echo(f"\nðŸ“¦ Requires: {provider.install_cmd}")
+        click.echo(f"\nRequires: {provider.install_cmd}")
     return provider
-
 def _is_url_env(name: str) -> bool:
     return "URL" in name or "ENDPOINT" in name
 
@@ -445,15 +461,13 @@ def _prompt_for_env_var(env_var):
     name = env_var.name
     desc = env_var.description
     default = env_var.default or ""
-    
+
     if _is_key_env(name):
         click.echo()
-        return click.prompt(f"  ðŸ”‘ {desc}", hide_input=True, default=default)
-    elif _is_url_env(name):
-        return click.prompt(f"  ðŸŒ {desc}", default=default, show_default=True)
-    else:
-        return click.prompt(f"  {desc}", default=default, show_default=True)
-
+        return click.prompt(f"  Key: {desc}", hide_input=True, default=default)
+    if _is_url_env(name):
+        return click.prompt(f"  URL: {desc}", default=default, show_default=True)
+    return click.prompt(f"  {desc}", default=default, show_default=True)
 def _collect_single_credential(env_var, is_local_auth: bool):
     """Prompt user for a single env var until valid. Returns (val, is_key, is_url)."""
     if is_local_auth and not env_var.required and not _is_url_env(env_var.name):
@@ -464,13 +478,12 @@ def _collect_single_credential(env_var, is_local_auth: bool):
         val = val.strip() if val else ""
 
         if env_var.required and not val:
-            click.echo(f"  âŒ {env_var.name} is required. Please provide a valid value.", err=True)
+            click.echo(f"  ERROR: {env_var.name} is required. Please provide a valid value.", err=True)
             continue
-            
+
         is_key = bool(_is_key_env(env_var.name) and val)
         is_url = bool(_is_url_env(env_var.name) and val)
         return val, is_key, is_url
-
 def _collect_credentials(provider, auth_type_enum) -> tuple:
     """Collect env vars, key, and base_url from user input."""
     env_vars = {}
@@ -494,17 +507,22 @@ def _validate_key(provider, collected_key, validate_key_format):
     is_valid, msg = validate_key_format(collected_key, provider.key_pattern)
     click.echo()
     if is_valid:
-        c_msg = f"{QWED.SUCCESS}âœ… {msg}{QWED.RESET}" if HAS_COLOR else f"âœ… {msg}"
+        c_msg = f"{QWED.SUCCESS}OK: {msg}{QWED.RESET}" if HAS_COLOR else f"OK: {msg}"
         click.echo(c_msg)
     else:
-        w_msg = f"{QWED.WARNING}âš ï¸  {msg}{QWED.RESET}" if HAS_COLOR else f"âš ï¸  {msg}"
-        p_msg = f"{QWED.INFO}   Proceeding anyway (some providers have non-standard key formats){QWED.RESET}" if HAS_COLOR else "   Proceeding anyway (some providers have non-standard key formats)"
+        w_msg = f"{QWED.WARNING}WARNING: {msg}{QWED.RESET}" if HAS_COLOR else f"WARNING: {msg}"
+        p_msg = (
+            f"{QWED.INFO}   Proceeding anyway (some providers have non-standard key formats){QWED.RESET}"
+            if HAS_COLOR
+            else "   Proceeding anyway (some providers have non-standard key formats)"
+        )
         click.echo(w_msg)
         click.echo(p_msg)
 
+
 def _test_connection_interactive(provider, collected_key, collected_base_url, test_connection, auth_type_enum):
     if provider.auth_type != auth_type_enum.LOCAL:
-        should_test = click.confirm("\nðŸ” Would you like to test the connection?", default=False)
+        should_test = click.confirm("\nWould you like to test the connection?", default=False)
     else:
         should_test = True
 
@@ -518,13 +536,14 @@ def _test_connection_interactive(provider, collected_key, collected_base_url, te
         base_url=collected_base_url,
     )
     if success:
-        c_msg = f"{QWED.SUCCESS}âœ… {msg}{QWED.RESET}" if HAS_COLOR else f"âœ… {msg}"
+        c_msg = f"{QWED.SUCCESS}OK: {msg}{QWED.RESET}" if HAS_COLOR else f"OK: {msg}"
         click.echo(c_msg)
     else:
-        e_msg = f"{QWED.ERROR}âŒ {msg}{QWED.RESET}" if HAS_COLOR else f"âŒ {msg}"
+        e_msg = f"{QWED.ERROR}ERROR: {msg}{QWED.RESET}" if HAS_COLOR else f"ERROR: {msg}"
         click.echo(e_msg)
         if not click.confirm("   Continue anyway?", default=True):
             sys.exit(1)
+
 
 def _validate_and_test_connection(provider, collected_key, collected_base_url, validate_key_format, test_connection, auth_type_enum) -> bool:
     """Run format validation and optional connection test."""
@@ -536,24 +555,25 @@ def _ensure_gitignore_protection(verify_gitignore, add_env_to_gitignore) -> bool
     """Verify or add .env to .gitignore, abort if cannot protect."""
     if verify_gitignore():
         if HAS_COLOR:
-            click.echo(f"\n{QWED.SUCCESS}ðŸ”’ Verified: .gitignore includes .env{QWED.RESET}")
+            click.echo(f"\n{QWED.SUCCESS}Verified: .gitignore includes .env{QWED.RESET}")
         else:
-            click.echo("\nðŸ”’ Verified: .gitignore includes .env")
+            click.echo("\nVerified: .gitignore includes .env")
     else:
         if HAS_COLOR:
-            click.echo(f"\n{QWED.WARNING}âš ï¸  .env NOT found in .gitignore!{QWED.RESET}")
+            click.echo(f"\n{QWED.WARNING}WARNING: .env not found in .gitignore.{QWED.RESET}")
         else:
-            click.echo("\nâš ï¸  .env NOT found in .gitignore!")
+            click.echo("\nWARNING: .env not found in .gitignore.")
         if click.confirm("   Add .env to .gitignore?", default=True):
             if add_env_to_gitignore():
-                click.echo("   âœ… Added .env to .gitignore")
+                click.echo("   OK: Added .env to .gitignore")
             else:
-                click.echo("   âŒ Failed to update .gitignore â€” aborting to protect secrets", err=True)
+                click.echo("   ERROR: Failed to update .gitignore - aborting to protect secrets", err=True)
                 sys.exit(1)
         else:
-            click.echo("   âš ï¸  Aborting: refusing to write secrets without .gitignore protection", err=True)
+            click.echo("   WARNING: Aborting without .gitignore protection for .env", err=True)
             sys.exit(1)
     return True
+
 
 @cli.command()
 @click.option(
@@ -657,7 +677,8 @@ def init(
 
     profile = provider_map[selected]
 
-    resolved_key = (api_key or os.getenv(profile.key_env) or os.getenv("NVIDIA_API_KEY", "")).strip()
+    nvidia_fallback = os.getenv("NVIDIA_API_KEY", "") if selected == "nvidia" else ""
+    resolved_key = (api_key or os.getenv(profile.key_env) or nvidia_fallback).strip()
     resolved_base_url = (
         (base_url or os.getenv(profile.base_url_env or "", "")).strip()
         if profile.base_url_env
@@ -744,15 +765,20 @@ def init(
     try:
         jwt_secret = ensure_jwt_secret()
     except Exception as exc:
+        logger.exception("JWT secret preparation failed")
         click.echo(f"Failed to prepare JWT secret: {type(exc).__name__}", err=True)
         sys.exit(1)
 
     env_vars["QWED_JWT_SECRET_KEY"] = jwt_secret
 
     try:
-        _ensure_gitignore_protection_noninteractive(verify_gitignore, add_env_to_gitignore)
+        if non_interactive:
+            _ensure_gitignore_protection_noninteractive(verify_gitignore, add_env_to_gitignore)
+        else:
+            _ensure_gitignore_protection(verify_gitignore, add_env_to_gitignore)
         env_path = write_env_file(env_vars, active_provider=profile.active_provider)
     except Exception as exc:
+        logger.exception("Credential persistence failed")
         click.echo(f"Failed to store credentials securely: {type(exc).__name__}", err=True)
         sys.exit(1)
 
@@ -775,7 +801,12 @@ def init(
         sys.exit(1)
 
     click.echo("\n  Starting local server...")
-    server_ready, started_new = _ensure_local_server_running(server_url, jwt_secret)
+    try:
+        server_ready, started_new = _ensure_local_server_running(server_url, jwt_secret)
+    except ValueError as exc:
+        logger.exception("Local server target validation failed")
+        click.echo(f"  [x] Invalid server URL: {exc}", err=True)
+        sys.exit(1)
     if not server_ready:
         click.echo("  [x] Failed to start local server.", err=True)
         click.echo("    Ensure dependencies are installed and `src/` is available in PYTHONPATH.", err=True)
@@ -788,6 +819,7 @@ def init(
     try:
         qwed_api_key, actual_org_name = _bootstrap_api_key(server_url, organization_name)
     except Exception as exc:
+        logger.exception("API key bootstrap failed")
         click.echo(f"  [x] API key bootstrap failed: {exc}", err=True)
         sys.exit(1)
 
@@ -841,10 +873,13 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
         load_dotenv()
     except ImportError:
         # python-dotenv is optional; credentials can still be passed via CLI args or env
-        import logging
-        logging.getLogger(__name__).debug("python-dotenv not installed, skipping auto-load")
+        logger.debug("python-dotenv not installed, skipping auto-load")
         if not quiet:
-            err_msg = f"{QWED.ERROR}âš ï¸  python-dotenv not installed. Run 'pip install python-dotenv' for auto-loading .env{QWED.RESET}" if HAS_COLOR else "âš ï¸  python-dotenv not installed. Run 'pip install python-dotenv' for auto-loading .env"
+            err_msg = (
+                f"{QWED.ERROR}WARNING: python-dotenv not installed. Run 'pip install python-dotenv' for auto-loading .env{QWED.RESET}"
+                if HAS_COLOR
+                else "WARNING: python-dotenv not installed. Run 'pip install python-dotenv' for auto-loading .env"
+            )
             click.echo(err_msg, err=True)
     
     try:
@@ -861,7 +896,11 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
             elif active == "openai-compatible" or active == "openai_compat":
                 base_url = _os.getenv("CUSTOM_BASE_URL", "")
                 if not base_url:
-                    err_msg = f"{QWED.ERROR}âŒ CUSTOM_BASE_URL is required for openai-compatible provider{QWED.RESET}" if HAS_COLOR else "âŒ CUSTOM_BASE_URL is required for openai-compatible provider"
+                    err_msg = (
+                        f"{QWED.ERROR}ERROR: CUSTOM_BASE_URL is required for openai-compatible provider{QWED.RESET}"
+                        if HAS_COLOR
+                        else "ERROR: CUSTOM_BASE_URL is required for openai-compatible provider"
+                    )
                     click.echo(err_msg, err=True)
                     click.echo("Set CUSTOM_BASE_URL env var or run: qwed init", err=True)
                     sys.exit(1)
@@ -880,7 +919,7 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
                     env_key = provider_key_env.get(provider, "QWED_API_KEY")
                     api_key = _os.getenv(env_key, _os.getenv("QWED_API_KEY", ""))
                 if HAS_COLOR and not quiet:
-                    click.echo(f"{QWED.INFO}â„¹ï¸  Using configured provider: {active}{QWED.RESET}")
+                    click.echo(f"{QWED.INFO}ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¹ÃƒÂ¯Ã‚Â¸Ã‚Â  Using configured provider: {active}{QWED.RESET}")
         
         # Create client
         if base_url:
@@ -893,7 +932,7 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
             )
         elif provider:
             if not api_key:
-                click.echo(f"{QWED.ERROR}âŒ API key required for {provider}{QWED.RESET}", err=True)
+                click.echo(f"{QWED.ERROR}ÃƒÂ¢Ã‚ÂÃ…â€™ API key required for {provider}{QWED.RESET}", err=True)
                 click.echo("Set QWED_API_KEY env var or use --api-key", err=True)
                 sys.exit(1)
             
@@ -914,15 +953,15 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
         # Show result (if not already shown by branded output)
         if quiet or not HAS_COLOR:
             if result.verified:
-                click.echo(f"âœ… VERIFIED: {result.value}")
+                click.echo(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ VERIFIED: {result.value}")
             else:
-                click.echo(f"âŒ {result.error or 'Verification failed'}", err=True)
+                click.echo(f"ÃƒÂ¢Ã‚ÂÃ…â€™ {result.error or 'Verification failed'}", err=True)
         
         if not result.verified:
             sys.exit(1)
     
     except Exception as e:
-        click.echo(f"{QWED.ERROR if HAS_COLOR else ''}âŒ Error: {str(e)}{QWED.RESET if HAS_COLOR else ''}", err=True)
+        click.echo(f"{QWED.ERROR if HAS_COLOR else ''}ÃƒÂ¢Ã‚ÂÃ…â€™ Error: {str(e)}{QWED.RESET if HAS_COLOR else ''}", err=True)
         sys.exit(1)
 
 
@@ -952,7 +991,7 @@ def cache_clear():
         from qwed_sdk.cache import VerificationCache
         cache_obj = VerificationCache()
         cache_obj.clear()
-        click.echo(f"{QWED.SUCCESS if HAS_COLOR else ''}âœ… Cache cleared!{QWED.RESET if HAS_COLOR else ''}")
+        click.echo(f"{QWED.SUCCESS if HAS_COLOR else ''}ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Cache cleared!{QWED.RESET if HAS_COLOR else ''}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -968,15 +1007,15 @@ def interactive(provider: Optional[str], model: Optional[str]):
     Example:
         qwed interactive
         > What is 2+2?
-        âœ… VERIFIED â†’ 4
+        ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ VERIFIED ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 4
         > derivative of x^2
-        âœ… VERIFIED â†’ 2*x
+        ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ VERIFIED ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 2*x
     """
     if HAS_COLOR:
-        click.echo(f"\n{QWED.BRAND}ðŸ”¬ QWED Interactive Mode{QWED.RESET}")
+        click.echo(f"\n{QWED.BRAND}ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â¬ QWED Interactive Mode{QWED.RESET}")
         click.echo(f"{QWED.INFO}Type 'exit' or 'quit' to quit{QWED.RESET}\n")
     else:
-        click.echo("\nðŸ”¬ QWED Interactive Mode")
+        click.echo("\nÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â¬ QWED Interactive Mode")
         click.echo("Type 'exit' or 'quit' to quit\n")
     
     # Create client once
@@ -1021,9 +1060,9 @@ def interactive(provider: Optional[str], model: Optional[str]):
             # Result already shown by branded output
             if not HAS_COLOR:
                 if result.verified:
-                    click.echo(f"âœ… {result.value}")
+                    click.echo(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ {result.value}")
                 else:
-                    click.echo(f"âŒ {result.error or 'Failed'}")
+                    click.echo(f"ÃƒÂ¢Ã‚ÂÃ…â€™ {result.error or 'Failed'}")
             
             click.echo()  # Blank line
             
@@ -1075,8 +1114,8 @@ def pii(text: str):
                 click.echo(f"  - {entity_type}: {count}")
         
     except ImportError:
-        click.echo(f"{QWED.ERROR if HAS_COLOR else ''}âŒ PII features not installed{QWED.RESET if HAS_COLOR else ''}", err=True)
-        click.echo("\nðŸ“¦ Install with:", err=True)
+        click.echo(f"{QWED.ERROR if HAS_COLOR else ''}ÃƒÂ¢Ã‚ÂÃ…â€™ PII features not installed{QWED.RESET if HAS_COLOR else ''}", err=True)
+        click.echo("\nÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â¦ Install with:", err=True)
         click.echo("   pip install 'qwed[pii]'", err=True)
         click.echo("   python -m spacy download en_core_web_lg", err=True)
         sys.exit(1)
@@ -1098,7 +1137,7 @@ def import_provider(url: str):
     try:
         from qwed_new.providers.config_manager import ProviderConfigManager
     except ImportError:
-        click.echo(f"{QWED.ERROR if HAS_COLOR else ''}âŒ Core config manager not found{QWED.RESET if HAS_COLOR else ''}", err=True)
+        click.echo(f"{QWED.ERROR if HAS_COLOR else ''}ÃƒÂ¢Ã‚ÂÃ…â€™ Core config manager not found{QWED.RESET if HAS_COLOR else ''}", err=True)
         sys.exit(1)
         
     try:
@@ -1111,16 +1150,16 @@ def import_provider(url: str):
         slug = manager.import_provider_from_url(url)
         
         if HAS_COLOR:
-            click.echo(f"{QWED.SUCCESS}âœ… Successfully imported provider '{slug}'!{QWED.RESET}")
+            click.echo(f"{QWED.SUCCESS}ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Successfully imported provider '{slug}'!{QWED.RESET}")
             click.echo(f"{QWED.INFO}   You can now run 'qwed init' and select it from the interactive menu.{QWED.RESET}")
         else:
-            click.echo(f"âœ… Successfully imported provider '{slug}'!")
+            click.echo(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Successfully imported provider '{slug}'!")
             click.echo("   You can now run 'qwed init' and select it from the interactive menu.")
     except Exception as e:
         if HAS_COLOR:
-            click.echo(f"{QWED.ERROR}âŒ Failed to import provider: {str(e)}{QWED.RESET}", err=True)
+            click.echo(f"{QWED.ERROR}ÃƒÂ¢Ã‚ÂÃ…â€™ Failed to import provider: {str(e)}{QWED.RESET}", err=True)
         else:
-            click.echo(f"âŒ Failed to import provider: {str(e)}", err=True)
+            click.echo(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Failed to import provider: {str(e)}", err=True)
         sys.exit(1)
 
 
