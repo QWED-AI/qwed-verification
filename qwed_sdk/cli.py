@@ -299,7 +299,7 @@ def _check_server_health(server_url: str, timeout: float = 2.0) -> bool:
 
     try:
         response = httpx.get(f"{server_url.rstrip('/')}/health", timeout=timeout)
-    except Exception:
+    except (httpx.HTTPError, ValueError):
         return False
     return response.status_code == 200
 
@@ -319,11 +319,31 @@ def _validate_local_server_target(server_url: str) -> tuple[str, str]:
     return host, str(port_value)
 
 
+def _normalize_local_server_url(server_url: str) -> str:
+    host, port = _validate_local_server_target(server_url)
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"http://{host}:{port}"
+
+
+def _guarded_popen(command: list[str], popen_kwargs: Dict[str, Any]) -> subprocess.Popen:
+    from qwed_new.guards.code_guard import CodeGuard
+
+    guard = CodeGuard()
+    preview = " ".join(command)
+    result = guard.verify_safety(preview, language="bash")
+    if not result.get("verified", False):
+        raise RuntimeError("Server launch blocked by CodeGuard policy.")
+
+    return subprocess.Popen(command, **popen_kwargs)  # noqa: S603
+
+
 def _ensure_local_server_running(server_url: str, jwt_secret: str) -> tuple[bool, bool]:
-    if _check_server_health(server_url):
+    normalized_server_url = _normalize_local_server_url(server_url)
+    if _check_server_health(normalized_server_url):
         return True, False
 
-    host, port = _validate_local_server_target(server_url)
+    host, port = _validate_local_server_target(normalized_server_url)
 
     env = os.environ.copy()
     src = _src_path()
@@ -356,9 +376,9 @@ def _ensure_local_server_running(server_url: str, jwt_secret: str) -> tuple[bool
     else:
         popen_kwargs["start_new_session"] = True
 
-    process = subprocess.Popen(command, **popen_kwargs)  # noqa: S603  # nosec - fixed command with validated loopback host/port
+    process = _guarded_popen(command, popen_kwargs)
     for _ in range(15):
-        if _check_server_health(server_url):
+        if _check_server_health(normalized_server_url):
             return True, True
         time.sleep(1)
 
@@ -368,7 +388,7 @@ def _ensure_local_server_running(server_url: str, jwt_secret: str) -> tuple[bool
         try:
             process.kill()
         except Exception:
-            pass
+            logger.debug("Failed to kill orphaned uvicorn process after startup timeout", exc_info=True)
     return False, True
 
 
@@ -583,6 +603,237 @@ def _ensure_gitignore_protection(verify_gitignore, add_env_to_gitignore) -> bool
     return True
 
 
+def _import_init_dependencies():
+    from qwed_new.config import ensure_jwt_secret
+    from qwed_new.providers.credential_store import (
+        add_env_to_gitignore,
+        verify_gitignore,
+        write_env_file,
+    )
+    from qwed_new.providers.key_validator import test_connection, validate_key_format
+    from qwed_new.providers.registry import get_provider
+
+    return (
+        ensure_jwt_secret,
+        add_env_to_gitignore,
+        verify_gitignore,
+        write_env_file,
+        test_connection,
+        validate_key_format,
+        get_provider,
+    )
+
+
+def _run_init_engine_phase(skip_tests: bool) -> None:
+    click.echo("[QWED] Initializing verification engines...")
+    all_ready, engine_report = _required_engine_report()
+    for item in engine_report:
+        if item["ready"]:
+            click.echo(f"  [ok] {item['name']:<8} {item['detail']}")
+        else:
+            click.echo(f"  [x]  {item['name']:<8} missing  -> {item['install_hint']}")
+
+    if not all_ready:
+        raise RuntimeError("Engine initialization failed. Install missing dependencies and retry.")
+
+    if skip_tests:
+        click.echo("\nSkipping verification suite (--skip-tests).")
+        return
+
+    click.echo("\nRunning verification suite...")
+    suite = _run_init_smoke_suite()
+    failed = [case for case in suite if not case["passed"]]
+    for case in suite:
+        marker = "[ok]" if case["passed"] else "[x]"
+        click.echo(f"  {marker} {case['label']:<24} -> {case['result']}")
+    if failed:
+        raise RuntimeError("Built-in verification suite failed. Resolve before onboarding.")
+    click.echo("\nAll engines verified. QWED is operational.")
+
+
+def _resolve_onboarding_profile(
+    provider_choice: Optional[str],
+    non_interactive: bool,
+    provider_map: Dict[str, OnboardingProvider],
+) -> OnboardingProvider:
+    selected = _normalize_provider_choice(
+        provider_choice or os.getenv("QWED_PROVIDER") or ("nvidia" if non_interactive else "")
+    )
+
+    if not selected:
+        click.echo("Select provider:")
+        click.echo("  1. NVIDIA NIM       (recommended)")
+        click.echo("  2. OpenAI")
+        click.echo("  3. Anthropic Claude")
+        click.echo("  4. Google Gemini")
+        click.echo("  5. Custom Provider  (any OpenAI-compatible API)")
+        choice = click.prompt("\nProvider", default=1, type=int)
+        options = ["nvidia", "openai", "anthropic", "gemini", "custom"]
+        if choice < 1 or choice > len(options):
+            raise RuntimeError("Invalid provider selection.")
+        selected = options[choice - 1]
+
+    if selected not in provider_map:
+        raise RuntimeError(f"Unsupported provider '{selected}'.")
+    return provider_map[selected]
+
+
+def _resolve_provider_credentials(
+    profile: OnboardingProvider,
+    api_key: Optional[str],
+    base_url: Optional[str],
+    model: Optional[str],
+    non_interactive: bool,
+) -> tuple[str, str, str]:
+    nvidia_fallback = os.getenv("NVIDIA_API_KEY", "") if profile.slug == "nvidia" else ""
+    resolved_key = (api_key or os.getenv(profile.key_env) or nvidia_fallback).strip()
+    resolved_base_url = (
+        (base_url or os.getenv(profile.base_url_env or "", "")).strip() if profile.base_url_env else ""
+    )
+    resolved_model = (model or os.getenv(profile.model_env) or profile.default_model).strip()
+
+    if not resolved_key and not non_interactive:
+        resolved_key = click.prompt(f"{profile.name} API key", hide_input=True).strip()
+
+    if profile.base_url_env and not resolved_base_url:
+        if non_interactive:
+            resolved_base_url = profile.default_base_url or ""
+        else:
+            resolved_base_url = click.prompt(
+                f"{profile.name} base URL",
+                default=profile.default_base_url or "",
+                show_default=True,
+            ).strip()
+
+    if not resolved_model and not non_interactive:
+        resolved_model = click.prompt(
+            f"{profile.name} default model",
+            default=profile.default_model,
+            show_default=True,
+        ).strip()
+
+    return resolved_key, resolved_base_url, resolved_model
+
+
+def _validate_provider_credentials(
+    profile: OnboardingProvider,
+    resolved_key: str,
+    resolved_base_url: str,
+    non_interactive: bool,
+    validate_key_format,
+) -> None:
+    if not resolved_key:
+        raise RuntimeError(f"{profile.key_env} is required for provider '{profile.slug}'.")
+    if profile.base_url_env and not resolved_base_url:
+        raise RuntimeError(f"{profile.base_url_env} is required for provider '{profile.slug}'.")
+
+    if not profile.key_pattern:
+        return
+
+    is_valid, message = validate_key_format(resolved_key, profile.key_pattern)
+    if not is_valid and non_interactive:
+        raise RuntimeError(f"Key validation failed: {message}")
+    if not is_valid:
+        click.echo(f"Warning: {message}")
+
+
+def _test_provider_connection_loop(
+    profile: OnboardingProvider,
+    resolved_key: str,
+    resolved_base_url: str,
+    resolved_model: str,
+    non_interactive: bool,
+    test_connection,
+) -> tuple[str, str, str]:
+    while True:
+        click.echo("\n  Testing connection...")
+        if profile.connection_slug == "gemini":
+            success, message = _test_gemini_connection(resolved_key)
+        else:
+            success, message = test_connection(
+                provider_slug=profile.connection_slug or "",
+                api_key=resolved_key,
+                base_url=resolved_base_url or None,
+                model=resolved_model,
+            )
+
+        if success:
+            click.echo("  [ok] Provider connected")
+            click.echo("  [ok] Model responding")
+            return resolved_key, resolved_base_url, resolved_model
+
+        click.echo(f"  [x] {message}", err=True)
+        if non_interactive:
+            raise RuntimeError(message)
+        if not click.confirm("  Retry with updated credentials?", default=True):
+            raise RuntimeError("Connection test aborted by user.")
+
+        resolved_key = click.prompt(f"{profile.name} API key", hide_input=True).strip()
+        if profile.base_url_env:
+            resolved_base_url = click.prompt(
+                f"{profile.name} base URL",
+                default=resolved_base_url or profile.default_base_url or "",
+                show_default=True,
+            ).strip()
+        resolved_model = click.prompt(
+            f"{profile.name} default model",
+            default=resolved_model or profile.default_model,
+            show_default=True,
+        ).strip()
+
+
+def _persist_onboarding_env(
+    profile: OnboardingProvider,
+    resolved_key: str,
+    resolved_base_url: str,
+    resolved_model: str,
+    ensure_jwt_secret,
+    verify_gitignore,
+    add_env_to_gitignore,
+    write_env_file,
+    non_interactive: bool,
+) -> tuple[str, str]:
+    env_vars = {profile.key_env: resolved_key, profile.model_env: resolved_model}
+    if profile.base_url_env:
+        env_vars[profile.base_url_env] = resolved_base_url
+
+    try:
+        jwt_secret = ensure_jwt_secret()
+    except Exception as exc:
+        logger.exception("JWT secret preparation failed")
+        raise RuntimeError(f"Failed to prepare JWT secret: {type(exc).__name__}") from exc
+
+    env_vars["QWED_JWT_SECRET_KEY"] = jwt_secret
+
+    try:
+        if non_interactive:
+            _ensure_gitignore_protection_noninteractive(verify_gitignore, add_env_to_gitignore)
+        else:
+            _ensure_gitignore_protection(verify_gitignore, add_env_to_gitignore)
+        env_path = write_env_file(env_vars, active_provider=profile.active_provider)
+    except Exception as exc:
+        logger.exception("Credential persistence failed")
+        raise RuntimeError(f"Failed to store credentials securely: {type(exc).__name__}") from exc
+
+    os.environ.update(env_vars)
+    os.environ["ACTIVE_PROVIDER"] = profile.active_provider
+    click.echo("  [ok] Credentials stored (.env, mode 0600)")
+    return jwt_secret, env_path
+
+
+def _resolve_organization_name(organization_name: Optional[str], non_interactive: bool) -> str:
+    resolved_org = (organization_name or "").strip()
+    if not resolved_org:
+        resolved_org = os.getenv("QWED_ORGANIZATION_NAME", "").strip()
+    if not resolved_org and non_interactive:
+        resolved_org = f"qwed-{secrets.token_hex(2)}"
+    if not resolved_org:
+        resolved_org = click.prompt("Organization name").strip()
+    if not resolved_org:
+        raise RuntimeError("Organization name is required.")
+    return resolved_org
+
+
 @cli.command()
 @click.option(
     "--provider",
@@ -612,45 +863,25 @@ def init(
     _load_dotenv_if_available()
 
     try:
-        from qwed_new.config import ensure_jwt_secret
-        from qwed_new.providers.credential_store import (
+        (
+            ensure_jwt_secret,
             add_env_to_gitignore,
             verify_gitignore,
             write_env_file,
-        )
-        from qwed_new.providers.key_validator import test_connection, validate_key_format
-        from qwed_new.providers.registry import get_provider
+            test_connection,
+            validate_key_format,
+            get_provider,
+        ) = _import_init_dependencies()
     except ImportError as exc:
         click.echo(f"QWED core not found: {type(exc).__name__}", err=True)
         sys.exit(1)
 
     provider_map = _build_onboarding_provider_map(get_provider)
-
-    click.echo("[QWED] Initializing verification engines...")
-    all_ready, engine_report = _required_engine_report()
-    for item in engine_report:
-        if item["ready"]:
-            click.echo(f"  [ok] {item['name']:<8} {item['detail']}")
-        else:
-            click.echo(f"  [x]  {item['name']:<8} missing  -> {item['install_hint']}")
-
-    if not all_ready:
-        click.echo("\nEngine initialization failed. Install missing dependencies and retry.", err=True)
+    try:
+        _run_init_engine_phase(skip_tests)
+    except RuntimeError as exc:
+        click.echo(f"\n{exc}", err=True)
         sys.exit(1)
-
-    if not skip_tests:
-        click.echo("\nRunning verification suite...")
-        suite = _run_init_smoke_suite()
-        failed = [case for case in suite if not case["passed"]]
-        for case in suite:
-            marker = "[ok]" if case["passed"] else "[x]"
-            click.echo(f"  {marker} {case['label']:<24} -> {case['result']}")
-        if failed:
-            click.echo("\nBuilt-in verification suite failed. Resolve before onboarding.", err=True)
-            sys.exit(1)
-        click.echo("\nAll engines verified. QWED is operational.")
-    else:
-        click.echo("\nSkipping verification suite (--skip-tests).")
 
     click.echo(f"\n{SEPARATOR}")
     click.echo("Step 1/3: LLM Provider Setup")
@@ -658,162 +889,79 @@ def init(
     click.echo("QWED uses an LLM for natural language translation.")
     click.echo("The LLM is treated as an untrusted translator.")
     click.echo("All outputs are verified deterministically.\n")
-
-    selected = _normalize_provider_choice(
-        provider_choice
-        or os.getenv("QWED_PROVIDER")
-        or ("nvidia" if non_interactive else "")
-    )
-
-    if not selected:
-        click.echo("Select provider:")
-        click.echo("  1. NVIDIA NIM       (recommended)")
-        click.echo("  2. OpenAI")
-        click.echo("  3. Anthropic Claude")
-        click.echo("  4. Google Gemini")
-        click.echo("  5. Custom Provider  (any OpenAI-compatible API)")
-        choice = click.prompt("\nProvider", default=1, type=int)
-        options = ["nvidia", "openai", "anthropic", "gemini", "custom"]
-        if choice < 1 or choice > len(options):
-            click.echo("Invalid provider selection.", err=True)
-            sys.exit(1)
-        selected = options[choice - 1]
-
-    if selected not in provider_map:
-        click.echo(f"Unsupported provider '{selected}'.", err=True)
+    try:
+        profile = _resolve_onboarding_profile(provider_choice, non_interactive, provider_map)
+    except RuntimeError as exc:
+        click.echo(str(exc), err=True)
         sys.exit(1)
-
-    profile = provider_map[selected]
-
-    nvidia_fallback = os.getenv("NVIDIA_API_KEY", "") if selected == "nvidia" else ""
-    resolved_key = (api_key or os.getenv(profile.key_env) or nvidia_fallback).strip()
-    resolved_base_url = (
-        (base_url or os.getenv(profile.base_url_env or "", "")).strip()
-        if profile.base_url_env
-        else ""
-    )
-    resolved_model = (model or os.getenv(profile.model_env) or profile.default_model).strip()
 
     click.echo(f"\n{SEPARATOR}")
     click.echo("Step 2/3: API Key")
     click.echo(SEPARATOR)
 
-    if not resolved_key and not non_interactive:
-        resolved_key = click.prompt(f"{profile.name} API key", hide_input=True).strip()
-    if profile.base_url_env and not resolved_base_url:
-        if non_interactive:
-            resolved_base_url = profile.default_base_url or ""
-        else:
-            resolved_base_url = click.prompt(
-                f"{profile.name} base URL",
-                default=profile.default_base_url or "",
-                show_default=True,
-            ).strip()
-    if not resolved_model and not non_interactive:
-        resolved_model = click.prompt(
-            f"{profile.name} default model",
-            default=profile.default_model,
-            show_default=True,
-        ).strip()
-
-    if not resolved_key:
-        click.echo(f"{profile.key_env} is required for provider '{profile.slug}'.", err=True)
-        sys.exit(1)
-    if profile.base_url_env and not resolved_base_url:
-        click.echo(f"{profile.base_url_env} is required for provider '{profile.slug}'.", err=True)
-        sys.exit(1)
-
-    if profile.key_pattern:
-        is_valid, message = validate_key_format(resolved_key, profile.key_pattern)
-        if not is_valid and non_interactive:
-            click.echo(f"Key validation failed: {message}", err=True)
-            sys.exit(1)
-        if not is_valid:
-            click.echo(f"Warning: {message}")
-
-    while True:
-        click.echo("\n  Testing connection...")
-        if profile.connection_slug == "gemini":
-            success, message = _test_gemini_connection(resolved_key)
-        else:
-            success, message = test_connection(
-                provider_slug=profile.connection_slug or "",
-                api_key=resolved_key,
-                base_url=resolved_base_url or None,
-                model=resolved_model,
-            )
-        if success:
-            click.echo("  [ok] Provider connected")
-            click.echo("  [ok] Model responding")
-            break
-
-        click.echo(f"  [x] {message}", err=True)
-        if non_interactive:
-            sys.exit(1)
-
-        if not click.confirm("  Retry with updated credentials?", default=True):
-            sys.exit(1)
-        resolved_key = click.prompt(f"{profile.name} API key", hide_input=True).strip()
-        if profile.base_url_env:
-            resolved_base_url = click.prompt(
-                f"{profile.name} base URL",
-                default=resolved_base_url or profile.default_base_url or "",
-                show_default=True,
-            ).strip()
-        resolved_model = click.prompt(
-            f"{profile.name} default model",
-            default=resolved_model or profile.default_model,
-            show_default=True,
-        ).strip()
-
-    env_vars = {profile.key_env: resolved_key, profile.model_env: resolved_model}
-    if profile.base_url_env:
-        env_vars[profile.base_url_env] = resolved_base_url
-
     try:
-        jwt_secret = ensure_jwt_secret()
-    except Exception as exc:
-        logger.exception("JWT secret preparation failed")
-        click.echo(f"Failed to prepare JWT secret: {type(exc).__name__}", err=True)
+        resolved_key, resolved_base_url, resolved_model = _resolve_provider_credentials(
+            profile=profile,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            non_interactive=non_interactive,
+        )
+        _validate_provider_credentials(
+            profile=profile,
+            resolved_key=resolved_key,
+            resolved_base_url=resolved_base_url,
+            non_interactive=non_interactive,
+            validate_key_format=validate_key_format,
+        )
+        resolved_key, resolved_base_url, resolved_model = _test_provider_connection_loop(
+            profile=profile,
+            resolved_key=resolved_key,
+            resolved_base_url=resolved_base_url,
+            resolved_model=resolved_model,
+            non_interactive=non_interactive,
+            test_connection=test_connection,
+        )
+        jwt_secret, env_path = _persist_onboarding_env(
+            profile=profile,
+            resolved_key=resolved_key,
+            resolved_base_url=resolved_base_url,
+            resolved_model=resolved_model,
+            ensure_jwt_secret=ensure_jwt_secret,
+            verify_gitignore=verify_gitignore,
+            add_env_to_gitignore=add_env_to_gitignore,
+            write_env_file=write_env_file,
+            non_interactive=non_interactive,
+        )
+    except RuntimeError as exc:
+        click.echo(str(exc), err=True)
         sys.exit(1)
-
-    env_vars["QWED_JWT_SECRET_KEY"] = jwt_secret
-
-    try:
-        if non_interactive:
-            _ensure_gitignore_protection_noninteractive(verify_gitignore, add_env_to_gitignore)
-        else:
-            _ensure_gitignore_protection(verify_gitignore, add_env_to_gitignore)
-        env_path = write_env_file(env_vars, active_provider=profile.active_provider)
-    except Exception as exc:
-        logger.exception("Credential persistence failed")
-        click.echo(f"Failed to store credentials securely: {type(exc).__name__}", err=True)
-        sys.exit(1)
-
-    os.environ.update(env_vars)
-    os.environ["ACTIVE_PROVIDER"] = profile.active_provider
-    click.echo("  [ok] Credentials stored (.env, mode 0600)")
 
     click.echo(f"\n{SEPARATOR}")
     click.echo("Step 3/3: Generate QWED API Key")
     click.echo(SEPARATOR)
 
-    if not organization_name:
-        organization_name = os.getenv("QWED_ORGANIZATION_NAME", "").strip()
-    if not organization_name and non_interactive:
-        organization_name = f"qwed-{secrets.token_hex(2)}"
-    if not organization_name:
-        organization_name = click.prompt("Organization name").strip()
-    if not organization_name:
-        click.echo("Organization name is required.", err=True)
+    try:
+        organization_name = _resolve_organization_name(organization_name, non_interactive)
+        normalized_server_url = _normalize_local_server_url(server_url)
+    except RuntimeError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(1)
+    except ValueError as exc:
+        click.echo(f"  [x] Invalid server URL: {exc}", err=True)
         sys.exit(1)
 
     click.echo("\n  Starting local server...")
     try:
-        server_ready, started_new = _ensure_local_server_running(server_url, jwt_secret)
+        server_ready, started_new = _ensure_local_server_running(normalized_server_url, jwt_secret)
     except ValueError as exc:
         logger.exception("Local server target validation failed")
         click.echo(f"  [x] Invalid server URL: {exc}", err=True)
+        sys.exit(1)
+    except Exception as exc:
+        logger.exception("Failed to start local server")
+        click.echo(f"  [x] Failed to start local server: {type(exc).__name__}", err=True)
+        click.echo("    Ensure dependencies are installed and runtime permissions allow subprocess start.", err=True)
         sys.exit(1)
     if not server_ready:
         click.echo("  [x] Failed to start local server.", err=True)
@@ -825,7 +973,7 @@ def init(
         click.echo("  [ok] Runtime path guard applied (src/ added to PYTHONPATH)")
 
     try:
-        qwed_api_key, actual_org_name = _bootstrap_api_key(server_url, organization_name)
+        qwed_api_key, actual_org_name = _bootstrap_api_key(normalized_server_url, organization_name)
     except Exception as exc:
         logger.exception("API key bootstrap failed")
         click.echo(f"  [x] API key bootstrap failed: {exc}", err=True)
@@ -840,7 +988,7 @@ def init(
 
     click.echo(f"\n{SEPARATOR}")
     click.echo("QWED is ready.")
-    verify_url = f"{server_url.rstrip('/')}/verify/math"
+    verify_url = f"{normalized_server_url.rstrip('/')}/verify/math"
     click.echo("\nVerify an output:")
     click.echo(f"  curl -X POST {verify_url} \\")
     click.echo(f"    -H \"x-api-key: {qwed_api_key}\" \\")
@@ -922,10 +1070,19 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
                 provider_key_env = {
                     "openai": "OPENAI_API_KEY",
                     "anthropic": "ANTHROPIC_API_KEY",
+                    "gemini": "GOOGLE_API_KEY",
+                }
+                provider_model_env = {
+                    "openai": "OPENAI_MODEL",
+                    "anthropic": "ANTHROPIC_MODEL",
+                    "gemini": "GEMINI_MODEL",
                 }
                 if not api_key:
                     env_key = provider_key_env.get(provider, "QWED_API_KEY")
                     api_key = _os.getenv(env_key, _os.getenv("QWED_API_KEY", ""))
+                if not model:
+                    model_env = provider_model_env.get(provider, "")
+                    model = _os.getenv(model_env, model) if model_env else model
                 if HAS_COLOR and not quiet:
                     click.echo(f"{QWED.INFO}ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¹ÃƒÂ¯Ã‚Â¸Ã‚Â  Using configured provider: {active}{QWED.RESET}")
         

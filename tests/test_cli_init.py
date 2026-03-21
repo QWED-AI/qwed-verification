@@ -1,4 +1,5 @@
 import os
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,7 +19,7 @@ from qwed_sdk.cli import (
     init,
 )
 
-TEST_JWT_VALUE = "test-value-123"
+TEST_TOKEN_MARKER = f"fixture-{uuid.uuid4().hex}"
 
 
 @pytest.fixture
@@ -96,7 +97,7 @@ def _gemini_provider_map():
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
 def test_init_non_interactive_success(
     _mock_jwt,
     _mock_write_env,
@@ -172,7 +173,7 @@ def test_init_non_interactive_connection_failure(
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
 def test_init_persists_jwt_secret_in_env_write(
     _mock_jwt,
     mock_write_env,
@@ -204,7 +205,7 @@ def test_init_persists_jwt_secret_in_env_write(
     assert result.exit_code == 0
     args, kwargs = mock_write_env.call_args
     env_vars = args[0]
-    assert env_vars["QWED_JWT_SECRET_KEY"] == TEST_JWT_VALUE
+    assert env_vars["QWED_JWT_SECRET_KEY"] == TEST_TOKEN_MARKER
     assert kwargs["active_provider"] == "openai"
 
 
@@ -629,8 +630,10 @@ def test_test_gemini_connection_other_http_status(monkeypatch):
 
 
 def test_check_server_health_handles_exception(monkeypatch):
+    import httpx
+
     def _raise(*_args, **_kwargs):
-        raise RuntimeError("down")
+        raise httpx.ConnectError("down")
 
     monkeypatch.setattr("httpx.get", _raise)
     assert _check_server_health("http://127.0.0.1:9001") is False
@@ -750,7 +753,7 @@ def test_init_exits_for_unsupported_provider_slug(
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
 def test_init_non_interactive_custom_uses_default_base_url(
     _mock_jwt,
     mock_write_env,
@@ -822,7 +825,7 @@ def test_init_non_interactive_custom_requires_base_url_if_no_default(
 @patch("qwed_sdk.cli._load_dotenv_if_available")
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
 @patch("qwed_sdk.cli._test_gemini_connection", return_value=(True, "Connected to Gemini API."))
 def test_init_uses_gemini_connection_path(
     _mock_gemini_conn,
@@ -937,7 +940,7 @@ def test_init_exits_when_jwt_creation_fails(
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
 @patch("qwed_new.providers.credential_store.write_env_file", side_effect=RuntimeError("disk full"))
-@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
 def test_init_exits_when_env_write_fails(
     _mock_jwt,
     _mock_write_env,
@@ -1083,7 +1086,7 @@ def test_init_exits_when_core_import_fails(monkeypatch, runner):
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(False, "bad creds"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
 def test_init_interactive_aborts_when_retry_declined(
     _mock_jwt,
     _mock_write_env,
@@ -1116,7 +1119,7 @@ def test_init_interactive_aborts_when_retry_declined(
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(False, "bad format"))
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
 def test_init_interactive_shows_warning_on_invalid_key_format(
     _mock_jwt,
     _mock_write_env,
@@ -1150,7 +1153,7 @@ def test_init_interactive_shows_warning_on_invalid_key_format(
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
 def test_init_interactive_prompts_for_model_when_default_empty(
     _mock_jwt,
     _mock_write_env,
@@ -1191,7 +1194,7 @@ def test_init_interactive_prompts_for_model_when_default_empty(
     side_effect=[(False, "bad creds"), (True, "Connected")],
 )
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
 def test_init_interactive_custom_retry_prompts_base_url_again(
     _mock_jwt,
     _mock_write_env,
@@ -1230,7 +1233,7 @@ def test_init_interactive_custom_retry_prompts_base_url_again(
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
 def test_init_exits_when_bootstrap_fails(
     _mock_jwt,
     _mock_write_env,
@@ -1273,7 +1276,7 @@ def test_init_exits_when_bootstrap_fails(
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
 def test_init_prints_org_alias_when_bootstrap_renames_org(
     _mock_jwt,
     _mock_write_env,
@@ -1316,7 +1319,7 @@ def test_init_prints_org_alias_when_bootstrap_renames_org(
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
 def test_init_non_interactive_autogenerates_org_name_when_missing(
     _mock_jwt,
     _mock_write_env,
@@ -1357,7 +1360,7 @@ def test_init_non_interactive_autogenerates_org_name_when_missing(
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
 def test_init_interactive_requires_org_name(
     _mock_jwt,
     _mock_write_env,
@@ -1390,7 +1393,7 @@ def test_init_interactive_requires_org_name(
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
 def test_init_exits_on_invalid_server_url(
     _mock_jwt,
     _mock_write_env,
@@ -1430,7 +1433,7 @@ def test_init_exits_on_invalid_server_url(
 @patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
 def test_init_exits_when_local_server_not_ready(
     _mock_jwt,
     _mock_write_env,
@@ -1474,7 +1477,7 @@ def test_init_exits_when_local_server_not_ready(
     side_effect=[(False, "Auth failed"), (True, "Connected")],
 )
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
-@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_JWT_VALUE)
+@patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
 def test_init_interactive_retries_connection_until_success(
     _mock_jwt,
     _mock_write_env,
