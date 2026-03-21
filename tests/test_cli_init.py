@@ -572,7 +572,7 @@ def test_resolve_server_runtime_dir_falls_back_to_home_when_unwritable(monkeypat
     monkeypatch.setattr("qwed_sdk.cli.Path.cwd", lambda: cwd_path)
     monkeypatch.setattr("qwed_sdk.cli.Path.home", lambda: home_path)
     monkeypatch.setattr("qwed_sdk.cli.os.access", lambda _path, _mode: False)
-    monkeypatch.setattr("qwed_sdk.cli.Path.mkdir", lambda self, parents=False, exist_ok=False: None)
+    monkeypatch.setattr("qwed_sdk.cli.Path.mkdir", lambda self, parents=True, exist_ok=True: None)
 
     expected = (home_path / "qwed-demo").resolve()
     assert _resolve_server_runtime_dir() == expected
