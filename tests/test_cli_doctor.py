@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from qwed_sdk.cli import _active_provider_status, _database_health, _doctor_report, cli
+from qwed_sdk.cli import _active_provider_status, _database_health, _doctor_report, _doctor_server_url, cli
 
 
 def _required_ok_report():
@@ -141,26 +141,47 @@ def test_active_provider_status_openai_compat_requires_base_url():
 
 
 @patch.dict(os.environ, {"QWED_SERVER_URL": "http://10.0.0.9:8000"})
+@patch("qwed_sdk.cli._check_server_health", return_value=True)
 @patch("qwed_sdk.cli._database_health", return_value={"healthy": True, "location": "qwed.db"})
 @patch("qwed_sdk.cli._active_provider_status", return_value={"ok": True, "label": "NVIDIA NIM", "message": "Connected"})
 @patch("qwed_sdk.cli._optional_engine_report", return_value=_optional_report())
 @patch("qwed_sdk.cli._required_engine_report", return_value=(True, _required_ok_report()))
-def test_doctor_report_invalid_server_url_marks_not_running(
+def test_doctor_report_allows_remote_server_url(
     _mock_required,
     _mock_optional,
     _mock_provider,
     _mock_db,
+    _mock_health,
 ):
     report = _doctor_report()
-    assert report["server"]["running"] is False
-    assert report["status"] == "DEGRADED"
+    assert report["server"]["running"] is True
+    assert report["server"]["url"] == "http://10.0.0.9:8000"
+    assert report["status"].startswith("OPERATIONAL")
 
 
 @patch("qwed_new.config.settings", new=type("Settings", (), {"DATABASE_URL": "postgresql://db.example/qwed"}))
-def test_database_health_non_sqlite_url():
+@patch("qwed_sdk.cli.socket.create_connection")
+def test_database_health_non_sqlite_url(mock_create_connection):
     status = _database_health()
     assert status["healthy"] is True
     assert status["location"] == "postgresql://db.example/qwed"
+    mock_create_connection.assert_called_once_with(("db.example", 5432), timeout=2.0)
+
+
+@patch("qwed_new.config.settings", new=type("Settings", (), {"DATABASE_URL": "postgresql://db.example/qwed"}))
+@patch("qwed_sdk.cli.socket.create_connection", side_effect=OSError("down"))
+def test_database_health_non_sqlite_url_connection_failure(_mock_create_connection):
+    status = _database_health()
+    assert status["healthy"] is False
+    assert status["location"] == "postgresql://db.example/qwed"
+    assert "error" in status
+
+
+@patch("qwed_new.config.settings", new=type("Settings", (), {"DATABASE_URL": "postgresql:///qwed"}))
+def test_database_health_non_sqlite_url_missing_hostname():
+    status = _database_health()
+    assert status["healthy"] is False
+    assert status["error"] == "Missing hostname"
 
 
 def test_database_health_sqlite_relative_path(tmp_path, monkeypatch):
@@ -171,3 +192,8 @@ def test_database_health_sqlite_relative_path(tmp_path, monkeypatch):
         status = _database_health()
     assert status["healthy"] is True
     assert status["location"].endswith("qwed.db")
+
+
+@patch.dict(os.environ, {"QWED_SERVER_URL": "10.0.0.9:8000"})
+def test_doctor_server_url_adds_http_scheme():
+    assert _doctor_server_url() == "http://10.0.0.9:8000"

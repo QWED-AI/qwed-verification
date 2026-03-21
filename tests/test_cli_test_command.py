@@ -25,10 +25,10 @@ def test_test_command_success(_mock_results):
 @patch(
     "qwed_sdk.cli._run_full_engine_tests",
     return_value=[
-        {"group": "Math", "label": "2+2=4", "passed": True, "result": "VALID"},
-        {"group": "Logic", "label": "x>5 AND x<3", "passed": False, "result": "UNSAT"},
-        {"group": "SQL", "label": "Valid SELECT", "passed": True, "result": "SAFE"},
-        {"group": "Code", "label": "Safe function", "passed": True, "result": "SAFE"},
+        {"group": "Math", "label": "2+2=4", "passed": True, "result": "VALID", "detail": "computed=4"},
+        {"group": "Logic", "label": "x>5 AND x<3", "passed": False, "result": "UNSAT", "detail": "status=UNSAT"},
+        {"group": "SQL", "label": "Valid SELECT", "passed": True, "result": "SAFE", "detail": "status=SAFE"},
+        {"group": "Code", "label": "Safe function", "passed": True, "result": "SAFE", "detail": "status=SAFE"},
     ],
 )
 def test_test_command_failure_exit_nonzero(_mock_results):
@@ -37,6 +37,7 @@ def test_test_command_failure_exit_nonzero(_mock_results):
 
     assert result.exit_code == 1
     assert "3/4 tests passed" in result.output
+    assert "status=UNSAT" in result.output
 
 
 @patch("qwed_new.core.code_verifier.CodeVerifier")
@@ -81,3 +82,4 @@ def test_run_full_engine_tests_returns_expected_shape(
     assert results[0]["group"] == "Math"
     assert any(item["label"] == "curl | bash" and item["passed"] for item in results)
     assert sum(1 for item in results if item["passed"]) == 12
+    assert all("detail" in item and item["detail"] for item in results)
