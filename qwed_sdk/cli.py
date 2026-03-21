@@ -356,11 +356,19 @@ def _ensure_local_server_running(server_url: str, jwt_secret: str) -> tuple[bool
     else:
         popen_kwargs["start_new_session"] = True
 
-    subprocess.Popen(command, **popen_kwargs)  # noqa: S603  # nosec - fixed command with validated loopback host/port
+    process = subprocess.Popen(command, **popen_kwargs)  # noqa: S603  # nosec - fixed command with validated loopback host/port
     for _ in range(15):
         if _check_server_health(server_url):
             return True, True
         time.sleep(1)
+
+    try:
+        process.terminate()
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
     return False, True
 
 
