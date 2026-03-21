@@ -1097,6 +1097,7 @@ def _provider_connection_profile(active_provider: str) -> dict:
             "key_env": "OPENAI_API_KEY",
             "model_env": "OPENAI_MODEL",
             "base_url_env": None,
+            "default_base_url": None,
         },
         "openai_direct": {
             "label": "OpenAI",
@@ -1104,6 +1105,7 @@ def _provider_connection_profile(active_provider: str) -> dict:
             "key_env": "OPENAI_API_KEY",
             "model_env": "OPENAI_MODEL",
             "base_url_env": None,
+            "default_base_url": None,
         },
         "anthropic": {
             "label": "Anthropic Claude",
@@ -1111,6 +1113,7 @@ def _provider_connection_profile(active_provider: str) -> dict:
             "key_env": "ANTHROPIC_API_KEY",
             "model_env": "ANTHROPIC_MODEL",
             "base_url_env": None,
+            "default_base_url": None,
         },
         "claude_opus": {
             "label": "Anthropic Claude",
@@ -1118,6 +1121,7 @@ def _provider_connection_profile(active_provider: str) -> dict:
             "key_env": "ANTHROPIC_API_KEY",
             "model_env": "ANTHROPIC_MODEL",
             "base_url_env": None,
+            "default_base_url": None,
         },
         "gemini": {
             "label": "Google Gemini",
@@ -1125,6 +1129,7 @@ def _provider_connection_profile(active_provider: str) -> dict:
             "key_env": "GOOGLE_API_KEY",
             "model_env": "GEMINI_MODEL",
             "base_url_env": None,
+            "default_base_url": None,
         },
         "openai_compat": {
             "label": "OpenAI-compatible",
@@ -1132,6 +1137,7 @@ def _provider_connection_profile(active_provider: str) -> dict:
             "key_env": "CUSTOM_API_KEY",
             "model_env": "CUSTOM_MODEL",
             "base_url_env": "CUSTOM_BASE_URL",
+            "default_base_url": None,
         },
         "azure_openai": {
             "label": "Azure OpenAI",
@@ -1139,6 +1145,7 @@ def _provider_connection_profile(active_provider: str) -> dict:
             "key_env": "AZURE_OPENAI_API_KEY",
             "model_env": "AZURE_OPENAI_DEPLOYMENT",
             "base_url_env": "AZURE_OPENAI_ENDPOINT",
+            "default_base_url": None,
         },
         "ollama": {
             "label": "Ollama",
@@ -1146,6 +1153,7 @@ def _provider_connection_profile(active_provider: str) -> dict:
             "key_env": None,
             "model_env": "OLLAMA_MODEL",
             "base_url_env": "OLLAMA_BASE_URL",
+            "default_base_url": "http://localhost:11434/v1",
         },
     }
     return profiles.get(active_provider, {})
@@ -1174,6 +1182,8 @@ def _active_provider_status() -> dict:
 
     api_key = os.getenv(profile["key_env"], "").strip() if profile["key_env"] else ""
     base_url = os.getenv(profile["base_url_env"], "").strip() if profile["base_url_env"] else ""
+    if not base_url:
+        base_url = str(profile.get("default_base_url") or "").strip()
     model = os.getenv(profile["model_env"], "").strip() if profile["model_env"] else ""
 
     if profile["key_env"] and not api_key:
@@ -1268,7 +1278,7 @@ def _print_doctor_report(report: dict) -> None:
     for item in report["required_engines"] + report["optional_engines"]:
         if item["ready"]:
             click.echo(
-                f"  [ok] {item['name']:<8} {str(item.get('version') or '-'): <8} {item['detail']}"
+                f"  [ok] {item['name']:<8} {(item.get('version') or '-')!s: <8} {item['detail']}"
             )
         else:
             click.echo(
