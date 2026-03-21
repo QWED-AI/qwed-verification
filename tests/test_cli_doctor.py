@@ -153,6 +153,35 @@ def test_active_provider_status_openai_compat_requires_base_url():
     assert "CUSTOM_BASE_URL" in status["message"]
 
 
+@patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
+@patch("qwed_sdk.cli._check_server_health", return_value=True)
+@patch("qwed_sdk.cli._optional_engine_report", return_value=[])
+@patch("qwed_sdk.cli._required_engine_report", return_value=(True, _required_ok_report()))
+@patch("qwed_sdk.cli._database_health", return_value={"healthy": True, "location": "qwed.db"})
+def test_doctor_report_reads_active_provider_from_dotenv_with_override(
+    _mock_db,
+    _mock_required,
+    _mock_optional,
+    _mock_health,
+    _mock_connection,
+    tmp_path,
+    monkeypatch,
+):
+    (tmp_path / ".env").write_text(
+        "ACTIVE_PROVIDER=openai_compat\n"
+        "CUSTOM_API_KEY=fixture_value\n"
+        "CUSTOM_BASE_URL=https://api.example.com/v1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ACTIVE_PROVIDER", "ollama")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+
+    report = _doctor_report()
+    assert report["provider"]["ok"] is True
+    assert report["provider"]["label"] == "OpenAI-compatible"
+
+
 @patch.dict(os.environ, {"QWED_SERVER_URL": "http://10.0.0.9:8000"})
 @patch("qwed_sdk.cli._check_server_health", return_value=True)
 @patch("qwed_sdk.cli._database_health", return_value={"healthy": True, "location": "qwed.db"})
@@ -225,6 +254,18 @@ def test_database_health_sqlite_driver_variant(tmp_path, monkeypatch):
         status = _database_health()
     assert status["healthy"] is True
     assert status["location"].endswith("qwed_driver.db")
+
+
+def test_database_health_prefers_database_url_env_over_settings(tmp_path, monkeypatch):
+    db_file = tmp_path / "from_env.db"
+    db_file.write_text("")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+
+    with patch("qwed_new.config.settings", new=type("Settings", (), {"DATABASE_URL": "sqlite:///./from_settings.db"})):
+        status = _database_health(prefer_env=True)
+
+    assert status["healthy"] is True
+    assert status["location"].endswith("from_env.db")
 
 
 @patch.dict(os.environ, {"QWED_SERVER_URL": "10.0.0.9:8000"})
