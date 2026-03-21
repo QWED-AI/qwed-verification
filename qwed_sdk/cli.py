@@ -61,6 +61,21 @@ MATH_LABEL_VALID = "2+2=4"
 MATH_LABEL_INVALID = "2+2=5"
 MATH_LABEL_LARGE = "997*998*999"
 LOGIC_LABEL_UNSAT = "x>5 AND x<3"
+PLACEHOLDER_API_KEY_VALUES = {
+    "apikey",
+    "changeme",
+    "dummy",
+    "example",
+    "none",
+    "null",
+    "placeholder",
+    "sample",
+    "test",
+    "xxx",
+    "xxxx",
+    "xxxxx",
+    "yourapikey",
+}
 
 
 @dataclass(frozen=True)
@@ -700,7 +715,7 @@ def _resolve_onboarding_profile(
 
     if not selected:
         click.echo("Select provider:")
-        click.echo("  1. NVIDIA NIM       (recommended)")
+        click.echo("  1. NVIDIA NIM")
         click.echo("  2. OpenAI")
         click.echo(f"  3. {ANTHROPIC_CLAUDE_LABEL}")
         click.echo("  4. Google Gemini")
@@ -740,8 +755,43 @@ def _resolve_provider_credentials(
 
 
 def _resolve_provider_api_key(profile: OnboardingProvider, api_key: Optional[str]) -> str:
-    nvidia_fallback = os.getenv("NVIDIA_API_KEY", "") if profile.slug == "nvidia" else ""
-    return (api_key or os.getenv(profile.key_env) or nvidia_fallback).strip()
+    direct_key = (api_key or "").strip()
+    env_key = os.getenv(profile.key_env, "").strip()
+    nvidia_fallback = os.getenv("NVIDIA_API_KEY", "").strip() if profile.slug == "nvidia" else ""
+
+    if _looks_like_placeholder_api_key(direct_key, profile.slug):
+        direct_key = ""
+    if _looks_like_placeholder_api_key(env_key, profile.slug):
+        env_key = ""
+    if _looks_like_placeholder_api_key(nvidia_fallback, profile.slug):
+        nvidia_fallback = ""
+
+    return direct_key or env_key or nvidia_fallback
+
+
+def _looks_like_placeholder_api_key(value: str, provider_slug: str) -> bool:
+    if not value:
+        return False
+
+    lowered = value.strip().lower()
+    normalized = lowered.replace(" ", "").replace("-", "").replace("_", "")
+
+    if normalized in PLACEHOLDER_API_KEY_VALUES:
+        return True
+    if "placeholder" in normalized:
+        return True
+    if "changeme" in normalized:
+        return True
+    if lowered.startswith(("your-", "replace-")) and "key" in lowered:
+        return True
+    if len(normalized) >= 3 and set(normalized) <= {"x", "*", "."}:
+        return True
+
+    # NVIDIA placeholders commonly look like nvapi-xxxx and should always reprompt.
+    if provider_slug == "nvidia" and lowered.startswith("nvapi-") and len(value.strip()) < 20:
+        return True
+
+    return False
 
 
 def _resolve_provider_base_url(
