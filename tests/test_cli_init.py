@@ -15,6 +15,8 @@ from qwed_sdk.cli import (
     _looks_like_placeholder_api_key,
     _required_engine_report,
     _resolve_provider_api_key,
+    _resolve_server_runtime_dir,
+    _runtime_sqlite_database_url,
     _run_init_smoke_suite,
     _test_gemini_connection,
     _validate_local_server_target,
@@ -465,10 +467,11 @@ def test_ensure_local_server_running_applies_pythonpath_guard(monkeypatch):
     checks = iter([False, True])
     popen_capture = {}
     expected_src = str(Path("repo") / "src")
+    runtime_dir = Path("runtime-dir")
 
     monkeypatch.setattr("qwed_sdk.cli._check_server_health", lambda _url, timeout=2.0: next(checks))
     monkeypatch.setattr("qwed_sdk.cli._src_path", lambda: expected_src)
-    monkeypatch.setattr("qwed_sdk.cli._project_root", lambda: Path("repo"))
+    monkeypatch.setattr("qwed_sdk.cli._resolve_server_runtime_dir", lambda: runtime_dir)
     monkeypatch.setattr("qwed_sdk.cli.time.sleep", lambda _s: None)
 
     def _fake_popen(command, **kwargs):
@@ -485,12 +488,15 @@ def test_ensure_local_server_running_applies_pythonpath_guard(monkeypatch):
     assert popen_capture["command"][-2:] == ["--port", "9001"]
     env = popen_capture["kwargs"]["env"]
     assert env["QWED_JWT_SECRET_KEY"] == jwt_value
+    assert env["DATABASE_URL"] == _runtime_sqlite_database_url(runtime_dir)
     assert env["PYTHONPATH"].split(os.pathsep)[0] == expected_src
+    assert popen_capture["kwargs"]["cwd"] == str(runtime_dir)
 
 
 def test_ensure_local_server_running_terminates_on_timeout(monkeypatch):
     popen_capture = {}
     expected_src = str(Path("repo") / "src")
+    runtime_dir = Path("runtime-dir")
 
     class _FakeProcess:
         def __init__(self):
@@ -507,7 +513,7 @@ def test_ensure_local_server_running_terminates_on_timeout(monkeypatch):
 
     monkeypatch.setattr("qwed_sdk.cli._check_server_health", lambda _url, timeout=2.0: False)
     monkeypatch.setattr("qwed_sdk.cli._src_path", lambda: expected_src)
-    monkeypatch.setattr("qwed_sdk.cli._project_root", lambda: Path("repo"))
+    monkeypatch.setattr("qwed_sdk.cli._resolve_server_runtime_dir", lambda: runtime_dir)
     monkeypatch.setattr("qwed_sdk.cli.time.sleep", lambda _s: None)
 
     def _fake_popen(command, **kwargs):
@@ -527,6 +533,7 @@ def test_ensure_local_server_running_terminates_on_timeout(monkeypatch):
 
 def test_ensure_local_server_running_kills_process_when_terminate_fails(monkeypatch):
     expected_src = str(Path("repo") / "src")
+    runtime_dir = Path("runtime-dir")
 
     class _FakeProcess:
         def __init__(self):
@@ -541,7 +548,7 @@ def test_ensure_local_server_running_kills_process_when_terminate_fails(monkeypa
     process = _FakeProcess()
     monkeypatch.setattr("qwed_sdk.cli._check_server_health", lambda _url, timeout=2.0: False)
     monkeypatch.setattr("qwed_sdk.cli._src_path", lambda: expected_src)
-    monkeypatch.setattr("qwed_sdk.cli._project_root", lambda: Path("repo"))
+    monkeypatch.setattr("qwed_sdk.cli._resolve_server_runtime_dir", lambda: runtime_dir)
     monkeypatch.setattr("qwed_sdk.cli.time.sleep", lambda _s: None)
     monkeypatch.setattr("qwed_sdk.cli.subprocess.Popen", lambda *_args, **_kwargs: process)
 
@@ -549,6 +556,37 @@ def test_ensure_local_server_running_kills_process_when_terminate_fails(monkeypa
     assert ready is False
     assert started is True
     assert process.killed is True
+
+
+def test_resolve_server_runtime_dir_prefers_cwd_when_writable(monkeypatch):
+    cwd_path = Path("writable-dir")
+    monkeypatch.setattr("qwed_sdk.cli.Path.cwd", lambda: cwd_path)
+    monkeypatch.setattr("qwed_sdk.cli.os.access", lambda _path, _mode: True)
+
+    assert _resolve_server_runtime_dir() == cwd_path.resolve()
+
+
+def test_resolve_server_runtime_dir_falls_back_to_home_when_unwritable(monkeypatch):
+    cwd_path = Path("readonly-dir")
+    home_path = Path("home-dir")
+    mkdir_calls = []
+
+    monkeypatch.setattr("qwed_sdk.cli.Path.cwd", lambda: cwd_path)
+    monkeypatch.setattr("qwed_sdk.cli.Path.home", lambda: home_path)
+    monkeypatch.setattr("qwed_sdk.cli.os.access", lambda _path, _mode: False)
+
+    def _fake_mkdir(self, parents=True, exist_ok=True):
+        mkdir_calls.append((self, parents, exist_ok))
+
+    monkeypatch.setattr("qwed_sdk.cli.Path.mkdir", _fake_mkdir)
+
+    expected = (home_path / "qwed-demo").resolve()
+    assert _resolve_server_runtime_dir() == expected
+    assert len(mkdir_calls) == 1
+    created_path, parents, exist_ok = mkdir_calls[0]
+    assert created_path.resolve() == expected
+    assert parents is True
+    assert exist_ok is True
 
 
 def test_validate_local_server_target_rejects_non_loopback():

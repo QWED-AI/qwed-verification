@@ -374,12 +374,28 @@ def _guarded_popen(command: list[str], popen_kwargs: Dict[str, Any]) -> subproce
     return subprocess.Popen(command, **popen_kwargs)  # noqa: S603
 
 
+def _resolve_server_runtime_dir() -> Path:
+    runtime_dir = Path.cwd().resolve()
+    if os.access(runtime_dir, os.W_OK):
+        return runtime_dir
+
+    fallback_dir = (Path.home() / "qwed-demo").resolve()
+    fallback_dir.mkdir(parents=True, exist_ok=True)
+    return fallback_dir
+
+
+def _runtime_sqlite_database_url(runtime_dir: Path) -> str:
+    db_path = (runtime_dir / "qwed.db").resolve()
+    return f"sqlite:///{db_path.as_posix()}"
+
+
 def _ensure_local_server_running(server_url: str, jwt_secret: str) -> tuple[bool, bool]:
     normalized_server_url = _normalize_local_server_url(server_url)
     if _check_server_health(normalized_server_url):
         return True, False
 
     host, port = _validate_local_server_target(normalized_server_url)
+    runtime_dir = _resolve_server_runtime_dir()
 
     env = os.environ.copy()
     src = _src_path()
@@ -387,6 +403,7 @@ def _ensure_local_server_running(server_url: str, jwt_secret: str) -> tuple[bool
     if src not in current_pythonpath.split(os.pathsep):
         env["PYTHONPATH"] = f"{src}{os.pathsep}{current_pythonpath}" if current_pythonpath else src
     env["QWED_JWT_SECRET_KEY"] = jwt_secret
+    env["DATABASE_URL"] = _runtime_sqlite_database_url(runtime_dir)
 
     command = [
         sys.executable,
@@ -400,7 +417,7 @@ def _ensure_local_server_running(server_url: str, jwt_secret: str) -> tuple[bool
     ]
 
     popen_kwargs: Dict[str, Any] = {
-        "cwd": str(_project_root()),
+        "cwd": str(runtime_dir),
         "env": env,
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
