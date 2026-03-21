@@ -51,6 +51,16 @@ def cli():
 SEPARATOR = "-" * 41
 ANTHROPIC_CLAUDE_LABEL = "Anthropic Claude"
 OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434/v1"
+SQLITE_URL_PREFIX = "sqlite:///"
+SQLITE_MEMORY_URL = f"{SQLITE_URL_PREFIX}:memory:"
+DEFAULT_DATABASE_URL = f"{SQLITE_URL_PREFIX}./qwed.db"
+LOCAL_SERVER_HOSTPORT = "localhost:8000"
+LOCAL_SERVER_SCHEME = "http"
+REMOTE_SERVER_SCHEME = "https"
+MATH_LABEL_VALID = "2+2=4"
+MATH_LABEL_INVALID = "2+2=5"
+MATH_LABEL_LARGE = "997*998*999"
+LOGIC_LABEL_UNSAT = "x>5 AND x<3"
 
 
 @dataclass(frozen=True)
@@ -235,7 +245,7 @@ def _run_init_smoke_suite() -> list[dict]:
     math_bad = math_engine.verify_math("2+2", 5)
     tests.append(
         {
-            "label": "2+2=5",
+            "label": MATH_LABEL_INVALID,
             "passed": math_bad.get("status") == "CORRECTION_NEEDED",
             "result": "BLOCKED",
         }
@@ -244,7 +254,7 @@ def _run_init_smoke_suite() -> list[dict]:
     logic_bad = logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"])
     tests.append(
         {
-            "label": "x>5 AND x<3",
+            "label": LOGIC_LABEL_UNSAT,
             "passed": logic_bad.status == "UNSAT",
             "result": "UNSAT",
         }
@@ -1242,55 +1252,86 @@ def _active_provider_status() -> dict:
     return {"ok": bool(ok), "label": profile["label"], "message": message}
 
 
+def _database_url_components() -> tuple[str, Any, str]:
+    from qwed_new.config import settings
+
+    db_url = str(getattr(settings, "DATABASE_URL", DEFAULT_DATABASE_URL))
+    parsed = urlparse(db_url)
+    base_scheme = parsed.scheme.split("+")[0] if parsed.scheme else ""
+    return db_url, parsed, base_scheme
+
+
+def _sqlite_database_health(db_url: str, parsed: Any, base_scheme: str) -> Optional[dict]:
+    if not (db_url.startswith(SQLITE_URL_PREFIX) or base_scheme == "sqlite"):
+        return None
+
+    db_path = (
+        db_url.replace(SQLITE_URL_PREFIX, "", 1)
+        if db_url.startswith(SQLITE_URL_PREFIX)
+        else parsed.path.lstrip("/")
+    )
+    if db_path == ":memory:":
+        return {"healthy": True, "location": SQLITE_MEMORY_URL}
+
+    path = Path(db_path)
+    if not path.is_absolute():
+        path = (_project_root() / path).resolve()
+    return {"healthy": path.exists(), "location": str(path)}
+
+
+def _redacted_database_location(parsed: Any, base_scheme: str) -> str:
+    return (
+        f"{base_scheme}://{parsed.hostname or '<missing-host>'}"
+        f"{f':{parsed.port}' if parsed.port else ''}{parsed.path or ''}"
+    )
+
+
+def _default_database_port(base_scheme: str) -> Optional[int]:
+    default_ports = {"postgresql": 5432, "mysql": 3306, "mariadb": 3306, "redis": 6379}
+    return default_ports.get(base_scheme)
+
+
+def _probe_database_socket(hostname: str, port: int, base_scheme: str, path: str, redacted_location: str) -> dict:
+    try:
+        with socket.create_connection((hostname, int(port)), timeout=2.0):
+            return {"healthy": True, "location": f"{base_scheme}://{hostname}:{int(port)}{path or ''}"}
+    except OSError as exc:
+        return {
+            "healthy": False,
+            "location": redacted_location,
+            "error": f"{type(exc).__name__}",
+        }
+
+
 def _database_health() -> dict:
     try:
-        from qwed_new.config import settings
+        db_url, parsed, base_scheme = _database_url_components()
+        sqlite_health = _sqlite_database_health(db_url, parsed, base_scheme)
+        if sqlite_health is not None:
+            return sqlite_health
 
-        db_url = str(getattr(settings, "DATABASE_URL", "sqlite:///./qwed.db"))
-        parsed = urlparse(db_url)
-        base_scheme = parsed.scheme.split("+")[0] if parsed.scheme else ""
-
-        if db_url.startswith("sqlite:///") or base_scheme == "sqlite":
-            db_path = db_url.replace("sqlite:///", "", 1) if db_url.startswith("sqlite:///") else parsed.path.lstrip("/")
-            if db_path == ":memory:":
-                return {"healthy": True, "location": "sqlite:///:memory:"}
-            path = Path(db_path)
-            if not path.is_absolute():
-                path = (_project_root() / path).resolve()
-            return {"healthy": path.exists(), "location": str(path)}
-
-        redacted_location = (
-            f"{base_scheme}://{parsed.hostname or '<missing-host>'}"
-            f"{f':{parsed.port}' if parsed.port else ''}{parsed.path or ''}"
-        )
+        redacted_location = _redacted_database_location(parsed, base_scheme)
         if not parsed.hostname:
             return {"healthy": False, "location": redacted_location, "error": "Missing hostname"}
 
-        default_ports = {"postgresql": 5432, "mysql": 3306, "mariadb": 3306, "redis": 6379}
-        port = parsed.port or default_ports.get(base_scheme)
+        port = parsed.port or _default_database_port(base_scheme)
         if not port:
             return {"healthy": False, "location": redacted_location, "error": "Missing port"}
 
-        try:
-            with socket.create_connection((parsed.hostname, int(port)), timeout=2.0):
-                location = f"{base_scheme}://{parsed.hostname}:{int(port)}{parsed.path or ''}"
-                return {"healthy": True, "location": location}
-        except OSError as exc:
-            return {
-                "healthy": False,
-                "location": redacted_location,
-                "error": f"{type(exc).__name__}",
-            }
+        return _probe_database_socket(parsed.hostname, int(port), base_scheme, parsed.path, redacted_location)
     except Exception as exc:
         return {"healthy": False, "location": f"unavailable ({type(exc).__name__})"}
 
 
 def _doctor_server_url() -> str:
-    raw_server_url = os.getenv("QWED_SERVER_URL", "https://localhost:8000").strip()
+    raw_server_url = os.getenv("QWED_SERVER_URL", LOCAL_SERVER_HOSTPORT).strip()
     if not raw_server_url:
-        return "https://localhost:8000"
+        raw_server_url = LOCAL_SERVER_HOSTPORT
     if "://" not in raw_server_url:
-        return f"https://{raw_server_url}"
+        parsed = urlparse(f"//{raw_server_url}")
+        host = (parsed.hostname or "").lower()
+        scheme = LOCAL_SERVER_SCHEME if host in {"localhost", "127.0.0.1", "::1"} else REMOTE_SERVER_SCHEME
+        return f"{scheme}://{raw_server_url}"
     return raw_server_url
 
 
@@ -1400,12 +1441,12 @@ def _run_full_engine_tests() -> List[dict]:
         math_engine = VerificationEngine()
     except Exception as exc:
         math_engine = None
-        add_engine_error_cases("Math", ["2+2=4", "2+2=5", "997*998*999"], exc)
+        add_engine_error_cases("Math", [MATH_LABEL_VALID, MATH_LABEL_INVALID, MATH_LABEL_LARGE], exc)
 
     if math_engine is not None:
         run_case(
             "Math",
-            "2+2=4",
+            MATH_LABEL_VALID,
             "VALID",
             lambda: math_engine.verify_math("2+2", 4),
             lambda payload: payload.get("status") == "VERIFIED",
@@ -1413,7 +1454,7 @@ def _run_full_engine_tests() -> List[dict]:
         )
         run_case(
             "Math",
-            "2+2=5",
+            MATH_LABEL_INVALID,
             "BLOCKED",
             lambda: math_engine.verify_math("2+2", 5),
             lambda payload: payload.get("status") == "CORRECTION_NEEDED",
@@ -1421,9 +1462,9 @@ def _run_full_engine_tests() -> List[dict]:
         )
         run_case(
             "Math",
-            "997*998*999",
+            MATH_LABEL_LARGE,
             "994010994 (verified)",
-            lambda: math_engine.verify_math("997*998*999", 994010994),
+            lambda: math_engine.verify_math(MATH_LABEL_LARGE, 994010994),
             lambda payload: payload.get("status") == "VERIFIED",
             lambda payload: f"status={payload.get('status')}",
         )
@@ -1434,12 +1475,12 @@ def _run_full_engine_tests() -> List[dict]:
         logic_engine = LogicVerifier()
     except Exception as exc:
         logic_engine = None
-        add_engine_error_cases("Logic", ["x>5 AND x<3", "x>3 AND x<10", "approval=1 AND approval=0"], exc)
+        add_engine_error_cases("Logic", [LOGIC_LABEL_UNSAT, "x>3 AND x<10", "approval=1 AND approval=0"], exc)
 
     if logic_engine is not None:
         run_case(
             "Logic",
-            "x>5 AND x<3",
+            LOGIC_LABEL_UNSAT,
             "UNSAT (contradiction)",
             lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"]),
             lambda payload: payload.status == "UNSAT",
