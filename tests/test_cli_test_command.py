@@ -83,3 +83,21 @@ def test_run_full_engine_tests_returns_expected_shape(
     assert any(item["label"] == "curl | bash" and item["passed"] for item in results)
     assert sum(1 for item in results if item["passed"]) == 12
     assert all("detail" in item and item["detail"] for item in results)
+
+
+@patch("qwed_new.core.code_verifier.CodeVerifier", side_effect=RuntimeError("code engine down"))
+@patch("qwed_new.core.sql_verifier.SQLVerifier", side_effect=RuntimeError("sql engine down"))
+@patch("qwed_new.core.logic_verifier.LogicVerifier", side_effect=RuntimeError("logic engine down"))
+@patch("qwed_new.core.verifier.VerificationEngine", side_effect=RuntimeError("math engine down"))
+def test_run_full_engine_tests_engine_construction_failures(
+    _mock_math_cls,
+    _mock_logic_cls,
+    _mock_sql_cls,
+    _mock_code_cls,
+):
+    results = _run_full_engine_tests()
+
+    assert len(results) == 12
+    assert all(item["result"] == "ERROR" for item in results)
+    assert all(item["passed"] is False for item in results)
+    assert all(item["detail"] for item in results)

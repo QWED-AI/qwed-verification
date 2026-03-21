@@ -4,7 +4,14 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from qwed_sdk.cli import _active_provider_status, _database_health, _doctor_report, _doctor_server_url, cli
+from qwed_sdk.cli import (
+    _active_provider_status,
+    _database_health,
+    _doctor_report,
+    _doctor_server_url,
+    _normalized_active_provider_key,
+    cli,
+)
 
 
 def _required_ok_report():
@@ -43,7 +50,8 @@ def test_doctor_json_output(
     assert payload["server"]["running"] is True
     assert payload["database"]["healthy"] is True
     assert payload["engines"][0]["name"] == "SymPy"
-    assert payload["status"].startswith("OPERATIONAL")
+    assert payload["status"] == "OPERATIONAL"
+    assert payload["optional_missing_count"] == 1
 
 
 @patch("qwed_sdk.cli._database_health", return_value={"healthy": False, "location": "qwed.db"})
@@ -90,6 +98,11 @@ def test_active_provider_status_auto_mode():
     status = _active_provider_status()
     assert status["ok"] is False
     assert status["label"] == "AUTO"
+
+
+@patch.dict(os.environ, {"ACTIVE_PROVIDER": "openai-compatible"})
+def test_normalized_active_provider_key_alias():
+    assert _normalized_active_provider_key() == "openai_compat"
 
 
 @patch.dict(os.environ, {"ACTIVE_PROVIDER": "openai", "OPENAI_API_KEY": ""})
@@ -156,7 +169,8 @@ def test_doctor_report_allows_remote_server_url(
     report = _doctor_report()
     assert report["server"]["running"] is True
     assert report["server"]["url"] == "http://10.0.0.9:8000"
-    assert report["status"].startswith("OPERATIONAL")
+    assert report["status"] == "OPERATIONAL"
+    assert report["optional_missing_count"] == 1
 
 
 @patch("qwed_new.config.settings", new=type("Settings", (), {"DATABASE_URL": "postgresql://db.example/qwed"}))
@@ -164,7 +178,7 @@ def test_doctor_report_allows_remote_server_url(
 def test_database_health_non_sqlite_url(mock_create_connection):
     status = _database_health()
     assert status["healthy"] is True
-    assert status["location"] == "postgresql://db.example/qwed"
+    assert status["location"] == "postgresql://db.example:5432/qwed"
     mock_create_connection.assert_called_once_with(("db.example", 5432), timeout=2.0)
 
 
@@ -184,6 +198,15 @@ def test_database_health_non_sqlite_url_missing_hostname():
     assert status["error"] == "Missing hostname"
 
 
+@patch("qwed_new.config.settings", new=type("Settings", (), {"DATABASE_URL": "postgresql+psycopg2://db.example/qwed"}))
+@patch("qwed_sdk.cli.socket.create_connection")
+def test_database_health_scheme_with_driver_uses_default_port(mock_create_connection):
+    status = _database_health()
+    assert status["healthy"] is True
+    assert status["location"] == "postgresql://db.example:5432/qwed"
+    mock_create_connection.assert_called_once_with(("db.example", 5432), timeout=2.0)
+
+
 def test_database_health_sqlite_relative_path(tmp_path, monkeypatch):
     db_file = tmp_path / "qwed.db"
     db_file.write_text("")
@@ -194,6 +217,16 @@ def test_database_health_sqlite_relative_path(tmp_path, monkeypatch):
     assert status["location"].endswith("qwed.db")
 
 
+def test_database_health_sqlite_driver_variant(tmp_path, monkeypatch):
+    db_file = tmp_path / "qwed_driver.db"
+    db_file.write_text("")
+    monkeypatch.setattr("qwed_sdk.cli._project_root", lambda: tmp_path)
+    with patch("qwed_new.config.settings", new=type("Settings", (), {"DATABASE_URL": "sqlite+aiosqlite:///./qwed_driver.db"})):
+        status = _database_health()
+    assert status["healthy"] is True
+    assert status["location"].endswith("qwed_driver.db")
+
+
 @patch.dict(os.environ, {"QWED_SERVER_URL": "10.0.0.9:8000"})
 def test_doctor_server_url_adds_http_scheme():
-    assert _doctor_server_url() == "http://10.0.0.9:8000"
+    assert _doctor_server_url() == "https://10.0.0.9:8000"

