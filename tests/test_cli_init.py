@@ -560,7 +560,7 @@ def test_validate_local_server_target_rejects_out_of_range_port():
 
 
 def test_ensure_gitignore_protection_noninteractive_raises_when_update_fails():
-    with pytest.raises(RuntimeError, match="Failed to update .gitignore"):
+    with pytest.raises(RuntimeError, match=r"Failed to update \.gitignore"):
         _ensure_gitignore_protection_noninteractive(lambda: False, lambda: False)
 
 
