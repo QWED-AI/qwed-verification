@@ -692,26 +692,12 @@ def _resolve_provider_credentials(
     model: Optional[str],
     non_interactive: bool,
 ) -> tuple[str, str, str]:
-    nvidia_fallback = os.getenv("NVIDIA_API_KEY", "") if profile.slug == "nvidia" else ""
-    resolved_key = (api_key or os.getenv(profile.key_env) or nvidia_fallback).strip()
-    resolved_base_url = (
-        (base_url or os.getenv(profile.base_url_env or "", "")).strip() if profile.base_url_env else ""
-    )
-    resolved_model = (model or os.getenv(profile.model_env) or profile.default_model).strip()
+    resolved_key = _resolve_provider_api_key(profile, api_key)
+    resolved_base_url = _resolve_provider_base_url(profile, base_url, non_interactive)
+    resolved_model = _resolve_provider_model(profile, model)
 
     if not resolved_key and not non_interactive:
         resolved_key = click.prompt(f"{profile.name} API key", hide_input=True).strip()
-
-    if profile.base_url_env and not resolved_base_url:
-        if non_interactive:
-            resolved_base_url = profile.default_base_url or ""
-        else:
-            resolved_base_url = click.prompt(
-                f"{profile.name} base URL",
-                default=profile.default_base_url or "",
-                show_default=True,
-            ).strip()
-
     if not resolved_model and not non_interactive:
         resolved_model = click.prompt(
             f"{profile.name} default model",
@@ -720,6 +706,37 @@ def _resolve_provider_credentials(
         ).strip()
 
     return resolved_key, resolved_base_url, resolved_model
+
+
+def _resolve_provider_api_key(profile: OnboardingProvider, api_key: Optional[str]) -> str:
+    nvidia_fallback = os.getenv("NVIDIA_API_KEY", "") if profile.slug == "nvidia" else ""
+    return (api_key or os.getenv(profile.key_env) or nvidia_fallback).strip()
+
+
+def _resolve_provider_base_url(
+    profile: OnboardingProvider,
+    base_url: Optional[str],
+    non_interactive: bool,
+) -> str:
+    if not profile.base_url_env:
+        return ""
+
+    resolved_base_url = (base_url or os.getenv(profile.base_url_env, "")).strip()
+    if resolved_base_url:
+        return resolved_base_url
+
+    if non_interactive:
+        return profile.default_base_url or ""
+
+    return click.prompt(
+        f"{profile.name} base URL",
+        default=profile.default_base_url or "",
+        show_default=True,
+    ).strip()
+
+
+def _resolve_provider_model(profile: OnboardingProvider, model: Optional[str]) -> str:
+    return (model or os.getenv(profile.model_env) or profile.default_model).strip()
 
 
 def _validate_provider_credentials(
@@ -754,39 +771,73 @@ def _test_provider_connection_loop(
 ) -> tuple[str, str, str]:
     while True:
         click.echo("\n  Testing connection...")
-        if profile.connection_slug == "gemini":
-            success, message = _test_gemini_connection(resolved_key)
-        else:
-            success, message = test_connection(
-                provider_slug=profile.connection_slug or "",
-                api_key=resolved_key,
-                base_url=resolved_base_url or None,
-                model=resolved_model,
-            )
+        success, message = _run_provider_connection_test(
+            profile=profile,
+            resolved_key=resolved_key,
+            resolved_base_url=resolved_base_url,
+            resolved_model=resolved_model,
+            test_connection=test_connection,
+        )
 
         if success:
             click.echo("  [ok] Provider connected")
             click.echo("  [ok] Model responding")
             return resolved_key, resolved_base_url, resolved_model
 
-        click.echo(f"  [x] {message}", err=True)
-        if non_interactive:
-            raise RuntimeError(message)
+        _raise_if_no_retry(non_interactive, message)
         if not click.confirm("  Retry with updated credentials?", default=True):
             raise RuntimeError("Connection test aborted by user.")
+        resolved_key, resolved_base_url, resolved_model = _prompt_retry_credentials(
+            profile=profile,
+            resolved_key=resolved_key,
+            resolved_base_url=resolved_base_url,
+            resolved_model=resolved_model,
+        )
 
-        resolved_key = click.prompt(f"{profile.name} API key", hide_input=True).strip()
-        if profile.base_url_env:
-            resolved_base_url = click.prompt(
-                f"{profile.name} base URL",
-                default=resolved_base_url or profile.default_base_url or "",
-                show_default=True,
-            ).strip()
-        resolved_model = click.prompt(
-            f"{profile.name} default model",
-            default=resolved_model or profile.default_model,
+
+def _run_provider_connection_test(
+    profile: OnboardingProvider,
+    resolved_key: str,
+    resolved_base_url: str,
+    resolved_model: str,
+    test_connection,
+) -> tuple[bool, str]:
+    if profile.connection_slug == "gemini":
+        return _test_gemini_connection(resolved_key)
+
+    return test_connection(
+        provider_slug=profile.connection_slug or "",
+        api_key=resolved_key,
+        base_url=resolved_base_url or None,
+        model=resolved_model,
+    )
+
+
+def _raise_if_no_retry(non_interactive: bool, message: str) -> None:
+    click.echo(f"  [x] {message}", err=True)
+    if non_interactive:
+        raise RuntimeError(message)
+
+
+def _prompt_retry_credentials(
+    profile: OnboardingProvider,
+    resolved_key: str,
+    resolved_base_url: str,
+    resolved_model: str,
+) -> tuple[str, str, str]:
+    resolved_key = click.prompt(f"{profile.name} API key", hide_input=True).strip()
+    if profile.base_url_env:
+        resolved_base_url = click.prompt(
+            f"{profile.name} base URL",
+            default=resolved_base_url or profile.default_base_url or "",
             show_default=True,
         ).strip()
+    resolved_model = click.prompt(
+        f"{profile.name} default model",
+        default=resolved_model or profile.default_model,
+        show_default=True,
+    ).strip()
+    return resolved_key, resolved_base_url, resolved_model
 
 
 def _persist_onboarding_env(
@@ -1133,7 +1184,7 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
             sys.exit(1)
     
     except Exception as e:
-        click.echo(f"{QWED.ERROR if HAS_COLOR else ''}Error: {str(e)}{QWED.RESET if HAS_COLOR else ''}", err=True)
+        click.echo(f"{QWED.ERROR if HAS_COLOR else ''}Error: {e!s}{QWED.RESET if HAS_COLOR else ''}", err=True)
         sys.exit(1)
 
 
