@@ -1,179 +1,262 @@
+import os
+from pathlib import Path
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
-from qwed_sdk.cli import init
-import sys
+
+from qwed_sdk.cli import (
+    OnboardingProvider,
+    _bootstrap_api_key,
+    _ensure_local_server_running,
+    init,
+)
+
 
 @pytest.fixture
 def runner():
     return CliRunner()
 
-def test_init_no_core(runner):
-    """Test when qwed core is missing."""
-    with patch.dict(sys.modules, {'qwed_new.providers.registry': None}):
-        result = runner.invoke(init)
-        assert result.exit_code == 1
-        assert "QWED core not found" in result.output
 
-@patch("qwed_new.providers.registry.list_providers")
-@patch("qwed_new.providers.credential_store.write_env_file")
-@patch("qwed_new.providers.credential_store.verify_gitignore")
-@patch("qwed_new.providers.key_validator.validate_key_format")
-@patch("qwed_new.providers.key_validator.test_connection")
-def test_init_success_openai(mock_test, mock_validate, mock_verify, mock_write, mock_list, runner):
-    """Test successful initialization of standard provider with connection test."""
-    mock_provider = MagicMock()
-    mock_provider.name = "OpenAI"
-    mock_provider.slug = "openai"
-    mock_provider.key_hint = "sk-proj-..."
-    mock_provider.install_cmd = "pip install openai"
-    mock_provider.auth_type = "API_KEY"
-    mock_provider.key_pattern = r"^sk-proj-"
-    
-    mock_env = MagicMock()
-    mock_env.name = "OPENAI_API_KEY"
-    mock_env.description = "OpenAI API Key"
-    mock_env.required = True
-    mock_env.default = None
-    mock_provider.env_vars = [mock_env]
-    
-    from qwed_new.providers.registry import AuthType
-    mock_provider.auth_type = AuthType.API_KEY
-    
-    mock_list.return_value = [mock_provider]
-    mock_verify.return_value = True
-    mock_write.return_value = "/path/to/.env"
-    mock_validate.return_value = (True, "Format OK")
-    mock_test.return_value = (True, "Connection OK")
-    
-    # Input: 1 (OpenAI), sk-test-key (Key), y (test conn), y (set default)
-    result = runner.invoke(init, input="1\nsk-test-key\ny\ny\n")
-    
-    assert result.exit_code == 0
-    assert "Selected: OpenAI" in result.output
-    assert "Connection OK" in result.output
-    assert "Written to /path/to/.env" in result.output
-
-@patch("qwed_new.providers.registry.list_providers")
-@patch("qwed_new.providers.credential_store.write_env_file")
-@patch("qwed_new.providers.credential_store.verify_gitignore")
-@patch("qwed_new.providers.credential_store.add_env_to_gitignore")
-@patch("qwed_new.providers.key_validator.test_connection")
-@patch("qwed_new.providers.key_validator.validate_key_format")
-def test_init_missing_gitignore_add_yes(mock_validate, mock_test, mock_add, mock_verify, mock_write, mock_list, runner):
-    """Test gitignore warning and user says yes to add."""
-    mock_provider = MagicMock()
-    mock_provider.name = "Ollama"
-    mock_provider.slug = "ollama"
-    mock_provider.key_hint = ""
-    mock_provider.install_cmd = None
-    mock_provider.env_vars = []
-    
-    from qwed_new.providers.registry import AuthType
-    mock_provider.auth_type = AuthType.LOCAL
-    
-    mock_list.return_value = [mock_provider]
-    mock_verify.return_value = False
-    mock_add.return_value = True
-    mock_write.return_value = ".env"
-    mock_test.return_value = (True, "OK")
-    mock_validate.return_value = (True, "OK")
-    
-    # Input: 1 (Ollama), y (set default), y (add to gitignore)
-    result = runner.invoke(init, input="1\ny\ny\n")
-    assert result.exit_code == 0
-    assert "NOT found in .gitignore!" in result.output
-    assert "Added .env to .gitignore" in result.output
-
-@patch("qwed_new.providers.registry.list_providers")
-@patch("qwed_new.providers.credential_store.verify_gitignore")
-@patch("qwed_new.providers.credential_store.add_env_to_gitignore")
-@patch("qwed_new.providers.key_validator.test_connection")
-@patch("qwed_new.providers.key_validator.validate_key_format")
-def test_init_missing_gitignore_add_no(mock_validate, mock_test, mock_add, mock_verify, mock_list, runner):
-    """Test gitignore warning and user says NO to add -> aborts."""
-    mock_provider = MagicMock()
-    mock_provider.name = "Ollama"
-    mock_provider.slug = "ollama"
-    mock_provider.env_vars = []
-    from qwed_new.providers.registry import AuthType
-    mock_provider.auth_type = AuthType.LOCAL
-    
-    mock_list.return_value = [mock_provider]
-    mock_verify.return_value = False
-    mock_test.return_value = (True, "OK")
-    mock_validate.return_value = (True, "OK")
-    
-    # Input: 1 (Ollama), y (set default), n (don't add to gitignore)
-    result = runner.invoke(init, input="1\ny\nn\n")
-    assert result.exit_code == 1
-    assert "refusing to write secrets without .gitignore protection" in result.output
-
-@patch("qwed_new.providers.registry.list_providers")
-def test_init_invalid_choice(mock_list, runner):
-    """Test invalid provider choice."""
-    mock_provider = MagicMock()
-    mock_provider.name = "Ollama"
-    mock_list.return_value = [mock_provider]
-    
-    # Input: 2 (out of bounds)
-    result = runner.invoke(init, input="2\n")
-    assert result.exit_code == 1
-    assert "Invalid choice" in result.output
-
-@patch("qwed_new.providers.registry.list_providers")
-@patch("qwed_new.providers.credential_store.verify_gitignore")
-@patch("qwed_new.providers.key_validator.validate_key_format")
-@patch("qwed_new.providers.key_validator.test_connection")
-def test_init_connection_fail_abort(mock_test, mock_validate, mock_verify, mock_list, runner):
-    """Test connection test fails and user aborts."""
-    mock_provider = MagicMock()
-    mock_provider.name = "OpenAI"
-    mock_provider.slug = "openai"
-    mock_env = MagicMock()
-    mock_env.name = "OPENAI_API_KEY"
-    mock_provider.env_vars = [mock_env]
-    from qwed_new.providers.registry import AuthType
-    mock_provider.auth_type = AuthType.API_KEY
-    mock_provider.key_pattern = r"^.*"
-    mock_list.return_value = [mock_provider]
-    
-    mock_validate.return_value = (True, "OK")
-    mock_test.return_value = (False, "Auth Failed")
-    
-    # Input: 1 (OpenAI), sk-test, y (test conn), n (continue anyway? NO)
-    result = runner.invoke(init, input="1\nsk-test\ny\nn\n")
-    assert result.exit_code == 1
-    assert "Auth Failed" in result.output
+def _engine_report():
+    return [
+        {"name": "SymPy", "ready": True, "detail": "math engine ready", "install_hint": "", "version": "1.14.0"},
+        {"name": "Z3", "ready": True, "detail": "logic engine ready", "install_hint": "", "version": "4.13.3"},
+        {"name": "AST", "ready": True, "detail": "code engine ready", "install_hint": "", "version": "built-in"},
+        {"name": "SQLGlot", "ready": True, "detail": "sql engine ready", "install_hint": "", "version": "30.0.0"},
+    ]
 
 
-@patch("qwed_new.providers.registry.list_providers")
-@patch("qwed_new.providers.credential_store.write_env_file")
-@patch("qwed_new.providers.credential_store.verify_gitignore")
-@patch("qwed_new.providers.key_validator.validate_key_format")
-@patch("qwed_new.providers.key_validator.test_connection")
-def test_init_yaml_provider_maps_to_openai_compat(
-    mock_test, mock_validate, mock_verify, mock_write, mock_list, runner
+def _provider_map():
+    return {
+        "openai": OnboardingProvider(
+            slug="openai",
+            name="OpenAI",
+            active_provider="openai",
+            key_env="OPENAI_API_KEY",
+            model_env="OPENAI_MODEL",
+            base_url_env=None,
+            default_model="gpt-4o-mini",
+            default_base_url=None,
+            connection_slug="openai",
+            key_pattern=r"^sk-",
+        )
+    }
+
+
+@patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
+@patch("qwed_sdk.cli._ensure_local_server_running", return_value=(True, True))
+@patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
+@patch("qwed_sdk.cli._required_engine_report", return_value=(True, _engine_report()))
+@patch("qwed_sdk.cli._ensure_gitignore_protection_noninteractive")
+@patch("qwed_sdk.cli._load_dotenv_if_available")
+@patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
+@patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
+@patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
+@patch("qwed_new.config.ensure_jwt_secret", return_value="jwt-secret-value")
+def test_init_non_interactive_success(
+    _mock_jwt,
+    _mock_write_env,
+    _mock_test_connection,
+    _mock_validate,
+    _mock_load_dotenv,
+    _mock_gitignore,
+    _mock_required_engines,
+    _mock_provider_map,
+    _mock_server,
+    _mock_bootstrap,
+    runner,
 ):
-    """yaml-* providers should persist as ACTIVE_PROVIDER=openai_compat."""
-    mock_provider = MagicMock()
-    mock_provider.name = "My YAML Provider"
-    mock_provider.slug = "yaml-my-provider"
-    mock_provider.key_hint = ""
-    mock_provider.install_cmd = None
-    mock_provider.env_vars = []
-
-    from qwed_new.providers.registry import AuthType
-
-    mock_provider.auth_type = AuthType.LOCAL
-
-    mock_list.return_value = [mock_provider]
-    mock_verify.return_value = True
-    mock_validate.return_value = (True, "OK")
-    mock_test.return_value = (True, "OK")
-    mock_write.return_value = ".env"
-
-    result = runner.invoke(init, input="1\ny\n")
+    result = runner.invoke(
+        init,
+        [
+            "--provider",
+            "openai",
+            "--api-key",
+            "sk-test-key",
+            "--organization-name",
+            "demo-org",
+            "--non-interactive",
+        ],
+    )
 
     assert result.exit_code == 0
-    mock_write.assert_called_once_with({}, active_provider="openai_compat")
+    assert "Step 1/3: LLM Provider Setup" in result.output
+    assert "Step 2/3: API Key" in result.output
+    assert "Step 3/3: Generate QWED API Key" in result.output
+    assert "qwed_live_test_key" in result.output
+
+
+@patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
+@patch("qwed_sdk.cli._required_engine_report", return_value=(True, _engine_report()))
+@patch("qwed_sdk.cli._load_dotenv_if_available")
+@patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
+@patch("qwed_new.providers.key_validator.test_connection", return_value=(False, "Auth failed"))
+def test_init_non_interactive_connection_failure(
+    _mock_test_connection,
+    _mock_validate,
+    _mock_load_dotenv,
+    _mock_required_engines,
+    _mock_provider_map,
+    runner,
+):
+    result = runner.invoke(
+        init,
+        [
+            "--provider",
+            "openai",
+            "--api-key",
+            "sk-test-key",
+            "--organization-name",
+            "demo-org",
+            "--non-interactive",
+            "--skip-tests",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Auth failed" in result.output
+
+
+@patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
+@patch("qwed_sdk.cli._ensure_local_server_running", return_value=(True, False))
+@patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
+@patch("qwed_sdk.cli._required_engine_report", return_value=(True, _engine_report()))
+@patch("qwed_sdk.cli._ensure_gitignore_protection_noninteractive")
+@patch("qwed_sdk.cli._load_dotenv_if_available")
+@patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
+@patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
+@patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
+@patch("qwed_new.config.ensure_jwt_secret", return_value="jwt-secret-value")
+def test_init_persists_jwt_secret_in_env_write(
+    _mock_jwt,
+    mock_write_env,
+    _mock_test_connection,
+    _mock_validate,
+    _mock_load_dotenv,
+    _mock_gitignore,
+    _mock_required_engines,
+    _mock_provider_map,
+    _mock_server,
+    _mock_bootstrap,
+    runner,
+):
+    result = runner.invoke(
+        init,
+        [
+            "--provider",
+            "openai",
+            "--api-key",
+            "sk-test-key",
+            "--organization-name",
+            "demo-org",
+            "--non-interactive",
+            "--skip-tests",
+        ],
+    )
+
+    assert result.exit_code == 0
+    args, kwargs = mock_write_env.call_args
+    env_vars = args[0]
+    assert env_vars["QWED_JWT_SECRET_KEY"] == "jwt-secret-value"
+    assert kwargs["active_provider"] == "openai"
+
+
+def test_bootstrap_api_key_success(monkeypatch):
+    class _Response:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = ""
+
+        def json(self):
+            return self._payload
+
+    class _Client:
+        def __init__(self, timeout):
+            self.timeout = timeout
+            self.calls = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            return False
+
+        def post(self, url, json=None, headers=None):
+            self.calls.append((url, json, headers))
+            if url.endswith("/auth/signup"):
+                return _Response(200, {"access_token": "token-123"})
+            if url.endswith("/auth/api-keys"):
+                assert headers == {"Authorization": "Bearer token-123"}
+                return _Response(200, {"key": "qwed_live_bootstrap"})
+            return _Response(404, {"detail": "not found"})
+
+    monkeypatch.setattr("httpx.Client", _Client)
+    monkeypatch.setattr("qwed_sdk.cli.secrets.token_hex", lambda n: "abc12345")
+    monkeypatch.setattr("qwed_sdk.cli.secrets.token_urlsafe", lambda n: "pw-token")
+
+    key, org = _bootstrap_api_key("http://localhost:8000", "Acme Org")
+    assert key == "qwed_live_bootstrap"
+    assert org == "Acme Org"
+
+
+def test_ensure_local_server_running_applies_pythonpath_guard(monkeypatch):
+    checks = iter([False, True])
+    popen_capture = {}
+
+    monkeypatch.setattr("qwed_sdk.cli._check_server_health", lambda _url, timeout=2.0: next(checks))
+    monkeypatch.setattr("qwed_sdk.cli._src_path", lambda: "C:/repo/src")
+    monkeypatch.setattr("qwed_sdk.cli._project_root", lambda: Path("C:/repo"))
+    monkeypatch.setattr("qwed_sdk.cli.time.sleep", lambda _s: None)
+
+    def _fake_popen(command, **kwargs):
+        popen_capture["command"] = command
+        popen_capture["kwargs"] = kwargs
+        return None
+
+    monkeypatch.setattr("qwed_sdk.cli.subprocess.Popen", _fake_popen)
+
+    ready, started = _ensure_local_server_running("http://127.0.0.1:9001", "jwt-secret")
+    assert ready is True
+    assert started is True
+    assert popen_capture["command"][-2:] == ["--port", "9001"]
+    env = popen_capture["kwargs"]["env"]
+    assert env["QWED_JWT_SECRET_KEY"] == "jwt-secret"
+    assert env["PYTHONPATH"].split(os.pathsep)[0] == "C:/repo/src"
+
+
+@patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
+@patch("qwed_sdk.cli._ensure_local_server_running", return_value=(True, False))
+@patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
+@patch("qwed_sdk.cli._required_engine_report", return_value=(True, _engine_report()))
+@patch("qwed_sdk.cli._ensure_gitignore_protection_noninteractive")
+@patch("qwed_sdk.cli._load_dotenv_if_available")
+@patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
+@patch(
+    "qwed_new.providers.key_validator.test_connection",
+    side_effect=[(False, "Auth failed"), (True, "Connected")],
+)
+@patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
+@patch("qwed_new.config.ensure_jwt_secret", return_value="jwt-secret-value")
+def test_init_interactive_retries_connection_until_success(
+    _mock_jwt,
+    _mock_write_env,
+    mock_test_connection,
+    _mock_validate,
+    _mock_load_dotenv,
+    _mock_gitignore,
+    _mock_required_engines,
+    _mock_provider_map,
+    _mock_server,
+    _mock_bootstrap,
+    runner,
+):
+    result = runner.invoke(
+        init,
+        ["--skip-tests"],
+        input="2\nsk-first\ny\nsk-second\n\ndemo-org\n",
+    )
+
+    assert result.exit_code == 0
+    assert mock_test_connection.call_count == 2
