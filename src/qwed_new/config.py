@@ -6,10 +6,25 @@ This module handles environment variables and provider selection.
 
 import os
 import secrets
-from dotenv import load_dotenv
+from pathlib import Path
 from enum import Enum
 
-load_dotenv()
+def load_dotenv_ordered(override: bool = False) -> None:
+    """Load config from user project dir first, then global qwed dir."""
+    try:
+        from dotenv import load_dotenv
+        if override:
+            load_dotenv(Path.home() / ".qwed" / ".env", override=True)
+            load_dotenv(Path.cwd() / ".env", override=True)
+        else:
+            load_dotenv(Path.cwd() / ".env", override=False)
+            load_dotenv(Path.home() / ".qwed" / ".env", override=False)
+    except ImportError as exc:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"python-dotenv not installed or failed to import; skipping .env loading: {exc}")
+
+load_dotenv_ordered(override=False)
 
 class ProviderType(str, Enum):
     OPENAI = "openai"

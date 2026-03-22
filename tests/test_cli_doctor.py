@@ -240,7 +240,7 @@ def test_database_health_scheme_with_driver_uses_default_port(mock_create_connec
 def test_database_health_sqlite_relative_path(tmp_path, monkeypatch):
     db_file = tmp_path / "qwed.db"
     db_file.write_text("")
-    monkeypatch.setattr("qwed_sdk.cli._project_root", lambda: tmp_path)
+    monkeypatch.chdir(tmp_path)
     with patch("qwed_new.config.settings", new=type("Settings", (), {"DATABASE_URL": "sqlite:///./qwed.db"})):
         status = _database_health()
     assert status["healthy"] is True
@@ -250,7 +250,7 @@ def test_database_health_sqlite_relative_path(tmp_path, monkeypatch):
 def test_database_health_sqlite_driver_variant(tmp_path, monkeypatch):
     db_file = tmp_path / "qwed_driver.db"
     db_file.write_text("")
-    monkeypatch.setattr("qwed_sdk.cli._project_root", lambda: tmp_path)
+    monkeypatch.chdir(tmp_path)
     with patch("qwed_new.config.settings", new=type("Settings", (), {"DATABASE_URL": "sqlite+aiosqlite:///./qwed_driver.db"})):
         status = _database_health()
     assert status["healthy"] is True
@@ -269,11 +269,10 @@ def test_database_health_prefers_database_url_env_over_settings(tmp_path, monkey
     assert status["location"].endswith("from_env.db")
 
 
-@patch("dotenv.find_dotenv", return_value="")
-@patch("dotenv.load_dotenv")
-def test_load_dotenv_if_available_without_dotenv_path_uses_override_flag(mock_load_dotenv, _mock_find_dotenv):
+@patch("qwed_new.config.load_dotenv_ordered")
+def test_load_dotenv_if_available_without_dotenv_path_uses_override_flag(mock_load_dotenv_ordered):
     _load_dotenv_if_available(override=True)
-    mock_load_dotenv.assert_called_once_with(override=True)
+    mock_load_dotenv_ordered.assert_called_once_with(override=True)
 
 
 @patch.dict(os.environ, {"QWED_SERVER_URL": "10.0.0.9:8000"})

@@ -102,13 +102,8 @@ def _src_path() -> str:
 
 def _load_dotenv_if_available(*, override: bool = False) -> None:
     try:
-        from dotenv import find_dotenv, load_dotenv
-
-        dotenv_path = find_dotenv(usecwd=True)
-        if dotenv_path:
-            load_dotenv(dotenv_path=dotenv_path, override=override)
-        else:
-            load_dotenv(override=override)
+        from qwed_new.config import load_dotenv_ordered
+        load_dotenv_ordered(override=override)
     except ImportError:
         return
 
@@ -1351,7 +1346,7 @@ def _sqlite_database_health(db_url: str, parsed: Any, base_scheme: str) -> Optio
 
     path = Path(db_path)
     if not path.is_absolute():
-        path = (_project_root() / path).resolve()
+        path = (Path.cwd() / path).resolve()
     return {"healthy": path.exists(), "location": str(path)}
 
 
@@ -1721,19 +1716,8 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
         os.environ["QWED_QUIET"] = "1"
     
     # Load .env file so credentials from qwed init are available
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-    except ImportError:
-        # python-dotenv is optional; credentials can still be passed via CLI args or env
-        logger.debug("python-dotenv not installed, skipping auto-load")
-        if not quiet:
-            err_msg = (
-                f"{QWED.ERROR}WARNING: python-dotenv not installed. Run 'pip install python-dotenv' for auto-loading .env{QWED.RESET}"
-                if HAS_COLOR
-                else "WARNING: python-dotenv not installed. Run 'pip install python-dotenv' for auto-loading .env"
-            )
-            click.echo(err_msg, err=True)
+    from qwed_new.config import load_dotenv_ordered
+    load_dotenv_ordered()
     
     try:
         # Auto-detect provider/base_url from ACTIVE_PROVIDER

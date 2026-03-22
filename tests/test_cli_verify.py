@@ -10,7 +10,8 @@ def runner():
 
 @pytest.fixture(autouse=True)
 def wipe_env():
-    with patch.dict(os.environ, {}, clear=True):
+    fake_env = {"HOME": "/tmp", "USERPROFILE": "C:\\tmp"}
+    with patch.dict(os.environ, fake_env, clear=True):
         yield
 
 @patch("qwed_sdk.cli.QWEDLocal")
@@ -72,7 +73,7 @@ def test_verify_failure_result(mock_qwedlocal, runner):
 
 def test_verify_missing_provider_and_base_url(runner):
     """Test verify without any provider info."""
-    with patch.dict(os.environ, {"ACTIVE_PROVIDER": ""}, clear=True):
+    with patch.dict(os.environ, {"ACTIVE_PROVIDER": ""}):
         result = runner.invoke(verify, ["query"])
         # Should default to ollama local since active is empty
         assert result.exit_code == 1
@@ -120,25 +121,12 @@ def test_verify_active_provider_named(mock_qwedlocal, runner):
 
 def test_verify_active_provider_missing_key(runner):
     """Test verify fails if provider selected but no key is found."""
-    with patch.dict(os.environ, {"ACTIVE_PROVIDER": "openai", "OPENAI_API_KEY": ""}, clear=True):
+    with patch.dict(os.environ, {"ACTIVE_PROVIDER": "openai", "OPENAI_API_KEY": ""}):
         result = runner.invoke(verify, ["query"])
         assert result.exit_code == 1
         assert "API key required for openai" in result.output
 
-@patch("qwed_sdk.cli.QWEDLocal")
-def test_verify_dotenv_missing_warning(mock_qwedlocal, runner):
-    """Test warning shown if dotenv is missing in regular mode."""
-    import sys
-    mock_instance = MagicMock()
-    mock_result = MagicMock()
-    mock_result.verified = True
-    mock_instance.verify.return_value = mock_result
-    mock_qwedlocal.return_value = mock_instance
-    
-    with patch.dict(sys.modules, {'dotenv': None}):
-        result = runner.invoke(verify, ["query", "--provider", "openai", "--api-key", "test"])
-        assert result.exit_code == 0
-        assert "python-dotenv not installed" in result.output
+
 
 @patch("qwed_sdk.cli.QWEDLocal")
 def test_verify_quiet_mode(mock_qwedlocal, runner):
@@ -151,13 +139,10 @@ def test_verify_quiet_mode(mock_qwedlocal, runner):
     mock_instance.verify.return_value = mock_result
     mock_qwedlocal.return_value = mock_instance
     
-    # Even without dotenv, warning shouldn't print
-    with patch.dict(sys.modules, {'dotenv': None}):
-        result = runner.invoke(verify, ["query", "--provider", "openai", "--api-key", "test", "--quiet"])
-        assert result.exit_code == 0
-        assert "python-dotenv not installed" not in result.output
-        assert "Using configured provider" not in result.output
-        assert "VERIFIED: quiet-result" in result.output
+    result = runner.invoke(verify, ["query", "--provider", "openai", "--api-key", "test", "--quiet"])
+    assert result.exit_code == 0
+    assert "Using configured provider" not in result.output
+    assert "VERIFIED: quiet-result" in result.output
 
 @patch("qwed_sdk.cli.QWEDLocal")
 def test_verify_exception_handling(mock_qwedlocal, runner):
@@ -171,7 +156,7 @@ def test_verify_exception_handling(mock_qwedlocal, runner):
 @patch("qwed_sdk.cli.QWEDLocal")
 def test_verify_active_provider_openai_compat_missing_base_url(mock_qwedlocal, runner):
     """openai_compat must fail fast when CUSTOM_BASE_URL is missing."""
-    with patch.dict(os.environ, {"ACTIVE_PROVIDER": "openai_compat"}, clear=True):
+    with patch.dict(os.environ, {"ACTIVE_PROVIDER": "openai_compat"}):
         result = runner.invoke(verify, ["query"])
 
     assert result.exit_code == 1
@@ -195,8 +180,7 @@ def test_verify_active_provider_openai_compat_success(mock_qwedlocal, runner):
             "CUSTOM_BASE_URL": "https://compat.test/v1",
             "CUSTOM_API_KEY": "compat-key",
             "CUSTOM_MODEL": "compat-model",
-        },
-        clear=True,
+        }
     ):
         result = runner.invoke(verify, ["query"])
 
