@@ -10,9 +10,15 @@ from pathlib import Path
 from dotenv import load_dotenv
 from enum import Enum
 
-# Load from multiple locations — user project dir first
-load_dotenv(Path.cwd() / ".env", override=False)
-load_dotenv(Path.home() / ".qwed" / ".env", override=False)
+def load_dotenv_ordered(override: bool = False) -> None:
+    """Load config from user project dir first, then global qwed dir."""
+    try:
+        load_dotenv(Path.cwd() / ".env", override=override)
+        load_dotenv(Path.home() / ".qwed" / ".env", override=override)
+    except ImportError:
+        pass
+
+load_dotenv_ordered(override=False)
 
 class ProviderType(str, Enum):
     OPENAI = "openai"

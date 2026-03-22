@@ -102,13 +102,8 @@ def _src_path() -> str:
 
 def _load_dotenv_if_available(*, override: bool = False) -> None:
     try:
-        from dotenv import find_dotenv, load_dotenv
-
-        dotenv_path = find_dotenv(usecwd=True)
-        if dotenv_path:
-            load_dotenv(dotenv_path=dotenv_path, override=override)
-        else:
-            load_dotenv(override=override)
+        from qwed_new.config import load_dotenv_ordered
+        load_dotenv_ordered(override=override)
     except ImportError:
         return
 

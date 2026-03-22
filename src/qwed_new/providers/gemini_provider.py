@@ -39,9 +39,15 @@ class GeminiProvider(LLMProvider):
         prompt = f"{system}\n\n{user_msg}"
         response = self.model.generate_content(
             prompt,
-            generation_config=genai.types.GenerationConfig(temperature=0.0)
+            generation_config=genai.types.GenerationConfig(temperature=0.0),
+            request_options={'timeout': 30.0}
         )
-        return response.text
+        content = response.text
+        if "```python" in content:
+            content = content.split("```python", 1)[1].split("```", 1)[0].strip()
+        elif "```" in content:
+            content = content.split("```", 1)[1].split("```", 1)[0].strip()
+        return content
 
     def _call_json(self, system: str, user_msg: str) -> dict:
         if self.model is None or genai is None:
@@ -53,14 +59,15 @@ class GeminiProvider(LLMProvider):
                 generation_config=genai.types.GenerationConfig(
                     temperature=0.0,
                     response_mime_type="application/json"
-                )
+                ),
+                request_options={'timeout': 30.0}
             )
             content = response.text
             # Strip markdown code fences if present
             if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
+                content = content.split("```json", 1)[1].split("```", 1)[0].strip()
             elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
+                content = content.split("```", 1)[1].split("```", 1)[0].strip()
             return json.loads(content)
         except json.JSONDecodeError as e:
             logger.debug("Gemini JSON parse error: %s", type(e).__name__)
@@ -120,6 +127,8 @@ Respond with JSON: {"verdict": "SUPPORTED|REFUTED|NOT_ENOUGH_INFO", "reasoning":
             raise ValueError("Gemini fact verification failed.") from None
 
     def verify_image(self, image_bytes: bytes, claim: str) -> Dict[str, Any]:
+        if self.model is None or genai is None:
+            raise ImportError("google-generativeai package required for Gemini integration.")
         system = """Analyze the image and verify the claim.
 Respond with JSON: {"verified": true, "reasoning": "...", "confidence": 0.95}"""
         try:
@@ -132,11 +141,14 @@ Respond with JSON: {"verified": true, "reasoning": "...", "confidence": 0.95}"""
                 generation_config=genai.types.GenerationConfig(
                     temperature=0.0,
                     response_mime_type="application/json"
-                )
+                ),
+                request_options={'timeout': 30.0}
             )
             content = response.text
             if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
+                content = content.split("```json", 1)[1].split("```", 1)[0].strip()
+            elif "```" in content:
+                content = content.split("```", 1)[1].split("```", 1)[0].strip()
             return json.loads(content)
         except Exception:
             raise ValueError("Gemini image verification failed.") from None
