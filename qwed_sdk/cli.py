@@ -1717,11 +1717,10 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
     
     # Load .env file so credentials from qwed init are available
     try:
-        from dotenv import load_dotenv
-        load_dotenv()
+        from qwed_new.config import load_dotenv_ordered
+        load_dotenv_ordered()
     except ImportError:
-        # python-dotenv is optional; credentials can still be passed via CLI args or env
-        logger.debug("python-dotenv not installed, skipping auto-load")
+        # qwed_new config fallback handled internally, but print if quiet=false
         if not quiet:
             err_msg = (
                 f"{QWED.ERROR}WARNING: python-dotenv not installed. Run 'pip install python-dotenv' for auto-loading .env{QWED.RESET}"

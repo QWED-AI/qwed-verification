@@ -45,6 +45,15 @@ class GeminiProvider(LLMProvider):
             return content.split("```", 1)[1].split("```", 1)[0].strip()
         return content.strip()
 
+    def _detect_image_mime_type(self, image_bytes: bytes) -> str:
+        if image_bytes.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if image_bytes.startswith(b"RIFF") and len(image_bytes) > 12 and image_bytes[8:12] == b"WEBP":
+            return "image/webp"
+        raise ValueError("Unsupported image format for Gemini verification.")
+
     def _call_text(self, system: str, user_msg: str) -> str:
         self._ensure_initialized()
         prompt = f"{system}\n\n{user_msg}"
@@ -129,11 +138,12 @@ Respond with JSON: {"verdict": "SUPPORTED|REFUTED|NOT_ENOUGH_INFO", "reasoning":
         self._ensure_initialized()
         system = """Analyze the image and verify the claim.
 Respond with JSON: {"verified": true, "reasoning": "...", "confidence": 0.95}"""
+        mime_type = self._detect_image_mime_type(image_bytes)
         try:
             prompt = f"{system}\n\nClaim: {claim}"
             response = self.model.generate_content(
                 [
-                    {"mime_type": "image/jpeg", "data": image_bytes},
+                    {"mime_type": mime_type, "data": image_bytes},
                     prompt
                 ],
                 generation_config=genai.types.GenerationConfig(

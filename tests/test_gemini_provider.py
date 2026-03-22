@@ -136,7 +136,7 @@ def test_translate_logic_success(provider, mock_gemini_model):
 
 def test_translate_logic_error(provider, mock_gemini_model):
     mock_gemini_model.generate_content.return_value.text = "invalid"
-    with pytest.raises(ValueError, match="Gemini logic translation failed."):
+    with pytest.raises(ValueError, match=r"Gemini logic translation failed\."):
         provider.translate_logic("bad")
 
 
@@ -151,7 +151,7 @@ def test_refine_logic_success(provider, mock_gemini_model):
 
 def test_refine_logic_error(provider, mock_gemini_model):
     mock_gemini_model.generate_content.return_value.text = "invalid"
-    with pytest.raises(ValueError, match="Gemini logic refinement failed."):
+    with pytest.raises(ValueError, match=r"Gemini logic refinement failed\."):
         provider.refine_logic("bad", "err")
 
 
@@ -166,7 +166,7 @@ def test_translate_stats_success(provider, mock_gemini_model):
 
 def test_translate_stats_error(provider, mock_gemini_model):
     mock_gemini_model.generate_content.side_effect = RuntimeError("fail")
-    with pytest.raises(ValueError, match="Gemini stats translation failed."):
+    with pytest.raises(ValueError, match=r"Gemini stats translation failed\."):
         provider.translate_stats("bad", [])
 
 
@@ -181,7 +181,7 @@ def test_verify_fact_success(provider, mock_gemini_model):
 
 def test_verify_fact_error(provider, mock_gemini_model):
     mock_gemini_model.generate_content.side_effect = RuntimeError("fail")
-    with pytest.raises(ValueError, match="Gemini fact verification failed."):
+    with pytest.raises(ValueError, match=r"Gemini fact verification failed\."):
         provider.verify_fact("C", "C")
 
 
@@ -190,7 +190,7 @@ def test_verify_image_success(provider, mock_gemini_model):
     mock_response.text = '```json\n{"verified": true, "reasoning": "ok", "confidence": 0.99}\n```'
     mock_gemini_model.generate_content.return_value = mock_response
     
-    res = provider.verify_image(b"fake_image", "claim")
+    res = provider.verify_image(b"\xff\xd8\xff_fake_image", "claim")
     assert res["verified"] is True
     
 def test_verify_image_no_fence(provider, mock_gemini_model):
@@ -198,7 +198,7 @@ def test_verify_image_no_fence(provider, mock_gemini_model):
     mock_response.text = '{"verified": true, "reasoning": "ok", "confidence": 0.99}'
     mock_gemini_model.generate_content.return_value = mock_response
     
-    res = provider.verify_image(b"fake_image", "claim")
+    res = provider.verify_image(b"\xff\xd8\xff_fake_image", "claim")
     assert res["verified"] is True
 
 def test_verify_image_generic_fence(provider, mock_gemini_model):
@@ -206,18 +206,31 @@ def test_verify_image_generic_fence(provider, mock_gemini_model):
     mock_response.text = '```\n{"verified": true, "reasoning": "ok", "confidence": 0.99}\n```'
     mock_gemini_model.generate_content.return_value = mock_response
     
-    res = provider.verify_image(b"fake_image", "claim")
+    res = provider.verify_image(b"\xff\xd8\xff_fake_image", "claim")
     assert res["verified"] is True
 
 
 def test_verify_image_error(provider, mock_gemini_model):
     mock_gemini_model.generate_content.side_effect = RuntimeError("fail")
-    with pytest.raises(ValueError, match="Gemini image verification failed."):
-        provider.verify_image(b"f", "c")
+    with pytest.raises(ValueError, match=r"Gemini image verification failed\."):
+        provider.verify_image(b"\xff\xd8\xffimage", "c")
 
 
 def test_verify_image_import_error(monkeypatch):
     monkeypatch.setattr("qwed_new.providers.gemini_provider.genai", None)
     provider = GeminiProvider()
     with pytest.raises(ImportError, match="google-generativeai package required"):
-        provider.verify_image(b"f", "c")
+        provider.verify_image(b"\xff\xd8\xff", "c")
+
+def test_detect_image_mime_type_jpeg(provider):
+    assert provider._detect_image_mime_type(b"\xff\xd8\xff_data") == "image/jpeg"
+
+def test_detect_image_mime_type_png(provider):
+    assert provider._detect_image_mime_type(b"\x89PNG\r\n\x1a\n_data") == "image/png"
+
+def test_detect_image_mime_type_webp(provider):
+    assert provider._detect_image_mime_type(b"RIFF____WEBP_data") == "image/webp"
+
+def test_detect_image_mime_type_unsupported(provider):
+    with pytest.raises(ValueError, match="Unsupported image format for Gemini verification."):
+        provider._detect_image_mime_type(b"invalid_bytes")
