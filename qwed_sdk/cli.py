@@ -1351,7 +1351,7 @@ def _sqlite_database_health(db_url: str, parsed: Any, base_scheme: str) -> Optio
 
     path = Path(db_path)
     if not path.is_absolute():
-        path = (_project_root() / path).resolve()
+        path = (Path.cwd() / path).resolve()
     return {"healthy": path.exists(), "location": str(path)}
 
 

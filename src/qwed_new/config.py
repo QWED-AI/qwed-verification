@@ -6,10 +6,13 @@ This module handles environment variables and provider selection.
 
 import os
 import secrets
+from pathlib import Path
 from dotenv import load_dotenv
 from enum import Enum
 
-load_dotenv()
+# Load from multiple locations — user project dir first
+load_dotenv(Path.cwd() / ".env", override=False)
+load_dotenv(Path.home() / ".qwed" / ".env", override=False)
 
 class ProviderType(str, Enum):
     OPENAI = "openai"
