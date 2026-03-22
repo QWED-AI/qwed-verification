@@ -1,6 +1,5 @@
-import json
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 # Import the provider. We'll mock google.generativeai entirely.
 from qwed_new.providers.gemini_provider import GeminiProvider

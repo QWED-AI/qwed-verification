@@ -13,8 +13,12 @@ def load_dotenv_ordered(override: bool = False) -> None:
     """Load config from user project dir first, then global qwed dir."""
     try:
         from dotenv import load_dotenv
-        load_dotenv(Path.cwd() / ".env", override=override)
-        load_dotenv(Path.home() / ".qwed" / ".env", override=override)
+        if override:
+            load_dotenv(Path.home() / ".qwed" / ".env", override=True)
+            load_dotenv(Path.cwd() / ".env", override=True)
+        else:
+            load_dotenv(Path.cwd() / ".env", override=False)
+            load_dotenv(Path.home() / ".qwed" / ".env", override=False)
     except ImportError as exc:
         import logging
         logger = logging.getLogger(__name__)
