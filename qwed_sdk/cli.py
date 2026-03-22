@@ -102,13 +102,8 @@ def _src_path() -> str:
 
 def _load_dotenv_if_available(*, override: bool = False) -> None:
     try:
-        from dotenv import find_dotenv, load_dotenv
-
-        dotenv_path = find_dotenv(usecwd=True)
-        if dotenv_path:
-            load_dotenv(dotenv_path=dotenv_path, override=override)
-        else:
-            load_dotenv(override=override)
+        from qwed_new.config import load_dotenv_ordered
+        load_dotenv_ordered(override=override)
     except ImportError:
         return
 
@@ -1351,7 +1346,7 @@ def _sqlite_database_health(db_url: str, parsed: Any, base_scheme: str) -> Optio
 
     path = Path(db_path)
     if not path.is_absolute():
-        path = (_project_root() / path).resolve()
+        path = (Path.cwd() / path).resolve()
     return {"healthy": path.exists(), "location": str(path)}
 
 

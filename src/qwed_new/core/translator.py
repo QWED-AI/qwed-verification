@@ -13,6 +13,7 @@ from qwed_new.providers.anthropic import AnthropicProvider
 from qwed_new.providers.claude_opus import ClaudeOpusProvider
 from qwed_new.providers.auto_shift import AutoShiftProvider
 from qwed_new.providers.openai_direct import OpenAIDirectProvider
+from qwed_new.providers.gemini_provider import GeminiProvider
 from qwed_new.providers.openai_compat import OpenAICompatProvider
 from qwed_new.providers.ollama_provider import OllamaProvider
 
@@ -41,8 +42,7 @@ class TranslationLayer:
             ProviderType.ANTHROPIC.value: AnthropicProvider,
             ProviderType.CLAUDE_OPUS.value: ClaudeOpusProvider,
             ProviderType.AUTO.value: AutoShiftProvider,
-            # Gemini support is currently routed through auto-shift until a dedicated provider is added.
-            ProviderType.GEMINI.value: AutoShiftProvider,
+            ProviderType.GEMINI.value: GeminiProvider,
             ProviderType.OLLAMA.value: OllamaProvider,
         }
         # Default fallback

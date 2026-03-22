@@ -77,7 +77,7 @@ def test_validate_math_output_rejects_invalid_confidence_without_leaking_value()
 
 
 def test_get_provider_allows_gemini_alias_without_unknown_fallback(monkeypatch):
-    class _DummyAutoProvider:
+    class _DummyGeminiProvider:
         def translate(self, user_query: str):
             return MathVerificationTask(
                 expression="2 + 2",
@@ -86,10 +86,10 @@ def test_get_provider_allows_gemini_alias_without_unknown_fallback(monkeypatch):
                 confidence=1.0,
             )
 
-    monkeypatch.setattr("qwed_new.core.translator.AutoShiftProvider", _DummyAutoProvider)
+    monkeypatch.setattr("qwed_new.core.translator.GeminiProvider", _DummyGeminiProvider)
 
     tl = TranslationLayer()
     provider = tl._get_provider("gemini")
 
-    assert isinstance(provider, _DummyAutoProvider)
+    assert isinstance(provider, _DummyGeminiProvider)
     assert tl.last_resolved_provider == "gemini"
