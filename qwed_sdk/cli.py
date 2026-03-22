@@ -1716,18 +1716,8 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
         os.environ["QWED_QUIET"] = "1"
     
     # Load .env file so credentials from qwed init are available
-    try:
-        from qwed_new.config import load_dotenv_ordered
-        load_dotenv_ordered()
-    except ImportError:
-        # qwed_new config fallback handled internally, but print if quiet=false
-        if not quiet:
-            err_msg = (
-                f"{QWED.ERROR}WARNING: python-dotenv not installed. Run 'pip install python-dotenv' for auto-loading .env{QWED.RESET}"
-                if HAS_COLOR
-                else "WARNING: python-dotenv not installed. Run 'pip install python-dotenv' for auto-loading .env"
-            )
-            click.echo(err_msg, err=True)
+    from qwed_new.config import load_dotenv_ordered
+    load_dotenv_ordered()
     
     try:
         # Auto-detect provider/base_url from ACTIVE_PROVIDER
