@@ -7,16 +7,18 @@ This module handles environment variables and provider selection.
 import os
 import secrets
 from pathlib import Path
-from dotenv import load_dotenv
 from enum import Enum
 
 def load_dotenv_ordered(override: bool = False) -> None:
     """Load config from user project dir first, then global qwed dir."""
     try:
+        from dotenv import load_dotenv
         load_dotenv(Path.cwd() / ".env", override=override)
         load_dotenv(Path.home() / ".qwed" / ".env", override=override)
-    except ImportError:
-        pass
+    except ImportError as exc:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"python-dotenv not installed or failed to import; skipping .env loading: {exc}")
 
 load_dotenv_ordered(override=False)
 

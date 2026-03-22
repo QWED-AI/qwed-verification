@@ -33,25 +33,30 @@ class GeminiProvider(LLMProvider):
         else:
             self.model = None
 
-    def _call_text(self, system: str, user_msg: str) -> str:
+    def _ensure_initialized(self) -> None:
         if self.model is None or genai is None:
             raise ImportError("google-generativeai package required for Gemini integration.")
+
+    def _simplify_fence(self, content: str, fence_lang: str) -> str:
+        fence = f"```{fence_lang}"
+        if fence in content:
+            return content.split(fence, 1)[1].split("```", 1)[0].strip()
+        elif "```" in content:
+            return content.split("```", 1)[1].split("```", 1)[0].strip()
+        return content.strip()
+
+    def _call_text(self, system: str, user_msg: str) -> str:
+        self._ensure_initialized()
         prompt = f"{system}\n\n{user_msg}"
         response = self.model.generate_content(
             prompt,
             generation_config=genai.types.GenerationConfig(temperature=0.0),
             request_options={'timeout': 30.0}
         )
-        content = response.text
-        if "```python" in content:
-            content = content.split("```python", 1)[1].split("```", 1)[0].strip()
-        elif "```" in content:
-            content = content.split("```", 1)[1].split("```", 1)[0].strip()
-        return content
+        return self._simplify_fence(response.text, "python")
 
     def _call_json(self, system: str, user_msg: str) -> dict:
-        if self.model is None or genai is None:
-            raise ImportError("google-generativeai package required for Gemini integration.")
+        self._ensure_initialized()
         prompt = f"{system}\n\nRespond ONLY with valid JSON.\n\n{user_msg}"
         try:
             response = self.model.generate_content(
@@ -62,13 +67,7 @@ class GeminiProvider(LLMProvider):
                 ),
                 request_options={'timeout': 30.0}
             )
-            content = response.text
-            # Strip markdown code fences if present
-            if "```json" in content:
-                content = content.split("```json", 1)[1].split("```", 1)[0].strip()
-            elif "```" in content:
-                content = content.split("```", 1)[1].split("```", 1)[0].strip()
-            return json.loads(content)
+            return json.loads(self._simplify_fence(response.text, "json"))
         except json.JSONDecodeError as e:
             logger.debug("Gemini JSON parse error: %s", type(e).__name__)
             raise ValueError("Failed to parse JSON from Gemini endpoint.") from e
@@ -127,8 +126,7 @@ Respond with JSON: {"verdict": "SUPPORTED|REFUTED|NOT_ENOUGH_INFO", "reasoning":
             raise ValueError("Gemini fact verification failed.") from None
 
     def verify_image(self, image_bytes: bytes, claim: str) -> Dict[str, Any]:
-        if self.model is None or genai is None:
-            raise ImportError("google-generativeai package required for Gemini integration.")
+        self._ensure_initialized()
         system = """Analyze the image and verify the claim.
 Respond with JSON: {"verified": true, "reasoning": "...", "confidence": 0.95}"""
         try:
@@ -144,11 +142,6 @@ Respond with JSON: {"verified": true, "reasoning": "...", "confidence": 0.95}"""
                 ),
                 request_options={'timeout': 30.0}
             )
-            content = response.text
-            if "```json" in content:
-                content = content.split("```json", 1)[1].split("```", 1)[0].strip()
-            elif "```" in content:
-                content = content.split("```", 1)[1].split("```", 1)[0].strip()
-            return json.loads(content)
+            return json.loads(self._simplify_fence(response.text, "json"))
         except Exception:
             raise ValueError("Gemini image verification failed.") from None
