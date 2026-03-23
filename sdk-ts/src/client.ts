@@ -70,10 +70,23 @@ export class QWEDClient {
     // HTTP Methods
     // --------------------------------------------------------------------------
 
+    private formatAgentId(agentId: number): string {
+        if (!Number.isInteger(agentId)) {
+            throw new QWEDError(
+                'Agent ID must be an integer',
+                'QWED-AGENT-ID-001',
+                400
+            );
+        }
+
+        return encodeURIComponent(String(agentId));
+    }
+
     private async request<T>(
         method: string,
         endpoint: string,
-        body?: unknown
+        body?: unknown,
+        extraHeaders?: Record<string, string>
     ): Promise<T> {
         const url = `${this.baseUrl}${endpoint}`;
 
@@ -83,7 +96,10 @@ export class QWEDClient {
         try {
             const response = await fetch(url, {
                 method,
-                headers: this.headers,
+                headers: {
+                    ...this.headers,
+                    ...extraHeaders,
+                },
                 body: body ? JSON.stringify(body) : undefined,
                 signal: controller.signal,
             });
@@ -218,6 +234,63 @@ export class QWEDClient {
         });
     }
 
+    async verifyProcess(
+        reasoningTrace: string,
+        options?: { mode?: 'irac' | 'milestones'; keyMilestones?: string[] }
+    ): Promise<VerificationResponse> {
+        return this.request('POST', '/verify/process', {
+            trace: reasoningTrace,
+            mode: options?.mode || 'irac',
+            milestones: options?.keyMilestones,
+        });
+    }
+
+    async verifyRAG(
+        targetDocumentId: string,
+        retrievedChunks: Record<string, unknown>[],
+        options?: { maxDrmRate?: string }
+    ): Promise<VerificationResponse> {
+        return this.request('POST', '/verify/rag', {
+            target_document_id: targetDocumentId,
+            chunks: retrievedChunks,
+            max_drm_rate: options?.maxDrmRate,
+        });
+    }
+
+    async verifyAgent(
+        agentId: number,
+        agentToken: string,
+        query: string,
+        options?: {
+            provider?: string;
+            checkExfiltration?: boolean;
+            checkMcpPoison?: boolean;
+            toolSchema?: Record<string, unknown>;
+        }
+    ): Promise<AgentVerificationResponse> {
+        // Build the correct payload matching backend AgentVerifyRequest + optional security checks
+        const payload: Record<string, unknown> = {
+            query: query,
+        };
+        if (options?.provider) payload.provider = options.provider;
+        if (options?.checkExfiltration !== undefined || options?.checkMcpPoison !== undefined) {
+            payload.security_checks = {
+                exfiltration: options?.checkExfiltration,
+                mcp_poison: options?.checkMcpPoison,
+            };
+        }
+        if (options?.toolSchema) {
+            payload.tool_schema = options.toolSchema;
+        }
+
+        return this.request(
+            'POST',
+            `/agents/${this.formatAgentId(agentId)}/verify`,
+            payload,
+            { 'X-Agent-Token': agentToken }
+        );
+    }
+
     // --------------------------------------------------------------------------
     // Batch Operations
     // --------------------------------------------------------------------------
@@ -250,22 +323,43 @@ export class QWEDClient {
 
     async registerAgent(
         registration: AgentRegistration
-    ): Promise<{ agent_id: string; agent_token: string; status: string }> {
+    ): Promise<{ agent_id: number; agent_token: string; status: string }> {
         return this.request('POST', '/agents/register', registration);
     }
 
     async verifyAgentAction(
         request: AgentVerificationRequest
     ): Promise<AgentVerificationResponse> {
+        const query = request.query ?? request.action?.query;
+        if (!query) {
+            throw new QWEDError(
+                'Agent verification requires a query payload',
+                'QWED-AGENT-VERIFY-001',
+                400
+            );
+        }
+
+        const payload: Record<string, unknown> = { query };
+        if (request.provider) {
+            payload.provider = request.provider;
+        }
+        if (request.security_checks) {
+            payload.security_checks = request.security_checks;
+        }
+        if (request.tool_schema) {
+            payload.tool_schema = request.tool_schema;
+        }
+
         return this.request(
             'POST',
-            `/agents/${request.agent_id}/verify`,
-            request
+            `/agents/${this.formatAgentId(request.agent_id)}/verify`,
+            payload,
+            { 'X-Agent-Token': request.agent_token }
         );
     }
 
     async getAgentBudget(
-        agentId: string,
+        agentId: number,
         agentToken: string
     ): Promise<{
         cost: { current_daily_usd: number; max_daily_usd: number };
@@ -275,7 +369,7 @@ export class QWEDClient {
         this.headers['X-API-Key'] = agentToken;
 
         try {
-            return await this.request('GET', `/agents/${agentId}/budget`);
+            return await this.request('GET', `/agents/${this.formatAgentId(agentId)}/budget`);
         } finally {
             this.headers['X-API-Key'] = originalKey;
         }
