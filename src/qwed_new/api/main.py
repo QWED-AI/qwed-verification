@@ -586,7 +586,7 @@ async def verify_image(
 class RAGVerifyRequest(BaseModel):
     target_document_id: str
     chunks: list[dict]
-    max_drm_rate: float | str = "0"
+    max_drm_rate: str = "0"  # Accepts Fraction-compatible strings: "0", "1/10", etc.
 
 @app.post("/verify/rag")
 async def verify_rag(
@@ -602,13 +602,8 @@ async def verify_rag(
     
     try:
         from qwed_sdk.guards.rag_guard import RAGGuard
-        from fractions import Fraction
         
-        rate = request.max_drm_rate
-        if isinstance(rate, float):
-            rate = str(Fraction(rate).limit_denominator())
-            
-        guard = RAGGuard(max_drm_rate=rate)
+        guard = RAGGuard(max_drm_rate=request.max_drm_rate)
         
         result = guard.verify_retrieval_context(
             target_document_id=request.target_document_id,
@@ -633,6 +628,52 @@ async def verify_rag(
             "status": "ERROR",
             "error": "Internal processing error",
             "message": INTERNAL_VERIFICATION_ERROR,
+            "verified": False
+        }
+
+class ProcessVerifyRequest(BaseModel):
+    trace: str
+    mode: str = "irac"
+    milestones: Optional[list[str]] = None
+
+@app.post("/verify/process")
+async def verify_process(
+    request: ProcessVerifyRequest,
+    tenant: TenantContext = Depends(get_current_tenant),
+    session: Session = Depends(get_session)
+):
+    """
+    Glass-Box Reasoning Process Verifier.
+    Checks IRAC structural compliance or milestone process rates.
+    """
+    check_rate_limit(tenant.api_key)
+    
+    try:
+        from qwed_new.guards.process_guard import ProcessVerifier
+        verifier = ProcessVerifier()
+        
+        if request.mode == "irac":
+            result = verifier.verify_irac_structure(request.trace)
+        else:
+            result = verifier.verify_trace(request.trace, request.milestones or [])
+            
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=f"Process Verification ({request.mode})",
+            result=str(result),
+            is_verified=result.get("verified", False),
+            domain="PROCESS"
+        )
+        session.add(log)
+        session.commit()
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Process verification error: {redact_pii(str(e))}", exc_info=False)
+        return {
+            "status": "ERROR",
+            "error": "Internal processing error",
             "is_valid": False
         }
 
@@ -750,6 +791,7 @@ class AgentRegistrationRequest(BaseModel):
 class AgentVerifyRequest(BaseModel):
     query: str
     provider: Optional[str] = None
+    security_checks: Optional[dict] = None
 
 class ToolCallRequest(BaseModel):
     tool_params: dict
@@ -815,6 +857,32 @@ async def agent_verify(
             input_data=request.query
         )
         raise HTTPException(status_code=403, detail=budget_reason)
+    
+    # 2.5 Security Checks
+    if request.security_checks:
+        if request.security_checks.get("exfiltration"):
+            from qwed_sdk.guards.exfiltration_guard import ExfiltrationGuard
+            guard = ExfiltrationGuard()
+            res = guard.scan_payload(request.query)
+            if not res.get("verified"):
+                agent_registry.log_activity(
+                    session, agent_id, agent.organization_id,
+                    "verification_request", "Exfiltration blocked", "blocked",
+                    input_data=request.query
+                )
+                raise HTTPException(status_code=403, detail="Potential exfiltration detected: " + res.get("message", ""))
+                
+        if request.security_checks.get("mcp_poison"):
+            from qwed_sdk.guards.mcp_poison_guard import MCPPoisonGuard
+            guard = MCPPoisonGuard()
+            res = guard.verify_tool_definition({"name": "agent_query", "description": request.query})
+            if not res.get("verified"):
+                agent_registry.log_activity(
+                    session, agent_id, agent.organization_id,
+                    "verification_request", "MCP Poisoning blocked", "blocked",
+                    input_data=request.query
+                )
+                raise HTTPException(status_code=403, detail="Potential MCP Model Context Poisoning detected")
     
     # 3. Process via control plane
     try:

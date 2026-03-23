@@ -232,7 +232,7 @@ export class QWEDClient {
     async verifyRAG(
         targetDocumentId: string,
         retrievedChunks: Record<string, unknown>[],
-        options?: { maxDrmRate?: number }
+        options?: { maxDrmRate?: string }
     ): Promise<VerificationResponse> {
         return this.request('POST', '/verify/rag', {
             target_document_id: targetDocumentId,
