@@ -318,10 +318,31 @@ export class QWEDClient {
     async verifyAgentAction(
         request: AgentVerificationRequest
     ): Promise<AgentVerificationResponse> {
+        const query = request.query ?? request.action?.query;
+        if (!query) {
+            throw new QWEDError(
+                'Agent verification requires a query payload',
+                'QWED-AGENT-VERIFY-001',
+                400
+            );
+        }
+
+        const payload: Record<string, unknown> = { query };
+        if (request.provider) {
+            payload.provider = request.provider;
+        }
+        if (request.security_checks) {
+            payload.security_checks = request.security_checks;
+        }
+        if (request.tool_schema) {
+            payload.tool_schema = request.tool_schema;
+        }
+
         return this.request(
             'POST',
             `/agents/${encodeURIComponent(request.agent_id)}/verify`,
-            request
+            payload,
+            { 'X-Agent-Token': request.agent_token }
         );
     }
 

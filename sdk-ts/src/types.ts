@@ -266,10 +266,19 @@ export interface AgentAction {
     parameters?: Record<string, unknown>;
 }
 
+export interface AgentSecurityChecks {
+    exfiltration?: boolean;
+    mcp_poison?: boolean;
+}
+
 export interface AgentVerificationRequest {
     agent_id: string;
     agent_token: string;
-    action: AgentAction;
+    query?: string;
+    provider?: string;
+    security_checks?: AgentSecurityChecks;
+    tool_schema?: Record<string, unknown>;
+    action?: AgentAction;
     context?: {
         conversation_id?: string;
         step_number?: number;
