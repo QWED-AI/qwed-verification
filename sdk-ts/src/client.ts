@@ -243,16 +243,22 @@ export class QWEDClient {
 
     async verifyAgent(
         agentId: string,
-        actionPayload: Record<string, unknown>,
-        options?: { checkExfiltration?: boolean; checkMcpPoison?: boolean }
-    ): Promise<VerificationResponse> {
-        return this.request('POST', `/agents/${agentId}/verify`, {
-            action: actionPayload,
-            security_checks: {
-                exfiltration: options?.checkExfiltration,
-                mcp_poison: options?.checkMcpPoison,
-            }
-        });
+        query: string,
+        options?: { provider?: string; checkExfiltration?: boolean; checkMcpPoison?: boolean }
+    ): Promise<AgentVerificationResponse> {
+        // Build the correct payload matching backend AgentVerifyRequest + optional security checks
+        const payload: Record<string, unknown> = {
+            query: query,
+        };
+        if (options?.provider) payload.provider = options.provider;
+        if (options?.checkExfiltration !== undefined || options?.checkMcpPoison !== undefined) {
+             payload.security_checks = {
+                 exfiltration: options?.checkExfiltration,
+                 mcp_poison: options?.checkMcpPoison,
+             };
+        }
+        
+        return this.request('POST', `/agents/${encodeURIComponent(agentId)}/verify`, payload);
     }
 
     // --------------------------------------------------------------------------
@@ -296,7 +302,7 @@ export class QWEDClient {
     ): Promise<AgentVerificationResponse> {
         return this.request(
             'POST',
-            `/agents/${request.agent_id}/verify`,
+            `/agents/${encodeURIComponent(request.agent_id)}/verify`,
             request
         );
     }
@@ -312,7 +318,7 @@ export class QWEDClient {
         this.headers['X-API-Key'] = agentToken;
 
         try {
-            return await this.request('GET', `/agents/${agentId}/budget`);
+            return await this.request('GET', `/agents/${encodeURIComponent(agentId)}/budget`);
         } finally {
             this.headers['X-API-Key'] = originalKey;
         }

@@ -583,6 +583,59 @@ async def verify_image(
             "confidence": 0.0
         }
 
+class RAGVerifyRequest(BaseModel):
+    target_document_id: str
+    chunks: list[dict]
+    max_drm_rate: float | str = "0"
+
+@app.post("/verify/rag")
+async def verify_rag(
+    request: RAGVerifyRequest,
+    tenant: TenantContext = Depends(get_current_tenant),
+    session: Session = Depends(get_session)
+):
+    """
+    Document-Level Retrieval Mismatch Defender.
+    Verifies that context chunks align with the target document.
+    """
+    check_rate_limit(tenant.api_key)
+    
+    try:
+        from qwed_sdk.guards.rag_guard import RAGGuard
+        from fractions import Fraction
+        
+        rate = request.max_drm_rate
+        if isinstance(rate, float):
+            rate = str(Fraction(rate).limit_denominator())
+            
+        guard = RAGGuard(max_drm_rate=rate)
+        
+        result = guard.verify_retrieval_context(
+            target_document_id=request.target_document_id,
+            retrieved_chunks=request.chunks
+        )
+        
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=f"RAG Document Verify: {request.target_document_id}",
+            result=str(result),
+            is_verified=result.get("verified", False),
+            domain="RAG"
+        )
+        session.add(log)
+        session.commit()
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"RAG verification error: {redact_pii(str(e))}", exc_info=False)
+        return {
+            "status": "ERROR",
+            "error": "Internal processing error",
+            "message": str(e),
+            "is_valid": False
+        }
+
 
 # ============================================================
 # OBSERVABILITY ENDPOINTS
