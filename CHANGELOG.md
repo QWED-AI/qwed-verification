@@ -2,6 +2,26 @@
 
 All notable changes to the QWED Protocol will be documented in this file.
 
+## [4.0.1] - 2026-03-23
+### 🔄 Sentinel Guard Sync
+
+#### 🆕 New Endpoints
+- **`POST /verify/process`**: Glass-box reasoning process verifier — IRAC structural compliance and custom milestone validation with decimal scoring.
+- **Agent Security Checks**: `POST /agents/{id}/verify` now accepts `security_checks: { exfiltration, mcp_poison }` to run `ExfiltrationGuard` and `MCPPoisonGuard` before verification.
+
+#### 🔒 Security Fixes
+- **Information Disclosure**: Removed raw `str(e)` from `/verify/rag` error responses; exceptions logged via `redact_pii()`, clients receive only `INTERNAL_VERIFICATION_ERROR`. (Sentry + CodeQL)
+- **Symbolic Precision**: `RAGVerifyRequest.max_drm_rate` changed from `float | str` → `str` with `field_validator` enforcing Fraction-compatible values.
+
+#### 🛠️ SDK Changes (`@qwed-ai/sdk@4.0.1`)
+- **`verifyProcess()`**: Validates AI reasoning traces using IRAC or custom milestone lists.
+- **`verifyRAG()`**: `maxDrmRate` type changed from `number` to `string` for symbolic precision.
+- **`verifyAgent()`**: Returns `AgentVerificationResponse`, payload aligned with backend schema. Agent IDs URL-encoded.
+- **Type Fixes**: `VerificationResultData.risk` and `risk_level` separated. Added `Process`, `RAG`, `Security` to `VerificationType` enum.
+
+#### 🧪 Tests
+- `test_api_phase17_endpoints.py` — covers `/verify/process`, `/verify/rag` exception masking, and agent security check blocking.
+
 ## [4.0.0] - 2026-03-12
 ### 🛡️ Sentinel Edition
 
