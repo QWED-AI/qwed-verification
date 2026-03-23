@@ -632,7 +632,7 @@ async def verify_rag(
         return {
             "status": "ERROR",
             "error": "Internal processing error",
-            "message": str(e),
+            "message": INTERNAL_VERIFICATION_ERROR,
             "is_valid": False
         }
 
