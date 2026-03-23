@@ -864,6 +864,83 @@ class AgentVerifyRequest(BaseModel):
 class ToolCallRequest(BaseModel):
     tool_params: dict
 
+def _require_authenticated_agent(session: Session, agent_id: int, x_agent_token: str) -> Agent:
+    agent = agent_registry.authenticate_agent(session, x_agent_token)
+    if not agent or agent.id != agent_id:
+        raise HTTPException(status_code=401, detail="Invalid agent token")
+    return agent
+
+def _enforce_agent_budget(session: Session, agent_id: int, agent: Agent, query: str) -> None:
+    budget_ok, budget_reason = agent_registry.check_budget(session, agent_id)
+    if budget_ok:
+        return
+
+    agent_registry.log_activity(
+        session, agent_id, agent.organization_id,
+        "verification_request", "Budget exceeded", "blocked",
+        input_data=query
+    )
+    raise HTTPException(status_code=403, detail=budget_reason)
+
+def _run_exfiltration_check(session: Session, agent_id: int, agent: Agent, query: str) -> None:
+    from qwed_sdk.guards.exfiltration_guard import ExfiltrationGuard
+
+    guard = ExfiltrationGuard()
+    res = guard.scan_payload(query)
+    if res.get("verified"):
+        return
+
+    agent_registry.log_activity(
+        session, agent_id, agent.organization_id,
+        "verification_request", "Exfiltration blocked", "blocked",
+        input_data=None
+    )
+    raise HTTPException(status_code=403, detail="Potential exfiltration detected: " + res.get("message", ""))
+
+def _run_mcp_poison_check(session: Session, agent_id: int, agent: Agent, tool_schema: Optional[dict]) -> None:
+    if not tool_schema:
+        raise HTTPException(
+            status_code=400,
+            detail="'tool_schema' is required when mcp_poison check is enabled"
+        )
+
+    from qwed_sdk.guards.mcp_poison_guard import MCPPoisonGuard
+
+    guard = MCPPoisonGuard()
+    res = guard.verify_tool_definition(tool_schema)
+    if res.get("verified"):
+        return
+
+    agent_registry.log_activity(
+        session, agent_id, agent.organization_id,
+        "verification_request", "MCP Poisoning blocked", "blocked",
+        input_data=None
+    )
+    raise HTTPException(status_code=403, detail="Potential MCP Model Context Poisoning detected")
+
+def _run_agent_security_checks(
+    session: Session,
+    agent_id: int,
+    agent: Agent,
+    request: AgentVerifyRequest,
+) -> None:
+    security_checks = request.security_checks or {}
+    if security_checks.get("exfiltration"):
+        _run_exfiltration_check(session, agent_id, agent, request.query)
+    if security_checks.get("mcp_poison"):
+        _run_mcp_poison_check(session, agent_id, agent, request.tool_schema)
+
+async def _process_agent_verification(agent: Agent, request: AgentVerifyRequest) -> dict:
+    try:
+        return await control_plane.process_natural_language(
+            request.query,
+            organization_id=agent.organization_id,
+            preferred_provider=request.provider
+        )
+    except Exception as e:
+        logger.error(f"Agent verification failed: {redact_pii(str(e))}", exc_info=False)
+        raise HTTPException(status_code=500, detail="Internal agent verification error") from e
+
 @app.post("/agents/register")
 async def register_agent(
     request: AgentRegistrationRequest,
@@ -919,62 +996,10 @@ async def agent_verify(
     import time
     start_time = time.time()
     
-    # 1. Authenticate agent
-    agent = agent_registry.authenticate_agent(session, x_agent_token)
-    if not agent or agent.id != agent_id:
-        raise HTTPException(status_code=401, detail="Invalid agent token")
-    
-    # 2. Check budget
-    budget_ok, budget_reason = agent_registry.check_budget(session, agent_id)
-    if not budget_ok:
-        agent_registry.log_activity(
-            session, agent_id, agent.organization_id,
-            "verification_request", "Budget exceeded", "blocked",
-            input_data=request.query
-        )
-        raise HTTPException(status_code=403, detail=budget_reason)
-    
-    # 2.5 Security Checks
-    if request.security_checks:
-        if request.security_checks.get("exfiltration"):
-            from qwed_sdk.guards.exfiltration_guard import ExfiltrationGuard
-            guard = ExfiltrationGuard()
-            res = guard.scan_payload(request.query)
-            if not res.get("verified"):
-                agent_registry.log_activity(
-                    session, agent_id, agent.organization_id,
-                    "verification_request", "Exfiltration blocked", "blocked",
-                    input_data=None
-                )
-                raise HTTPException(status_code=403, detail="Potential exfiltration detected: " + res.get("message", ""))
-                
-        if request.security_checks.get("mcp_poison"):
-            if not request.tool_schema:
-                raise HTTPException(
-                    status_code=400,
-                    detail="'tool_schema' is required when mcp_poison check is enabled"
-                )
-            from qwed_sdk.guards.mcp_poison_guard import MCPPoisonGuard
-            guard = MCPPoisonGuard()
-            res = guard.verify_tool_definition(request.tool_schema)
-            if not res.get("verified"):
-                agent_registry.log_activity(
-                    session, agent_id, agent.organization_id,
-                    "verification_request", "MCP Poisoning blocked", "blocked",
-                    input_data=None
-                )
-                raise HTTPException(status_code=403, detail="Potential MCP Model Context Poisoning detected")
-    
-    # 3. Process via control plane
-    try:
-        result = await control_plane.process_natural_language(
-            request.query,
-            organization_id=agent.organization_id,
-            preferred_provider=request.provider
-        )
-    except Exception as e:
-        logger.error(f"Agent verification failed: {redact_pii(str(e))}", exc_info=False)
-        raise HTTPException(status_code=500, detail="Internal agent verification error")
+    agent = _require_authenticated_agent(session, agent_id, x_agent_token)
+    _enforce_agent_budget(session, agent_id, agent, request.query)
+    _run_agent_security_checks(session, agent_id, agent, request)
+    result = await _process_agent_verification(agent, request)
     
     # 4. Log activity
     latency = (time.time() - start_time) * 1000
