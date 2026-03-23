@@ -26,6 +26,41 @@ def test_verify_process_endpoint(client):
     assert response.status_code == 200
     assert "verified" in response.json()
 
+@patch("qwed_new.guards.process_guard.ProcessVerifier.verify_trace")
+def test_verify_process_endpoint_milestones_mode(mock_verify_trace, client):
+    mock_verify_trace.return_value = {
+        "verified": True,
+        "score": 1.0,
+        "process_rate": 1.0,
+        "missed_milestones": [],
+    }
+    response = client.post("/verify/process", json={
+        "trace": "Step 1: collect evidence\nStep 2: apply rule",
+        "mode": "milestones",
+        "milestones": ["collect evidence", "apply rule"]
+    }, headers={"x-api-key": "fake-key"})
+
+    assert response.status_code == 200
+    assert response.json()["verified"] is True
+    mock_verify_trace.assert_called_once_with(
+        "Step 1: collect evidence\nStep 2: apply rule",
+        ["collect evidence", "apply rule"]
+    )
+
+@patch("qwed_new.guards.process_guard.ProcessVerifier.verify_irac_structure", side_effect=RuntimeError("secret process failure"))
+def test_verify_process_endpoint_exception_uses_verified_flag(mock_verify_irac, client):
+    response = client.post("/verify/process", json={
+        "trace": "Issue: test\nRule: test\nApplication: test\nConclusion: test",
+        "mode": "irac"
+    }, headers={"x-api-key": "fake-key"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ERROR"
+    assert data["error"] == "Internal processing error"
+    assert data["verified"] is False
+    assert "is_valid" not in data
+
 def test_verify_rag_endpoint(client):
     response = client.post("/verify/rag", json={
         "target_document_id": "doc123",

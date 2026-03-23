@@ -627,7 +627,6 @@ async def verify_rag(
         return {
             "status": "ERROR",
             "error": "Internal processing error",
-            "message": INTERNAL_VERIFICATION_ERROR,
             "verified": False
         }
 
@@ -674,7 +673,7 @@ async def verify_process(
         return {
             "status": "ERROR",
             "error": "Internal processing error",
-            "is_valid": False
+            "verified": False
         }
 
 
