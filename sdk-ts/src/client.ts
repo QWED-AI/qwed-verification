@@ -70,6 +70,18 @@ export class QWEDClient {
     // HTTP Methods
     // --------------------------------------------------------------------------
 
+    private formatAgentId(agentId: number): string {
+        if (!Number.isInteger(agentId)) {
+            throw new QWEDError(
+                'Agent ID must be an integer',
+                'QWED-AGENT-ID-001',
+                400
+            );
+        }
+
+        return encodeURIComponent(String(agentId));
+    }
+
     private async request<T>(
         method: string,
         endpoint: string,
@@ -246,7 +258,7 @@ export class QWEDClient {
     }
 
     async verifyAgent(
-        agentId: string,
+        agentId: number,
         agentToken: string,
         query: string,
         options?: {
@@ -273,7 +285,7 @@ export class QWEDClient {
 
         return this.request(
             'POST',
-            `/agents/${encodeURIComponent(agentId)}/verify`,
+            `/agents/${this.formatAgentId(agentId)}/verify`,
             payload,
             { 'X-Agent-Token': agentToken }
         );
@@ -311,7 +323,7 @@ export class QWEDClient {
 
     async registerAgent(
         registration: AgentRegistration
-    ): Promise<{ agent_id: string; agent_token: string; status: string }> {
+    ): Promise<{ agent_id: number; agent_token: string; status: string }> {
         return this.request('POST', '/agents/register', registration);
     }
 
@@ -340,14 +352,14 @@ export class QWEDClient {
 
         return this.request(
             'POST',
-            `/agents/${encodeURIComponent(request.agent_id)}/verify`,
+            `/agents/${this.formatAgentId(request.agent_id)}/verify`,
             payload,
             { 'X-Agent-Token': request.agent_token }
         );
     }
 
     async getAgentBudget(
-        agentId: string,
+        agentId: number,
         agentToken: string
     ): Promise<{
         cost: { current_daily_usd: number; max_daily_usd: number };
@@ -357,7 +369,7 @@ export class QWEDClient {
         this.headers['X-API-Key'] = agentToken;
 
         try {
-            return await this.request('GET', `/agents/${encodeURIComponent(agentId)}/budget`);
+            return await this.request('GET', `/agents/${this.formatAgentId(agentId)}/budget`);
         } finally {
             this.headers['X-API-Key'] = originalKey;
         }

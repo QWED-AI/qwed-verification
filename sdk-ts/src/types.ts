@@ -272,7 +272,7 @@ export interface AgentSecurityChecks {
 }
 
 export interface AgentVerificationRequest {
-    agent_id: string;
+    agent_id: number;
     agent_token: string;
     query?: string;
     provider?: string;
