@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File, Form, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Annotated
 from sqlmodel import Session
 import os
 import logging
@@ -12,6 +12,7 @@ from qwed_new.core.security import redact_pii
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 INTERNAL_VERIFICATION_ERROR = "Internal verification error"
+INTERNAL_PROCESSING_ERROR = "Internal processing error"
 
 from qwed_new.core.control_plane import ControlPlane
 from qwed_new.core.tenant_context import get_current_tenant, TenantContext
@@ -24,6 +25,10 @@ from qwed_new.core.rate_limiter import check_rate_limit
 from qwed_new.auth import auth_router
 from qwed_new.auth.audit_routes import router as audit_router
 from qwed_new.auth.middleware import get_api_key
+
+TenantDependency = Annotated[TenantContext, Depends(get_current_tenant)]
+SessionDependency = Annotated[Session, Depends(get_session)]
+AgentTokenHeader = Annotated[str, Header(...)]
 
 app = FastAPI(
     title="QWED API",
@@ -195,7 +200,7 @@ async def verify_stats(
         logger.error(f"Stats verification error: {redact_pii(str(e))}", exc_info=False)
         return {
             "status": "ERROR",
-            "error": "Internal processing error"
+            "error": INTERNAL_PROCESSING_ERROR
         }
 
 
@@ -591,8 +596,8 @@ class RAGVerifyRequest(BaseModel):
 @app.post("/verify/rag")
 async def verify_rag(
     request: RAGVerifyRequest,
-    tenant: TenantContext = Depends(get_current_tenant),
-    session: Session = Depends(get_session)
+    tenant: TenantDependency,
+    session: SessionDependency
 ):
     """
     Document-Level Retrieval Mismatch Defender.
@@ -610,10 +615,18 @@ async def verify_rag(
             retrieved_chunks=request.chunks
         )
         
+        audit_result = {
+            "verified": result.get("verified", False),
+            "risk": result.get("risk"),
+            "drm_rate": result.get("drm_rate"),
+            "chunks_checked": result.get("chunks_checked"),
+            "mismatched_count": result.get("mismatched_count"),
+        }
+
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=f"RAG Document Verify: {request.target_document_id}",
-            result=str(result),
+            result=str(audit_result),
             is_verified=result.get("verified", False),
             domain="RAG"
         )
@@ -626,7 +639,7 @@ async def verify_rag(
         logger.error(f"RAG verification error: {redact_pii(str(e))}", exc_info=False)
         return {
             "status": "ERROR",
-            "error": "Internal processing error",
+            "error": INTERNAL_PROCESSING_ERROR,
             "verified": False
         }
 
@@ -638,8 +651,8 @@ class ProcessVerifyRequest(BaseModel):
 @app.post("/verify/process")
 async def verify_process(
     request: ProcessVerifyRequest,
-    tenant: TenantContext = Depends(get_current_tenant),
-    session: Session = Depends(get_session)
+    tenant: TenantDependency,
+    session: SessionDependency
 ):
     """
     Glass-Box Reasoning Process Verifier.
@@ -653,8 +666,18 @@ async def verify_process(
         
         if request.mode == "irac":
             result = verifier.verify_irac_structure(request.trace)
+        elif request.mode == "milestones":
+            if not request.milestones:
+                raise HTTPException(
+                    status_code=400,
+                    detail="'milestones' is required when mode=\"milestones\""
+                )
+            result = verifier.verify_trace(request.trace, request.milestones)
         else:
-            result = verifier.verify_trace(request.trace, request.milestones or [])
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid mode. Use 'irac' or 'milestones'."
+            )
             
         log = VerificationLog(
             organization_id=tenant.organization_id,
@@ -668,11 +691,13 @@ async def verify_process(
         
         return result
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Process verification error: {redact_pii(str(e))}", exc_info=False)
         return {
             "status": "ERROR",
-            "error": "Internal processing error",
+            "error": INTERNAL_PROCESSING_ERROR,
             "verified": False
         }
 
@@ -828,12 +853,19 @@ async def register_agent(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/agents/{agent_id}/verify")
+@app.post(
+    "/agents/{agent_id}/verify",
+    responses={
+        401: {"description": "Invalid agent token."},
+        403: {"description": "Agent budget exceeded or request blocked by security checks."},
+        500: {"description": "Internal agent verification error."},
+    },
+)
 async def agent_verify(
     agent_id: int,
     request: AgentVerifyRequest,
-    x_agent_token: str = Header(...),
-    session: Session = Depends(get_session)
+    x_agent_token: AgentTokenHeader,
+    session: SessionDependency
 ):
     """
     Agent makes a verification request through QWED.
@@ -867,7 +899,7 @@ async def agent_verify(
                 agent_registry.log_activity(
                     session, agent_id, agent.organization_id,
                     "verification_request", "Exfiltration blocked", "blocked",
-                    input_data=request.query
+                    input_data=None
                 )
                 raise HTTPException(status_code=403, detail="Potential exfiltration detected: " + res.get("message", ""))
                 
@@ -879,7 +911,7 @@ async def agent_verify(
                 agent_registry.log_activity(
                     session, agent_id, agent.organization_id,
                     "verification_request", "MCP Poisoning blocked", "blocked",
-                    input_data=request.query
+                    input_data=None
                 )
                 raise HTTPException(status_code=403, detail="Potential MCP Model Context Poisoning detected")
     

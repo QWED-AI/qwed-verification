@@ -6,7 +6,7 @@ from unittest.mock import patch, MagicMock
 def client():
     from qwed_new.api.main import app, get_current_tenant, get_session
     
-    mock_tenant = MagicMock(organization_id=1, api_key="sk-test", organization_name="Test Org")
+    mock_tenant = MagicMock(organization_id=1, api_key="dummy-api-key", organization_name="Test Org")
     mock_session = MagicMock(add=MagicMock(), commit=MagicMock())
     
     app.dependency_overrides[get_current_tenant] = lambda: mock_tenant
@@ -41,11 +41,33 @@ def test_verify_process_endpoint_milestones_mode(mock_verify_trace, client):
     }, headers={"x-api-key": "fake-key"})
 
     assert response.status_code == 200
-    assert response.json()["verified"] is True
+    data = response.json()
+    assert data["verified"] is True
+    assert data["score"] == 1.0
+    assert data["process_rate"] == 1.0
+    assert data["missed_milestones"] == []
     mock_verify_trace.assert_called_once_with(
         "Step 1: collect evidence\nStep 2: apply rule",
         ["collect evidence", "apply rule"]
     )
+
+def test_verify_process_endpoint_rejects_missing_milestones(client):
+    response = client.post("/verify/process", json={
+        "trace": "Step 1: collect evidence\nStep 2: apply rule",
+        "mode": "milestones"
+    }, headers={"x-api-key": "fake-key"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "'milestones' is required when mode=\"milestones\""
+
+def test_verify_process_endpoint_rejects_invalid_mode(client):
+    response = client.post("/verify/process", json={
+        "trace": "Issue: test\nRule: test\nApplication: test\nConclusion: test",
+        "mode": "IRCA"
+    }, headers={"x-api-key": "fake-key"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid mode. Use 'irac' or 'milestones'."
 
 @patch("qwed_new.guards.process_guard.ProcessVerifier.verify_irac_structure", side_effect=RuntimeError("secret process failure"))
 def test_verify_process_endpoint_exception_uses_verified_flag(mock_verify_irac, client):
@@ -61,14 +83,28 @@ def test_verify_process_endpoint_exception_uses_verified_flag(mock_verify_irac, 
     assert data["verified"] is False
     assert "is_valid" not in data
 
-def test_verify_rag_endpoint(client):
+@patch("qwed_sdk.guards.rag_guard.RAGGuard.verify_retrieval_context")
+def test_verify_rag_endpoint(mock_verify_retrieval_context, client):
+    mock_verify_retrieval_context.return_value = {
+        "verified": True,
+        "drm_rate": 0.0,
+        "chunks_checked": 1,
+        "risk": "LOW",
+    }
     response = client.post("/verify/rag", json={
         "target_document_id": "doc123",
         "chunks": [{"text": "Hello world"}],
         "max_drm_rate": "0"
     }, headers={"x-api-key": "fake-key"})
     assert response.status_code == 200
-    assert "verified" in response.json()
+    data = response.json()
+    assert data["verified"] is True
+    assert data["drm_rate"] == 0.0
+    assert data["chunks_checked"] == 1
+    mock_verify_retrieval_context.assert_called_once_with(
+        target_document_id="doc123",
+        retrieved_chunks=[{"text": "Hello world"}]
+    )
 
 @patch("qwed_sdk.guards.rag_guard.RAGGuard.__init__", side_effect=ValueError("SecretDBPassword123"))
 def test_verify_rag_endpoint_exception_no_leak(mock_rag_init, client):
@@ -113,3 +149,5 @@ def test_agent_verify_security_checks(mock_registry, client):
     )
     assert response2.status_code == 403
     assert "MCP Model Context Poisoning" in response2.json()["detail"]
+    blocked_inputs = [call.kwargs.get("input_data") for call in mock_registry.log_activity.call_args_list]
+    assert blocked_inputs == [None, None]

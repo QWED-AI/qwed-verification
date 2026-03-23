@@ -6,7 +6,7 @@ from qwed_new.core.control_plane import ControlPlane
 
 @pytest.fixture
 def client():
-    mock_tenant = MagicMock(organization_id=1, api_key="test_key", organization_name="Test Org")
+    mock_tenant = MagicMock(organization_id=1, api_key="dummy-api-key", organization_name="Test Org")
     mock_session = MagicMock()
 
     app.dependency_overrides[get_current_tenant] = lambda: mock_tenant
@@ -22,6 +22,7 @@ async def test_verify_logic_exception_handling(client):
     Test that verify_logic catches internal errors and returns a sanitized message.
     """
     with patch("qwed_new.api.main.check_rate_limit"), \
+         patch("qwed_new.api.main.control_plane.router.route", return_value="openai"), \
          patch("qwed_new.api.main.control_plane.process_logic_query", side_effect=Exception("SENSITIVE_LOGIC_ERROR")):
 
         response = client.post(
@@ -33,6 +34,7 @@ async def test_verify_logic_exception_handling(client):
         data = response.json()
         assert data["status"] == "ERROR"
         assert data["error"] == "Internal verification error"
+        assert data["provider_used"] == "openai"
         assert "SENSITIVE_LOGIC_ERROR" not in str(data)
 
 def test_verify_logic_exception_integration(client):
@@ -40,6 +42,7 @@ def test_verify_logic_exception_integration(client):
     Integration style test for verify_logic exception.
     """
     with patch("qwed_new.api.main.check_rate_limit"), \
+         patch("qwed_new.api.main.control_plane.router.route", return_value="openai"), \
          patch("qwed_new.api.main.control_plane.process_logic_query", side_effect=Exception("SENSITIVE_FAILURE")):
 
         response = client.post(
@@ -51,6 +54,7 @@ def test_verify_logic_exception_integration(client):
         data = response.json()
         assert data["status"] == "ERROR"
         assert data["error"] == "Internal verification error"
+        assert data["provider_used"] == "openai"
         assert "SENSITIVE_FAILURE" not in str(data)
 
 @pytest.mark.asyncio
