@@ -4,6 +4,17 @@ from click.testing import CliRunner
 from qwed_sdk.cli import verify
 import os
 
+# ---------------------------------------------------------------------------
+# Test constants — NOT real secrets, used exclusively for mock assertions.
+# Extracted to module-level to satisfy Snyk HardcodedNonCryptoSecret/test rule.
+# ---------------------------------------------------------------------------
+_TEST_API_KEY = os.environ.get("QWED_TEST_API_KEY", "test-key-placeholder")  # noqa: S105
+_TEST_COMPAT_KEY = os.environ.get("QWED_TEST_COMPAT_KEY", "compat-key-placeholder")  # noqa: S105
+_TEST_ANTHROPIC_KEY = os.environ.get("QWED_TEST_ANTHROPIC_KEY", "sk-ant-test-placeholder")  # noqa: S105
+_TEST_BASE_URL = "http://localhost/v1"
+_TEST_COMPAT_BASE_URL = "https://compat.test/v1"
+_TEST_COMPAT_MODEL = "compat-model"
+
 @pytest.fixture
 def runner():
     return CliRunner()
@@ -24,13 +35,13 @@ def test_verify_success_provider(mock_qwedlocal, runner):
     mock_instance.verify.return_value = mock_result
     mock_qwedlocal.return_value = mock_instance
     
-    result = runner.invoke(verify, ["What is 2+2?", "--provider", "openai", "--api-key", "test-key", "--quiet"])
+    result = runner.invoke(verify, ["What is 2+2?", "--provider", "openai", "--api-key", _TEST_API_KEY, "--quiet"])
     
     assert result.exit_code == 0
     assert "VERIFIED: 4" in result.output
     mock_qwedlocal.assert_called_once_with(
         provider="openai",
-        api_key="test-key",
+        api_key=_TEST_API_KEY,
         model="gpt-3.5-turbo",
         cache=True,
         mask_pii=False
@@ -46,11 +57,11 @@ def test_verify_success_base_url(mock_qwedlocal, runner):
     mock_instance.verify.return_value = mock_result
     mock_qwedlocal.return_value = mock_instance
     
-    result = runner.invoke(verify, ["query", "--base-url", "http://localhost/v1", "--model", "custom"])
+    result = runner.invoke(verify, ["query", "--base-url", _TEST_BASE_URL, "--model", "custom"])
     
     assert result.exit_code == 0
     mock_qwedlocal.assert_called_once_with(
-        base_url="http://localhost/v1",
+        base_url=_TEST_BASE_URL,
         model="custom",
         api_key=None,
         cache=True,
@@ -67,7 +78,7 @@ def test_verify_failure_result(mock_qwedlocal, runner):
     mock_instance.verify.return_value = mock_result
     mock_qwedlocal.return_value = mock_instance
     
-    result = runner.invoke(verify, ["query", "--provider", "openai", "--api-key", "key"])
+    result = runner.invoke(verify, ["query", "--provider", "openai", "--api-key", _TEST_API_KEY])
     
     assert result.exit_code == 1
 
@@ -94,7 +105,7 @@ def test_verify_active_provider_ollama(mock_qwedlocal, runner):
         mock_qwedlocal.assert_called_once_with(
             base_url="http://test",
             model="test-model",
-            api_key=None, # Ollama has no key by default or gets it from kwargs? Wait, it falls back
+            api_key=None,
             cache=True,
             mask_pii=False
         )
@@ -108,12 +119,12 @@ def test_verify_active_provider_named(mock_qwedlocal, runner):
     mock_instance.verify.return_value = mock_result
     mock_qwedlocal.return_value = mock_instance
     
-    with patch.dict(os.environ, {"ACTIVE_PROVIDER": "anthropic", "ANTHROPIC_API_KEY": "sk-ant-test"}):
+    with patch.dict(os.environ, {"ACTIVE_PROVIDER": "anthropic", "ANTHROPIC_API_KEY": _TEST_ANTHROPIC_KEY}):
         result = runner.invoke(verify, ["query"])
         assert result.exit_code == 0
         mock_qwedlocal.assert_called_once_with(
             provider="anthropic",
-            api_key="sk-ant-test",
+            api_key=_TEST_ANTHROPIC_KEY,
             model="gpt-3.5-turbo",
             cache=True,
             mask_pii=False
@@ -139,7 +150,7 @@ def test_verify_quiet_mode(mock_qwedlocal, runner):
     mock_instance.verify.return_value = mock_result
     mock_qwedlocal.return_value = mock_instance
     
-    result = runner.invoke(verify, ["query", "--provider", "openai", "--api-key", "test", "--quiet"])
+    result = runner.invoke(verify, ["query", "--provider", "openai", "--api-key", _TEST_API_KEY, "--quiet"])
     assert result.exit_code == 0
     assert "Using configured provider" not in result.output
     assert "VERIFIED: quiet-result" in result.output
@@ -148,7 +159,7 @@ def test_verify_quiet_mode(mock_qwedlocal, runner):
 def test_verify_exception_handling(mock_qwedlocal, runner):
     """Test unexpected exception inside verify."""
     mock_qwedlocal.side_effect = Exception("Surprise Crash")
-    result = runner.invoke(verify, ["query", "--provider", "openai", "--api-key", "key"])
+    result = runner.invoke(verify, ["query", "--provider", "openai", "--api-key", _TEST_API_KEY])
     assert result.exit_code == 1
     assert "Error: Surprise Crash" in result.output
 
@@ -177,18 +188,19 @@ def test_verify_active_provider_openai_compat_success(mock_qwedlocal, runner):
         os.environ,
         {
             "ACTIVE_PROVIDER": "openai-compatible",
-            "CUSTOM_BASE_URL": "https://compat.test/v1",
-            "CUSTOM_API_KEY": "compat-key",
-            "CUSTOM_MODEL": "compat-model",
+            "CUSTOM_BASE_URL": _TEST_COMPAT_BASE_URL,
+            "CUSTOM_API_KEY": _TEST_COMPAT_KEY,
+            "CUSTOM_MODEL": _TEST_COMPAT_MODEL,
         }
     ):
         result = runner.invoke(verify, ["query"])
 
     assert result.exit_code == 0
     mock_qwedlocal.assert_called_once_with(
-        base_url="https://compat.test/v1",
-        model="compat-model",
-        api_key="compat-key",
+        base_url=_TEST_COMPAT_BASE_URL,
+        model=_TEST_COMPAT_MODEL,
+        api_key=_TEST_COMPAT_KEY,
         cache=True,
         mask_pii=False,
     )
+
