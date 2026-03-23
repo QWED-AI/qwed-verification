@@ -35,7 +35,7 @@ class ProcessVerifier:
         for step, pattern in self.irac_patterns.items():
             match = pattern.search(reasoning_trace)
             if match:
-                matches[step] = True
+                matches[step] = match.group(0)
             else:
                 missing_steps.append(step)
         
@@ -46,7 +46,11 @@ class ProcessVerifier:
             "verified": len(missing_steps) == 0,
             "score": score,
             "missing_steps": missing_steps,
-            "mechanism": "Regex Pattern Matching (Deterministic)"
+            "mechanism": "Regex Pattern Matching (Deterministic)",
+            "irac.issue": matches.get("issue", ""),
+            "irac.rule": matches.get("rule", ""),
+            "irac.application": matches.get("application", ""),
+            "irac.conclusion": matches.get("conclusion", ""),
         }
 
     def verify_trace(self, text: str, key_middle: List[str]) -> Dict[str, Any]:

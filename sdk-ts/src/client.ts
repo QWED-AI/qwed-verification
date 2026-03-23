@@ -73,7 +73,8 @@ export class QWEDClient {
     private async request<T>(
         method: string,
         endpoint: string,
-        body?: unknown
+        body?: unknown,
+        extraHeaders?: Record<string, string>
     ): Promise<T> {
         const url = `${this.baseUrl}${endpoint}`;
 
@@ -83,7 +84,10 @@ export class QWEDClient {
         try {
             const response = await fetch(url, {
                 method,
-                headers: this.headers,
+                headers: {
+                    ...this.headers,
+                    ...extraHeaders,
+                },
                 body: body ? JSON.stringify(body) : undefined,
                 signal: controller.signal,
             });
@@ -243,8 +247,14 @@ export class QWEDClient {
 
     async verifyAgent(
         agentId: string,
+        agentToken: string,
         query: string,
-        options?: { provider?: string; checkExfiltration?: boolean; checkMcpPoison?: boolean }
+        options?: {
+            provider?: string;
+            checkExfiltration?: boolean;
+            checkMcpPoison?: boolean;
+            toolSchema?: Record<string, unknown>;
+        }
     ): Promise<AgentVerificationResponse> {
         // Build the correct payload matching backend AgentVerifyRequest + optional security checks
         const payload: Record<string, unknown> = {
@@ -252,13 +262,21 @@ export class QWEDClient {
         };
         if (options?.provider) payload.provider = options.provider;
         if (options?.checkExfiltration !== undefined || options?.checkMcpPoison !== undefined) {
-             payload.security_checks = {
-                 exfiltration: options?.checkExfiltration,
-                 mcp_poison: options?.checkMcpPoison,
-             };
+            payload.security_checks = {
+                exfiltration: options?.checkExfiltration,
+                mcp_poison: options?.checkMcpPoison,
+            };
         }
-        
-        return this.request('POST', `/agents/${encodeURIComponent(agentId)}/verify`, payload);
+        if (options?.toolSchema) {
+            payload.tool_schema = options.toolSchema;
+        }
+
+        return this.request(
+            'POST',
+            `/agents/${encodeURIComponent(agentId)}/verify`,
+            payload,
+            { 'X-Agent-Token': agentToken }
+        );
     }
 
     // --------------------------------------------------------------------------

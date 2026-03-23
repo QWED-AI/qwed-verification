@@ -6,7 +6,7 @@ from qwed_new.core.control_plane import ControlPlane
 
 @pytest.fixture
 def client():
-    mock_tenant = MagicMock(organization_id=1, api_key="dummy-api-key", organization_name="Test Org")
+    mock_tenant = MagicMock(organization_id=1, api_key="placeholder", organization_name="Test Org")
     mock_session = MagicMock()
 
     app.dependency_overrides[get_current_tenant] = lambda: mock_tenant

@@ -1,10 +1,11 @@
 from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File, Form, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, Annotated
 from sqlmodel import Session
 import os
 import logging
+from fractions import Fraction
 
 from qwed_new.core.security import redact_pii
 
@@ -593,7 +594,40 @@ class RAGVerifyRequest(BaseModel):
     chunks: list[dict]
     max_drm_rate: str = "0"  # Accepts Fraction-compatible strings: "0", "1/10", etc.
 
-@app.post("/verify/rag")
+    @field_validator("target_document_id")
+    @classmethod
+    def validate_target_document_id(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("target_document_id must be a non-empty string.")
+        return stripped
+
+    @field_validator("chunks")
+    @classmethod
+    def validate_chunks(cls, value: list[dict]) -> list[dict]:
+        if not value:
+            raise ValueError("chunks must be a non-empty list.")
+        if any(not isinstance(chunk, dict) or not chunk for chunk in value):
+            raise ValueError("Each chunk must be a non-empty object.")
+        return value
+
+    @field_validator("max_drm_rate")
+    @classmethod
+    def validate_max_drm_rate(cls, value: str) -> str:
+        try:
+            threshold = Fraction(value)
+        except (TypeError, ValueError, ZeroDivisionError) as exc:
+            raise ValueError("max_drm_rate must be a Fraction-compatible string.") from exc
+        if not Fraction(0) <= threshold <= Fraction(1):
+            raise ValueError("max_drm_rate must be between 0 and 1.")
+        return value
+
+@app.post(
+    "/verify/rag",
+    responses={
+        400: {"description": "Invalid RAG verification request payload."},
+    },
+)
 async def verify_rag(
     request: RAGVerifyRequest,
     tenant: TenantDependency,
@@ -607,13 +641,15 @@ async def verify_rag(
     
     try:
         from qwed_sdk.guards.rag_guard import RAGGuard
-        
-        guard = RAGGuard(max_drm_rate=request.max_drm_rate)
-        
-        result = guard.verify_retrieval_context(
-            target_document_id=request.target_document_id,
-            retrieved_chunks=request.chunks
-        )
+
+        try:
+            guard = RAGGuard(max_drm_rate=request.max_drm_rate)
+            result = guard.verify_retrieval_context(
+                target_document_id=request.target_document_id,
+                retrieved_chunks=request.chunks
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         
         audit_result = {
             "verified": result.get("verified", False),
@@ -635,6 +671,8 @@ async def verify_rag(
         
         return result
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"RAG verification error: {redact_pii(str(e))}", exc_info=False)
         return {
@@ -648,7 +686,12 @@ class ProcessVerifyRequest(BaseModel):
     mode: str = "irac"
     milestones: Optional[list[str]] = None
 
-@app.post("/verify/process")
+@app.post(
+    "/verify/process",
+    responses={
+        400: {"description": "Invalid process mode or missing milestones for milestones mode."},
+    },
+)
 async def verify_process(
     request: ProcessVerifyRequest,
     tenant: TenantDependency,
@@ -816,6 +859,7 @@ class AgentVerifyRequest(BaseModel):
     query: str
     provider: Optional[str] = None
     security_checks: Optional[dict] = None
+    tool_schema: Optional[dict] = None
 
 class ToolCallRequest(BaseModel):
     tool_params: dict
@@ -856,6 +900,7 @@ async def register_agent(
 @app.post(
     "/agents/{agent_id}/verify",
     responses={
+        400: {"description": "Invalid security check configuration or agent verification payload."},
         401: {"description": "Invalid agent token."},
         403: {"description": "Agent budget exceeded or request blocked by security checks."},
         500: {"description": "Internal agent verification error."},
@@ -904,9 +949,14 @@ async def agent_verify(
                 raise HTTPException(status_code=403, detail="Potential exfiltration detected: " + res.get("message", ""))
                 
         if request.security_checks.get("mcp_poison"):
+            if not request.tool_schema:
+                raise HTTPException(
+                    status_code=400,
+                    detail="'tool_schema' is required when mcp_poison check is enabled"
+                )
             from qwed_sdk.guards.mcp_poison_guard import MCPPoisonGuard
             guard = MCPPoisonGuard()
-            res = guard.verify_tool_definition({"name": "agent_query", "description": request.query})
+            res = guard.verify_tool_definition(request.tool_schema)
             if not res.get("verified"):
                 agent_registry.log_activity(
                     session, agent_id, agent.organization_id,
