@@ -218,6 +218,43 @@ export class QWEDClient {
         });
     }
 
+    async verifyProcess(
+        reasoningTrace: string,
+        options?: { mode?: 'irac' | 'milestones'; keyMilestones?: string[] }
+    ): Promise<VerificationResponse> {
+        return this.request('POST', '/verify/process', {
+            trace: reasoningTrace,
+            mode: options?.mode || 'irac',
+            milestones: options?.keyMilestones,
+        });
+    }
+
+    async verifyRAG(
+        targetDocumentId: string,
+        retrievedChunks: Record<string, unknown>[],
+        options?: { maxDrmRate?: number }
+    ): Promise<VerificationResponse> {
+        return this.request('POST', '/verify/rag', {
+            target_document_id: targetDocumentId,
+            chunks: retrievedChunks,
+            max_drm_rate: options?.maxDrmRate,
+        });
+    }
+
+    async verifyAgent(
+        agentId: string,
+        actionPayload: Record<string, unknown>,
+        options?: { checkExfiltration?: boolean; checkMcpPoison?: boolean }
+    ): Promise<VerificationResponse> {
+        return this.request('POST', `/agents/${agentId}/verify`, {
+            action: actionPayload,
+            security_checks: {
+                exfiltration: options?.checkExfiltration,
+                mcp_poison: options?.checkMcpPoison,
+            }
+        });
+    }
+
     // --------------------------------------------------------------------------
     // Batch Operations
     // --------------------------------------------------------------------------

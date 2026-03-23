@@ -17,6 +17,9 @@ export enum VerificationType {
     SQL = 'sql',
     Image = 'image',
     Reasoning = 'reasoning',
+    Process = 'process',
+    RAG = 'rag',
+    Security = 'security',
 }
 
 export enum VerificationStatus {
@@ -116,6 +119,26 @@ export interface VerificationResultData {
     vulnerabilities?: Vulnerability[];
     verdict?: FactVerdict;
     citations?: Citation[];
+    
+    // ProcessVerifier Metrics
+    score?: number;
+    process_rate?: number;
+    missing_steps?: string[];
+    missed_milestones?: string[];
+    
+    // RAGGuard DRM Metrics
+    drm_rate?: number;
+    chunks_checked?: number;
+    mismatched_count?: number;
+    
+    // IRAC Compliance Audits
+    'irac.issue'?: string;
+    'irac.rule'?: string;
+    'irac.application'?: string;
+    'irac.conclusion'?: string;
+
+    // Agentic Standalone Metrics
+    risk?: 'DOCUMENT_RETRIEVAL_MISMATCH' | 'EXFILTRATION_ATTEMPT' | 'MCP_POISONING' | 'TOXIC_CHAIN' | 'SOVEREIGNTY_VIOLATION' | 'FABRICATED_REASONING' | 'low' | 'medium' | 'high' | 'critical';
 }
 
 export interface VerificationProof {
