@@ -58,6 +58,8 @@ jobs:
               --ignore-vuln CVE-2025-8869 \
               `# CVE-2026-1703: pip wheel path traversal (CVSS 2.0 Low) — build-only, pinned hashes used` \
               --ignore-vuln CVE-2026-1703 \
+              `# CVE-2026-4539: pygments ReDoS in AdlLexer — local-only, no fix version available yet` \
+              --ignore-vuln CVE-2026-4539 \
               2>&1 | tee audit-results.txt
       - store_artifacts:
           path: audit-results.txt
