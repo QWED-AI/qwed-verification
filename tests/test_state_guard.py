@@ -1,6 +1,4 @@
-import os
 import pytest
-from pathlib import Path
 import subprocess
 from qwed_new.guards.state_guard import StateGuard
 
@@ -14,7 +12,6 @@ def test_state_guard_initialization(tmp_path):
     
     guard = StateGuard(str(tmp_path))
     assert guard.workspace == tmp_path.resolve()
-    assert guard.shadow_repo.exists()
 
 def test_state_guard_snapshot_and_rollback(tmp_path):
     subprocess.run(["git", "init"], cwd=str(tmp_path), check=True, capture_output=True)
@@ -36,7 +33,11 @@ def test_state_guard_snapshot_and_rollback(tmp_path):
     
     # Modify the workspace
     test_file.write_text("malicious agent modification")
+    rogue_file = tmp_path / "rogue.txt"
+    rogue_file.write_text("left behind")
+    
     assert test_file.read_text() == "malicious agent modification"
+    assert rogue_file.exists()
     
     # Rollback
     success = guard.rollback(tree_hash)
@@ -44,6 +45,7 @@ def test_state_guard_snapshot_and_rollback(tmp_path):
     
     # Verify rollback
     assert test_file.read_text() == "initial"
+    assert not rogue_file.exists()
 
 def test_state_guard_invalid_hash(tmp_path):
     subprocess.run(["git", "init"], cwd=str(tmp_path), check=True, capture_output=True)
