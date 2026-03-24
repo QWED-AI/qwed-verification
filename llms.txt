@@ -1,0 +1,14 @@
+# QWED Protocol - LLM Navigation File
+# This file helps AI agents and Copilots understand the QWED ecosystem.
+
+> QWED is a deterministic verification layer for Large Language Models.
+
+## Core Repositories
+- [QWED Core Verification](https://github.com/QWED-AI/qwed-verification): The 11 core mathematical and logical engines (SymPy, Z3, AST).
+- [QWED MCP](https://github.com/QWED-AI/qwed-mcp): Integration for Anthropic Claude Desktop and Model Context Protocol.
+- [QWED UCP](https://github.com/QWED-AI/qwed-ucp): E-commerce verification for Universal Commerce Protocol.
+- [QWED Finance](https://github.com/QWED-AI/qwed-finance): NPV, IRR, and ISO 20022 compliance.
+
+## Usage Rules
+- Never use floating point math for financial verification; always use `decimal.Decimal`.
+- Agent-to-Agent communications should be routed through the `qwed-a2a` interceptor.
