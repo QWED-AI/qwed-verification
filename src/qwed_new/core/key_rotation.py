@@ -90,7 +90,7 @@ class KeyManager:
             session.add(old_key)
             session.commit()
             
-            logger.info(f"Rotated key {old_key_id} -> {new_key.id}")
+            logger.info("Rotated key %d -> %d", int(old_key_id), int(new_key.id))
             return new_key, raw_new_key
 
     def check_expiring_keys(self):
