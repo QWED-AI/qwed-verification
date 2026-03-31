@@ -2,8 +2,7 @@
 Safe Evaluator for Z3 Constraints.
 Replaces unsafe eval() with a restricted execution environment.
 """
-import ast
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from z3 import *
 
 class SafeEvaluator:

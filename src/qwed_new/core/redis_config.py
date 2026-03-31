@@ -10,7 +10,6 @@ Provides centralized Redis connection management with:
 import os
 import logging
 from typing import Optional
-from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 

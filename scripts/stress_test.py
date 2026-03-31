@@ -7,7 +7,6 @@ Uses ThreadPoolExecutor for concurrency.
 import concurrent.futures
 import requests
 import time
-import json
 import random
 
 BASE_URL = "http://127.0.0.1:8001"

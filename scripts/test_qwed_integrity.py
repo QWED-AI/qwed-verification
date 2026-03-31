@@ -13,7 +13,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from sympy import sympify, N, sqrt, log, sin, pi, factorial, Rational
+from sympy import sympify, N
 
 def test_qwed_catches_errors():
     """

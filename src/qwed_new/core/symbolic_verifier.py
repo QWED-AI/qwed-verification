@@ -7,14 +7,12 @@ Uses CrossHair (Z3-based) for symbolic analysis and property verification.
 Phase 1 of QWED's symbolic execution roadmap.
 """
 
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 import ast
-import textwrap
 import tempfile
 import os
 import sys
-from io import StringIO
 
 
 @dataclass

@@ -4,11 +4,8 @@ Database Reset and Migration Script.
 Drops all tables and recreates them with the new multi-tenancy schema.
 """
 
-import os
 from sqlmodel import SQLModel
 from qwed_new.core.database import engine
-from qwed_new.core.models import Organization, ApiKey, ResourceQuota, VerificationLog, User
-from qwed_new.core.agent_models import Agent, AgentPermission, AgentActivity, ToolCall
 
 def reset_database():
     """

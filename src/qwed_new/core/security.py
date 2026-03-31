@@ -7,7 +7,7 @@ OWASP LLM01:2025 - Prompt Injection Defense (Multi-Layer)
 import re
 import base64
 import logging
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Optional
 from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)

@@ -1,6 +1,6 @@
 import sqlglot
 from sqlglot import exp
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 class SQLGuard:
     """

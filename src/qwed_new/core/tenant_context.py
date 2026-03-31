@@ -5,8 +5,6 @@ This module handles API key validation and tenant identification.
 It's the "authentication layer" of the QWED OS.
 """
 
-import hashlib
-from typing import Optional
 from fastapi import Header, HTTPException, Depends
 from sqlmodel import Session, select
 from qwed_new.core.database import get_session
