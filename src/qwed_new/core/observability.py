@@ -24,7 +24,7 @@ try:
 except ImportError:
     PROMETHEUS_AVAILABLE = False
     logger.warning("prometheus-client not installed. Prometheus metrics disabled.")
-    generate_latest = lambda r: b""
+    generate_latest = lambda: b""
     CONTENT_TYPE_LATEST = "text/plain"
 
 # Prometheus metric definitions
