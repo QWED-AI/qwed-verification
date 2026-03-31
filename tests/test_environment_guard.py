@@ -250,16 +250,15 @@ class TestStartupHookGuard:
             assert result["scanned_directories"] == [tmpdir]
 
     def test_get_site_dirs_returns_sorted_list(self):
-        """_get_site_dirs should return a sorted list of existing directories."""
+        """_get_site_dirs should return a sorted, deterministic list."""
         guard = StartupHookGuard()
-        dirs = guard._get_site_dirs()
-        # Should return a list (may be empty in some CI environments)
-        assert isinstance(dirs, list)
-        # Should be sorted
-        assert dirs == sorted(dirs)
-        # All returned paths should be existing directories
-        for d in dirs:
-            assert os.path.isdir(d)
+        with tempfile.TemporaryDirectory() as dir_b:
+            with tempfile.TemporaryDirectory() as dir_a:
+                # Feed dirs in reverse order to verify sorting
+                with patch("site.getsitepackages", return_value=[dir_b, dir_a]):
+                    with patch("site.ENABLE_USER_SITE", False, create=True):
+                        dirs = guard._get_site_dirs()
+                assert dirs == sorted([dir_a, dir_b])
 
     def test_get_site_dirs_handles_missing_getsitepackages(self):
         """_get_site_dirs should gracefully handle missing getsitepackages."""
@@ -333,6 +332,8 @@ class TestStartupHookGuard:
         assert result["verified"] is False
         assert len(result["scan_errors"]) == 1
         assert "scan failure" in result["message"]
+        assert "could not be fully verified" in result["message"]
+        assert "Detected 0" not in result["message"]
 
 
     def test_path_injection_in_allowlisted_file(self):

@@ -76,7 +76,6 @@ class StartupHookGuard:
         "coverage.pth",
         "pytest.pth",
         "site-packages.pth",
-        "README.txt",
     })
 
     def __init__(
@@ -235,6 +234,14 @@ class StartupHookGuard:
             parts.append(f"{len(scan_errors)} directory scan failure(s)")
 
         detail = "; ".join(parts) if parts else "suspicious activity"
+
+        if total == 0 and scan_errors:
+            return (
+                f"CRITICAL: {len(scan_errors)} directory scan failure(s) — "
+                f"environment could not be fully verified. "
+                f"Execution blocked as a precaution."
+            )
+
         return (
             f"CRITICAL: Detected {total} suspicious Python "
             f"startup hook(s) — {detail}. "
