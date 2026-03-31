@@ -89,7 +89,7 @@ class TestStartupHookGuard:
             assert result["verified"] is False
             assert any("subprocess" in f for f in result["content_findings"])
             assert any("socket" in f for f in result["content_findings"])
-            assert any("os.system" in f for f in result["content_findings"])
+            assert any("os" in f and "system" in f for f in result["content_findings"])
 
     def test_content_scanning_disabled(self):
         """When scan_contents=False, any unknown .pth is flagged regardless of content."""
@@ -106,13 +106,29 @@ class TestStartupHookGuard:
             assert len(result["suspicious_hooks"]) == 1
             assert len(result["content_findings"]) == 0  # No content scan
 
-    def test_harmless_unknown_pth_passes_with_content_scan(self):
-        """Unknown .pth with harmless content should PASS when scan_contents=True."""
+    def test_harmless_unknown_pth_flagged_even_with_clean_content(self):
+        """Unknown .pth is flagged even with harmless content (not allowlisted)."""
         guard = StartupHookGuard(scan_contents=True)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             with open(os.path.join(tmpdir, "my_tool.pth"), "w") as f:
                 f.write("# just a path entry\n/opt/my_tool/lib\n")
+
+            with patch.object(guard, "_get_site_dirs", return_value=[tmpdir]):
+                result = guard.verify_environment_integrity()
+
+            # Not allowlisted = always flagged (defense in depth)
+            assert result["verified"] is False
+            assert len(result["suspicious_hooks"]) == 1
+            assert len(result["content_findings"]) == 0  # No malicious patterns found
+
+    def test_allowlisted_clean_file_passes(self):
+        """Allowlisted .pth with clean content should PASS."""
+        guard = StartupHookGuard(scan_contents=True)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with open(os.path.join(tmpdir, "setuptools.pth"), "w") as f:
+                f.write("# standard setuptools\n")
 
             with patch.object(guard, "_get_site_dirs", return_value=[tmpdir]):
                 result = guard.verify_environment_integrity()

@@ -147,8 +147,9 @@ class StartupHookGuard:
                     file_findings = self._scan_file_contents(filepath)
                     content_findings.extend(file_findings)
 
-                # Flag as suspicious if: not allowlisted, OR has malicious content
-                if (not is_allowlisted and not self.scan_contents) or file_findings:
+                # Flag if: not allowlisted (regardless of content), OR
+                # allowlisted but has malicious content (tampered file)
+                if not is_allowlisted or file_findings:
                     suspicious_hooks.append(filepath)
 
         if suspicious_hooks:
