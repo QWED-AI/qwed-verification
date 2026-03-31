@@ -243,3 +243,81 @@ class TestStartupHookGuard:
 
             assert result["verified"] is True
             assert result["scanned_directories"] == [tmpdir]
+
+    def test_get_site_dirs_returns_sorted_list(self):
+        """_get_site_dirs should return a sorted list of existing directories."""
+        guard = StartupHookGuard()
+        dirs = guard._get_site_dirs()
+        # Should return a list (may be empty in some CI environments)
+        assert isinstance(dirs, list)
+        # Should be sorted
+        assert dirs == sorted(dirs)
+        # All returned paths should be existing directories
+        for d in dirs:
+            assert os.path.isdir(d)
+
+    def test_get_site_dirs_handles_missing_getsitepackages(self):
+        """_get_site_dirs should gracefully handle missing getsitepackages."""
+        guard = StartupHookGuard()
+        with patch("site.getsitepackages", side_effect=AttributeError):
+            with patch("site.getusersitepackages", return_value=None):
+                dirs = guard._get_site_dirs()
+        assert isinstance(dirs, list)
+
+    def test_get_site_dirs_includes_user_site(self):
+        """_get_site_dirs should include user site-packages when it exists."""
+        guard = StartupHookGuard()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("site.getsitepackages", return_value=[]):
+                with patch("site.getusersitepackages", return_value=tmpdir):
+                    dirs = guard._get_site_dirs()
+            assert tmpdir in dirs
+
+    def test_scan_directory_handles_os_error(self):
+        """_scan_directory should gracefully handle OSError on listdir."""
+        guard = StartupHookGuard()
+        suspicious: list = []
+        findings: list = []
+
+        # Pass a non-existent directory
+        guard._scan_directory("/nonexistent/path/xyz", suspicious, findings)
+
+        # Should not crash, and lists should remain empty
+        assert suspicious == []
+        assert findings == []
+
+    def test_scan_directory_skips_non_pth_files(self):
+        """_scan_directory should skip non-.pth files."""
+        guard = StartupHookGuard()
+        suspicious: list = []
+        findings: list = []
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create non-.pth files
+            for name in ["README.md", "config.ini", "data.txt"]:
+                with open(os.path.join(tmpdir, name), "w") as f:
+                    f.write("exec(base64.b64decode('evil'))")
+
+            guard._scan_directory(tmpdir, suspicious, findings)
+
+        assert suspicious == []
+        assert findings == []
+
+
+def test_guards_package_exports():
+    """Verify that all guards are importable from the package."""
+    from qwed_sdk.guards import (
+        SystemGuard,
+        ConfigGuard,
+        RAGGuard,
+        MCPPoisonGuard,
+        ExfiltrationGuard,
+        SelfInitiatedCoTGuard,
+        ProcessVerifier,
+        StartupHookGuard,
+    )
+    # All should be classes
+    assert callable(StartupHookGuard)
+    assert callable(SystemGuard)
+    assert callable(ConfigGuard)
+    assert callable(ProcessVerifier)
