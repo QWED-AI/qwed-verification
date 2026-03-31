@@ -13,20 +13,18 @@ Enterprise Features:
 - Decimal precision for financial calculations
 """
 
-import sympy
 from sympy import (
-    Symbol, symbols, Matrix, sqrt, sin, cos, tan, log, exp, pi, E,
-    diff, integrate, limit, oo, factorial, binomial, gcd, lcm,
-    simplify, expand, factor, solve, Eq, summation, product,
-    Rational, Float, N
+    Symbol, Matrix,
+    diff, integrate, limit, oo,
+    simplify, expand
 )
 from sympy.parsing.sympy_parser import parse_expr, standard_transformations, implicit_multiplication_application
-from sympy.stats import Normal, Exponential, Poisson, Binomial, density, E as ExpectedValue, variance, std
-from typing import Any, Dict, List, Optional, Union, Tuple
+from typing import Any, Dict, List, Optional, Union
 from decimal import Decimal, ROUND_HALF_UP
 from dataclasses import dataclass
-import re
 import math
+
+INVALID_TEMPERATURE_UNIT_ERROR = "Invalid temperature unit"
 
 
 @dataclass
@@ -859,23 +857,21 @@ class VerificationEngine:
         to_u = unit_map.get(to_unit)
         
         if not from_u or not to_u:
-            return {"is_correct": False, "status": "ERROR", "error": "Invalid temperature unit"}
-        
+            return {"is_correct": False, "status": "ERROR", "error": INVALID_TEMPERATURE_UNIT_ERROR}
+
         # Convert to Celsius first
-        if from_u == 'celsius':
-            celsius = value
-        elif from_u == 'fahrenheit':
-            celsius = (value - 32) * 5/9
-        elif from_u == 'kelvin':
-            celsius = value - 273.15
-        
+        celsius = {
+            'celsius': value,
+            'fahrenheit': (value - 32) * 5 / 9,
+            'kelvin': value - 273.15,
+        }[from_u]
+
         # Convert from Celsius to target
-        if to_u == 'celsius':
-            calculated = celsius
-        elif to_u == 'fahrenheit':
-            calculated = celsius * 9/5 + 32
-        elif to_u == 'kelvin':
-            calculated = celsius + 273.15
+        calculated = {
+            'celsius': celsius,
+            'fahrenheit': celsius * 9 / 5 + 32,
+            'kelvin': celsius + 273.15,
+        }[to_u]
         
         is_correct = abs(calculated - expected) <= tolerance
         

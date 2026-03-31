@@ -10,9 +10,8 @@ Validation Checks:
 3. Evaluable: Can we calculate a numerical result?
 """
 
-from sympy import sympify, Symbol
 from sympy.parsing.sympy_parser import parse_expr
-from typing import Dict, List
+from typing import Dict
 
 
 class SemanticValidator:

@@ -267,8 +267,7 @@ class DSLLogicVerifier:
         """Check if two constraints are obviously conflicting."""
         # Simple heuristic: same variable with > and < that overlap
         # E.g., "x > 5" and "x < 3"
-        import re
-        
+
         # Pattern: variable > number
         gt_pattern = r"(\w+)\s*>\s*([\d.]+)"
         lt_pattern = r"(\w+)\s*<\s*([\d.]+)"

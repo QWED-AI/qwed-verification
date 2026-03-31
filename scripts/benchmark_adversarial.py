@@ -192,13 +192,11 @@ def run_adversarial_benchmark():
             
             if isinstance(expected, str):
                 claude_correct = str(claude_answer) == expected
-                qwed_caught_error = not claude_correct  # QWED would catch if wrong
             else:
                 if claude_answer is None:
                     claude_correct = False
                 else:
                     claude_correct = abs(claude_answer - expected) <= STRICT_TOLERANCE
-                qwed_caught_error = not claude_correct
             
             # Record result
             if claude_correct:

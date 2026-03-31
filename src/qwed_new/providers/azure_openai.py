@@ -379,7 +379,6 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
                 content = content.split("```")[1].split("```")[0].strip()
                 
             return content
-            return content
             
         except Exception as e:
             print(f"Stats Translation Error: {e}")
