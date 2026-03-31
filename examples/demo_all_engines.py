@@ -95,7 +95,7 @@ def demo_code_engine():
     
     # Example 1: Safe code
     print("\n🔒 Example 1: Safe Code")
-    result = verifier.analyze_code("def add(a, b): return a + b")
+    verifier.analyze_code("def add(a, b): return a + b")
     print(f"   Code: def add(a, b): return a + b")
     print(f"   QWED result: SAFE ✅")
     

@@ -547,7 +547,7 @@ class TaintAnalyzer:
                     queue.append((var, new_path))
         
         # Direct path if BFS fails
-        return [source_var, sink_var] if source_var != sink_var else [source_var]
+        return [source_var, sink_var]
     
     def _get_all_tainted(self) -> Set[str]:
         """Get all tainted variables."""

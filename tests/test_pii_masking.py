@@ -200,7 +200,6 @@ class TestPIIMetadata:
         
         # This test would need a real LLM connection
         # Skipping for now
-        pass
 
 
 class TestCLI:

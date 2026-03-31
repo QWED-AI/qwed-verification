@@ -50,9 +50,7 @@ def clean_code(code: str) -> str:
     return code.strip()
 
 # QWED Verification Engines
-import sympy as sp
-from sympy import Matrix, symbols, simplify, factorial
-import ast
+from sympy import Matrix
 import re
 
 # ============================================================================

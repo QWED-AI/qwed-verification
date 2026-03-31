@@ -13,19 +13,15 @@ Enterprise Features:
 - Decimal precision for financial calculations
 """
 
-import sympy
 from sympy import (
-    Symbol, symbols, Matrix, sqrt, sin, cos, tan, log, exp, pi, E,
-    diff, integrate, limit, oo, factorial, binomial, gcd, lcm,
-    simplify, expand, factor, solve, Eq, summation, product,
-    Rational, Float, N
+    Symbol, Matrix,
+    diff, integrate, limit, oo,
+    simplify, expand
 )
 from sympy.parsing.sympy_parser import parse_expr, standard_transformations, implicit_multiplication_application
-from sympy.stats import Normal, Exponential, Poisson, Binomial, density, E as ExpectedValue, variance, std
-from typing import Any, Dict, List, Optional, Union, Tuple
+from typing import Any, Dict, List, Optional, Union
 from decimal import Decimal, ROUND_HALF_UP
 from dataclasses import dataclass
-import re
 import math
 
 
@@ -868,6 +864,8 @@ class VerificationEngine:
             celsius = (value - 32) * 5/9
         elif from_u == 'kelvin':
             celsius = value - 273.15
+        else:
+            return {"is_correct": False, "status": "ERROR", "error": "Invalid temperature unit"}
         
         # Convert from Celsius to target
         if to_u == 'celsius':
@@ -876,6 +874,8 @@ class VerificationEngine:
             calculated = celsius * 9/5 + 32
         elif to_u == 'kelvin':
             calculated = celsius + 273.15
+        else:
+            return {"is_correct": False, "status": "ERROR", "error": "Invalid temperature unit"}
         
         is_correct = abs(calculated - expected) <= tolerance
         

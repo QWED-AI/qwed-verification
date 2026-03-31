@@ -96,7 +96,7 @@ class TranslationLayer:
         # 2. Validate expression contains only safe characters
         import re
         # Allow: numbers, operators, parentheses, decimals, e/pi, common math functions
-        safe_pattern = r'^[0-9+\-*/().epi \ssqrtsincostandlogexpabsln]+$'
+        safe_pattern = r'^[0-9+\-*/().\sabcdegilnopqrstx]+$'
         if not re.match(safe_pattern, task.expression.replace(' ', ''), re.IGNORECASE):
             raise SecurityError(SAFETY_VALIDATOR_REJECTION)
         
