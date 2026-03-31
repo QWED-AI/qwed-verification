@@ -17,7 +17,7 @@ Example:
     result = verifier.verify(data, schema)  # True - deterministic!
 """
 
-from typing import Dict, List, Any, Optional, Set, Tuple, Union
+from typing import Dict, List, Any, Union
 from dataclasses import dataclass, field
 import re
 import json

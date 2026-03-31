@@ -1,6 +1,5 @@
 import requests
 import time
-import sys
 import os
 
 BASE_URL = "http://localhost:8000"

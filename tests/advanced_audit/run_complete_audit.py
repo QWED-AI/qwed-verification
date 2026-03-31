@@ -21,7 +21,7 @@ from datetime import datetime
 # Add parent directory to path to import modules
 sys.path.insert(0, str(Path(__file__).parent))
 
-from api_client import QWEDAPIClient, APIResponse
+from api_client import QWEDAPIClient
 from base_test import BaseTest, TestResult
 from reporters.json_reporter import JSONReporter
 from reporters.markdown_reporter import MarkdownReporter

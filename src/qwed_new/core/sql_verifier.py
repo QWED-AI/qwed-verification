@@ -12,7 +12,7 @@ Provides AST-based SQL analysis to prevent:
 import sqlglot
 from sqlglot import exp, parse_one
 from typing import List, Dict, Any, Optional, Set
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
