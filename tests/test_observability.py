@@ -12,10 +12,10 @@ def test_observability_falls_back_without_prometheus(monkeypatch):
 
     real_import = builtins.__import__
 
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+    def fake_import(name, globals_=None, locals_=None, fromlist=(), level=0):
         if name == "prometheus_client":
             raise ImportError("prometheus_client unavailable in test")
-        return real_import(name, globals, locals, fromlist, level)
+        return real_import(name, globals_, locals_, fromlist, level)
 
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, module)
