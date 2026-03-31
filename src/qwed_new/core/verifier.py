@@ -24,6 +24,8 @@ from decimal import Decimal, ROUND_HALF_UP
 from dataclasses import dataclass
 import math
 
+INVALID_TEMPERATURE_UNIT_ERROR = "Invalid temperature unit"
+
 
 @dataclass
 class VerificationResult:
@@ -855,27 +857,21 @@ class VerificationEngine:
         to_u = unit_map.get(to_unit)
         
         if not from_u or not to_u:
-            return {"is_correct": False, "status": "ERROR", "error": "Invalid temperature unit"}
-        
+            return {"is_correct": False, "status": "ERROR", "error": INVALID_TEMPERATURE_UNIT_ERROR}
+
         # Convert to Celsius first
-        if from_u == 'celsius':
-            celsius = value
-        elif from_u == 'fahrenheit':
-            celsius = (value - 32) * 5/9
-        elif from_u == 'kelvin':
-            celsius = value - 273.15
-        else:
-            return {"is_correct": False, "status": "ERROR", "error": "Invalid temperature unit"}
-        
+        celsius = {
+            'celsius': value,
+            'fahrenheit': (value - 32) * 5 / 9,
+            'kelvin': value - 273.15,
+        }[from_u]
+
         # Convert from Celsius to target
-        if to_u == 'celsius':
-            calculated = celsius
-        elif to_u == 'fahrenheit':
-            calculated = celsius * 9/5 + 32
-        elif to_u == 'kelvin':
-            calculated = celsius + 273.15
-        else:
-            return {"is_correct": False, "status": "ERROR", "error": "Invalid temperature unit"}
+        calculated = {
+            'celsius': celsius,
+            'fahrenheit': celsius * 9 / 5 + 32,
+            'kelvin': celsius + 273.15,
+        }[to_u]
         
         is_correct = abs(calculated - expected) <= tolerance
         

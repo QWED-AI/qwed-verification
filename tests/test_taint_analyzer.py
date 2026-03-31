@@ -163,6 +163,14 @@ subprocess.run(["ls", "-la"])
 
 class TestComplexFlows:
     """Test complex data flow patterns."""
+
+    def test_build_flow_path_falls_back_to_direct_path(self, analyzer):
+        """Fallback path should connect source and sink directly."""
+        analyzer._flow_graph.clear()
+
+        path = analyzer._build_flow_path("source", "sink")
+
+        assert path == ["source", "sink"]
     
     def test_conditional_flow(self, analyzer):
         """Taint propagation through conditionals is limited.
