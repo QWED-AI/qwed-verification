@@ -71,8 +71,8 @@ def action_verify():
     llm_output = get_env("LLM_OUTPUT")
     engine = get_env("ENGINE", "math")
     
-    if engine == "math" and (not query or not llm_output):
-        print("❌ Error: 'query' and 'llm_output' are required for math verify mode.")
+    if engine == "math" and not query:
+        print("❌ Error: 'query' is required for math verify mode.")
         sys.exit(1)
     elif engine == "logic" and not query:
         print("❌ Error: 'query' is required for logic verify mode.")
@@ -89,7 +89,7 @@ def action_verify():
         client = QWEDClient(api_key=api_key)
         
         if engine == "math":
-            result = client.verify_math(query=query, llm_output=llm_output)
+            result = client.verify_math(expression=query)
         elif engine == "logic":
             result = client.verify_logic(query)
         elif engine == "code":
