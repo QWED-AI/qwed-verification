@@ -71,8 +71,14 @@ def action_verify():
     llm_output = get_env("LLM_OUTPUT")
     engine = get_env("ENGINE", "math")
     
-    if not query or not llm_output:
-        print("❌ Error: 'query' and 'llm_output' are required for verify mode.")
+    if engine == "math" and (not query or not llm_output):
+        print("❌ Error: 'query' and 'llm_output' are required for math verify mode.")
+        sys.exit(1)
+    elif engine == "logic" and not query:
+        print("❌ Error: 'query' is required for logic verify mode.")
+        sys.exit(1)
+    elif engine == "code" and not llm_output:
+        print("❌ Error: 'llm_output' is required for code verify mode.")
         sys.exit(1)
     
     print(f"🚀 QWED Verification (Engine: {engine})")
