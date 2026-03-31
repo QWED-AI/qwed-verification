@@ -85,7 +85,7 @@ def action_verify():
         if engine == "math":
             result = client.verify_math(query=query, llm_output=llm_output)
         elif engine == "logic":
-            result = client.verify_logic(query, llm_output)
+            result = client.verify_logic(query)
         elif engine == "code":
             result = client.verify_code(code=llm_output)
         else:
