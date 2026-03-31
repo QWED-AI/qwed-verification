@@ -43,6 +43,7 @@ class TestStartupHookGuard:
             assert "litellm_init.pth" in result["suspicious_hooks"][0]
             assert any("exec" in f for f in result["content_findings"])
             assert any("base64" in f for f in result["content_findings"])
+            assert result["counts"]["malicious"] == 1
 
     def test_allows_standard_pth_files(self):
         """Standard .pth files (setuptools, pip, etc.) should be allowed."""
@@ -180,6 +181,7 @@ class TestStartupHookGuard:
             assert result["verified"] is False
             assert len(result["suspicious_hooks"]) == 1
             assert any("subprocess" in f for f in result["content_findings"])
+            assert result["counts"]["malicious"] == 1
 
     def test_message_mentions_patterns_when_found(self):
         """Message should mention 'malicious patterns' when content findings exist."""
@@ -293,8 +295,9 @@ class TestStartupHookGuard:
         suspicious: list = []
         findings: list = []
         scan_errors: list = []
+        counts = {"malicious": 0, "unreadable": 0, "unauthorized": 0}
 
-        guard._scan_directory("/nonexistent/path/xyz", suspicious, findings, scan_errors)
+        guard._scan_directory("/nonexistent/path/xyz", suspicious, findings, scan_errors, counts)
 
         assert suspicious == []
         assert findings == []
@@ -307,13 +310,14 @@ class TestStartupHookGuard:
         suspicious: list = []
         findings: list = []
         scan_errors: list = []
+        counts = {"malicious": 0, "unreadable": 0, "unauthorized": 0}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             for name in ["README.md", "config.ini", "data.txt"]:
                 with open(os.path.join(tmpdir, name), "w") as f:
                     f.write("exec(base64.b64decode('evil'))")
 
-            guard._scan_directory(tmpdir, suspicious, findings, scan_errors)
+            guard._scan_directory(tmpdir, suspicious, findings, scan_errors, counts)
 
         assert suspicious == []
         assert findings == []
@@ -329,6 +333,57 @@ class TestStartupHookGuard:
         assert result["verified"] is False
         assert len(result["scan_errors"]) == 1
         assert "scan failure" in result["message"]
+
+
+    def test_path_injection_in_allowlisted_file(self):
+        """Allowlisted .pth with suspicious path entries should be flagged."""
+        guard = StartupHookGuard()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with open(os.path.join(tmpdir, "pip.pth"), "w") as f:
+                f.write("# normal comment\n/tmp/evil\n")
+
+            with patch.object(guard, "_get_site_dirs", return_value=[tmpdir]):
+                result = guard.verify_environment_integrity()
+
+            assert result["verified"] is False
+            assert any("Suspicious path entry" in f for f in result["content_findings"])
+            assert any("/tmp/evil" in f for f in result["content_findings"])
+            assert result["counts"]["malicious"] == 1
+
+    def test_path_traversal_in_allowlisted_file(self):
+        """Allowlisted .pth with path traversal should be flagged."""
+        guard = StartupHookGuard()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with open(os.path.join(tmpdir, "setuptools.pth"), "w") as f:
+                f.write("../../../etc/evil_package\n")
+
+            with patch.object(guard, "_get_site_dirs", return_value=[tmpdir]):
+                result = guard.verify_environment_integrity()
+
+            assert result["verified"] is False
+            assert any("Suspicious path entry" in f for f in result["content_findings"])
+
+    def test_message_has_accurate_per_category_counts(self):
+        """Message should report accurate counts per category."""
+        guard = StartupHookGuard()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 1 malicious
+            with open(os.path.join(tmpdir, "evil.pth"), "w") as f:
+                f.write("exec(base64.b64decode('..'))")
+            # 1 unauthorized (clean content, not on allowlist)
+            with open(os.path.join(tmpdir, "unknown.pth"), "w") as f:
+                f.write("# just a comment")
+
+            with patch.object(guard, "_get_site_dirs", return_value=[tmpdir]):
+                result = guard.verify_environment_integrity()
+
+            assert result["counts"]["malicious"] == 1
+            assert result["counts"]["unauthorized"] == 1
+            assert "1 with malicious patterns" in result["message"]
+            assert "1 unauthorized" in result["message"]
 
 
 def test_guards_package_exports():

@@ -38,6 +38,17 @@ _SUSPICIOUS_PATTERNS = [
     re.compile(r"\bcryptowallet|\.aws/credentials", re.IGNORECASE),
 ]
 
+# Suspicious path entries in .pth files — directories an attacker would inject
+# to hijack imports via sys.path manipulation (no exec/eval needed)
+_SUSPICIOUS_PATH_PATTERNS = [
+    re.compile(r"^/tmp\b"),
+    re.compile(r"^/dev/shm\b"),
+    re.compile(r"^/var/tmp\b"),
+    re.compile(r"\.\./"),                         # relative path traversal
+    re.compile(r"^~"),                            # home directory expansion
+    re.compile(r"^https?://"),                    # URL-based path injection
+]
+
 
 class StartupHookGuard:
     """
@@ -115,12 +126,79 @@ class StartupHookGuard:
             )
         return findings
 
+    def _scan_path_entries(self, filepath: str) -> List[str]:
+        """Detect suspicious sys.path entries in allowlisted .pth files.
+
+        In Python's site module, non-comment, non-import lines in .pth files
+        are added to sys.path. An attacker can inject a path like /tmp/evil
+        to hijack imports without using exec/eval.
+        """
+        findings: List[str] = []
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                for line_num, line in enumerate(f, 1):
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("#"):
+                        continue
+                    if stripped.startswith("import "):
+                        continue  # Handled by _scan_file_contents
+                    # This is a path entry — check for suspicious locations
+                    for pattern in _SUSPICIOUS_PATH_PATTERNS:
+                        if pattern.search(stripped):
+                            findings.append(
+                                f"Suspicious path entry line {line_num}: "
+                                f"'{stripped}' in {filepath}"
+                            )
+                            break
+        except OSError:
+            pass  # Read errors handled by _scan_file_contents
+        return findings
+
+    def _classify_file(
+        self,
+        filepath: str,
+        is_allowlisted: bool,
+        counts: Dict[str, int],
+        content_findings: List[str],
+    ) -> bool:
+        """Classify a .pth file and return True if suspicious."""
+        file_findings: List[str] = []
+
+        # Always scan allowlisted files for tampering (fail-closed)
+        if is_allowlisted or self.scan_contents:
+            file_findings = self._scan_file_contents(filepath)
+            content_findings.extend(file_findings)
+
+        # For allowlisted files, also check for path injection
+        if is_allowlisted:
+            path_findings = self._scan_path_entries(filepath)
+            if path_findings:
+                content_findings.extend(path_findings)
+                file_findings.extend(path_findings)
+
+        # Classify the finding
+        has_patterns = any("Suspicious pattern" in f for f in file_findings)
+        has_path_inject = any("Suspicious path entry" in f for f in file_findings)
+        has_read_error = any("Unable to read" in f for f in file_findings)
+
+        if has_patterns or has_path_inject:
+            counts["malicious"] += 1
+            return True
+        if has_read_error:
+            counts["unreadable"] += 1
+            return True
+        if not is_allowlisted:
+            counts["unauthorized"] += 1
+            return True
+        return False
+
     def _scan_directory(
         self,
         site_dir: str,
         suspicious_hooks: List[str],
         content_findings: List[str],
         scan_errors: List[str],
+        counts: Dict[str, int],
     ) -> None:
         """Scan a single site-packages directory for suspicious .pth files."""
         try:
@@ -134,51 +212,31 @@ class StartupHookGuard:
         for filename in entries:
             if not filename.endswith(".pth"):
                 continue
-
             filepath = os.path.join(site_dir, filename)
             is_allowlisted = filename in self.allowed
-
-            # Always scan allowlisted files for tampering (fail-closed);
-            # scan non-allowlisted files only when scan_contents is enabled
-            file_findings: List[str] = []
-            if is_allowlisted or self.scan_contents:
-                file_findings = self._scan_file_contents(filepath)
-                content_findings.extend(file_findings)
-
-            # Flag if: not allowlisted, OR allowlisted but tampered
-            if not is_allowlisted or file_findings:
+            if self._classify_file(
+                filepath, is_allowlisted, counts, content_findings
+            ):
                 suspicious_hooks.append(filepath)
 
     @staticmethod
-    def _build_message(
-        suspicious_hooks: List[str],
-        content_findings: List[str],
-        scan_errors: List[str],
-    ) -> str:
-        """Build an accurate summary message based on evidence types."""
+    def _build_message(counts: Dict[str, int], scan_errors: List[str]) -> str:
+        """Build an accurate summary message from structured classification."""
+        total = sum(counts.values())
         parts: List[str] = []
-        pattern_count = sum(
-            1 for f in content_findings if "Suspicious pattern" in f
-        )
-        error_count = sum(
-            1 for f in content_findings if "Unable to read" in f
-        )
-        unauthorized_count = len(suspicious_hooks) - (
-            1 if pattern_count else 0
-        ) - (1 if error_count else 0)
 
-        if pattern_count:
-            parts.append("malicious patterns detected")
-        if error_count:
-            parts.append("unreadable files (possible tampering)")
-        if unauthorized_count > 0 or not parts:
-            parts.append("unauthorized files not on allowlist")
+        if counts.get("malicious"):
+            parts.append(f"{counts['malicious']} with malicious patterns")
+        if counts.get("unreadable"):
+            parts.append(f"{counts['unreadable']} unreadable (possible tampering)")
+        if counts.get("unauthorized"):
+            parts.append(f"{counts['unauthorized']} unauthorized (not on allowlist)")
         if scan_errors:
             parts.append(f"{len(scan_errors)} directory scan failure(s)")
 
-        detail = "; ".join(parts)
+        detail = "; ".join(parts) if parts else "suspicious activity"
         return (
-            f"CRITICAL: Detected {len(suspicious_hooks)} suspicious Python "
+            f"CRITICAL: Detected {total} suspicious Python "
             f"startup hook(s) — {detail}. "
             f"This is a known supply chain attack vector. Execution blocked."
         )
@@ -194,17 +252,24 @@ class StartupHookGuard:
                 - suspicious_hooks (list): Paths to suspicious .pth files.
                 - content_findings (list): Malicious patterns found.
                 - scan_errors (list): Directory enumeration failures.
+                - counts (dict): Per-category classification counts.
                 - message (str): Human-readable summary.
         """
         suspicious_hooks: List[str] = []
         content_findings: List[str] = []
         scan_errors: List[str] = []
         scanned_dirs: List[str] = []
+        counts: Dict[str, int] = {
+            "malicious": 0,
+            "unreadable": 0,
+            "unauthorized": 0,
+        }
 
         for site_dir in self._get_site_dirs():
             scanned_dirs.append(site_dir)
             self._scan_directory(
-                site_dir, suspicious_hooks, content_findings, scan_errors
+                site_dir, suspicious_hooks, content_findings,
+                scan_errors, counts,
             )
 
         if suspicious_hooks or scan_errors:
@@ -212,12 +277,11 @@ class StartupHookGuard:
                 "verified": False,
                 "status": "COMPROMISED",
                 "risk": "COMPROMISED_ENVIRONMENT_STARTUP_HOOK",
-                "message": self._build_message(
-                    suspicious_hooks, content_findings, scan_errors
-                ),
+                "message": self._build_message(counts, scan_errors),
                 "suspicious_hooks": suspicious_hooks,
                 "content_findings": content_findings,
                 "scan_errors": scan_errors,
+                "counts": counts,
                 "scanned_directories": scanned_dirs,
             }
 
@@ -228,5 +292,6 @@ class StartupHookGuard:
             "suspicious_hooks": [],
             "content_findings": [],
             "scan_errors": [],
+            "counts": counts,
             "scanned_directories": scanned_dirs,
         }
