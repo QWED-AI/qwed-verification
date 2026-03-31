@@ -216,17 +216,22 @@ class TestStartupHookGuard:
             filepath = os.path.join(tmpdir, "locked.pth")
             with open(filepath, "w") as f:
                 f.write("something")
-            # Make unreadable
-            os.chmod(filepath, 0o000)
+
+            # Mock open() to raise PermissionError for this file
+            original_open = open
+
+            def mock_open(path, *args, **kwargs):
+                if str(path) == filepath:
+                    raise PermissionError("Permission denied")
+                return original_open(path, *args, **kwargs)
 
             with patch.object(guard, "_get_site_dirs", return_value=[tmpdir]):
-                result = guard.verify_environment_integrity()
-
-            # Restore permissions for cleanup
-            os.chmod(filepath, 0o644)
+                with patch("builtins.open", side_effect=mock_open):
+                    result = guard.verify_environment_integrity()
 
             assert result["verified"] is False
             assert any("Unable to read" in f for f in result["content_findings"])
+            assert any("PermissionError" in f for f in result["content_findings"])
 
     def test_empty_site_dir(self):
         """Empty site-packages directory should pass cleanly."""
