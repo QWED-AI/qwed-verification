@@ -172,9 +172,14 @@ class StartupHookGuard:
                 "scanned_directories": scanned_dirs,
             }
 
-        # Build accurate message based on evidence
-        if content_findings:
+        # Build accurate message based on evidence type
+        pattern_matches = [f for f in content_findings if "Suspicious pattern" in f]
+        read_errors = [f for f in content_findings if "Unable to read" in f]
+
+        if pattern_matches:
             detail = "with malicious patterns detected"
+        elif read_errors:
+            detail = "with unreadable files (possible tampering)"
         else:
             detail = "not on the verified allowlist"
 

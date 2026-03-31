@@ -232,6 +232,9 @@ class TestStartupHookGuard:
             assert result["verified"] is False
             assert any("Unable to read" in f for f in result["content_findings"])
             assert any("PermissionError" in f for f in result["content_findings"])
+            # Should NOT say "malicious patterns" for I/O errors
+            assert "malicious patterns" not in result["message"]
+            assert "unreadable" in result["message"]
 
     def test_empty_site_dir(self):
         """Empty site-packages directory should pass cleanly."""
