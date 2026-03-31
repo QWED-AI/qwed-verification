@@ -6,8 +6,6 @@ import os
 import tempfile
 from unittest.mock import patch
 
-import pytest
-
 from qwed_sdk.guards.environment_guard import StartupHookGuard
 
 
@@ -17,10 +15,12 @@ class TestStartupHookGuard:
     def test_clean_environment(self):
         """Environment with no unknown .pth files should pass."""
         guard = StartupHookGuard()
-        result = guard.verify_environment_integrity()
-        # In a clean dev environment, this should usually pass
-        assert result["verified"] is True or result["status"] in ("CLEAN_ENVIRONMENT", "COMPROMISED")
-        assert "suspicious_hooks" in result
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(guard, "_get_site_dirs", return_value=[tmpdir]):
+                result = guard.verify_environment_integrity()
+        assert result["verified"] is True
+        assert result["status"] == "CLEAN_ENVIRONMENT"
+        assert result["suspicious_hooks"] == []
         assert "scanned_directories" in result
 
     def test_detects_malicious_pth_file(self):
@@ -92,12 +92,12 @@ class TestStartupHookGuard:
             assert any("os.system" in f for f in result["content_findings"])
 
     def test_content_scanning_disabled(self):
-        """When scan_contents=False, should only flag presence, not contents."""
+        """When scan_contents=False, any unknown .pth is flagged regardless of content."""
         guard = StartupHookGuard(scan_contents=False)
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            with open(os.path.join(tmpdir, "evil.pth"), "w") as f:
-                f.write("exec(base64.b64decode('...'))")
+            with open(os.path.join(tmpdir, "unknown.pth"), "w") as f:
+                f.write("# harmless comment")
 
             with patch.object(guard, "_get_site_dirs", return_value=[tmpdir]):
                 result = guard.verify_environment_integrity()
@@ -106,6 +106,20 @@ class TestStartupHookGuard:
             assert len(result["suspicious_hooks"]) == 1
             assert len(result["content_findings"]) == 0  # No content scan
 
+    def test_harmless_unknown_pth_passes_with_content_scan(self):
+        """Unknown .pth with harmless content should PASS when scan_contents=True."""
+        guard = StartupHookGuard(scan_contents=True)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with open(os.path.join(tmpdir, "my_tool.pth"), "w") as f:
+                f.write("# just a path entry\n/opt/my_tool/lib\n")
+
+            with patch.object(guard, "_get_site_dirs", return_value=[tmpdir]):
+                result = guard.verify_environment_integrity()
+
+            assert result["verified"] is True
+            assert len(result["suspicious_hooks"]) == 0
+
     def test_multiple_suspicious_files(self):
         """Should report all suspicious .pth files, not just the first."""
         guard = StartupHookGuard()
@@ -113,7 +127,7 @@ class TestStartupHookGuard:
         with tempfile.TemporaryDirectory() as tmpdir:
             for i in range(3):
                 with open(os.path.join(tmpdir, f"backdoor_{i}.pth"), "w") as f:
-                    f.write(f"import os; os.popen('whoami')\n")
+                    f.write("import os; os.popen('whoami')\n")
 
             with patch.object(guard, "_get_site_dirs", return_value=[tmpdir]):
                 result = guard.verify_environment_integrity()

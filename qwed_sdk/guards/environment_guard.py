@@ -130,20 +130,26 @@ class StartupHookGuard:
             scanned_dirs.append(site_dir)
             try:
                 entries = os.listdir(site_dir)
-            except PermissionError:
+            except OSError:
                 continue
 
             for filename in entries:
                 if not filename.endswith(".pth"):
                     continue
-                if filename in self.allowed:
-                    continue
 
                 filepath = os.path.join(site_dir, filename)
-                suspicious_hooks.append(filepath)
+                is_allowlisted = filename in self.allowed
 
+                # Always scan content (even for allowlisted files — tampered
+                # pip.pth/setuptools.pth must be caught)
+                file_findings: List[str] = []
                 if self.scan_contents:
-                    content_findings.extend(self._scan_file_contents(filepath))
+                    file_findings = self._scan_file_contents(filepath)
+                    content_findings.extend(file_findings)
+
+                # Flag as suspicious if: not allowlisted, OR has malicious content
+                if (not is_allowlisted and not self.scan_contents) or file_findings:
+                    suspicious_hooks.append(filepath)
 
         if suspicious_hooks:
             return {
@@ -152,8 +158,8 @@ class StartupHookGuard:
                 "risk": "COMPROMISED_ENVIRONMENT_STARTUP_HOOK",
                 "message": (
                     f"CRITICAL: Detected {len(suspicious_hooks)} unknown Python "
-                    f"startup hook(s) (.pth files). This is a known supply chain "
-                    f"attack vector. Execution blocked."
+                    f"startup hook(s) (.pth files) with malicious patterns. "
+                    f"This is a known supply chain attack vector. Execution blocked."
                 ),
                 "suspicious_hooks": suspicious_hooks,
                 "content_findings": content_findings,
