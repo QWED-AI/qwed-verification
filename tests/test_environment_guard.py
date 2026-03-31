@@ -268,43 +268,67 @@ class TestStartupHookGuard:
         assert isinstance(dirs, list)
 
     def test_get_site_dirs_includes_user_site(self):
-        """_get_site_dirs should include user site-packages when it exists."""
+        """_get_site_dirs should include user site-packages when enabled."""
         guard = StartupHookGuard()
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("site.getsitepackages", return_value=[]):
                 with patch("site.getusersitepackages", return_value=tmpdir):
-                    dirs = guard._get_site_dirs()
+                    with patch("site.ENABLE_USER_SITE", True, create=True):
+                        dirs = guard._get_site_dirs()
             assert tmpdir in dirs
 
+    def test_get_site_dirs_skips_disabled_user_site(self):
+        """_get_site_dirs should skip user site when ENABLE_USER_SITE=False."""
+        guard = StartupHookGuard()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("site.getsitepackages", return_value=[]):
+                with patch("site.getusersitepackages", return_value=tmpdir):
+                    with patch("site.ENABLE_USER_SITE", False, create=True):
+                        dirs = guard._get_site_dirs()
+            assert tmpdir not in dirs
+
     def test_scan_directory_handles_os_error(self):
-        """_scan_directory should gracefully handle OSError on listdir."""
+        """_scan_directory should record error when directory can't be listed."""
         guard = StartupHookGuard()
         suspicious: list = []
         findings: list = []
+        scan_errors: list = []
 
-        # Pass a non-existent directory
-        guard._scan_directory("/nonexistent/path/xyz", suspicious, findings)
+        guard._scan_directory("/nonexistent/path/xyz", suspicious, findings, scan_errors)
 
-        # Should not crash, and lists should remain empty
         assert suspicious == []
         assert findings == []
+        assert len(scan_errors) == 1
+        assert "Unable to list" in scan_errors[0]
 
     def test_scan_directory_skips_non_pth_files(self):
         """_scan_directory should skip non-.pth files."""
         guard = StartupHookGuard()
         suspicious: list = []
         findings: list = []
+        scan_errors: list = []
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create non-.pth files
             for name in ["README.md", "config.ini", "data.txt"]:
                 with open(os.path.join(tmpdir, name), "w") as f:
                     f.write("exec(base64.b64decode('evil'))")
 
-            guard._scan_directory(tmpdir, suspicious, findings)
+            guard._scan_directory(tmpdir, suspicious, findings, scan_errors)
 
         assert suspicious == []
         assert findings == []
+        assert scan_errors == []
+
+    def test_directory_scan_failure_blocks_clean_result(self):
+        """verify_environment_integrity should NOT return verified=True on scan errors."""
+        guard = StartupHookGuard()
+
+        with patch.object(guard, "_get_site_dirs", return_value=["/nonexistent/xyz"]):
+            result = guard.verify_environment_integrity()
+
+        assert result["verified"] is False
+        assert len(result["scan_errors"]) == 1
+        assert "scan failure" in result["message"]
 
 
 def test_guards_package_exports():

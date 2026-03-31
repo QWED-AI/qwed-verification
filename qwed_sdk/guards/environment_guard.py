@@ -76,7 +76,9 @@ class StartupHookGuard:
         """
         Args:
             allowed_pth_files: Additional .pth filenames to whitelist.
-            scan_contents: If True, also scans file contents for malicious patterns.
+            scan_contents: When True, scans file contents for malicious
+                patterns. Note: allowlisted files are always scanned for
+                tampering regardless of this flag (fail-closed design).
         """
         self.allowed = set(self.DEFAULT_ALLOWED)
         if allowed_pth_files:
@@ -90,9 +92,10 @@ class StartupHookGuard:
             dirs.extend(site.getsitepackages())
         except AttributeError:
             pass  # Some embedded interpreters lack this
-        user_site = getattr(site, "getusersitepackages", lambda: None)()
-        if user_site:
-            dirs.append(user_site)
+        if getattr(site, "ENABLE_USER_SITE", False):
+            user_site = getattr(site, "getusersitepackages", lambda: None)()
+            if user_site:
+                dirs.append(user_site)
         return sorted(d for d in dirs if os.path.isdir(d))
 
     def _scan_file_contents(self, filepath: str) -> List[str]:
@@ -117,11 +120,15 @@ class StartupHookGuard:
         site_dir: str,
         suspicious_hooks: List[str],
         content_findings: List[str],
+        scan_errors: List[str],
     ) -> None:
         """Scan a single site-packages directory for suspicious .pth files."""
         try:
             entries = sorted(os.listdir(site_dir))
-        except OSError:
+        except OSError as exc:
+            scan_errors.append(
+                f"Unable to list {site_dir} ({type(exc).__name__}: {exc})"
+            )
             return
 
         for filename in entries:
@@ -131,7 +138,7 @@ class StartupHookGuard:
             filepath = os.path.join(site_dir, filename)
             is_allowlisted = filename in self.allowed
 
-            # Always scan allowlisted files for tampering;
+            # Always scan allowlisted files for tampering (fail-closed);
             # scan non-allowlisted files only when scan_contents is enabled
             file_findings: List[str] = []
             if is_allowlisted or self.scan_contents:
@@ -141,6 +148,40 @@ class StartupHookGuard:
             # Flag if: not allowlisted, OR allowlisted but tampered
             if not is_allowlisted or file_findings:
                 suspicious_hooks.append(filepath)
+
+    @staticmethod
+    def _build_message(
+        suspicious_hooks: List[str],
+        content_findings: List[str],
+        scan_errors: List[str],
+    ) -> str:
+        """Build an accurate summary message based on evidence types."""
+        parts: List[str] = []
+        pattern_count = sum(
+            1 for f in content_findings if "Suspicious pattern" in f
+        )
+        error_count = sum(
+            1 for f in content_findings if "Unable to read" in f
+        )
+        unauthorized_count = len(suspicious_hooks) - (
+            1 if pattern_count else 0
+        ) - (1 if error_count else 0)
+
+        if pattern_count:
+            parts.append("malicious patterns detected")
+        if error_count:
+            parts.append("unreadable files (possible tampering)")
+        if unauthorized_count > 0 or not parts:
+            parts.append("unauthorized files not on allowlist")
+        if scan_errors:
+            parts.append(f"{len(scan_errors)} directory scan failure(s)")
+
+        detail = "; ".join(parts)
+        return (
+            f"CRITICAL: Detected {len(suspicious_hooks)} suspicious Python "
+            f"startup hook(s) — {detail}. "
+            f"This is a known supply chain attack vector. Execution blocked."
+        )
 
     def verify_environment_integrity(self) -> Dict[str, Any]:
         """
@@ -152,47 +193,40 @@ class StartupHookGuard:
                 - status (str): "CLEAN_ENVIRONMENT" or "COMPROMISED".
                 - suspicious_hooks (list): Paths to suspicious .pth files.
                 - content_findings (list): Malicious patterns found.
+                - scan_errors (list): Directory enumeration failures.
                 - message (str): Human-readable summary.
         """
         suspicious_hooks: List[str] = []
         content_findings: List[str] = []
+        scan_errors: List[str] = []
         scanned_dirs: List[str] = []
 
         for site_dir in self._get_site_dirs():
             scanned_dirs.append(site_dir)
-            self._scan_directory(site_dir, suspicious_hooks, content_findings)
+            self._scan_directory(
+                site_dir, suspicious_hooks, content_findings, scan_errors
+            )
 
-        if not suspicious_hooks:
+        if suspicious_hooks or scan_errors:
             return {
-                "verified": True,
-                "status": "CLEAN_ENVIRONMENT",
-                "message": "No unauthorized startup hooks detected.",
-                "suspicious_hooks": [],
-                "content_findings": [],
+                "verified": False,
+                "status": "COMPROMISED",
+                "risk": "COMPROMISED_ENVIRONMENT_STARTUP_HOOK",
+                "message": self._build_message(
+                    suspicious_hooks, content_findings, scan_errors
+                ),
+                "suspicious_hooks": suspicious_hooks,
+                "content_findings": content_findings,
+                "scan_errors": scan_errors,
                 "scanned_directories": scanned_dirs,
             }
 
-        # Build accurate message based on evidence type
-        pattern_matches = [f for f in content_findings if "Suspicious pattern" in f]
-        read_errors = [f for f in content_findings if "Unable to read" in f]
-
-        if pattern_matches:
-            detail = "with malicious patterns detected"
-        elif read_errors:
-            detail = "with unreadable files (possible tampering)"
-        else:
-            detail = "not on the verified allowlist"
-
         return {
-            "verified": False,
-            "status": "COMPROMISED",
-            "risk": "COMPROMISED_ENVIRONMENT_STARTUP_HOOK",
-            "message": (
-                f"CRITICAL: Detected {len(suspicious_hooks)} suspicious Python "
-                f"startup hook(s) (.pth files) {detail}. "
-                f"This is a known supply chain attack vector. Execution blocked."
-            ),
-            "suspicious_hooks": suspicious_hooks,
-            "content_findings": content_findings,
+            "verified": True,
+            "status": "CLEAN_ENVIRONMENT",
+            "message": "No unauthorized startup hooks detected.",
+            "suspicious_hooks": [],
+            "content_findings": [],
+            "scan_errors": [],
             "scanned_directories": scanned_dirs,
         }
