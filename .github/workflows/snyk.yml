@@ -20,10 +20,10 @@ jobs:
     name: Snyk Dependency Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.11'
 
@@ -42,7 +42,7 @@ jobs:
         run: snyk test --org=${{ secrets.SNYK_ORG_ID }} --severity-threshold=high --sarif-file-output=snyk.sarif
 
       - name: Upload Snyk results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
         if: always() && hashFiles('snyk.sarif') != ''
         with:
           sarif_file: snyk.sarif
@@ -51,7 +51,7 @@ jobs:
     name: Snyk Code Analysis (SAST)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Snyk CLI
         run: npm install -g snyk
@@ -63,7 +63,7 @@ jobs:
         run: snyk code test --org=${{ secrets.SNYK_ORG_ID }} --sarif-file-output=snyk-code.sarif
 
       - name: Upload Snyk Code results
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
         if: always() && hashFiles('snyk-code.sarif') != ''
         with:
           sarif_file: snyk-code.sarif
