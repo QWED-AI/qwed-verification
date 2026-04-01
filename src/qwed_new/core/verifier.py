@@ -365,7 +365,7 @@ class VerificationEngine:
         self, 
         operation: str,
         matrices: Dict[str, List[List[float]]],
-        expected: Union[List[List[float]], float, List[float]]
+        expected: List[List[float]] | float | List[float]
     ) -> Dict[str, Any]:
         """
         Verify matrix operations.
