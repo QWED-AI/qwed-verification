@@ -750,7 +750,7 @@ class ConsensusVerifier:
         """Parse query into expression and expected value."""
         try:
             from qwed_new.core.translator import TranslationLayer
-        except (ImportError, ModuleNotFoundError):
+        except ImportError:
             # Fallback: extract simple expression
             import re
             nums = re.findall(r"\d+", query)

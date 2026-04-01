@@ -517,7 +517,6 @@ Format as a numbered list."""
         except Exception as e:
             # Best-effort numeric fallback; treat evaluation failures as non-equivalent.
             logger.debug("Safe arithmetic fallback failed for formulas %s vs %s: %s", f1, f2, e)
-            pass
         
         return False
 
