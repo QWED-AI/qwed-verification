@@ -62,7 +62,7 @@ def test_consensus_helper_fallbacks_and_failures(monkeypatch):
 
     expression, expected = verifier._parse_math_query("What is 12 plus 30?")
     assert expression == "12 + 30"
-    assert expected == 42.0
+    assert expected == Decimal("42")
 
     with pytest.raises(ValueError, match="Verification code generation failed"):
         verifier._generate_verification_code("What is 2 plus 2?")
@@ -90,6 +90,7 @@ def test_reasoning_verifier_safe_arithmetic_and_fallback():
     verifier = ReasoningVerifier(enable_cache=False)
 
     assert verifier._safe_arithmetic_eval("1 + 2 * 3") == Decimal("7")
+    assert verifier._safe_arithmetic_eval("2 ** 3") == Decimal("8")
     assert verifier._formulas_equivalent("1/0", "1") is False
 
 

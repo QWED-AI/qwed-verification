@@ -746,21 +746,27 @@ class ConsensusVerifier:
     # Helper Methods
     # =========================================================================
     
-    def _parse_math_query(self, query: str) -> Tuple[str, float]:
+    def _parse_math_query(self, query: str) -> Tuple[str, Decimal]:
         """Parse query into expression and expected value."""
         try:
             from qwed_new.core.translator import TranslationLayer
+            translator = TranslationLayer()
+            task = translator.translate(query)
         except ImportError:
             # Fallback: extract simple expression
             import re
             nums = re.findall(r"\d+", query)
             if len(nums) >= 2:
                 exact_sum = Decimal(nums[0]) + Decimal(nums[1])
-                return f"{nums[0]} + {nums[1]}", float(exact_sum)
-            return "0", 0.0
-        translator = TranslationLayer()
-        task = translator.translate(query)
-        return task.expression, task.expected_value or 0.0
+                return f"{nums[0]} + {nums[1]}", exact_sum
+            return "0", Decimal("0")
+
+        expected_value = task.expected_value
+        if expected_value is None:
+            return task.expression, Decimal("0")
+        if isinstance(expected_value, Decimal):
+            return task.expression, expected_value
+        return task.expression, Decimal(str(expected_value))
     
     def _generate_verification_code(self, query: str) -> str:
         """Generate Python code for verification."""

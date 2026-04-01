@@ -18,16 +18,16 @@ class TestQWEDLocalCoverage(unittest.TestCase):
     def test_init_openai_provider(self):
         """Test initialization with OpenAI provider."""
         with patch.object(qwed_local_module, "OpenAI") as MockOpenAI:
-            client = QWEDLocal(provider="openai", api_key="sk-test", cache=False)
+            client = QWEDLocal(provider="openai", api_key="test-openai-key", cache=False)
             self.assertEqual(client.client_type, "openai")
-            MockOpenAI.assert_called_with(api_key="sk-test")
+            MockOpenAI.assert_called_with(api_key="test-openai-key")
 
     def test_init_anthropic_provider(self):
         """Test initialization with Anthropic provider."""
         with patch.object(qwed_local_module, "Anthropic") as MockAnthropic:
-            client = QWEDLocal(provider="anthropic", api_key="sk-ant", cache=False)
+            client = QWEDLocal(provider="anthropic", api_key="test-anthropic-key", cache=False)
             self.assertEqual(client.client_type, "anthropic")
-            MockAnthropic.assert_called_with(api_key="sk-ant")
+            MockAnthropic.assert_called_with(api_key="test-anthropic-key")
 
     def test_init_gemini_provider(self):
         """Test initialization with Gemini provider."""

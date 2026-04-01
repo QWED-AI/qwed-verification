@@ -527,6 +527,7 @@ Format as a numbered list."""
             ast.Sub: operator.sub,
             ast.Mult: operator.mul,
             ast.Div: lambda left, right: left / right,
+            ast.Pow: operator.pow,
         }
         allowed_unary = {
             ast.UAdd: operator.pos,
