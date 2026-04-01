@@ -2,6 +2,7 @@ import logging
 import os
 from pathlib import Path
 
+from sqlalchemy.exc import ArgumentError
 from sqlalchemy.engine.url import make_url
 from sqlmodel import SQLModel, create_engine, Session
 
@@ -18,7 +19,7 @@ engine = create_engine(DATABASE_URL, connect_args=connect_args)
 try:
     parsed_db_url = make_url(DATABASE_URL)
     safe_db_url = parsed_db_url.render_as_string(hide_password=True)
-except Exception:
+except (ArgumentError, ValueError, TypeError):
     safe_db_url = "<invalid DATABASE_URL>"
 logger.debug("DATABASE_URL=%s", safe_db_url)
 if parsed_db_url is not None and parsed_db_url.drivername.startswith("sqlite"):

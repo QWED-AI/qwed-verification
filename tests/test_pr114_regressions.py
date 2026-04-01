@@ -129,6 +129,20 @@ def test_qwed_local_safe_eval_helpers_run_through_code_guard():
             qwed_local_module._safe_eval_sympy_expr("1 + 2", {})
 
 
+def test_qwed_local_safe_eval_helpers_work_without_qwed_new(monkeypatch):
+    original_import = builtins.__import__
+
+    def fake_import(name, globals_=None, locals_=None, fromlist=(), level=0):
+        if name == "qwed_new.guards.code_guard":
+            raise ImportError("qwed_new unavailable in standalone SDK test")
+        return original_import(name, globals_, locals_, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    assert qwed_local_module._safe_eval_sympy_expr("1 + 2", {}) == 3
+    assert qwed_local_module._safe_eval_z3_expr("True", {}) is True
+
+
 @pytest.mark.asyncio
 async def test_consensus_verifier_records_async_aggregation_failure():
     verifier = ConsensusVerifier(max_workers=1, enable_circuit_breaker=False)

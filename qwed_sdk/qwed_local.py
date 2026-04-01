@@ -32,6 +32,7 @@ Example:
 from typing import Optional, Dict, Any, List
 import os
 from dataclasses import dataclass
+import operator
 
 # QWED Branding Colors
 try:
@@ -105,13 +106,72 @@ class DisallowedExpressionError(UnsafeExpressionError):
 
 
 def _verify_expr_with_code_guard(expr_str: str) -> None:
-    """Run CodeGuard on an expression before evaluating a validated AST."""
-    from qwed_new.guards.code_guard import CodeGuard
+    """Run CodeGuard on an expression when the full package is available."""
+    try:
+        from qwed_new.guards.code_guard import CodeGuard
+    except ImportError:
+        # The standalone SDK can still rely on AST validation if qwed_new is absent.
+        return
 
     guard = CodeGuard()
     result = guard.verify_safety(expr_str, language="python")
     if not result.get("verified"):
         raise ValueError(f"Code blocked: {result.get('violations', [])}")
+
+
+_BINARY_OPERATORS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+
+_UNARY_OPERATORS = {
+    ast.USub: operator.neg,
+}
+
+
+def _evaluate_validated_ast(node: ast.AST, namespace: dict):
+    """Evaluate an already-validated AST using a restricted namespace."""
+    if isinstance(node, ast.Expression):
+        return _evaluate_validated_ast(node.body, namespace)
+    if isinstance(node, ast.Constant):
+        return node.value
+    if hasattr(ast, "Str") and isinstance(node, ast.Str):
+        return node.s
+    if hasattr(ast, "Num") and isinstance(node, ast.Num):
+        return node.n
+    if isinstance(node, ast.Name):
+        if node.id not in namespace:
+            raise DisallowedExpressionError(f"Unknown symbol: {node.id}")
+        return namespace[node.id]
+    if isinstance(node, ast.Attribute):
+        return getattr(_evaluate_validated_ast(node.value, namespace), node.attr)
+    if isinstance(node, ast.Call):
+        func = _evaluate_validated_ast(node.func, namespace)
+        args = [_evaluate_validated_ast(arg, namespace) for arg in node.args]
+        kwargs = {
+            keyword.arg: _evaluate_validated_ast(keyword.value, namespace)
+            for keyword in node.keywords
+        }
+        return func(*args, **kwargs)
+    if isinstance(node, ast.BinOp):
+        op_type = type(node.op)
+        if op_type not in _BINARY_OPERATORS:
+            raise DisallowedExpressionError(f"Unsupported operator: {op_type.__name__}")
+        return _BINARY_OPERATORS[op_type](
+            _evaluate_validated_ast(node.left, namespace),
+            _evaluate_validated_ast(node.right, namespace),
+        )
+    if isinstance(node, ast.UnaryOp):
+        op_type = type(node.op)
+        if op_type not in _UNARY_OPERATORS:
+            raise DisallowedExpressionError(f"Unsupported unary operator: {op_type.__name__}")
+        return _UNARY_OPERATORS[op_type](_evaluate_validated_ast(node.operand, namespace))
+
+    raise DisallowedExpressionError(f"Unsupported AST node: {type(node).__name__}")
 
 def _has_string_arg(node: ast.Call) -> bool:
     """Check if a Call node has any string literal arguments."""
@@ -228,13 +288,11 @@ def _safe_eval_sympy_expr(expr_str: str, local_vars: dict):
     # Layered defense: AST allow-list first, then CodeGuard, then restricted builtins.
     _verify_expr_with_code_guard(stripped)
 
-    code = compile(tree, '<sympy_expr>', 'eval')
-
-    # Defensively enforce restricted builtins (only abs, int)
+    # Layered defense: AST allow-list first, then optional CodeGuard, then restricted namespace.
     restricted_ns = {k: v for k, v in local_vars.items() if k != "__builtins__"}
-    restricted_ns["__builtins__"] = _SAFE_SYMPY_BUILTINS
+    restricted_ns.update(_SAFE_SYMPY_BUILTINS)
 
-    return eval(code, restricted_ns)  # noqa: S307  # nosec - AST-validated with CodeGuard + restricted namespace
+    return _evaluate_validated_ast(tree, restricted_ns)
 
 
 _ALLOWED_Z3_NAMES = {'Bool', 'And', 'Or', 'Not', 'Implies'}
@@ -297,14 +355,10 @@ def _safe_eval_z3_expr(expr_str: str, z3_namespace: dict):
     # Layered defense: AST allow-list first, then CodeGuard, then restricted builtins.
     _verify_expr_with_code_guard(stripped)
     
-    # Compile the already-validated AST (no re-parse)
-    code = compile(tree, '<z3_expr>', 'eval')
-    
-    # Defensively strip builtins regardless of what the caller passes
+    # Layered defense: AST allow-list first, then optional CodeGuard, then restricted namespace.
     restricted_ns = {k: v for k, v in z3_namespace.items() if k != "__builtins__"}
-    restricted_ns["__builtins__"] = {}
     
-    return eval(code, restricted_ns)  # noqa: S307  # nosec - AST-validated with CodeGuard + restricted namespace
+    return _evaluate_validated_ast(tree, restricted_ns)
 
 
 @dataclass
