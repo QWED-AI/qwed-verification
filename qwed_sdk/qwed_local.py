@@ -283,6 +283,31 @@ def _evaluate_validated_ast(node: ast.AST, namespace: dict):
 
     raise DisallowedExpressionError(f"Unsupported AST node: {type(node).__name__}")
 
+
+def _format_sympy_result(value: Any) -> str:
+    """Format SymPy results without degrading exact values like integers/rationals."""
+    if sympy is not None and isinstance(value, sympy.Basic):
+        if getattr(value, "is_Integer", False) or getattr(value, "is_Rational", False):
+            return str(value)
+        if getattr(value, "is_Number", False):
+            return str(value.evalf())
+    return str(value)
+
+
+def _math_answers_match(llm_answer: str, verified_result: Any) -> bool:
+    """Compare LLM and verified answers using SymPy when possible."""
+    normalized_llm = llm_answer.strip()
+    verified_text = _format_sympy_result(verified_result)
+    if normalized_llm == verified_text:
+        return True
+    if sympy is None:
+        return False
+    try:
+        llm_expr = sympy.sympify(normalized_llm)
+        return sympy.simplify(llm_expr - verified_result) == 0
+    except Exception:
+        return False
+
 def _has_string_arg(node: ast.Call) -> bool:
     """Check if a Call node has any string literal arguments."""
     for arg in node.args:
@@ -806,13 +831,10 @@ SymPy code:"""
                 # AST-validated eval via _safe_eval_sympy_expr (fixes S5334)
                 verified_result = _safe_eval_sympy_expr(llm_expr, local_vars)
                 
-                # If it's an expression (like 2+2), evaluate it
-                if hasattr(verified_result, 'evalf'):
-                    verified_result = verified_result.evalf()
-                verified_value = str(verified_result)
+                verified_value = _format_sympy_result(verified_result)
                 
                 # Compare LLM answer with verified result
-                is_correct = str(llm_answer) == verified_value
+                is_correct = _math_answers_match(llm_answer, verified_result)
                 
                 result = VerificationResult(
                     verified=is_correct,

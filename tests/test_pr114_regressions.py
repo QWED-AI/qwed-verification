@@ -154,6 +154,13 @@ def test_qwed_local_safe_eval_sympy_supports_exact_division_and_tuple_calls():
     assert integral_value == qwed_local_module.sympy.Rational(1, 2)
 
 
+def test_qwed_local_math_answer_matching_preserves_exact_integers():
+    verified_result = qwed_local_module._safe_eval_sympy_expr("2 + 2", {"sympy": qwed_local_module.sympy})
+
+    assert qwed_local_module._format_sympy_result(verified_result) == "4"
+    assert qwed_local_module._math_answers_match("4", verified_result) is True
+
+
 def test_qwed_local_safe_eval_sympy_rejects_keyword_unpacking():
     assert qwed_local_module._is_safe_sympy_expr("sympy.integrate(x, **kw)") is False
 
