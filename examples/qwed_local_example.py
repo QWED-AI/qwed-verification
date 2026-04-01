@@ -16,14 +16,12 @@ from qwed_sdk import QWEDLocal
 try:
     from colorama import Fore, Style, init
     init(autoreset=True)
-    HAS_COLOR = True
 except ImportError:
     # Fallback if colorama not installed
     class Fore:
         GREEN = RED = YELLOW = CYAN = MAGENTA = BLUE = ""
     class Style:
         BRIGHT = RESET_ALL = ""
-    HAS_COLOR = False
 
 def example_ollama():
     """Example: Using Ollama (FREE)"""

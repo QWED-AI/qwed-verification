@@ -90,48 +90,47 @@ class TestQWEDLocalCoverage(unittest.TestCase):
         
         # Reset counters
         mod._verification_count = 0
-        mod._has_shown_nudge = False
-        
-        # 1st time - no show
-        mod._show_github_nudge()
-        self.assertFalse(mod._has_shown_nudge)
-        
-        # 2nd time - no show
-        mod._show_github_nudge()
-        
-        # 3rd time - SHOW
-        mod._show_github_nudge()
-        self.assertTrue(mod._has_shown_nudge)
-        
+
+        with patch('builtins.print') as mock_print:
+            # 1st time - no show
+            mod._show_github_nudge()
+            self.assertEqual(mock_print.call_count, 0)
+
+            # 2nd time - no show
+            mod._show_github_nudge()
+            self.assertEqual(mock_print.call_count, 0)
+
+            # 3rd time - SHOW
+            mod._show_github_nudge()
+            self.assertGreater(mock_print.call_count, 0)
+
         # 10th time - SHOW again
         mod._verification_count = 9
-        mod._show_github_nudge()
+        with patch('builtins.print') as mock_print:
+            mod._show_github_nudge()
+            self.assertGreater(mock_print.call_count, 0)
 
     def test_show_github_nudge_no_color(self):
         """Test nudge without color (non-colored fallback path)."""
         from qwed_sdk import qwed_local as mod
         
         old_count = mod._verification_count
-        old_shown = mod._has_shown_nudge
         old_has_color = mod.HAS_COLOR
         
         try:
             # Directly set the module-level variable
             mod.HAS_COLOR = False
             mod._verification_count = 2
-            mod._has_shown_nudge = False
             
             with patch('builtins.print') as mock_print:
                 mod._show_github_nudge()
-                
-                self.assertTrue(mod._has_shown_nudge)
+                self.assertGreater(mock_print.call_count, 0)
                 
                 # Verify print was called with non-colored separator
                 args, _ = mock_print.call_args_list[0]
                 self.assertIn("─" * 60, args[0])
         finally:
             mod._verification_count = old_count
-            mod._has_shown_nudge = old_shown
             mod.HAS_COLOR = old_has_color
 
     def test_cache_hit_printing_logic(self):

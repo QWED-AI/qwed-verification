@@ -613,6 +613,7 @@ class MultiVLMVerifier:
                 result = provider.verify_image(image_bytes, claim)
                 vlm_results.append(result)
             except Exception:
+                # A single provider failure should not block multi-VLM consensus.
                 pass
         
         if len(vlm_results) < min_agreement:

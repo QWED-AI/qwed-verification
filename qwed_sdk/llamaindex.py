@@ -323,6 +323,7 @@ class QWEDCallbackHandler(BaseCallbackHandler if LLAMAINDEX_AVAILABLE else objec
                     status = "✅" if result.verified else "❌"
                     print(f"[QWED] {status} Event {event_type}: verified={result.verified}")
             except Exception:
+                # Verification logging is best-effort and should not break the callback flow.
                 pass
     
     def start_trace(self, trace_id: Optional[str] = None) -> None:

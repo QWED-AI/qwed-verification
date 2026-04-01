@@ -104,7 +104,7 @@ def demo_code_engine():
     result = verifier.analyze_code("eval(user_input)")
     is_safe = result.get('is_safe', len(result.get('issues', [])) == 0)
     print(f"   Code: eval(user_input)")
-    print(f"   QWED result: UNSAFE ❌ (eval detected)")
+    print(f"   QWED result: {'SAFE ✅' if is_safe else 'UNSAFE ❌'}")
 
 
 def demo_sql_engine():

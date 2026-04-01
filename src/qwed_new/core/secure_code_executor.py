@@ -99,7 +99,7 @@ class SecureCodeExecutor:
                 
                 # 3. Run in Docker container
                 try:
-                    result = self._run_in_container(tmpdir, execution_id)
+                    self._run_in_container(tmpdir, execution_id)
                     
                     # 4. Parse result
                     result_file = os.path.join(tmpdir, "result.json")
@@ -162,9 +162,9 @@ class SecureCodeExecutor:
             logger.warning(f"Container timeout or error: {e}")
             try:
                 container.kill()
-            except:
-                pass
-            raise ExecutionError(f"Execution timed out after {self.timeout}s")
+            except Exception:
+                logger.debug("Failed to kill container after timeout", exc_info=True)
+            raise ExecutionError(f"Execution timed out after {self.timeout}s") from e
     
     def _is_safe_code(self, code: str) -> Tuple[bool, Optional[str]]:
         """

@@ -32,6 +32,7 @@ Example:
 from typing import Optional, Dict, Any, List
 import os
 from dataclasses import dataclass
+import operator
 
 # QWED Branding Colors
 try:
@@ -103,6 +104,210 @@ class InvalidExpressionSyntaxError(UnsafeExpressionError):
 class DisallowedExpressionError(UnsafeExpressionError):
     """Raised when an expression contains disallowed AST nodes."""
 
+
+def _verify_expr_with_code_guard(expr_str: str) -> None:
+    """Run CodeGuard on an expression when the full package is available."""
+    try:
+        from qwed_new.guards.code_guard import CodeGuard
+    except ImportError:
+        # The standalone SDK can still rely on AST validation if qwed_new is absent.
+        return
+
+    guard = CodeGuard()
+    result = guard.verify_safety(expr_str, language="python")
+    if not result.get("verified"):
+        raise ValueError(f"Code blocked: {result.get('violations', [])}")
+
+
+_BINARY_OPERATORS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+
+_UNARY_OPERATORS = {
+    ast.USub: operator.neg,
+}
+
+_MISSING_LITERAL = object()
+
+
+def _evaluate_literal_node(node: ast.AST):
+    """Evaluate a literal AST node."""
+    if isinstance(node, ast.Constant):
+        return node.value
+    if hasattr(ast, "Str") and isinstance(node, ast.Str):
+        return node.s
+    if hasattr(ast, "Num") and isinstance(node, ast.Num):
+        return node.n
+    return _MISSING_LITERAL
+
+
+def _evaluate_name_node(node: ast.Name, namespace: dict):
+    """Resolve a named symbol from the restricted namespace."""
+    if node.id not in namespace:
+        raise DisallowedExpressionError(f"Unknown symbol: {node.id}")
+    return namespace[node.id]
+
+
+def _evaluate_call_node(node: ast.Call, namespace: dict):
+    """Evaluate a validated call expression."""
+    func = _evaluate_validated_ast(node.func, namespace)
+    args = [_evaluate_validated_ast(arg, namespace) for arg in node.args]
+    kwargs = {}
+    for keyword in node.keywords:
+        if keyword.arg is None:
+            raise DisallowedExpressionError("Keyword unpacking is not allowed")
+        kwargs[keyword.arg] = _evaluate_validated_ast(keyword.value, namespace)
+    return func(*args, **kwargs)
+
+
+def _evaluate_binop_node(node: ast.BinOp, namespace: dict):
+    """Evaluate a validated binary operation."""
+    op_type = type(node.op)
+    if op_type not in _BINARY_OPERATORS:
+        raise DisallowedExpressionError(f"Unsupported operator: {op_type.__name__}")
+    return _BINARY_OPERATORS[op_type](
+        _evaluate_validated_ast(node.left, namespace),
+        _evaluate_validated_ast(node.right, namespace),
+    )
+
+
+def _evaluate_unary_node(node: ast.UnaryOp, namespace: dict):
+    """Evaluate a validated unary operation."""
+    op_type = type(node.op)
+    if op_type not in _UNARY_OPERATORS:
+        raise DisallowedExpressionError(f"Unsupported unary operator: {op_type.__name__}")
+    return _UNARY_OPERATORS[op_type](_evaluate_validated_ast(node.operand, namespace))
+
+
+def _coerce_sympy_literal_value(value):
+    """Convert numeric literals to SymPy-native values when available."""
+    if sympy is None:
+        return value
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return sympy.Integer(value)
+    if isinstance(value, float):
+        return sympy.Float(str(value))
+    return value
+
+
+def _evaluate_sympy_literal_node(node: ast.AST):
+    """Evaluate a literal node for the SymPy-specific evaluator."""
+    literal_value = _evaluate_literal_node(node)
+    if literal_value is _MISSING_LITERAL:
+        return _MISSING_LITERAL
+    return _coerce_sympy_literal_value(literal_value)
+
+
+def _evaluate_sympy_call_node(node: ast.Call, namespace: dict):
+    """Evaluate a validated SymPy call expression."""
+    func = _evaluate_sympy_ast(node.func, namespace)
+    args = [_evaluate_sympy_ast(arg, namespace) for arg in node.args]
+    kwargs = {}
+    for keyword in node.keywords:
+        if keyword.arg is None:
+            raise DisallowedExpressionError("Keyword unpacking is not allowed")
+        kwargs[keyword.arg] = _evaluate_sympy_ast(keyword.value, namespace)
+    return func(*args, **kwargs)
+
+
+def _evaluate_sympy_binop_node(node: ast.BinOp, namespace: dict):
+    """Evaluate a validated SymPy binary operation."""
+    op_type = type(node.op)
+    if op_type not in _BINARY_OPERATORS:
+        raise DisallowedExpressionError(f"Unsupported operator: {op_type.__name__}")
+    return _BINARY_OPERATORS[op_type](
+        _evaluate_sympy_ast(node.left, namespace),
+        _evaluate_sympy_ast(node.right, namespace),
+    )
+
+
+def _evaluate_sympy_unary_node(node: ast.UnaryOp, namespace: dict):
+    """Evaluate a validated SymPy unary operation."""
+    op_type = type(node.op)
+    if op_type not in _UNARY_OPERATORS:
+        raise DisallowedExpressionError(f"Unsupported unary operator: {op_type.__name__}")
+    return _UNARY_OPERATORS[op_type](_evaluate_sympy_ast(node.operand, namespace))
+
+
+def _evaluate_sympy_ast(node: ast.AST, namespace: dict):
+    """Evaluate an already-validated SymPy AST using exact arithmetic."""
+    if isinstance(node, ast.Expression):
+        return _evaluate_sympy_ast(node.body, namespace)
+
+    literal_value = _evaluate_sympy_literal_node(node)
+    if literal_value is not _MISSING_LITERAL:
+        return literal_value
+    if isinstance(node, ast.Name):
+        return _evaluate_name_node(node, namespace)
+    if isinstance(node, ast.Attribute):
+        return getattr(_evaluate_sympy_ast(node.value, namespace), node.attr)
+    if isinstance(node, ast.Tuple):
+        return tuple(_evaluate_sympy_ast(element, namespace) for element in node.elts)
+    if isinstance(node, ast.List):
+        return [_evaluate_sympy_ast(element, namespace) for element in node.elts]
+    if isinstance(node, ast.Call):
+        return _evaluate_sympy_call_node(node, namespace)
+    if isinstance(node, ast.BinOp):
+        return _evaluate_sympy_binop_node(node, namespace)
+    if isinstance(node, ast.UnaryOp):
+        return _evaluate_sympy_unary_node(node, namespace)
+
+    raise DisallowedExpressionError(f"Unsupported AST node: {type(node).__name__}")
+
+
+def _evaluate_validated_ast(node: ast.AST, namespace: dict):
+    """Evaluate an already-validated AST using a restricted namespace."""
+    if isinstance(node, ast.Expression):
+        return _evaluate_validated_ast(node.body, namespace)
+
+    literal_value = _evaluate_literal_node(node)
+    if literal_value is not _MISSING_LITERAL:
+        return literal_value
+    if isinstance(node, ast.Name):
+        return _evaluate_name_node(node, namespace)
+    if isinstance(node, ast.Attribute):
+        return getattr(_evaluate_validated_ast(node.value, namespace), node.attr)
+    if isinstance(node, ast.Call):
+        return _evaluate_call_node(node, namespace)
+    if isinstance(node, ast.BinOp):
+        return _evaluate_binop_node(node, namespace)
+    if isinstance(node, ast.UnaryOp):
+        return _evaluate_unary_node(node, namespace)
+
+    raise DisallowedExpressionError(f"Unsupported AST node: {type(node).__name__}")
+
+
+def _format_sympy_result(value: Any) -> str:
+    """Format SymPy results without degrading exact values like integers/rationals."""
+    if sympy is not None and isinstance(value, sympy.Basic):
+        if getattr(value, "is_Integer", False) or getattr(value, "is_Rational", False):
+            return str(value)
+        if getattr(value, "is_Number", False):
+            return str(value.evalf())
+    return str(value)
+
+
+def _math_answers_match(llm_answer: str, verified_result: Any) -> bool:
+    """Compare LLM and verified answers using SymPy when possible."""
+    normalized_llm = llm_answer.strip()
+    verified_text = _format_sympy_result(verified_result)
+    if normalized_llm == verified_text:
+        return True
+    if sympy is None:
+        return False
+    try:
+        llm_expr = sympy.sympify(normalized_llm)
+        return sympy.simplify(llm_expr - verified_result) == 0
+    except Exception:
+        return False
+
 def _has_string_arg(node: ast.Call) -> bool:
     """Check if a Call node has any string literal arguments."""
     for arg in node.args:
@@ -129,7 +334,7 @@ _ALLOWED_SYMPY_FUNCS = {
 _SAFE_SYMPY_NODE_TYPES = (
     ast.Name, ast.Constant, ast.Expression,
     ast.Load, ast.BinOp, ast.UnaryOp,
-    ast.keyword, ast.Pow,
+    ast.keyword, ast.Tuple, ast.List, ast.Pow,
     ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.USub,
 )
 
@@ -146,6 +351,8 @@ _SYMPY_FUNCS_REJECTING_STRING_ARGS = _ALLOWED_SYMPY_FUNCS - _SYMPY_SAFE_STRING_F
 
 def _is_safe_sympy_call(node: ast.Call) -> bool:
     """Validate a single Call node against sympy allow-list."""
+    if any(keyword.arg is None for keyword in node.keywords):
+        return False
     if isinstance(node.func, ast.Attribute):
         if getattr(node.func.value, 'id', '') != 'sympy':
             return False
@@ -202,11 +409,7 @@ def _is_safe_sympy_expr(expr_str: str) -> bool:
 
 
 def _safe_eval_sympy_expr(expr_str: str, local_vars: dict):
-    """Safely evaluate a SymPy expression using AST compilation.
-
-    Mirrors _safe_eval_z3_expr for the SymPy/math verification path.
-    Parses once, validates AST, compiles, executes in restricted namespace.
-    """
+    """Safely evaluate a SymPy expression using a validated AST walker."""
     stripped = expr_str.strip()
 
     try:
@@ -215,14 +418,14 @@ def _safe_eval_sympy_expr(expr_str: str, local_vars: dict):
         raise InvalidExpressionSyntaxError(str(exc)) from exc
     if not _is_safe_sympy_ast(tree):
         raise DisallowedExpressionError
+    # Layered defense: AST allow-list first, then CodeGuard, then restricted builtins.
+    _verify_expr_with_code_guard(stripped)
 
-    code = compile(tree, '<sympy_expr>', 'eval')
-
-    # Defensively enforce restricted builtins (only abs, int)
+    # Layered defense: AST allow-list first, then optional CodeGuard, then restricted namespace.
     restricted_ns = {k: v for k, v in local_vars.items() if k != "__builtins__"}
-    restricted_ns["__builtins__"] = _SAFE_SYMPY_BUILTINS
+    restricted_ns.update(_SAFE_SYMPY_BUILTINS)
 
-    return eval(code, restricted_ns)  # noqa: S307  # nosec - AST-validated
+    return _evaluate_sympy_ast(tree, restricted_ns)
 
 
 _ALLOWED_Z3_NAMES = {'Bool', 'And', 'Or', 'Not', 'Implies'}
@@ -282,15 +485,13 @@ def _safe_eval_z3_expr(expr_str: str, z3_namespace: dict):
         raise InvalidExpressionSyntaxError(str(exc)) from exc
     if not _is_safe_z3_ast(tree):
         raise DisallowedExpressionError
+    # Layered defense: AST allow-list first, then CodeGuard, then restricted builtins.
+    _verify_expr_with_code_guard(stripped)
     
-    # Compile the already-validated AST (no re-parse)
-    code = compile(tree, '<z3_expr>', 'eval')
-    
-    # Defensively strip builtins regardless of what the caller passes
+    # Layered defense: AST allow-list first, then optional CodeGuard, then restricted namespace.
     restricted_ns = {k: v for k, v in z3_namespace.items() if k != "__builtins__"}
-    restricted_ns["__builtins__"] = {}
     
-    return eval(code, restricted_ns)  # noqa: S307  # nosec - AST-validated
+    return _evaluate_validated_ast(tree, restricted_ns)
 
 
 @dataclass
@@ -309,17 +510,16 @@ class VerificationResult:
 
 # GitHub Star Nudge (only show occasionally)
 _verification_count = 0
-_has_shown_nudge = False
 
 def _show_github_nudge():
     """Show GitHub star nudge after successful verifications."""
-    global _verification_count, _has_shown_nudge
+    global _verification_count
     
     _verification_count += 1
     
     # Show nudge after 3rd successful verification, then every 10th
     should_show = (
-        (_verification_count == 3 and not _has_shown_nudge) or 
+        (_verification_count == 3) or
         (_verification_count % 10 == 0)
     )
     
@@ -329,7 +529,6 @@ def _show_github_nudge():
         print(f"{QWED.SUCCESS}💚 If QWED saved you time, give us a ⭐ on GitHub!{QWED.RESET}")
         print(f"{QWED.INFO}👉 https://github.com/QWED-AI/qwed-verification{QWED.RESET}")
         print(f"{QWED.BRAND}{'─' * 60}{QWED.RESET}\n")
-        _has_shown_nudge = True
     elif should_show:
         # Non-colored fallback
         print("\n" + "─" * 60)
@@ -337,7 +536,6 @@ def _show_github_nudge():
         print("💚 If QWED saved you time, give us a ⭐ on GitHub!")
         print("👉 https://github.com/QWED-AI/qwed-verification")
         print("─" * 60 + "\n")
-        _has_shown_nudge = True
 
 
 class QWEDLocal:
@@ -514,7 +712,6 @@ class QWEDLocal:
         """
         # PII MASKING (Phase 19 privacy shield)
         if self.mask_pii and self._pii_detector:
-            original_prompt = prompt
             prompt, pii_report = self._pii_detector.detect_and_mask(prompt)
             
             if pii_report["pii_detected"] > 0:
@@ -634,13 +831,10 @@ SymPy code:"""
                 # AST-validated eval via _safe_eval_sympy_expr (fixes S5334)
                 verified_result = _safe_eval_sympy_expr(llm_expr, local_vars)
                 
-                # If it's an expression (like 2+2), evaluate it
-                if hasattr(verified_result, 'evalf'):
-                    verified_result = verified_result.evalf()
-                verified_value = str(verified_result)
+                verified_value = _format_sympy_result(verified_result)
                 
                 # Compare LLM answer with verified result
-                is_correct = str(llm_answer) == verified_value
+                is_correct = _math_answers_match(llm_answer, verified_result)
                 
                 result = VerificationResult(
                     verified=is_correct,

@@ -5,22 +5,29 @@ Import integrations for your favorite agent frameworks.
 """
 
 # LangChain
+QWEDTool = None
 try:
     from .langchain import QWEDTool
 except ImportError:
-    pass
+    QWEDTool = None
 
 # CrewAI
+QWEDVerifiedAgent = None
+VerificationConfig = None
 try:
     from .crewai import QWEDVerifiedAgent, VerificationConfig
 except ImportError:
-    pass
+    QWEDVerifiedAgent = None
+    VerificationConfig = None
 
 # LlamaIndex
+QWEDQueryEngine = None
+VerifiedResponse = None
 try:
     from .llamaindex import QWEDQueryEngine, VerifiedResponse
 except ImportError:
-    pass
+    QWEDQueryEngine = None
+    VerifiedResponse = None
 
 __all__ = [
     "QWEDTool",
