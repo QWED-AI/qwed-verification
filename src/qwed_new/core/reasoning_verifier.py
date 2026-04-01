@@ -537,7 +537,10 @@ Format as a numbered list."""
         def _eval(node):
             if isinstance(node, ast.Expression):
                 return _eval(node.body)
-            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            if isinstance(node, ast.Constant) and type(node.value) in (int, float):
+                literal = ast.get_source_segment(expr, node)
+                if literal is not None:
+                    return Decimal(literal)
                 return Decimal(str(node.value))
             if isinstance(node, ast.BinOp) and type(node.op) in allowed_binops:
                 return allowed_binops[type(node.op)](_eval(node.left), _eval(node.right))

@@ -10,6 +10,8 @@ if str(REPO_ROOT) not in sys.path:
 from qwed_sdk import qwed_local as qwed_local_module
 
 QWEDLocal = qwed_local_module.QWEDLocal
+OPENAI_TEST_TOKEN = "unit-test-token-openai"
+ANTHROPIC_TEST_TOKEN = "unit-test-token-anthropic"
 
 
 class TestQWEDLocalCoverage(unittest.TestCase):
@@ -18,16 +20,16 @@ class TestQWEDLocalCoverage(unittest.TestCase):
     def test_init_openai_provider(self):
         """Test initialization with OpenAI provider."""
         with patch.object(qwed_local_module, "OpenAI") as MockOpenAI:
-            client = QWEDLocal(provider="openai", api_key="test-openai-key", cache=False)
+            client = QWEDLocal(provider="openai", api_key=OPENAI_TEST_TOKEN, cache=False)
             self.assertEqual(client.client_type, "openai")
-            MockOpenAI.assert_called_with(api_key="test-openai-key")
+            MockOpenAI.assert_called_with(api_key=OPENAI_TEST_TOKEN)
 
     def test_init_anthropic_provider(self):
         """Test initialization with Anthropic provider."""
         with patch.object(qwed_local_module, "Anthropic") as MockAnthropic:
-            client = QWEDLocal(provider="anthropic", api_key="test-anthropic-key", cache=False)
+            client = QWEDLocal(provider="anthropic", api_key=ANTHROPIC_TEST_TOKEN, cache=False)
             self.assertEqual(client.client_type, "anthropic")
-            MockAnthropic.assert_called_with(api_key="test-anthropic-key")
+            MockAnthropic.assert_called_with(api_key=ANTHROPIC_TEST_TOKEN)
 
     def test_init_gemini_provider(self):
         """Test initialization with Gemini provider."""

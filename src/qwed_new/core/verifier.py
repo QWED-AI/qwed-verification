@@ -68,7 +68,7 @@ class VerificationEngine:
     def verify_math(
         self, 
         expression: str, 
-        expected_value: float, 
+        expected_value: Union[float, Decimal], 
         tolerance: float = 1e-6,
         use_decimal: bool = True
     ) -> Dict[str, Any]:
@@ -77,7 +77,7 @@ class VerificationEngine:
         
         Args:
             expression: The math string (e.g., "2 * (5 + 10)")
-            expected_value: The value the LLM claims it is (e.g., 30)
+            expected_value: The value the LLM claims it is (e.g., 30 or Decimal("30"))
             tolerance: Floating point tolerance
             use_decimal: If True, use Decimal for exact arithmetic (financial)
             
