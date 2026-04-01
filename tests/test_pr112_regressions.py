@@ -1,6 +1,7 @@
 import builtins
 import asyncio
 import sys
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -88,7 +89,7 @@ def test_logic_verifier_unsat_explanation_falls_back_when_core_lookup_fails():
 def test_reasoning_verifier_safe_arithmetic_and_fallback():
     verifier = ReasoningVerifier(enable_cache=False)
 
-    assert verifier._safe_arithmetic_eval("1 + 2 * 3") == 7.0
+    assert verifier._safe_arithmetic_eval("1 + 2 * 3") == Decimal("7")
     assert verifier._formulas_equivalent("1/0", "1") is False
 
 
@@ -128,7 +129,7 @@ def test_verify_math_returns_symbolic_result_for_non_numeric_expression(monkeypa
         def commit(self):
             return None
 
-    tenant = SimpleNamespace(api_key="test-key", organization_id=1)
+    tenant = SimpleNamespace(api_key="", organization_id=1)
     session = DummySession()
 
     result = asyncio.run(api_main.verify_math({"expression": "x + 1"}, tenant, session))
@@ -144,8 +145,9 @@ def test_attestation_guard_requires_secret(monkeypatch):
         AttestationGuard()
 
 
-def test_attestation_guard_uses_injected_timestamp():
-    guard = AttestationGuard(secret_key="test-secret")
+def test_attestation_guard_uses_injected_timestamp(monkeypatch):
+    monkeypatch.setenv("QWED_ATTESTATION_SECRET", "x" * 16)
+    guard = AttestationGuard()
 
     token = guard.sign_verification(
         "what is 2+2?",

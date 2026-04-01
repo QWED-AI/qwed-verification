@@ -164,17 +164,19 @@ class VerificationEngine:
             x = Symbol('x')
             test_values = [0.5, 1, 2, -1, 0.1]
             matches = 0
+            evaluated_points = 0
             for val in test_values:
                 try:
                     left_val = float(left.subs(x, val).evalf())
                     right_val = float(right.subs(x, val).evalf())
+                    evaluated_points += 1
                     if abs(left_val - right_val) < 1e-10:
                         matches += 1
                 except Exception:
                     # Some sample points may be outside the domain; skip those values.
                     pass
             
-            if matches == len(test_values):
+            if evaluated_points > 0 and matches == evaluated_points:
                 return {
                     "is_equivalent": True,
                     "status": "LIKELY_EQUIVALENT",

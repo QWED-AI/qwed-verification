@@ -750,10 +750,7 @@ class ConsensusVerifier:
         """Parse query into expression and expected value."""
         try:
             from qwed_new.core.translator import TranslationLayer
-            translator = TranslationLayer()
-            task = translator.translate(query)
-            return task.expression, task.expected_value or 0.0
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             # Fallback: extract simple expression
             import re
             nums = re.findall(r"\d+", query)
@@ -761,6 +758,9 @@ class ConsensusVerifier:
                 exact_sum = Decimal(nums[0]) + Decimal(nums[1])
                 return f"{nums[0]} + {nums[1]}", float(exact_sum)
             return "0", 0.0
+        translator = TranslationLayer()
+        task = translator.translate(query)
+        return task.expression, task.expected_value or 0.0
     
     def _generate_verification_code(self, query: str) -> str:
         """Generate Python code for verification."""
