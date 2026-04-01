@@ -17,11 +17,10 @@ import time
 import os
 import requests
 import sys
-from typing import Dict, List, Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from sympy import sympify, N, sqrt, log, sin, cos, pi, factorial, Rational, exp
+from sympy import sympify, N
 
 # Azure Claude API config - USE ENVIRONMENT VARIABLES
 # Set AZURE_ENDPOINT and AZURE_API_KEY environment variables before running

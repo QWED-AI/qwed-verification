@@ -4,14 +4,13 @@ QWED DSL Compiler.
 Compiles validated AST from the parser into Z3 constraints or SymPy expressions.
 """
 
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
 # Z3 imports (lazy to avoid import errors if Z3 not installed)
 try:
     from z3 import (
         Int, Bool, Real, And, Or, Not, Implies, Xor,
-        ForAll, Exists, Solver, sat, unsat
     )
     Z3_AVAILABLE = True
 except ImportError:
@@ -20,7 +19,6 @@ except ImportError:
 # SymPy imports (lazy)
 try:
     import sympy
-    from sympy import symbols, Eq, Ne, Gt, Lt, Ge, Le, And as SymAnd, Or as SymOr, Not as SymNot
     SYMPY_AVAILABLE = True
 except ImportError:
     SYMPY_AVAILABLE = False

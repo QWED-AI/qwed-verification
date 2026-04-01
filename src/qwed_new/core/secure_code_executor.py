@@ -156,7 +156,7 @@ class SecureCodeExecutor:
         try:
             # Wait for completion with timeout
             # Note: docker-py wait() timeout is in seconds since v3.0.0
-            wait_result = container.wait(timeout=self.timeout)
+            container.wait(timeout=self.timeout)
             return container
         except Exception as e:
             logger.warning(f"Container timeout or error: {e}")

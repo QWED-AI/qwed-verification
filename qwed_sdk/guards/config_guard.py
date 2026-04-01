@@ -3,7 +3,7 @@ ConfigGuard: Deterministic Secrets Scanner.
 Detects plaintext secrets in configuration data.
 """
 import re
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 
 class ConfigGuard:
     """

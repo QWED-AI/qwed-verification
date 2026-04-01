@@ -3,7 +3,6 @@ Claude Opus 4.5 Provider Implementation (Azure AI Foundry).
 """
 
 import os
-from typing import Dict, Any, List
 from anthropic import AnthropicFoundry
 from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.providers.base import LLMProvider

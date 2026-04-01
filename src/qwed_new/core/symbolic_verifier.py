@@ -525,8 +525,6 @@ class SymbolicVerifier:
     
     def _calculate_max_loop_depth(self, tree: ast.AST) -> int:
         """Calculate maximum loop nesting depth."""
-        max_depth = 0
-        
         class DepthCalculator(ast.NodeVisitor):
             def __init__(self):
                 self.current_depth = 0
@@ -731,14 +729,12 @@ class SymbolicVerifier:
         # Estimate paths (simplified heuristic)
         loops = analysis.get("loops", [])
         recursions = analysis.get("recursions", [])
-        max_depth = analysis.get("max_loop_depth", 0)
         
         # Rough estimation: paths = iterations^depth for nested loops
         default_iterations = 10
         estimated_paths = 1
         
         for loop in loops:
-            depth = loop.get("depth", 1)
             if loop.get("iterable_type") == "range":
                 estimated_paths *= default_iterations
             else:

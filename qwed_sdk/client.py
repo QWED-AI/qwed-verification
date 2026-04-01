@@ -6,11 +6,10 @@ Provides synchronous and asynchronous clients for the QWED API.
 
 import httpx
 import time
-from typing import List, Dict, Any, Optional, Union
-from contextlib import contextmanager
+from typing import List, Dict, Any, Optional
 import os
 
-from qwed_sdk.models import VerificationResult, BatchResult, VerificationType
+from qwed_sdk.models import VerificationResult, BatchResult
 
 
 class QWEDClient:
