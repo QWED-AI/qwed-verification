@@ -1,3 +1,4 @@
+import ast
 import builtins
 import importlib
 import importlib.util
@@ -8,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
+from sqlalchemy.exc import ArgumentError
 
 from qwed_sdk import qwed_local as qwed_local_module
 from src.qwed_new.core.consensus_verifier import ConsensusVerifier, VerificationMode
@@ -27,6 +29,17 @@ def _load_module(module_name: str, relative_path: str):
 
 def _raise_runtime_error(*args, **kwargs):
     raise RuntimeError("boom")
+
+
+def _blocked_module_importer(blocked_modules):
+    original_import = builtins.__import__
+
+    def fake_import(name, globals_=None, locals_=None, fromlist=(), level=0):
+        if name in blocked_modules:
+            raise ImportError(f"blocked import: {name}")
+        return original_import(name, globals_, locals_, fromlist, level)
+
+    return fake_import
 
 
 def test_setup_and_verify_wait_for_server_retries_on_timeout(monkeypatch):
@@ -117,6 +130,23 @@ def test_integrations_exports_none_when_optional_imports_fail(monkeypatch):
                 sys.modules[name] = saved
 
 
+def test_qwed_local_import_fallbacks_when_optional_deps_are_missing(monkeypatch):
+    fake_import = _blocked_module_importer({
+        "colorama",
+        "openai",
+        "sympy",
+        "z3",
+    })
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    module = _load_module("qwed_local_import_fallbacks_test", "qwed_sdk/qwed_local.py")
+
+    assert module.HAS_COLOR is False
+    assert module.OpenAI is None
+    assert module.sympy is None
+    assert module.Solver is None
+
+
 def test_qwed_local_safe_eval_helpers_run_through_code_guard():
     assert qwed_local_module._safe_eval_sympy_expr("1 + 2", {}) == 3
     assert qwed_local_module._safe_eval_z3_expr("True", {}) is True
@@ -165,6 +195,39 @@ def test_qwed_local_safe_eval_sympy_rejects_keyword_unpacking():
     assert qwed_local_module._is_safe_sympy_expr("sympy.integrate(x, **kw)") is False
 
 
+def test_qwed_local_generic_ast_evaluator_rejects_unsupported_shapes():
+    kwargs_unpack = ast.Call(
+        func=ast.Name(id="abs", ctx=ast.Load()),
+        args=[ast.Constant(value=1)],
+        keywords=[ast.keyword(arg=None, value=ast.Dict(keys=[], values=[]))],
+    )
+    with pytest.raises(qwed_local_module.DisallowedExpressionError, match="Keyword unpacking"):
+        qwed_local_module._evaluate_call_node(kwargs_unpack, {"abs": abs})
+
+    unsupported_binop = ast.parse("1 << 2", mode="eval").body
+    with pytest.raises(qwed_local_module.DisallowedExpressionError, match="Unsupported operator"):
+        qwed_local_module._evaluate_binop_node(unsupported_binop, {})
+
+    unsupported_unary = ast.parse("~1", mode="eval").body
+    with pytest.raises(qwed_local_module.DisallowedExpressionError, match="Unsupported unary operator"):
+        qwed_local_module._evaluate_unary_node(unsupported_unary, {})
+
+    with pytest.raises(qwed_local_module.DisallowedExpressionError, match="Unsupported AST node"):
+        qwed_local_module._evaluate_validated_ast(ast.parse("[1, 2]", mode="eval").body, {})
+
+
+def test_qwed_local_math_answer_match_fallback_paths(monkeypatch):
+    with patch.object(qwed_local_module, "sympy", None):
+        assert qwed_local_module._coerce_sympy_literal_value(1.25) == 1.25
+        assert qwed_local_module._math_answers_match("3", 4) is False
+
+    fake_sympy = MagicMock()
+    fake_sympy.Basic = tuple
+    fake_sympy.sympify.side_effect = ValueError("bad parse")
+    with patch.object(qwed_local_module, "sympy", fake_sympy):
+        assert qwed_local_module._math_answers_match("not-a-number", object()) is False
+
+
 @pytest.mark.asyncio
 async def test_consensus_verifier_records_async_aggregation_failure():
     verifier = ConsensusVerifier(max_workers=1, enable_circuit_breaker=False)
@@ -195,6 +258,20 @@ def test_database_logging_redacts_credentials(monkeypatch):
     debug_messages = [call.args[1] for call in logger.debug.call_args_list if len(call.args) > 1]
     assert any("db.example" in message for message in debug_messages)
     assert all("supersecret" not in message for message in debug_messages)
+
+
+def test_database_logging_handles_invalid_database_url(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "not-a-valid-url")
+    logger = MagicMock()
+
+    with (
+        patch("logging.getLogger", return_value=logger),
+        patch("sqlmodel.create_engine", return_value=MagicMock()),
+        patch("sqlalchemy.engine.url.make_url", side_effect=ArgumentError("bad url")),
+    ):
+        _load_module("database_invalid_url_test", "src/qwed_new/core/database.py")
+
+    logger.debug.assert_any_call("DATABASE_URL=%s", "<invalid DATABASE_URL>")
 
 
 def test_telemetry_init_logs_when_disabled(monkeypatch):
