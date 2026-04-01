@@ -266,6 +266,7 @@ class VerificationCache:
             reset = Style.RESET_ALL
             has_color = True
         except ImportError:
+            # colorama is optional; fall back to non-colored output when unavailable.
             pass
 
         if has_color:

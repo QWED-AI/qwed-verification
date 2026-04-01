@@ -309,26 +309,29 @@ class VerificationResult:
 
 # GitHub Star Nudge (only show occasionally)
 _verification_count = 0
+_has_shown_nudge = False
 
 def _show_github_nudge():
     """Show GitHub star nudge after successful verifications."""
-    global _verification_count
+    global _verification_count, _has_shown_nudge
     
     _verification_count += 1
     
     # Show nudge after 3rd successful verification, then every 10th
     should_show = (
-        (_verification_count == 3) or
+        (_verification_count == 3 and not _has_shown_nudge) or
         (_verification_count % 10 == 0)
     )
     
     if should_show and HAS_COLOR:
+        _has_shown_nudge = True
         print(f"\n{QWED.BRAND}{'─' * 60}{QWED.RESET}")
         print(f"{QWED.BRAND}✨ Verified by QWED{QWED.RESET} {QWED.INFO}| Model Agnostic AI Verification{QWED.RESET}")
         print(f"{QWED.SUCCESS}💚 If QWED saved you time, give us a ⭐ on GitHub!{QWED.RESET}")
         print(f"{QWED.INFO}👉 https://github.com/QWED-AI/qwed-verification{QWED.RESET}")
         print(f"{QWED.BRAND}{'─' * 60}{QWED.RESET}\n")
     elif should_show:
+        _has_shown_nudge = True
         # Non-colored fallback
         print("\n" + "─" * 60)
         print("✨ Verified by QWED | Model Agnostic AI Verification")
