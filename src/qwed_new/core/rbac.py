@@ -10,10 +10,9 @@ Roles:
 
 import logging
 from functools import wraps
-from typing import List, Optional, Callable
-from fastapi import HTTPException, Request, Depends
+from typing import List, Callable
+from fastapi import HTTPException, Request
 from qwed_new.core.models import User
-from qwed_new.core.database import get_session
 
 logger = logging.getLogger(__name__)
 

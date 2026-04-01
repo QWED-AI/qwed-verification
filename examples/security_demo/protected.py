@@ -1,7 +1,6 @@
 import sys
 sys.path.insert(0, "../../") # Path to qwed_new
 
-from typing import Dict, Any
 from qwed_sdk.qwed_local import QWEDLocal # Using Local Client foundation
 from qwed_sdk.pii_detector import PIIDetector
 

@@ -16,7 +16,7 @@ import statistics
 import tracemalloc
 import argparse
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Callable
+from typing import List, Callable
 from dataclasses import dataclass, asdict
 from pathlib import Path
 import sys

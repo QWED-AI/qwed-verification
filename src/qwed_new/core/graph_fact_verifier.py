@@ -24,8 +24,8 @@ Why NOT Embeddings:
     - Our method: Subject mismatch (Modi ≠ Rahul) → NOT VERIFIED
 """
 
-from typing import Dict, List, Any, Optional, Set, Tuple
-from dataclasses import dataclass, field
+from typing import Dict, List, Any, Optional, Tuple
+from dataclasses import dataclass
 from enum import Enum
 import re
 

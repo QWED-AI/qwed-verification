@@ -13,7 +13,6 @@ from typing import Dict, Any, Tuple, Optional
 from sqlmodel import Session
 
 from qwed_new.core.agent_models import ToolCall
-from qwed_new.core.agent_registry import agent_registry
 
 class ToolApprovalSystem:
     """

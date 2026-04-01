@@ -14,11 +14,8 @@ and VLM is only used for claims that require semantic understanding.
 
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
-import base64
 import re
-import io
 import struct
-import zlib
 
 
 @dataclass

@@ -1,6 +1,4 @@
 import os
-import shutil
-import json
 
 # Configuration
 SOURCE_DIR = r"C:\Users\rahul\.gemini\antigravity\playground\vector-meteoroid\qwed_new\benchmarks\deep_suite"

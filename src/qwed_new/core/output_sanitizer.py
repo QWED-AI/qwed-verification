@@ -9,7 +9,7 @@ or used in downstream systems, preventing XSS, code injection, and other attacks
 import re
 import html
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)

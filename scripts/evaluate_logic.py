@@ -5,7 +5,6 @@ Runs complex logic puzzles against the active provider.
 
 import json
 import os
-import time
 import requests
 from typing import List, Dict
 

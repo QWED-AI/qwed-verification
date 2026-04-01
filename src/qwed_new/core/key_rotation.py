@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Tuple
 from sqlmodel import select
 
-from qwed_new.core.models import ApiKey, User
+from qwed_new.core.models import ApiKey
 from qwed_new.core.database import engine
 from sqlmodel import Session
 from qwed_new.core.alerting import alert_manager

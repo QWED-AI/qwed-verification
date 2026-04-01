@@ -11,14 +11,6 @@ from typing import List, Dict, Any, Tuple, Optional, Union
 from dataclasses import dataclass
 from enum import Enum
 
-# Import QWED custom exceptions for better error messages
-try:
-    from ..exceptions import QWEDSyntaxError, QWEDSymbolNotFoundError, QWEDError
-    USING_QWED_EXCEPTIONS = True
-except ImportError:
-    # Fallback if running standalone
-    USING_QWED_EXCEPTIONS = False
-
 
 class OperatorCategory(str, Enum):
     """Categories of allowed operators."""

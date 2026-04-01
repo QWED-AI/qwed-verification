@@ -23,7 +23,6 @@ except ImportError:
 
 # LlamaIndex Imports
 try:
-    from llama_index.core.query_engine import BaseQueryEngine
     LLAMAINDEX_AVAILABLE = True
 except ImportError:
     LLAMAINDEX_AVAILABLE = False
