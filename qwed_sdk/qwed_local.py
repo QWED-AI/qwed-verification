@@ -132,44 +132,75 @@ _UNARY_OPERATORS = {
     ast.USub: operator.neg,
 }
 
+_MISSING_LITERAL = object()
 
-def _evaluate_validated_ast(node: ast.AST, namespace: dict):
-    """Evaluate an already-validated AST using a restricted namespace."""
-    if isinstance(node, ast.Expression):
-        return _evaluate_validated_ast(node.body, namespace)
+
+def _evaluate_literal_node(node: ast.AST):
+    """Evaluate a literal AST node."""
     if isinstance(node, ast.Constant):
         return node.value
     if hasattr(ast, "Str") and isinstance(node, ast.Str):
         return node.s
     if hasattr(ast, "Num") and isinstance(node, ast.Num):
         return node.n
+    return _MISSING_LITERAL
+
+
+def _evaluate_name_node(node: ast.Name, namespace: dict):
+    """Resolve a named symbol from the restricted namespace."""
+    if node.id not in namespace:
+        raise DisallowedExpressionError(f"Unknown symbol: {node.id}")
+    return namespace[node.id]
+
+
+def _evaluate_call_node(node: ast.Call, namespace: dict):
+    """Evaluate a validated call expression."""
+    func = _evaluate_validated_ast(node.func, namespace)
+    args = [_evaluate_validated_ast(arg, namespace) for arg in node.args]
+    kwargs = {
+        keyword.arg: _evaluate_validated_ast(keyword.value, namespace)
+        for keyword in node.keywords
+    }
+    return func(*args, **kwargs)
+
+
+def _evaluate_binop_node(node: ast.BinOp, namespace: dict):
+    """Evaluate a validated binary operation."""
+    op_type = type(node.op)
+    if op_type not in _BINARY_OPERATORS:
+        raise DisallowedExpressionError(f"Unsupported operator: {op_type.__name__}")
+    return _BINARY_OPERATORS[op_type](
+        _evaluate_validated_ast(node.left, namespace),
+        _evaluate_validated_ast(node.right, namespace),
+    )
+
+
+def _evaluate_unary_node(node: ast.UnaryOp, namespace: dict):
+    """Evaluate a validated unary operation."""
+    op_type = type(node.op)
+    if op_type not in _UNARY_OPERATORS:
+        raise DisallowedExpressionError(f"Unsupported unary operator: {op_type.__name__}")
+    return _UNARY_OPERATORS[op_type](_evaluate_validated_ast(node.operand, namespace))
+
+
+def _evaluate_validated_ast(node: ast.AST, namespace: dict):
+    """Evaluate an already-validated AST using a restricted namespace."""
+    if isinstance(node, ast.Expression):
+        return _evaluate_validated_ast(node.body, namespace)
+
+    literal_value = _evaluate_literal_node(node)
+    if literal_value is not _MISSING_LITERAL:
+        return literal_value
     if isinstance(node, ast.Name):
-        if node.id not in namespace:
-            raise DisallowedExpressionError(f"Unknown symbol: {node.id}")
-        return namespace[node.id]
+        return _evaluate_name_node(node, namespace)
     if isinstance(node, ast.Attribute):
         return getattr(_evaluate_validated_ast(node.value, namespace), node.attr)
     if isinstance(node, ast.Call):
-        func = _evaluate_validated_ast(node.func, namespace)
-        args = [_evaluate_validated_ast(arg, namespace) for arg in node.args]
-        kwargs = {
-            keyword.arg: _evaluate_validated_ast(keyword.value, namespace)
-            for keyword in node.keywords
-        }
-        return func(*args, **kwargs)
+        return _evaluate_call_node(node, namespace)
     if isinstance(node, ast.BinOp):
-        op_type = type(node.op)
-        if op_type not in _BINARY_OPERATORS:
-            raise DisallowedExpressionError(f"Unsupported operator: {op_type.__name__}")
-        return _BINARY_OPERATORS[op_type](
-            _evaluate_validated_ast(node.left, namespace),
-            _evaluate_validated_ast(node.right, namespace),
-        )
+        return _evaluate_binop_node(node, namespace)
     if isinstance(node, ast.UnaryOp):
-        op_type = type(node.op)
-        if op_type not in _UNARY_OPERATORS:
-            raise DisallowedExpressionError(f"Unsupported unary operator: {op_type.__name__}")
-        return _UNARY_OPERATORS[op_type](_evaluate_validated_ast(node.operand, namespace))
+        return _evaluate_unary_node(node, namespace)
 
     raise DisallowedExpressionError(f"Unsupported AST node: {type(node).__name__}")
 
