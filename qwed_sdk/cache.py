@@ -253,21 +253,28 @@ class VerificationCache:
     def print_stats(self):
         """Print cache statistics with colors."""
         stats = self.get_stats()
-        
+
+        brand = info = success = value = reset = ""
+        has_color = False
         try:
-            from qwed_sdk.qwed_local import QWED, HAS_COLOR
-        except (ImportError, AttributeError):
-            HAS_COLOR = False
-            class QWED:
-                BRAND = INFO = SUCCESS = VALUE = RESET = ""
-        
-        if HAS_COLOR:
-            print(f"\n{QWED.BRAND}📊 Cache Statistics{QWED.RESET}")
-            print(f"{QWED.INFO}Hits:{QWED.RESET} {QWED.SUCCESS}{stats.hits}{QWED.RESET}")
-            print(f"{QWED.INFO}Misses:{QWED.RESET} {stats.misses}")
-            print(f"{QWED.INFO}Hit Rate:{QWED.RESET} {QWED.VALUE}{stats.hit_rate:.1%}{QWED.RESET}")
-            print(f"{QWED.INFO}Total Entries:{QWED.RESET} {stats.total_entries}/{self.MAX_ENTRIES}")
-            print(f"{QWED.INFO}Cache Size:{QWED.RESET} {stats.cache_size_bytes / 1024:.1f} KB\n")
+            from colorama import Fore, Style, init
+            init(autoreset=True)
+            brand = Fore.MAGENTA + Style.BRIGHT
+            info = Fore.CYAN
+            success = Fore.GREEN + Style.BRIGHT
+            value = Fore.BLUE + Style.BRIGHT
+            reset = Style.RESET_ALL
+            has_color = True
+        except ImportError:
+            pass
+
+        if has_color:
+            print(f"\n{brand}📊 Cache Statistics{reset}")
+            print(f"{info}Hits:{reset} {success}{stats.hits}{reset}")
+            print(f"{info}Misses:{reset} {stats.misses}")
+            print(f"{info}Hit Rate:{reset} {value}{stats.hit_rate:.1%}{reset}")
+            print(f"{info}Total Entries:{reset} {stats.total_entries}/{self.MAX_ENTRIES}")
+            print(f"{info}Cache Size:{reset} {stats.cache_size_bytes / 1024:.1f} KB\n")
         else:
             print("\n📊 Cache Statistics")
             print(f"Hits: {stats.hits}")

@@ -604,4 +604,4 @@ if __name__ == "__main__":
             idx = sys.argv.index("--tests")
             tests = sys.argv[idx+1].split(",")
     
-    results = run_benchmark(models, tests)
+    run_benchmark(models, tests)

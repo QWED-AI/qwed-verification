@@ -16,7 +16,9 @@ def wait_for_server():
                 print("✅ Server is online!")
                 return True
         except requests.exceptions.ConnectionError:
-            pass
+            # Server may still be starting up; retry until timeout.
+            time.sleep(1)
+            continue
         time.sleep(1)
     print("❌ Server timed out. Please ensure it is running.")
     return False

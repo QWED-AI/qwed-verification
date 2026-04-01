@@ -191,16 +191,7 @@ class GraphFactVerifier:
         
         # Build explanation
         explanation = self._build_explanation(matches, status)
-        
-        result = FactResult(
-            status=status,
-            claim=claim,
-            claim_triples=claim_triples,
-            context_triples=context_triples,
-            matches=matches,
-            explanation=explanation
-        )
-        
+
         return {
             "status": status.value,
             "is_verified": status == VerificationStatus.VERIFIED,

@@ -211,9 +211,7 @@ def run_benchmark():
         
         try:
             # Get Claude's answer
-            start = time.time()
             claude_answer = call_claude(item["query"])
-            latency = time.time() - start
             
             if claude_answer is None:
                 print(f"  ⚠️ Claude returned invalid response")

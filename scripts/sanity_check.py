@@ -18,7 +18,7 @@ try:
     # Test 2: Unit Mismatch (The Beast Feature)
     try:
         m3 = Money("10", "USD")
-        fail_case = m1 + m3
+        m1 + m3
         print("❌ FAILED: Unit Mismatch did not raise error!")
         sys.exit(1)
     except UnitMismatchError:

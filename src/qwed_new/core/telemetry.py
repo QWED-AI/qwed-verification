@@ -19,7 +19,7 @@ Usage:
 import os
 import logging
 from typing import Optional
-from functools import wraps
+from functools import lru_cache, wraps
 from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
@@ -32,19 +32,15 @@ OTEL_ENABLED = os.getenv("OTEL_ENABLED", "true").lower() == "true"
 # Lazy initialization
 _tracer = None
 _trace_provider = None
-_initialized = False
 
 
+@lru_cache(maxsize=1)
 def _init_telemetry():
     """Initialize OpenTelemetry with OTLP exporter."""
-    global _tracer, _trace_provider, _initialized
-    
-    if _initialized:
-        return
+    global _tracer, _trace_provider
     
     if not OTEL_ENABLED:
         logger.info("OpenTelemetry disabled via OTEL_ENABLED=false")
-        _initialized = True
         return
     
     try:
@@ -73,16 +69,13 @@ def _init_telemetry():
         trace.set_tracer_provider(_trace_provider)
         
         _tracer = trace.get_tracer("qwed")
-        _initialized = True
         
         logger.info(f"OpenTelemetry initialized. Exporting to: {OTLP_ENDPOINT}")
         
     except ImportError as e:
         logger.warning(f"OpenTelemetry not available: {e}")
-        _initialized = True
     except Exception as e:
         logger.warning(f"Failed to initialize OpenTelemetry: {e}")
-        _initialized = True
 
 
 def get_tracer():
@@ -138,7 +131,7 @@ def instrument_requests():
         RequestsInstrumentor().instrument()
         logger.info("Requests library instrumented with OpenTelemetry")
     except ImportError:
-        pass
+        logger.info("opentelemetry-instrumentation-requests not installed")
     except Exception as e:
         logger.warning(f"Failed to instrument requests: {e}")
 

@@ -253,6 +253,7 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
                     "status": result.status
                 })
             except Exception:
+                # Optional auto-verification should not interrupt LangChain execution.
                 pass
         
         # Detect and verify code blocks
@@ -267,6 +268,7 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
                         "vulnerabilities": len(result.result.get("vulnerabilities", []))
                     })
             except Exception:
+                # Optional auto-verification should not interrupt LangChain execution.
                 pass
         
         # Detect and verify SQL
@@ -280,6 +282,7 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
                         "verified": result.verified
                     })
             except Exception:
+                # Optional auto-verification should not interrupt LangChain execution.
                 pass
         
         self.verification_results.append(results)

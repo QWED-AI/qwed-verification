@@ -418,7 +418,8 @@ class ConsensusVerifier:
                         success=False,
                         error="Timeout"
                     ))
-        except Exception as e:
+        except Exception:
+            # Partial engine results are still usable for consensus calculation.
             pass
         
         consensus = self._calculate_consensus(results)

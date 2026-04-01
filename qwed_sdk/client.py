@@ -341,7 +341,6 @@ class QWEDClient:
         Returns:
             BatchResult with all item results
         """
-        start = time.time()
         data = self._request(
             "POST",
             "/verify/batch",

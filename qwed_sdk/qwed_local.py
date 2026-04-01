@@ -309,17 +309,16 @@ class VerificationResult:
 
 # GitHub Star Nudge (only show occasionally)
 _verification_count = 0
-_has_shown_nudge = False
 
 def _show_github_nudge():
     """Show GitHub star nudge after successful verifications."""
-    global _verification_count, _has_shown_nudge
+    global _verification_count
     
     _verification_count += 1
     
     # Show nudge after 3rd successful verification, then every 10th
     should_show = (
-        (_verification_count == 3 and not _has_shown_nudge) or 
+        (_verification_count == 3) or
         (_verification_count % 10 == 0)
     )
     
@@ -329,7 +328,6 @@ def _show_github_nudge():
         print(f"{QWED.SUCCESS}💚 If QWED saved you time, give us a ⭐ on GitHub!{QWED.RESET}")
         print(f"{QWED.INFO}👉 https://github.com/QWED-AI/qwed-verification{QWED.RESET}")
         print(f"{QWED.BRAND}{'─' * 60}{QWED.RESET}\n")
-        _has_shown_nudge = True
     elif should_show:
         # Non-colored fallback
         print("\n" + "─" * 60)
@@ -337,7 +335,6 @@ def _show_github_nudge():
         print("💚 If QWED saved you time, give us a ⭐ on GitHub!")
         print("👉 https://github.com/QWED-AI/qwed-verification")
         print("─" * 60 + "\n")
-        _has_shown_nudge = True
 
 
 class QWEDLocal:
@@ -514,7 +511,6 @@ class QWEDLocal:
         """
         # PII MASKING (Phase 19 privacy shield)
         if self.mask_pii and self._pii_detector:
-            original_prompt = prompt
             prompt, pii_report = self._pii_detector.detect_and_mask(prompt)
             
             if pii_report["pii_detected"] > 0:
