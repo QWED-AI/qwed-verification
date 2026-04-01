@@ -40,8 +40,6 @@ try:
 except ImportError:
     LLAMAINDEX_AVAILABLE = False
     # Stub classes
-    class BaseQueryEngine:
-        pass
     class BaseNodePostprocessor:
         pass
     class BaseCallbackHandler:
