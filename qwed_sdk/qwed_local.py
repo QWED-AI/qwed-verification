@@ -157,10 +157,11 @@ def _evaluate_call_node(node: ast.Call, namespace: dict):
     """Evaluate a validated call expression."""
     func = _evaluate_validated_ast(node.func, namespace)
     args = [_evaluate_validated_ast(arg, namespace) for arg in node.args]
-    kwargs = {
-        keyword.arg: _evaluate_validated_ast(keyword.value, namespace)
-        for keyword in node.keywords
-    }
+    kwargs = {}
+    for keyword in node.keywords:
+        if keyword.arg is None:
+            raise DisallowedExpressionError("Keyword unpacking is not allowed")
+        kwargs[keyword.arg] = _evaluate_validated_ast(keyword.value, namespace)
     return func(*args, **kwargs)
 
 
@@ -181,6 +182,84 @@ def _evaluate_unary_node(node: ast.UnaryOp, namespace: dict):
     if op_type not in _UNARY_OPERATORS:
         raise DisallowedExpressionError(f"Unsupported unary operator: {op_type.__name__}")
     return _UNARY_OPERATORS[op_type](_evaluate_validated_ast(node.operand, namespace))
+
+
+def _coerce_sympy_literal_value(value):
+    """Convert numeric literals to SymPy-native values when available."""
+    if sympy is None:
+        return value
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return sympy.Integer(value)
+    if isinstance(value, float):
+        return sympy.Float(str(value))
+    return value
+
+
+def _evaluate_sympy_literal_node(node: ast.AST):
+    """Evaluate a literal node for the SymPy-specific evaluator."""
+    literal_value = _evaluate_literal_node(node)
+    if literal_value is _MISSING_LITERAL:
+        return _MISSING_LITERAL
+    return _coerce_sympy_literal_value(literal_value)
+
+
+def _evaluate_sympy_call_node(node: ast.Call, namespace: dict):
+    """Evaluate a validated SymPy call expression."""
+    func = _evaluate_sympy_ast(node.func, namespace)
+    args = [_evaluate_sympy_ast(arg, namespace) for arg in node.args]
+    kwargs = {}
+    for keyword in node.keywords:
+        if keyword.arg is None:
+            raise DisallowedExpressionError("Keyword unpacking is not allowed")
+        kwargs[keyword.arg] = _evaluate_sympy_ast(keyword.value, namespace)
+    return func(*args, **kwargs)
+
+
+def _evaluate_sympy_binop_node(node: ast.BinOp, namespace: dict):
+    """Evaluate a validated SymPy binary operation."""
+    op_type = type(node.op)
+    if op_type not in _BINARY_OPERATORS:
+        raise DisallowedExpressionError(f"Unsupported operator: {op_type.__name__}")
+    return _BINARY_OPERATORS[op_type](
+        _evaluate_sympy_ast(node.left, namespace),
+        _evaluate_sympy_ast(node.right, namespace),
+    )
+
+
+def _evaluate_sympy_unary_node(node: ast.UnaryOp, namespace: dict):
+    """Evaluate a validated SymPy unary operation."""
+    op_type = type(node.op)
+    if op_type not in _UNARY_OPERATORS:
+        raise DisallowedExpressionError(f"Unsupported unary operator: {op_type.__name__}")
+    return _UNARY_OPERATORS[op_type](_evaluate_sympy_ast(node.operand, namespace))
+
+
+def _evaluate_sympy_ast(node: ast.AST, namespace: dict):
+    """Evaluate an already-validated SymPy AST using exact arithmetic."""
+    if isinstance(node, ast.Expression):
+        return _evaluate_sympy_ast(node.body, namespace)
+
+    literal_value = _evaluate_sympy_literal_node(node)
+    if literal_value is not _MISSING_LITERAL:
+        return literal_value
+    if isinstance(node, ast.Name):
+        return _evaluate_name_node(node, namespace)
+    if isinstance(node, ast.Attribute):
+        return getattr(_evaluate_sympy_ast(node.value, namespace), node.attr)
+    if isinstance(node, ast.Tuple):
+        return tuple(_evaluate_sympy_ast(element, namespace) for element in node.elts)
+    if isinstance(node, ast.List):
+        return [_evaluate_sympy_ast(element, namespace) for element in node.elts]
+    if isinstance(node, ast.Call):
+        return _evaluate_sympy_call_node(node, namespace)
+    if isinstance(node, ast.BinOp):
+        return _evaluate_sympy_binop_node(node, namespace)
+    if isinstance(node, ast.UnaryOp):
+        return _evaluate_sympy_unary_node(node, namespace)
+
+    raise DisallowedExpressionError(f"Unsupported AST node: {type(node).__name__}")
 
 
 def _evaluate_validated_ast(node: ast.AST, namespace: dict):
@@ -230,7 +309,7 @@ _ALLOWED_SYMPY_FUNCS = {
 _SAFE_SYMPY_NODE_TYPES = (
     ast.Name, ast.Constant, ast.Expression,
     ast.Load, ast.BinOp, ast.UnaryOp,
-    ast.keyword, ast.Pow,
+    ast.keyword, ast.Tuple, ast.List, ast.Pow,
     ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.USub,
 )
 
@@ -247,6 +326,8 @@ _SYMPY_FUNCS_REJECTING_STRING_ARGS = _ALLOWED_SYMPY_FUNCS - _SYMPY_SAFE_STRING_F
 
 def _is_safe_sympy_call(node: ast.Call) -> bool:
     """Validate a single Call node against sympy allow-list."""
+    if any(keyword.arg is None for keyword in node.keywords):
+        return False
     if isinstance(node.func, ast.Attribute):
         if getattr(node.func.value, 'id', '') != 'sympy':
             return False
@@ -303,11 +384,7 @@ def _is_safe_sympy_expr(expr_str: str) -> bool:
 
 
 def _safe_eval_sympy_expr(expr_str: str, local_vars: dict):
-    """Safely evaluate a SymPy expression using AST compilation.
-
-    Mirrors _safe_eval_z3_expr for the SymPy/math verification path.
-    Parses once, validates AST, compiles, executes in restricted namespace.
-    """
+    """Safely evaluate a SymPy expression using a validated AST walker."""
     stripped = expr_str.strip()
 
     try:
@@ -323,7 +400,7 @@ def _safe_eval_sympy_expr(expr_str: str, local_vars: dict):
     restricted_ns = {k: v for k, v in local_vars.items() if k != "__builtins__"}
     restricted_ns.update(_SAFE_SYMPY_BUILTINS)
 
-    return _evaluate_validated_ast(tree, restricted_ns)
+    return _evaluate_sympy_ast(tree, restricted_ns)
 
 
 _ALLOWED_Z3_NAMES = {'Bool', 'And', 'Or', 'Not', 'Implies'}

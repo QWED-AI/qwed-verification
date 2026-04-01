@@ -143,6 +143,21 @@ def test_qwed_local_safe_eval_helpers_work_without_qwed_new(monkeypatch):
     assert qwed_local_module._safe_eval_z3_expr("True", {}) is True
 
 
+def test_qwed_local_safe_eval_sympy_supports_exact_division_and_tuple_calls():
+    x = qwed_local_module.sympy.Symbol("x")
+    namespace = {"sympy": qwed_local_module.sympy, "x": x}
+
+    exact_value = qwed_local_module._safe_eval_sympy_expr("1/10 + 2/10", namespace)
+    integral_value = qwed_local_module._safe_eval_sympy_expr("sympy.integrate(x, (x, 0, 1))", namespace)
+
+    assert exact_value == qwed_local_module.sympy.Rational(3, 10)
+    assert integral_value == qwed_local_module.sympy.Rational(1, 2)
+
+
+def test_qwed_local_safe_eval_sympy_rejects_keyword_unpacking():
+    assert qwed_local_module._is_safe_sympy_expr("sympy.integrate(x, **kw)") is False
+
+
 @pytest.mark.asyncio
 async def test_consensus_verifier_records_async_aggregation_failure():
     verifier = ConsensusVerifier(max_workers=1, enable_circuit_breaker=False)
