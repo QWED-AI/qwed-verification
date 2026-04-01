@@ -12,6 +12,8 @@ Enhanced Features:
 6. Confidence scoring
 """
 
+import ast
+import operator
 import re
 import hashlib
 from typing import Dict, Any, List, Optional, Callable
@@ -505,13 +507,41 @@ Format as a numbered list."""
         try:
             # Only evaluate if they look safe
             if re.match(r'^[\d\+\-\*/\.\(\)]+$', f1) and re.match(r'^[\d\+\-\*/\.\(\)]+$', f2):
-                v1 = eval(f1)
-                v2 = eval(f2)
+                v1 = self._safe_arithmetic_eval(f1)
+                v2 = self._safe_arithmetic_eval(f2)
                 return abs(v1 - v2) < 0.0001
         except Exception:
+            # Best-effort numeric fallback; treat evaluation failures as non-equivalent.
             pass
         
         return False
+
+    def _safe_arithmetic_eval(self, expr: str) -> float:
+        """Safely evaluate a simple arithmetic expression for formula fallback checks."""
+        allowed_binops = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+        }
+        allowed_unary = {
+            ast.UAdd: operator.pos,
+            ast.USub: operator.neg,
+        }
+
+        def _eval(node):
+            if isinstance(node, ast.Expression):
+                return _eval(node.body)
+            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                return float(node.value)
+            if isinstance(node, ast.BinOp) and type(node.op) in allowed_binops:
+                return allowed_binops[type(node.op)](_eval(node.left), _eval(node.right))
+            if isinstance(node, ast.UnaryOp) and type(node.op) in allowed_unary:
+                return allowed_unary[type(node.op)](_eval(node.operand))
+            raise ValueError("Unsafe arithmetic expression")
+
+        tree = ast.parse(expr, mode="eval")
+        return float(_eval(tree))
     
     # =========================================================================
     # Confidence Calculation

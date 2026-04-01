@@ -620,7 +620,16 @@ class SymbolicVerifier:
             }
         
         # Transform code to add bounds
-        bounded_code = self._add_bounds_to_code(code, loop_bound, recursion_depth)
+        try:
+            bounded_code = self._add_bounds_to_code(code, loop_bound, recursion_depth)
+        except ValueError as e:
+            return {
+                "is_verified": False,
+                "status": "bounds_transform_error",
+                "message": str(e),
+                "bounded": False,
+                "issues": [{"type": "error", "description": str(e)}],
+            }
         
         # Run verification on bounded code
         result = self.verify_code(bounded_code)
@@ -694,8 +703,8 @@ class SymbolicVerifier:
         
         try:
             return ast.unparse(new_tree)
-        except Exception:
-            return code  # Return original if transform fails
+        except Exception as e:
+            raise ValueError("Failed to apply bounded-model transform") from e
     
     def get_verification_budget(
         self, 

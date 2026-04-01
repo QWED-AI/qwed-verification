@@ -12,6 +12,7 @@ Enhanced Features:
 from typing import List, Dict, Any, Optional, Tuple, Callable
 from dataclasses import dataclass, field
 from enum import Enum
+from decimal import Decimal
 import time
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -757,7 +758,8 @@ class ConsensusVerifier:
             import re
             nums = re.findall(r"\d+", query)
             if len(nums) >= 2:
-                return f"{nums[0]} + {nums[1]}", float(nums[0]) + float(nums[1])
+                exact_sum = Decimal(nums[0]) + Decimal(nums[1])
+                return f"{nums[0]} + {nums[1]}", float(exact_sum)
             return "0", 0.0
     
     def _generate_verification_code(self, query: str) -> str:
@@ -767,8 +769,8 @@ class ConsensusVerifier:
             translator = TranslationLayer()
             task = translator.translate(query)
             return f"print({task.expression})"
-        except Exception:
-            return "print('Unable to generate code')"
+        except Exception as e:
+            raise ValueError(f"Verification code generation failed: {e}") from e
     
     def _model_as_logic(self, query: str) -> Tuple[Dict, List]:
         """Model query as logic constraints."""
@@ -776,8 +778,8 @@ class ConsensusVerifier:
             from qwed_new.core.translator import TranslationLayer
             translator = TranslationLayer()
             return translator.translate_logic(query)
-        except Exception:
-            return {}, []
+        except Exception as e:
+            raise ValueError(f"Logic translation failed: {e}") from e
     
     # =========================================================================
     # Health Monitoring

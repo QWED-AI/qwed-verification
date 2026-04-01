@@ -171,6 +171,7 @@ class VerificationEngine:
                     if abs(left_val - right_val) < 1e-10:
                         matches += 1
                 except Exception:
+                    # Some sample points may be outside the domain; skip those values.
                     pass
             
             if matches == len(test_values):
