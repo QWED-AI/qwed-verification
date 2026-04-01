@@ -1,9 +1,8 @@
 import jwt
 import time
-import json
 import hashlib
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 class AttestationGuard:
     """

@@ -508,7 +508,7 @@ Format as a numbered list."""
                 v1 = eval(f1)
                 v2 = eval(f2)
                 return abs(v1 - v2) < 0.0001
-        except:
+        except Exception:
             pass
         
         return False

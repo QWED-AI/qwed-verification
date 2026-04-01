@@ -694,7 +694,7 @@ class SymbolicVerifier:
         
         try:
             return ast.unparse(new_tree)
-        except:
+        except Exception:
             return code  # Return original if transform fails
     
     def get_verification_budget(

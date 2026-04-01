@@ -10,7 +10,6 @@ Supports:
 import os
 import sys
 import json
-import glob
 from pathlib import Path
 
 try:

@@ -12,5 +12,5 @@ try:
     for name, obj in inspect.getmembers(resources):
         if "Azure" in name or "Foundry" in name:
             print(f"Found in resources: {name}")
-except:
+except Exception:
     pass

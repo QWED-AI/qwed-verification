@@ -6,7 +6,7 @@ fails over to the secondary provider if the primary one fails.
 """
 
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 from qwed_new.core.schemas import MathVerificationTask, LogicVerificationTask
 from qwed_new.providers.base import LLMProvider
 from qwed_new.providers.azure_openai import AzureOpenAIProvider

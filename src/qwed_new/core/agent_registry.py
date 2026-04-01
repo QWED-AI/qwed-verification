@@ -11,10 +11,10 @@ This module handles:
 import secrets
 from typing import List, Optional, Tuple
 from sqlmodel import Session, select
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from qwed_new.core.agent_models import (
-    Agent, AgentPermission, AgentActivity, ToolCall,
+    Agent, AgentPermission, AgentActivity,
     AgentType, AgentStatus
 )
 

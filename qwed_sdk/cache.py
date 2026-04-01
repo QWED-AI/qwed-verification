@@ -257,7 +257,7 @@ class VerificationCache:
         
         try:
             from qwed_sdk.qwed_local import QWED, HAS_COLOR
-        except:
+        except Exception:
             HAS_COLOR = False
             class QWED:
                 BRAND = INFO = SUCCESS = VALUE = RESET = ""

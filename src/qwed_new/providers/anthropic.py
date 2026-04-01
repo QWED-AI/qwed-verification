@@ -3,8 +3,7 @@ Anthropic Provider Implementation.
 """
 
 import os
-import json
-from typing import Dict, Any, List
+from typing import Dict, Any
 from anthropic import AnthropicFoundry
 from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.providers.base import LLMProvider

@@ -170,7 +170,7 @@ class VerificationEngine:
                     right_val = float(right.subs(x, val).evalf())
                     if abs(left_val - right_val) < 1e-10:
                         matches += 1
-                except:
+                except Exception:
                     pass
             
             if matches == len(test_values):

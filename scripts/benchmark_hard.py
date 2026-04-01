@@ -138,7 +138,7 @@ def verify_answer(claude_answer: str, expected, expression: str) -> tuple:
             return expected, is_correct
         
         return expected, False
-    except:
+    except Exception:
         return expected, False
 
 def run_hard_benchmark():

@@ -752,7 +752,7 @@ class ConsensusVerifier:
             translator = TranslationLayer()
             task = translator.translate(query)
             return task.expression, task.expected_value or 0.0
-        except:
+        except Exception:
             # Fallback: extract simple expression
             import re
             nums = re.findall(r"\d+", query)
@@ -767,7 +767,7 @@ class ConsensusVerifier:
             translator = TranslationLayer()
             task = translator.translate(query)
             return f"print({task.expression})"
-        except:
+        except Exception:
             return "print('Unable to generate code')"
     
     def _model_as_logic(self, query: str) -> Tuple[Dict, List]:
@@ -776,7 +776,7 @@ class ConsensusVerifier:
             from qwed_new.core.translator import TranslationLayer
             translator = TranslationLayer()
             return translator.translate_logic(query)
-        except:
+        except Exception:
             return {}, []
     
     # =========================================================================
