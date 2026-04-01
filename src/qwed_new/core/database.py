@@ -1,5 +1,6 @@
 import logging
 import os
+from pathlib import Path
 
 from sqlalchemy.engine.url import make_url
 from sqlmodel import SQLModel, create_engine, Session
@@ -12,14 +13,16 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./qwed.db")
 # check_same_thread=False is needed for SQLite with FastAPI
 connect_args = {"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
 
+parsed_db_url = None
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
 try:
-    safe_db_url = make_url(DATABASE_URL).render_as_string(hide_password=True)
+    parsed_db_url = make_url(DATABASE_URL)
+    safe_db_url = parsed_db_url.render_as_string(hide_password=True)
 except Exception:
     safe_db_url = "<invalid DATABASE_URL>"
 logger.debug("DATABASE_URL=%s", safe_db_url)
-if "sqlite" in DATABASE_URL:
-    logger.debug("SQLite database file=%s", os.path.basename("qwed.db"))
+if parsed_db_url is not None and parsed_db_url.drivername.startswith("sqlite"):
+    logger.debug("SQLite database file=%s", Path(parsed_db_url.database or "").name)
 
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)

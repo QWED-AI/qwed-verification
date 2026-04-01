@@ -1,7 +1,6 @@
 import builtins
 import importlib
 import importlib.util
-import os
 import runpy
 import sys
 from pathlib import Path
@@ -24,6 +23,10 @@ def _load_module(module_name: str, relative_path: str):
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def _raise_runtime_error(*args, **kwargs):
+    raise RuntimeError("boom")
 
 
 def test_setup_and_verify_wait_for_server_retries_on_timeout(monkeypatch):
@@ -57,10 +60,10 @@ def test_cache_print_stats_falls_back_without_colorama(tmp_path, monkeypatch):
 
     original_import = builtins.__import__
 
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+    def fake_import(name, globals_=None, locals_=None, fromlist=(), level=0):
         if name == "colorama":
             raise ImportError("colorama unavailable in test")
-        return original_import(name, globals, locals, fromlist, level)
+        return original_import(name, globals_, locals_, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
@@ -91,11 +94,11 @@ def test_integrations_exports_none_when_optional_imports_fail(monkeypatch):
         "qwed_sdk.integrations.llamaindex",
     }
 
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-        package = globals.get("__package__") if globals else ""
+    def fake_import(name, globals_=None, locals_=None, fromlist=(), level=0):
+        package = globals_.get("__package__") if globals_ else ""
         if name in blocked or (level == 1 and package == "qwed_sdk.integrations" and name in blocked):
             raise ImportError(f"blocked optional import: {name}")
-        return original_import(name, globals, locals, fromlist, level)
+        return original_import(name, globals_, locals_, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
@@ -131,7 +134,7 @@ async def test_consensus_verifier_records_async_aggregation_failure():
     verifier = ConsensusVerifier(max_workers=1, enable_circuit_breaker=False)
     verifier._select_engines = lambda query, mode: [("Math", lambda q: 42)]
     verifier._is_engine_available = lambda engine_name: True
-    verifier._record_engine_result = lambda engine_name, result: (_ for _ in ()).throw(RuntimeError("boom"))
+    verifier._record_engine_result = _raise_runtime_error
     verifier._calculate_consensus = lambda results: {
         "answer": None,
         "confidence": 0.0,
@@ -150,7 +153,7 @@ def test_database_logging_redacts_credentials(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:supersecret@db.example/qwed")
     logger = MagicMock()
 
-    with patch("logging.getLogger", return_value=logger):
+    with patch("logging.getLogger", return_value=logger), patch("sqlmodel.create_engine", return_value=MagicMock()):
         _load_module("database_redaction_test", "src/qwed_new/core/database.py")
 
     debug_messages = [call.args[1] for call in logger.debug.call_args_list if len(call.args) > 1]
@@ -180,10 +183,10 @@ def test_telemetry_requests_instrumentation_logs_missing_dependency(monkeypatch)
 
     original_import = builtins.__import__
 
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+    def fake_import(name, globals_=None, locals_=None, fromlist=(), level=0):
         if name == "opentelemetry.instrumentation.requests":
             raise ImportError("requests instrumentation unavailable")
-        return original_import(name, globals, locals, fromlist, level)
+        return original_import(name, globals_, locals_, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
     module.instrument_requests()

@@ -225,6 +225,7 @@ def _safe_eval_sympy_expr(expr_str: str, local_vars: dict):
         raise InvalidExpressionSyntaxError(str(exc)) from exc
     if not _is_safe_sympy_ast(tree):
         raise DisallowedExpressionError
+    # Layered defense: AST allow-list first, then CodeGuard, then restricted builtins.
     _verify_expr_with_code_guard(stripped)
 
     code = compile(tree, '<sympy_expr>', 'eval')
@@ -233,7 +234,7 @@ def _safe_eval_sympy_expr(expr_str: str, local_vars: dict):
     restricted_ns = {k: v for k, v in local_vars.items() if k != "__builtins__"}
     restricted_ns["__builtins__"] = _SAFE_SYMPY_BUILTINS
 
-    return eval(code, restricted_ns)  # noqa: S307  # nosec - AST-validated
+    return eval(code, restricted_ns)  # noqa: S307  # nosec - AST-validated with CodeGuard + restricted namespace
 
 
 _ALLOWED_Z3_NAMES = {'Bool', 'And', 'Or', 'Not', 'Implies'}
@@ -293,6 +294,7 @@ def _safe_eval_z3_expr(expr_str: str, z3_namespace: dict):
         raise InvalidExpressionSyntaxError(str(exc)) from exc
     if not _is_safe_z3_ast(tree):
         raise DisallowedExpressionError
+    # Layered defense: AST allow-list first, then CodeGuard, then restricted builtins.
     _verify_expr_with_code_guard(stripped)
     
     # Compile the already-validated AST (no re-parse)
@@ -302,7 +304,7 @@ def _safe_eval_z3_expr(expr_str: str, z3_namespace: dict):
     restricted_ns = {k: v for k, v in z3_namespace.items() if k != "__builtins__"}
     restricted_ns["__builtins__"] = {}
     
-    return eval(code, restricted_ns)  # noqa: S307  # nosec - AST-validated
+    return eval(code, restricted_ns)  # noqa: S307  # nosec - AST-validated with CodeGuard + restricted namespace
 
 
 @dataclass
@@ -321,29 +323,26 @@ class VerificationResult:
 
 # GitHub Star Nudge (only show occasionally)
 _verification_count = 0
-_has_shown_nudge = False
 
 def _show_github_nudge():
     """Show GitHub star nudge after successful verifications."""
-    global _verification_count, _has_shown_nudge
+    global _verification_count
     
     _verification_count += 1
     
     # Show nudge after 3rd successful verification, then every 10th
     should_show = (
-        (_verification_count == 3 and not _has_shown_nudge) or
+        (_verification_count == 3) or
         (_verification_count % 10 == 0)
     )
     
     if should_show and HAS_COLOR:
-        _has_shown_nudge = True
         print(f"\n{QWED.BRAND}{'─' * 60}{QWED.RESET}")
         print(f"{QWED.BRAND}✨ Verified by QWED{QWED.RESET} {QWED.INFO}| Model Agnostic AI Verification{QWED.RESET}")
         print(f"{QWED.SUCCESS}💚 If QWED saved you time, give us a ⭐ on GitHub!{QWED.RESET}")
         print(f"{QWED.INFO}👉 https://github.com/QWED-AI/qwed-verification{QWED.RESET}")
         print(f"{QWED.BRAND}{'─' * 60}{QWED.RESET}\n")
     elif should_show:
-        _has_shown_nudge = True
         # Non-colored fallback
         print("\n" + "─" * 60)
         print("✨ Verified by QWED | Model Agnostic AI Verification")
