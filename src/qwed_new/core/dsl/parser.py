@@ -7,13 +7,14 @@ S-expression logic format. It replaces unsafe eval() with structured parsing.
 Format: (AND (GT x 5) (LT y 10))
 """
 
+import importlib
 from typing import List, Dict, Any, Tuple, Optional, Union
 from dataclasses import dataclass
 from enum import Enum
 
 # Import QWED custom exceptions for better error messages
 try:
-    from ..exceptions import QWEDSyntaxError, QWEDSymbolNotFoundError, QWEDError
+    importlib.import_module("..exceptions", __package__)
     USING_QWED_EXCEPTIONS = True
 except ImportError:
     # Fallback if running standalone

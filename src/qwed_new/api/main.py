@@ -18,7 +18,7 @@ INTERNAL_PROCESSING_ERROR = "Internal processing error"
 from qwed_new.core.control_plane import ControlPlane
 from qwed_new.core.tenant_context import get_current_tenant, TenantContext
 from qwed_new.core.database import create_db_and_tables, get_session
-from qwed_new.core.models import VerificationLog, User, Organization, ApiKey
+from qwed_new.core.models import VerificationLog, ApiKey
 from qwed_new.core.rate_limiter import check_rate_limit
 
 # Import auth router
@@ -1215,7 +1215,7 @@ async def verify_with_consensus(
 from qwed_new.core.compliance_exporter import ComplianceExporter
 from qwed_new.core.threat_detector import threat_detector
 from qwed_new.core.key_rotation import key_manager
-from qwed_new.core.rbac import require_role, RBACMiddleware
+from qwed_new.core.rbac import require_role
 
 compliance_exporter = ComplianceExporter()
 
@@ -1301,7 +1301,7 @@ async def startup_security_tasks():
 # BATCH VERIFICATION ENDPOINTS (Phase 4)
 # ============================================================
 
-from qwed_new.core.batch import batch_service, VerificationType
+from qwed_new.core.batch import batch_service
 from typing import List
 
 class BatchVerifyRequest(BaseModel):

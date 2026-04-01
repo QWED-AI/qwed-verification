@@ -7,7 +7,7 @@ Python's Decimal for exact arithmetic (no floating point errors).
 QWED uses this for invoice verification where 0.1 + 0.2 MUST equal 0.3.
 """
 
-from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Union
 
 

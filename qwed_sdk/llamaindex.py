@@ -16,7 +16,7 @@ Usage:
     )
 """
 
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 import re
 
@@ -32,10 +32,8 @@ except ImportError:
 # ============================================================================
 
 try:
-    from llama_index.core.query_engine import BaseQueryEngine
-    from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
+    from llama_index.core.schema import NodeWithScore, QueryBundle
     from llama_index.core.postprocessor.types import BaseNodePostprocessor
-    from llama_index.core.callbacks import CallbackManager
     from llama_index.core.callbacks.base import BaseCallbackHandler
     from llama_index.core.callbacks.schema import CBEventType, EventPayload
     LLAMAINDEX_AVAILABLE = True

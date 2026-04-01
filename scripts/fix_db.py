@@ -1,5 +1,4 @@
 import sqlite3
-import os
 
 # Connect to the database
 db_path = "qwed_new/src/qwed_v2.db"

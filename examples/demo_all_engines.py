@@ -12,7 +12,6 @@ from qwed_new.core.verifier import VerificationEngine
 from qwed_new.core.logic_verifier import LogicVerifier
 from qwed_new.core.code_verifier import CodeSecurityVerifier
 from qwed_new.core.sql_verifier import SQLVerifier
-from qwed_new.core.stats_verifier import StatsVerifier
 
 
 def demo_math_engine():

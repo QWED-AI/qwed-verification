@@ -30,13 +30,12 @@ Example:
 """
 
 from typing import Optional, Dict, Any, List
-import json
 import os
 from dataclasses import dataclass
 
 # QWED Branding Colors
 try:
-    from colorama import Fore, Style, Back, init
+    from colorama import Fore, Style, init
     init(autoreset=True)
     
     # QWED Brand Colors
@@ -78,12 +77,11 @@ except ImportError:
 # Verifiers (bundled with SDK)
 try:
     import sympy
-    from sympy.parsing.sympy_parser import parse_expr
 except ImportError:
     sympy = None
 
 try:
-    from z3 import Solver, sat, Bool, Int, Real
+    from z3 import Solver
 except ImportError:
     Solver = None
 

@@ -18,7 +18,7 @@ Enhanced Features:
 
 from z3 import *
 from typing import Dict, List, Optional, Any, Union, Tuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import re
 
 

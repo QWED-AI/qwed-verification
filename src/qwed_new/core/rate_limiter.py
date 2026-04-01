@@ -7,10 +7,9 @@ Implements:
 - Returns 429 Too Many Requests when exceeded
 """
 
-from datetime import datetime, timedelta
 from typing import Dict, Optional
 from collections import defaultdict
-from fastapi import HTTPException, Request
+from fastapi import HTTPException
 import time
 import os
 

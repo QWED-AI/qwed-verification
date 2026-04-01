@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from sqlmodel import Session, select
 
-from qwed_new.core.models import SecurityEvent, Organization
+from qwed_new.core.models import SecurityEvent
 from qwed_new.core.database import engine
 
 logger = logging.getLogger(__name__)

@@ -1,8 +1,6 @@
 from fastapi import HTTPException, Security, Depends
 from fastapi.security import APIKeyHeader
 from sqlmodel import Session, select
-from typing import Optional
-import hashlib
 
 from qwed_new.core.database import get_session
 from qwed_new.core.models import ApiKey

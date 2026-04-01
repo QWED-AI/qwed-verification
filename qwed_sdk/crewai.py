@@ -17,7 +17,6 @@ Usage:
 
 from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass, field
-import re
 
 # Import QWED client
 try:
@@ -31,15 +30,13 @@ except ImportError:
 # ============================================================================
 
 try:
-    from crewai import Agent, Task, Crew
+    from crewai import Agent, Crew
     from crewai.tools import BaseTool
     CREWAI_AVAILABLE = True
 except ImportError:
     CREWAI_AVAILABLE = False
     # Stub classes
     class Agent:
-        pass
-    class Task:
         pass
     class Crew:
         pass

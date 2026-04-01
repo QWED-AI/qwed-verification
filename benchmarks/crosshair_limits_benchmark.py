@@ -11,8 +11,7 @@ It shows exactly where CrossHair times out or fails due to:
 Purpose: Transparency about tool limitations (Reddit feedback #4)
 """
 
-from typing import List, Dict, Any
-import time
+from typing import List, Dict
 
 
 # =========================================================================
