@@ -20,8 +20,6 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from sympy import sympify, N
-
 # Azure Claude API config - USE ENVIRONMENT VARIABLES
 AZURE_ENDPOINT = os.getenv(
     "AZURE_ENDPOINT", 

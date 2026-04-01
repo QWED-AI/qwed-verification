@@ -21,8 +21,6 @@ try:
 except ImportError:
     from ..client import QWEDClient
 
-LLAMAINDEX_AVAILABLE = True
-
 @dataclass
 class VerifiedResponse:
     """Response with verification metadata."""
