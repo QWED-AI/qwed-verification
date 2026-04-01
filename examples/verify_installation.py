@@ -46,7 +46,7 @@ def test_math_engine():
 
 def test_logic_engine():
     from qwed_new.core.logic_verifier import LogicVerifier
-    verifier = LogicVerifier()
+    LogicVerifier()
     # Basic test - just ensure it initializes
     return True
 
@@ -54,13 +54,13 @@ def test_logic_engine():
 def test_code_engine():
     from qwed_new.core.code_verifier import CodeSecurityVerifier
     verifier = CodeSecurityVerifier()
-    result = verifier.analyze_code("x = 1")
+    verifier.analyze_code("x = 1")
     return True
 
 
 def test_sql_engine():
     from qwed_new.core.sql_verifier import SQLVerifier
-    verifier = SQLVerifier()
+    SQLVerifier()
     # Basic test
     return True
 

@@ -528,7 +528,6 @@ class TaintAnalyzer:
         if source_var == sink_var:
             return [source_var]
         
-        path = [source_var]
         visited = {source_var}
         
         # BFS to find path

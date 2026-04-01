@@ -17,12 +17,10 @@ import time
 import os
 import requests
 import sys
-from typing import Dict, List, Any
-from decimal import Decimal, ROUND_HALF_UP
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from sympy import sympify, N, sqrt, log, exp, Rational
+from sympy import sympify, N
 
 # Azure Claude API config - USE ENVIRONMENT VARIABLES
 AZURE_ENDPOINT = os.getenv(

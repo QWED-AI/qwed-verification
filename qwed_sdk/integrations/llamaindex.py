@@ -21,14 +21,6 @@ try:
 except ImportError:
     from ..client import QWEDClient
 
-# LlamaIndex Imports
-try:
-    LLAMAINDEX_AVAILABLE = True
-except ImportError:
-    LLAMAINDEX_AVAILABLE = False
-    class BaseQueryEngine:
-        pass
-
 @dataclass
 class VerifiedResponse:
     """Response with verification metadata."""

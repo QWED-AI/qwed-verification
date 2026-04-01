@@ -16,7 +16,7 @@ import time
 import os
 import requests
 import sys
-from typing import Dict, List, Any
+from typing import Dict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 

@@ -12,16 +12,16 @@ Uses QWED verification engines:
 - Stats: Statistical formulas
 """
 
+import ast
 import json
 import time
 import os
 import requests
 import sys
-from typing import Dict, List, Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from sympy import sympify, N, sqrt, log, sin, cos, pi, factorial, Rational, exp
+from sympy import sympify, N
 
 # Azure Claude API config - USE ENVIRONMENT VARIABLES
 # Set AZURE_ENDPOINT and AZURE_API_KEY environment variables before running
@@ -142,7 +142,7 @@ def verify_with_qwed(expression: str, expected):
     try:
         if isinstance(expected, str):
             # Logic - just evaluate
-            calculated = str(eval(expression)).lower()
+            calculated = str(_safe_bool_eval(expression)).lower()
             return calculated, calculated == expected
         else:
             # Math/Stats
@@ -151,6 +151,28 @@ def verify_with_qwed(expression: str, expected):
             return calculated, is_correct
     except Exception as e:
         return None, False
+
+
+def _safe_bool_eval(expression: str) -> bool:
+    """Safely evaluate simple boolean expressions used in the benchmark dataset."""
+    tree = ast.parse(expression, mode="eval")
+
+    def _eval(node):
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, bool):
+            return node.value
+        if isinstance(node, ast.BoolOp):
+            values = [_eval(value) for value in node.values]
+            if isinstance(node.op, ast.And):
+                return all(values)
+            if isinstance(node.op, ast.Or):
+                return any(values)
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            return not _eval(node.operand)
+        raise ValueError(f"Unsupported boolean expression: {expression}")
+
+    return _eval(tree)
 
 def run_adversarial_benchmark():
     print("=" * 70)

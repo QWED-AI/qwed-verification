@@ -12,13 +12,11 @@ import json
 import time
 import os
 import requests
-from typing import Dict, List, Any
+from typing import Dict
 import sys
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
-from src.qwed_new.core.verifier import VerificationEngine
 
 # Azure Claude API config - USE ENVIRONMENT VARIABLES
 AZURE_ENDPOINT = os.getenv(
