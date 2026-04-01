@@ -15,9 +15,13 @@ from enum import Enum
 from decimal import Decimal
 import time
 import asyncio
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter
 import threading
+
+
+logger = logging.getLogger(__name__)
 
 
 class VerificationMode(str, Enum):
@@ -418,9 +422,18 @@ class ConsensusVerifier:
                         success=False,
                         error="Timeout"
                     ))
-        except Exception:
+        except Exception as e:
             # Partial engine results are still usable for consensus calculation.
-            pass
+            logger.exception("Unexpected async aggregation failure")
+            results.append(EngineResult(
+                engine_name="consensus_orchestrator",
+                method="async_aggregation",
+                result=None,
+                confidence=0.0,
+                latency_ms=(time.time() - start_time) * 1000,
+                success=False,
+                error=str(e)
+            ))
         
         consensus = self._calculate_consensus(results)
         total_latency = (time.time() - start_time) * 1000

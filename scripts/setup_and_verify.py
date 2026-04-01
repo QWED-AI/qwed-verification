@@ -11,11 +11,11 @@ def wait_for_server():
     print("⏳ Waiting for server to be ready...")
     for _ in range(30):
         try:
-            resp = requests.get(f"{BASE_URL}/health")
+            resp = requests.get(f"{BASE_URL}/health", timeout=2)
             if resp.status_code == 200:
                 print("✅ Server is online!")
                 return True
-        except requests.exceptions.ConnectionError:
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
             # Server may still be starting up; retry until timeout.
             time.sleep(1)
             continue

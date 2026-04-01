@@ -266,8 +266,8 @@ class VerificationCache:
             reset = Style.RESET_ALL
             has_color = True
         except ImportError:
-            # colorama is optional; fall back to non-colored output when unavailable.
-            pass
+            # colorama is optional; keep plain-text output fallback.
+            has_color = False
 
         if has_color:
             print(f"\n{brand}📊 Cache Statistics{reset}")

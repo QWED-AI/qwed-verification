@@ -162,7 +162,7 @@ class SecureCodeExecutor:
             logger.warning(f"Container timeout or error: {e}")
             try:
                 container.kill()
-            except Exception:
+            except docker.errors.APIError:
                 logger.debug("Failed to kill container after timeout", exc_info=True)
             raise ExecutionError(f"Execution timed out after {self.timeout}s")
     

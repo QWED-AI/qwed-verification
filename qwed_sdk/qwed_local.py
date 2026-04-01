@@ -103,6 +103,16 @@ class InvalidExpressionSyntaxError(UnsafeExpressionError):
 class DisallowedExpressionError(UnsafeExpressionError):
     """Raised when an expression contains disallowed AST nodes."""
 
+
+def _verify_expr_with_code_guard(expr_str: str) -> None:
+    """Run CodeGuard on an expression before evaluating a validated AST."""
+    from qwed_new.guards.code_guard import CodeGuard
+
+    guard = CodeGuard()
+    result = guard.verify_safety(expr_str, language="python")
+    if not result.get("verified"):
+        raise ValueError(f"Code blocked: {result.get('violations', [])}")
+
 def _has_string_arg(node: ast.Call) -> bool:
     """Check if a Call node has any string literal arguments."""
     for arg in node.args:
@@ -215,6 +225,7 @@ def _safe_eval_sympy_expr(expr_str: str, local_vars: dict):
         raise InvalidExpressionSyntaxError(str(exc)) from exc
     if not _is_safe_sympy_ast(tree):
         raise DisallowedExpressionError
+    _verify_expr_with_code_guard(stripped)
 
     code = compile(tree, '<sympy_expr>', 'eval')
 
@@ -282,6 +293,7 @@ def _safe_eval_z3_expr(expr_str: str, z3_namespace: dict):
         raise InvalidExpressionSyntaxError(str(exc)) from exc
     if not _is_safe_z3_ast(tree):
         raise DisallowedExpressionError
+    _verify_expr_with_code_guard(stripped)
     
     # Compile the already-validated AST (no re-parse)
     code = compile(tree, '<z3_expr>', 'eval')
