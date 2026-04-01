@@ -19,7 +19,7 @@ Usage:
     markdown = tracker.export_markdown()
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 from enum import Enum

@@ -19,7 +19,7 @@ from sympy import (
     simplify, expand
 )
 from sympy.parsing.sympy_parser import parse_expr, standard_transformations, implicit_multiplication_application
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 from decimal import Decimal, ROUND_HALF_UP
 from dataclasses import dataclass
 import math
@@ -68,7 +68,7 @@ class VerificationEngine:
     def verify_math(
         self, 
         expression: str, 
-        expected_value: float, 
+        expected_value: float | Decimal, 
         tolerance: float = 1e-6,
         use_decimal: bool = True
     ) -> Dict[str, Any]:
@@ -77,7 +77,7 @@ class VerificationEngine:
         
         Args:
             expression: The math string (e.g., "2 * (5 + 10)")
-            expected_value: The value the LLM claims it is (e.g., 30)
+            expected_value: The value the LLM claims it is (e.g., 30 or Decimal("30"))
             tolerance: Floating point tolerance
             use_decimal: If True, use Decimal for exact arithmetic (financial)
             
@@ -164,16 +164,19 @@ class VerificationEngine:
             x = Symbol('x')
             test_values = [0.5, 1, 2, -1, 0.1]
             matches = 0
+            evaluated_points = 0
             for val in test_values:
                 try:
                     left_val = float(left.subs(x, val).evalf())
                     right_val = float(right.subs(x, val).evalf())
+                    evaluated_points += 1
                     if abs(left_val - right_val) < 1e-10:
                         matches += 1
-                except:
+                except Exception:
+                    # Some sample points may be outside the domain; skip those values.
                     pass
             
-            if matches == len(test_values):
+            if evaluated_points > 0 and matches == evaluated_points:
                 return {
                     "is_equivalent": True,
                     "status": "LIKELY_EQUIVALENT",
@@ -362,7 +365,7 @@ class VerificationEngine:
         self, 
         operation: str,
         matrices: Dict[str, List[List[float]]],
-        expected: Union[List[List[float]], float, List[float]]
+        expected: List[List[float]] | float | List[float]
     ) -> Dict[str, Any]:
         """
         Verify matrix operations.

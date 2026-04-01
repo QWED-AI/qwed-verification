@@ -1,6 +1,5 @@
 import jwt
 import time
-import json
 import hashlib
 import os
 from typing import Dict, Any, Optional
@@ -13,13 +12,17 @@ class AttestationGuard:
     def __init__(self, secret_key: str = None, allow_insecure: bool = False):
         self.secret = secret_key or os.environ.get("QWED_ATTESTATION_SECRET")
         if not self.secret:
-            if allow_insecure or os.environ.get("QWED_DEV_MODE") == "1":
-                # deepcode ignore HardcodedSecret: Dev-mode fallback, only active with explicit opt-in
-                self.secret = "dev-secret-insecure"
-            else:
-                raise ValueError("QWED_ATTESTATION_SECRET required. Set allow_insecure=True for dev mode.")
+            raise ValueError(
+                "QWED_ATTESTATION_SECRET required. Refusing insecure fallback secret."
+            )
 
-    def sign_verification(self, input_query: str, guard_result: Dict[str, Any], engine: str = "QWED-Deterministic-v1") -> str:
+    def sign_verification(
+        self,
+        input_query: str,
+        guard_result: Dict[str, Any],
+        engine: str = "QWED-Deterministic-v1",
+        timestamp: Optional[float] = None,
+    ) -> str:
         """
         Creates a JWT attesting that a specific verification occurred.
         Source: QWED Features list.
@@ -28,7 +31,7 @@ class AttestationGuard:
         query_hash = hashlib.sha256(input_query.encode('utf-8')).hexdigest()
         
         payload = {
-            "timestamp": time.time(),
+            "timestamp": time.time() if timestamp is None else timestamp,
             "query_hash": query_hash,
             "verification_result": guard_result.get("verified", False),
             "engine": engine,

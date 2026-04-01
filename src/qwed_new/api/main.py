@@ -430,7 +430,7 @@ async def verify_math(
                             "simplified": str(simplified),
                             "original": str(parsed)
                         }
-                    except:
+                    except Exception:
                         # Symbolic expression
                         result = {
                             "is_valid": True,

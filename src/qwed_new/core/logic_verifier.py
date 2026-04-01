@@ -550,7 +550,8 @@ class LogicVerifier:
             core = solver.unsat_core()
             if core:
                 return f"Conflicting constraints: {[str(c) for c in core]}"
-        except:
+        except Exception:
+            # Unsat-core extraction is best-effort; fall back to a generic explanation.
             pass
         
         return "Constraints are logically inconsistent"

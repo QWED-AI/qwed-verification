@@ -12,6 +12,7 @@ Enhanced Features:
 from typing import List, Dict, Any, Optional, Tuple, Callable
 from dataclasses import dataclass, field
 from enum import Enum
+from decimal import Decimal
 import time
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -745,20 +746,27 @@ class ConsensusVerifier:
     # Helper Methods
     # =========================================================================
     
-    def _parse_math_query(self, query: str) -> Tuple[str, float]:
+    def _parse_math_query(self, query: str) -> Tuple[str, Decimal]:
         """Parse query into expression and expected value."""
         try:
             from qwed_new.core.translator import TranslationLayer
             translator = TranslationLayer()
             task = translator.translate(query)
-            return task.expression, task.expected_value or 0.0
-        except:
+        except ImportError:
             # Fallback: extract simple expression
             import re
             nums = re.findall(r"\d+", query)
             if len(nums) >= 2:
-                return f"{nums[0]} + {nums[1]}", float(nums[0]) + float(nums[1])
-            return "0", 0.0
+                exact_sum = Decimal(nums[0]) + Decimal(nums[1])
+                return f"{nums[0]} + {nums[1]}", exact_sum
+            return "0", Decimal("0")
+
+        expected_value = task.expected_value
+        if expected_value is None:
+            return task.expression, Decimal("0")
+        if isinstance(expected_value, Decimal):
+            return task.expression, expected_value
+        return task.expression, Decimal(str(expected_value))
     
     def _generate_verification_code(self, query: str) -> str:
         """Generate Python code for verification."""
@@ -767,8 +775,8 @@ class ConsensusVerifier:
             translator = TranslationLayer()
             task = translator.translate(query)
             return f"print({task.expression})"
-        except:
-            return "print('Unable to generate code')"
+        except Exception as e:
+            raise ValueError(f"Verification code generation failed: {e}") from e
     
     def _model_as_logic(self, query: str) -> Tuple[Dict, List]:
         """Model query as logic constraints."""
@@ -776,8 +784,8 @@ class ConsensusVerifier:
             from qwed_new.core.translator import TranslationLayer
             translator = TranslationLayer()
             return translator.translate_logic(query)
-        except:
-            return {}, []
+        except Exception as e:
+            raise ValueError(f"Logic translation failed: {e}") from e
     
     # =========================================================================
     # Health Monitoring

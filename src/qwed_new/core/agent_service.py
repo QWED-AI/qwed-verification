@@ -5,14 +5,12 @@ Implements the QWED-Agent specification for AI agent verification.
 Provides registration, verification, budget management, and audit logging.
 """
 
-import hashlib
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, Dict, Any, List, Set
 from enum import Enum
-import json
 
 
 class AgentType(Enum):

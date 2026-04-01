@@ -40,7 +40,7 @@ def send_request(query_id, query):
         try:
             data = response.json()
             result_status = data.get("status", "UNKNOWN")
-        except:
+        except Exception:
             result_status = "PARSE_ERROR"
             
         return {

@@ -4,7 +4,7 @@ Azure OpenAI Provider Implementation.
 
 import os
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any
 from openai import AzureOpenAI
 from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.providers.base import LLMProvider

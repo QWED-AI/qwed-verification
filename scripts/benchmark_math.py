@@ -96,7 +96,7 @@ def call_claude(query: str) -> str:
         if numbers:
             return float(numbers[0])
         return None
-    except:
+    except Exception:
         return None
 
 def verify_with_qwed(query: str, llm_answer: float, expected: float) -> Dict:

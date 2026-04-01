@@ -12,11 +12,17 @@ Enhanced Features:
 6. Confidence scoring
 """
 
+import ast
+from decimal import Decimal, localcontext
+import logging
+import operator
 import re
 import hashlib
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
 import time
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -505,13 +511,47 @@ Format as a numbered list."""
         try:
             # Only evaluate if they look safe
             if re.match(r'^[\d\+\-\*/\.\(\)]+$', f1) and re.match(r'^[\d\+\-\*/\.\(\)]+$', f2):
-                v1 = eval(f1)
-                v2 = eval(f2)
-                return abs(v1 - v2) < 0.0001
-        except:
-            pass
+                v1 = self._safe_arithmetic_eval(f1)
+                v2 = self._safe_arithmetic_eval(f2)
+                return abs(v1 - v2) < Decimal("0.0001")
+        except Exception as e:
+            # Best-effort numeric fallback; treat evaluation failures as non-equivalent.
+            logger.debug("Safe arithmetic fallback failed for formulas %s vs %s: %s", f1, f2, e)
         
         return False
+
+    def _safe_arithmetic_eval(self, expr: str) -> Decimal:
+        """Safely evaluate a simple arithmetic expression for formula fallback checks."""
+        allowed_binops = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: lambda left, right: left / right,
+            ast.Pow: operator.pow,
+        }
+        allowed_unary = {
+            ast.UAdd: operator.pos,
+            ast.USub: operator.neg,
+        }
+
+        def _eval(node):
+            if isinstance(node, ast.Expression):
+                return _eval(node.body)
+            if isinstance(node, ast.Constant) and type(node.value) in (int, float):
+                literal = ast.get_source_segment(expr, node)
+                if literal is not None:
+                    return Decimal(literal)
+                return Decimal(str(node.value))
+            if isinstance(node, ast.BinOp) and type(node.op) in allowed_binops:
+                return allowed_binops[type(node.op)](_eval(node.left), _eval(node.right))
+            if isinstance(node, ast.UnaryOp) and type(node.op) in allowed_unary:
+                return allowed_unary[type(node.op)](_eval(node.operand))
+            raise ValueError("Unsafe arithmetic expression")
+
+        tree = ast.parse(expr, mode="eval")
+        with localcontext() as ctx:
+            ctx.prec = 50
+            return _eval(tree)
     
     # =========================================================================
     # Confidence Calculation

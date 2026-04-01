@@ -2,7 +2,7 @@
 Audit log routes for QWED Enterprise Portal.
 """
 from fastapi import APIRouter, Depends, Query, HTTPException
-from typing import Optional, List
+from typing import Optional
 import csv
 import io
 from datetime import datetime, timedelta

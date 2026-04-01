@@ -8,7 +8,7 @@ This module defines models for:
 - Tool call tracking
 """
 
-from typing import Optional, List
+from typing import Optional
 from sqlmodel import Field, SQLModel, JSON, Column
 from datetime import datetime
 from enum import Enum
