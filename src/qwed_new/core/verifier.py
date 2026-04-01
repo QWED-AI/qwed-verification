@@ -19,7 +19,7 @@ from sympy import (
     simplify, expand
 )
 from sympy.parsing.sympy_parser import parse_expr, standard_transformations, implicit_multiplication_application
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 from decimal import Decimal, ROUND_HALF_UP
 from dataclasses import dataclass
 import math
@@ -68,7 +68,7 @@ class VerificationEngine:
     def verify_math(
         self, 
         expression: str, 
-        expected_value: Union[float, Decimal], 
+        expected_value: float | Decimal, 
         tolerance: float = 1e-6,
         use_decimal: bool = True
     ) -> Dict[str, Any]:
