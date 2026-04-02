@@ -180,12 +180,14 @@ async def verify_stats(
         import pandas as pd
         df = pd.read_csv(file.file)
         
-        from qwed_new.core.stats_verifier import StatsVerifier
+        from qwed_new.core.stats_verifier import StatsVerifier, SECURE_STATS_BLOCKED_CODE
         verifier = StatsVerifier()
         
         result = verifier.verify_stats(query, df, provider=None)
-        if result.get("status") == "BLOCKED":
+        if result.get("status") == "BLOCKED" and result.get("error") == SECURE_STATS_BLOCKED_CODE:
             raise HTTPException(status_code=503, detail="Service temporarily unavailable")
+        if result.get("status") == "BLOCKED":
+            raise HTTPException(status_code=403, detail="Verification blocked by security policy")
         
         log = VerificationLog(
             organization_id=tenant.organization_id,
@@ -1174,6 +1176,9 @@ async def verify_with_consensus(
         mode=mode,
         min_confidence=request.min_confidence
     )
+
+    if result.agreement_status == "blocked_secure_execution":
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable")
     
     # Check if confidence meets requirement
     if result.confidence < request.min_confidence:

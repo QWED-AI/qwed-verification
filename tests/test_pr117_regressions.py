@@ -5,7 +5,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from qwed_new.api.main import app, get_current_tenant, get_session
-from qwed_new.core.consensus_verifier import ConsensusVerifier
+from qwed_new.core.consensus_verifier import (
+    SECURE_EXECUTION_REQUIRED,
+    ConsensusVerifier,
+    EngineResult,
+)
 from qwed_new.core.stats_verifier import (
     SECURE_STATS_BLOCKED_CODE,
     SECURE_STATS_SANDBOX_REQUIRED,
@@ -17,6 +21,7 @@ from qwed_new.core.stats_verifier import (
 
 @pytest.fixture
 def client():
+    previous_overrides = app.dependency_overrides.copy()
     mock_tenant = MagicMock(organization_id=1, api_key="placeholder", organization_name="Test Org")
     mock_session = MagicMock(add=MagicMock(), commit=MagicMock())
 
@@ -25,7 +30,7 @@ def client():
 
     yield TestClient(app)
 
-    app.dependency_overrides.clear()
+    app.dependency_overrides = previous_overrides
 
 
 def test_wasm_stats_fallback_is_fail_closed():
@@ -93,6 +98,23 @@ def test_stats_api_masks_secure_runtime_unavailability(client):
     assert response.json()["detail"] == "Service temporarily unavailable"
 
 
+def test_stats_api_preserves_security_policy_blocks(client):
+    with patch("qwed_new.core.stats_verifier.StatsVerifier.verify_stats") as mock_verify_stats:
+        mock_verify_stats.return_value = {
+            "status": "BLOCKED",
+            "error": "Code failed security validation",
+        }
+        response = client.post(
+            "/verify/stats",
+            files={"file": ("data.csv", b"value\n1\n2\n", "text/csv")},
+            data={"query": "What is the mean of value?"},
+            headers={"x-api-key": "fake-key"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Verification blocked by security policy"
+
+
 def test_consensus_code_engine_requires_secure_executor():
     verifier = ConsensusVerifier(enable_circuit_breaker=False)
     verifier._code_verifier = MagicMock()
@@ -112,7 +134,7 @@ def test_consensus_code_engine_requires_secure_executor():
 
     assert result.success is False
     assert result.result is None
-    assert "Docker is not available" in result.error
+    assert result.error == SECURE_EXECUTION_REQUIRED
 
 
 def test_consensus_code_engine_uses_secure_executor_output():
@@ -135,9 +157,23 @@ def test_consensus_code_engine_uses_secure_executor_output():
 
 def test_consensus_codegen_assigns_result_variable():
     verifier = ConsensusVerifier(enable_circuit_breaker=False)
-    with patch("qwed_new.core.translator.TranslationLayer") as mock_translator_cls:
-        mock_translator = mock_translator_cls.return_value
-        mock_translator.translate.return_value = MagicMock(expression="2 + 2")
-        code = verifier._generate_verification_code("What is 2+2?")
+    verifier._translator = MagicMock()
+    verifier._translator.translate.return_value = MagicMock(expression="2 + 2")
+
+    code = verifier._generate_verification_code("What is 2+2?")
 
     assert code == "result = 2 + 2"
+
+
+def test_consensus_blocks_when_secure_execution_is_required():
+    verifier = ConsensusVerifier(enable_circuit_breaker=False)
+    results = [
+        EngineResult("SymPy", "symbolic_math", "4", 1.0, 1.0, True),
+        EngineResult("Python", "code_execution", None, 0.0, 1.0, False, SECURE_EXECUTION_REQUIRED),
+    ]
+
+    consensus = verifier._calculate_consensus(results)
+
+    assert consensus["answer"] is None
+    assert consensus["confidence"] == 0.0
+    assert consensus["status"] == "blocked_secure_execution"

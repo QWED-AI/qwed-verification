@@ -22,6 +22,7 @@ import threading
 
 
 logger = logging.getLogger(__name__)
+SECURE_EXECUTION_REQUIRED = "SECURE_EXECUTION_REQUIRED"
 
 
 class VerificationMode(str, Enum):
@@ -272,6 +273,7 @@ class ConsensusVerifier:
         self._code_verifier = None
         self._secure_executor = None
         self._stats_verifier = None
+        self._translator = None
         self._reasoning_verifier = None
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
     
@@ -282,6 +284,13 @@ class ConsensusVerifier:
             from qwed_new.core.verifier import VerificationEngine
             self._math_verifier = VerificationEngine()
         return self._math_verifier
+
+    @property
+    def translator(self):
+        if self._translator is None:
+            from qwed_new.core.translator import TranslationLayer
+            self._translator = TranslationLayer()
+        return self._translator
     
     @property
     def logic_verifier(self):
@@ -601,6 +610,8 @@ class ConsensusVerifier:
             # Execute only through the secure Docker sandbox.
             success, error, output = self.secure_executor.execute(code, {})
             if not success:
+                if error and "Cannot execute code securely" in error:
+                    error = SECURE_EXECUTION_REQUIRED
                 return EngineResult(
                     engine_name="Python",
                     method="code_execution",
@@ -715,6 +726,9 @@ class ConsensusVerifier:
         """Calculate weighted consensus from engine results."""
         if not results:
             return {"answer": None, "confidence": 0.0, "status": "no_results"}
+
+        if any(r.error == SECURE_EXECUTION_REQUIRED for r in results):
+            return {"answer": None, "confidence": 0.0, "status": "blocked_secure_execution"}
         
         successful = [r for r in results if r.success]
         
@@ -779,9 +793,7 @@ class ConsensusVerifier:
     def _generate_verification_code(self, query: str) -> str:
         """Generate Python code for verification."""
         try:
-            from qwed_new.core.translator import TranslationLayer
-            translator = TranslationLayer()
-            task = translator.translate(query)
+            task = self.translator.translate(query)
             return f"result = {task.expression}"
         except Exception as e:
             raise ValueError(f"Verification code generation failed: {e}") from e
