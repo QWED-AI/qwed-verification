@@ -177,3 +177,24 @@ def test_consensus_blocks_when_secure_execution_is_required():
     assert consensus["answer"] is None
     assert consensus["confidence"] == 0.0
     assert consensus["status"] == "blocked_secure_execution"
+
+
+def test_consensus_api_masks_secure_execution_block(client):
+    fake_result = MagicMock(
+        confidence=0.0,
+        final_answer=None,
+        engines_used=2,
+        agreement_status="blocked_secure_execution",
+        verification_chain=[],
+        total_latency_ms=5.0,
+    )
+
+    with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake_result):
+        response = client.post(
+            "/verify/consensus",
+            json={"query": "2+2", "verification_mode": "high", "min_confidence": 0.95},
+            headers={"x-api-key": "fake-key"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Service temporarily unavailable"

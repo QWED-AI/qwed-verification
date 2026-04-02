@@ -37,6 +37,7 @@ class SecureCodeExecutor:
     """
     
     def __init__(self):
+        self.client = None
         try:
             self.client = docker.from_env()
             self.docker_available = True
@@ -65,7 +66,7 @@ class SecureCodeExecutor:
         Returns:
             (success, error_message, result)
         """
-        if not self.docker_available:
+        if not self.is_available():
             return False, "Docker is not available. Cannot execute code securely.", None
         
         # 1. Pre-execution validation using AST
@@ -304,8 +305,17 @@ except Exception as e:
         return self.execution_count
     
     def is_available(self) -> bool:
-        """Check if Docker is available."""
-        return self.docker_available
+        """Check if Docker is currently available."""
+        if not self.docker_available or self.client is None:
+            return False
+
+        try:
+            self.client.ping()
+            return True
+        except Exception as e:
+            logger.warning("Docker availability check failed: %s", e)
+            self.docker_available = False
+            return False
 
 
 class ExecutionError(Exception):

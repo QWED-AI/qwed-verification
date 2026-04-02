@@ -21,6 +21,16 @@ class TestSecureExecutorCoverage(unittest.TestCase):
             self.assertFalse(success)
             self.assertIn("Docker is not available", error)
 
+    def test_is_available_rechecks_docker_health(self):
+        """Test live Docker health check instead of relying on cached startup state."""
+        executor = SecureCodeExecutor()
+        executor.docker_available = True
+        executor.client = MagicMock()
+        executor.client.ping.side_effect = Exception("Docker daemon unavailable")
+
+        self.assertFalse(executor.is_available())
+        self.assertFalse(executor.docker_available)
+
     def test_execute_os_error_tempdir(self):
         """Test execute when tempfile creation fails."""
         with patch("tempfile.TemporaryDirectory", side_effect=OSError("Disk full")):

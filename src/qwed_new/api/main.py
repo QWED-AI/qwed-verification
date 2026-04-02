@@ -160,7 +160,13 @@ async def verify_logic(
             "provider_used": provider_used,
         }
 
-@app.post("/verify/stats")
+@app.post(
+    "/verify/stats",
+    responses={
+        403: {"description": "Verification blocked by security policy."},
+        503: {"description": "Secure execution runtime unavailable."},
+    },
+)
 async def verify_stats(
     file: UploadFile = File(...),
     query: str = Form(...),
@@ -1143,7 +1149,14 @@ class ConsensusVerifyRequest(BaseModel):
     verification_mode: str = "single"  # "single", "high", "maximum"
     min_confidence: float = 0.95  # 0.0 to 1.0
 
-@app.post("/verify/consensus")
+@app.post(
+    "/verify/consensus",
+    responses={
+        400: {"description": "Invalid verification mode."},
+        422: {"description": "Consensus confidence below requested minimum."},
+        503: {"description": "Secure execution runtime unavailable for required consensus depth."},
+    },
+)
 async def verify_with_consensus(
     request: ConsensusVerifyRequest,
     tenant: TenantContext = Depends(get_current_tenant),
