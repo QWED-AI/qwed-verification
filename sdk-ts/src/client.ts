@@ -263,22 +263,14 @@ export class QWEDClient {
         query: string,
         options?: {
             provider?: string;
-            checkExfiltration?: boolean;
-            checkMcpPoison?: boolean;
             toolSchema?: Record<string, unknown>;
         }
     ): Promise<AgentVerificationResponse> {
-        // Build the correct payload matching backend AgentVerifyRequest + optional security checks
+        // Security checks are enforced server-side and cannot be disabled by clients.
         const payload: Record<string, unknown> = {
             query: query,
         };
         if (options?.provider) payload.provider = options.provider;
-        if (options?.checkExfiltration !== undefined || options?.checkMcpPoison !== undefined) {
-            payload.security_checks = {
-                exfiltration: options?.checkExfiltration,
-                mcp_poison: options?.checkMcpPoison,
-            };
-        }
         if (options?.toolSchema) {
             payload.tool_schema = options.toolSchema;
         }
@@ -342,9 +334,6 @@ export class QWEDClient {
         const payload: Record<string, unknown> = { query };
         if (request.provider) {
             payload.provider = request.provider;
-        }
-        if (request.security_checks) {
-            payload.security_checks = request.security_checks;
         }
         if (request.tool_schema) {
             payload.tool_schema = request.tool_schema;

@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -80,3 +80,14 @@ def test_consensus_verifier_does_not_select_fact_engine_without_context():
     engines = verifier._select_engines("What is the capital population?", VerificationMode.MAXIMUM)
 
     assert "Fact" not in [engine_name for engine_name, _ in engines]
+
+
+def test_consensus_fact_engine_requires_external_context():
+    verifier = ConsensusVerifier(enable_circuit_breaker=False)
+
+    result = verifier._verify_with_fact()
+
+    assert result.engine_name == "Fact"
+    assert result.success is False
+    assert result.result is None
+    assert "External fact context is required" in result.error
