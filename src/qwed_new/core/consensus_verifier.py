@@ -236,7 +236,6 @@ class ConsensusVerifier:
         "Python": 10000,
         "Z3": 5000,
         "Stats": 10000,
-        "Fact": 3000,
         "Image": 15000
     }
     
@@ -246,7 +245,6 @@ class ConsensusVerifier:
         "Z3": 0.995,       # Formal logic solver
         "Python": 0.99,    # Code execution
         "Stats": 0.98,     # Statistical analysis
-        "Fact": 0.85,      # Depends on external sources
         "Image": 0.80      # VLM-dependent
     }
     
