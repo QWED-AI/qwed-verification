@@ -11,6 +11,7 @@ Thank you for your interest in contributing! Before you start, please read this 
 | File | Why It Matters |
 |------|----------------|
 | [README.md](./README.md) | Understand what QWED is |
+| [QWED_RULES.md](./QWED_RULES.md) | Canonical enforcement rules for contributors and tools |
 | [docs/architecture.md](./docs/architecture.md) | System design and engine architecture |
 | [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) | Community standards |
 | [SECURITY.md](./SECURITY.md) | How to report vulnerabilities |
@@ -26,7 +27,10 @@ QWED is NOT just another LLM wrapper. Our philosophy:
 1. **LLMs are untrusted translators** - They convert natural language to structured queries
 2. **Symbolic engines are trusted verifiers** - SymPy, Z3, SQLGlot, etc. do the actual verification
 3. **Determinism is required** - Given the same input, output must be identical every time
-4. **LLM fallback is last resort** - Only when deterministic methods cannot handle the query
+4. **LLM output is never proof** - Models may assist with translation or enrichment, but they must not weaken deterministic enforcement
+
+When contributor guidance and enforcement guidance appear to conflict, follow
+`QWED_RULES.md` as the authoritative source for boundary behavior.
 
 ### ❌ Common Misunderstandings
 
