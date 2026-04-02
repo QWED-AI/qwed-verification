@@ -572,7 +572,7 @@ class ConsensusVerifier:
             )
     
     def _verify_with_code(self, query: str) -> EngineResult:
-        """Verify by executing Python code."""
+        """Verify by executing Python code in the secure Docker sandbox."""
         start = time.time()
         try:
             code = self._generate_verification_code(query)
@@ -590,10 +590,20 @@ class ConsensusVerifier:
                     error=f"Unsafe code: {safety_result['issues']}"
                 )
             
-            # Execute
-            from qwed_new.core.code_executor import CodeExecutor
-            executor = CodeExecutor()
-            output = executor.execute(code)
+            # Execute only through the secure Docker sandbox.
+            from qwed_new.core.secure_code_executor import SecureCodeExecutor
+            executor = SecureCodeExecutor()
+            success, error, output = executor.execute(code, {})
+            if not success:
+                return EngineResult(
+                    engine_name="Python",
+                    method="code_execution",
+                    result=None,
+                    confidence=0.0,
+                    latency_ms=(time.time() - start) * 1000,
+                    success=False,
+                    error=error
+                )
             
             return EngineResult(
                 engine_name="Python",

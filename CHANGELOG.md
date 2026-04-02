@@ -6,6 +6,8 @@ All notable changes to the QWED Protocol will be documented in this file.
 ### Security
 - Agent verification security checks are now enforced server-side and are no longer configurable through client request payloads.
 - TypeScript SDK agent verification helpers no longer send `security_checks`; `tool_schema` remains available for server-side MCP inspection.
+- Statistical verification now requires the secure Docker sandbox; Wasm and restricted in-process fallback execution paths are disabled.
+- Consensus Python verification now uses the secure Docker executor instead of same-process code execution.
 
 ## [4.0.1] - 2026-03-23
 ### 🔄 Sentinel Guard Sync
