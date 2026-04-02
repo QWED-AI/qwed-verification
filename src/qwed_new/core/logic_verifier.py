@@ -529,18 +529,8 @@ class LogicVerifier:
         # Use safe evaluator if available
         if self.safe_evaluator:
             return self.safe_evaluator.safe_eval(constr, z3_vars)
-        
-        # Fallback: build safe context for eval
-        safe_context = {
-            'And': And, 'Or': Or, 'Not': Not, 'Implies': Implies,
-            'If': If, 'ForAll': ForAll, 'Exists': Exists,
-            'Int': Int, 'Bool': Bool, 'Real': Real,
-            'BitVec': BitVec, 'Array': Array, 'Select': Select, 'Store': Store,
-            'True': True, 'False': False,
-            **z3_vars
-        }
-        
-        return eval(constr, {"__builtins__": {}}, safe_context)
+
+        raise RuntimeError("SafeEvaluator is required for constraint parsing")
     
     def _explain_unsat(self, solver: Solver, constraints: List[str]) -> str:
         """Try to explain why constraints are unsatisfiable."""

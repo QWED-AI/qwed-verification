@@ -2,6 +2,11 @@
 
 All notable changes to the QWED Protocol will be documented in this file.
 
+## [Unreleased]
+### Security
+- Agent verification security checks are now enforced server-side and are no longer configurable through client request payloads.
+- TypeScript SDK agent verification helpers no longer send `security_checks`; `tool_schema` remains available for server-side MCP inspection.
+
 ## [4.0.1] - 2026-03-23
 ### 🔄 Sentinel Guard Sync
 

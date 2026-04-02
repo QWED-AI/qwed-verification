@@ -858,7 +858,6 @@ class AgentRegistrationRequest(BaseModel):
 class AgentVerifyRequest(BaseModel):
     query: str
     provider: Optional[str] = None
-    security_checks: Optional[dict] = None
     tool_schema: Optional[dict] = None
 
 class ToolCallRequest(BaseModel):
@@ -924,10 +923,8 @@ def _run_agent_security_checks(
     agent: Agent,
     request: AgentVerifyRequest,
 ) -> None:
-    security_checks = request.security_checks or {}
-    if security_checks.get("exfiltration"):
-        _run_exfiltration_check(session, agent_id, agent, request.query)
-    if security_checks.get("mcp_poison"):
+    _run_exfiltration_check(session, agent_id, agent, request.query)
+    if request.tool_schema:
         _run_mcp_poison_check(session, agent_id, agent, request.tool_schema)
 
 async def _process_agent_verification(agent: Agent, request: AgentVerifyRequest) -> dict:
@@ -1156,6 +1153,8 @@ async def verify_with_consensus(
     
     Returns detailed verification chain and confidence score.
     """
+    check_rate_limit(tenant.api_key)
+
     try:
         # Parse mode
         mode = VerificationMode(request.verification_mode)

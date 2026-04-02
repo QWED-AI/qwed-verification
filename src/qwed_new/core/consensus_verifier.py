@@ -236,7 +236,6 @@ class ConsensusVerifier:
         "Python": 10000,
         "Z3": 5000,
         "Stats": 10000,
-        "Fact": 3000,
         "Image": 15000
     }
     
@@ -246,7 +245,6 @@ class ConsensusVerifier:
         "Z3": 0.995,       # Formal logic solver
         "Python": 0.99,    # Code execution
         "Stats": 0.98,     # Statistical analysis
-        "Fact": 0.85,      # Depends on external sources
         "Image": 0.80      # VLM-dependent
     }
     
@@ -469,10 +467,6 @@ class ConsensusVerifier:
             query_lower = query.lower()
             if any(kw in query_lower for kw in ["average", "mean", "median", "variance"]):
                 engines.append(("Stats", self._verify_with_stats))
-            
-            # Add fact for knowledge queries
-            if any(kw in query_lower for kw in ["capital", "president", "population"]):
-                engines.append(("Fact", self._verify_with_fact))
         
         return engines
     
@@ -684,34 +678,18 @@ class ConsensusVerifier:
                 error=str(e)
             )
     
-    def _verify_with_fact(self, query: str) -> EngineResult:
+    def _verify_with_fact(self, _query: str) -> EngineResult:
         """Verify using Fact engine."""
         start = time.time()
-        try:
-            from qwed_new.core.fact_verifier import FactVerifier
-            verifier = FactVerifier()
-            
-            # Simple extraction - in production would use proper NER
-            result = verifier.verify_fact(query, query)  # Self-reference for demo
-            
-            return EngineResult(
-                engine_name="Fact",
-                method="knowledge_retrieval",
-                result=result.get("verdict"),
-                confidence=result.get("confidence", 0.5),
-                latency_ms=(time.time() - start) * 1000,
-                success=True
-            )
-        except Exception as e:
-            return EngineResult(
-                engine_name="Fact",
-                method="knowledge_retrieval",
-                result=None,
-                confidence=0.0,
-                latency_ms=(time.time() - start) * 1000,
-                success=False,
-                error=str(e)
-            )
+        return EngineResult(
+            engine_name="Fact",
+            method="knowledge_retrieval",
+            result=None,
+            confidence=0.0,
+            latency_ms=(time.time() - start) * 1000,
+            success=False,
+            error="External fact context is required for consensus fact verification"
+        )
     
     # =========================================================================
     # Consensus Calculation
