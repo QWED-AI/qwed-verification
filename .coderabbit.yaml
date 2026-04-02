@@ -1,15 +1,33 @@
 # Root of qwed-verification
 language: en-US
 reviews:
+  instructions: |
+    Follow QWED_RULES.md strictly.
+
+    QWED is a deterministic verification and enforcement boundary, not a
+    conventional application. Do not suggest changes that weaken enforcement in
+    exchange for convenience, usability, or availability.
+
+    Reject suggestions that introduce or recommend:
+    - fallback execution
+    - graceful degradation past failed verification
+    - raw eval/exec as backup behavior
+    - user-configurable security guards
+    - retries or auto-correction that bypass verification
+    - trust in model output as proof
+
+    Prefer fail-closed behavior and default-deny handling.
   auto_review:
     enabled: true
   path_instructions:
     - path: "**/*.py"
       instructions: |
         You are a security auditor for QWED (Deterministic AI Verification).
+
+        Follow QWED_RULES.md strictly.
         
         CRITICAL RULES:
         1. NO NON-DETERMINISM: Flag usage of 'random', 'uuid.uuid4()', or 'datetime.now()' inside verification logic. Inputs must be injected.
         2. SYMBOLIC MATH: Flag floating-point math (e.g., 0.1 + 0.2). Suggest 'decimal.Decimal' or 'sympy'.
-        3. SECURITY: Block 'eval()', 'exec()', or 'subprocess' unless wrapped in CodeGuard.
+        3. SECURITY: Reject fallback execution, graceful degradation, or retries that bypass verification. Block 'eval()', 'exec()', or 'subprocess' unless wrapped in CodeGuard and still compliant with QWED_RULES.md.
         4. IRAC: Ensure new legal guards follow Issue-Rule-Application-Conclusion structure [Source: MSLR].
