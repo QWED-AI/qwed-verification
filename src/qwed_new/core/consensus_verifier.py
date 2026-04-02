@@ -680,7 +680,7 @@ class ConsensusVerifier:
                 error=str(e)
             )
     
-    def _verify_with_fact(self) -> EngineResult:
+    def _verify_with_fact(self, _query: str) -> EngineResult:
         """Verify using Fact engine."""
         start = time.time()
         return EngineResult(

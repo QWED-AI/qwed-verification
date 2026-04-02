@@ -85,7 +85,7 @@ def test_consensus_verifier_does_not_select_fact_engine_without_context():
 def test_consensus_fact_engine_requires_external_context():
     verifier = ConsensusVerifier(enable_circuit_breaker=False)
 
-    result = verifier._verify_with_fact()
+    result = verifier._verify_with_fact("What is the capital of France?")
 
     assert result.engine_name == "Fact"
     assert result.success is False
