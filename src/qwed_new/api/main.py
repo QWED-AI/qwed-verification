@@ -184,6 +184,8 @@ async def verify_stats(
         verifier = StatsVerifier()
         
         result = verifier.verify_stats(query, df, provider=None)
+        if result.get("status") == "BLOCKED":
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable")
         
         log = VerificationLog(
             organization_id=tenant.organization_id,
@@ -196,6 +198,8 @@ async def verify_stats(
         session.commit()
         
         return result
+    except HTTPException:
+        raise
         
     except Exception as e:
         logger.error(f"Stats verification error: {redact_pii(str(e))}", exc_info=False)

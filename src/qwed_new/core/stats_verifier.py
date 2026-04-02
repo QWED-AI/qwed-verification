@@ -24,6 +24,7 @@ SECURE_STATS_SANDBOX_REQUIRED = (
     "Statistical verification requires the secure Docker sandbox. "
     "In-process fallback execution is disabled."
 )
+SECURE_STATS_BLOCKED_CODE = "SERVICE_UNAVAILABLE"
 
 
 @dataclass
@@ -387,10 +388,9 @@ class StatsVerifier:
             logger.warning("Blocked stats execution because secure Docker sandbox is unavailable")
             return {
                 "status": "BLOCKED",
-                "error": SECURE_STATS_SANDBOX_REQUIRED,
+                "error": SECURE_STATS_BLOCKED_CODE,
                 "code": code,
                 "columns": columns,
-                "risk_level": "critical",
                 "execution_time_ms": (time.time() - start_time) * 1000
             }
         

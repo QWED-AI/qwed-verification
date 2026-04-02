@@ -270,6 +270,7 @@ class ConsensusVerifier:
         self._math_verifier = None
         self._logic_verifier = None
         self._code_verifier = None
+        self._secure_executor = None
         self._stats_verifier = None
         self._reasoning_verifier = None
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
@@ -295,6 +296,13 @@ class ConsensusVerifier:
             from qwed_new.core.code_verifier import CodeVerifier
             self._code_verifier = CodeVerifier()
         return self._code_verifier
+
+    @property
+    def secure_executor(self):
+        if self._secure_executor is None:
+            from qwed_new.core.secure_code_executor import SecureCodeExecutor
+            self._secure_executor = SecureCodeExecutor()
+        return self._secure_executor
     
     @property
     def stats_verifier(self):
@@ -591,9 +599,7 @@ class ConsensusVerifier:
                 )
             
             # Execute only through the secure Docker sandbox.
-            from qwed_new.core.secure_code_executor import SecureCodeExecutor
-            executor = SecureCodeExecutor()
-            success, error, output = executor.execute(code, {})
+            success, error, output = self.secure_executor.execute(code, {})
             if not success:
                 return EngineResult(
                     engine_name="Python",
@@ -776,7 +782,7 @@ class ConsensusVerifier:
             from qwed_new.core.translator import TranslationLayer
             translator = TranslationLayer()
             task = translator.translate(query)
-            return f"print({task.expression})"
+            return f"result = {task.expression}"
         except Exception as e:
             raise ValueError(f"Verification code generation failed: {e}") from e
     
