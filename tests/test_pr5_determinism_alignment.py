@@ -1,6 +1,7 @@
 import pytest
 
-from qwed_new.core.control_plane import ControlPlane, metrics_collector
+from qwed_new.core.control_plane import ControlPlane
+from qwed_new.core.observability import metrics_collector
 from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.core.verifier import VerificationEngine
 
@@ -95,3 +96,25 @@ async def test_control_plane_keeps_inconclusive_when_translation_claim_is_wrong(
     assert result["final_answer"] == 30.0
     assert result["verification"]["status"] == "CORRECTION_NEEDED"
     assert result["trust_boundary"]["translation_claim_self_consistent"] is False
+
+
+def test_control_plane_maps_syntax_error_to_error_status():
+    result = ControlPlane._determine_math_response_status({"status": "SYNTAX_ERROR"})
+
+    assert result == "ERROR"
+
+
+def test_control_plane_defaults_missing_math_status_to_error():
+    result = ControlPlane._determine_math_response_status({})
+
+    assert result == "ERROR"
+
+
+def test_control_plane_marks_failed_expression_evaluation_as_non_deterministic():
+    result = ControlPlane._build_math_trust_boundary(
+        "openai_compat",
+        {"status": "SYNTAX_ERROR", "is_correct": False},
+    )
+
+    assert result["deterministic_expression_evaluation"] is False
+    assert result["translation_claim_self_consistent"] is False
