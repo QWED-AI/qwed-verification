@@ -18,6 +18,7 @@ from typing import Any, Dict, Tuple, Optional
 
 
 logger = logging.getLogger(__name__)
+SECURE_RUNTIME_UNAVAILABLE = "SECURE_RUNTIME_UNAVAILABLE"
 
 def _sanitize_log_msg(msg: str) -> str:
     """Strip newline characters to prevent log injection."""
@@ -67,7 +68,7 @@ class SecureCodeExecutor:
             (success, error_message, result)
         """
         if not self.is_available():
-            return False, "Docker is not available. Cannot execute code securely.", None
+            return False, SECURE_RUNTIME_UNAVAILABLE, None
         
         # 1. Pre-execution validation using AST
         is_safe, safety_reason = self._is_safe_code(code)

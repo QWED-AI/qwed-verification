@@ -2,7 +2,11 @@
 import unittest
 import docker
 from unittest.mock import MagicMock, patch
-from src.qwed_new.core.secure_code_executor import SecureCodeExecutor, ExecutionError
+from src.qwed_new.core.secure_code_executor import (
+    SECURE_RUNTIME_UNAVAILABLE,
+    SecureCodeExecutor,
+    ExecutionError,
+)
 
 class TestSecureExecutorCoverage(unittest.TestCase):
     """Targeted tests to improve coverage of secure_code_executor.py"""
@@ -19,7 +23,7 @@ class TestSecureExecutorCoverage(unittest.TestCase):
             executor = SecureCodeExecutor()
             success, error, _ = executor.execute("print(1)", {})
             self.assertFalse(success)
-            self.assertIn("Docker is not available", error)
+            self.assertEqual(SECURE_RUNTIME_UNAVAILABLE, error)
 
     def test_is_available_rechecks_docker_health(self):
         """Test live Docker health check instead of relying on cached startup state."""

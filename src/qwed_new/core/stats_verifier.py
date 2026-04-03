@@ -25,6 +25,7 @@ SECURE_STATS_SANDBOX_REQUIRED = (
     "In-process fallback execution is disabled."
 )
 SECURE_STATS_BLOCKED_CODE = "SERVICE_UNAVAILABLE"
+SECURE_STATS_RUNTIME_UNAVAILABLE = "SECURE_RUNTIME_UNAVAILABLE"
 
 
 @dataclass
@@ -415,6 +416,16 @@ class StatsVerifier:
                 "execution_time_ms": exec_result.execution_time_ms,
                 "total_time_ms": total_time
             }
+        if exec_result.error == SECURE_STATS_RUNTIME_UNAVAILABLE:
+            logger.warning("Blocked stats execution because secure Docker sandbox became unavailable")
+            return {
+                "status": "BLOCKED",
+                "error": SECURE_STATS_BLOCKED_CODE,
+                "code": code,
+                "columns": columns,
+                "execution_time_ms": exec_result.execution_time_ms,
+                "total_time_ms": total_time
+            }
         else:
             return {
                 "status": "EXECUTION_FAILED",
@@ -484,6 +495,8 @@ class StatsVerifier:
         
         try:
             success, error, result = self.docker_executor.execute(code, context)
+            if error == "SECURE_RUNTIME_UNAVAILABLE":
+                error = SECURE_STATS_RUNTIME_UNAVAILABLE
             
             return ExecutionResult(
                 success=success,

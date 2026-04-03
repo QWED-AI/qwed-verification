@@ -17,12 +17,12 @@ import time
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from collections import Counter
 import threading
 
 
 logger = logging.getLogger(__name__)
 SECURE_EXECUTION_REQUIRED = "SECURE_EXECUTION_REQUIRED"
+_NONE_CONSENSUS_KEY = "__QWED_NONE__"
 
 
 class VerificationMode(str, Enum):
@@ -610,7 +610,7 @@ class ConsensusVerifier:
             # Execute only through the secure Docker sandbox.
             success, error, output = self.secure_executor.execute(code, {})
             if not success:
-                if error and "Cannot execute code securely" in error:
+                if error == "SECURE_RUNTIME_UNAVAILABLE":
                     error = SECURE_EXECUTION_REQUIRED
                 return EngineResult(
                     engine_name="Python",
@@ -737,10 +737,12 @@ class ConsensusVerifier:
         
         # Weight answers by engine reliability
         weighted_answers: Dict[str, float] = {}
+        answer_values: Dict[str, Any] = {}
         for r in successful:
-            answer_key = str(r.result)
+            answer_key = self._consensus_answer_key(r.result)
             weight = self.ENGINE_WEIGHTS.get(r.engine_name, 0.5) * r.confidence
             weighted_answers[answer_key] = weighted_answers.get(answer_key, 0) + weight
+            answer_values.setdefault(answer_key, r.result)
         
         # Find best answer
         best_answer = max(weighted_answers, key=weighted_answers.get)
@@ -748,7 +750,7 @@ class ConsensusVerifier:
         best_weight = weighted_answers[best_answer]
         
         # Determine agreement status
-        if len(set(str(r.result) for r in successful)) == 1:
+        if len({self._consensus_answer_key(r.result) for r in successful}) == 1:
             status = "unanimous"
             confidence = min(0.999, best_weight / len(successful))
         elif best_weight > total_weight / 2:
@@ -759,10 +761,17 @@ class ConsensusVerifier:
             confidence = min(0.7, best_weight / total_weight)
         
         return {
-            "answer": best_answer,
+            "answer": answer_values[best_answer],
             "confidence": confidence,
             "status": status
         }
+
+    @staticmethod
+    def _consensus_answer_key(result: Any) -> str:
+        """Normalize consensus answer keys without collapsing null to the string 'None'."""
+        if result is None:
+            return _NONE_CONSENSUS_KEY
+        return str(result)
     
     # =========================================================================
     # Helper Methods
