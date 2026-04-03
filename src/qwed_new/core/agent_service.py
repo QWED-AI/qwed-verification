@@ -289,7 +289,7 @@ class AgentService:
                 "error": {"code": "QWED-AGENT-003", "message": "Agent suspended"},
             }
 
-        context_error = self._enforce_action_context(agent_id, action, context)
+        context_error, context_state = self._enforce_action_context(agent_id, action, context)
         if context_error:
             return {
                 "decision": AgentDecision.DENIED.value,
@@ -332,6 +332,7 @@ class AgentService:
         
         # Update budget tracking
         if decision == AgentDecision.APPROVED:
+            self._commit_action_context(context, context_state)
             estimated_cost = 0.01  # Base cost
             agent.budget.current_daily_cost_usd += estimated_cost
             agent.budget.current_hour_requests += 1
@@ -373,25 +374,25 @@ class AgentService:
         agent_id: str,
         action: AgentAction,
         context: Optional[ActionContext],
-    ) -> Optional[Dict[str, str]]:
+    ) -> tuple[Optional[Dict[str, str]], Optional[Dict[str, Any]]]:
         """Require deterministic action context and detect replay/loop patterns."""
         if context is None or not context.conversation_id or context.step_number is None:
-            return {
+            return ({
                 "code": "QWED-AGENT-CTX-001",
                 "message": "Action context with conversation_id and step_number is required",
-            }
+            }, None)
 
         if context.step_number < 1:
-            return {
+            return ({
                 "code": "QWED-AGENT-CTX-002",
                 "message": "step_number must be >= 1",
-            }
+            }, None)
 
         if context.step_number > self.MAX_CONVERSATION_STEPS:
-            return {
+            return ({
                 "code": "QWED-AGENT-LOOP-001",
                 "message": "Conversation step limit exceeded",
-            }
+            }, None)
 
         state_key = (agent_id, context.conversation_id)
         fingerprint = self._action_fingerprint(action)
@@ -403,10 +404,10 @@ class AgentService:
             )
 
             if context.step_number <= state["last_step"]:
-                return {
+                return ({
                     "code": "QWED-AGENT-LOOP-002",
                     "message": "Replay or out-of-order action step detected",
-                }
+                }, None)
 
             repeat_count = (
                 state["repeat_count"] + 1
@@ -415,18 +416,39 @@ class AgentService:
             )
 
             if repeat_count > self.MAX_CONSECUTIVE_IDENTICAL_ACTIONS:
-                return {
+                return ({
                     "code": "QWED-AGENT-LOOP-003",
                     "message": "Repetitive action loop detected",
-                }
+                }, None)
 
-            self._conversation_state[state_key] = {
+            next_state = {
                 "last_step": context.step_number,
                 "last_fingerprint": fingerprint,
                 "repeat_count": repeat_count,
             }
 
-        return None
+        return None, {"state_key": state_key, "next_state": next_state}
+
+    def _commit_action_context(
+        self,
+        context: ActionContext,
+        context_state: Optional[Dict[str, Any]],
+    ) -> None:
+        """Persist conversation progress only after the action is approved."""
+        if context_state is None:
+            return
+
+        state_key = context_state["state_key"]
+        next_state = context_state["next_state"]
+
+        with self._conversation_state_lock:
+            state = self._conversation_state.get(
+                state_key,
+                {"last_step": 0},
+            )
+            if context.step_number <= state["last_step"]:
+                return
+            self._conversation_state[state_key] = next_state
 
     @staticmethod
     def _action_fingerprint(action: AgentAction) -> str:

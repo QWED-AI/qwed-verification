@@ -115,6 +115,8 @@ def get_optional_current_user(
     """Resolve a JWT-authenticated user when present."""
     if not authorization:
         return None
+    if not authorization.startswith("Bearer "):
+        return None
 
     payload = get_current_user_token(authorization)
     user_id = payload.get("sub")
@@ -152,7 +154,7 @@ def get_optional_api_key_record(
 
 def _has_metrics_admin_role(user: Optional[User]) -> bool:
     """Return True when the user can access global operational metrics."""
-    return user is not None and user.role in {"owner", "admin"}
+    return user is not None and user.is_active and user.role in {"owner", "admin"}
 
 
 def require_metrics_access(

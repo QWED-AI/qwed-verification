@@ -29,7 +29,7 @@ def _register_test_agent(service: AgentService):
     return agent["agent_id"], agent["agent_token"]
 
 
-def test_redis_limiter_falls_back_locally_on_backend_error():
+def test_redis_limiter_fails_closed_on_backend_error():
     mock_client = MagicMock()
     mock_pipe = MagicMock()
     mock_client.pipeline.return_value = mock_pipe
@@ -166,7 +166,7 @@ def test_verify_action_allows_different_action_after_loop_denial_same_step():
 
 
 def test_metrics_requires_admin_user(client):
-    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="member")
+    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="member", is_active=True)
 
     response = client.get("/metrics", headers={"Authorization": "Bearer fake"})
 
@@ -175,7 +175,7 @@ def test_metrics_requires_admin_user(client):
 
 
 def test_metrics_allows_admin_user(client):
-    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="admin")
+    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="admin", is_active=True)
 
     with patch.object(api_main.metrics_collector, "get_global_metrics", return_value={"requests": 1}), patch.object(
         api_main.metrics_collector,
@@ -189,7 +189,7 @@ def test_metrics_allows_admin_user(client):
 
 
 def test_prometheus_metrics_requires_admin_user(client):
-    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="member")
+    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="member", is_active=True)
 
     response = client.get("/metrics/prometheus", headers={"Authorization": "Bearer fake"})
 
@@ -203,7 +203,7 @@ def test_metrics_allows_api_key_client(client):
         user_id=42,
     )
     mock_session = MagicMock()
-    mock_session.get.return_value = MagicMock(role="admin")
+    mock_session.get.return_value = MagicMock(role="admin", is_active=True)
     api_main.app.dependency_overrides[api_main.get_session] = lambda: mock_session
 
     with patch.object(api_main.metrics_collector, "get_global_metrics", return_value={"requests": 1}), patch.object(
@@ -222,7 +222,7 @@ def test_metrics_rejects_non_admin_api_key_client(client):
         user_id=42,
     )
     mock_session = MagicMock()
-    mock_session.get.return_value = MagicMock(role="member")
+    mock_session.get.return_value = MagicMock(role="member", is_active=True)
     api_main.app.dependency_overrides[api_main.get_session] = lambda: mock_session
 
     response = client.get("/metrics", headers={"x-api-key": "fake-key"})
@@ -240,6 +240,55 @@ def test_get_optional_current_user_rejects_missing_sub_claim():
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "Missing sub claim in token"
+
+
+def test_metrics_rejects_inactive_admin_user(client):
+    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="admin", is_active=False)
+
+    response = client.get("/metrics", headers={"Authorization": "Bearer fake"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Admin access required"
+
+
+def test_metrics_allows_api_key_when_authorization_header_is_not_bearer(client):
+    api_main.app.dependency_overrides[get_optional_api_key_record] = lambda: MagicMock(
+        organization_id=1,
+        user_id=42,
+    )
+    mock_session = MagicMock()
+    mock_session.get.return_value = MagicMock(role="admin", is_active=True)
+    api_main.app.dependency_overrides[api_main.get_session] = lambda: mock_session
+
+    with patch.object(api_main.metrics_collector, "get_global_metrics", return_value={"requests": 1}), patch.object(
+        api_main.metrics_collector,
+        "get_all_tenant_metrics",
+        return_value={"1": {"requests": 1}},
+    ):
+        response = client.get("/metrics", headers={"Authorization": "Basic abc", "x-api-key": "fake-key"})
+
+    assert response.status_code == 200
+
+
+def test_budget_denial_does_not_consume_conversation_step():
+    service = AgentService()
+    agent_id, _ = _register_test_agent(service)
+    service._agents[agent_id].budget.max_requests_per_hour = 0
+
+    denied = service.verify_action(
+        agent_id,
+        AgentAction(action_type="calculate", query="2+2"),
+        context=ActionContext(conversation_id="conv-budget", step_number=1),
+    )
+    retry = service.verify_action(
+        agent_id,
+        AgentAction(action_type="verify_logic", query="x > 1"),
+        context=ActionContext(conversation_id="conv-budget", step_number=1),
+    )
+
+    assert denied["decision"] == "BUDGET_EXCEEDED"
+    assert retry["decision"] == "BUDGET_EXCEEDED"
+    assert retry["error"]["code"] == "QWED-AGENT-BUDGET-002"
 
 
 def test_enforce_environment_integrity_raises_on_compromise():
