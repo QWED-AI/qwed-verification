@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File, F
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 from typing import Optional, Annotated
-from sqlmodel import Session
+from sqlmodel import Session, select
 import os
 import logging
 from fractions import Fraction
@@ -18,7 +18,7 @@ INTERNAL_PROCESSING_ERROR = "Internal processing error"
 from qwed_new.core.control_plane import ControlPlane
 from qwed_new.core.tenant_context import get_current_tenant, TenantContext
 from qwed_new.core.database import create_db_and_tables, get_session
-from qwed_new.core.models import VerificationLog, ApiKey
+from qwed_new.core.models import VerificationLog, ApiKey, User
 from qwed_new.core.rate_limiter import check_rate_limit
 
 # Import auth router
@@ -26,6 +26,8 @@ from qwed_new.core.rate_limiter import check_rate_limit
 from qwed_new.auth import auth_router
 from qwed_new.auth.audit_routes import router as audit_router
 from qwed_new.auth.middleware import get_api_key
+from qwed_new.auth.routes import get_current_user_token
+from qwed_new.auth.security import hash_api_key
 
 TenantDependency = Annotated[TenantContext, Depends(get_current_tenant)]
 SessionDependency = Annotated[Session, Depends(get_session)]
@@ -52,8 +54,46 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(audit_router)
 
+STARTUP_ALLOWED_PTH_FILES = {
+    "__editable__.qwed_a2a-0.1.0.pth",
+    "__editable__.qwed_finance-2.0.1.pth",
+    "__editable__.qwed_mcp-0.2.0.pth",
+    "_qwed.pth",
+    "_qwed_legal.pth",
+    "_qwed_new.pth",
+    "_qwed_ucp.pth",
+    "a1_coverage.pth",
+    "pywin32.pth",
+}
+
+
+def _get_env_allowlisted_pth_files() -> set[str]:
+    """Parse deployment-provided exact startup hook allowlist entries."""
+    extra = os.environ.get("QWED_ALLOWED_STARTUP_PTH_FILES", "")
+    return {name.strip() for name in extra.split(",") if name.strip()}
+
+
+def _get_startup_hook_allowlist() -> set[str]:
+    """Return additional expected startup hook files for this deployment."""
+    allowlist = set(STARTUP_ALLOWED_PTH_FILES)
+    allowlist.update(_get_env_allowlisted_pth_files())
+    return allowlist
+
+
+def _enforce_environment_integrity() -> None:
+    """Fail startup if Python startup hooks cannot be verified as safe."""
+    from qwed_sdk.guards.environment_guard import StartupHookGuard
+
+    guard = StartupHookGuard(allowed_pth_files=_get_startup_hook_allowlist())
+    result = guard.verify_environment_integrity()
+    if not result.get("verified"):
+        logger.critical("Startup environment integrity check failed")
+        raise RuntimeError("Environment integrity verification failed")
+
+
 @app.on_event("startup")
 def on_startup():
+    _enforce_environment_integrity()
     create_db_and_tables()
 
 # Initialize Kernel (Control Plane)
@@ -66,6 +106,76 @@ class VerifyRequest(BaseModel):
 @app.get("/")
 async def root():
     return {"message": "QWED OS is Running", "version": "1.0.0"}
+
+
+def get_optional_current_user(
+    authorization: Optional[str] = Header(None),
+    session: Session = Depends(get_session),
+) -> Optional[User]:
+    """Resolve a JWT-authenticated user when present."""
+    if not authorization:
+        return None
+    if not authorization.startswith("Bearer "):
+        return None
+
+    payload = get_current_user_token(authorization)
+    user_id = payload.get("sub")
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Missing sub claim in token")
+
+    try:
+        user = session.get(User, int(user_id))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid token subject") from exc
+
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    return user
+
+
+def get_optional_api_key_record(
+    x_api_key: Optional[str] = Header(None),
+    session: Session = Depends(get_session),
+) -> Optional[ApiKey]:
+    """Resolve an API key record when the caller provides x-api-key."""
+    if not x_api_key:
+        return None
+
+    hashed_key = hash_api_key(x_api_key)
+    statement = select(ApiKey).where(ApiKey.key_hash == hashed_key, ApiKey.is_active)
+    api_key = session.exec(statement).first()
+
+    if not api_key:
+        raise HTTPException(status_code=403, detail="Invalid or revoked API Key")
+
+    return api_key
+
+
+def _has_metrics_admin_role(user: Optional[User]) -> bool:
+    """Return True when the user can access global operational metrics."""
+    return user is not None and user.is_active and user.role in {"owner", "admin"}
+
+
+def require_metrics_access(
+    current_user: Annotated[Optional[User], Depends(get_optional_current_user)],
+    api_key_record: Annotated[Optional[ApiKey], Depends(get_optional_api_key_record)],
+    session: Annotated[Session, Depends(get_session)],
+) -> None:
+    """Restrict operational metrics to admin JWT users or admin-linked API keys."""
+    if _has_metrics_admin_role(current_user):
+        return
+
+    if api_key_record is not None:
+        api_key_user = session.get(User, api_key_record.user_id) if api_key_record.user_id else None
+        if _has_metrics_admin_role(api_key_user):
+            return
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    if current_user is not None:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    raise HTTPException(status_code=401, detail="Authentication required")
 
 @app.post("/verify/natural_language")
 async def verify_natural_language(
@@ -761,7 +871,11 @@ async def verify_process(
 # OBSERVABILITY ENDPOINTS
 # ============================================================
 
-from qwed_new.core.observability import metrics_collector
+from qwed_new.core.observability import (
+    get_prometheus_content_type,
+    get_prometheus_metrics,
+    metrics_collector,
+)
 from datetime import datetime
 from sqlmodel import select
 
@@ -779,12 +893,13 @@ async def health_check():
     }
 
 @app.get("/metrics")
-async def get_global_metrics():
+async def get_global_metrics(
+    current_user: Annotated[None, Depends(require_metrics_access)],
+):
     """
     Get system-wide metrics.
-    
-    Note: In production, this should require admin authentication.
     """
+    del current_user
     global_metrics = metrics_collector.get_global_metrics()
     all_tenant_metrics = metrics_collector.get_all_tenant_metrics()
     
@@ -792,6 +907,22 @@ async def get_global_metrics():
         "global": global_metrics,
         "tenants": all_tenant_metrics
     }
+
+@app.get("/metrics/prometheus", tags=["Observability"])
+async def prometheus_metrics(
+    current_user: Annotated[None, Depends(require_metrics_access)],
+):
+    """
+    Prometheus-compatible metrics endpoint.
+    
+    Returns metrics in Prometheus text format for scraping.
+    """
+    del current_user
+    content = get_prometheus_metrics()
+    return Response(
+        content=content,
+        media_type=get_prometheus_content_type()
+    )
 
 @app.get("/metrics/{organization_id}")
 async def get_tenant_metrics(
@@ -1410,18 +1541,3 @@ async def get_batch_status(
 # ============================================================
 # PROMETHEUS METRICS ENDPOINT
 # ============================================================
-
-from qwed_new.core.observability import get_prometheus_metrics, get_prometheus_content_type
-
-@app.get("/metrics/prometheus", tags=["Observability"])
-async def prometheus_metrics():
-    """
-    Prometheus-compatible metrics endpoint.
-    
-    Returns metrics in Prometheus text format for scraping.
-    """
-    content = get_prometheus_metrics()
-    return Response(
-        content=content,
-        media_type=get_prometheus_content_type()
-    )

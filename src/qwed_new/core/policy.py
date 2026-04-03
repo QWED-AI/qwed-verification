@@ -73,7 +73,7 @@ class RedisSlidingWindowLimiter:
         from qwed_new.core.redis_config import get_redis_client
         self._client = get_redis_client()
         
-        # Fallback to in-memory if Redis unavailable
+        # Only use local fallback when Redis is unavailable at initialization.
         self._fallback: Optional[RateLimiter] = None
         if self._client is None:
             self._fallback = RateLimiter(rate=rate, per=per)
@@ -93,7 +93,7 @@ class RedisSlidingWindowLimiter:
             True if request is allowed, False if rate limited
         """
         # Fallback to in-memory
-        if self._fallback:
+        if self._client is None and self._fallback:
             return self._fallback.allow()
         
         now = time.time()
@@ -130,13 +130,12 @@ class RedisSlidingWindowLimiter:
             return True
             
         except Exception as e:
-            logger.warning(f"Redis rate limit error: {e}. Allowing request.")
-            # Fail-open: allow request if Redis errors
-            return True
+            logger.warning(f"Redis rate limit error: {e}. Denying request.")
+            return False
     
     def get_remaining(self, identifier: str = "global") -> int:
         """Get remaining requests in current window."""
-        if self._fallback:
+        if self._client is None and self._fallback:
             return max(0, int(self._fallback.tokens))
         
         try:
@@ -151,11 +150,11 @@ class RedisSlidingWindowLimiter:
             return max(0, self.rate - current_count)
             
         except Exception:
-            return self.rate  # Assume full if error
+            return 0
     
     def reset(self, identifier: str = "global") -> bool:
         """Reset rate limit for an identifier."""
-        if self._fallback:
+        if self._client is None and self._fallback:
             self._fallback.tokens = self._fallback.rate
             return True
         

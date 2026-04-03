@@ -23,7 +23,7 @@ class User(SQLModel, table=True):
     email: str = Field(index=True, unique=True)
     password_hash: str
     organization_id: int = Field(foreign_key="organization.id")
-    role: str = Field(default="member")  # admin, member, viewer
+    role: str = Field(default="member")  # owner, admin, member, viewer
     permissions: Optional[str] = None  # JSON string of permissions
     is_active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
