@@ -9,6 +9,8 @@ from qwed_new.core.verifier import VerificationEngine
 def test_verify_identity_sampling_returns_unknown_without_formal_proof():
     engine = VerificationEngine()
 
+    # This RHS is crafted to equal x at the hardcoded sample points used by
+    # verify_identity (0.5, 1, 2, -1, 0.1) without being algebraically identical.
     result = engine.verify_identity(
         "x",
         "x + (x-0.5)*(x-1)*(x-2)*(x+1)*(x-0.1)",
