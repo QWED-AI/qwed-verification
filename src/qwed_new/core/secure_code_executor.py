@@ -307,7 +307,7 @@ except Exception as e:
     
     def is_available(self) -> bool:
         """Check if Docker is currently available."""
-        if not self.docker_available or self.client is None:
+        if self.client is None:
             return False
 
         try:
@@ -315,7 +315,6 @@ except Exception as e:
             return True
         except Exception as e:
             logger.warning("Docker availability check failed: %s", e)
-            self.docker_available = False
             return False
 
 

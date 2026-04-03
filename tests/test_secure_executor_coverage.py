@@ -33,7 +33,17 @@ class TestSecureExecutorCoverage(unittest.TestCase):
         executor.client.ping.side_effect = Exception("Docker daemon unavailable")
 
         self.assertFalse(executor.is_available())
-        self.assertFalse(executor.docker_available)
+        self.assertTrue(executor.docker_available)
+
+    def test_is_available_recovers_after_transient_ping_failure(self):
+        """Test Docker availability check recovers once ping succeeds again."""
+        executor = SecureCodeExecutor()
+        executor.docker_available = True
+        executor.client = MagicMock()
+        executor.client.ping.side_effect = [Exception("Temporary Docker issue"), None]
+
+        self.assertFalse(executor.is_available())
+        self.assertTrue(executor.is_available())
 
     def test_execute_os_error_tempdir(self):
         """Test execute when tempfile creation fails."""
