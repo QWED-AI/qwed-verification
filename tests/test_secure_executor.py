@@ -9,7 +9,6 @@ import pandas as pd
 from qwed_new.core.secure_code_executor import (
     SECURE_RUNTIME_UNAVAILABLE,
     SecureCodeExecutor,
-    ExecutionError,
 )
 
 

@@ -10,6 +10,7 @@ from qwed_new.core.consensus_verifier import (
     ConsensusVerifier,
     EngineResult,
 )
+from qwed_new.core.secure_code_executor import SECURE_RUNTIME_UNAVAILABLE
 from qwed_new.core.stats_verifier import (
     SECURE_STATS_BLOCKED_CODE,
     SECURE_STATS_SANDBOX_REQUIRED,
@@ -128,7 +129,7 @@ def test_consensus_code_engine_requires_secure_executor():
         mock_executor = mock_executor_cls.return_value
         mock_executor.execute.return_value = (
             False,
-            "SECURE_RUNTIME_UNAVAILABLE",
+            SECURE_RUNTIME_UNAVAILABLE,
             None,
         )
         result = verifier._verify_with_code("What is 2+2?")
@@ -209,7 +210,7 @@ def test_stats_verifier_blocks_if_docker_drops_after_selection():
     verifier._code_verifier.verify_code.return_value = {"is_safe": True}
     verifier._docker_executor = MagicMock()
     verifier._docker_executor.is_available.return_value = True
-    verifier._docker_executor.execute.return_value = (False, "SECURE_RUNTIME_UNAVAILABLE", None)
+    verifier._docker_executor.execute.return_value = (False, SECURE_RUNTIME_UNAVAILABLE, None)
 
     df = pd.DataFrame({"value": [1, 2, 3]})
 
@@ -222,7 +223,7 @@ def test_stats_verifier_blocks_if_docker_drops_after_selection():
 def test_stats_execute_docker_marks_runtime_unavailable():
     verifier = StatsVerifier()
     verifier._docker_executor = MagicMock()
-    verifier._docker_executor.execute.return_value = (False, "SECURE_RUNTIME_UNAVAILABLE", None)
+    verifier._docker_executor.execute.return_value = (False, SECURE_RUNTIME_UNAVAILABLE, None)
 
     result = verifier._execute_docker("result = 1", {"df": pd.DataFrame({"value": [1]})})
 

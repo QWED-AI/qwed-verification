@@ -494,8 +494,9 @@ class StatsVerifier:
         start_time = time.time()
         
         try:
+            from qwed_new.core.secure_code_executor import SECURE_RUNTIME_UNAVAILABLE
             success, error, result = self.docker_executor.execute(code, context)
-            if error == "SECURE_RUNTIME_UNAVAILABLE":
+            if error == SECURE_RUNTIME_UNAVAILABLE:
                 error = SECURE_STATS_RUNTIME_UNAVAILABLE
             
             return ExecutionResult(
