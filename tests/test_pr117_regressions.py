@@ -12,6 +12,7 @@ from qwed_new.core.consensus_verifier import (
 )
 from qwed_new.core.secure_code_executor import SECURE_RUNTIME_UNAVAILABLE
 from qwed_new.core.stats_verifier import (
+    INTERNAL_VERIFICATION_ERROR,
     SECURE_STATS_BLOCKED_CODE,
     SECURE_STATS_SANDBOX_REQUIRED,
     SECURE_STATS_RUNTIME_UNAVAILABLE,
@@ -68,6 +69,22 @@ def test_stats_verifier_blocks_without_secure_docker_runtime():
 
     assert result["status"] == "BLOCKED"
     assert result["error"] == SECURE_STATS_BLOCKED_CODE
+
+
+def test_stats_verifier_masks_translation_exceptions():
+    verifier = StatsVerifier()
+    verifier._translator = MagicMock()
+    verifier._translator.translate_stats.side_effect = RuntimeError(
+        "boom /tmp/secret api_key=sk-test-123"
+    )
+
+    df = pd.DataFrame({"value": [1, 2, 3]})
+
+    result = verifier.verify_stats("What is the mean of value?", df)
+
+    assert result["status"] == "ERROR"
+    assert result["error"] == INTERNAL_VERIFICATION_ERROR
+    assert "secret" not in result["error"]
 
 
 def test_stats_sandbox_info_reports_fail_closed_without_docker():

@@ -18,7 +18,10 @@ from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass, field
 import ast
 
+from qwed_new.core.security import redact_pii
+
 logger = logging.getLogger(__name__)
+INTERNAL_VERIFICATION_ERROR = "Internal verification error"
 
 SECURE_STATS_SANDBOX_REQUIRED = (
     "Statistical verification requires the secure Docker sandbox. "
@@ -360,10 +363,14 @@ class StatsVerifier:
         try:
             code = self.translator.translate_stats(query, columns, provider=provider)
         except Exception as e:
-            logger.error(f"Code generation failed: {e}")
+            logger.error(
+                "Stats code generation failed: %s",
+                redact_pii(str(e)),
+                exc_info=False,
+            )
             return {
                 "status": "ERROR",
-                "error": f"Code generation failed: {str(e)}",
+                "error": INTERNAL_VERIFICATION_ERROR,
                 "columns": columns,
                 "execution_time_ms": (time.time() - start_time) * 1000
             }
