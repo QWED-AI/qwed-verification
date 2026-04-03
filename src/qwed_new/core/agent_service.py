@@ -9,6 +9,7 @@ import time
 import uuid
 import hmac
 import json
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Set
@@ -169,6 +170,7 @@ class AgentService:
         self._activity_logs: List[ActivityLog] = []
         self._suspended_agents: Set[str] = set()
         self._conversation_state: Dict[tuple[str, str], Dict[str, Any]] = {}
+        self._conversation_state_lock = threading.Lock()
     
     def _generate_agent_id(self) -> str:
         return f"agent_{uuid.uuid4().hex[:12]}"
@@ -265,7 +267,7 @@ class AgentService:
         self,
         agent_id: str,
         action: AgentAction,
-        context: Optional[ActionContext] = None,
+        context: ActionContext,
         require_attestation: bool = False,
         risk_threshold: str = "medium",
     ) -> Dict[str, Any]:
@@ -392,29 +394,36 @@ class AgentService:
             }
 
         state_key = (agent_id, context.conversation_id)
-        state = self._conversation_state.get(
-            state_key,
-            {"last_step": 0, "last_fingerprint": None, "repeat_count": 0},
-        )
-
-        if context.step_number <= state["last_step"]:
-            return {
-                "code": "QWED-AGENT-LOOP-002",
-                "message": "Replay or out-of-order action step detected",
-            }
-
         fingerprint = self._action_fingerprint(action)
-        repeat_count = state["repeat_count"] + 1 if fingerprint == state["last_fingerprint"] else 1
-        self._conversation_state[state_key] = {
-            "last_step": context.step_number,
-            "last_fingerprint": fingerprint,
-            "repeat_count": repeat_count,
-        }
 
-        if repeat_count > self.MAX_CONSECUTIVE_IDENTICAL_ACTIONS:
-            return {
-                "code": "QWED-AGENT-LOOP-003",
-                "message": "Repetitive action loop detected",
+        with self._conversation_state_lock:
+            state = self._conversation_state.get(
+                state_key,
+                {"last_step": 0, "last_fingerprint": None, "repeat_count": 0},
+            )
+
+            if context.step_number <= state["last_step"]:
+                return {
+                    "code": "QWED-AGENT-LOOP-002",
+                    "message": "Replay or out-of-order action step detected",
+                }
+
+            repeat_count = (
+                state["repeat_count"] + 1
+                if fingerprint == state["last_fingerprint"]
+                else 1
+            )
+
+            if repeat_count > self.MAX_CONSECUTIVE_IDENTICAL_ACTIONS:
+                return {
+                    "code": "QWED-AGENT-LOOP-003",
+                    "message": "Repetitive action loop detected",
+                }
+
+            self._conversation_state[state_key] = {
+                "last_step": context.step_number,
+                "last_fingerprint": fingerprint,
+                "repeat_count": repeat_count,
             }
 
         return None

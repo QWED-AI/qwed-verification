@@ -73,8 +73,10 @@ class RedisSlidingWindowLimiter:
         from qwed_new.core.redis_config import get_redis_client
         self._client = get_redis_client()
         
-        # Always keep a local fallback so Redis outages do not fail open.
-        self._fallback: Optional[RateLimiter] = RateLimiter(rate=rate, per=per)
+        # Only use local fallback when Redis is unavailable at initialization.
+        self._fallback: Optional[RateLimiter] = None
+        if self._client is None:
+            self._fallback = RateLimiter(rate=rate, per=per)
     
     def _get_key(self, identifier: str) -> str:
         """Generate Redis key for the rate limit bucket."""
@@ -128,8 +130,8 @@ class RedisSlidingWindowLimiter:
             return True
             
         except Exception as e:
-            logger.warning(f"Redis rate limit error: {e}. Falling back to local limiter.")
-            return self._fallback.allow()
+            logger.warning(f"Redis rate limit error: {e}. Denying request.")
+            return False
     
     def get_remaining(self, identifier: str = "global") -> int:
         """Get remaining requests in current window."""
@@ -148,7 +150,7 @@ class RedisSlidingWindowLimiter:
             return max(0, self.rate - current_count)
             
         except Exception:
-            return max(0, int(self._fallback.tokens))
+            return 0
     
     def reset(self, identifier: str = "global") -> bool:
         """Reset rate limit for an identifier."""
@@ -160,8 +162,7 @@ class RedisSlidingWindowLimiter:
             key = self._get_key(identifier)
             return self._client.delete(key) > 0
         except Exception:
-            self._fallback.tokens = self._fallback.rate
-            return True
+            return False
 
 
 class PolicyEngine:

@@ -5,7 +5,6 @@ from typing import Optional, Annotated
 from sqlmodel import Session
 import os
 import logging
-import site
 from fractions import Fraction
 
 from qwed_new.core.security import redact_pii
@@ -27,7 +26,8 @@ from qwed_new.core.rate_limiter import check_rate_limit
 from qwed_new.auth import auth_router
 from qwed_new.auth.audit_routes import router as audit_router
 from qwed_new.auth.middleware import get_api_key
-from qwed_new.auth.routes import get_current_user
+from qwed_new.auth.routes import get_current_user, get_current_user_token
+from qwed_new.auth.security import hash_api_key
 
 TenantDependency = Annotated[TenantContext, Depends(get_current_tenant)]
 SessionDependency = Annotated[Session, Depends(get_session)]
@@ -55,32 +55,28 @@ app.include_router(auth_router)
 app.include_router(audit_router)
 
 STARTUP_ALLOWED_PTH_FILES = {
+    "__editable__.qwed_a2a-0.1.0.pth",
+    "__editable__.qwed_finance-2.0.1.pth",
+    "__editable__.qwed_mcp-0.2.0.pth",
+    "_qwed.pth",
+    "_qwed_legal.pth",
+    "_qwed_new.pth",
+    "_qwed_ucp.pth",
     "a1_coverage.pth",
     "pywin32.pth",
 }
 
 
+def _get_env_allowlisted_pth_files() -> set[str]:
+    """Parse deployment-provided exact startup hook allowlist entries."""
+    extra = os.environ.get("QWED_ALLOWED_STARTUP_PTH_FILES", "")
+    return {name.strip() for name in extra.split(",") if name.strip()}
+
+
 def _get_startup_hook_allowlist() -> set[str]:
     """Return additional expected startup hook files for this deployment."""
     allowlist = set(STARTUP_ALLOWED_PTH_FILES)
-    extra = os.environ.get("QWED_ALLOWED_STARTUP_PTH_FILES", "")
-    allowlist.update({name.strip() for name in extra.split(",") if name.strip()})
-    try:
-        site_dirs = list(site.getsitepackages())
-    except AttributeError:
-        site_dirs = []
-    if getattr(site, "ENABLE_USER_SITE", False):
-        user_site = getattr(site, "getusersitepackages", lambda: None)()
-        if user_site:
-            site_dirs.append(user_site)
-    for site_dir in site_dirs:
-        if not os.path.isdir(site_dir):
-            continue
-        for filename in os.listdir(site_dir):
-            if not filename.endswith(".pth"):
-                continue
-            if filename.startswith("_qwed") or filename.startswith("__editable__.qwed"):
-                allowlist.add(filename)
+    allowlist.update(_get_env_allowlisted_pth_files())
     return allowlist
 
 
@@ -112,13 +108,54 @@ async def root():
     return {"message": "QWED OS is Running", "version": "1.0.0"}
 
 
-def require_metrics_admin(
-    current_user: User = Depends(get_current_user),
-) -> User:
-    """Restrict operational metrics to owner/admin users."""
-    if current_user.role not in {"owner", "admin"}:
+async def get_optional_current_user(
+    authorization: Optional[str] = Header(None),
+    session: Session = Depends(get_session),
+) -> Optional[User]:
+    """Resolve a JWT-authenticated user when present."""
+    if not authorization:
+        return None
+
+    payload = get_current_user_token(authorization)
+    user_id = payload.get("sub")
+    user = session.get(User, int(user_id))
+
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    return user
+
+
+async def get_optional_api_key_record(
+    x_api_key: Optional[str] = Header(None),
+    session: Session = Depends(get_session),
+) -> Optional[ApiKey]:
+    """Resolve an API key record when the caller provides x-api-key."""
+    if not x_api_key:
+        return None
+
+    hashed_key = hash_api_key(x_api_key)
+    statement = select(ApiKey).where(ApiKey.key_hash == hashed_key, ApiKey.is_active == True)
+    api_key = session.exec(statement).first()
+
+    if not api_key:
+        raise HTTPException(status_code=403, detail="Invalid or revoked API Key")
+
+    return api_key
+
+
+def require_metrics_access(
+    current_user: Annotated[Optional[User], Depends(get_optional_current_user)],
+    api_key_record: Annotated[Optional[ApiKey], Depends(get_optional_api_key_record)],
+) -> None:
+    """Restrict operational metrics to admin JWT users or authenticated API-key clients."""
+    if current_user and current_user.role in {"owner", "admin"}:
+        return
+    if api_key_record is not None:
+        return
+    if current_user is not None:
         raise HTTPException(status_code=403, detail="Admin access required")
-    return current_user
+    raise HTTPException(status_code=401, detail="Authentication required")
 
 @app.post("/verify/natural_language")
 async def verify_natural_language(
@@ -837,7 +874,7 @@ async def health_check():
 
 @app.get("/metrics")
 async def get_global_metrics(
-    current_user: User = Depends(require_metrics_admin),
+    current_user: Annotated[None, Depends(require_metrics_access)],
 ):
     """
     Get system-wide metrics.
@@ -853,7 +890,7 @@ async def get_global_metrics(
 
 @app.get("/metrics/prometheus", tags=["Observability"])
 async def prometheus_metrics(
-    current_user: User = Depends(require_metrics_admin),
+    current_user: Annotated[None, Depends(require_metrics_access)],
 ):
     """
     Prometheus-compatible metrics endpoint.
