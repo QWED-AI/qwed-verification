@@ -5,6 +5,7 @@ from typing import Optional, Annotated
 from sqlmodel import Session
 import os
 import logging
+import site
 from fractions import Fraction
 
 from qwed_new.core.security import redact_pii
@@ -18,7 +19,7 @@ INTERNAL_PROCESSING_ERROR = "Internal processing error"
 from qwed_new.core.control_plane import ControlPlane
 from qwed_new.core.tenant_context import get_current_tenant, TenantContext
 from qwed_new.core.database import create_db_and_tables, get_session
-from qwed_new.core.models import VerificationLog, ApiKey
+from qwed_new.core.models import VerificationLog, ApiKey, User
 from qwed_new.core.rate_limiter import check_rate_limit
 
 # Import auth router
@@ -26,6 +27,7 @@ from qwed_new.core.rate_limiter import check_rate_limit
 from qwed_new.auth import auth_router
 from qwed_new.auth.audit_routes import router as audit_router
 from qwed_new.auth.middleware import get_api_key
+from qwed_new.auth.routes import get_current_user
 
 TenantDependency = Annotated[TenantContext, Depends(get_current_tenant)]
 SessionDependency = Annotated[Session, Depends(get_session)]
@@ -52,8 +54,50 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(audit_router)
 
+STARTUP_ALLOWED_PTH_FILES = {
+    "a1_coverage.pth",
+    "pywin32.pth",
+}
+
+
+def _get_startup_hook_allowlist() -> set[str]:
+    """Return additional expected startup hook files for this deployment."""
+    allowlist = set(STARTUP_ALLOWED_PTH_FILES)
+    extra = os.environ.get("QWED_ALLOWED_STARTUP_PTH_FILES", "")
+    allowlist.update({name.strip() for name in extra.split(",") if name.strip()})
+    try:
+        site_dirs = list(site.getsitepackages())
+    except AttributeError:
+        site_dirs = []
+    if getattr(site, "ENABLE_USER_SITE", False):
+        user_site = getattr(site, "getusersitepackages", lambda: None)()
+        if user_site:
+            site_dirs.append(user_site)
+    for site_dir in site_dirs:
+        if not os.path.isdir(site_dir):
+            continue
+        for filename in os.listdir(site_dir):
+            if not filename.endswith(".pth"):
+                continue
+            if filename.startswith("_qwed") or filename.startswith("__editable__.qwed"):
+                allowlist.add(filename)
+    return allowlist
+
+
+def _enforce_environment_integrity() -> None:
+    """Fail startup if Python startup hooks cannot be verified as safe."""
+    from qwed_sdk.guards.environment_guard import StartupHookGuard
+
+    guard = StartupHookGuard(allowed_pth_files=_get_startup_hook_allowlist())
+    result = guard.verify_environment_integrity()
+    if not result.get("verified"):
+        logger.critical("Startup environment integrity check failed")
+        raise RuntimeError("Environment integrity verification failed")
+
+
 @app.on_event("startup")
 def on_startup():
+    _enforce_environment_integrity()
     create_db_and_tables()
 
 # Initialize Kernel (Control Plane)
@@ -66,6 +110,15 @@ class VerifyRequest(BaseModel):
 @app.get("/")
 async def root():
     return {"message": "QWED OS is Running", "version": "1.0.0"}
+
+
+def require_metrics_admin(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Restrict operational metrics to owner/admin users."""
+    if current_user.role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return current_user
 
 @app.post("/verify/natural_language")
 async def verify_natural_language(
@@ -761,7 +814,11 @@ async def verify_process(
 # OBSERVABILITY ENDPOINTS
 # ============================================================
 
-from qwed_new.core.observability import metrics_collector
+from qwed_new.core.observability import (
+    get_prometheus_content_type,
+    get_prometheus_metrics,
+    metrics_collector,
+)
 from datetime import datetime
 from sqlmodel import select
 
@@ -779,12 +836,13 @@ async def health_check():
     }
 
 @app.get("/metrics")
-async def get_global_metrics():
+async def get_global_metrics(
+    current_user: User = Depends(require_metrics_admin),
+):
     """
     Get system-wide metrics.
-    
-    Note: In production, this should require admin authentication.
     """
+    del current_user
     global_metrics = metrics_collector.get_global_metrics()
     all_tenant_metrics = metrics_collector.get_all_tenant_metrics()
     
@@ -792,6 +850,22 @@ async def get_global_metrics():
         "global": global_metrics,
         "tenants": all_tenant_metrics
     }
+
+@app.get("/metrics/prometheus", tags=["Observability"])
+async def prometheus_metrics(
+    current_user: User = Depends(require_metrics_admin),
+):
+    """
+    Prometheus-compatible metrics endpoint.
+    
+    Returns metrics in Prometheus text format for scraping.
+    """
+    del current_user
+    content = get_prometheus_metrics()
+    return Response(
+        content=content,
+        media_type=get_prometheus_content_type()
+    )
 
 @app.get("/metrics/{organization_id}")
 async def get_tenant_metrics(
@@ -1410,18 +1484,3 @@ async def get_batch_status(
 # ============================================================
 # PROMETHEUS METRICS ENDPOINT
 # ============================================================
-
-from qwed_new.core.observability import get_prometheus_metrics, get_prometheus_content_type
-
-@app.get("/metrics/prometheus", tags=["Observability"])
-async def prometheus_metrics():
-    """
-    Prometheus-compatible metrics endpoint.
-    
-    Returns metrics in Prometheus text format for scraping.
-    """
-    content = get_prometheus_metrics()
-    return Response(
-        content=content,
-        media_type=get_prometheus_content_type()
-    )

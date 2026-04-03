@@ -7,6 +7,8 @@ Provides registration, verification, budget management, and audit logging.
 
 import time
 import uuid
+import hmac
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Set
@@ -159,11 +161,14 @@ class AgentService:
         "verify_logic": "logic",
         "verify_fact": "fact",
     }
+    MAX_CONVERSATION_STEPS = 50
+    MAX_CONSECUTIVE_IDENTICAL_ACTIONS = 2
     
     def __init__(self):
         self._agents: Dict[str, AgentInfo] = {}
         self._activity_logs: List[ActivityLog] = []
         self._suspended_agents: Set[str] = set()
+        self._conversation_state: Dict[tuple[str, str], Dict[str, Any]] = {}
     
     def _generate_agent_id(self) -> str:
         return f"agent_{uuid.uuid4().hex[:12]}"
@@ -251,7 +256,10 @@ class AgentService:
     def verify_agent_token(self, agent_id: str, agent_token: str) -> bool:
         """Verify agent authentication"""
         agent = self._agents.get(agent_id)
-        return agent is not None and agent.agent_token == agent_token
+        return (
+            agent is not None
+            and hmac.compare_digest(agent.agent_token, agent_token)
+        )
     
     def verify_action(
         self,
@@ -277,6 +285,13 @@ class AgentService:
             return {
                 "decision": AgentDecision.DENIED.value,
                 "error": {"code": "QWED-AGENT-003", "message": "Agent suspended"},
+            }
+
+        context_error = self._enforce_action_context(agent_id, action, context)
+        if context_error:
+            return {
+                "decision": AgentDecision.DENIED.value,
+                "error": context_error,
             }
         
         # Reset budget counters if needed
@@ -350,6 +365,71 @@ class AgentService:
         }
         
         return response
+
+    def _enforce_action_context(
+        self,
+        agent_id: str,
+        action: AgentAction,
+        context: Optional[ActionContext],
+    ) -> Optional[Dict[str, str]]:
+        """Require deterministic action context and detect replay/loop patterns."""
+        if context is None or not context.conversation_id or context.step_number is None:
+            return {
+                "code": "QWED-AGENT-CTX-001",
+                "message": "Action context with conversation_id and step_number is required",
+            }
+
+        if context.step_number < 1:
+            return {
+                "code": "QWED-AGENT-CTX-002",
+                "message": "step_number must be >= 1",
+            }
+
+        if context.step_number > self.MAX_CONVERSATION_STEPS:
+            return {
+                "code": "QWED-AGENT-LOOP-001",
+                "message": "Conversation step limit exceeded",
+            }
+
+        state_key = (agent_id, context.conversation_id)
+        state = self._conversation_state.get(
+            state_key,
+            {"last_step": 0, "last_fingerprint": None, "repeat_count": 0},
+        )
+
+        if context.step_number <= state["last_step"]:
+            return {
+                "code": "QWED-AGENT-LOOP-002",
+                "message": "Replay or out-of-order action step detected",
+            }
+
+        fingerprint = self._action_fingerprint(action)
+        repeat_count = state["repeat_count"] + 1 if fingerprint == state["last_fingerprint"] else 1
+        self._conversation_state[state_key] = {
+            "last_step": context.step_number,
+            "last_fingerprint": fingerprint,
+            "repeat_count": repeat_count,
+        }
+
+        if repeat_count > self.MAX_CONSECUTIVE_IDENTICAL_ACTIONS:
+            return {
+                "code": "QWED-AGENT-LOOP-003",
+                "message": "Repetitive action loop detected",
+            }
+
+        return None
+
+    @staticmethod
+    def _action_fingerprint(action: AgentAction) -> str:
+        """Create a deterministic fingerprint for loop detection."""
+        payload = {
+            "action_type": action.action_type,
+            "query": action.query,
+            "code": action.code,
+            "target": action.target,
+            "parameters": action.parameters,
+        }
+        return json.dumps(payload, sort_keys=True, default=str)
     
     def _check_budget(self, agent: AgentInfo) -> Dict[str, Any]:
         """Check if agent is within budget"""

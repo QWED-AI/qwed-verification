@@ -73,10 +73,8 @@ class RedisSlidingWindowLimiter:
         from qwed_new.core.redis_config import get_redis_client
         self._client = get_redis_client()
         
-        # Fallback to in-memory if Redis unavailable
-        self._fallback: Optional[RateLimiter] = None
-        if self._client is None:
-            self._fallback = RateLimiter(rate=rate, per=per)
+        # Always keep a local fallback so Redis outages do not fail open.
+        self._fallback: Optional[RateLimiter] = RateLimiter(rate=rate, per=per)
     
     def _get_key(self, identifier: str) -> str:
         """Generate Redis key for the rate limit bucket."""
@@ -93,7 +91,7 @@ class RedisSlidingWindowLimiter:
             True if request is allowed, False if rate limited
         """
         # Fallback to in-memory
-        if self._fallback:
+        if self._client is None and self._fallback:
             return self._fallback.allow()
         
         now = time.time()
@@ -130,13 +128,12 @@ class RedisSlidingWindowLimiter:
             return True
             
         except Exception as e:
-            logger.warning(f"Redis rate limit error: {e}. Allowing request.")
-            # Fail-open: allow request if Redis errors
-            return True
+            logger.warning(f"Redis rate limit error: {e}. Falling back to local limiter.")
+            return self._fallback.allow()
     
     def get_remaining(self, identifier: str = "global") -> int:
         """Get remaining requests in current window."""
-        if self._fallback:
+        if self._client is None and self._fallback:
             return max(0, int(self._fallback.tokens))
         
         try:
@@ -151,11 +148,11 @@ class RedisSlidingWindowLimiter:
             return max(0, self.rate - current_count)
             
         except Exception:
-            return self.rate  # Assume full if error
+            return max(0, int(self._fallback.tokens))
     
     def reset(self, identifier: str = "global") -> bool:
         """Reset rate limit for an identifier."""
-        if self._fallback:
+        if self._client is None and self._fallback:
             self._fallback.tokens = self._fallback.rate
             return True
         
@@ -163,7 +160,8 @@ class RedisSlidingWindowLimiter:
             key = self._get_key(identifier)
             return self._client.delete(key) > 0
         except Exception:
-            return False
+            self._fallback.tokens = self._fallback.rate
+            return True
 
 
 class PolicyEngine:
