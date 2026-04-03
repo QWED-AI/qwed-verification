@@ -71,7 +71,7 @@ def test_stats_verifier_blocks_without_secure_docker_runtime():
     assert result["error"] == SECURE_STATS_BLOCKED_CODE
 
 
-def test_stats_verifier_masks_translation_exceptions():
+def test_stats_verifier_masks_translation_exceptions(caplog):
     verifier = StatsVerifier()
     verifier._translator = MagicMock()
     verifier._translator.translate_stats.side_effect = RuntimeError(
@@ -80,11 +80,16 @@ def test_stats_verifier_masks_translation_exceptions():
 
     df = pd.DataFrame({"value": [1, 2, 3]})
 
-    result = verifier.verify_stats("What is the mean of value?", df)
+    with caplog.at_level("ERROR"):
+        result = verifier.verify_stats("What is the mean of value?", df)
 
     assert result["status"] == "ERROR"
     assert result["error"] == INTERNAL_VERIFICATION_ERROR
     assert "secret" not in result["error"]
+    assert "secret" not in caplog.text
+    assert "/tmp/secret" not in caplog.text
+    assert "sk-test-123" not in caplog.text
+    assert "api_key=" not in caplog.text
 
 
 def test_stats_sandbox_info_reports_fail_closed_without_docker():

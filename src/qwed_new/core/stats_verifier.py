@@ -18,8 +18,6 @@ from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass, field
 import ast
 
-from qwed_new.core.security import redact_pii
-
 logger = logging.getLogger(__name__)
 INTERNAL_VERIFICATION_ERROR = "Internal verification error"
 
@@ -364,8 +362,8 @@ class StatsVerifier:
             code = self.translator.translate_stats(query, columns, provider=provider)
         except Exception as e:
             logger.error(
-                "Stats code generation failed: %s",
-                redact_pii(str(e)),
+                "Stats code generation failed (exception_type=%s)",
+                type(e).__name__,
                 exc_info=False,
             )
             return {
