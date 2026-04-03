@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File, F
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 from typing import Optional, Annotated
-from sqlmodel import Session
+from sqlmodel import Session, select
 import os
 import logging
 from fractions import Fraction
@@ -26,7 +26,7 @@ from qwed_new.core.rate_limiter import check_rate_limit
 from qwed_new.auth import auth_router
 from qwed_new.auth.audit_routes import router as audit_router
 from qwed_new.auth.middleware import get_api_key
-from qwed_new.auth.routes import get_current_user, get_current_user_token
+from qwed_new.auth.routes import get_current_user_token
 from qwed_new.auth.security import hash_api_key
 
 TenantDependency = Annotated[TenantContext, Depends(get_current_tenant)]
@@ -108,7 +108,7 @@ async def root():
     return {"message": "QWED OS is Running", "version": "1.0.0"}
 
 
-async def get_optional_current_user(
+def get_optional_current_user(
     authorization: Optional[str] = Header(None),
     session: Session = Depends(get_session),
 ) -> Optional[User]:
@@ -118,7 +118,13 @@ async def get_optional_current_user(
 
     payload = get_current_user_token(authorization)
     user_id = payload.get("sub")
-    user = session.get(User, int(user_id))
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Missing sub claim in token")
+
+    try:
+        user = session.get(User, int(user_id))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid token subject") from exc
 
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
@@ -126,7 +132,7 @@ async def get_optional_current_user(
     return user
 
 
-async def get_optional_api_key_record(
+def get_optional_api_key_record(
     x_api_key: Optional[str] = Header(None),
     session: Session = Depends(get_session),
 ) -> Optional[ApiKey]:
@@ -135,7 +141,7 @@ async def get_optional_api_key_record(
         return None
 
     hashed_key = hash_api_key(x_api_key)
-    statement = select(ApiKey).where(ApiKey.key_hash == hashed_key, ApiKey.is_active == True)
+    statement = select(ApiKey).where(ApiKey.key_hash == hashed_key, ApiKey.is_active)
     api_key = session.exec(statement).first()
 
     if not api_key:
@@ -144,17 +150,29 @@ async def get_optional_api_key_record(
     return api_key
 
 
+def _has_metrics_admin_role(user: Optional[User]) -> bool:
+    """Return True when the user can access global operational metrics."""
+    return user is not None and user.role in {"owner", "admin"}
+
+
 def require_metrics_access(
     current_user: Annotated[Optional[User], Depends(get_optional_current_user)],
     api_key_record: Annotated[Optional[ApiKey], Depends(get_optional_api_key_record)],
+    session: Annotated[Session, Depends(get_session)],
 ) -> None:
-    """Restrict operational metrics to admin JWT users or authenticated API-key clients."""
-    if current_user and current_user.role in {"owner", "admin"}:
+    """Restrict operational metrics to admin JWT users or admin-linked API keys."""
+    if _has_metrics_admin_role(current_user):
         return
+
     if api_key_record is not None:
-        return
+        api_key_user = session.get(User, api_key_record.user_id) if api_key_record.user_id else None
+        if _has_metrics_admin_role(api_key_user):
+            return
+        raise HTTPException(status_code=403, detail="Admin access required")
+
     if current_user is not None:
         raise HTTPException(status_code=403, detail="Admin access required")
+
     raise HTTPException(status_code=401, detail="Authentication required")
 
 @app.post("/verify/natural_language")

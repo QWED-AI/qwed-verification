@@ -198,10 +198,48 @@ def test_prometheus_metrics_requires_admin_user(client):
 
 
 def test_metrics_allows_api_key_client(client):
-    api_main.app.dependency_overrides[get_optional_api_key_record] = lambda: MagicMock(organization_id=1)
-    response = client.get("/metrics", headers={"x-api-key": "fake-key"})
+    api_main.app.dependency_overrides[get_optional_api_key_record] = lambda: MagicMock(
+        organization_id=1,
+        user_id=42,
+    )
+    mock_session = MagicMock()
+    mock_session.get.return_value = MagicMock(role="admin")
+    api_main.app.dependency_overrides[api_main.get_session] = lambda: mock_session
+
+    with patch.object(api_main.metrics_collector, "get_global_metrics", return_value={"requests": 1}), patch.object(
+        api_main.metrics_collector,
+        "get_all_tenant_metrics",
+        return_value={"1": {"requests": 1}},
+    ):
+        response = client.get("/metrics", headers={"x-api-key": "fake-key"})
 
     assert response.status_code == 200
+
+
+def test_metrics_rejects_non_admin_api_key_client(client):
+    api_main.app.dependency_overrides[get_optional_api_key_record] = lambda: MagicMock(
+        organization_id=1,
+        user_id=42,
+    )
+    mock_session = MagicMock()
+    mock_session.get.return_value = MagicMock(role="member")
+    api_main.app.dependency_overrides[api_main.get_session] = lambda: mock_session
+
+    response = client.get("/metrics", headers={"x-api-key": "fake-key"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Admin access required"
+
+
+def test_get_optional_current_user_rejects_missing_sub_claim():
+    session = MagicMock()
+
+    with patch("qwed_new.api.main.get_current_user_token", return_value={}):
+        with pytest.raises(api_main.HTTPException) as exc_info:
+            api_main.get_optional_current_user("Bearer fake", session)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Missing sub claim in token"
 
 
 def test_enforce_environment_integrity_raises_on_compromise():
