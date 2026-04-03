@@ -164,6 +164,12 @@ class AgentService:
     }
     MAX_CONVERSATION_STEPS = 50
     MAX_CONSECUTIVE_IDENTICAL_ACTIONS = 2
+    RISK_RANKS = {
+        RiskLevel.LOW: 0,
+        RiskLevel.MEDIUM: 1,
+        RiskLevel.HIGH: 2,
+        RiskLevel.CRITICAL: 3,
+    }
     
     def __init__(self):
         self._agents: Dict[str, AgentInfo] = {}
@@ -322,7 +328,7 @@ class AgentService:
         # Determine decision
         if failed:
             decision = AgentDecision.DENIED
-        elif risk_level.value > RiskLevel[risk_threshold.upper()].value:
+        elif self._risk_exceeds_threshold(risk_level, RiskLevel[risk_threshold.upper()]):
             if agent.trust_level.value < TrustLevel.AUTONOMOUS.value:
                 decision = AgentDecision.PENDING
             else:
@@ -330,9 +336,12 @@ class AgentService:
         else:
             decision = AgentDecision.APPROVED
         
+        # Commit approved or pending steps so loop/replay tracking cannot be bypassed.
+        if decision in {AgentDecision.APPROVED, AgentDecision.PENDING}:
+            self._commit_action_context(context, context_state)
+
         # Update budget tracking
         if decision == AgentDecision.APPROVED:
-            self._commit_action_context(context, context_state)
             estimated_cost = 0.01  # Base cost
             agent.budget.current_daily_cost_usd += estimated_cost
             agent.budget.current_hour_requests += 1
@@ -461,6 +470,10 @@ class AgentService:
             "parameters": action.parameters,
         }
         return json.dumps(payload, sort_keys=True, default=str)
+
+    def _risk_exceeds_threshold(self, risk_level: RiskLevel, threshold: RiskLevel) -> bool:
+        """Compare risk levels by their enforcement rank, not string value."""
+        return self.RISK_RANKS[risk_level] > self.RISK_RANKS[threshold]
     
     def _check_budget(self, agent: AgentInfo) -> Dict[str, Any]:
         """Check if agent is within budget"""

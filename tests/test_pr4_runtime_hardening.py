@@ -149,20 +149,60 @@ def test_verify_action_allows_different_action_after_loop_denial_same_step():
         repeat_action,
         context=ActionContext(conversation_id="conv-3", step_number=2),
     )
+    state_before_denial = service._conversation_state[(agent_id, "conv-3")].copy()
     denied = service.verify_action(
         agent_id,
         repeat_action,
         context=ActionContext(conversation_id="conv-3", step_number=3),
     )
+    assert service._conversation_state[(agent_id, "conv-3")] == state_before_denial
     different = service.verify_action(
         agent_id,
         different_action,
         context=ActionContext(conversation_id="conv-3", step_number=3),
     )
+    step4 = service.verify_action(
+        agent_id,
+        AgentAction(action_type="calculate", query="3+3"),
+        context=ActionContext(conversation_id="conv-3", step_number=4),
+    )
 
     assert denied["decision"] == "DENIED"
     assert denied["error"]["code"] == "QWED-AGENT-LOOP-003"
+    assert state_before_denial == {
+        "last_step": 2,
+        "last_fingerprint": service._action_fingerprint(repeat_action),
+        "repeat_count": 2,
+    }
     assert different["decision"] == "APPROVED"
+    assert step4["decision"] == "APPROVED"
+
+
+def test_verify_action_blocks_repetitive_pending_loop():
+    service = AgentService()
+    agent_id, _ = _register_test_agent(service)
+    pending_action = AgentAction(action_type="file_write", query="write config")
+
+    first = service.verify_action(
+        agent_id,
+        pending_action,
+        context=ActionContext(conversation_id="conv-pending", step_number=1),
+    )
+    second = service.verify_action(
+        agent_id,
+        pending_action,
+        context=ActionContext(conversation_id="conv-pending", step_number=2),
+    )
+    third = service.verify_action(
+        agent_id,
+        pending_action,
+        context=ActionContext(conversation_id="conv-pending", step_number=3),
+    )
+
+    assert first["decision"] == "PENDING"
+    assert second["decision"] == "PENDING"
+    assert third["decision"] == "DENIED"
+    assert third["error"]["code"] == "QWED-AGENT-LOOP-003"
 
 
 def test_metrics_requires_admin_user(client):
