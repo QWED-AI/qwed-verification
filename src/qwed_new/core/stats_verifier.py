@@ -1,13 +1,10 @@
 """
 Enterprise Statistical Verification Engine.
 
-Verifies claims about tabular data with secure execution options:
-1. Docker sandbox (production)
-2. Wasm sandbox (portable)
-3. Restricted executor (fallback)
+Verifies claims about tabular data using a secure Docker sandbox.
+In-process execution fallbacks are intentionally disabled.
 
 Enhanced Features:
-- Multiple sandbox options
 - Pre-execution security validation
 - Memory and CPU limits
 - Timeout enforcement
@@ -22,6 +19,13 @@ from dataclasses import dataclass, field
 import ast
 
 logger = logging.getLogger(__name__)
+
+SECURE_STATS_SANDBOX_REQUIRED = (
+    "Statistical verification requires the secure Docker sandbox. "
+    "In-process fallback execution is disabled."
+)
+SECURE_STATS_BLOCKED_CODE = "SERVICE_UNAVAILABLE"
+SECURE_STATS_RUNTIME_UNAVAILABLE = "SECURE_RUNTIME_UNAVAILABLE"
 
 
 @dataclass
@@ -46,10 +50,10 @@ class SecurityReport:
 
 class WasmSandbox:
     """
-    WebAssembly-based sandbox for portable secure execution.
-    
-    Uses Pyodide (Python in Wasm) for sandboxed execution.
-    More portable than Docker, works in any environment.
+    Deprecated Wasm fallback.
+
+    This class is retained only to preserve explicit fail-closed behavior for
+    older call sites. It never executes model-generated code in-process.
 
     Attributes:
         memory_limit_mb (int): Memory limit in MB.
@@ -105,8 +109,8 @@ class WasmSandbox:
         """
         Execute code in Wasm sandbox.
         
-        Since Pyodide requires async/browser context, this implementation
-        uses a restricted Python executor with similar security properties.
+        The Wasm fallback is intentionally disabled. QWED requires Docker
+        isolation for model-generated statistical code.
 
         Args:
             code: Python code to execute.
@@ -117,82 +121,25 @@ class WasmSandbox:
 
         Example:
             >>> result = sandbox.execute("result = 1 + 1", {})
-            >>> print(result.result)
-            2
+            >>> print(result.success)
+            False
         """
+        del code, context
         start_time = time.time()
-        
-        # For now, use a restricted executor since true Wasm requires
-        # browser context or specific runtime
-        try:
-            result = self._execute_restricted(code, context)
-            return ExecutionResult(
-                success=True,
-                result=result,
-                execution_time_ms=(time.time() - start_time) * 1000,
-                sandbox_type="wasm_restricted"
-            )
-        except Exception as e:
-            return ExecutionResult(
-                success=False,
-                error=str(e),
-                execution_time_ms=(time.time() - start_time) * 1000,
-                sandbox_type="wasm_restricted"
-            )
-    
-    def _execute_restricted(self, code: str, context: Dict[str, Any]) -> Any:
-        """Execute code in restricted Python environment."""
-        # Create very restricted namespace
-        import statistics
-        import math
-        
-        safe_builtins = {
-            'abs': abs,
-            'all': all,
-            'any': any,
-            'bool': bool,
-            'float': float,
-            'int': int,
-            'len': len,
-            'list': list,
-            'max': max,
-            'min': min,
-            'print': print,
-            'range': range,
-            'round': round,
-            'sorted': sorted,
-            'str': str,
-            'sum': sum,
-            'tuple': tuple,
-            'zip': zip,
-            'enumerate': enumerate,
-            'dict': dict,
-            'set': set,
-            'True': True,
-            'False': False,
-            'None': None,
-        }
-        
-        safe_namespace = {
-            '__builtins__': safe_builtins,
-            'pd': pd,
-            'statistics': statistics,
-            'math': math,
-            **context
-        }
-        
-        # Execute with timeout (basic implementation)
-        exec(code, safe_namespace)
-        
-        # Return last computed value if stored in 'result'
-        return safe_namespace.get('result', safe_namespace.get('answer', None))
+        return ExecutionResult(
+            success=False,
+            error=SECURE_STATS_SANDBOX_REQUIRED,
+            execution_time_ms=(time.time() - start_time) * 1000,
+            sandbox_type="wasm_disabled"
+        )
 
 
 class RestrictedExecutor:
     """
-    Fallback executor with AST-based security restrictions.
-    
-    Analyzes code AST to block dangerous operations before execution.
+    Restricted AST validator for generated statistical code.
+
+    Execution is intentionally disabled; the class only retains AST validation
+    helpers so QWED can block unsafe code before Docker execution.
 
     Attributes:
         timeout_seconds (float): Execution timeout in seconds.
@@ -267,7 +214,7 @@ class RestrictedExecutor:
     
     def execute(self, code: str, context: Dict[str, Any]) -> ExecutionResult:
         """
-        Execute code if it passes safety checks.
+        Execution is intentionally disabled.
 
         Args:
             code: Python code to execute.
@@ -278,69 +225,24 @@ class RestrictedExecutor:
 
         Example:
             >>> result = executor.execute("result = 5 * 5", {})
-            >>> print(result.result)
-            25
+            >>> print(result.success)
+            False
         """
+        del code, context
         start_time = time.time()
-        
-        is_safe, issues = self.is_code_safe(code)
-        if not is_safe:
-            return ExecutionResult(
-                success=False,
-                error=f"Code failed safety check: {issues}",
-                execution_time_ms=(time.time() - start_time) * 1000,
-                sandbox_type="restricted"
-            )
-        
-        # Create restricted namespace
-        import statistics
-        import math
-        
-        safe_builtins = {
-            'abs': abs, 'all': all, 'any': any, 'bool': bool,
-            'float': float, 'int': int, 'len': len, 'list': list,
-            'max': max, 'min': min, 'print': print, 'range': range,
-            'round': round, 'sorted': sorted, 'str': str, 'sum': sum,
-            'tuple': tuple, 'zip': zip, 'enumerate': enumerate,
-            'dict': dict, 'set': set,
-            'True': True, 'False': False, 'None': None,
-        }
-        
-        namespace = {
-            '__builtins__': safe_builtins,
-            'pd': pd,
-            'statistics': statistics,
-            'math': math,
-            **context
-        }
-        
-        try:
-            exec(code, namespace)
-            result = namespace.get('result', namespace.get('answer', None))
-            
-            return ExecutionResult(
-                success=True,
-                result=result,
-                execution_time_ms=(time.time() - start_time) * 1000,
-                sandbox_type="restricted"
-            )
-        except Exception as e:
-            return ExecutionResult(
-                success=False,
-                error=str(e),
-                execution_time_ms=(time.time() - start_time) * 1000,
-                sandbox_type="restricted"
-            )
+        return ExecutionResult(
+            success=False,
+            error=SECURE_STATS_SANDBOX_REQUIRED,
+            execution_time_ms=(time.time() - start_time) * 1000,
+            sandbox_type="restricted_disabled"
+        )
 
 
 class StatsVerifier:
     """
     Enterprise Statistical Verification Engine.
     
-    Verifies claims about tabular data with multiple sandbox options:
-    1. Docker (most secure, requires Docker)
-    2. Wasm (portable, works anywhere)
-    3. Restricted (fallback, AST-validated)
+    Verifies claims about tabular data using the secure Docker sandbox only.
 
     Attributes:
         preferred_sandbox (str): Preferred sandbox type.
@@ -359,11 +261,12 @@ class StatsVerifier:
         
         Args:
             preferred_sandbox: "docker", "wasm", "restricted", or "auto".
+                Non-Docker choices are blocked for model-generated code.
             timeout_seconds: Execution timeout in seconds.
             memory_limit_mb: Memory limit in megabytes.
 
         Example:
-            >>> verifier = StatsVerifier(preferred_sandbox="restricted")
+            >>> verifier = StatsVerifier(preferred_sandbox="docker")
         """
         self.preferred_sandbox = preferred_sandbox
         self.timeout_seconds = timeout_seconds
@@ -421,25 +324,11 @@ class StatsVerifier:
         return self._restricted_executor
     
     def _select_sandbox(self) -> Tuple[str, Any]:
-        """Select best available sandbox."""
-        if self.preferred_sandbox == "docker":
-            if self.docker_executor and self.docker_executor.is_available():
-                return "docker", self.docker_executor
-        
-        if self.preferred_sandbox == "wasm":
-            return "wasm", self.wasm_sandbox
-        
-        if self.preferred_sandbox == "restricted":
-            return "restricted", self.restricted_executor
-        
-        # Auto: try Docker first, then Wasm, then restricted
+        """Select the secure sandbox or fail closed."""
         if self.docker_executor and self.docker_executor.is_available():
             return "docker", self.docker_executor
-        
-        if self.wasm_sandbox.is_available():
-            return "wasm", self.wasm_sandbox
-        
-        return "restricted", self.restricted_executor
+
+        return "blocked", None
     
     def verify_stats(
         self,
@@ -496,15 +385,19 @@ class StatsVerifier:
         
         # 3. Select sandbox and execute
         sandbox_type, sandbox = self._select_sandbox()
+        if sandbox_type != "docker" or sandbox is None:
+            logger.warning("Blocked stats execution because secure Docker sandbox is unavailable")
+            return {
+                "status": "BLOCKED",
+                "error": SECURE_STATS_BLOCKED_CODE,
+                "code": code,
+                "columns": columns,
+                "execution_time_ms": (time.time() - start_time) * 1000
+            }
         
         context = {"df": df}
         
-        if sandbox_type == "docker":
-            exec_result = self._execute_docker(code, context)
-        elif sandbox_type == "wasm":
-            exec_result = self.wasm_sandbox.execute(code, context)
-        else:
-            exec_result = self.restricted_executor.execute(code, context)
+        exec_result = self._execute_docker(code, context)
         
         total_time = (time.time() - start_time) * 1000
         
@@ -520,6 +413,16 @@ class StatsVerifier:
                     "checks_passed": security_report.checks_passed,
                     "risk_level": security_report.risk_level
                 },
+                "execution_time_ms": exec_result.execution_time_ms,
+                "total_time_ms": total_time
+            }
+        if exec_result.error == SECURE_STATS_RUNTIME_UNAVAILABLE:
+            logger.warning("Blocked stats execution because secure Docker sandbox became unavailable")
+            return {
+                "status": "BLOCKED",
+                "error": SECURE_STATS_BLOCKED_CODE,
+                "code": code,
+                "columns": columns,
                 "execution_time_ms": exec_result.execution_time_ms,
                 "total_time_ms": total_time
             }
@@ -591,7 +494,10 @@ class StatsVerifier:
         start_time = time.time()
         
         try:
+            from qwed_new.core.secure_code_executor import SECURE_RUNTIME_UNAVAILABLE
             success, error, result = self.docker_executor.execute(code, context)
+            if error == SECURE_RUNTIME_UNAVAILABLE:
+                error = SECURE_STATS_RUNTIME_UNAVAILABLE
             
             return ExecutionResult(
                 success=success,
@@ -697,7 +603,7 @@ class StatsVerifier:
         return {
             "preferred": self.preferred_sandbox,
             "docker_available": docker_available,
-            "wasm_available": self.wasm_sandbox.is_available(),
-            "restricted_available": True,  # Always available
+            "wasm_available": False,
+            "restricted_available": False,
             "current": self._select_sandbox()[0]
         }

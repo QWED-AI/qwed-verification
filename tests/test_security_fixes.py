@@ -133,6 +133,8 @@ class TestSecurityFixes(unittest.TestCase):
             executor = SecureCodeExecutor()
             # Force docker_available to True so we don't return early
             executor.docker_available = True
+            executor.client = MagicMock()
+            executor.client.ping.return_value = True
             
             # Mock tempfile.TemporaryDirectory to raise OSError
             with patch('tempfile.TemporaryDirectory', side_effect=OSError("Permission denied")):

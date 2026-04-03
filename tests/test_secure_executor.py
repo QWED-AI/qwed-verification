@@ -6,7 +6,10 @@ Note: Requires Docker to be running for these tests to pass.
 
 import pytest
 import pandas as pd
-from qwed_new.core.secure_code_executor import SecureCodeExecutor, ExecutionError
+from qwed_new.core.secure_code_executor import (
+    SECURE_RUNTIME_UNAVAILABLE,
+    SecureCodeExecutor,
+)
 
 
 class TestSecureCodeExecutor:
@@ -167,7 +170,7 @@ class TestSecureExecutorFallback:
         code = "result = 2 + 2"
         success, error, result = executor.execute(code, {})
         assert not success
-        assert "Docker" in error
+        assert error == SECURE_RUNTIME_UNAVAILABLE
 
 
 if __name__ == "__main__":

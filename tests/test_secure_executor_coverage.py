@@ -2,7 +2,11 @@
 import unittest
 import docker
 from unittest.mock import MagicMock, patch
-from src.qwed_new.core.secure_code_executor import SecureCodeExecutor, ExecutionError
+from src.qwed_new.core.secure_code_executor import (
+    SECURE_RUNTIME_UNAVAILABLE,
+    SecureCodeExecutor,
+    ExecutionError,
+)
 
 class TestSecureExecutorCoverage(unittest.TestCase):
     """Targeted tests to improve coverage of secure_code_executor.py"""
@@ -19,7 +23,27 @@ class TestSecureExecutorCoverage(unittest.TestCase):
             executor = SecureCodeExecutor()
             success, error, _ = executor.execute("print(1)", {})
             self.assertFalse(success)
-            self.assertIn("Docker is not available", error)
+            self.assertEqual(SECURE_RUNTIME_UNAVAILABLE, error)
+
+    def test_is_available_rechecks_docker_health(self):
+        """Test live Docker health check instead of relying on cached startup state."""
+        executor = SecureCodeExecutor()
+        executor.docker_available = True
+        executor.client = MagicMock()
+        executor.client.ping.side_effect = Exception("Docker daemon unavailable")
+
+        self.assertFalse(executor.is_available())
+        self.assertTrue(executor.docker_available)
+
+    def test_is_available_recovers_after_transient_ping_failure(self):
+        """Test Docker availability check recovers once ping succeeds again."""
+        executor = SecureCodeExecutor()
+        executor.docker_available = True
+        executor.client = MagicMock()
+        executor.client.ping.side_effect = [Exception("Temporary Docker issue"), None]
+
+        self.assertFalse(executor.is_available())
+        self.assertTrue(executor.is_available())
 
     def test_execute_os_error_tempdir(self):
         """Test execute when tempfile creation fails."""
