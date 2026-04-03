@@ -10,6 +10,7 @@ import uuid
 import hmac
 import json
 import threading
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Set
@@ -176,6 +177,7 @@ class AgentService:
         self._activity_logs: List[ActivityLog] = []
         self._suspended_agents: Set[str] = set()
         self._conversation_state: Dict[tuple[str, str], Dict[str, Any]] = {}
+        self._conversation_reservations: Dict[tuple[str, str], Dict[str, Any]] = {}
         self._conversation_state_lock = threading.Lock()
     
     def _generate_agent_id(self) -> str:
@@ -308,6 +310,7 @@ class AgentService:
         # Check budget
         budget_check = self._check_budget(agent)
         if not budget_check["passed"]:
+            self._release_action_context(context_state)
             return {
                 "decision": AgentDecision.BUDGET_EXCEEDED.value,
                 "error": {
@@ -339,6 +342,8 @@ class AgentService:
         # Commit approved or pending steps so loop/replay tracking cannot be bypassed.
         if decision in {AgentDecision.APPROVED, AgentDecision.PENDING}:
             self._commit_action_context(context, context_state)
+        else:
+            self._release_action_context(context_state)
 
         # Update budget tracking
         if decision == AgentDecision.APPROVED:
@@ -407,6 +412,13 @@ class AgentService:
         fingerprint = self._action_fingerprint(action)
 
         with self._conversation_state_lock:
+            reservation = self._conversation_reservations.get(state_key)
+            if reservation and context.step_number <= reservation["step_number"]:
+                return ({
+                    "code": "QWED-AGENT-LOOP-002",
+                    "message": "Replay or in-flight action step detected",
+                }, None)
+
             state = self._conversation_state.get(
                 state_key,
                 {"last_step": 0, "last_fingerprint": None, "repeat_count": 0},
@@ -435,8 +447,17 @@ class AgentService:
                 "last_fingerprint": fingerprint,
                 "repeat_count": repeat_count,
             }
+            reservation_id = uuid.uuid4().hex
+            self._conversation_reservations[state_key] = {
+                "step_number": context.step_number,
+                "reservation_id": reservation_id,
+            }
 
-        return None, {"state_key": state_key, "next_state": next_state}
+        return None, {
+            "state_key": state_key,
+            "next_state": next_state,
+            "reservation_id": reservation_id,
+        }
 
     def _commit_action_context(
         self,
@@ -449,15 +470,31 @@ class AgentService:
 
         state_key = context_state["state_key"]
         next_state = context_state["next_state"]
+        reservation_id = context_state["reservation_id"]
 
         with self._conversation_state_lock:
-            state = self._conversation_state.get(
-                state_key,
-                {"last_step": 0},
-            )
+            reservation = self._conversation_reservations.get(state_key)
+            if reservation is None or reservation["reservation_id"] != reservation_id:
+                return
+            state = self._conversation_state.get(state_key, {"last_step": 0})
             if context.step_number <= state["last_step"]:
+                self._conversation_reservations.pop(state_key, None)
                 return
             self._conversation_state[state_key] = next_state
+            self._conversation_reservations.pop(state_key, None)
+
+    def _release_action_context(self, context_state: Optional[Dict[str, Any]]) -> None:
+        """Release an in-flight context reservation when execution does not proceed."""
+        if context_state is None:
+            return
+
+        state_key = context_state["state_key"]
+        reservation_id = context_state["reservation_id"]
+
+        with self._conversation_state_lock:
+            reservation = self._conversation_reservations.get(state_key)
+            if reservation and reservation["reservation_id"] == reservation_id:
+                self._conversation_reservations.pop(state_key, None)
 
     @staticmethod
     def _action_fingerprint(action: AgentAction) -> str:
@@ -467,9 +504,31 @@ class AgentService:
             "query": action.query,
             "code": action.code,
             "target": action.target,
-            "parameters": action.parameters,
+            "parameters": AgentService._sanitize_fingerprint_value(action.parameters),
         }
-        return json.dumps(payload, sort_keys=True, default=str)
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    @staticmethod
+    def _sanitize_fingerprint_value(value: Any) -> Any:
+        """Allow only deterministic JSON-compatible values in action fingerprints."""
+        if value is None or isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise TypeError("Non-finite floats are not allowed in action parameters")
+            return value
+        if isinstance(value, list):
+            return [AgentService._sanitize_fingerprint_value(item) for item in value]
+        if isinstance(value, tuple):
+            return [AgentService._sanitize_fingerprint_value(item) for item in value]
+        if isinstance(value, dict):
+            sanitized: Dict[str, Any] = {}
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise TypeError("Action parameter keys must be strings")
+                sanitized[key] = AgentService._sanitize_fingerprint_value(item)
+            return sanitized
+        raise TypeError(f"Unsupported action parameter type: {type(value).__name__}")
 
     def _risk_exceeds_threshold(self, risk_level: RiskLevel, threshold: RiskLevel) -> bool:
         """Compare risk levels by their enforcement rank, not string value."""

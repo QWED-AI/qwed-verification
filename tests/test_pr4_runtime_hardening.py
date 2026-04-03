@@ -205,6 +205,41 @@ def test_verify_action_blocks_repetitive_pending_loop():
     assert third["error"]["code"] == "QWED-AGENT-LOOP-003"
 
 
+def test_verify_action_reserves_in_flight_step_until_release():
+    service = AgentService()
+    agent_id, _ = _register_test_agent(service)
+    action = AgentAction(action_type="calculate", query="2+2")
+
+    error, context_state = service._enforce_action_context(
+        agent_id,
+        action,
+        ActionContext(conversation_id="conv-race", step_number=1),
+    )
+    replay_error, _ = service._enforce_action_context(
+        agent_id,
+        action,
+        ActionContext(conversation_id="conv-race", step_number=1),
+    )
+    service._release_action_context(context_state)
+    retry_error, retry_state = service._enforce_action_context(
+        agent_id,
+        action,
+        ActionContext(conversation_id="conv-race", step_number=1),
+    )
+
+    assert error is None
+    assert replay_error["code"] == "QWED-AGENT-LOOP-002"
+    assert retry_error is None
+    service._release_action_context(retry_state)
+
+
+def test_action_fingerprint_rejects_non_deterministic_parameters():
+    action = AgentAction(action_type="calculate", query="2+2", parameters={"bad": object()})
+
+    with pytest.raises(TypeError, match="Unsupported action parameter type"):
+        AgentService._action_fingerprint(action)
+
+
 def test_metrics_requires_admin_user(client):
     api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="member", is_active=True)
 
