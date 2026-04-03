@@ -178,10 +178,11 @@ class VerificationEngine:
             
             if evaluated_points > 0 and matches == evaluated_points:
                 return {
-                    "is_equivalent": True,
-                    "status": "LIKELY_EQUIVALENT",
+                    "is_equivalent": None,
+                    "status": "UNKNOWN",
                     "method": "numerical_sampling",
-                    "confidence": 0.99
+                    "confidence": 0.0,
+                    "reason": "Numerical sampling matched at fixed points, but no formal proof was established"
                 }
             
             return {

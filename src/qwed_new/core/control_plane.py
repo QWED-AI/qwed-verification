@@ -35,6 +35,34 @@ class ControlPlane:
         # Enterprise security components
         self.security_gateway = EnhancedSecurityGateway()
         self.output_sanitizer = OutputSanitizer()
+
+    @staticmethod
+    def _build_math_trust_boundary(
+        provider: str,
+        verification_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Describe exactly what the math pipeline did and did not prove."""
+        expression_status = verification_result.get("status")
+        deterministic_evaluation = expression_status in {"VERIFIED", "CORRECTION_NEEDED"}
+        return {
+            "query_interpretation_source": "llm_translation",
+            "query_semantics_verified": False,
+            "verification_scope": "translated_expression_only",
+            "deterministic_expression_evaluation": deterministic_evaluation,
+            "formal_proof": False,
+            "translation_claim_self_consistent": verification_result.get("is_correct"),
+            "provider_used": provider,
+        }
+
+    @staticmethod
+    def _determine_math_response_status(verification_result: Dict[str, Any]) -> str:
+        """Avoid representing translated-query evaluation as a proven user-query verdict."""
+        expression_status = verification_result.get("status")
+        if expression_status in {"VERIFIED", "CORRECTION_NEEDED"}:
+            return "INCONCLUSIVE"
+        if expression_status == "SYNTAX_ERROR":
+            return "ERROR"
+        return expression_status or "ERROR"
         
     async def process_natural_language(
         self, 
@@ -99,14 +127,18 @@ class ControlPlane:
                 expression=task.expression,
                 expected_value=task.claimed_answer
             )
+            response_status = self._determine_math_response_status(verification_result)
+            trust_boundary = self._build_math_trust_boundary(provider, verification_result)
+            trust_boundary["overall_status"] = response_status
             
             # 5. Response Construction
             response = {
-                "status": verification_result["status"],
+                "status": response_status,
                 "final_answer": verification_result.get("calculated_value"),
                 "user_query": query,
                 "translation": task.dict(),
                 "verification": verification_result,
+                "trust_boundary": trust_boundary,
                 "provider_used": provider,
                 "latency_ms": (time.time() - start_time) * 1000
             }
