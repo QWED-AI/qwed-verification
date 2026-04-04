@@ -4,7 +4,7 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
-## [4.1.0] - 2026-04-04
+## [5.0.0] - 2026-04-04
 ### 🛡️ Enforcement Boundary Hardening
 
 Major release focused on making QWED's verification boundary fail-closed, deterministic about what it proves, and substantially harder to bypass under adversarial conditions. Consolidates 98 commits and 20 merged PRs since v4.0.1, including the full PR 0–5 enforcement hardening series.
@@ -44,9 +44,9 @@ Major release focused on making QWED's verification boundary fail-closed, determ
 - Merged security autofix PRs and dependency hardening (#100–#114).
 
 #### 📦 SDK & Package Versions
-- `qwed` (PyPI): `4.0.1` → `4.1.0`
-- `qwed_sdk` (Python): `2.1.0-dev` → `4.1.0`
-- `@qwed-ai/sdk` (NPM): `4.0.1` → `4.1.0`
+- `qwed` (PyPI): `4.0.1` → `5.0.0`
+- `qwed_sdk` (Python): `2.1.0-dev` → `5.0.0`
+- `@qwed-ai/sdk` (NPM): `4.0.1` → `5.0.0`
 - TypeScript SDK: Removed `security_checks` from agent verification helpers; `tool_schema` remains.
 
 #### 🧪 Test Coverage
