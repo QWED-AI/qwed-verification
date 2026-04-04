@@ -37,7 +37,7 @@ from qwed_sdk.models import (
     VerificationType,
 )
 
-__version__ = "2.1.0-dev"
+__version__ = "4.1.0"
 __all__ = [
     "QWEDClient",
     "QWEDAsyncClient",

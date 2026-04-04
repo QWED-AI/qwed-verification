@@ -3,11 +3,65 @@
 All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
-### Security
-- Agent verification security checks are now enforced server-side and are no longer configurable through client request payloads.
-- TypeScript SDK agent verification helpers no longer send `security_checks`; `tool_schema` remains available for server-side MCP inspection.
-- Statistical verification now requires the secure Docker sandbox; Wasm and restricted in-process fallback execution paths are disabled.
-- Consensus Python verification now uses the secure Docker executor instead of same-process code execution.
+
+## [4.1.0] - 2026-04-04
+### 🛡️ Enforcement Boundary Hardening
+
+Major release focused on making QWED's verification boundary fail-closed, deterministic about what it proves, and substantially harder to bypass under adversarial conditions. Consolidates 98 commits and 20 merged PRs since v4.0.1, including the full PR 0–5 enforcement hardening series.
+
+#### 🔐 Security Hardening
+- **Fail-Closed Verification**: Disabled unsafe in-process execution fallbacks; stats and consensus paths now require secure Docker sandbox.
+- **Critical Boundary Closures**: Removed logic verifier `eval()` fallback — raises `RuntimeError` if `SafeEvaluator` is unavailable (CVE-QWED-001).
+- **Mandatory Guards**: Agent security guards (Exfiltration, MCP Poison) are now server-enforced and unconditional — `security_checks` field removed from request model.
+- **Consensus Rate Limiting**: `/verify/consensus` endpoint now enforces `check_rate_limit` to prevent cost amplification attacks.
+- **Self-Attestation Fix**: Consensus fact engine no longer calls `verify_fact(query, query)` — requires external context.
+- **Redis Fail-Closed**: `RedisSlidingWindowLimiter` now denies requests on Redis errors instead of allowing them.
+- **Timing-Safe Token Verification**: Agent token comparison switched to `hmac.compare_digest`.
+- **Metrics Access Control**: `/metrics` and `/metrics/prometheus` now require authenticated admin access.
+- **Environment Integrity**: Startup enforces `verify_environment_integrity()` before database initialization.
+
+#### 🧠 Determinism & Trust Boundary
+- Natural-language math responses now return `INCONCLUSIVE` when verifying LLM-translated expressions — never `VERIFIED`.
+- Added explicit `trust_boundary` metadata in API responses describing what was actually verified.
+- `verify_identity()` numerical sampling fallback now returns `UNKNOWN` instead of `LIKELY_EQUIVALENT`.
+- Heuristic/non-proof outcomes are honestly labeled instead of presented as formal verification.
+
+#### 🤖 Agent Hardening
+- **Action context mandatory**: `verify_action()` requires `ActionContext` with `conversation_id` and `step_number`.
+- **Replay detection**: Same `(conversation_id, step_number)` pair blocked (QWED-AGENT-LOOP-002).
+- **Loop detection**: Same action repeated 3+ times triggers DENIED (QWED-AGENT-LOOP-003).
+- **In-flight step reservations**: Prevents race conditions in concurrent agent calls.
+- **Budget denial isolation**: Budget-exceeded denials do not consume conversation state.
+
+#### 📜 Tool Governance (PR 0)
+- Added `QWED_RULES.md` — canonical enforcement contract for contributors and tools.
+- Added `.github/copilot-instructions.md` — blocks Copilot from suggesting fallback execution.
+- Added `.github/pull_request_template.md` — mandatory enforcement checklist.
+- Extended `.coderabbit.yaml` with enforcement-specific review instructions.
+
+#### 🔧 Supply Chain & CI
+- Pinned third-party GitHub Actions to verified commit SHAs.
+- Merged security autofix PRs and dependency hardening (#100–#114).
+
+#### 📦 SDK & Package Versions
+- `qwed` (PyPI): `4.0.1` → `4.1.0`
+- `qwed_sdk` (Python): `2.1.0-dev` → `4.1.0`
+- `@qwed-ai/sdk` (NPM): `4.0.1` → `4.1.0`
+- TypeScript SDK: Removed `security_checks` from agent verification helpers; `tool_schema` remains.
+
+#### 🧪 Test Coverage
+- `test_pr115_regressions.py` — critical boundary closures (eval removal, guard enforcement, consensus rate limit, fact self-attestation).
+- `test_pr117_regressions.py` — stats fail-closed behavior, sandbox enforcement.
+- `test_pr4_runtime_hardening.py` — Redis fail-closed, agent loop controls, metrics auth, environment integrity.
+- `test_pr5_determinism_alignment.py` — trust boundary metadata, INCONCLUSIVE status, numerical sampling UNKNOWN.
+- **Sanity sweep**: 162 passed, 11 skipped, 0 failures.
+
+#### ⚠️ Upgrade Notes
+- `INCONCLUSIVE` is now a distinct verification status — downstream consumers must handle it.
+- `BLOCKED` and `UNKNOWN` are explicit outcomes, not generic failures.
+- Agent integrations must provide `ActionContext` with `conversation_id` and `step_number`.
+- `/metrics` endpoints now require admin role — update monitoring integrations accordingly.
+
 
 ## [4.0.1] - 2026-03-23
 ### 🔄 Sentinel Guard Sync
