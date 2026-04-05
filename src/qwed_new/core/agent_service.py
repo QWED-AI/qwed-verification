@@ -348,7 +348,10 @@ class AgentService:
             decision = AgentDecision.APPROVED
         
         # Commit approved or pending steps so loop/replay tracking cannot be bypassed.
+        # LOOP-004 fingerprint: only commit on APPROVED (PENDING may be rejected later).
         if decision in {AgentDecision.APPROVED, AgentDecision.PENDING}:
+            if decision == AgentDecision.PENDING and context_state is not None:
+                context_state["loop_004_fingerprint"] = None
             self._commit_action_context(context, context_state)
         else:
             self._release_action_context(context_state)
