@@ -16,6 +16,8 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List, Set
 from enum import Enum
 
+from qwed_new.guards.doom_loop_guard import ProgressAwareDoomLoopGuard
+
 
 class AgentType(Enum):
     """Agent autonomy levels"""
@@ -108,6 +110,8 @@ class ActionContext:
     conversation_id: Optional[str] = None
     step_number: Optional[int] = None
     user_intent: Optional[str] = None
+    pre_action_state_hash: Optional[str] = None
+    state_source: Optional[str] = None
 
 
 @dataclass
@@ -165,6 +169,9 @@ class AgentService:
     }
     MAX_CONVERSATION_STEPS = 50
     MAX_CONSECUTIVE_IDENTICAL_ACTIONS = 2
+    # Server-side flag: when True, callers MUST provide state hash for LOOP-004.
+    # Set to False during gradual rollout; set to True once all callers are updated.
+    DOOM_LOOP_GUARD_REQUIRED = False
     RISK_RANKS = {
         RiskLevel.LOW: 0,
         RiskLevel.MEDIUM: 1,
@@ -179,6 +186,7 @@ class AgentService:
         self._conversation_state: Dict[tuple[str, str], Dict[str, Any]] = {}
         self._conversation_reservations: Dict[tuple[str, str], Dict[str, Any]] = {}
         self._conversation_state_lock = threading.Lock()
+        self._doom_loop_guard = ProgressAwareDoomLoopGuard()
     
     def _generate_agent_id(self) -> str:
         return f"agent_{uuid.uuid4().hex[:12]}"
@@ -329,21 +337,12 @@ class AgentService:
         failed = [c.name for c in checks if not c.passed]
         
         # Determine decision
-        if failed:
-            decision = AgentDecision.DENIED
-        elif self._risk_exceeds_threshold(risk_level, RiskLevel[risk_threshold.upper()]):
-            if agent.trust_level.value < TrustLevel.AUTONOMOUS.value:
-                decision = AgentDecision.PENDING
-            else:
-                decision = AgentDecision.APPROVED
-        else:
-            decision = AgentDecision.APPROVED
+        decision = self._determine_decision(
+            failed, risk_level, risk_threshold, agent.trust_level,
+        )
         
-        # Commit approved or pending steps so loop/replay tracking cannot be bypassed.
-        if decision in {AgentDecision.APPROVED, AgentDecision.PENDING}:
-            self._commit_action_context(context, context_state)
-        else:
-            self._release_action_context(context_state)
+        # Commit or release action context based on decision.
+        self._finalize_action_context(decision, context, context_state)
 
         # Update budget tracking
         if decision == AgentDecision.APPROVED:
@@ -366,7 +365,7 @@ class AgentService:
         )
         self._activity_logs.append(log)
         
-        response = {
+        return {
             "decision": decision.value,
             "verification": {
                 "status": "VERIFIED" if decision == AgentDecision.APPROVED else "FAILED",
@@ -380,8 +379,41 @@ class AgentService:
                 "hourly_requests": agent.budget.max_requests_per_hour - agent.budget.current_hour_requests,
             },
         }
-        
-        return response
+
+    def _determine_decision(
+        self,
+        failed: list,
+        risk_level: RiskLevel,
+        risk_threshold: str,
+        trust_level: TrustLevel,
+    ) -> AgentDecision:
+        """Map verification results + risk to a deterministic decision."""
+        if failed:
+            return AgentDecision.DENIED
+        if self._risk_exceeds_threshold(risk_level, RiskLevel[risk_threshold.upper()]):
+            if trust_level.value < TrustLevel.AUTONOMOUS.value:
+                return AgentDecision.PENDING
+            return AgentDecision.APPROVED
+        return AgentDecision.APPROVED
+
+    def _finalize_action_context(
+        self,
+        decision: AgentDecision,
+        context: ActionContext,
+        context_state: Optional[Dict[str, Any]],
+    ) -> None:
+        """Commit or release action context based on decision.
+
+        LOOP-004 fingerprint is only committed on APPROVED.
+        PENDING actions still commit step/replay tracking (LOOP-001/002/003)
+        but clear the fingerprint since PENDING may be rejected later.
+        """
+        if decision in {AgentDecision.APPROVED, AgentDecision.PENDING}:
+            if decision == AgentDecision.PENDING and context_state is not None:
+                context_state["loop_004_fingerprint"] = None
+            self._commit_action_context(context, context_state)
+        else:
+            self._release_action_context(context_state)
 
     def _enforce_action_context(
         self,
@@ -409,7 +441,13 @@ class AgentService:
             }, None)
 
         state_key = (agent_id, context.conversation_id)
-        fingerprint = self._action_fingerprint(action)
+        try:
+            fingerprint = self._action_fingerprint(action)
+        except TypeError as exc:
+            return ({
+                "code": "QWED-AGENT-STATE-004",
+                "message": f"Action parameters must be deterministic JSON-compatible values: {exc}",
+            }, None)
 
         with self._conversation_state_lock:
             reservation = self._conversation_reservations.get(state_key)
@@ -453,11 +491,83 @@ class AgentService:
                 "reservation_id": reservation_id,
             }
 
+        # --- LOOP-004: Progress-aware no-progress detection ---
+        loop_004_result = self._check_progress_doom_loop(
+            agent_id, action, context, state_key, reservation_id,
+        )
+        if isinstance(loop_004_result, dict) and "code" in loop_004_result:
+            return (loop_004_result, None)
+
         return None, {
             "state_key": state_key,
             "next_state": next_state,
             "reservation_id": reservation_id,
+            "loop_004_fingerprint": loop_004_result,  # str or None
+            "agent_id": agent_id,
+            "conversation_id": context.conversation_id,
         }
+
+    def _check_progress_doom_loop(
+        self,
+        agent_id: str,
+        action: AgentAction,
+        context: ActionContext,
+        state_key: tuple,
+        reservation_id: str,
+    ) -> Optional[Dict[str, str]]:
+        """Run LOOP-004 progress check; returns error dict or None."""
+        has_hash = context.pre_action_state_hash is not None
+        has_source = context.state_source is not None
+
+        # Neither supplied: check server-side enforcement flag.
+        if not has_hash and not has_source:
+            if self.DOOM_LOOP_GUARD_REQUIRED:
+                self._release_reservation(state_key, reservation_id)
+                return {
+                    "code": "QWED-AGENT-STATE-001",
+                    "message": (
+                        "pre_action_state_hash and state_source are required "
+                        "when DOOM_LOOP_GUARD_REQUIRED is enabled."
+                    ),
+                }
+            return None
+
+        # Partial supply → fail closed.
+        if has_hash != has_source:
+            self._release_reservation(state_key, reservation_id)
+            return {
+                "code": "QWED-AGENT-STATE-001",
+                "message": "pre_action_state_hash and state_source must be provided together.",
+            }
+
+        progress = self._doom_loop_guard.verify_progress(
+            agent_id=agent_id,
+            conversation_id=context.conversation_id,
+            tool_name=action.action_type,
+            arguments={
+                "query": action.query,
+                "code": action.code,
+                "target": action.target,
+                "parameters": action.parameters,
+            },
+            pre_action_state_hash=context.pre_action_state_hash,
+            state_source=context.state_source,
+        )
+        if not progress["verified"]:
+            self._release_reservation(state_key, reservation_id)
+            return {
+                "code": progress["error_code"],
+                "message": progress["message"],
+            }
+        # Return the fingerprint so it can be committed after approval.
+        return progress.get("fingerprint")
+
+    def _release_reservation(self, state_key: tuple, reservation_id: str) -> None:
+        """Release a pending reservation under the conversation state lock."""
+        with self._conversation_state_lock:
+            reservation = self._conversation_reservations.get(state_key)
+            if reservation and reservation["reservation_id"] == reservation_id:
+                self._conversation_reservations.pop(state_key, None)
 
     def _commit_action_context(
         self,
@@ -482,6 +592,16 @@ class AgentService:
                 return
             self._conversation_state[state_key] = next_state
             self._conversation_reservations.pop(state_key, None)
+
+            # Phase 2: commit LOOP-004 fingerprint now that action is approved.
+            # Executed within the lock to prevent TOCTOU concurrent bypasses.
+            fp = context_state.get("loop_004_fingerprint")
+            if fp is not None:
+                self._doom_loop_guard.commit_progress(
+                    agent_id=context_state["agent_id"],
+                    conversation_id=context_state["conversation_id"],
+                    fingerprint=fp,
+                )
 
     def _release_action_context(self, context_state: Optional[Dict[str, Any]]) -> None:
         """Release an in-flight context reservation when execution does not proceed."""
