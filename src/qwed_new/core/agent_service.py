@@ -337,24 +337,12 @@ class AgentService:
         failed = [c.name for c in checks if not c.passed]
         
         # Determine decision
-        if failed:
-            decision = AgentDecision.DENIED
-        elif self._risk_exceeds_threshold(risk_level, RiskLevel[risk_threshold.upper()]):
-            if agent.trust_level.value < TrustLevel.AUTONOMOUS.value:
-                decision = AgentDecision.PENDING
-            else:
-                decision = AgentDecision.APPROVED
-        else:
-            decision = AgentDecision.APPROVED
+        decision = self._determine_decision(
+            failed, risk_level, risk_threshold, agent.trust_level,
+        )
         
-        # Commit approved or pending steps so loop/replay tracking cannot be bypassed.
-        # LOOP-004 fingerprint: only commit on APPROVED (PENDING may be rejected later).
-        if decision in {AgentDecision.APPROVED, AgentDecision.PENDING}:
-            if decision == AgentDecision.PENDING and context_state is not None:
-                context_state["loop_004_fingerprint"] = None
-            self._commit_action_context(context, context_state)
-        else:
-            self._release_action_context(context_state)
+        # Commit or release action context based on decision.
+        self._finalize_action_context(decision, context, context_state)
 
         # Update budget tracking
         if decision == AgentDecision.APPROVED:
@@ -377,7 +365,7 @@ class AgentService:
         )
         self._activity_logs.append(log)
         
-        response = {
+        return {
             "decision": decision.value,
             "verification": {
                 "status": "VERIFIED" if decision == AgentDecision.APPROVED else "FAILED",
@@ -391,8 +379,41 @@ class AgentService:
                 "hourly_requests": agent.budget.max_requests_per_hour - agent.budget.current_hour_requests,
             },
         }
-        
-        return response
+
+    def _determine_decision(
+        self,
+        failed: list,
+        risk_level: RiskLevel,
+        risk_threshold: str,
+        trust_level: TrustLevel,
+    ) -> AgentDecision:
+        """Map verification results + risk to a deterministic decision."""
+        if failed:
+            return AgentDecision.DENIED
+        if self._risk_exceeds_threshold(risk_level, RiskLevel[risk_threshold.upper()]):
+            if trust_level.value < TrustLevel.AUTONOMOUS.value:
+                return AgentDecision.PENDING
+            return AgentDecision.APPROVED
+        return AgentDecision.APPROVED
+
+    def _finalize_action_context(
+        self,
+        decision: AgentDecision,
+        context: ActionContext,
+        context_state: Optional[Dict[str, Any]],
+    ) -> None:
+        """Commit or release action context based on decision.
+
+        LOOP-004 fingerprint is only committed on APPROVED.
+        PENDING actions still commit step/replay tracking (LOOP-001/002/003)
+        but clear the fingerprint since PENDING may be rejected later.
+        """
+        if decision in {AgentDecision.APPROVED, AgentDecision.PENDING}:
+            if decision == AgentDecision.PENDING and context_state is not None:
+                context_state["loop_004_fingerprint"] = None
+            self._commit_action_context(context, context_state)
+        else:
+            self._release_action_context(context_state)
 
     def _enforce_action_context(
         self,
