@@ -593,14 +593,15 @@ class AgentService:
             self._conversation_state[state_key] = next_state
             self._conversation_reservations.pop(state_key, None)
 
-        # Phase 2: commit LOOP-004 fingerprint now that action is approved.
-        fp = context_state.get("loop_004_fingerprint")
-        if fp is not None:
-            self._doom_loop_guard.commit_progress(
-                agent_id=context_state["agent_id"],
-                conversation_id=context_state["conversation_id"],
-                fingerprint=fp,
-            )
+            # Phase 2: commit LOOP-004 fingerprint now that action is approved.
+            # Executed within the lock to prevent TOCTOU concurrent bypasses.
+            fp = context_state.get("loop_004_fingerprint")
+            if fp is not None:
+                self._doom_loop_guard.commit_progress(
+                    agent_id=context_state["agent_id"],
+                    conversation_id=context_state["conversation_id"],
+                    fingerprint=fp,
+                )
 
     def _release_action_context(self, context_state: Optional[Dict[str, Any]]) -> None:
         """Release an in-flight context reservation when execution does not proceed."""
