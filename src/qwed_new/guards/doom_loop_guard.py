@@ -201,10 +201,14 @@ class ProgressAwareDoomLoopGuard:
         if isinstance(value, (list, tuple)):
             return [ProgressAwareDoomLoopGuard._canonicalize(v) for v in value]
         if isinstance(value, dict):
-            return {
-                k: ProgressAwareDoomLoopGuard._canonicalize(v)
-                for k, v in sorted(value.items())
-            }
+            canonicalized = {}
+            for k, v in value.items():
+                if not isinstance(k, str):
+                    raise TypeError(
+                        f"Argument dict keys must be strings, got {type(k).__name__}"
+                    )
+                canonicalized[k] = ProgressAwareDoomLoopGuard._canonicalize(v)
+            return {k: canonicalized[k] for k in sorted(canonicalized)}
         raise TypeError(
             f"Unsupported argument type for canonicalization: {type(value).__name__}"
         )

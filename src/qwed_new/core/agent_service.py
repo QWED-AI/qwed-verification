@@ -169,6 +169,9 @@ class AgentService:
     }
     MAX_CONVERSATION_STEPS = 50
     MAX_CONSECUTIVE_IDENTICAL_ACTIONS = 2
+    # Server-side flag: when True, callers MUST provide state hash for LOOP-004.
+    # Set to False during gradual rollout; set to True once all callers are updated.
+    DOOM_LOOP_GUARD_REQUIRED = False
     RISK_RANKS = {
         RiskLevel.LOW: 0,
         RiskLevel.MEDIUM: 1,
@@ -414,7 +417,13 @@ class AgentService:
             }, None)
 
         state_key = (agent_id, context.conversation_id)
-        fingerprint = self._action_fingerprint(action)
+        try:
+            fingerprint = self._action_fingerprint(action)
+        except TypeError as exc:
+            return ({
+                "code": "QWED-AGENT-STATE-004",
+                "message": f"Action parameters must be deterministic JSON-compatible values: {exc}",
+            }, None)
 
         with self._conversation_state_lock:
             reservation = self._conversation_reservations.get(state_key)
@@ -483,8 +492,17 @@ class AgentService:
         has_hash = context.pre_action_state_hash is not None
         has_source = context.state_source is not None
 
-        # Neither supplied → guard is opt-in, skip.
+        # Neither supplied: check server-side enforcement flag.
         if not has_hash and not has_source:
+            if self.DOOM_LOOP_GUARD_REQUIRED:
+                self._release_reservation(state_key, reservation_id)
+                return {
+                    "code": "QWED-AGENT-STATE-001",
+                    "message": (
+                        "pre_action_state_hash and state_source are required "
+                        "when DOOM_LOOP_GUARD_REQUIRED is enabled."
+                    ),
+                }
             return None
 
         # Partial supply → fail closed.

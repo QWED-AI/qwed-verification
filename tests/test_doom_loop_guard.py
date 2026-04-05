@@ -504,3 +504,55 @@ class TestDoomLoopIntegration:
         )
         assert result["decision"] == "DENIED"
         assert result["error"]["code"] == "QWED-AGENT-STATE-001"
+
+    def test_doom_loop_guard_required_flag_blocks_missing_hash(self):
+        """Server-side enforcement: DOOM_LOOP_GUARD_REQUIRED = True → DENIED."""
+        service = AgentService()
+        service.DOOM_LOOP_GUARD_REQUIRED = True
+        agent_id, _ = _register_test_agent(service)
+
+        result = service.verify_action(
+            agent_id,
+            AgentAction(action_type="calculate", query="2+2"),
+            context=ActionContext(
+                conversation_id="conv-required",
+                step_number=1,
+                # No hash/source supplied
+            ),
+        )
+        assert result["decision"] == "DENIED"
+        assert result["error"]["code"] == "QWED-AGENT-STATE-001"
+
+    def test_non_deterministic_action_params_denied(self):
+        """TypeError from _action_fingerprint → DENIED, not unhandled exception."""
+        service = AgentService()
+        agent_id, _ = _register_test_agent(service)
+
+        result = service.verify_action(
+            agent_id,
+            AgentAction(
+                action_type="calculate",
+                query="2+2",
+                parameters={1: "non-string-key"},  # triggers TypeError
+            ),
+            context=ActionContext(
+                conversation_id="conv-badparams",
+                step_number=1,
+            ),
+        )
+        assert result["decision"] == "DENIED"
+        assert result["error"]["code"] == "QWED-AGENT-STATE-004"
+
+    def test_non_string_dict_key_in_progress_guard_blocked(self):
+        """Non-string dict key in arguments → BLOCKED via STATE-004."""
+        guard = ProgressAwareDoomLoopGuard()
+        result = guard.verify_progress(
+            agent_id="a1",
+            conversation_id="c1",
+            tool_name="calculate",
+            arguments={1: "numeric-key"},
+            pre_action_state_hash=STATE_A,
+            state_source="git_tree",
+        )
+        assert result["verified"] is False
+        assert result["error_code"] == "QWED-AGENT-STATE-004"
