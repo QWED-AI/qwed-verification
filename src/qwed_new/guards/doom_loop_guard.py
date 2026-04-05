@@ -94,11 +94,20 @@ class ProgressAwareDoomLoopGuard:
         # ----------------------------------------------------------
         # Build deterministic fingerprint: action ⊕ world state
         # ----------------------------------------------------------
-        action_payload = json.dumps(
-            {"tool": tool_name, "args": self._canonicalize(arguments)},
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        try:
+            action_payload = json.dumps(
+                {"tool": tool_name, "args": self._canonicalize(arguments)},
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as exc:
+            return {
+                "verified": False,
+                "status": "BLOCKED",
+                "error_code": "QWED-AGENT-STATE-004",
+                "message": f"Arguments must be deterministic JSON-compatible values: {exc}",
+            }
         combined = f"{action_payload}|STATE:{pre_action_state_hash}"
         fingerprint = hashlib.sha256(combined.encode("utf-8")).hexdigest()
 
@@ -152,12 +161,12 @@ class ProgressAwareDoomLoopGuard:
         self, state_hash: str, state_source: str
     ) -> Optional[Dict[str, Any]]:
         """Return an error dict if inputs are invalid, else ``None``."""
-        if not state_hash:
+        if not isinstance(state_hash, str) or not state_hash:
             return {
                 "verified": False,
                 "status": "BLOCKED",
                 "error_code": "QWED-AGENT-STATE-001",
-                "message": "pre_action_state_hash is required and must not be empty.",
+                "message": "pre_action_state_hash is required and must be a non-empty string.",
             }
 
         if not self._SHA256_PATTERN.match(state_hash):
@@ -171,7 +180,7 @@ class ProgressAwareDoomLoopGuard:
                 ),
             }
 
-        if state_source not in self.VALID_STATE_SOURCES:
+        if not isinstance(state_source, str) or state_source not in self.VALID_STATE_SOURCES:
             return {
                 "verified": False,
                 "status": "BLOCKED",
@@ -196,5 +205,6 @@ class ProgressAwareDoomLoopGuard:
                 k: ProgressAwareDoomLoopGuard._canonicalize(v)
                 for k, v in sorted(value.items())
             }
-        # Non-serializable types are coerced to their repr for safety
-        return repr(value)
+        raise TypeError(
+            f"Unsupported argument type for canonicalization: {type(value).__name__}"
+        )

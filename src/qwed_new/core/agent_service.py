@@ -459,37 +459,69 @@ class AgentService:
             }
 
         # --- LOOP-004: Progress-aware no-progress detection ---
-        # Only activates when the caller supplies a world-state hash.
-        if context.pre_action_state_hash and context.state_source:
-            progress = self._doom_loop_guard.verify_progress(
-                agent_id=agent_id,
-                conversation_id=context.conversation_id,
-                tool_name=action.action_type,
-                arguments={
-                    "query": action.query,
-                    "code": action.code,
-                    "target": action.target,
-                    "parameters": action.parameters,
-                },
-                pre_action_state_hash=context.pre_action_state_hash,
-                state_source=context.state_source,
-            )
-            if not progress["verified"]:
-                # Release reservation — action is denied.
-                with self._conversation_state_lock:
-                    reservation = self._conversation_reservations.get(state_key)
-                    if reservation and reservation["reservation_id"] == reservation_id:
-                        self._conversation_reservations.pop(state_key, None)
-                return ({
-                    "code": progress["error_code"],
-                    "message": progress["message"],
-                }, None)
+        loop_004_error = self._check_progress_doom_loop(
+            agent_id, action, context, state_key, reservation_id,
+        )
+        if loop_004_error is not None:
+            return (loop_004_error, None)
 
         return None, {
             "state_key": state_key,
             "next_state": next_state,
             "reservation_id": reservation_id,
         }
+
+    def _check_progress_doom_loop(
+        self,
+        agent_id: str,
+        action: AgentAction,
+        context: ActionContext,
+        state_key: tuple,
+        reservation_id: str,
+    ) -> Optional[Dict[str, str]]:
+        """Run LOOP-004 progress check; returns error dict or None."""
+        has_hash = context.pre_action_state_hash is not None
+        has_source = context.state_source is not None
+
+        # Neither supplied → guard is opt-in, skip.
+        if not has_hash and not has_source:
+            return None
+
+        # Partial supply → fail closed.
+        if has_hash != has_source:
+            self._release_reservation(state_key, reservation_id)
+            return {
+                "code": "QWED-AGENT-STATE-001",
+                "message": "pre_action_state_hash and state_source must be provided together.",
+            }
+
+        progress = self._doom_loop_guard.verify_progress(
+            agent_id=agent_id,
+            conversation_id=context.conversation_id,
+            tool_name=action.action_type,
+            arguments={
+                "query": action.query,
+                "code": action.code,
+                "target": action.target,
+                "parameters": action.parameters,
+            },
+            pre_action_state_hash=context.pre_action_state_hash,
+            state_source=context.state_source,
+        )
+        if not progress["verified"]:
+            self._release_reservation(state_key, reservation_id)
+            return {
+                "code": progress["error_code"],
+                "message": progress["message"],
+            }
+        return None
+
+    def _release_reservation(self, state_key: tuple, reservation_id: str) -> None:
+        """Release a pending reservation under the conversation state lock."""
+        with self._conversation_state_lock:
+            reservation = self._conversation_reservations.get(state_key)
+            if reservation and reservation["reservation_id"] == reservation_id:
+                self._conversation_reservations.pop(state_key, None)
 
     def _commit_action_context(
         self,

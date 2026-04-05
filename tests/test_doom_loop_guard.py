@@ -7,8 +7,6 @@ are correctly halted, while legitimate progress is allowed through.
 
 import hashlib
 
-import pytest
-
 from qwed_new.core.agent_service import ActionContext, AgentAction, AgentService
 from qwed_new.guards.doom_loop_guard import ProgressAwareDoomLoopGuard
 
@@ -252,6 +250,61 @@ class TestInputValidation:
         )
         assert result["verified"] is True
 
+    def test_tuple_arguments_canonicalized(self):
+        """Covers the tuple branch in _canonicalize (line 193)."""
+        guard = ProgressAwareDoomLoopGuard()
+        result = guard.verify_progress(
+            agent_id="a1",
+            conversation_id="c1",
+            tool_name="calculate",
+            arguments={"coords": (1, 2, 3)},
+            pre_action_state_hash=STATE_A,
+            state_source="git_tree",
+        )
+        assert result["verified"] is True
+
+    def test_non_serializable_arguments_blocked(self):
+        """Non-deterministic types now raise TypeError → BLOCKED."""
+        guard = ProgressAwareDoomLoopGuard()
+        result = guard.verify_progress(
+            agent_id="a1",
+            conversation_id="c1",
+            tool_name="calculate",
+            arguments={"obj": frozenset([1, 2])},
+            pre_action_state_hash=STATE_A,
+            state_source="git_tree",
+        )
+        assert result["verified"] is False
+        assert result["error_code"] == "QWED-AGENT-STATE-004"
+
+    def test_non_string_state_hash_rejected(self):
+        """Non-string state hash → BLOCKED via isinstance check."""
+        guard = ProgressAwareDoomLoopGuard()
+        result = guard.verify_progress(
+            agent_id="a1",
+            conversation_id="c1",
+            tool_name="calculate",
+            arguments={},
+            pre_action_state_hash=12345,
+            state_source="git_tree",
+        )
+        assert result["verified"] is False
+        assert result["error_code"] == "QWED-AGENT-STATE-001"
+
+    def test_non_string_state_source_rejected(self):
+        """Non-string state source → BLOCKED via isinstance check."""
+        guard = ProgressAwareDoomLoopGuard()
+        result = guard.verify_progress(
+            agent_id="a1",
+            conversation_id="c1",
+            tool_name="calculate",
+            arguments={},
+            pre_action_state_hash=STATE_A,
+            state_source=42,
+        )
+        assert result["verified"] is False
+        assert result["error_code"] == "QWED-AGENT-STATE-003"
+
 
 # ===================================================================
 # Integration tests — through AgentService.verify_action()
@@ -394,6 +447,9 @@ class TestDoomLoopIntegration:
             # state is different. LOOP-003 fires first in the guard chain.
             if step <= 2:
                 assert result["decision"] == "APPROVED"
+            else:
+                assert result["decision"] == "DENIED"
+                assert result["error"]["code"] == "QWED-AGENT-LOOP-003"
 
     def test_verify_action_invalid_state_hash_blocks(self):
         """Bad state hash format → BLOCKED, not uncontrolled error."""
@@ -412,3 +468,39 @@ class TestDoomLoopIntegration:
         )
         assert result["decision"] == "DENIED"
         assert result["error"]["code"] == "QWED-AGENT-STATE-002"
+
+    def test_verify_action_partial_supply_blocks(self):
+        """Hash without source → DENIED (partial supply = fail closed)."""
+        service = AgentService()
+        agent_id, _ = _register_test_agent(service)
+
+        result = service.verify_action(
+            agent_id,
+            AgentAction(action_type="calculate", query="2+2"),
+            context=ActionContext(
+                conversation_id="conv-partial",
+                step_number=1,
+                pre_action_state_hash=STATE_A,
+                state_source=None,
+            ),
+        )
+        assert result["decision"] == "DENIED"
+        assert result["error"]["code"] == "QWED-AGENT-STATE-001"
+
+    def test_verify_action_empty_string_hash_blocks(self):
+        """Empty string hash → DENIED (not silently bypassed)."""
+        service = AgentService()
+        agent_id, _ = _register_test_agent(service)
+
+        result = service.verify_action(
+            agent_id,
+            AgentAction(action_type="calculate", query="2+2"),
+            context=ActionContext(
+                conversation_id="conv-empty",
+                step_number=1,
+                pre_action_state_hash="",
+                state_source="git_tree",
+            ),
+        )
+        assert result["decision"] == "DENIED"
+        assert result["error"]["code"] == "QWED-AGENT-STATE-001"
