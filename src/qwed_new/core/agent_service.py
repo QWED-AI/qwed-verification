@@ -16,6 +16,8 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List, Set
 from enum import Enum
 
+from qwed_new.guards.doom_loop_guard import ProgressAwareDoomLoopGuard
+
 
 class AgentType(Enum):
     """Agent autonomy levels"""
@@ -108,6 +110,8 @@ class ActionContext:
     conversation_id: Optional[str] = None
     step_number: Optional[int] = None
     user_intent: Optional[str] = None
+    pre_action_state_hash: Optional[str] = None
+    state_source: Optional[str] = None
 
 
 @dataclass
@@ -179,6 +183,7 @@ class AgentService:
         self._conversation_state: Dict[tuple[str, str], Dict[str, Any]] = {}
         self._conversation_reservations: Dict[tuple[str, str], Dict[str, Any]] = {}
         self._conversation_state_lock = threading.Lock()
+        self._doom_loop_guard = ProgressAwareDoomLoopGuard()
     
     def _generate_agent_id(self) -> str:
         return f"agent_{uuid.uuid4().hex[:12]}"
@@ -452,6 +457,33 @@ class AgentService:
                 "step_number": context.step_number,
                 "reservation_id": reservation_id,
             }
+
+        # --- LOOP-004: Progress-aware no-progress detection ---
+        # Only activates when the caller supplies a world-state hash.
+        if context.pre_action_state_hash and context.state_source:
+            progress = self._doom_loop_guard.verify_progress(
+                agent_id=agent_id,
+                conversation_id=context.conversation_id,
+                tool_name=action.action_type,
+                arguments={
+                    "query": action.query,
+                    "code": action.code,
+                    "target": action.target,
+                    "parameters": action.parameters,
+                },
+                pre_action_state_hash=context.pre_action_state_hash,
+                state_source=context.state_source,
+            )
+            if not progress["verified"]:
+                # Release reservation — action is denied.
+                with self._conversation_state_lock:
+                    reservation = self._conversation_reservations.get(state_key)
+                    if reservation and reservation["reservation_id"] == reservation_id:
+                        self._conversation_reservations.pop(state_key, None)
+                return ({
+                    "code": progress["error_code"],
+                    "message": progress["message"],
+                }, None)
 
         return None, {
             "state_key": state_key,
