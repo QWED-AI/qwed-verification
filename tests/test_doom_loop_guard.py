@@ -56,8 +56,10 @@ class TestProgressAwareDoomLoopGuard:
             )
             assert result["verified"] is True
             assert result["status"] == "PROGRESSING"
+            # Simulate approval by committing the fingerprint.
+            guard.commit_progress("a1", "c1", result["fingerprint"])
 
-        # 3rd identical call → HALTED
+        # 3rd identical call → HALTED (2 committed + 1 pending = 3)
         result = guard.verify_progress(
             agent_id="a1",
             conversation_id="c1",
@@ -105,9 +107,10 @@ class TestProgressAwareDoomLoopGuard:
     def test_history_window_evicts_old_entries(self):
         guard = ProgressAwareDoomLoopGuard()
 
-        # Fill history with 20 unique entries
-        for i in range(guard.MAX_HISTORY):
-            guard.verify_progress(
+        # Fill history with 21 unique committed entries.
+        # The deque has maxlen=20, so entry 0 is evicted by entry 20.
+        for i in range(guard.MAX_HISTORY + 1):
+            result = guard.verify_progress(
                 agent_id="a1",
                 conversation_id="c1",
                 tool_name=f"tool_{i}",
@@ -115,9 +118,10 @@ class TestProgressAwareDoomLoopGuard:
                 pre_action_state_hash=_sha256(f"state-{i}"),
                 state_source="file_tree",
             )
+            guard.commit_progress("a1", "c1", result["fingerprint"])
 
         # Now repeat the very first action+state — it was evicted from
-        # the window, so the count should be only 1, not 2.
+        # the window, so the count should be only 1 (0 committed + 1 pending).
         result = guard.verify_progress(
             agent_id="a1",
             conversation_id="c1",
@@ -134,7 +138,7 @@ class TestProgressAwareDoomLoopGuard:
 
         for conv in ["conv-1", "conv-2"]:
             for _ in range(2):
-                guard.verify_progress(
+                result = guard.verify_progress(
                     agent_id="a1",
                     conversation_id=conv,
                     tool_name="calculate",
@@ -142,9 +146,10 @@ class TestProgressAwareDoomLoopGuard:
                     pre_action_state_hash=STATE_A,
                     state_source="git_tree",
                 )
+                guard.commit_progress("a1", conv, result["fingerprint"])
 
-        # 3rd call on conv-1 only — should NOT be halted because
-        # the 2 on conv-2 are in a different scope.
+        # 3rd call on conv-1 only — should be halted because
+        # 2 committed + 1 pending = 3.
         result = guard.verify_progress(
             agent_id="a1",
             conversation_id="conv-1",
@@ -160,7 +165,7 @@ class TestProgressAwareDoomLoopGuard:
         guard = ProgressAwareDoomLoopGuard()
 
         for _ in range(2):
-            guard.verify_progress(
+            result = guard.verify_progress(
                 agent_id="a1",
                 conversation_id="c1",
                 tool_name="calculate",
@@ -168,6 +173,7 @@ class TestProgressAwareDoomLoopGuard:
                 pre_action_state_hash=STATE_A,
                 state_source="git_tree",
             )
+            guard.commit_progress("a1", "c1", result["fingerprint"])
 
         guard.reset_conversation("a1", "c1")
 
@@ -556,3 +562,52 @@ class TestDoomLoopIntegration:
         )
         assert result["verified"] is False
         assert result["error_code"] == "QWED-AGENT-STATE-004"
+
+    def test_denied_actions_do_not_pollute_loop_004_history(self):
+        """
+        Sentry regression: actions denied by budget/risk must NOT count
+        toward the LOOP-004 sliding window.  Two-phase commit ensures
+        fingerprints are only recorded on APPROVED decisions.
+        """
+        guard = ProgressAwareDoomLoopGuard()
+
+        # Simulate 5 rounds of verify_progress WITHOUT commit_progress.
+        # This mimics actions that were checked but denied downstream.
+        for _ in range(5):
+            result = guard.verify_progress(
+                agent_id="a1",
+                conversation_id="c1",
+                tool_name="calculate",
+                arguments={"query": "2+2"},
+                pre_action_state_hash=STATE_A,
+                state_source="git_tree",
+            )
+            # Should always be PROGRESSING because nothing was committed.
+            assert result["verified"] is True
+            assert result["status"] == "PROGRESSING"
+            assert result["repeat_count"] == 1  # always 1 (0 committed + 1 pending)
+
+    def test_committed_actions_trigger_loop_004(self):
+        """
+        After commit_progress is called, the fingerprint counts
+        toward the LOOP-004 threshold.
+        """
+        guard = ProgressAwareDoomLoopGuard()
+
+        for i in range(3):
+            result = guard.verify_progress(
+                agent_id="a1",
+                conversation_id="c1",
+                tool_name="calculate",
+                arguments={"query": "2+2"},
+                pre_action_state_hash=STATE_A,
+                state_source="git_tree",
+            )
+            if i < 2:
+                assert result["verified"] is True
+                # Commit: this action was approved downstream.
+                guard.commit_progress("a1", "c1", result["fingerprint"])
+            else:
+                # 3rd check: 2 committed + 1 pending = 3 → HALTED
+                assert result["verified"] is False
+                assert result["error_code"] == "QWED-AGENT-LOOP-004"

@@ -112,16 +112,16 @@ class ProgressAwareDoomLoopGuard:
         fingerprint = hashlib.sha256(combined.encode("utf-8")).hexdigest()
 
         # ----------------------------------------------------------
-        # Sliding window: track and evaluate
+        # Sliding window: READ-ONLY check (do NOT record yet).
+        # The fingerprint is committed only after all downstream
+        # checks (budget, risk, verification) pass via commit_progress().
         # ----------------------------------------------------------
         scope_key = (agent_id, conversation_id)
 
         with self._lock:
-            history = self._histories.setdefault(
-                scope_key, deque(maxlen=self.MAX_HISTORY)
-            )
-            history.append(fingerprint)
-            repeat_count = sum(1 for fp in history if fp == fingerprint)
+            history = self._histories.get(scope_key, deque(maxlen=self.MAX_HISTORY))
+            # Count how many times this fingerprint WOULD appear if committed.
+            repeat_count = sum(1 for fp in history if fp == fingerprint) + 1
 
         if repeat_count >= self.NO_PROGRESS_THRESHOLD:
             return {
@@ -146,6 +146,26 @@ class ProgressAwareDoomLoopGuard:
             "repeat_count": repeat_count,
             "state_source": state_source,
         }
+
+    def commit_progress(
+        self,
+        agent_id: str,
+        conversation_id: str,
+        fingerprint: str,
+    ) -> None:
+        """
+        Record a fingerprint in the sliding window AFTER the action is approved.
+
+        Must only be called when all downstream checks (budget, risk,
+        verification) have passed.  This prevents denied actions from
+        polluting the history and causing false LOOP-004 triggers.
+        """
+        scope_key = (agent_id, conversation_id)
+        with self._lock:
+            history = self._histories.setdefault(
+                scope_key, deque(maxlen=self.MAX_HISTORY)
+            )
+            history.append(fingerprint)
 
     def reset_conversation(self, agent_id: str, conversation_id: str) -> None:
         """Clear the sliding window for a conversation (e.g. on close)."""

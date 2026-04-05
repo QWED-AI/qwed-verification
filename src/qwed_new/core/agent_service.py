@@ -468,16 +468,19 @@ class AgentService:
             }
 
         # --- LOOP-004: Progress-aware no-progress detection ---
-        loop_004_error = self._check_progress_doom_loop(
+        loop_004_result = self._check_progress_doom_loop(
             agent_id, action, context, state_key, reservation_id,
         )
-        if loop_004_error is not None:
-            return (loop_004_error, None)
+        if isinstance(loop_004_result, dict) and "code" in loop_004_result:
+            return (loop_004_result, None)
 
         return None, {
             "state_key": state_key,
             "next_state": next_state,
             "reservation_id": reservation_id,
+            "loop_004_fingerprint": loop_004_result,  # str or None
+            "agent_id": agent_id,
+            "conversation_id": context.conversation_id,
         }
 
     def _check_progress_doom_loop(
@@ -532,7 +535,8 @@ class AgentService:
                 "code": progress["error_code"],
                 "message": progress["message"],
             }
-        return None
+        # Return the fingerprint so it can be committed after approval.
+        return progress.get("fingerprint")
 
     def _release_reservation(self, state_key: tuple, reservation_id: str) -> None:
         """Release a pending reservation under the conversation state lock."""
@@ -564,6 +568,15 @@ class AgentService:
                 return
             self._conversation_state[state_key] = next_state
             self._conversation_reservations.pop(state_key, None)
+
+        # Phase 2: commit LOOP-004 fingerprint now that action is approved.
+        fp = context_state.get("loop_004_fingerprint")
+        if fp is not None:
+            self._doom_loop_guard.commit_progress(
+                agent_id=context_state["agent_id"],
+                conversation_id=context_state["conversation_id"],
+                fingerprint=fp,
+            )
 
     def _release_action_context(self, context_state: Optional[Dict[str, Any]]) -> None:
         """Release an in-flight context reservation when execution does not proceed."""
