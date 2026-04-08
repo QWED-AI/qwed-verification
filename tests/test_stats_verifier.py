@@ -14,6 +14,8 @@ import pandas as pd
 import sys
 import os
 import pytest
+from decimal import Decimal
+from fractions import Fraction
 
 BASE_URL = "http://127.0.0.1:8002"
 
@@ -236,14 +238,15 @@ class TestComputeStatistics:
         assert result["result"] == sum(values)
 
     def test_large_numbers_mean(self):
-        """Mean of very large numbers should be computed consistently."""
+        """Mean of 10^15-scale integers must be exact — uses Decimal to avoid float precision loss."""
         values = [10**15, 10**15 + 1, 10**15 + 2]
         df = pd.DataFrame({"x": values})
 
         result = self.verifier.compute_statistics(df, "x", "mean")
 
         assert result["status"] == "SUCCESS"
-        assert result["result"] == pytest.approx(sum(values) / len(values))
+        expected = Decimal(sum(values)) / Decimal(len(values))
+        assert Decimal(str(result["result"])) == expected
 
     def test_large_numbers_variance_is_non_negative(self):
         """Variance should never be negative, even for very large numbers."""
@@ -328,13 +331,14 @@ class TestComputeStatistics:
         assert result["result"] >= 0
 
     def test_negative_values_mean_is_correct(self):
-        """Mean with negative values should be computed correctly."""
+        """Mean of [-5, -1, -4] is -10/3 (non-terminating decimal); uses Fraction for exact comparison."""
         df = pd.DataFrame({"x": [-5, -1, -4]})
 
         result = self.verifier.compute_statistics(df, "x", "mean")
 
         assert result["status"] == "SUCCESS"
-        assert result["result"] == pytest.approx(-10 / 3)
+        expected = Fraction(-10, 3)
+        assert Fraction(result["result"]).limit_denominator(1000) == expected
     
     def test_negative_values_median_is_correct(self):
         """Median with negative values should be computed correctly."""
@@ -464,11 +468,15 @@ class TestComputeStatistics:
 
 # -------------------------------------------------------------------------
 # Integration tests
+# Run with: INTEGRATION_TESTS=1 pytest tests/test_stats_verifier.py -k integration
 # -------------------------------------------------------------------------
 
+@pytest.mark.skipif(
+    not os.getenv("INTEGRATION_TESTS"),
+    reason="requires a live server at 127.0.0.1:8002 — set INTEGRATION_TESTS=1 to run"
+)
 def test_stats_verification():
-    print("📊 Testing Statistical Verifier...")
-    
+    """End-to-end: POST a CSV to /verify/stats and assert the correct sales total is returned."""
     # 1. Create a dummy CSV
     csv_content = """Date,Product,Sales,Region
 2023-01-01,Widget A,100,North
@@ -477,41 +485,29 @@ def test_stats_verification():
 2023-01-04,Widget C,200,East
 2023-01-05,Widget B,130,South
 """
-    
-    # 2. Define Query
+
+    # 2. Define query — Widget A sales: 100 + 120 = 220
     query = "What is the total sales for Widget A?"
-    expected_answer = "220" # 100 + 120
-    
-    print(f"\nQuery: {query}")
-    print("Uploading CSV...")
-    
+    expected_answer = "220"
+
     # 3. Send Request
-    files = {
-        'file': ('sales.csv', csv_content, 'text/csv')
-    }
-    data = {
-        'query': query,
-        'provider': 'azure_openai'
-    }
-    
+    files = {'file': ('sales.csv', csv_content, 'text/csv')}
+    data = {'query': query, 'provider': 'azure_openai'}
+
     try:
         response = requests.post(f"{BASE_URL}/verify/stats", files=files, data=data)
-        
-        if response.status_code == 200:
-            result = response.json()
-            print("\n✅ Verification Success!")
-            print(f"Result: {result['result']}")
-            print(f"Generated Code:\n{result['code']}")
-            
-            if str(result['result']) == expected_answer:
-                print("🎯 Answer Matches Expected!")
-            else:
-                print(f"⚠️ Answer Mismatch. Expected {expected_answer}, got {result['result']}")
-        else:
-            print(f"❌ Request Failed: {response.text}")
-            
     except Exception as e:
-        print(f"❌ Connection Error: {e}")
+        pytest.fail(f"Connection to {BASE_URL} failed: {e}")
+
+    assert response.status_code == 200, (
+        f"Expected HTTP 200 from /verify/stats, got {response.status_code}: {response.text}"
+    )
+
+    result = response.json()
+    assert str(result["result"]) == expected_answer, (
+        f"Expected total sales {expected_answer}, got {result['result']!r}"
+    )
+
 
 if __name__ == "__main__":
     test_stats_verification()
