@@ -502,8 +502,13 @@ def test_stats_verification():
     }
 
     try:
-        response = requests.post(f"{BASE_URL}/verify/stats", files=files, data=data)
-    except Exception as e:
+        response = requests.post(
+            f"{BASE_URL}/verify/stats",
+            files=files,
+            data=data,
+            timeout=10,
+        )
+    except requests.exceptions.RequestException as e:
         pytest.fail(f"Connection to {BASE_URL} failed: {e}")
 
     assert response.status_code == 200, (
