@@ -243,7 +243,7 @@ class TestComputeStatistics:
         result = self.verifier.compute_statistics(df, "x", "mean")
 
         assert result["status"] == "SUCCESS"
-        assert result["result"] == sum(values) / len(values)
+        assert result["result"] == pytest.approx(sum(values) / len(values))
 
     def test_large_numbers_variance_is_non_negative(self):
         """Variance should never be negative, even for very large numbers."""
@@ -373,7 +373,7 @@ class TestComputeStatistics:
         assert result["result"] == 3
     
     def test_negative_values_mode_is_correct(self):
-        """Mode with negative values should be computed correctly."""
+        """Mode with all unique negative values returns smallest (pandas behavior: all values are modes when equally frequent, .iloc[0] returns first sorted)."""
         df = pd.DataFrame({"x": [-5, -1, -4]})
 
         result = self.verifier.compute_statistics(df, "x", "mode")
