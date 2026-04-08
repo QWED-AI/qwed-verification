@@ -471,7 +471,7 @@ class TestComputeStatistics:
 # -------------------------------------------------------------------------
 
 @pytest.mark.skipif(
-    not os.getenv("INTEGRATION_TESTS"),
+    os.getenv("INTEGRATION_TESTS", "").strip().lower() not in {"1", "true", "yes"},
     reason="requires a live server at 127.0.0.1:8002 — set INTEGRATION_TESTS=1 to run"
 )
 def test_stats_verification():
