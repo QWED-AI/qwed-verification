@@ -238,7 +238,7 @@ class TestComputeStatistics:
         assert result["result"] == sum(values)
 
     def test_large_numbers_mean(self):
-        """Mean of 10^15-scale integers must be exact — uses Decimal to avoid float precision loss."""
+        """Mean of large numbers uses Decimal to avoid float precision loss."""
         values = [10**15, 10**15 + 1, 10**15 + 2]
         df = pd.DataFrame({"x": values})
 
@@ -431,7 +431,7 @@ class TestComputeStatistics:
         assert result["result"] == 2
 
     def test_mode_multimodal_returns_first(self):
-        """When multiple modes exist, implementation, returns the first value from pandas mode output"""
+        """When multiple modes exist, implementation returns the first value from pandas mode output"""
         df = pd.DataFrame({"x": [1, 1, 2, 2, 3]})
 
         result = self.verifier.compute_statistics(df, "x", "mode")
@@ -468,7 +468,6 @@ class TestComputeStatistics:
 
 # -------------------------------------------------------------------------
 # Integration tests
-# Run with: INTEGRATION_TESTS=1 pytest tests/test_stats_verifier.py -k integration
 # -------------------------------------------------------------------------
 
 @pytest.mark.skipif(
@@ -486,13 +485,21 @@ def test_stats_verification():
 2023-01-05,Widget B,130,South
 """
 
-    # 2. Define query — Widget A sales: 100 + 120 = 220
+    # 2. Define Query
     query = "What is the total sales for Widget A?"
-    expected_answer = "220"
+    expected_answer = "220" # 100 + 120
+    
+    print(f"\nQuery: {query}")
+    print("Uploading CSV...")
 
     # 3. Send Request
-    files = {'file': ('sales.csv', csv_content, 'text/csv')}
-    data = {'query': query, 'provider': 'azure_openai'}
+    files = {
+        'file': ('sales.csv', csv_content, 'text/csv')
+    }
+    data = {
+        'query': query,
+        'provider': 'azure_openai'
+    }
 
     try:
         response = requests.post(f"{BASE_URL}/verify/stats", files=files, data=data)
