@@ -522,4 +522,4 @@ def test_stats_verification():
 
 
 if __name__ == "__main__":
-    test_stats_verification()
+    pytest.main([__file__, "-v"])
