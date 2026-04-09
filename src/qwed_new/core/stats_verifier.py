@@ -532,14 +532,14 @@ class StatsVerifier:
         """
         Compute statistics directly without code generation.
 
-        Returns SUCCESS only for clearly defined deterministic results.
-        Returns ERROR for undefined or ambiguous cases.
+        Returns SUCCESS only for clearly defined and safely verifiable results.
+        Returns ERROR for undefined, ambiguous, or otherwise non-verifiable cases.
 
         Policy highlights:
         - empty series are rejected for all operations
         - series with no valid non-NaN observations are rejected for all operations
         - multimodal results are treated as ambiguous and rejected
-        - NaN outputs are treated as undefined and rejected
+        - outputs that are undefined, ambiguous, or non-verifiable are rejected
         """
         start_time = time.time()
 
@@ -603,14 +603,6 @@ class StatsVerifier:
             }
 
         if operation == "mode":
-            if len(result) == 0:
-                return {
-                    "status": "ERROR",
-                    "error": "mode is undefined because the series has no valid non-NaN values",
-                    "operation": operation,
-                    "column": column,
-                }
-
             if len(result) > 1:
                 return {
                     "status": "ERROR",
