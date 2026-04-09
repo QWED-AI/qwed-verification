@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: qwed-core
-          image: qwed-core:2.0.0
+          image: ghcr.io/qwed-ai/qwed-core:5.0.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000

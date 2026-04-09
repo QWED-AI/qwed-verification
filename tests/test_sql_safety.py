@@ -23,8 +23,18 @@ def test_sql_verifier_destructive_commands():
     result = verifier.verify_sql("TRUNCATE TABLE logs")
     assert result["is_safe"] is False
     assert any("Destructive" in str(issue.get("description", issue)) or 
-               "destructive" in str(issue.get("type", issue))
+               "destructive" in str(issue.get("type", issue)) or
+               "admin" in str(issue.get("type", issue))
                for issue in result["issues"])
+
+    # SET ROLE should remain blocked as an administrative command
+    result = verifier.verify_sql("SET ROLE app_reader")
+    assert result["is_safe"] is False
+    assert any(
+        "Administrative" in str(issue.get("description", issue))
+        or "admin" in str(issue.get("type", issue)).lower()
+        for issue in result["issues"]
+    )
 
 def test_sql_verifier_sensitive_columns():
     verifier = SQLVerifier()

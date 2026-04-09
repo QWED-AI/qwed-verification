@@ -12,6 +12,7 @@ from collections import defaultdict
 from fastapi import HTTPException
 import time
 import os
+import threading
 
 class RateLimiter:
     """
@@ -25,6 +26,8 @@ class RateLimiter:
     """
     
     def __init__(self):
+        self._lock = threading.Lock()
+
         # Per-API-key request timestamps: {api_key: [timestamp1, timestamp2, ...]}
         self.api_key_requests: Dict[str, list] = defaultdict(list)
         
@@ -50,19 +53,20 @@ class RateLimiter:
         Returns:
             True if request is allowed, False if rate limit exceeded
         """
-        # Clean old requests
-        self.api_key_requests[api_key] = self._clean_old_requests(
-            self.api_key_requests[api_key], 
-            self.PER_KEY_WINDOW
-        )
-        
-        # Check limit
-        if len(self.api_key_requests[api_key]) >= self.PER_KEY_LIMIT:
-            return False
-        
-        # Record this request
-        self.api_key_requests[api_key].append(time.time())
-        return True
+        with self._lock:
+            # Clean old requests
+            self.api_key_requests[api_key] = self._clean_old_requests(
+                self.api_key_requests[api_key], 
+                self.PER_KEY_WINDOW
+            )
+            
+            # Check limit
+            if len(self.api_key_requests[api_key]) >= self.PER_KEY_LIMIT:
+                return False
+            
+            # Record this request
+            self.api_key_requests[api_key].append(time.time())
+            return True
     
     def check_global_limit(self) -> bool:
         """
@@ -71,19 +75,20 @@ class RateLimiter:
         Returns:
             True if request is allowed, False if rate limit exceeded
         """
-        # Clean old requests
-        self.global_requests = self._clean_old_requests(
-            self.global_requests, 
-            self.GLOBAL_WINDOW
-        )
-        
-        # Check limit
-        if len(self.global_requests) >= self.GLOBAL_LIMIT:
-            return False
-        
-        # Record this request
-        self.global_requests.append(time.time())
-        return True
+        with self._lock:
+            # Clean old requests
+            self.global_requests = self._clean_old_requests(
+                self.global_requests, 
+                self.GLOBAL_WINDOW
+            )
+            
+            # Check limit
+            if len(self.global_requests) >= self.GLOBAL_LIMIT:
+                return False
+            
+            # Record this request
+            self.global_requests.append(time.time())
+            return True
     
     def get_reset_time(self, api_key: Optional[str] = None) -> int:
         """
@@ -95,19 +100,21 @@ class RateLimiter:
         Returns:
             Seconds until oldest request expires from the window
         """
-        if api_key:
-            requests = self.api_key_requests.get(api_key, [])
-            window = self.PER_KEY_WINDOW
-        else:
-            requests = self.global_requests
-            window = self.GLOBAL_WINDOW
-        
-        if not requests:
-            return 0
-        
-        oldest = min(requests)
-        reset_time = oldest + window
-        return max(0, int(reset_time - time.time()))
+        with self._lock:
+            if api_key:
+                # Copy list to prevent mutation during calculation
+                requests = list(self.api_key_requests.get(api_key, []))
+                window = self.PER_KEY_WINDOW
+            else:
+                requests = list(self.global_requests)
+                window = self.GLOBAL_WINDOW
+            
+            if not requests:
+                return 0
+            
+            oldest = min(requests)
+            reset_time = oldest + window
+            return max(0, int(reset_time - time.time()))
 
 
 # Global rate limiter instance

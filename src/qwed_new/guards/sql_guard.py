@@ -28,7 +28,7 @@ class SQLGuard:
             # Check for DROP, DELETE, INSERT, UPDATE, ALTER, CREATE, TRUNCATE
             mutation_types = (
                 exp.Drop, exp.Delete, exp.Insert, exp.Update, exp.Alter, 
-                exp.Create, exp.Truncate
+                exp.Create, exp.TruncateTable
             )
             
             # Check root node

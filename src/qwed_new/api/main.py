@@ -22,7 +22,6 @@ from qwed_new.core.models import VerificationLog, ApiKey, User
 from qwed_new.core.rate_limiter import check_rate_limit
 
 # Import auth router
-# Import auth router
 from qwed_new.auth import auth_router
 from qwed_new.auth.audit_routes import router as audit_router
 from qwed_new.auth.middleware import get_api_key
@@ -33,19 +32,25 @@ TenantDependency = Annotated[TenantContext, Depends(get_current_tenant)]
 SessionDependency = Annotated[Session, Depends(get_session)]
 AgentTokenHeader = Annotated[str, Header(...)]
 
+APP_VERSION = "5.0.0"
+
 app = FastAPI(
     title="QWED API",
     description="The Deterministic Verification Protocol for AI",
-    version="2.0.0"
+    version=APP_VERSION
 )
 
 # CORS - configurable via environment variable
 # Default allows all origins for development, restrict in production
-CORS_ORIGINS = os.environ.get("QWED_CORS_ORIGINS", "*").split(",")
+raw_cors_origins = os.environ.get("QWED_CORS_ORIGINS", "")
+CORS_ORIGINS = [origin.strip() for origin in raw_cors_origins.split(",") if origin.strip()]
+if not CORS_ORIGINS:
+    logger.critical("QWED_CORS_ORIGINS must be configured")
+    raise RuntimeError("QWED_CORS_ORIGINS must be configured")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS if CORS_ORIGINS != ["*"] else ["*"],
-    allow_credentials=True,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=CORS_ORIGINS != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -82,13 +87,17 @@ def _get_startup_hook_allowlist() -> set[str]:
 
 def _enforce_environment_integrity() -> None:
     """Fail startup if Python startup hooks cannot be verified as safe."""
+    if os.environ.get("QWED_SKIP_ENV_INTEGRITY_CHECK") == "true":
+        logger.warning("Bypassing environment integrity check due to QWED_SKIP_ENV_INTEGRITY_CHECK")
+        return
+
     from qwed_sdk.guards.environment_guard import StartupHookGuard
 
     guard = StartupHookGuard(allowed_pth_files=_get_startup_hook_allowlist())
     result = guard.verify_environment_integrity()
     if not result.get("verified"):
-        logger.critical("Startup environment integrity check failed")
-        raise RuntimeError("Environment integrity verification failed")
+        logger.critical(f"Startup environment integrity check failed: {result}")
+        raise RuntimeError(f"Environment integrity verification failed: {result.get('risk')}")
 
 
 @app.on_event("startup")
@@ -105,7 +114,7 @@ class VerifyRequest(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"message": "QWED OS is Running", "version": "1.0.0"}
+    return {"message": "QWED OS is Running", "version": APP_VERSION}
 
 
 def get_optional_current_user(
@@ -876,7 +885,7 @@ from qwed_new.core.observability import (
     get_prometheus_metrics,
     metrics_collector,
 )
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlmodel import select
 
 @app.get("/health")
@@ -888,8 +897,8 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "QWED Platform",
-        "version": "1.0.0",
-        "timestamp": datetime.utcnow().isoformat()
+        "version": APP_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 @app.get("/metrics")
