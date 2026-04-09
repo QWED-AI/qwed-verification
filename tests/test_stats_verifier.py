@@ -1,12 +1,18 @@
 """
-Tests for StatsVerifier - direct statistical operations.
+Tests for StatsVerifier.compute_statistics().
 
-These tests focus on deterministic edge cases for compute_statistics():
-1. Empty data arrays
-2. Single element arrays
-3. Very large numbers
-4. Negative numbers in variance/std calculations
-5. Basic error handling for missing columns and unknown operations
+Verifies fail-closed semantics: operations return ERROR when the input is
+empty, lacks valid observations, or produces an undefined or ambiguous result.
+
+Coverage:
+  1. Empty series (all operations)
+  2. Single-element series
+  3. Large numeric values
+  4. Negative values
+  5. Mixed valid/NaN inputs
+  6. All-NaN series
+  7. Mode ambiguity (multimodal)
+  8. Missing columns and unknown operations
 """
 
 import requests
@@ -25,16 +31,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from qwed_new.core.stats_verifier import StatsVerifier
 
 class TestStatsVerifierBasic:
-    """Basic tests for StatsVerifier."""
+    """Tests for StatsVerifier initialization."""
+
     def test_verifier_initialization(self):
-        """Test that verifier initializes with defaults."""
+        """Verify default configuration values."""
         verifier = StatsVerifier()
         assert verifier.preferred_sandbox == "auto"
         assert verifier.timeout_seconds == 30.0
         assert verifier.memory_limit_mb == 128
 
     def test_verifier_custom_config(self):
-        """Test verifier custom config."""
+        """Verify custom configuration parameters."""
         verifier = StatsVerifier(
             preferred_sandbox="docker",
             timeout_seconds=20.0,
@@ -45,105 +52,102 @@ class TestStatsVerifierBasic:
         assert verifier.memory_limit_mb == 256
 
 class TestComputeStatistics:
-    """Tests for direct statistical operations."""
+    """Tests for compute_statistics() operations."""
+
     def setup_method(self):
         self.verifier = StatsVerifier()
 
     # -------------------------------------------------------------------------
-    # Empty data arrays
+    # Empty series - all operations must fail closed
     # -------------------------------------------------------------------------
 
-    def test_empty_series_sum(self):
-        """Sum of an empty series should be handled consistently."""
+    def test_empty_series_sum_is_error(self):
+        """Sum on an empty series returns ERROR."""
         df = pd.DataFrame({"x": []})
 
         result = self.verifier.compute_statistics(df, "x", "sum")
 
-        assert result["status"] == "SUCCESS"
-        assert result["operation"] == "sum"
-        assert result["column"] == "x"
-        assert result["result"] == 0
-    
-    def test_empty_series_count(self):
-        """Count of an empty series should be zero."""
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
+    def test_empty_series_count_is_error(self):
+        """Count on an empty series returns ERROR."""
         df = pd.DataFrame({"x": []})
 
         result = self.verifier.compute_statistics(df, "x", "count")
 
-        assert result["status"] == "SUCCESS"
-        assert result["result"] == 0
-    
-    def test_empty_series_mode_returns_none(self):
-        """Mode of an empty series should return None."""
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
+    def test_empty_series_mode_is_error(self):
+        """Mode on an empty series returns ERROR."""
         df = pd.DataFrame({"x": []})
 
         result = self.verifier.compute_statistics(df, "x", "mode")
 
-        assert result["status"] == "SUCCESS"
-        assert result["result"] is None
+        assert result["status"] == "ERROR"
+        assert result.get("error")
 
-    def test_empty_series_mean_is_nan(self):
-        """Mean of an empty series should be NaN."""
+    def test_empty_series_mean_is_error(self):
+        """Mean on an empty series returns ERROR."""
         df = pd.DataFrame({"x": []})
 
         result = self.verifier.compute_statistics(df, "x", "mean")
 
-        assert result["status"] == "SUCCESS"
-        assert pd.isna(result["result"])
+        assert result["status"] == "ERROR"
+        assert result.get("error")
 
-    def test_empty_series_variance_is_nan(self):
-        """Variance of an empty series should be NaN."""
+    def test_empty_series_variance_is_error(self):
+        """Variance on an empty series returns ERROR."""
         df = pd.DataFrame({"x": []})
 
         result = self.verifier.compute_statistics(df, "x", "var")
 
-        assert result["status"] == "SUCCESS"
-        assert pd.isna(result["result"])
+        assert result["status"] == "ERROR"
+        assert result.get("error")
 
-
-    def test_empty_series_std_is_nan(self):
-        """Standard deviation of an empty series should be NaN."""
+    def test_empty_series_std_is_error(self):
+        """Standard deviation on an empty series returns ERROR."""
         df = pd.DataFrame({"x": []})
 
         result = self.verifier.compute_statistics(df, "x", "std")
 
-        assert result["status"] == "SUCCESS"
-        assert pd.isna(result["result"])
-    
-    def test_empty_series_median_is_nan(self):
-        """Median of an empty series should be NaN."""
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
+    def test_empty_series_median_is_error(self):
+        """Median on an empty series returns ERROR."""
         df = pd.DataFrame({"x": []})
 
         result = self.verifier.compute_statistics(df, "x", "median")
 
-        assert result["status"] == "SUCCESS"
-        assert pd.isna(result["result"])
-    
-    def test_empty_series_min_is_nan(self):
-        """Min of an empty series should be NaN."""
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
+    def test_empty_series_min_is_error(self):
+        """Min on an empty series returns ERROR."""
         df = pd.DataFrame({"x": []})
 
         result = self.verifier.compute_statistics(df, "x", "min")
 
-        assert result["status"] == "SUCCESS"
-        assert pd.isna(result["result"])
-    
-    def test_empty_series_max_is_nan(self):
-        """Max of an empty series should be NaN."""
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
+    def test_empty_series_max_is_error(self):
+        """Max on an empty series returns ERROR."""
         df = pd.DataFrame({"x": []})
 
         result = self.verifier.compute_statistics(df, "x", "max")
 
-        assert result["status"] == "SUCCESS"
-        assert pd.isna(result["result"])
-    
-    
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
     # -------------------------------------------------------------------------
-    # Single element arrays
+    # Single-element series
     # -------------------------------------------------------------------------
 
     def test_single_element_mean(self):
-        """Mean of a single-element series should equal that element."""
+        """Mean of a single-element series is the element itself."""
         df = pd.DataFrame({"x": [7]})
 
         result = self.verifier.compute_statistics(df, "x", "mean")
@@ -152,7 +156,7 @@ class TestComputeStatistics:
         assert result["result"] == 7
 
     def test_single_element_sum(self):
-        """Sum of a single-element series should equal that element."""
+        """Sum of a single-element series is the element itself."""
         df = pd.DataFrame({"x": [7]})
 
         result = self.verifier.compute_statistics(df, "x", "sum")
@@ -161,7 +165,7 @@ class TestComputeStatistics:
         assert result["result"] == 7
 
     def test_single_element_count(self):
-        """Count of a single-element series should be 1."""
+        """Count of a single-element series is 1."""
         df = pd.DataFrame({"x": [7]})
 
         result = self.verifier.compute_statistics(df, "x", "count")
@@ -170,7 +174,7 @@ class TestComputeStatistics:
         assert result["result"] == 1
 
     def test_single_element_mode(self):
-        """Mode of a single-element series should be that element."""
+        """Mode of a single-element series is the element itself."""
         df = pd.DataFrame({"x": [7]})
 
         result = self.verifier.compute_statistics(df, "x", "mode")
@@ -178,26 +182,26 @@ class TestComputeStatistics:
         assert result["status"] == "SUCCESS"
         assert result["result"] == 7
 
-    def test_single_element_variance_is_nan(self):
-        """Variance of a single-element series should be NaN."""
+    def test_single_element_variance_is_error(self):
+        """Variance on a single-element series returns ERROR."""
         df = pd.DataFrame({"x": [7]})
 
         result = self.verifier.compute_statistics(df, "x", "var")
 
-        assert result["status"] == "SUCCESS"
-        assert pd.isna(result["result"])
+        assert result["status"] == "ERROR"
+        assert result.get("error")
 
-    def test_single_element_std_is_nan(self):
-        """Standard deviation of a single-element series should be NaN."""
+    def test_single_element_std_is_error(self):
+        """Standard deviation on a single-element series returns ERROR."""
         df = pd.DataFrame({"x": [7]})
 
         result = self.verifier.compute_statistics(df, "x", "std")
 
-        assert result["status"] == "SUCCESS"
-        assert pd.isna(result["result"])
-    
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
     def test_single_element_median(self):
-        """Median of a single-element series should equal that element."""
+        """Median of a single-element series is the element itself."""
         df = pd.DataFrame({"x": [7]})
 
         result = self.verifier.compute_statistics(df, "x", "median")
@@ -206,7 +210,7 @@ class TestComputeStatistics:
         assert result["result"] == 7
 
     def test_single_element_min(self):
-        """Min of a single-element series should equal that element."""
+        """Min of a single-element series is the element itself."""
         df = pd.DataFrame({"x": [7]})
 
         result = self.verifier.compute_statistics(df, "x", "min")
@@ -215,7 +219,7 @@ class TestComputeStatistics:
         assert result["result"] == 7
 
     def test_single_element_max(self):
-        """Max of a single-element series should equal that element."""
+        """Max of a single-element series is the element itself."""
         df = pd.DataFrame({"x": [7]})
 
         result = self.verifier.compute_statistics(df, "x", "max")
@@ -228,7 +232,7 @@ class TestComputeStatistics:
     # -------------------------------------------------------------------------
 
     def test_large_numbers_sum(self):
-        """Very large numbers should be summed consistently."""
+        """Sum of large integers matches exact arithmetic total."""
         values = [10**15, 10**15 + 1, 10**15 + 2]
         df = pd.DataFrame({"x": values})
 
@@ -238,7 +242,7 @@ class TestComputeStatistics:
         assert result["result"] == sum(values)
 
     def test_large_numbers_mean(self):
-        """Mean of large numbers uses Decimal to avoid float precision loss."""
+        """Mean of large integers preserves precision."""
         values = [10**15, 10**15 + 1, 10**15 + 2]
         df = pd.DataFrame({"x": values})
 
@@ -249,7 +253,7 @@ class TestComputeStatistics:
         assert Decimal(str(result["result"])) == expected
 
     def test_large_numbers_variance_is_non_negative(self):
-        """Variance should never be negative, even for very large numbers."""
+        """Variance of large integers is non-negative."""
         values = [10**15, 10**15 + 1, 10**15 + 2]
         df = pd.DataFrame({"x": values})
 
@@ -259,7 +263,7 @@ class TestComputeStatistics:
         assert result["result"] >= 0
 
     def test_large_numbers_std_is_non_negative(self):
-        """Standard deviation should never be negative, even for very large numbers."""
+        """Standard deviation of large integers is non-negative."""
         values = [10**15, 10**15 + 1, 10**15 + 2]
         df = pd.DataFrame({"x": values})
 
@@ -267,9 +271,9 @@ class TestComputeStatistics:
 
         assert result["status"] == "SUCCESS"
         assert result["result"] >= 0
-    
+
     def test_large_numbers_median(self):
-        """Median of very large numbers should be computed consistently."""
+        """Median of large integers matches middle value."""
         values = [10**15, 10**15 + 1, 10**15 + 2]
         df = pd.DataFrame({"x": values})
 
@@ -277,9 +281,9 @@ class TestComputeStatistics:
 
         assert result["status"] == "SUCCESS"
         assert result["result"] == values[1]
-    
+
     def test_large_numbers_count(self):
-        """Count of very large numbers should be computed consistently."""
+        """Count of large integers returns number of observations."""
         values = [10**15, 10**15 + 1, 10**15 + 2]
         df = pd.DataFrame({"x": values})
 
@@ -287,9 +291,9 @@ class TestComputeStatistics:
 
         assert result["status"] == "SUCCESS"
         assert result["result"] == len(values)
-    
+
     def test_large_numbers_min(self):
-        """Min of very large numbers should be computed consistently."""
+        """Min identifies the smallest value in a series."""
         values = [10**15, 10**15 + 1, 10**15 + 2]
         df = pd.DataFrame({"x": values})
 
@@ -297,9 +301,9 @@ class TestComputeStatistics:
 
         assert result["status"] == "SUCCESS"
         assert result["result"] == values[0]
-    
+
     def test_large_numbers_max(self):
-        """Max of very large numbers should be computed consistently."""
+        """Max identifies the largest value in a series."""
         values = [10**15, 10**15 + 1, 10**15 + 2]
         df = pd.DataFrame({"x": values})
 
@@ -309,11 +313,11 @@ class TestComputeStatistics:
         assert result["result"] == values[2]
 
     # -------------------------------------------------------------------------
-    # Negative numbers in variance calculations
+    # Negative numbers
     # -------------------------------------------------------------------------
 
-    def test_variance_with_negative_values_is_non_negative(self):
-        """Variance with negative values should still be non-negative."""
+    def test_negative_values_variance_is_non_negative(self):
+        """Variance of negative values is non-negative."""
         df = pd.DataFrame({"x": [-5, -1, -4]})
 
         result = self.verifier.compute_statistics(df, "x", "var")
@@ -321,8 +325,8 @@ class TestComputeStatistics:
         assert result["status"] == "SUCCESS"
         assert result["result"] >= 0
 
-    def test_std_with_negative_values_is_non_negative(self):
-        """Std with negative values should still be non-negative."""
+    def test_negative_values_std_is_non_negative(self):
+        """Standard deviation of negative values is non-negative."""
         df = pd.DataFrame({"x": [-5, -1, -4]})
 
         result = self.verifier.compute_statistics(df, "x", "std")
@@ -331,7 +335,7 @@ class TestComputeStatistics:
         assert result["result"] >= 0
 
     def test_negative_values_mean_is_correct(self):
-        """Mean of [-5, -1, -4] is -10/3 (non-terminating decimal); uses Fraction for exact comparison."""
+        """Mean of negative values is correct."""
         df = pd.DataFrame({"x": [-5, -1, -4]})
 
         result = self.verifier.compute_statistics(df, "x", "mean")
@@ -339,59 +343,58 @@ class TestComputeStatistics:
         assert result["status"] == "SUCCESS"
         expected = Fraction(-10, 3)
         assert Fraction(result["result"]).limit_denominator(1000) == expected
-    
+
     def test_negative_values_median_is_correct(self):
-        """Median with negative values should be computed correctly."""
+        """Median of negative values is correct."""
         df = pd.DataFrame({"x": [-5, -1, -4]})
 
         result = self.verifier.compute_statistics(df, "x", "median")
 
         assert result["status"] == "SUCCESS"
         assert result["result"] == -4
-    
+
     def test_negative_values_min_is_correct(self):
-        """Min with negative values should be computed correctly."""
+        """Min of negative values is correct."""
         df = pd.DataFrame({"x": [-5, -1, -4]})
 
         result = self.verifier.compute_statistics(df, "x", "min")
 
         assert result["status"] == "SUCCESS"
         assert result["result"] == -5
-    
+
     def test_negative_values_max_is_correct(self):
-        """Max with negative values should be computed correctly."""
+        """Max of negative values is correct."""
         df = pd.DataFrame({"x": [-5, -1, -4]})
 
         result = self.verifier.compute_statistics(df, "x", "max")
 
         assert result["status"] == "SUCCESS"
         assert result["result"] == -1
-    
+
     def test_negative_values_count_is_correct(self):
-        """Count with negative values should be computed correctly."""
+        """Count of negative values is correct."""
         df = pd.DataFrame({"x": [-5, -1, -4]})
 
         result = self.verifier.compute_statistics(df, "x", "count")
 
         assert result["status"] == "SUCCESS"
         assert result["result"] == 3
-    
-    def test_negative_values_mode_is_correct(self):
-        """Mode with all unique negative values returns smallest (pandas behavior: all values are modes when equally frequent, .iloc[0] returns first sorted)."""
+
+    def test_negative_unique_values_mode_is_error(self):
+        """Multimodal negative values return ERROR."""
         df = pd.DataFrame({"x": [-5, -1, -4]})
 
         result = self.verifier.compute_statistics(df, "x", "mode")
 
-        assert result["status"] == "SUCCESS"
-        assert result["result"] == -5
-    
+        assert result["status"] == "ERROR"
+        assert result.get("error")
 
     # -------------------------------------------------------------------------
-    # NaN handling
+    # Mixed valid/NaN inputs - NaNs are excluded
     # -------------------------------------------------------------------------
 
-    def test_nan_series_mean_ignores_nan(self):
-        """Mean should skip NaN values (pandas default: skipna=True)."""
+    def test_mixed_nan_mean_uses_valid_observations(self):
+        """Mean excludes NaN values."""
         df = pd.DataFrame({"x": [1.0, float("nan"), 3.0]})
 
         result = self.verifier.compute_statistics(df, "x", "mean")
@@ -399,8 +402,8 @@ class TestComputeStatistics:
         assert result["status"] == "SUCCESS"
         assert result["result"] == pytest.approx(2.0)
 
-    def test_nan_series_count_ignores_nan(self):
-        """Count should not include NaN entries."""
+    def test_mixed_nan_count_uses_valid_observations(self):
+        """Count excludes NaN values."""
         df = pd.DataFrame({"x": [1.0, float("nan"), 3.0]})
 
         result = self.verifier.compute_statistics(df, "x", "count")
@@ -408,21 +411,169 @@ class TestComputeStatistics:
         assert result["status"] == "SUCCESS"
         assert result["result"] == 2
 
-    def test_all_nan_mode_returns_none(self):
-        """Mode of an all-NaN series returns None (s.mode() is empty)."""
+    def test_mixed_nan_sum_uses_valid_observations(self):
+        """Sum excludes NaN values."""
+        df = pd.DataFrame({"x": [1.0, float("nan"), 3.0]})
+
+        result = self.verifier.compute_statistics(df, "x", "sum")
+
+        assert result["status"] == "SUCCESS"
+        assert result["result"] == pytest.approx(4.0)
+
+    def test_mixed_nan_var_uses_valid_observations(self):
+        """Variance excludes NaN values."""
+        df = pd.DataFrame({"x": [1.0, float("nan"), 3.0]})
+
+        result = self.verifier.compute_statistics(df, "x", "var")
+
+        assert result["status"] == "SUCCESS"
+        assert result["result"] == pytest.approx(2.0)
+
+    def test_mixed_nan_std_uses_valid_observations(self):
+        """Standard deviation excludes NaN values."""
+        df = pd.DataFrame({"x": [1.0, float("nan"), 3.0]})
+
+        result = self.verifier.compute_statistics(df, "x", "std")
+
+        assert result["status"] == "SUCCESS"
+        assert result["result"] == pytest.approx(2.0 ** 0.5)
+
+    def test_mixed_nan_median_uses_valid_observations(self):
+        """Median excludes NaN values."""
+        df = pd.DataFrame({"x": [1.0, float("nan"), 3.0]})
+
+        result = self.verifier.compute_statistics(df, "x", "median")
+
+        assert result["status"] == "SUCCESS"
+        assert result["result"] == pytest.approx(2.0)
+
+    def test_mixed_nan_min_uses_valid_observations(self):
+        """Min excludes NaN values."""
+        df = pd.DataFrame({"x": [1.0, float("nan"), 3.0]})
+
+        result = self.verifier.compute_statistics(df, "x", "min")
+
+        assert result["status"] == "SUCCESS"
+        assert result["result"] == pytest.approx(1.0)
+
+    def test_mixed_nan_max_uses_valid_observations(self):
+        """Max excludes NaN values."""
+        df = pd.DataFrame({"x": [1.0, float("nan"), 3.0]})
+
+        result = self.verifier.compute_statistics(df, "x", "max")
+
+        assert result["status"] == "SUCCESS"
+        assert result["result"] == pytest.approx(3.0)
+
+    def test_mixed_nan_var_single_valid_observation_is_error(self):
+        """Variance with single valid observation returns ERROR."""
+        df = pd.DataFrame({"x": [1.0, float("nan")]})
+
+        result = self.verifier.compute_statistics(df, "x", "var")
+
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
+    def test_mixed_nan_std_single_valid_observation_is_error(self):
+        """Standard deviation with single valid observation returns ERROR."""
+        df = pd.DataFrame({"x": [1.0, float("nan")]})
+
+        result = self.verifier.compute_statistics(df, "x", "std")
+
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
+    # -------------------------------------------------------------------------
+    # All-NaN inputs
+    # -------------------------------------------------------------------------
+
+    def test_all_nan_series_count_is_error(self):
+        """Count on all-NaN series returns ERROR."""
+        df = pd.DataFrame({"x": [float("nan"), float("nan")]})
+
+        result = self.verifier.compute_statistics(df, "x", "count")
+
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
+    def test_all_nan_series_sum_is_error(self):
+        """Sum on all-NaN series returns ERROR."""
+        df = pd.DataFrame({"x": [float("nan"), float("nan")]})
+
+        result = self.verifier.compute_statistics(df, "x", "sum")
+
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
+    def test_all_nan_series_mean_is_error(self):
+        """Mean on all-NaN series returns ERROR."""
+        df = pd.DataFrame({"x": [float("nan"), float("nan")]})
+
+        result = self.verifier.compute_statistics(df, "x", "mean")
+
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
+    def test_all_nan_series_var_is_error(self):
+        """Variance on all-NaN series returns ERROR."""
+        df = pd.DataFrame({"x": [float("nan"), float("nan")]})
+
+        result = self.verifier.compute_statistics(df, "x", "var")
+
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
+    def test_all_nan_series_std_is_error(self):
+        """Standard deviation on all-NaN series returns ERROR."""
+        df = pd.DataFrame({"x": [float("nan"), float("nan")]})
+
+        result = self.verifier.compute_statistics(df, "x", "std")
+
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
+    def test_all_nan_series_median_is_error(self):
+        """Median on all-NaN series returns ERROR."""
+        df = pd.DataFrame({"x": [float("nan"), float("nan")]})
+
+        result = self.verifier.compute_statistics(df, "x", "median")
+
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
+    def test_all_nan_series_min_is_error(self):
+        """Min on all-NaN series returns ERROR."""
+        df = pd.DataFrame({"x": [float("nan"), float("nan")]})
+
+        result = self.verifier.compute_statistics(df, "x", "min")
+
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
+    def test_all_nan_series_max_is_error(self):
+        """Max on all-NaN series returns ERROR."""
+        df = pd.DataFrame({"x": [float("nan"), float("nan")]})
+
+        result = self.verifier.compute_statistics(df, "x", "max")
+
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
+    def test_all_nan_series_mode_is_error(self):
+        """Mode on all-NaN series returns ERROR."""
         df = pd.DataFrame({"x": [float("nan"), float("nan")]})
 
         result = self.verifier.compute_statistics(df, "x", "mode")
 
-        assert result["status"] == "SUCCESS"
-        assert result["result"] is None
+        assert result["status"] == "ERROR"
+        assert result.get("error")
 
     # -------------------------------------------------------------------------
     # Mode edge cases
     # -------------------------------------------------------------------------
 
     def test_mode_unique_winner(self):
-        """Mode returns the single most-frequent value."""
+        """Unambiguous mode returns SUCCESS."""
         df = pd.DataFrame({"x": [1, 2, 2, 3]})
 
         result = self.verifier.compute_statistics(df, "x", "mode")
@@ -430,38 +581,56 @@ class TestComputeStatistics:
         assert result["status"] == "SUCCESS"
         assert result["result"] == 2
 
-    def test_mode_multimodal_returns_first(self):
-        """When multiple modes exist, implementation returns the first value from pandas mode output"""
-        df = pd.DataFrame({"x": [1, 1, 2, 2, 3]})
+    def test_mode_with_nan_unique_winner(self):
+        """Mode excludes NaNs and returns valid unique winner."""
+        df = pd.DataFrame({"x": [1, 1, float("nan"), 2]})
 
         result = self.verifier.compute_statistics(df, "x", "mode")
 
         assert result["status"] == "SUCCESS"
         assert result["result"] == 1
 
+    def test_mode_multimodal_is_error(self):
+        """Multimodal series returns ERROR."""
+        df = pd.DataFrame({"x": [1, 1, 2, 2, 3]})
+
+        result = self.verifier.compute_statistics(df, "x", "mode")
+
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
+    def test_mode_with_nan_multimodal_is_error(self):
+        """Multimodal series (after excluding NaNs) returns ERROR."""
+        df = pd.DataFrame({"x": [1, 1, 2, 2, float("nan")]})
+
+        result = self.verifier.compute_statistics(df, "x", "mode")
+
+        assert result["status"] == "ERROR"
+        assert result.get("error")
+
     # -------------------------------------------------------------------------
-    # Error handling
+    # Error handling - missing column / unknown operation
     # -------------------------------------------------------------------------
 
     def test_missing_column_returns_error(self):
-        """Missing column should return an ERROR result with available columns."""
+        """Missing column returns ERROR with available columns."""
         df = pd.DataFrame({"x": [1, 2, 3]})
 
         result = self.verifier.compute_statistics(df, "y", "mean")
 
         assert result["status"] == "ERROR"
-        assert "not found" in result["error"]
+        assert result.get("error")
         assert "available_columns" in result
         assert result["available_columns"] == ["x"]
 
     def test_unknown_operation_returns_error(self):
-        """Unknown operation should return an ERROR result with valid operations."""
+        """Unknown operation returns ERROR with available operations."""
         df = pd.DataFrame({"x": [1, 2, 3]})
 
         result = self.verifier.compute_statistics(df, "x", "skewness")
 
         assert result["status"] == "ERROR"
-        assert "Unknown operation" in result["error"]
+        assert result.get("error")
         assert "available_operations" in result
         assert "mean" in result["available_operations"]
         assert "var" in result["available_operations"]
@@ -472,10 +641,10 @@ class TestComputeStatistics:
 
 @pytest.mark.skipif(
     os.getenv("INTEGRATION_TESTS", "").strip().lower() not in {"1", "true", "yes"},
-    reason="requires a live server at 127.0.0.1:8002 — set INTEGRATION_TESTS=1 to run"
+    reason="requires a live server at 127.0.0.1:8002 - set INTEGRATION_TESTS=1 to run"
 )
 def test_stats_verification():
-    """End-to-end: POST a CSV to /verify/stats and assert the correct sales total is returned."""
+    """Verify end-to-end statistics computation via API."""
     # 1. Create a dummy CSV
     csv_content = """Date,Product,Sales,Region
 2023-01-01,Widget A,100,North
@@ -488,7 +657,7 @@ def test_stats_verification():
     # 2. Define Query
     query = "What is the total sales for Widget A?"
     expected_answer = "220" # 100 + 120
-    
+
     print(f"\nQuery: {query}")
     print("Uploading CSV...")
 
