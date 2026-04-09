@@ -670,6 +670,7 @@ def test_stats_verification():
         'provider': 'azure_openai'
     }
 
+    response = None
     try:
         response = requests.post(
             f"{BASE_URL}/verify/stats",
@@ -679,6 +680,7 @@ def test_stats_verification():
         )
     except requests.exceptions.RequestException as e:
         pytest.fail(f"Connection to {BASE_URL} failed: {e}")
+        return
 
     assert response.status_code == 200, (
         f"Expected HTTP 200 from /verify/stats, got {response.status_code}: {response.text}"
