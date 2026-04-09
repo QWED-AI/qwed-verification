@@ -31,9 +31,10 @@ services:
   postgres:
     image: postgres:15
     container_name: qwed_postgres
+    env_file:
+      - .env
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-qwed}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-qwed_db}
     ports:
       - "5432:5432"
@@ -98,9 +99,10 @@ services:
   grafana:
     image: grafana/grafana:10.2.2
     container_name: qwed_grafana
+    env_file:
+      - .env
     environment:
       GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:?set GF_SECURITY_ADMIN_USER}
-      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:?set GF_SECURITY_ADMIN_PASSWORD}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafanadata:/var/lib/grafana

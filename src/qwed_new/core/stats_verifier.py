@@ -576,15 +576,8 @@ class StatsVerifier:
             }
         
         try:
-            result = operations[operation](df[column])
-            
-            return {
-                "status": "SUCCESS",
-                "result": result,
-                "operation": operation,
-                "column": column,
-                "execution_time_ms": (time.time() - start_time) * 1000
-            }
+            series = df[column]
+            result = operations[operation](series)
         except Exception as e:
             return {
                 "status": "ERROR",
@@ -592,6 +585,43 @@ class StatsVerifier:
                 "operation": operation,
                 "column": column
             }
+
+        if operation == "mode":
+            mode_values = series.mode()
+            if len(mode_values) > 1:
+                return {
+                    "status": "ERROR",
+                    "error": (
+                        f"mode is ambiguous because {len(mode_values)} equally frequent "
+                        "values exist"
+                    ),
+                    "operation": operation,
+                    "column": column,
+                }
+            if len(mode_values) == 0:
+                return {
+                    "status": "ERROR",
+                    "error": "mode produced an undefined result (NaN)",
+                    "operation": operation,
+                    "column": column,
+                }
+            result = mode_values.iloc[0]
+
+        if pd.isna(result):
+            return {
+                "status": "ERROR",
+                "error": f"{operation} produced an undefined result (NaN)",
+                "operation": operation,
+                "column": column,
+            }
+
+        return {
+            "status": "SUCCESS",
+            "result": result,
+            "operation": operation,
+            "column": column,
+            "execution_time_ms": (time.time() - start_time) * 1000
+        }
     
     def get_sandbox_info(self) -> Dict[str, Any]:
         """
