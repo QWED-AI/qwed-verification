@@ -18,7 +18,7 @@ def is_api_running():
     try:
         response = requests.get("http://localhost:8000/health", timeout=2)
         return response.status_code == 200
-    except:
+    except Exception:
         return False
 
 
