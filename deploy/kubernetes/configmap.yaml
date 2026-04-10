@@ -4,7 +4,8 @@ metadata:
   name: qwed-config
   namespace: qwed
 data:
-  DATABASE_URL: "postgresql://qwed:qwed_secret@postgres:5432/qwed_db"
+  # NOTE: DATABASE_URL moved to secret.yaml (contains credentials)
+  QWED_CORS_ORIGINS: "http://localhost:3000"
   REDIS_URL: "redis://redis:6379/0"
   ACTIVE_PROVIDER: "azure_openai"
   AZURE_OPENAI_ENDPOINT: "https://your-resource.openai.azure.com/"

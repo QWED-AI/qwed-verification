@@ -253,6 +253,26 @@ def test_stats_execute_docker_marks_runtime_unavailable():
     assert result.error == SECURE_STATS_RUNTIME_UNAVAILABLE
 
 
+def test_compute_statistics_rejects_all_nan_results():
+    verifier = StatsVerifier()
+    df = pd.DataFrame({"value": [float("nan"), float("nan")]})
+
+    result = verifier.compute_statistics(df, "value", "mean")
+
+    assert result["status"] == "ERROR"
+    assert "undefined result" in result["error"]
+
+
+def test_compute_statistics_rejects_ambiguous_mode():
+    verifier = StatsVerifier()
+    df = pd.DataFrame({"value": [1, 1, 2, 2]})
+
+    result = verifier.compute_statistics(df, "value", "mode")
+
+    assert result["status"] == "ERROR"
+    assert "ambiguous" in result["error"]
+
+
 def test_consensus_preserves_none_answer_value():
     verifier = ConsensusVerifier(enable_circuit_breaker=False)
     results = [

@@ -16,6 +16,18 @@ inputs:
     description: 'Action type: verify, scan-secrets, scan-code, verify-shell'
     required: false
     default: 'verify'
+
+  # Add provider and model inputs
+  provider:
+    description: 'LLM provider (e.g. openai, anthropic)'
+    required: false
+  model:
+    description: 'Model name'
+    required: false
+  mask_pii:
+    description: 'Mask PII in inputs/outputs'
+    required: false
+    default: 'false'
   
   # Legacy inputs for single verification
   query:
@@ -64,6 +76,9 @@ runs:
   image: 'Dockerfile'
   env:
     INPUT_API_KEY: ${{ inputs.api_key }}
+    INPUT_PROVIDER: ${{ inputs.provider }}
+    INPUT_MODEL: ${{ inputs.model }}
+    INPUT_MASK_PII: ${{ inputs.mask_pii }}
     INPUT_ACTION: ${{ inputs.action }}
     INPUT_QUERY: ${{ inputs.query }}
     INPUT_LLM_OUTPUT: ${{ inputs.llm_output }}

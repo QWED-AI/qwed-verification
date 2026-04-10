@@ -2,16 +2,29 @@
 # Update code_verifier.py on remote server
 
 # Backup original
-cp ~/qwed_new/src/qwed_new/core/code_verifier.py ~/qwed_new/src/qwed_new/core/code_verifier.py.backup
+/bin/cp ~/qwed_new/src/qwed_new/core/code_verifier.py ~/qwed_new/src/qwed_new/core/code_verifier.py.backup
 
-# Add getattr to CRITICAL_FUNCTIONS (line 42)
-sed -i '42s/"yaml.unsafe_load",/"yaml.unsafe_load",\n        "getattr",  # Can execute arbitrary methods/' ~/qwed_new/src/qwed_new/core/code_verifier.py
+# Add getattr to CRITICAL_FUNCTIONS
+/bin/sed -i 's/"yaml\.unsafe_load",/"yaml.unsafe_load",\n        "getattr",  # Can execute arbitrary methods/' ~/qwed_new/src/qwed_new/core/code_verifier.py
 
 # Add WEAK_CRYPTO_FUNCTIONS after CRITICAL_FUNCTIONS
-sed -i '/^    CRITICAL_FUNCTIONS = {/,/^    }/a \\n    # Weak cryptographic functions (CRITICAL for passwords)\n    WEAK_CRYPTO_FUNCTIONS = {\n        "hashlib.md5", "hashlib.sha1",  # Broken for passwords\n    }\n    \n    # Password-related variable names\n    PASSWORD_INDICATORS = {\n        "password", "passwd", "pwd", "pass",\n        "credential", "cred", "auth",\n        "secret", "token", "key"\n    }' ~/qwed_new/src/qwed_new/core/code_verifier.py
+/bin/sed -i '/^    CRITICAL_FUNCTIONS = {/,/^    }/{ /^    }/a\
+\
+    # Weak cryptographic functions (CRITICAL for passwords)\
+    WEAK_CRYPTO_FUNCTIONS = {\
+        "hashlib.md5", "hashlib.sha1",  # Broken for passwords\
+    }\
+\
+    # Password-related variable names\
+    PASSWORD_INDICATORS = {\
+        "password", "passwd", "pwd", "pass",\
+        "credential", "cred", "auth",\
+        "secret", "token", "key"\
+    }\
+}' ~/qwed_new/src/qwed_new/core/code_verifier.py
 
-echo "Code verifier updated!"
-echo "Restarting QWED service..."
-sudo systemctl restart qwed
-sleep 3
-sudo systemctl status qwed
+/bin/echo "Code verifier updated!"
+/bin/echo "Restarting QWED service..."
+/bin/systemctl restart qwed
+/bin/sleep 3
+/bin/systemctl is-active --quiet qwed || { /bin/systemctl --no-pager status qwed; exit 1; }

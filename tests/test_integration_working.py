@@ -8,6 +8,7 @@ Run only when API server is running.
 import pytest
 import requests
 import time
+import os
 from qwed_sdk import QWEDClient
 
 
@@ -21,10 +22,16 @@ def is_api_running():
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    not is_api_running(),
-    reason="QWED API server not running on localhost:8000"
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not is_api_running(),
+        reason="QWED API server not running on localhost:8000"
+    ),
+    pytest.mark.skipif(
+        os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true",
+        reason="Skip live integration tests in CI pipeline"
+    )
+]
 
 
 @pytest.fixture

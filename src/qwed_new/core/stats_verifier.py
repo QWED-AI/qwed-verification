@@ -531,25 +531,31 @@ class StatsVerifier:
     ) -> Dict[str, Any]:
         """
         Compute statistics directly without code generation.
+        
+        Safer alternative for common operations.
+        
+        Args:
+            df: DataFrame containing the data.
+            column: Name of the column to operate on.
+            operation: One of "mean", "median", "std", "var", "sum", "count", "min", "max", "mode".
 
-        Returns SUCCESS only for clearly defined and safely verifiable results.
-        Returns ERROR for undefined, ambiguous, or otherwise non-verifiable cases.
+        Returns:
+            Dict containing the result or error.
 
-        Policy highlights:
-        - empty series are rejected for all operations
-        - series with no valid non-NaN observations are rejected for all operations
-        - multimodal results are treated as ambiguous and rejected
-        - outputs that are undefined, ambiguous, or non-verifiable are rejected
+        Example:
+            >>> result = verifier.compute_statistics(df, "age", "mean")
+            >>> print(result["result"])
+            35.5
         """
         start_time = time.time()
-
+        
         if column not in df.columns:
             return {
                 "status": "ERROR",
                 "error": f"Column '{column}' not found",
-                "available_columns": list(df.columns),
+                "available_columns": list(df.columns)
             }
-
+        
         operations = {
             "mean": lambda s: s.mean(),
             "median": lambda s: s.median(),
@@ -559,62 +565,47 @@ class StatsVerifier:
             "count": lambda s: s.count(),
             "min": lambda s: s.min(),
             "max": lambda s: s.max(),
-            "mode": lambda s: s.mode(),
+            "mode": lambda s: s.mode().iloc[0] if len(s.mode()) > 0 else None,
         }
-
+        
         if operation not in operations:
             return {
                 "status": "ERROR",
                 "error": f"Unknown operation '{operation}'",
-                "available_operations": list(operations.keys()),
+                "available_operations": list(operations.keys())
             }
-
-        s = df[column]
-        total_count = len(s)
-        valid_count = int(s.count())
-
-        if total_count == 0:
-            return {
-                "status": "ERROR",
-                "error": f"{operation} is undefined for an empty series",
-                "operation": operation,
-                "column": column,
-            }
-
-        if valid_count == 0:
-            return {
-                "status": "ERROR",
-                "error": (
-                    f"{operation} is undefined because the series has no valid "
-                    "non-NaN values"
-                ),
-                "operation": operation,
-                "column": column,
-            }
-
+        
         try:
-            result = operations[operation](s)
+            series = df[column]
+            result = operations[operation](series)
         except Exception as e:
             return {
                 "status": "ERROR",
                 "error": str(e),
                 "operation": operation,
-                "column": column,
+                "column": column
             }
 
         if operation == "mode":
-            if len(result) > 1:
+            mode_values = series.mode()
+            if len(mode_values) > 1:
                 return {
                     "status": "ERROR",
                     "error": (
-                        f"mode is ambiguous because {len(result)} equally frequent "
+                        f"mode is ambiguous because {len(mode_values)} equally frequent "
                         "values exist"
                     ),
                     "operation": operation,
                     "column": column,
                 }
-
-            result = result.iloc[0]
+            if len(mode_values) == 0:
+                return {
+                    "status": "ERROR",
+                    "error": "mode produced an undefined result (NaN)",
+                    "operation": operation,
+                    "column": column,
+                }
+            result = mode_values.iloc[0]
 
         if pd.isna(result):
             return {
@@ -629,7 +620,7 @@ class StatsVerifier:
             "result": result,
             "operation": operation,
             "column": column,
-            "execution_time_ms": (time.time() - start_time) * 1000,
+            "execution_time_ms": (time.time() - start_time) * 1000
         }
     
     def get_sandbox_info(self) -> Dict[str, Any]:

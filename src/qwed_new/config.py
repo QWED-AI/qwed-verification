@@ -45,7 +45,12 @@ class Settings:
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
     # Security
-    API_KEY_SECRET = os.getenv("API_KEY_SECRET", "change-me-in-production")
+    API_KEY_SECRET = os.getenv("API_KEY_SECRET")
+    if not API_KEY_SECRET:
+        raise RuntimeError(
+            "API_KEY_SECRET environment variable must be set. "
+            "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(48))\""
+        )
 
     # Default to Ollama if not specified (safer local fallback)
     ACTIVE_PROVIDER = os.getenv("ACTIVE_PROVIDER", ProviderType.OLLAMA)

@@ -58,3 +58,20 @@ node_modules/
 npm-debug.log
 yarn-error.log
 .pnpm-debug.log
+.aider*
+
+# Debug / test output artifacts
+out.txt
+git_logs*.txt
+pytest_out.txt
+test_*.txt
+test_*.log
+err.log
+
+# Coverage
+coverage.xml
+htmlcov/
+.coverage
+
+# Kubernetes secrets (contain credentials)
+deploy/kubernetes/secret.yaml

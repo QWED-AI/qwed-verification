@@ -13,15 +13,15 @@ services:
       jaeger:
         condition: service_healthy
     environment:
-      - DATABASE_URL=postgresql://qwed:qwed_secret@postgres:5432/qwed_db
-      - REDIS_URL=redis://redis:6379/0
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
-      - API_KEY_SECRET=dev_secret_key
+      - DATABASE_URL=${DATABASE_URL:?Set DATABASE_URL in .env}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
+      - QWED_CORS_ORIGINS=${QWED_CORS_ORIGINS:?set QWED_CORS_ORIGINS}
+      - API_KEY_SECRET=${API_KEY_SECRET:?set API_KEY_SECRET}
     ports:
       - "8000:8000"
     volumes:
       - ./src:/app/src
-      - /var/run/docker.sock:/var/run/docker.sock  # Required for Stats Verification engine
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -31,16 +31,17 @@ services:
   postgres:
     image: postgres:15
     container_name: qwed_postgres
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: qwed
-      POSTGRES_PASSWORD: qwed_secret
-      POSTGRES_DB: qwed_db
+      POSTGRES_USER: ${POSTGRES_USER:-qwed}
+      POSTGRES_DB: ${POSTGRES_DB:-qwed_db}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U qwed -d qwed_db"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -98,9 +99,10 @@ services:
   grafana:
     image: grafana/grafana:10.2.2
     container_name: qwed_grafana
+    env_file:
+      - .env
     environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: qwed_admin
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:?set GF_SECURITY_ADMIN_USER}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafanadata:/var/lib/grafana
