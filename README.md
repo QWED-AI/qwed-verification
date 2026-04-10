@@ -876,7 +876,7 @@ Apache 2.0 - See [LICENSE](LICENSE)
 
 Thanks to everyone building QWED, especially [@Pryce22](https://github.com/Pryce22) our first contributor.
 
-> Future contributors should be added here as they merge, or this section can later be switched back to an automatic contributors widget.
+> Future contributors should be added here as they merge, or this section can later be switched back to an automatic contributors widget. [See all contributors →](https://github.com/QWED-AI/qwed-verification/graphs/contributors)
 
 ---
 
