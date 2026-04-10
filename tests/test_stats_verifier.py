@@ -1,5 +1,4 @@
 import requests
-import pandas as pd
 
 BASE_URL = "http://127.0.0.1:8002"
 
