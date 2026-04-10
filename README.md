@@ -867,9 +867,16 @@ Apache 2.0 - See [LICENSE](LICENSE)
 
 ## 👥 Contributors
 
-<a href="https://github.com/QWED-AI/qwed-verification/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=QWED-AI/qwed-verification" alt="QWED Contributors" />
+<a href="https://github.com/rahuldass19">
+  <img src="https://github.com/rahuldass19.png?size=96" width="64px;" alt="Rahul Dass" />
 </a>
+<a href="https://github.com/Pryce22">
+  <img src="https://github.com/Pryce22.png?size=96" width="64px;" alt="Pryce22" />
+</a>
+
+Thanks to everyone building QWED, especially [@Pryce22](https://github.com/Pryce22) our first contributor.
+
+> Future contributors should be added here as they merge, or this section can later be switched back to an automatic contributors widget. [See all contributors →](https://github.com/QWED-AI/qwed-verification/graphs/contributors)
 
 ---
 
