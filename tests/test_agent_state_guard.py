@@ -55,6 +55,14 @@ def _build_transition_guard() -> AgentStateGuard:
     )
 
 
+def _build_commit_guard(tmp_path) -> AgentStateGuard:
+    return AgentStateGuard(
+        STRICT_AGENT_STATE_SCHEMA,
+        transition_rules=STRICT_AGENT_TRANSITION_RULES,
+        allowed_commit_roots=[str(tmp_path)],
+    )
+
+
 def test_rejects_empty_payload():
     guard = _build_guard()
 
@@ -301,6 +309,154 @@ def test_accepts_valid_monotonic_state_transition():
     assert result["status"] == "VERIFIED"
     assert result["normalized_previous_state"]["status"] == "pending"
     assert result["normalized_state"]["status"] == "running"
+
+
+def test_rejects_commit_without_allowed_roots(tmp_path):
+    guard = _build_transition_guard()
+    target_path = tmp_path / "state.json"
+
+    result = guard.verify_transition_and_commit_state(
+        '{"agent_id": "a1", "status": "pending", "step_count": 1, "tasks": []}',
+        '{"agent_id": "a1", "status": "running", "step_count": 2, "tasks": []}',
+        str(target_path),
+    )
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-107"
+    assert not target_path.exists()
+
+
+def test_rejects_relative_commit_path(tmp_path):
+    guard = _build_commit_guard(tmp_path)
+
+    result = guard.verify_transition_and_commit_state(
+        '{"agent_id": "a1", "status": "pending", "step_count": 1, "tasks": []}',
+        '{"agent_id": "a1", "status": "running", "step_count": 2, "tasks": []}',
+        "state.json",
+    )
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-107"
+
+
+def test_rejects_commit_path_outside_allowed_roots(tmp_path):
+    guard = _build_commit_guard(tmp_path)
+    outside_target = tmp_path.parent / "outside.json"
+
+    result = guard.verify_transition_and_commit_state(
+        '{"agent_id": "a1", "status": "pending", "step_count": 1, "tasks": []}',
+        '{"agent_id": "a1", "status": "running", "step_count": 2, "tasks": []}',
+        str(outside_target),
+    )
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-107"
+    assert not outside_target.exists()
+
+
+def test_rejects_commit_path_with_non_json_extension(tmp_path):
+    guard = _build_commit_guard(tmp_path)
+    target_path = tmp_path / "state.txt"
+
+    result = guard.verify_transition_and_commit_state(
+        '{"agent_id": "a1", "status": "pending", "step_count": 1, "tasks": []}',
+        '{"agent_id": "a1", "status": "running", "step_count": 2, "tasks": []}',
+        str(target_path),
+    )
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-107"
+    assert not target_path.exists()
+
+
+def test_rejects_commit_when_target_parent_does_not_exist(tmp_path):
+    guard = _build_commit_guard(tmp_path)
+    target_path = tmp_path / "missing" / "state.json"
+
+    result = guard.verify_transition_and_commit_state(
+        '{"agent_id": "a1", "status": "pending", "step_count": 1, "tasks": []}',
+        '{"agent_id": "a1", "status": "running", "step_count": 2, "tasks": []}',
+        str(target_path),
+    )
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-107"
+    assert not target_path.exists()
+
+
+def test_rejects_commit_without_side_effects_when_transition_is_blocked(tmp_path):
+    guard = _build_commit_guard(tmp_path)
+    target_path = tmp_path / "state.json"
+
+    result = guard.verify_transition_and_commit_state(
+        '{"agent_id": "a1", "status": "running", "step_count": 3, "tasks": []}',
+        '{"agent_id": "a1", "status": "pending", "step_count": 2, "tasks": []}',
+        str(target_path),
+    )
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-106"
+    assert not target_path.exists()
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_commits_verified_transition_atomically(tmp_path):
+    guard = _build_commit_guard(tmp_path)
+    target_path = tmp_path / "state.json"
+
+    result = guard.verify_transition_and_commit_state(
+        """
+        {
+          "agent_id": "a1",
+          "status": "pending",
+          "step_count": 1,
+          "tasks": [{"id": "task-1", "done": false}]
+        }
+        """,
+        """
+        {
+          "tasks": [
+            {"done": true, "id": "task-1"},
+            {"done": false, "id": "task-2"}
+          ],
+          "step_count": 2,
+          "status": "running",
+          "agent_id": "a1"
+        }
+        """,
+        str(target_path),
+    )
+
+    assert result["verified"] is True
+    assert result["status"] == "VERIFIED"
+    assert result["committed_path"] == str(target_path)
+    assert result["committed_bytes"] > 0
+    assert target_path.read_text(encoding="utf-8") == (
+        '{"agent_id":"a1","status":"running","step_count":2,'
+        '"tasks":[{"done":true,"id":"task-1"},{"done":false,"id":"task-2"}]}'
+    )
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_cleans_up_temp_file_when_atomic_replace_fails(tmp_path, monkeypatch):
+    guard = _build_commit_guard(tmp_path)
+    target_path = tmp_path / "state.json"
+
+    def failing_replace(source, destination):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr("qwed_new.guards.agent_state_guard.os.replace", failing_replace)
+
+    result = guard.verify_transition_and_commit_state(
+        '{"agent_id": "a1", "status": "pending", "step_count": 1, "tasks": []}',
+        '{"agent_id": "a1", "status": "running", "step_count": 2, "tasks": []}',
+        str(target_path),
+    )
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-108"
+    assert not target_path.exists()
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_rejects_invalid_current_state_during_transition():

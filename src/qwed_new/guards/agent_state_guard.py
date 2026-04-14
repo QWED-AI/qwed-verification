@@ -1,20 +1,23 @@
 """
 AgentStateGuard
 
-Phase 1 focuses on structural verification and Phase 2 adds bounded semantic
-transition validation:
+Phase 1 focuses on structural verification, Phase 2 adds bounded semantic
+transition validation, and Phase 3 adds governed atomic commit:
 - strict JSON parsing
 - strict schema validation
 - deterministic transition checks
 - fail-closed decision objects
 
-No commit side effects are introduced here.
+No side effects occur before verification completes.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from decimal import Decimal
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Dict, Iterable
 
@@ -23,8 +26,8 @@ class AgentStateGuard:
     """
     Deterministically verifies proposed agent state payloads before any commit.
 
-    Phase 1 validates structure and Phase 2 adds bounded semantic transition
-    proof. Execution policy still belongs to a later phase.
+    Phase 1 validates structure, Phase 2 adds bounded semantic transition
+    proof, and Phase 3 adds governed atomic commit.
     """
 
     _VALID_SCHEMA_TYPES = frozenset(
@@ -44,6 +47,7 @@ class AgentStateGuard:
         self,
         required_schema: Dict[str, Any],
         transition_rules: Dict[str, Any] | None = None,
+        allowed_commit_roots: list[str] | tuple[str, ...] | None = None,
     ) -> None:
         validated_schema = self._validate_schema_definition(required_schema, "$")
         validated_transition_rules = self._validate_transition_rules_definition(
@@ -53,6 +57,9 @@ class AgentStateGuard:
         self.transition_rules = self._freeze_config(validated_transition_rules)
         self._transition_rules_configured = self._has_effective_transition_rules(
             self.transition_rules
+        )
+        self.allowed_commit_roots = self._validate_allowed_commit_roots(
+            allowed_commit_roots or []
         )
 
     def verify_state_payload(self, proposed_state_json: str) -> Dict[str, Any]:
@@ -155,6 +162,54 @@ class AgentStateGuard:
             "normalized_state": proposed_result["normalized_state"],
         }
 
+    def verify_transition_and_commit_state(
+        self,
+        current_state_json: str,
+        proposed_state_json: str,
+        target_path: str,
+    ) -> Dict[str, Any]:
+        """
+        Verify a transition and atomically commit the normalized state only after
+        verification succeeds.
+        """
+        commit_target = self._validate_commit_target(target_path)
+        if isinstance(commit_target, dict):
+            return commit_target
+
+        verification_result = self.verify_state_transition(
+            current_state_json=current_state_json,
+            proposed_state_json=proposed_state_json,
+        )
+        if not verification_result["verified"]:
+            return verification_result
+
+        try:
+            committed_bytes = self._atomic_write_json(
+                verification_result["normalized_state"],
+                commit_target,
+            )
+        except OSError as exc:
+            return self._blocked(
+                error_code="QWED-AGENT-STATE-108",
+                message=(
+                    "Blocked: atomic state commit failed deterministically. "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            )
+
+        return {
+            "verified": True,
+            "status": "VERIFIED",
+            "proof": (
+                "State transition satisfied structural and semantic rules and was "
+                "atomically committed."
+            ),
+            "normalized_previous_state": verification_result["normalized_previous_state"],
+            "normalized_state": verification_result["normalized_state"],
+            "committed_path": str(commit_target),
+            "committed_bytes": committed_bytes,
+        }
+
     def _load_strict_json(self, proposed_state_json: str) -> Any:
         return json.loads(
             proposed_state_json,
@@ -176,6 +231,78 @@ class AgentStateGuard:
     @staticmethod
     def _has_effective_transition_rules(transition_rules: Any) -> bool:
         return any(bool(value) for value in transition_rules.values())
+
+    @staticmethod
+    def _validate_allowed_commit_roots(
+        allowed_commit_roots: list[str] | tuple[str, ...]
+    ) -> tuple[Path, ...]:
+        if not isinstance(allowed_commit_roots, (list, tuple)):
+            raise ValueError("allowed_commit_roots must be a list or tuple of paths.")
+
+        validated_roots: list[Path] = []
+        for root in allowed_commit_roots:
+            if not isinstance(root, str) or not root.strip():
+                raise ValueError(
+                    "allowed_commit_roots entries must be non-empty absolute paths."
+                )
+            resolved_root = Path(root).resolve(strict=False)
+            if not resolved_root.is_absolute():
+                raise ValueError(
+                    "allowed_commit_roots entries must be absolute paths."
+                )
+            validated_roots.append(resolved_root)
+        return tuple(validated_roots)
+
+    def _validate_commit_target(self, target_path: str) -> Path | Dict[str, Any]:
+        if not self.allowed_commit_roots:
+            return self._blocked(
+                error_code="QWED-AGENT-STATE-107",
+                message=(
+                    "Blocked: atomic state commit requires configured allowed "
+                    "commit roots."
+                ),
+            )
+
+        if not isinstance(target_path, str) or not target_path.strip():
+            return self._blocked(
+                error_code="QWED-AGENT-STATE-107",
+                message="Blocked: target_path must be a non-empty absolute path.",
+            )
+
+        candidate = Path(target_path)
+        if not candidate.is_absolute():
+            return self._blocked(
+                error_code="QWED-AGENT-STATE-107",
+                message="Blocked: target_path must be an absolute path.",
+            )
+
+        resolved_target = candidate.resolve(strict=False)
+        parent = resolved_target.parent
+        if not parent.exists() or not parent.is_dir():
+            return self._blocked(
+                error_code="QWED-AGENT-STATE-107",
+                message=(
+                    "Blocked: target_path parent directory must already exist for "
+                    "atomic commit."
+                ),
+            )
+
+        if resolved_target.suffix.lower() != ".json":
+            return self._blocked(
+                error_code="QWED-AGENT-STATE-107",
+                message="Blocked: target_path must end with .json for state commits.",
+            )
+
+        if not any(
+            self._is_path_within_root(resolved_target, allowed_root)
+            for allowed_root in self.allowed_commit_roots
+        ):
+            return self._blocked(
+                error_code="QWED-AGENT-STATE-107",
+                message="Blocked: target_path is outside the configured commit roots.",
+            )
+
+        return resolved_target
 
     def _validate_schema_definition(
         self, schema: Dict[str, Any], path: str
@@ -561,6 +688,14 @@ class AgentStateGuard:
             )
 
     @staticmethod
+    def _is_path_within_root(candidate: Path, root: Path) -> bool:
+        try:
+            candidate.relative_to(root)
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
     def _get_path_value(state: Dict[str, Any], path: str) -> Any:
         value: Any = state
         for part in path[2:].split("."):
@@ -568,6 +703,50 @@ class AgentStateGuard:
                 raise ValueError(f"Configured path {path!r} was not found in state.")
             value = value[part]
         return value
+
+    @classmethod
+    def _serialize_json_deterministically(cls, value: Any) -> str:
+        if isinstance(value, MappingProxyType):
+            value = dict(value)
+        if isinstance(value, dict):
+            items = []
+            for key in sorted(value):
+                items.append(
+                    f"{json.dumps(key)}:{cls._serialize_json_deterministically(value[key])}"
+                )
+            return "{" + ",".join(items) + "}"
+        if isinstance(value, (list, tuple)):
+            return "[" + ",".join(cls._serialize_json_deterministically(item) for item in value) + "]"
+        if isinstance(value, Decimal):
+            return str(value)
+        return json.dumps(value, separators=(",", ":"))
+
+    def _atomic_write_json(self, normalized_state: Dict[str, Any], target_path: Path) -> int:
+        payload = self._serialize_json_deterministically(normalized_state).encode("utf-8")
+        temp_file_path: str | None = None
+
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                delete=False,
+                dir=target_path.parent,
+                prefix=f"{target_path.stem}.",
+                suffix=".tmp",
+            ) as temp_file:
+                temp_file_path = temp_file.name
+                temp_file.write(payload)
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
+
+            os.replace(temp_file_path, target_path)
+            temp_file_path = None
+            return len(payload)
+        finally:
+            if temp_file_path is not None:
+                try:
+                    os.unlink(temp_file_path)
+                except FileNotFoundError:
+                    pass
 
     def _validate_object_value(
         self, schema: Dict[str, Any], value: Any, path: str, depth: int
