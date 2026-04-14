@@ -27,10 +27,26 @@ class AgentStateGuard:
     _VALID_SCHEMA_TYPES = frozenset(
         {"object", "array", "string", "integer", "number", "boolean", "null"}
     )
+    _VALID_TRANSITION_RULE_KEYS = frozenset(
+        {
+            "immutable_paths",
+            "monotonic_integer_paths",
+            "ordered_enum_paths",
+            "keyed_object_array_paths",
+        }
+    )
     MAX_VALIDATION_DEPTH = 64
 
-    def __init__(self, required_schema: Dict[str, Any]) -> None:
+    def __init__(
+        self,
+        required_schema: Dict[str, Any],
+        transition_rules: Dict[str, Any] | None = None,
+    ) -> None:
         self.required_schema = self._validate_schema_definition(required_schema, "$")
+        self._transition_rules_configured = bool(transition_rules)
+        self.transition_rules = self._validate_transition_rules_definition(
+            transition_rules or {}
+        )
 
     def verify_state_payload(self, proposed_state_json: str) -> Dict[str, Any]:
         """
@@ -70,6 +86,59 @@ class AgentStateGuard:
             "normalized_state": self._canonicalize(state_data),
         }
 
+    def verify_state_transition(
+        self,
+        current_state_json: str,
+        proposed_state_json: str,
+    ) -> Dict[str, Any]:
+        """
+        Verify an old_state -> new_state transition with structural and
+        configured semantic checks. No side effects occur here.
+        """
+        if not self._transition_rules_configured:
+            return self._blocked(
+                error_code="QWED-AGENT-STATE-104",
+                message=(
+                    "Blocked: semantic transition verification requires configured "
+                    "transition rules."
+                ),
+            )
+
+        current_result = self.verify_state_payload(current_state_json)
+        if not current_result["verified"]:
+            return self._blocked(
+                error_code="QWED-AGENT-STATE-105",
+                message=(
+                    "Blocked: current agent state failed structural verification. "
+                    f"{current_result['message']}"
+                ),
+            )
+
+        proposed_result = self.verify_state_payload(proposed_state_json)
+        if not proposed_result["verified"]:
+            return proposed_result
+
+        transition_error = self._validate_transition_rules(
+            current_state=current_result["normalized_state"],
+            proposed_state=proposed_result["normalized_state"],
+        )
+        if transition_error is not None:
+            return self._blocked(
+                error_code="QWED-AGENT-STATE-106",
+                message=f"Blocked: {transition_error}",
+            )
+
+        return {
+            "verified": True,
+            "status": "VERIFIED",
+            "proof": (
+                "State transition satisfied the configured structural and "
+                "semantic rules."
+            ),
+            "normalized_previous_state": current_result["normalized_state"],
+            "normalized_state": proposed_result["normalized_state"],
+        }
+
     def _load_strict_json(self, proposed_state_json: str) -> Any:
         return json.loads(
             proposed_state_json,
@@ -92,6 +161,39 @@ class AgentStateGuard:
             handler(self, schema, path)
 
         return schema
+
+    def _validate_transition_rules_definition(
+        self, transition_rules: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        if not isinstance(transition_rules, dict):
+            raise ValueError("Transition rules must be a dictionary.")
+
+        unknown_keys = sorted(
+            set(transition_rules) - set(self._VALID_TRANSITION_RULE_KEYS)
+        )
+        if unknown_keys:
+            raise ValueError(
+                f"Transition rules contain unsupported keys: {unknown_keys}."
+            )
+
+        validated_rules: Dict[str, Any] = {}
+        validated_rules["immutable_paths"] = self._validate_path_list(
+            transition_rules.get("immutable_paths", []),
+            "immutable_paths",
+        )
+        validated_rules["monotonic_integer_paths"] = self._validate_path_list(
+            transition_rules.get("monotonic_integer_paths", []),
+            "monotonic_integer_paths",
+        )
+        validated_rules["ordered_enum_paths"] = self._validate_ordered_enum_paths(
+            transition_rules.get("ordered_enum_paths", {})
+        )
+        validated_rules["keyed_object_array_paths"] = (
+            self._validate_keyed_object_array_paths(
+                transition_rules.get("keyed_object_array_paths", {})
+            )
+        )
+        return validated_rules
 
     def _validate_value(
         self,
@@ -123,6 +225,72 @@ class AgentStateGuard:
                 f"Schema at {path} must declare a supported type, got {schema_type!r}."
             )
         return schema_type
+
+    @staticmethod
+    def _validate_path_list(paths: Any, rule_name: str) -> list[str]:
+        if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+            raise ValueError(f"{rule_name} must be a list of JSON-style path strings.")
+        for path in paths:
+            AgentStateGuard._validate_json_path(path, rule_name)
+        return paths
+
+    def _validate_ordered_enum_paths(self, rules: Any) -> Dict[str, list[Any]]:
+        if not isinstance(rules, dict):
+            raise ValueError("ordered_enum_paths must be a dictionary.")
+
+        validated: Dict[str, list[Any]] = {}
+        for path, allowed_values in rules.items():
+            self._validate_json_path(path, "ordered_enum_paths")
+            if not isinstance(allowed_values, list) or len(allowed_values) < 2:
+                raise ValueError(
+                    f"ordered_enum_paths[{path!r}] must define at least two ordered values."
+                )
+            validated[path] = allowed_values
+        return validated
+
+    def _validate_keyed_object_array_paths(
+        self, rules: Any
+    ) -> Dict[str, Dict[str, Any]]:
+        if not isinstance(rules, dict):
+            raise ValueError("keyed_object_array_paths must be a dictionary.")
+
+        validated: Dict[str, Dict[str, Any]] = {}
+        for path, rule in rules.items():
+            self._validate_json_path(path, "keyed_object_array_paths")
+            if not isinstance(rule, dict):
+                raise ValueError(
+                    f"keyed_object_array_paths[{path!r}] must be a dictionary."
+                )
+
+            key = rule.get("key")
+            if not isinstance(key, str) or not key:
+                raise ValueError(
+                    f"keyed_object_array_paths[{path!r}] must define a non-empty key field."
+                )
+
+            monotonic_boolean_fields = rule.get("monotonic_boolean_fields", [])
+            if not isinstance(monotonic_boolean_fields, list) or any(
+                not isinstance(field, str) or not field
+                for field in monotonic_boolean_fields
+            ):
+                raise ValueError(
+                    f"keyed_object_array_paths[{path!r}].monotonic_boolean_fields "
+                    "must be a list of field names."
+                )
+
+            allow_new_items = rule.get("allow_new_items", True)
+            if not isinstance(allow_new_items, bool):
+                raise ValueError(
+                    f"keyed_object_array_paths[{path!r}].allow_new_items must be a boolean."
+                )
+
+            validated[path] = {
+                "key": key,
+                "monotonic_boolean_fields": monotonic_boolean_fields,
+                "allow_new_items": allow_new_items,
+            }
+
+        return validated
 
     @staticmethod
     def _validate_enum_definition(schema: Dict[str, Any], path: str) -> None:
@@ -178,6 +346,191 @@ class AgentStateGuard:
         if "enum" in schema and value not in schema["enum"]:
             return f"{path} must be one of {schema['enum']!r}, got {value!r}."
         return None
+
+    def _validate_transition_rules(
+        self,
+        current_state: Dict[str, Any],
+        proposed_state: Dict[str, Any],
+    ) -> str | None:
+        validators = (
+            self._validate_immutable_paths,
+            self._validate_monotonic_integer_paths,
+            self._validate_ordered_enum_transition_paths,
+            self._validate_keyed_object_array_transition_paths,
+        )
+        for validator in validators:
+            error = validator(current_state, proposed_state)
+            if error is not None:
+                return error
+        return None
+
+    def _validate_immutable_paths(
+        self,
+        current_state: Dict[str, Any],
+        proposed_state: Dict[str, Any],
+    ) -> str | None:
+        for path in self.transition_rules["immutable_paths"]:
+            current_value = self._get_path_value(current_state, path)
+            proposed_value = self._get_path_value(proposed_state, path)
+            if current_value != proposed_value:
+                return (
+                    f"{path} is immutable across state transitions. "
+                    f"Current={current_value!r}, proposed={proposed_value!r}."
+                )
+        return None
+
+    def _validate_monotonic_integer_paths(
+        self,
+        current_state: Dict[str, Any],
+        proposed_state: Dict[str, Any],
+    ) -> str | None:
+        for path in self.transition_rules["monotonic_integer_paths"]:
+            current_value = self._get_path_value(current_state, path)
+            proposed_value = self._get_path_value(proposed_state, path)
+            if proposed_value < current_value:
+                return (
+                    f"{path} regressed from {current_value!r} to "
+                    f"{proposed_value!r}."
+                )
+        return None
+
+    def _validate_ordered_enum_transition_paths(
+        self,
+        current_state: Dict[str, Any],
+        proposed_state: Dict[str, Any],
+    ) -> str | None:
+        for path, allowed_values in self.transition_rules["ordered_enum_paths"].items():
+            current_value = self._get_path_value(current_state, path)
+            proposed_value = self._get_path_value(proposed_state, path)
+            current_index = allowed_values.index(current_value)
+            proposed_index = allowed_values.index(proposed_value)
+            if proposed_index < current_index:
+                return (
+                    f"{path} regressed from {current_value!r} to "
+                    f"{proposed_value!r}."
+                )
+        return None
+
+    def _validate_keyed_object_array_transition_paths(
+        self,
+        current_state: Dict[str, Any],
+        proposed_state: Dict[str, Any],
+    ) -> str | None:
+        for path, rule in self.transition_rules["keyed_object_array_paths"].items():
+            current_items = self._get_path_value(current_state, path)
+            proposed_items = self._get_path_value(proposed_state, path)
+            error = self._validate_keyed_object_array_transition(
+                path=path,
+                current_items=current_items,
+                proposed_items=proposed_items,
+                rule=rule,
+            )
+            if error is not None:
+                return error
+        return None
+
+    def _validate_keyed_object_array_transition(
+        self,
+        path: str,
+        current_items: Any,
+        proposed_items: Any,
+        rule: Dict[str, Any],
+    ) -> str | None:
+        if not isinstance(current_items, list) or not isinstance(proposed_items, list):
+            return f"{path} must resolve to arrays in both current and proposed state."
+
+        key_field = rule["key"]
+        current_keys = self._extract_keyed_item_keys(current_items, path, key_field)
+        if isinstance(current_keys, str):
+            return current_keys
+        proposed_keys = self._extract_keyed_item_keys(proposed_items, path, key_field)
+        if isinstance(proposed_keys, str):
+            return proposed_keys
+
+        if proposed_keys[: len(current_keys)] != current_keys:
+            return f"{path} must preserve existing item order and prevent deletion."
+        if not rule["allow_new_items"] and len(proposed_keys) != len(current_keys):
+            return f"{path} does not allow appending new items."
+
+        current_map = {item[key_field]: item for item in current_items}
+        proposed_map = {item[key_field]: item for item in proposed_items}
+
+        for key in current_keys:
+            current_item = current_map[key]
+            proposed_item = proposed_map[key]
+            item_error = self._validate_keyed_object_item_transition(
+                path=path,
+                key_field=key_field,
+                item_key=key,
+                current_item=current_item,
+                proposed_item=proposed_item,
+                monotonic_boolean_fields=rule["monotonic_boolean_fields"],
+            )
+            if item_error is not None:
+                return item_error
+        return None
+
+    @staticmethod
+    def _extract_keyed_item_keys(
+        items: list[Any], path: str, key_field: str
+    ) -> list[Any] | str:
+        keys: list[Any] = []
+        seen_keys: set[Any] = set()
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                return f"{path}[{index}] must be an object."
+            if key_field not in item:
+                return f"{path}[{index}] is missing key field {key_field!r}."
+            key = item[key_field]
+            if key in seen_keys:
+                return f"{path} contains duplicate {key_field!r} values: {key!r}."
+            seen_keys.add(key)
+            keys.append(key)
+        return keys
+
+    @staticmethod
+    def _validate_keyed_object_item_transition(
+        path: str,
+        key_field: str,
+        item_key: Any,
+        current_item: Dict[str, Any],
+        proposed_item: Dict[str, Any],
+        monotonic_boolean_fields: list[str],
+    ) -> str | None:
+        for field in monotonic_boolean_fields:
+            old_value = current_item.get(field)
+            new_value = proposed_item.get(field)
+            if old_value is True and new_value is False:
+                return (
+                    f"{path}[{key_field}={item_key!r}].{field} regressed from True to False."
+                )
+
+        for field, old_value in current_item.items():
+            if field in monotonic_boolean_fields:
+                continue
+            new_value = proposed_item.get(field)
+            if old_value != new_value:
+                return (
+                    f"{path}[{key_field}={item_key!r}].{field} changed from "
+                    f"{old_value!r} to {new_value!r}."
+                )
+        return None
+
+    @staticmethod
+    def _validate_json_path(path: str, rule_name: str) -> None:
+        if not isinstance(path, str) or not path.startswith("$.") or ".." in path:
+            raise ValueError(
+                f"{rule_name} paths must use dot-style JSON paths starting with '$.'."
+            )
+
+    @staticmethod
+    def _get_path_value(state: Dict[str, Any], path: str) -> Any:
+        value: Any = state
+        for part in path[2:].split("."):
+            if not isinstance(value, dict) or part not in value:
+                raise ValueError(f"Configured path {path!r} was not found in state.")
+            value = value[part]
+        return value
 
     def _validate_object_value(
         self, schema: Dict[str, Any], value: Any, path: str, depth: int

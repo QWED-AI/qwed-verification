@@ -28,9 +28,31 @@ STRICT_AGENT_STATE_SCHEMA = {
     "additionalProperties": False,
 }
 
+STRICT_AGENT_TRANSITION_RULES = {
+    "immutable_paths": ["$.agent_id"],
+    "monotonic_integer_paths": ["$.step_count"],
+    "ordered_enum_paths": {
+        "$.status": ["pending", "running", "completed"],
+    },
+    "keyed_object_array_paths": {
+        "$.tasks": {
+            "key": "id",
+            "monotonic_boolean_fields": ["done"],
+            "allow_new_items": True,
+        }
+    },
+}
+
 
 def _build_guard() -> AgentStateGuard:
     return AgentStateGuard(STRICT_AGENT_STATE_SCHEMA)
+
+
+def _build_transition_guard() -> AgentStateGuard:
+    return AgentStateGuard(
+        STRICT_AGENT_STATE_SCHEMA,
+        transition_rules=STRICT_AGENT_TRANSITION_RULES,
+    )
 
 
 def test_rejects_empty_payload():
@@ -185,6 +207,401 @@ def test_accepts_structurally_valid_payload_and_normalizes_order():
         "step_count": 1,
         "tasks": [{"done": False, "id": "task-1"}],
     }
+
+
+def test_transition_requires_configured_rules():
+    guard = _build_guard()
+
+    result = guard.verify_state_transition(
+        '{"agent_id": "a1", "status": "pending", "step_count": 1, "tasks": []}',
+        '{"agent_id": "a1", "status": "running", "step_count": 2, "tasks": []}',
+    )
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-104"
+
+
+def test_accepts_valid_monotonic_state_transition():
+    guard = _build_transition_guard()
+
+    result = guard.verify_state_transition(
+        """
+        {
+          "agent_id": "a1",
+          "status": "pending",
+          "step_count": 1,
+          "tasks": [{"id": "task-1", "done": false}]
+        }
+        """,
+        """
+        {
+          "agent_id": "a1",
+          "status": "running",
+          "step_count": 2,
+          "tasks": [
+            {"id": "task-1", "done": true},
+            {"id": "task-2", "done": false}
+          ]
+        }
+        """,
+    )
+
+    assert result["verified"] is True
+    assert result["status"] == "VERIFIED"
+    assert result["normalized_previous_state"]["status"] == "pending"
+    assert result["normalized_state"]["status"] == "running"
+
+
+def test_rejects_invalid_current_state_during_transition():
+    guard = _build_transition_guard()
+
+    result = guard.verify_state_transition(
+        '{"agent_id": "a1", "status": "pending"}',
+        '{"agent_id": "a1", "status": "running", "step_count": 2, "tasks": []}',
+    )
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-105"
+    assert "current agent state failed structural verification" in result["message"]
+
+
+def test_rejects_immutable_field_transition_change():
+    guard = _build_transition_guard()
+
+    result = guard.verify_state_transition(
+        '{"agent_id": "a1", "status": "pending", "step_count": 1, "tasks": []}',
+        '{"agent_id": "a2", "status": "running", "step_count": 2, "tasks": []}',
+    )
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-106"
+    assert "$.agent_id is immutable" in result["message"]
+
+
+def test_rejects_monotonic_counter_regression():
+    guard = _build_transition_guard()
+
+    result = guard.verify_state_transition(
+        '{"agent_id": "a1", "status": "running", "step_count": 3, "tasks": []}',
+        '{"agent_id": "a1", "status": "running", "step_count": 2, "tasks": []}',
+    )
+
+    assert result["verified"] is False
+    assert "$.step_count regressed" in result["message"]
+
+
+def test_rejects_ordered_status_regression():
+    guard = _build_transition_guard()
+
+    result = guard.verify_state_transition(
+        '{"agent_id": "a1", "status": "completed", "step_count": 3, "tasks": []}',
+        '{"agent_id": "a1", "status": "running", "step_count": 4, "tasks": []}',
+    )
+
+    assert result["verified"] is False
+    assert "$.status regressed" in result["message"]
+
+
+def test_rejects_task_reopen_transition():
+    guard = _build_transition_guard()
+
+    result = guard.verify_state_transition(
+        """
+        {
+          "agent_id": "a1",
+          "status": "running",
+          "step_count": 2,
+          "tasks": [{"id": "task-1", "done": true}]
+        }
+        """,
+        """
+        {
+          "agent_id": "a1",
+          "status": "running",
+          "step_count": 3,
+          "tasks": [{"id": "task-1", "done": false}]
+        }
+        """,
+    )
+
+    assert result["verified"] is False
+    assert "regressed from True to False" in result["message"]
+
+
+def test_rejects_task_deletion_or_reordering():
+    guard = _build_transition_guard()
+
+    result = guard.verify_state_transition(
+        """
+        {
+          "agent_id": "a1",
+          "status": "running",
+          "step_count": 2,
+          "tasks": [
+            {"id": "task-1", "done": false},
+            {"id": "task-2", "done": false}
+          ]
+        }
+        """,
+        """
+        {
+          "agent_id": "a1",
+          "status": "running",
+          "step_count": 3,
+          "tasks": [
+            {"id": "task-2", "done": false},
+            {"id": "task-1", "done": true}
+          ]
+        }
+        """,
+    )
+
+    assert result["verified"] is False
+    assert "must preserve existing item order and prevent deletion" in result["message"]
+
+
+def test_returns_structural_failure_for_invalid_proposed_state_in_transition():
+    guard = _build_transition_guard()
+
+    result = guard.verify_state_transition(
+        '{"agent_id": "a1", "status": "pending", "step_count": 1, "tasks": []}',
+        '{"agent_id": "a1", "status": "running"}',
+    )
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-103"
+
+
+def test_rejects_transition_rules_that_are_not_dicts():
+    with pytest.raises(ValueError, match="Transition rules must be a dictionary"):
+        AgentStateGuard(STRICT_AGENT_STATE_SCHEMA, transition_rules=["nope"])
+
+
+def test_rejects_transition_rules_with_unknown_keys():
+    with pytest.raises(ValueError, match="unsupported keys"):
+        AgentStateGuard(
+            STRICT_AGENT_STATE_SCHEMA,
+            transition_rules={"unknown_rule": []},
+        )
+
+
+def test_rejects_invalid_path_list_rule():
+    with pytest.raises(ValueError, match="must be a list of JSON-style path strings"):
+        AgentStateGuard(
+            STRICT_AGENT_STATE_SCHEMA,
+            transition_rules={"immutable_paths": "$.agent_id"},
+        )
+
+
+def test_rejects_invalid_json_path_rule():
+    with pytest.raises(ValueError, match="paths must use dot-style JSON paths"):
+        AgentStateGuard(
+            STRICT_AGENT_STATE_SCHEMA,
+            transition_rules={"immutable_paths": ["agent_id"]},
+        )
+
+
+def test_rejects_invalid_ordered_enum_rule():
+    with pytest.raises(ValueError, match="must define at least two ordered values"):
+        AgentStateGuard(
+            STRICT_AGENT_STATE_SCHEMA,
+            transition_rules={"ordered_enum_paths": {"$.status": ["pending"]}},
+        )
+
+
+def test_rejects_non_dict_ordered_enum_rules():
+    with pytest.raises(ValueError, match="ordered_enum_paths must be a dictionary"):
+        AgentStateGuard(
+            STRICT_AGENT_STATE_SCHEMA,
+            transition_rules={"ordered_enum_paths": ["$.status"]},
+        )
+
+
+def test_rejects_invalid_keyed_object_array_rule():
+    with pytest.raises(ValueError, match="must define a non-empty key field"):
+        AgentStateGuard(
+            STRICT_AGENT_STATE_SCHEMA,
+            transition_rules={"keyed_object_array_paths": {"$.tasks": {}}},
+        )
+
+
+def test_rejects_non_dict_keyed_object_array_rules():
+    with pytest.raises(ValueError, match="keyed_object_array_paths must be a dictionary"):
+        AgentStateGuard(
+            STRICT_AGENT_STATE_SCHEMA,
+            transition_rules={"keyed_object_array_paths": ["$.tasks"]},
+        )
+
+
+def test_rejects_non_dict_single_keyed_object_array_rule():
+    with pytest.raises(ValueError, match="must be a dictionary"):
+        AgentStateGuard(
+            STRICT_AGENT_STATE_SCHEMA,
+            transition_rules={"keyed_object_array_paths": {"$.tasks": "bad"}},
+        )
+
+
+def test_rejects_invalid_monotonic_boolean_fields_rule():
+    with pytest.raises(ValueError, match="must be a list of field names"):
+        AgentStateGuard(
+            STRICT_AGENT_STATE_SCHEMA,
+            transition_rules={
+                "keyed_object_array_paths": {
+                    "$.tasks": {"key": "id", "monotonic_boolean_fields": "done"}
+                }
+            },
+        )
+
+
+def test_rejects_non_boolean_allow_new_items_rule():
+    with pytest.raises(ValueError, match="allow_new_items must be a boolean"):
+        AgentStateGuard(
+            STRICT_AGENT_STATE_SCHEMA,
+            transition_rules={
+                "keyed_object_array_paths": {
+                    "$.tasks": {"key": "id", "allow_new_items": "yes"}
+                }
+            },
+        )
+
+
+def test_rejects_keyed_object_array_duplicate_ids():
+    guard = _build_transition_guard()
+
+    result = guard.verify_state_transition(
+        '{"agent_id": "a1", "status": "running", "step_count": 1, "tasks": []}',
+        """
+        {
+          "agent_id": "a1",
+          "status": "running",
+          "step_count": 2,
+          "tasks": [
+            {"id": "task-1", "done": false},
+            {"id": "task-1", "done": false}
+          ]
+        }
+        """,
+    )
+
+    assert result["verified"] is False
+    assert "contains duplicate 'id' values" in result["message"]
+
+
+def test_rejects_keyed_object_array_missing_key_field():
+    guard = _build_transition_guard()
+
+    error = guard._validate_keyed_object_array_transition(
+        path="$.tasks",
+        current_items=[],
+        proposed_items=[{"done": False}],
+        rule={"key": "id", "monotonic_boolean_fields": ["done"], "allow_new_items": True},
+    )
+
+    assert error == "$.tasks[0] is missing key field 'id'."
+
+
+def test_rejects_keyed_object_array_non_object_items():
+    guard = _build_transition_guard()
+
+    current_state = {"tasks": []}
+    proposed_state = {"tasks": ["bad-item"]}
+    rule = {"key": "id", "monotonic_boolean_fields": ["done"], "allow_new_items": True}
+
+    error = guard._validate_keyed_object_array_transition(
+        path="$.tasks",
+        current_items=current_state["tasks"],
+        proposed_items=proposed_state["tasks"],
+        rule=rule,
+    )
+
+    assert error == "$.tasks[0] must be an object."
+
+
+def test_rejects_keyed_object_array_non_array_values():
+    guard = _build_transition_guard()
+
+    error = guard._validate_keyed_object_array_transition(
+        path="$.tasks",
+        current_items={},
+        proposed_items=[],
+        rule={"key": "id", "monotonic_boolean_fields": ["done"], "allow_new_items": True},
+    )
+
+    assert error == "$.tasks must resolve to arrays in both current and proposed state."
+
+
+def test_rejects_keyed_object_array_invalid_current_items():
+    guard = _build_transition_guard()
+
+    error = guard._validate_keyed_object_array_transition(
+        path="$.tasks",
+        current_items=[{"done": False}],
+        proposed_items=[],
+        rule={"key": "id", "monotonic_boolean_fields": ["done"], "allow_new_items": True},
+    )
+
+    assert error == "$.tasks[0] is missing key field 'id'."
+
+
+def test_rejects_new_items_when_append_is_disabled():
+    guard = AgentStateGuard(
+        STRICT_AGENT_STATE_SCHEMA,
+        transition_rules={
+            **STRICT_AGENT_TRANSITION_RULES,
+            "keyed_object_array_paths": {
+                "$.tasks": {
+                    "key": "id",
+                    "monotonic_boolean_fields": ["done"],
+                    "allow_new_items": False,
+                }
+            },
+        },
+    )
+
+    result = guard.verify_state_transition(
+        """
+        {
+          "agent_id": "a1",
+          "status": "running",
+          "step_count": 1,
+          "tasks": [{"id": "task-1", "done": false}]
+        }
+        """,
+        """
+        {
+          "agent_id": "a1",
+          "status": "running",
+          "step_count": 2,
+          "tasks": [
+            {"id": "task-1", "done": true},
+            {"id": "task-2", "done": false}
+          ]
+        }
+        """,
+    )
+
+    assert result["verified"] is False
+    assert "does not allow appending new items" in result["message"]
+
+
+def test_rejects_changes_to_existing_task_fields_outside_monotonic_bool():
+    guard = _build_transition_guard()
+
+    error = guard._validate_keyed_object_item_transition(
+        path="$.tasks",
+        key_field="id",
+        item_key="task-1",
+        current_item={"id": "task-1", "done": False, "label": "old"},
+        proposed_item={"id": "task-1", "done": True, "label": "new"},
+        monotonic_boolean_fields=["done"],
+    )
+
+    assert error == "$.tasks[id='task-1'].label changed from 'old' to 'new'."
+
+
+def test_get_path_value_rejects_missing_paths():
+    with pytest.raises(ValueError, match="was not found in state"):
+        AgentStateGuard._get_path_value({"agent_id": "a1"}, "$.status")
 
 
 def test_invalid_schema_definition_fails_fast():
