@@ -1,18 +1,21 @@
 """
 AgentStateGuard
 
-Phase 1 focuses only on structural verification:
+Phase 1 focuses on structural verification and Phase 2 adds bounded semantic
+transition validation:
 - strict JSON parsing
 - strict schema validation
+- deterministic transition checks
 - fail-closed decision objects
 
-No state transition proof or commit side effects are introduced here.
+No commit side effects are introduced here.
 """
 
 from __future__ import annotations
 
 import json
 from decimal import Decimal
+from types import MappingProxyType
 from typing import Any, Dict, Iterable
 
 
@@ -20,8 +23,8 @@ class AgentStateGuard:
     """
     Deterministically verifies proposed agent state payloads before any commit.
 
-    Phase 1 validates structure only. Semantic transition proof and execution
-    policy belong to later phases.
+    Phase 1 validates structure and Phase 2 adds bounded semantic transition
+    proof. Execution policy still belongs to a later phase.
     """
 
     _VALID_SCHEMA_TYPES = frozenset(
@@ -42,10 +45,14 @@ class AgentStateGuard:
         required_schema: Dict[str, Any],
         transition_rules: Dict[str, Any] | None = None,
     ) -> None:
-        self.required_schema = self._validate_schema_definition(required_schema, "$")
-        self._transition_rules_configured = bool(transition_rules)
-        self.transition_rules = self._validate_transition_rules_definition(
+        validated_schema = self._validate_schema_definition(required_schema, "$")
+        validated_transition_rules = self._validate_transition_rules_definition(
             transition_rules or {}
+        )
+        self.required_schema = self._freeze_config(validated_schema)
+        self.transition_rules = self._freeze_config(validated_transition_rules)
+        self._transition_rules_configured = self._has_effective_transition_rules(
+            self.transition_rules
         )
 
     def verify_state_payload(self, proposed_state_json: str) -> Dict[str, Any]:
@@ -118,10 +125,19 @@ class AgentStateGuard:
         if not proposed_result["verified"]:
             return proposed_result
 
-        transition_error = self._validate_transition_rules(
-            current_state=current_result["normalized_state"],
-            proposed_state=proposed_result["normalized_state"],
-        )
+        try:
+            transition_error = self._validate_transition_rules(
+                current_state=current_result["normalized_state"],
+                proposed_state=proposed_result["normalized_state"],
+            )
+        except Exception as exc:
+            return self._blocked(
+                error_code="QWED-AGENT-STATE-106",
+                message=(
+                    "Blocked: transition-rule evaluation failed deterministically. "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            )
         if transition_error is not None:
             return self._blocked(
                 error_code="QWED-AGENT-STATE-106",
@@ -147,6 +163,19 @@ class AgentStateGuard:
             # Preserve deterministic numeric semantics for Phase 1 validation.
             parse_float=Decimal,
         )
+
+    @classmethod
+    def _freeze_config(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            frozen = {key: cls._freeze_config(item) for key, item in value.items()}
+            return MappingProxyType(frozen)
+        if isinstance(value, list):
+            return tuple(cls._freeze_config(item) for item in value)
+        return value
+
+    @staticmethod
+    def _has_effective_transition_rules(transition_rules: Any) -> bool:
+        return any(bool(value) for value in transition_rules.values())
 
     def _validate_schema_definition(
         self, schema: Dict[str, Any], path: str
@@ -260,6 +289,14 @@ class AgentStateGuard:
             if not isinstance(rule, dict):
                 raise ValueError(
                     f"keyed_object_array_paths[{path!r}] must be a dictionary."
+                )
+            unknown_rule_keys = sorted(
+                set(rule) - {"key", "monotonic_boolean_fields", "allow_new_items"}
+            )
+            if unknown_rule_keys:
+                raise ValueError(
+                    f"keyed_object_array_paths[{path!r}] contains unsupported keys: "
+                    f"{unknown_rule_keys}."
                 )
 
             key = rule.get("key")

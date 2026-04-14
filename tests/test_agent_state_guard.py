@@ -221,6 +221,57 @@ def test_transition_requires_configured_rules():
     assert result["error_code"] == "QWED-AGENT-STATE-104"
 
 
+def test_placeholder_transition_config_does_not_count_as_enabled():
+    guard = AgentStateGuard(
+        STRICT_AGENT_STATE_SCHEMA,
+        transition_rules={
+            "immutable_paths": [],
+            "monotonic_integer_paths": [],
+            "ordered_enum_paths": {},
+            "keyed_object_array_paths": {},
+        },
+    )
+
+    result = guard.verify_state_transition(
+        '{"agent_id": "a1", "status": "pending", "step_count": 1, "tasks": []}',
+        '{"agent_id": "a1", "status": "running", "step_count": 2, "tasks": []}',
+    )
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-104"
+
+
+def test_freezes_schema_and_transition_rules_against_caller_mutation():
+    schema = {
+        "type": "object",
+        "properties": {
+            "agent_id": {"type": "string"},
+            "status": {"type": "string", "enum": ["pending", "running", "completed"]},
+        },
+        "required": ["agent_id", "status"],
+        "additionalProperties": False,
+    }
+    transition_rules = {
+        "immutable_paths": ["$.agent_id"],
+        "ordered_enum_paths": {"$.status": ["pending", "running", "completed"]},
+    }
+
+    guard = AgentStateGuard(schema, transition_rules=transition_rules)
+
+    schema["properties"]["agent_id"]["type"] = "integer"
+    transition_rules["immutable_paths"].append("$.status")
+    transition_rules["ordered_enum_paths"]["$.status"].append("failed")
+
+    result = guard.verify_state_transition(
+        '{"agent_id": "a1", "status": "pending"}',
+        '{"agent_id": "a1", "status": "running"}',
+    )
+
+    assert result["verified"] is True
+    assert guard.required_schema["properties"]["agent_id"]["type"] == "string"
+    assert guard.transition_rules["immutable_paths"] == ("$.agent_id",)
+
+
 def test_accepts_valid_monotonic_state_transition():
     guard = _build_transition_guard()
 
@@ -409,6 +460,42 @@ def test_rejects_invalid_ordered_enum_rule():
         )
 
 
+def test_blocks_transition_when_ordered_enum_rule_omits_valid_state_value():
+    guard = AgentStateGuard(
+        STRICT_AGENT_STATE_SCHEMA,
+        transition_rules={
+            "ordered_enum_paths": {"$.status": ["pending", "running"]},
+        },
+    )
+
+    result = guard.verify_state_transition(
+        '{"agent_id": "a1", "status": "completed", "step_count": 2, "tasks": []}',
+        '{"agent_id": "a1", "status": "completed", "step_count": 3, "tasks": []}',
+    )
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-106"
+    assert "transition-rule evaluation failed deterministically" in result["message"]
+
+
+def test_blocks_transition_when_rule_path_is_missing_from_state():
+    guard = AgentStateGuard(
+        STRICT_AGENT_STATE_SCHEMA,
+        transition_rules={
+            "immutable_paths": ["$.notes"],
+        },
+    )
+
+    result = guard.verify_state_transition(
+        '{"agent_id": "a1", "status": "pending", "step_count": 1, "tasks": []}',
+        '{"agent_id": "a1", "status": "running", "step_count": 2, "tasks": []}',
+    )
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-106"
+    assert "Configured path '$.notes' was not found in state." in result["message"]
+
+
 def test_rejects_non_dict_ordered_enum_rules():
     with pytest.raises(ValueError, match="ordered_enum_paths must be a dictionary"):
         AgentStateGuard(
@@ -422,6 +509,18 @@ def test_rejects_invalid_keyed_object_array_rule():
         AgentStateGuard(
             STRICT_AGENT_STATE_SCHEMA,
             transition_rules={"keyed_object_array_paths": {"$.tasks": {}}},
+        )
+
+
+def test_rejects_unknown_keyed_object_array_rule_keys():
+    with pytest.raises(ValueError, match="contains unsupported keys"):
+        AgentStateGuard(
+            STRICT_AGENT_STATE_SCHEMA,
+            transition_rules={
+                "keyed_object_array_paths": {
+                    "$.tasks": {"key": "id", "allow_new_item": False}
+                }
+            },
         )
 
 
