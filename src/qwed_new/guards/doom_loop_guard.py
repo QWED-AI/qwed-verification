@@ -7,7 +7,7 @@ each action to the *world state* at the time it was proposed.  If the agent
 takes the exact same action on the exact same unchanged state multiple times,
 it is stuck — even if step numbers are advancing normally.
 
-Design principles (from ChatGPT / NotebookLM architecture review):
+Design principles:
 - Additive to existing guards (LOOP-001/002/003), never replaces them
 - SHA-256 fingerprints (not MD5)
 - State hash source must be explicitly declared by the caller
@@ -28,6 +28,10 @@ class ProgressAwareDoomLoopGuard:
     when an agent is repeating actions without changing the underlying
     system state (Adaptive Control Error / no-progress doom loop).
     """
+
+    # Error-code allocation:
+    # - QWED-AGENT-STATE-001..099 are reserved for shared state/input guards
+    # - QWED-AGENT-LOOP-* remains specific to loop-detection outcomes
 
     VALID_STATE_SOURCES = frozenset(
         {"file_tree", "db_snapshot", "conversation_digest", "git_tree", "custom"}
