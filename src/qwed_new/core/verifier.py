@@ -950,7 +950,7 @@ class VerificationEngine:
     # Legacy method for compatibility
     # =========================================================================
     
-    def verify_logic_rule(self, rule: str, context: Dict[str, Any]) -> bool:
+    def verify_logic_rule(self, _rule: str, _context: Dict[str, Any]) -> bool:
         """
         Legacy placeholder. Hard-fail closed and direct callers to LogicVerifier.
         """
