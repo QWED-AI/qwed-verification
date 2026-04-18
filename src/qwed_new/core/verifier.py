@@ -108,7 +108,14 @@ class VerificationEngine:
         """
         try:
             tolerance_decimal = self._parse_tolerance(tolerance)
+        except ValueError as e:
+            return {
+                "is_correct": False,
+                "error": str(e),
+                "status": "BLOCKED"
+            }
 
+        try:
             # 1. Parse the expression safely
             expr = parse_expr(expression, transformations=self.TRANSFORMATIONS)
             
@@ -126,9 +133,9 @@ class VerificationEngine:
                     return {
                         "is_correct": False,
                         "error": TOLERANCE_POLICY_ERROR,
-                        "requested_tolerance": float(tolerance_decimal),
-                        "max_allowed_tolerance": float(max_tolerance),
-                        "calculated_value": float(calculated_value),
+                        "requested_tolerance": str(tolerance_decimal),
+                        "max_allowed_tolerance": str(max_tolerance),
+                        "calculated_value": str(calculated_value),
                         "precision_mode": "decimal",
                         "status": "BLOCKED",
                     }
@@ -145,38 +152,31 @@ class VerificationEngine:
                     "precision_mode": "decimal",
                     "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED"
                 }
-            else:
-                calculated_value = float(expr.evalf())
-                max_tolerance = self._max_verify_math_tolerance(Decimal(str(calculated_value)))
 
-                if tolerance_decimal > max_tolerance:
-                    return {
-                        "is_correct": False,
-                        "error": TOLERANCE_POLICY_ERROR,
-                        "requested_tolerance": float(tolerance_decimal),
-                        "max_allowed_tolerance": float(max_tolerance),
-                        "calculated_value": calculated_value,
-                        "precision_mode": "float",
-                        "status": "BLOCKED",
-                    }
+            calculated_value = float(expr.evalf())
+            max_tolerance = self._max_verify_math_tolerance(Decimal(str(calculated_value)))
 
-                diff = abs(calculated_value - expected_value)
-                is_correct = diff <= float(tolerance_decimal)
-                
+            if tolerance_decimal > max_tolerance:
                 return {
-                    "is_correct": is_correct,
-                    "calculated_value": calculated_value,
-                    "claimed_value": expected_value,
-                    "diff": diff,
+                    "is_correct": False,
+                    "error": TOLERANCE_POLICY_ERROR,
+                    "requested_tolerance": str(tolerance_decimal),
+                    "max_allowed_tolerance": str(max_tolerance),
+                    "calculated_value": str(calculated_value),
                     "precision_mode": "float",
-                    "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED"
+                    "status": "BLOCKED",
                 }
+
+            diff = abs(calculated_value - expected_value)
+            is_correct = diff <= float(tolerance_decimal)
             
-        except ValueError as e:
             return {
-                "is_correct": False,
-                "error": str(e),
-                "status": "BLOCKED"
+                "is_correct": is_correct,
+                "calculated_value": calculated_value,
+                "claimed_value": expected_value,
+                "diff": diff,
+                "precision_mode": "float",
+                "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED"
             }
         except Exception as e:
             return {
