@@ -27,6 +27,9 @@ import math
 INVALID_TEMPERATURE_UNIT_ERROR = "Invalid temperature unit"
 INVALID_TOLERANCE_ERROR = "Invalid tolerance"
 TOLERANCE_POLICY_ERROR = "Tolerance exceeds deterministic verification bound"
+VERIFY_LOGIC_RULE_DEPRECATED_ERROR = (
+    "verify_logic_rule is deprecated and fail-closed; use LogicVerifier instead"
+)
 
 
 @dataclass
@@ -949,6 +952,6 @@ class VerificationEngine:
     
     def verify_logic_rule(self, rule: str, context: Dict[str, Any]) -> bool:
         """
-        Legacy placeholder. Use LogicVerifier instead.
+        Legacy placeholder. Hard-fail closed and direct callers to LogicVerifier.
         """
-        pass
+        raise NotImplementedError(VERIFY_LOGIC_RULE_DEPRECATED_ERROR)
