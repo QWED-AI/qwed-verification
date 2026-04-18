@@ -93,27 +93,19 @@ class ToolApprovalSystem:
             return True, None, tool_call
         
         else:
-            # Unknown operation - evaluate by risk score
-            if risk_score < 0.3:
-                # Low risk - approve
-                tool_call.approved = True
-                tool_call.approved_by = "policy"
-                
-                session.add(tool_call)
-                session.commit()
-                session.refresh(tool_call)
-                
-                return True, None, tool_call
-            else:
-                # High risk - block
-                tool_call.approved = False
-                tool_call.blocked_reason = f"High risk score ({risk_score})"
-                
-                session.add(tool_call)
-                session.commit()
-                session.refresh(tool_call)
-                
-                return False, tool_call.blocked_reason, tool_call
+            # Unknown operations fail closed, regardless of heuristic risk score.
+            tool_call.approved = False
+            tool_call.approved_by = None
+            tool_call.blocked_reason = (
+                f"Unknown tool '{tool_name}' requires explicit allowlisting "
+                f"(risk_score={risk_score:.1f})"
+            )
+
+            session.add(tool_call)
+            session.commit()
+            session.refresh(tool_call)
+
+            return False, tool_call.blocked_reason, tool_call
     
     def execute_tool_call(
         self,
