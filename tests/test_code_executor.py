@@ -28,6 +28,6 @@ def test_code_executor_error_points_callers_to_secure_boundary():
     executor = CodeExecutor()
 
     with pytest.raises(RuntimeError) as exc_info:
-        executor.execute("__import__('os').system('echo unsafe')")
+        executor.execute("__import__('os').getcwd()")
 
     assert "SecureCodeExecutor" in str(exc_info.value)

@@ -8,7 +8,9 @@ execution boundary.
 
 from __future__ import annotations
 
-from typing import Any, Final
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Any, ClassVar, Final
 
 
 LEGACY_CODE_EXECUTOR_DISABLED: Final[str] = (
@@ -26,7 +28,7 @@ class CodeExecutor:
     now raises a deterministic runtime error.
     """
 
-    ALLOWED_GLOBALS: dict[str, Any] = {}
+    ALLOWED_GLOBALS: ClassVar[Mapping[str, Any]] = MappingProxyType({})
 
     def execute(self, code: str, df: Any = None) -> str:
         """Fail closed on every attempted execution."""
