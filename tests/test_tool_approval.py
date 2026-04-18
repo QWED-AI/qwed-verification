@@ -80,8 +80,8 @@ def test_unknown_high_risk_operation_is_also_blocked():
 
     assert approved is False
     assert "Unknown tool 'delete_archive' requires explicit allowlisting" in blocked_reason
-    assert "risk_score=" in blocked_reason
-    assert tool_call.risk_score > 0.0
+    assert "risk_score=0.9" in blocked_reason
+    assert tool_call.risk_score >= 0.3
 
 
 def test_execute_tool_call_rejects_unapproved_calls():

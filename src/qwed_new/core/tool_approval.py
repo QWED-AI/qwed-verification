@@ -98,7 +98,7 @@ class ToolApprovalSystem:
             tool_call.approved_by = None
             tool_call.blocked_reason = (
                 f"Unknown tool '{tool_name}' requires explicit allowlisting "
-                f"(risk_score={risk_score})"
+                f"(risk_score={risk_score:.1f})"
             )
 
             session.add(tool_call)
