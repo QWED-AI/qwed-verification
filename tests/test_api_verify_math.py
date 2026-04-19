@@ -6,7 +6,11 @@ from qwed_new.api.main import app, get_current_tenant, get_session
 
 
 def test_verify_math_ambiguous_expression_fails_closed_and_logs_unverified():
-    mock_tenant = MagicMock(organization_id=123, api_key="dummy_key", user_id=456)
+    mock_tenant = MagicMock(
+        organization_id=123,
+        api_key=MagicMock(name="tenant_api_key"),
+        user_id=456,
+    )
     mock_session = MagicMock()
 
     app.dependency_overrides[get_current_tenant] = lambda: mock_tenant
