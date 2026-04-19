@@ -242,7 +242,7 @@ class TestArrayValidation:
         """Array with duplicates fails."""
         schema = {"type": "array", "uniqueItems": True}
         result = verifier.verify([1, 2, 2, 3], schema)
-        assert result["is_valid"] == False
+        assert not result["is_valid"]
 
     def test_unique_items_uncheckable_fails_closed(self, verifier):
         """If uniqueness cannot be proven, validation must fail closed."""
