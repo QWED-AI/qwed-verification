@@ -504,9 +504,18 @@ class SchemaVerifier:
                         ))
                         break
                     seen.add(item_key)
-            except (TypeError, ValueError):
-                pass  # Can't check uniqueness for unhashable items
-        
+            except (TypeError, ValueError) as exc:
+                issues.append(SchemaIssue(
+                    path=path,
+                    issue_type="uniqueness_validation_error",
+                    expected="provably unique items",
+                    actual="uniqueness check could not be completed",
+                    message=(
+                        "uniqueItems could not be verified deterministically: "
+                        f"{exc}"
+                    )
+                ))
+
         # items (single schema for all items)
         if "items" in schema and isinstance(schema["items"], dict):
             for i, item in enumerate(data):
