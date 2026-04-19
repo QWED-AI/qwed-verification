@@ -540,7 +540,9 @@ async def verify_math(
                 elif is_ambiguous:
                     simplified = simplify(parsed)
                     result = {
-                        "is_valid": True,
+                        "is_valid": False,
+                        "result": False,
+                        "status": "BLOCKED",
                         "warning": "ambiguous",
                         "message": "Expression may be ambiguous due to implicit multiplication after division",
                         "simplified": str(simplified),
