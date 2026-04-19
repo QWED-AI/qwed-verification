@@ -243,7 +243,17 @@ class TestArrayValidation:
         schema = {"type": "array", "uniqueItems": True}
         result = verifier.verify([1, 2, 2, 3], schema)
         assert result["is_valid"] == False
-    
+
+    def test_unique_items_uncheckable_fails_closed(self, verifier):
+        """If uniqueness cannot be proven, validation must fail closed."""
+        schema = {"type": "array", "uniqueItems": True}
+        result = verifier.verify([{"bad": {1, 2}}, {"bad": {3, 4}}], schema)
+
+        assert result["is_valid"] == False
+        assert result["status"] == "INVALID"
+        assert result["issues"][0]["type"] == "uniqueness_validation_error"
+        assert "uniqueItems could not be verified deterministically" in result["issues"][0]["message"]
+
     def test_items_schema(self, verifier):
         """Array items validated against item schema."""
         schema = {
