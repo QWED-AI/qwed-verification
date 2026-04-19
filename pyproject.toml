@@ -1,6 +1,6 @@
 [project]
 name = "qwed"
-version = "5.0.0"
+version = "5.1.0"
 description = "The Deterministic Verification Protocol for AI - 11 verification engines for math, logic, code, SQL, facts, images, and more. Now with Agentic Security Guards."
 authors = [
     {name = "QWED Team", email = "rahul@qwedai.com"},

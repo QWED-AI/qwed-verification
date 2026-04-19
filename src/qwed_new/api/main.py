@@ -32,7 +32,7 @@ TenantDependency = Annotated[TenantContext, Depends(get_current_tenant)]
 SessionDependency = Annotated[Session, Depends(get_session)]
 AgentTokenHeader = Annotated[str, Header(...)]
 
-APP_VERSION = "5.0.0"
+APP_VERSION = "5.1.0"
 
 app = FastAPI(
     title="QWED API",

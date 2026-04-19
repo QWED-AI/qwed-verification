@@ -4,6 +4,58 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+## [5.1.0] - 2026-04-19
+### Agent State Governance and Fail-Closed Hardening
+
+Minor release expanding QWED from action verification into state governance while closing the adversarial fail-open gaps identified after v5.0.0. This release includes AgentStateGuard plus a focused hardening wave across execution, tool governance, mathematical verification, API semantics, and schema validation.
+
+#### New Capability
+- **AgentStateGuard**: Added deterministic state verification with strict structural validation, semantic transition checks, and governed atomic state commits. This extends QWED from action-only verification to state and memory governance.
+
+#### Fail-Closed Hardening
+- **Legacy CodeExecutor hard-blocked**: `CodeExecutor.execute()` now raises `RuntimeError` unconditionally. All supported execution remains on `SecureCodeExecutor`.
+- **Unknown tools default-denied**: `ToolApprovalSystem` now blocks unknown tools regardless of heuristic risk score.
+- **Bounded math tolerance**: `verify_math()` rejects oversized, negative, non-finite, and malformed tolerances instead of letting callers weaken correctness checks.
+- **Legacy logic path fails closed**: `verify_logic_rule()` now raises `NotImplementedError` instead of returning `None`.
+- **Identity sampling rejected**: `verify_identity()` now returns `BLOCKED` when numerical sampling matches but no formal proof exists.
+- **Ambiguous math API rejected**: `/verify/math` now blocks ambiguous implicit-multiplication expressions instead of returning `is_valid: true`.
+- **Schema uniqueness fail-closed**: `SchemaVerifier` now emits `uniqueness_validation_error` when `uniqueItems` cannot be proven deterministically.
+
+#### Runtime and Security Follow-Through
+- **Progress-aware doom loop guard**: Added LOOP-004 state-aware replay protection for repeated actions on unchanged state.
+- **Security and infrastructure hardening**: Incorporated follow-up hardening across configs, CI, and infrastructure.
+- **Stats verifier coverage expansion**: Added edge-case coverage for the statistics engine.
+- **CodeQL and cleanup follow-ups**: Merged syntax, test, and static-analysis cleanup work after the v5.0.0 boundary release.
+
+#### Upgrade Notes
+- `CodeExecutor` is no longer usable as a legacy execution path. Migrate any direct imports to `SecureCodeExecutor`.
+- Unknown tools now require explicit allowlisting and are no longer auto-approved at low heuristic risk.
+- `verify_math()` may return `BLOCKED` for tolerances that exceed the deterministic policy bound.
+- `verify_logic_rule()` no longer returns an ambiguous non-result; callers must migrate to `LogicVerifier`.
+- Sampling-only `verify_identity()` matches now return `BLOCKED`, not `UNKNOWN`.
+- Ambiguous `/verify/math` expressions now return `BLOCKED` with `is_valid: false`.
+- `uniqueItems` validation failures are now explicit schema errors instead of silent passes.
+
+#### SDK and Package Versions
+- `qwed` (PyPI): `5.0.0` -> `5.1.0`
+- `qwed_sdk` (Python): `5.0.0` -> `5.1.0`
+- `@qwed-ai/sdk` (NPM): `5.0.0` -> `5.1.0`
+
+#### Included PRs since v5.0.0
+- `#124` feat(agent): add progress-aware doom loop guard (LOOP-004)
+- `#126` security: harden configs, CI, and infrastructure -- full audit fixes
+- `#127` test(stats): add edge case coverage for statistics engine
+- `#136` fix(codeql): resolve remaining syntax and test cleanup alerts
+- `#137` Update contributors section in README
+- `#139` feat: AgentStateGuard - full implementation (structural + semantic + atomic commit)
+- `#149` fix: hard-block legacy CodeExecutor execution path
+- `#150` fix: default deny unknown tool approvals
+- `#151` fix: bound verify_math tolerance by computed magnitude
+- `#152` fix: fail closed in verify_logic_rule
+- `#153` fix: fail closed in verify_identity
+- `#154` fix: fail closed for ambiguous math api inputs
+- `#155` fix: fail closed on uniqueItems validation errors
+
 ## [5.0.0] - 2026-04-04
 ### 🛡️ Enforcement Boundary Hardening
 
