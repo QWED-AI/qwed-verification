@@ -69,6 +69,19 @@ class TestIdentityVerification:
         """Test non-equivalent expressions."""
         result = engine.verify_identity("x**2", "x**3")
         assert result["is_equivalent"] is False
+        assert result["status"] == "NOT_EQUIVALENT"
+
+    def test_sampling_only_match_fails_closed(self, engine):
+        """Fixed-point sampling must not produce an equivalence-style result."""
+        result = engine.verify_identity(
+            "x*(x-0.5)*(x-1)*(x-2)*(x+1)*(x-0.1)",
+            "0",
+        )
+
+        assert result["is_equivalent"] is False
+        assert result["status"] == "BLOCKED"
+        assert result["method"] == "numerical_sampling_rejected"
+        assert "no formal proof" in result["reason"]
 
 
 class TestCalculus:

@@ -6,7 +6,7 @@ from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.core.verifier import VerificationEngine
 
 
-def test_verify_identity_sampling_returns_unknown_without_formal_proof():
+def test_verify_identity_sampling_fails_closed_without_formal_proof():
     engine = VerificationEngine()
 
     # This RHS is crafted to equal x at the hardcoded sample points used by
@@ -16,9 +16,9 @@ def test_verify_identity_sampling_returns_unknown_without_formal_proof():
         "x + (x-0.5)*(x-1)*(x-2)*(x+1)*(x-0.1)",
     )
 
-    assert result["status"] == "UNKNOWN"
-    assert result["is_equivalent"] is None
-    assert result["method"] == "numerical_sampling"
+    assert result["status"] == "BLOCKED"
+    assert result["is_equivalent"] is False
+    assert result["method"] == "numerical_sampling_rejected"
 
 
 @pytest.mark.asyncio

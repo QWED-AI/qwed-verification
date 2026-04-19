@@ -236,11 +236,14 @@ class VerificationEngine:
             
             if evaluated_points > 0 and matches == evaluated_points:
                 return {
-                    "is_equivalent": None,
-                    "status": "UNKNOWN",
-                    "method": "numerical_sampling",
+                    "is_equivalent": False,
+                    "status": "BLOCKED",
+                    "method": "numerical_sampling_rejected",
                     "confidence": 0.0,
-                    "reason": "Numerical sampling matched at fixed points, but no formal proof was established"
+                    "reason": (
+                        "Numerical sampling matched at fixed points, but no formal proof "
+                        "was established"
+                    ),
                 }
             
             return {
