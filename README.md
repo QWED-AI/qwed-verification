@@ -23,7 +23,8 @@
   [![Docker Verified](https://img.shields.io/badge/Docker-Verified_Publisher-blue.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-verification)
   [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
   [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/11903/badge)](https://www.bestpractices.dev/projects/11903)
-  [![Snyk Security](https://snyk.io/test/github/QWED-AI/qwed-verification/badge.svg)](https://snyk.io/test/github/QWED-AI/qwed-verification)
+  [![Snyk Security](https://img.shields.io/badge/Snyk-Monitored-4C4A73?logo=snyk&logoColor=white)](https://app.snyk.io)
+  [![QWED Security](https://img.shields.io/badge/GitHub_Marketplace-QWED_Security_%E2%9C%93-2ea44f?style=flat&logo=github&logoColor=white)](https://github.com/marketplace/qwed-security)
   [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=QWED-AI_qwed-verification&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=QWED-AI_qwed-verification)
   [![DOI](https://zenodo.org/badge/1115581942.svg)](https://doi.org/10.5281/zenodo.18111675)
   [![GitHub stars](https://img.shields.io/github/stars/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification)
@@ -622,6 +623,8 @@ QWED verification is available as specialized packages for different industries:
 | **qwed-tax** 💸 | Tax compliance & withholding verification middleware | `pip install qwed-tax` | [GitHub](https://github.com/QWED-AI/qwed-tax) |
 
 ### 🎬 GitHub Actions
+
+> 🏪 **[QWED Security](https://github.com/marketplace/qwed-security)** is currently a **Verified Publisher ✓** on GitHub Marketplace — install it to auto-verify every PR with deterministic math, logic, and security checks.
 
 Use QWED verification in your CI/CD pipelines:
 
