@@ -624,7 +624,7 @@ QWED verification is available as specialized packages for different industries:
 
 ### 🎬 GitHub Actions
 
-> 🏪 **[QWED Security](https://github.com/marketplace/qwed-security)** is now a **Verified Publisher ✓** on GitHub Marketplace — install it to auto-verify every PR with deterministic math, logic, and security checks.
+> 🏪 **[QWED Security](https://github.com/marketplace/qwed-security)** is currently a **Verified Publisher ✓** on GitHub Marketplace — install it to auto-verify every PR with deterministic math, logic, and security checks.
 
 Use QWED verification in your CI/CD pipelines:
 
