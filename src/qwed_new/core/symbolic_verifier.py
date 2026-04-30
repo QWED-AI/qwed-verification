@@ -138,7 +138,13 @@ class SymbolicVerifier:
             "verified": False,
             "status": status,
             "message": message,
-            "issues": []
+            "issues": [],
+            "functions_checked": 0,
+            "functions_verified": 0,
+            "functions_skipped": 0,
+            "functions_unverifiable": 0,
+            "functions_discovered": 0,
+            "counterexamples_found": 0,
         }
 
     def _no_verifiable_functions_result(self) -> Dict[str, Any]:

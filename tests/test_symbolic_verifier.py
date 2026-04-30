@@ -162,8 +162,24 @@ print(x)
         assert result["functions_discovered"] == 0
         assert result["functions_checked"] == 0
         assert result["functions_verified"] == 0
+        assert result["functions_skipped"] == 0
         assert result["functions_unverifiable"] == 0
+        assert result["counterexamples_found"] == 0
         assert result["issues"][0]["type"] == "unverifiable"
+
+    def test_verify_crosshair_unavailable_returns_consistent_counts(self):
+        """CrossHair-unavailable terminal results should preserve the full result schema."""
+        with patch.object(self.verifier, "_crosshair_available", False):
+            result = self.verifier.verify_code("def add(x: int, y: int) -> int:\n    return x + y\n")
+
+        assert result["is_verified"] is False
+        assert result["status"] == "crosshair_not_available"
+        assert result["functions_checked"] == 0
+        assert result["functions_verified"] == 0
+        assert result["functions_skipped"] == 0
+        assert result["functions_unverifiable"] == 0
+        assert result["functions_discovered"] == 0
+        assert result["counterexamples_found"] == 0
 
     @pytest.mark.skipif(not _crosshair_available, reason="CrossHair not installed")
     def test_verify_syntax_error(self):
@@ -173,6 +189,12 @@ def broken(
 """
         result = self.verifier.verify_code(code)
         assert result["status"] == "syntax_error"
+        assert result["functions_checked"] == 0
+        assert result["functions_verified"] == 0
+        assert result["functions_skipped"] == 0
+        assert result["functions_unverifiable"] == 0
+        assert result["functions_discovered"] == 0
+        assert result["counterexamples_found"] == 0
     
     @pytest.mark.skipif(not _crosshair_available, reason="CrossHair not installed")
     def test_verify_simple_function(self):
