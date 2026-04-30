@@ -7,6 +7,7 @@ These tests verify the symbolic execution engine works correctly.
 import pytest
 import sys
 import os
+from unittest.mock import patch
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -146,16 +147,22 @@ class TestCodeVerification:
     def setup_method(self):
         self.verifier = SymbolicVerifier(timeout_seconds=5)
     
-    @pytest.mark.skipif(not _crosshair_available, reason="CrossHair not installed")
     def test_verify_no_functions(self):
-        """Test verification of code with no functions."""
+        """Code with no functions must fail closed, not pass as verified."""
         code = """
 x = 1 + 2
 print(x)
 """
-        result = self.verifier.verify_code(code)
-        assert result["status"] == "no_functions_to_check"
-    
+        with patch.object(self.verifier, "_crosshair_available", True):
+            result = self.verifier.verify_code(code)
+        assert result["is_verified"] is False
+        assert result["status"] == "no_verifiable_functions"
+        assert result["functions_discovered"] == 0
+        assert result["functions_checked"] == 0
+        assert result["functions_verified"] == 0
+        assert result["functions_unverifiable"] == 0
+        assert result["issues"][0]["type"] == "unverifiable"
+
     @pytest.mark.skipif(not _crosshair_available, reason="CrossHair not installed")
     def test_verify_syntax_error(self):
         """Test verification handles syntax errors."""
@@ -175,6 +182,78 @@ def add(x: int, y: int) -> int:
         result = self.verifier.verify_code(code)
         # Simple addition should verify
         assert result["functions_checked"] > 0
+
+    def test_verify_untyped_function_fails_closed(self):
+        """Untyped functions must not be reported as verified."""
+        code = """
+def add(a, b):
+    return a + b
+"""
+        with patch.object(self.verifier, "_crosshair_available", True):
+            result = self.verifier.verify_code(code)
+
+        assert result["is_verified"] is False
+        assert result["status"] == "no_verifiable_functions"
+        assert result["functions_discovered"] == 1
+        assert result["functions_checked"] == 0
+        assert result["functions_skipped"] == 1
+        assert result["functions_unverifiable"] == 1
+        assert result["functions_verified"] == 0
+        assert any(issue["function"] == "add" for issue in result["issues"])
+
+    def test_verify_mixed_typed_and_untyped_functions_remains_unverifiable(self):
+        """A skipped function must prevent an overall verified result."""
+        code = """
+def typed_add(a: int, b: int) -> int:
+    return a + b
+
+def untyped_add(a, b):
+    return a + b
+"""
+        with patch.object(self.verifier, "_crosshair_available", True):
+            with patch.object(
+                self.verifier,
+                "_verify_function",
+                side_effect=[
+                    {
+                        "verified": True,
+                        "function": "typed_add",
+                        "skipped": False,
+                        "unverifiable": False,
+                        "issues": []
+                    },
+                    {
+                        "verified": False,
+                        "function": "untyped_add",
+                        "skipped": True,
+                        "unverifiable": True,
+                        "issues": [{
+                            "type": "unverifiable",
+                            "function": "untyped_add",
+                            "description": "Function skipped: no type annotations for symbolic verification"
+                        }]
+                    }
+                ]
+            ):
+                result = self.verifier.verify_code(code)
+
+        assert result["is_verified"] is False
+        assert result["status"] == "unverifiable"
+        assert result["functions_discovered"] == 2
+        assert result["functions_checked"] == 1
+        assert result["functions_verified"] == 1
+        assert result["functions_skipped"] == 1
+        assert result["functions_unverifiable"] == 1
+
+    def test_skipped_function_result_is_not_marked_verified(self):
+        """Function-level skip results must not claim successful verification."""
+        func_info = {"name": "add", "has_types": False}
+        result = self.verifier._verify_function("def add(a, b):\n    return a + b\n", func_info)
+
+        assert result["verified"] is False
+        assert result["skipped"] is True
+        assert result["unverifiable"] is True
+        assert result["issues"][0]["type"] == "unverifiable"
 
 
 class TestContractVerification:

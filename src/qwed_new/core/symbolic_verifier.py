@@ -115,32 +115,82 @@ class SymbolicVerifier:
         
         if not functions:
             return {
-                "is_verified": True,
-                "status": "no_functions_to_check",
-                "message": "No typed functions found to verify",
-                "issues": [],
-                "functions_checked": 0
+                "is_verified": False,
+                "status": "no_verifiable_functions",
+                "message": "No functions found to verify symbolically",
+                "issues": [{
+                    "type": "unverifiable",
+                    "function": None,
+                    "description": "No functions found in code to verify symbolically"
+                }],
+                "functions_checked": 0,
+                "functions_verified": 0,
+                "functions_skipped": 0,
+                "functions_unverifiable": 0,
+                "functions_discovered": 0,
+                "counterexamples_found": 0
             }
         
         # Run CrossHair analysis
         issues = []
         verified_count = 0
+        checked_count = 0
+        skipped_count = 0
+        unverifiable_count = 0
+        counterexample_count = 0
         
         for func in functions:
             result = self._verify_function(code, func)
-            if result["verified"]:
+            if result.get("verified"):
                 verified_count += 1
-            else:
-                issues.extend(result.get("issues", []))
-        
-        all_verified = len(issues) == 0
+            if not result.get("skipped"):
+                checked_count += 1
+
+            if result.get("skipped") or result.get("unverifiable"):
+                unverifiable_count += 1
+                if result.get("skipped"):
+                    skipped_count += 1
+
+            result_issues = result.get("issues", [])
+            issues.extend(result_issues)
+            counterexample_count += sum(
+                1 for issue in result_issues if issue.get("type") == "counterexample"
+            )
+
+        all_verified = (
+            checked_count > 0 and
+            verified_count == checked_count and
+            skipped_count == 0 and
+            unverifiable_count == 0 and
+            counterexample_count == 0
+        )
+
+        if all_verified:
+            status = "verified"
+            message = "All verifiable functions were proven symbolically."
+        elif checked_count == 0:
+            status = "no_verifiable_functions"
+            message = "No typed functions could be symbolically verified."
+        elif skipped_count > 0 or unverifiable_count > 0:
+            status = "unverifiable"
+            message = "Symbolic verification was incomplete; at least one function could not be proven."
+        elif counterexample_count > 0:
+            status = "counterexamples_found"
+            message = "CrossHair found counterexamples for one or more functions."
+        else:
+            status = "verification_error"
+            message = "Symbolic verification did not complete cleanly."
         
         return {
             "is_verified": all_verified,
-            "status": "verified" if all_verified else "counterexamples_found",
-            "functions_checked": len(functions),
+            "status": status,
+            "message": message,
+            "functions_checked": checked_count,
             "functions_verified": verified_count,
-            "counterexamples_found": len(issues),
+            "functions_skipped": skipped_count,
+            "functions_unverifiable": unverifiable_count,
+            "functions_discovered": len(functions),
+            "counterexamples_found": counterexample_count,
             "issues": issues
         }
     
@@ -181,9 +231,15 @@ class SymbolicVerifier:
         # Skip functions without type hints (CrossHair needs them)
         if not func_info["has_types"]:
             return {
-                "verified": True,
+                "verified": False,
                 "skipped": True,
-                "reason": "No type annotations - CrossHair requires type hints"
+                "unverifiable": True,
+                "reason": "No type annotations - CrossHair requires type hints",
+                "issues": [{
+                    "type": "unverifiable",
+                    "function": func_name,
+                    "description": "Function skipped: no type annotations for symbolic verification"
+                }]
             }
         
         try:
@@ -203,6 +259,8 @@ class SymbolicVerifier:
                 return {
                     "verified": len(issues) == 0,
                     "function": func_name,
+                    "skipped": False,
+                    "unverifiable": False,
                     "issues": issues
                 }
             finally:
@@ -212,6 +270,8 @@ class SymbolicVerifier:
             return {
                 "verified": False,
                 "function": func_name,
+                "skipped": False,
+                "unverifiable": True,
                 "issues": [{
                     "type": "error",
                     "function": func_name,
