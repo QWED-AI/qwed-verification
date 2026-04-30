@@ -322,6 +322,91 @@ class TestObjectValidation:
         assert verifier.verify({"user": {"name": "John"}}, schema)["is_valid"] == True
         assert verifier.verify({"user": {}}, schema)["is_valid"] == False
 
+    def test_strict_additional_properties_false_rejects_extra_fields(self, verifier):
+        """Strict mode must fail closed on undeclared object properties."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}
+            },
+            "required": ["name"],
+            "additionalProperties": False
+        }
+
+        result = verifier.verify({"name": "rahul", "role": "admin"}, schema, strict=True)
+
+        assert result["is_valid"] is False
+        assert result["status"] == "INVALID"
+        assert any(
+            issue["type"] == "additional_property" and issue["severity"] == "ERROR"
+            for issue in result["issues"]
+        )
+
+    def test_strict_additional_properties_false_accepts_declared_fields(self, verifier):
+        """Strict mode should still allow payloads that fully match the schema."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}
+            },
+            "required": ["name"],
+            "additionalProperties": False
+        }
+
+        result = verifier.verify({"name": "rahul"}, schema, strict=True)
+
+        assert result["is_valid"] is True
+        assert result["status"] == "VALID"
+
+    def test_non_strict_mode_keeps_additional_properties_non_blocking(self, verifier):
+        """Non-strict mode preserves permissive handling for extra properties."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}
+            },
+            "required": ["name"],
+            "additionalProperties": False
+        }
+
+        result = verifier.verify({"name": "rahul", "role": "admin"}, schema, strict=False)
+
+        assert result["is_valid"] is True
+        assert result["status"] == "VALID"
+        assert not any(issue["type"] == "additional_property" for issue in result["issues"])
+
+    def test_nested_additional_properties_false_rejects_extra_nested_fields(self, verifier):
+        """Nested objects must also fail closed on undeclared extra properties."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "user": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"}
+                    },
+                    "required": ["name"],
+                    "additionalProperties": False
+                }
+            },
+            "required": ["user"]
+        }
+
+        result = verifier.verify(
+            {"user": {"name": "rahul", "role": "admin"}},
+            schema,
+            strict=True
+        )
+
+        assert result["is_valid"] is False
+        assert result["status"] == "INVALID"
+        assert any(
+            issue["path"] == "$.user.role"
+            and issue["type"] == "additional_property"
+            and issue["severity"] == "ERROR"
+            for issue in result["issues"]
+        )
+
 
 class TestMathDelegation:
     """Test computed field verification."""

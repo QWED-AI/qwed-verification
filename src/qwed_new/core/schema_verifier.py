@@ -572,7 +572,7 @@ class SchemaVerifier:
                     issue_type="additional_property",
                     expected="no additional properties",
                     actual=key,
-                    severity="WARNING",
+                    severity="ERROR",
                     message=f"Additional property '{key}' not allowed"
                 ))
             
