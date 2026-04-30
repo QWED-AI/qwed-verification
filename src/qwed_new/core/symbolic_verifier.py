@@ -92,57 +92,143 @@ class SymbolicVerifier:
             Dict with verification results
         """
         if not self._crosshair_available:
-            return {
-                "is_verified": False,
-                "status": "crosshair_not_available",
-                "message": "CrossHair not installed. Run: pip install crosshair-tool",
-                "issues": []
-            }
+            return self._build_terminal_result(
+                status="crosshair_not_available",
+                message="CrossHair not installed. Run: pip install crosshair-tool",
+            )
         
         # Parse code to extract functions
         try:
             tree = ast.parse(code)
         except SyntaxError as e:
-            return {
-                "is_verified": False,
-                "status": "syntax_error",
-                "message": str(e),
-                "issues": []
-            }
+            return self._build_terminal_result(
+                status="syntax_error",
+                message=str(e),
+            )
         
         # Find all functions with type hints (CrossHair needs types)
         functions = self._extract_functions(tree)
         
         if not functions:
-            return {
-                "is_verified": True,
-                "status": "no_functions_to_check",
-                "message": "No typed functions found to verify",
-                "issues": [],
-                "functions_checked": 0
-            }
-        
-        # Run CrossHair analysis
+            return self._no_verifiable_functions_result()
+
+        summary = self._summarize_verification_results(code, functions)
+        status, message = self._derive_verification_outcome(summary)
+
+        return {
+            "is_verified": summary["all_verified"],
+            "is_safe": summary["all_verified"],
+            "verified": summary["all_verified"],
+            "status": status,
+            "message": message,
+            "functions_checked": summary["checked_count"],
+            "functions_verified": summary["verified_count"],
+            "functions_skipped": summary["skipped_count"],
+            "functions_unverifiable": summary["unverifiable_count"],
+            "functions_discovered": summary["functions_discovered"],
+            "counterexamples_found": summary["counterexample_count"],
+            "issues": summary["issues"]
+        }
+
+    def _build_terminal_result(self, status: str, message: str) -> Dict[str, Any]:
+        """Build a fail-closed terminal result for pre-verification exits."""
+        return {
+            "is_verified": False,
+            "is_safe": False,
+            "verified": False,
+            "status": status,
+            "message": message,
+            "issues": [],
+            "functions_checked": 0,
+            "functions_verified": 0,
+            "functions_skipped": 0,
+            "functions_unverifiable": 0,
+            "functions_discovered": 0,
+            "counterexamples_found": 0,
+        }
+
+    def _no_verifiable_functions_result(self) -> Dict[str, Any]:
+        """Return a fail-closed result when no functions can be symbolically checked."""
+        return {
+            "is_verified": False,
+            "is_safe": False,
+            "verified": False,
+            "status": "no_verifiable_functions",
+            "message": "No functions found to verify symbolically",
+            "issues": [{
+                "type": "unverifiable",
+                "function": None,
+                "description": "No functions found in code to verify symbolically"
+            }],
+            "functions_checked": 0,
+            "functions_verified": 0,
+            "functions_skipped": 0,
+            "functions_unverifiable": 0,
+            "functions_discovered": 0,
+            "counterexamples_found": 0
+        }
+
+    def _summarize_verification_results(
+        self,
+        code: str,
+        functions: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Aggregate per-function verification results into summary counts."""
         issues = []
         verified_count = 0
-        
+        checked_count = 0
+        skipped_count = 0
+        unverifiable_count = 0
+        counterexample_count = 0
+
         for func in functions:
             result = self._verify_function(code, func)
-            if result["verified"]:
+            if result.get("verified"):
                 verified_count += 1
-            else:
-                issues.extend(result.get("issues", []))
-        
-        all_verified = len(issues) == 0
-        
+            if not result.get("skipped"):
+                checked_count += 1
+
+            if result.get("skipped") or result.get("unverifiable"):
+                unverifiable_count += 1
+                if result.get("skipped"):
+                    skipped_count += 1
+
+            result_issues = result.get("issues", [])
+            issues.extend(result_issues)
+            counterexample_count += sum(
+                1 for issue in result_issues if issue.get("type") == "counterexample"
+            )
+
+        all_verified = (
+            checked_count > 0 and
+            verified_count == checked_count and
+            skipped_count == 0 and
+            unverifiable_count == 0 and
+            counterexample_count == 0
+        )
+
         return {
-            "is_verified": all_verified,
-            "status": "verified" if all_verified else "counterexamples_found",
-            "functions_checked": len(functions),
-            "functions_verified": verified_count,
-            "counterexamples_found": len(issues),
-            "issues": issues
+            "all_verified": all_verified,
+            "issues": issues,
+            "verified_count": verified_count,
+            "checked_count": checked_count,
+            "skipped_count": skipped_count,
+            "unverifiable_count": unverifiable_count,
+            "counterexample_count": counterexample_count,
+            "functions_discovered": len(functions),
         }
+
+    def _derive_verification_outcome(self, summary: Dict[str, Any]) -> tuple[str, str]:
+        """Map aggregated counts to a final verification status and message."""
+        if summary["all_verified"]:
+            return "verified", "All verifiable functions were proven symbolically."
+        if summary["counterexample_count"] > 0:
+            return "counterexamples_found", "CrossHair found counterexamples for one or more functions."
+        if summary["checked_count"] == 0:
+            return "no_verifiable_functions", "No typed functions could be symbolically verified."
+        if summary["skipped_count"] > 0 or summary["unverifiable_count"] > 0:
+            return "unverifiable", "Symbolic verification was incomplete; at least one function could not be proven."
+        return "verification_error", "Symbolic verification did not complete cleanly."
     
     def _extract_functions(self, tree: ast.AST) -> List[Dict[str, Any]]:
         """Extract function names and info from AST."""
@@ -181,9 +267,15 @@ class SymbolicVerifier:
         # Skip functions without type hints (CrossHair needs them)
         if not func_info["has_types"]:
             return {
-                "verified": True,
+                "verified": False,
                 "skipped": True,
-                "reason": "No type annotations - CrossHair requires type hints"
+                "unverifiable": True,
+                "reason": "No type annotations - CrossHair requires type hints",
+                "issues": [{
+                    "type": "unverifiable",
+                    "function": func_name,
+                    "description": "Function skipped: no type annotations for symbolic verification"
+                }]
             }
         
         try:
@@ -203,6 +295,8 @@ class SymbolicVerifier:
                 return {
                     "verified": len(issues) == 0,
                     "function": func_name,
+                    "skipped": False,
+                    "unverifiable": False,
                     "issues": issues
                 }
             finally:
@@ -212,6 +306,8 @@ class SymbolicVerifier:
             return {
                 "verified": False,
                 "function": func_name,
+                "skipped": False,
+                "unverifiable": True,
                 "issues": [{
                     "type": "error",
                     "function": func_name,
