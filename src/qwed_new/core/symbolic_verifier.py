@@ -94,6 +94,8 @@ class SymbolicVerifier:
         if not self._crosshair_available:
             return {
                 "is_verified": False,
+                "is_safe": False,
+                "verified": False,
                 "status": "crosshair_not_available",
                 "message": "CrossHair not installed. Run: pip install crosshair-tool",
                 "issues": []
@@ -105,6 +107,8 @@ class SymbolicVerifier:
         except SyntaxError as e:
             return {
                 "is_verified": False,
+                "is_safe": False,
+                "verified": False,
                 "status": "syntax_error",
                 "message": str(e),
                 "issues": []
@@ -116,6 +120,8 @@ class SymbolicVerifier:
         if not functions:
             return {
                 "is_verified": False,
+                "is_safe": False,
+                "verified": False,
                 "status": "no_verifiable_functions",
                 "message": "No functions found to verify symbolically",
                 "issues": [{
@@ -168,21 +174,23 @@ class SymbolicVerifier:
         if all_verified:
             status = "verified"
             message = "All verifiable functions were proven symbolically."
+        elif counterexample_count > 0:
+            status = "counterexamples_found"
+            message = "CrossHair found counterexamples for one or more functions."
         elif checked_count == 0:
             status = "no_verifiable_functions"
             message = "No typed functions could be symbolically verified."
         elif skipped_count > 0 or unverifiable_count > 0:
             status = "unverifiable"
             message = "Symbolic verification was incomplete; at least one function could not be proven."
-        elif counterexample_count > 0:
-            status = "counterexamples_found"
-            message = "CrossHair found counterexamples for one or more functions."
         else:
             status = "verification_error"
             message = "Symbolic verification did not complete cleanly."
         
         return {
             "is_verified": all_verified,
+            "is_safe": all_verified,
+            "verified": all_verified,
             "status": status,
             "message": message,
             "functions_checked": checked_count,

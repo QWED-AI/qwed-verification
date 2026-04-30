@@ -156,6 +156,8 @@ print(x)
         with patch.object(self.verifier, "_crosshair_available", True):
             result = self.verifier.verify_code(code)
         assert result["is_verified"] is False
+        assert result["is_safe"] is False
+        assert result["verified"] is False
         assert result["status"] == "no_verifiable_functions"
         assert result["functions_discovered"] == 0
         assert result["functions_checked"] == 0
@@ -182,6 +184,8 @@ def add(x: int, y: int) -> int:
         result = self.verifier.verify_code(code)
         # Simple addition should verify
         assert result["functions_checked"] > 0
+        assert result["is_safe"] is result["is_verified"]
+        assert result["verified"] is result["is_verified"]
 
     def test_verify_untyped_function_fails_closed(self):
         """Untyped functions must not be reported as verified."""
@@ -244,6 +248,79 @@ def untyped_add(a, b):
         assert result["functions_verified"] == 1
         assert result["functions_skipped"] == 1
         assert result["functions_unverifiable"] == 1
+
+    def test_verify_counterexample_takes_precedence_over_unverifiable(self):
+        """Concrete counterexamples should outrank generic unverifiable status."""
+        code = """
+def typed_add(a: int, b: int) -> int:
+    return a + b
+
+def untyped_add(a, b):
+    return a + b
+"""
+        with patch.object(self.verifier, "_crosshair_available", True):
+            with patch.object(
+                self.verifier,
+                "_verify_function",
+                side_effect=[
+                    {
+                        "verified": False,
+                        "function": "typed_add",
+                        "skipped": False,
+                        "unverifiable": False,
+                        "issues": [{
+                            "type": "counterexample",
+                            "function": "typed_add",
+                            "description": "Counterexample found"
+                        }]
+                    },
+                    {
+                        "verified": False,
+                        "function": "untyped_add",
+                        "skipped": True,
+                        "unverifiable": True,
+                        "issues": [{
+                            "type": "unverifiable",
+                            "function": "untyped_add",
+                            "description": "Function skipped: no type annotations for symbolic verification"
+                        }]
+                    }
+                ]
+            ):
+                result = self.verifier.verify_code(code)
+
+        assert result["is_verified"] is False
+        assert result["status"] == "counterexamples_found"
+        assert result["functions_discovered"] == 2
+        assert result["functions_checked"] == 1
+        assert result["counterexamples_found"] == 1
+        assert result["functions_skipped"] == 1
+        assert result["functions_unverifiable"] == 1
+        assert result["functions_verified"] == 0
+
+    def test_verify_inconsistent_function_result_falls_back_to_verification_error(self):
+        """Unexpected verifier output must not silently pass or masquerade as another state."""
+        code = """
+def typed_add(a: int, b: int) -> int:
+    return a + b
+"""
+        with patch.object(self.verifier, "_crosshair_available", True):
+            with patch.object(
+                self.verifier,
+                "_verify_function",
+                return_value={
+                    "verified": False,
+                    "function": "typed_add",
+                    "skipped": False,
+                    "unverifiable": False,
+                    "issues": []
+                }
+            ):
+                result = self.verifier.verify_code(code)
+
+        assert result["is_verified"] is False
+        assert result["status"] == "verification_error"
+        assert result["message"] == "Symbolic verification did not complete cleanly."
 
     def test_skipped_function_result_is_not_marked_verified(self):
         """Function-level skip results must not claim successful verification."""
