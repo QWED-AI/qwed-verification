@@ -114,19 +114,45 @@ class TestSecureExecutorCoverage(unittest.TestCase):
         with self.assertRaises(ExecutionError):
             executor._run_in_container("/tmp", "exec_1")
 
-    def test_code_verifier_fallback_and_safety_check(self):
-        """Test fallback to basic safety check when CodeVerifier missing."""
-        # 1. Mock import error for CodeVerifier
+    def test_code_verifier_import_error_fails_closed(self):
+        """CodeVerifier import failures must block execution safety checks."""
         with patch.dict("sys.modules", {"qwed_new.core.code_verifier": None}):
-             executor = SecureCodeExecutor()
-             # 2. Test Safe Code
-             is_safe, _ = executor._is_safe_code("print('hello')")
-             self.assertTrue(is_safe)
-             
-             # 3. Test Unsafe Code (loop coverage)
-             is_safe, reason = executor._is_safe_code("import os; os.system('ls')")
-             self.assertFalse(is_safe)
-             self.assertIn("dangerous operation", reason)
+            executor = SecureCodeExecutor()
+
+            is_safe, reason = executor._is_safe_code("print('hello')")
+            self.assertFalse(is_safe)
+            self.assertIn("CodeVerifier unavailable", reason)
+
+    def test_execute_fails_closed_when_code_verifier_missing(self):
+        """Execution must not proceed when CodeVerifier cannot be imported."""
+        with patch.dict("sys.modules", {"qwed_new.core.code_verifier": None}):
+            executor = SecureCodeExecutor()
+            executor.client = MagicMock()
+            executor.client.ping.return_value = None
+
+            success, error, result = executor.execute("print('hello')", {})
+
+            self.assertFalse(success)
+            self.assertIn("Code safety validation failed", error)
+            self.assertIn("CodeVerifier unavailable", error)
+            self.assertIsNone(result)
+            executor.client.containers.run.assert_not_called()
+
+    def test_execute_import_error_returns_advisory_reason_without_authorizing(self):
+        """Heuristic fallback may inform the error but must never authorize execution."""
+        with patch.dict("sys.modules", {"qwed_new.core.code_verifier": None}):
+            executor = SecureCodeExecutor()
+            executor.client = MagicMock()
+            executor.client.ping.return_value = None
+
+            success, error, result = executor.execute("import os; os.system('ls')", {})
+
+            self.assertFalse(success)
+            self.assertIn("CodeVerifier unavailable", error)
+            self.assertIn("Advisory-only fallback also flagged", error)
+            self.assertIn("dangerous operation", error)
+            self.assertIsNone(result)
+            executor.client.containers.run.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main()

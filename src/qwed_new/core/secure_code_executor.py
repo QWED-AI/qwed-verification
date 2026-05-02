@@ -188,9 +188,15 @@ class SecureCodeExecutor:
             return True, None
             
         except ImportError:
-            logger.warning("CodeVerifier not available, using basic validation")
-            # Fallback: basic keyword check
-            return self._basic_safety_check(code)
+            logger.error("CodeVerifier not available; blocking execution")
+            is_basic_safe, advisory_reason = self._basic_safety_check(code)
+            advisory_suffix = ""
+            if not is_basic_safe and advisory_reason:
+                advisory_suffix = f" Advisory-only fallback also flagged: {advisory_reason}"
+            return (
+                False,
+                f"CodeVerifier unavailable; cannot validate code safety.{advisory_suffix}",
+            )
     
     def _basic_safety_check(self, code: str) -> Tuple[bool, Optional[str]]:
         """Basic safety check if CodeVerifier is not available."""
