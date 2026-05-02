@@ -145,7 +145,7 @@ class TestSecureExecutorCoverage(unittest.TestCase):
             executor.client = MagicMock()
             executor.client.ping.return_value = None
 
-            success, error, result = executor.execute("import os; os.system('ls')", {})
+            success, error, result = executor.execute("import os; result = os.name", {})
 
             self.assertFalse(success)
             self.assertIn("CodeVerifier unavailable", error)
@@ -153,6 +153,15 @@ class TestSecureExecutorCoverage(unittest.TestCase):
             self.assertIn("dangerous operation", error)
             self.assertIsNone(result)
             executor.client.containers.run.assert_not_called()
+
+    def test_code_verifier_runtime_failure_fails_closed(self):
+        """Runtime failures inside CodeVerifier must block execution deterministically."""
+        executor = SecureCodeExecutor()
+        with patch("qwed_new.core.code_verifier.CodeVerifier.verify_code", side_effect=RuntimeError("engine down")):
+            is_safe, reason = executor._is_safe_code("print('hello')")
+
+        self.assertFalse(is_safe)
+        self.assertIn("CodeVerifier unavailable", reason)
 
 if __name__ == '__main__':
     unittest.main()
