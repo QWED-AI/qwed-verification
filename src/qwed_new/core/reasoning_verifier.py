@@ -13,6 +13,7 @@ Enhanced Features:
 """
 
 import ast
+import copy
 from decimal import Decimal, localcontext
 import logging
 import operator
@@ -642,20 +643,30 @@ Format as a numbered list."""
             for k in oldest_keys:
                 del self._cache[k]
         
-        self._cache[key] = result
+        self._cache[key] = self._clone_result(result, cached=False)
 
     def _clone_cached_result(self, cached: ReasoningValidation) -> ReasoningValidation:
         """Return an immutable-style copy of a cached validation result."""
+        cloned = self._clone_result(cached, cached=True)
+        return cloned
+
+    def _clone_result(
+        self,
+        source: ReasoningValidation,
+        *,
+        cached: bool,
+    ) -> ReasoningValidation:
+        """Return a defensive copy of a validation result."""
         return ReasoningValidation(
-            is_valid=cached.is_valid,
-            confidence=cached.confidence,
-            reasoning_trace=list(cached.reasoning_trace),
-            issues=list(cached.issues),
-            primary_formula=cached.primary_formula,
-            alternative_formula=cached.alternative_formula,
-            semantic_facts=dict(cached.semantic_facts) if cached.semantic_facts is not None else None,
-            cached=True,
-            verification_time_ms=cached.verification_time_ms,
+            is_valid=source.is_valid,
+            confidence=source.confidence,
+            reasoning_trace=copy.deepcopy(source.reasoning_trace),
+            issues=copy.deepcopy(source.issues),
+            primary_formula=source.primary_formula,
+            alternative_formula=source.alternative_formula,
+            semantic_facts=copy.deepcopy(source.semantic_facts),
+            cached=cached,
+            verification_time_ms=source.verification_time_ms,
         )
     
     def clear_cache(self):

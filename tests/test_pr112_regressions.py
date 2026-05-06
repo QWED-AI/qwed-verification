@@ -134,7 +134,7 @@ def test_reasoning_verifier_rejects_unstructured_failure_trace():
     verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=False)
     task = SimpleNamespace(expression="10 + 5", reasoning="")
 
-    verifier._provider_loaders["anthropic"] = lambda: object()
+    verifier._provider_loaders["anthropic"] = object
     verifier._generate_reasoning_trace = lambda _query, _task: ["Rate limit exceeded, trace unavailable"]
 
     result = verifier.verify_understanding(
@@ -145,6 +145,38 @@ def test_reasoning_verifier_rejects_unstructured_failure_trace():
 
     assert result.is_valid is False
     assert "Reasoning trace unavailable or non-substantive" in result.issues
+
+
+def test_reasoning_verifier_cache_miss_result_does_not_mutate_cached_copy():
+    class DummyProvider:
+        def complete(self, _prompt):
+            return "1. Extract 10 and 5\n2. Add them to get 15"
+
+    verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=True)
+    verifier.clear_cache()
+    verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+
+    task = SimpleNamespace(expression="10 + 5", reasoning="1. Add 10 and 5")
+    query = "Alice has 10 apples and gets 5 more. How many apples does she have?"
+
+    first = verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+    first.issues.append("caller mutation")
+    first.reasoning_trace.append("999. fake step")
+
+    second = verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+
+    assert first.cached is False
+    assert second.cached is True
+    assert "caller mutation" not in second.issues
+    assert "999. fake step" not in second.reasoning_trace
 
 
 def test_reasoning_verifier_cache_separates_cross_validation_modes():
