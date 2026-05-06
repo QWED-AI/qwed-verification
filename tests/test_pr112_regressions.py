@@ -184,9 +184,10 @@ def test_reasoning_verifier_returns_cached_result_for_same_verification_mode():
     )
 
     assert first.is_valid is True
-    assert first.cached is True
+    assert first.cached is False
     assert second.is_valid is True
     assert second.cached is True
+    assert second is not first
 
 
 def test_symbolic_verifier_reports_bounds_transform_error(monkeypatch):

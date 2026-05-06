@@ -19,7 +19,7 @@ import operator
 import re
 import hashlib
 from typing import Dict, Any, List, Optional, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import time
 
 logger = logging.getLogger(__name__)
@@ -209,8 +209,7 @@ class ReasoningVerifier:
         )
         if self.enable_cache and cache_key in self._cache:
             cached = self._cache[cache_key]
-            cached.cached = True
-            return cached
+            return replace(cached, cached=True)
         
         issues = []
         
