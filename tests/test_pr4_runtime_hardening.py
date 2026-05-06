@@ -63,7 +63,7 @@ def test_redis_limiter_reset_reports_failure_on_redis_error():
 def test_agent_token_verification_uses_compare_digest():
     service = AgentService()
     agent_id, stored_token = _register_test_agent(service)
-    presented_token = "not-the-stored-token"
+    presented_token = "mismatch"
 
     with patch("qwed_new.core.agent_service.hmac.compare_digest", return_value=True) as mock_compare:
         assert service.verify_agent_token(agent_id, presented_token) is True
