@@ -94,6 +94,42 @@ def test_reasoning_verifier_safe_arithmetic_and_fallback():
     assert verifier._formulas_equivalent("1/0", "1") is False
 
 
+def test_reasoning_verifier_fails_closed_without_trace_provider():
+    verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=False)
+    verifier._provider_loaders["anthropic"] = lambda: None
+
+    task = SimpleNamespace(expression="10 + 5", reasoning="")
+
+    result = verifier.verify_understanding(
+        query="Alice has 10 apples and gets 5 more. How many apples does she have?",
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+
+    assert result.is_valid is False
+    assert "Reasoning trace unavailable or non-substantive" in result.issues
+
+
+def test_reasoning_verifier_requires_distinct_cross_validation_provider():
+    class DummyProvider:
+        def complete(self, _prompt):
+            return "1. Extract 10 and 5\n2. Add them to get 15"
+
+    verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=False)
+    verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+
+    task = SimpleNamespace(expression="10 + 5", reasoning="1. Add 10 and 5")
+
+    result = verifier.verify_understanding(
+        query="Alice has 10 apples and gets 5 more. How many apples does she have?",
+        primary_task=task,
+        enable_cross_validation=True,
+    )
+
+    assert result.is_valid is False
+    assert "Cross-validation requested but no distinct secondary provider is available" in result.issues
+
+
 def test_symbolic_verifier_reports_bounds_transform_error(monkeypatch):
     verifier = SymbolicVerifier()
     code = """

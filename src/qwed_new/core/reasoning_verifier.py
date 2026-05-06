@@ -82,6 +82,12 @@ class ReasoningVerifier:
     # Cache for semantic parsing (LRU cache)
     _cache: Dict[str, ReasoningValidation] = {}
     _cache_max_size: int = 1000
+    NON_SUBSTANTIVE_TRACE_MARKERS = (
+        "No LLM provider available for reasoning trace",
+        "Could not generate reasoning trace",
+        "No structured reasoning trace generated",
+        "Failed to generate reasoning trace:",
+    )
     
     def __init__(
         self, 
@@ -165,8 +171,7 @@ class ReasoningVerifier:
             provider = self._get_provider(name)
             if provider and provider != primary:
                 return provider
-        # If only one provider, return it anyway
-        return primary
+        return None
     
     # =========================================================================
     # Main Verification
@@ -215,6 +220,7 @@ class ReasoningVerifier:
         
         # 3. Generate reasoning trace from primary LLM
         reasoning_trace = self._generate_reasoning_trace(query, primary_task)
+        issues.extend(self._validate_reasoning_trace(reasoning_trace))
         
         # 4. Validate formula semantics
         formula_issues = self._validate_formula_semantics(facts, primary_task.expression)
@@ -222,11 +228,15 @@ class ReasoningVerifier:
         
         # 5. Cross-validate with secondary LLM
         alternative_formula = None
-        if enable_cross_validation and self.secondary_llm:
-            alt_result = self._cross_validate(query, primary_task.expression)
-            alternative_formula = alt_result.get("formula")
-            if alt_result.get("issues"):
-                issues.extend(alt_result["issues"])
+        if enable_cross_validation:
+            secondary = self.secondary_llm
+            if not secondary:
+                issues.append("Cross-validation requested but no distinct secondary provider is available")
+            else:
+                alt_result = self._cross_validate(query, primary_task.expression)
+                alternative_formula = alt_result.get("formula")
+                if alt_result.get("issues"):
+                    issues.extend(alt_result["issues"])
         
         # 6. Calculate confidence
         confidence = self._calculate_confidence(issues, facts, reasoning_trace, cot_steps)
@@ -385,6 +395,17 @@ class ReasoningVerifier:
             issues.append("No reasoning steps found for complex operation")
         
         return issues
+
+    def _validate_reasoning_trace(self, reasoning_trace: List[str]) -> List[str]:
+        """Fail closed when the reasoning trace is unavailable or non-substantive."""
+        if not reasoning_trace:
+            return ["Reasoning trace missing"]
+
+        for entry in reasoning_trace:
+            if any(entry.startswith(marker) for marker in self.NON_SUBSTANTIVE_TRACE_MARKERS):
+                return ["Reasoning trace unavailable or non-substantive"]
+
+        return []
     
     # =========================================================================
     # Reasoning Trace Generation
