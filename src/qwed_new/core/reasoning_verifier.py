@@ -19,7 +19,7 @@ import operator
 import re
 import hashlib
 from typing import Dict, Any, List, Optional, Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 import time
 
 logger = logging.getLogger(__name__)
@@ -82,13 +82,6 @@ class ReasoningVerifier:
     # Cache for semantic parsing (LRU cache)
     _cache: Dict[str, ReasoningValidation] = {}
     _cache_max_size: int = 1000
-    NON_SUBSTANTIVE_TRACE_MARKERS = (
-        "No LLM provider available for reasoning trace",
-        "Could not generate reasoning trace",
-        "No structured reasoning trace generated",
-        "Failed to generate reasoning trace:",
-    )
-    
     def __init__(
         self, 
         providers: Optional[List[str]] = None,
@@ -209,7 +202,7 @@ class ReasoningVerifier:
         )
         if self.enable_cache and cache_key in self._cache:
             cached = self._cache[cache_key]
-            return replace(cached, cached=True)
+            return self._clone_cached_result(cached)
         
         issues = []
         
@@ -400,14 +393,16 @@ class ReasoningVerifier:
         return issues
 
     def _validate_reasoning_trace(self, reasoning_trace: List[str]) -> List[str]:
-        """Fail closed when the reasoning trace is unavailable or non-substantive."""
+        """Fail closed when the reasoning trace lacks substantive reasoning steps."""
         if not reasoning_trace:
             return ["Reasoning trace missing"]
 
-        for entry in reasoning_trace:
-            if any(entry.startswith(marker) for marker in self.NON_SUBSTANTIVE_TRACE_MARKERS):
-                return ["Reasoning trace unavailable or non-substantive"]
-
+        substantive = [
+            entry for entry in reasoning_trace
+            if entry and (entry[0].isdigit() or entry.startswith("-"))
+        ]
+        if not substantive:
+            return ["Reasoning trace unavailable or non-substantive"]
         return []
     
     # =========================================================================
@@ -648,6 +643,20 @@ Format as a numbered list."""
                 del self._cache[k]
         
         self._cache[key] = result
+
+    def _clone_cached_result(self, cached: ReasoningValidation) -> ReasoningValidation:
+        """Return an immutable-style copy of a cached validation result."""
+        return ReasoningValidation(
+            is_valid=cached.is_valid,
+            confidence=cached.confidence,
+            reasoning_trace=list(cached.reasoning_trace),
+            issues=list(cached.issues),
+            primary_formula=cached.primary_formula,
+            alternative_formula=cached.alternative_formula,
+            semantic_facts=dict(cached.semantic_facts) if cached.semantic_facts is not None else None,
+            cached=True,
+            verification_time_ms=cached.verification_time_ms,
+        )
     
     def clear_cache(self):
         """

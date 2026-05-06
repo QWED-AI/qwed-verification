@@ -130,6 +130,23 @@ def test_reasoning_verifier_requires_distinct_cross_validation_provider():
     assert "Cross-validation requested but no distinct secondary provider is available" in result.issues
 
 
+def test_reasoning_verifier_rejects_unstructured_failure_trace():
+    verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=False)
+    task = SimpleNamespace(expression="10 + 5", reasoning="")
+
+    verifier._provider_loaders["anthropic"] = lambda: object()
+    verifier._generate_reasoning_trace = lambda _query, _task: ["Rate limit exceeded, trace unavailable"]
+
+    result = verifier.verify_understanding(
+        query="Alice has 10 apples and gets 5 more. How many apples does she have?",
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+
+    assert result.is_valid is False
+    assert "Reasoning trace unavailable or non-substantive" in result.issues
+
+
 def test_reasoning_verifier_cache_separates_cross_validation_modes():
     class DummyProvider:
         def complete(self, _prompt):
