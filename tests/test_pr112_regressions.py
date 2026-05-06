@@ -130,6 +130,65 @@ def test_reasoning_verifier_requires_distinct_cross_validation_provider():
     assert "Cross-validation requested but no distinct secondary provider is available" in result.issues
 
 
+def test_reasoning_verifier_cache_separates_cross_validation_modes():
+    class DummyProvider:
+        def complete(self, _prompt):
+            return "1. Extract 10 and 5\n2. Add them to get 15"
+
+    verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=True)
+    verifier.clear_cache()
+    verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+
+    task = SimpleNamespace(expression="10 + 5", reasoning="1. Add 10 and 5")
+    query = "Alice has 10 apples and gets 5 more. How many apples does she have?"
+
+    without_cross_validation = verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+    with_cross_validation = verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=True,
+    )
+
+    assert without_cross_validation.is_valid is True
+    assert without_cross_validation.cached is False
+    assert with_cross_validation.is_valid is False
+    assert with_cross_validation.cached is False
+    assert "Cross-validation requested but no distinct secondary provider is available" in with_cross_validation.issues
+
+
+def test_reasoning_verifier_returns_cached_result_for_same_verification_mode():
+    class DummyProvider:
+        def complete(self, _prompt):
+            return "1. Extract 10 and 5\n2. Add them to get 15"
+
+    verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=True)
+    verifier.clear_cache()
+    verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+
+    task = SimpleNamespace(expression="10 + 5", reasoning="1. Add 10 and 5")
+    query = "Alice has 10 apples and gets 5 more. How many apples does she have?"
+
+    first = verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+    second = verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+
+    assert first.is_valid is True
+    assert first.cached is True
+    assert second.is_valid is True
+    assert second.cached is True
+
+
 def test_symbolic_verifier_reports_bounds_transform_error(monkeypatch):
     verifier = SymbolicVerifier()
     code = """

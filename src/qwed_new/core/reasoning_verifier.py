@@ -202,7 +202,11 @@ class ReasoningVerifier:
         start_time = time.time()
         
         # Check cache first
-        cache_key = self._get_cache_key(query, primary_task.expression)
+        cache_key = self._get_cache_key(
+            query,
+            primary_task.expression,
+            enable_cross_validation=enable_cross_validation,
+        )
         if self.enable_cache and cache_key in self._cache:
             cached = self._cache[cache_key]
             cached.cached = True
@@ -618,9 +622,22 @@ Format as a numbered list."""
     # Caching
     # =========================================================================
     
-    def _get_cache_key(self, query: str, formula: str) -> str:
-        """Generate cache key for query + formula."""
-        content = f"{query}||{formula}"
+    def _get_cache_key(
+        self,
+        query: str,
+        formula: str,
+        *,
+        enable_cross_validation: bool,
+    ) -> str:
+        """Generate cache key for the full verification mode."""
+        content = "||".join(
+            [
+                query,
+                formula,
+                ",".join(self.provider_names),
+                "cross_validation=on" if enable_cross_validation else "cross_validation=off",
+            ]
+        )
         return hashlib.sha256(content.encode()).hexdigest()[:16]
     
     def _cache_result(self, key: str, result: ReasoningValidation):
