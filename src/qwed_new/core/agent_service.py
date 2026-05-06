@@ -327,12 +327,26 @@ class AgentService:
                     "details": budget_check.get("details", {}),
                 },
             }
+
+        engine = self._resolve_action_engine(action.action_type)
+        if not self._is_registered_action(action.action_type):
+            self._release_action_context(context_state)
+            return {
+                "decision": AgentDecision.DENIED.value,
+                "error": {
+                    "code": "QWED-AGENT-ACTION-001",
+                    "message": (
+                        f"Unknown action_type '{action.action_type}' cannot be verified "
+                        "without explicit registered semantics"
+                    ),
+                },
+            }
         
         # Assess risk level
         risk_level = self._assess_risk(action, agent)
         
         # Run verification checks
-        checks = self._run_verification_checks(agent, action, risk_level)
+        checks = self._run_verification_checks(agent, action, risk_level, engine)
         passed = [c.name for c in checks if c.passed]
         failed = [c.name for c in checks if not c.passed]
         
@@ -369,7 +383,7 @@ class AgentService:
             "decision": decision.value,
             "verification": {
                 "status": "VERIFIED" if decision == AgentDecision.APPROVED else "FAILED",
-                "engine": self.ACTION_ENGINES.get(action.action_type, "security"),
+                "engine": engine,
                 "risk_level": risk_level.value,
                 "checks_passed": passed,
                 "checks_failed": failed,
@@ -379,6 +393,18 @@ class AgentService:
                 "hourly_requests": agent.budget.max_requests_per_hour - agent.budget.current_hour_requests,
             },
         }
+
+    def _resolve_action_engine(self, action_type: str) -> Optional[str]:
+        """Return the registered engine label for an action, or None if it has no engine binding."""
+        if action_type in self.ACTION_ENGINES:
+            return self.ACTION_ENGINES[action_type]
+        if action_type in self.TOOL_RISK_LEVELS:
+            return "tool_control"
+        return None
+
+    def _is_registered_action(self, action_type: str) -> bool:
+        """True when an action_type has explicit semantics in QWED."""
+        return action_type in self.ACTION_ENGINES or action_type in self.TOOL_RISK_LEVELS
 
     def _determine_decision(
         self,
@@ -684,6 +710,11 @@ class AgentService:
     
     def _assess_risk(self, action: AgentAction, agent: AgentInfo) -> RiskLevel:
         """Assess risk level of an action"""
+        if not self._is_registered_action(action.action_type):
+            raise ValueError(
+                f"Unknown action_type '{action.action_type}' cannot be risk-assessed deterministically"
+            )
+
         # Check tool-based risk
         if action.action_type in self.TOOL_RISK_LEVELS:
             return self.TOOL_RISK_LEVELS[action.action_type]
@@ -704,13 +735,19 @@ class AgentService:
         agent: AgentInfo,
         action: AgentAction,
         risk_level: RiskLevel,
+        engine: Optional[str],
     ) -> List[VerificationCheck]:
         """Run verification checks on an action"""
         checks = []
         
         # Check permissions
-        engine = self.ACTION_ENGINES.get(action.action_type)
-        if engine and engine not in agent.permissions.allowed_engines:
+        if engine is None:
+            checks.append(VerificationCheck(
+                name="action_registered",
+                passed=False,
+                message=f"Unknown action_type '{action.action_type}' has no registered engine",
+            ))
+        elif action.action_type in self.ACTION_ENGINES and engine not in agent.permissions.allowed_engines:
             checks.append(VerificationCheck(
                 name="engine_allowed",
                 passed=False,

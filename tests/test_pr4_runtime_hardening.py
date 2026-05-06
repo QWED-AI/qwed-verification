@@ -63,12 +63,12 @@ def test_redis_limiter_reset_reports_failure_on_redis_error():
 def test_agent_token_verification_uses_compare_digest():
     service = AgentService()
     agent_id, stored_token = _register_test_agent(service)
-    presented_token = "not-the-stored-token"
+    provided_value = "mismatch"
 
     with patch("qwed_new.core.agent_service.hmac.compare_digest", return_value=True) as mock_compare:
-        assert service.verify_agent_token(agent_id, presented_token) is True
+        assert service.verify_agent_token(agent_id, provided_value) is True
 
-    mock_compare.assert_called_once_with(stored_token, presented_token)
+    mock_compare.assert_called_once_with(stored_token, provided_value)
 
 
 def test_verify_action_requires_context():
@@ -83,6 +83,47 @@ def test_verify_action_requires_context():
 
     assert result["decision"] == "DENIED"
     assert result["error"]["code"] == "QWED-AGENT-CTX-001"
+
+
+def test_verify_action_denies_unknown_action_types():
+    service = AgentService()
+    agent_id, _ = _register_test_agent(service)
+
+    result = service.verify_action(
+        agent_id,
+        AgentAction(
+            action_type="transfer_funds_internal_v2",
+            query="Move funds between ledgers",
+        ),
+        context=ActionContext(conversation_id="conv-unknown", step_number=1),
+    )
+
+    assert result["decision"] == "DENIED"
+    assert result["error"]["code"] == "QWED-AGENT-ACTION-001"
+    assert "verification" not in result
+
+
+def test_unknown_action_denial_releases_same_step_reservation():
+    service = AgentService()
+    agent_id, _ = _register_test_agent(service)
+
+    denied = service.verify_action(
+        agent_id,
+        AgentAction(
+            action_type="transfer_funds_internal_v2",
+            query="Move funds between ledgers",
+        ),
+        context=ActionContext(conversation_id="conv-unknown-release", step_number=1),
+    )
+    approved = service.verify_action(
+        agent_id,
+        AgentAction(action_type="calculate", query="2+2"),
+        context=ActionContext(conversation_id="conv-unknown-release", step_number=1),
+    )
+
+    assert denied["decision"] == "DENIED"
+    assert denied["error"]["code"] == "QWED-AGENT-ACTION-001"
+    assert approved["decision"] == "APPROVED"
 
 
 def test_verify_action_blocks_replay_steps():
