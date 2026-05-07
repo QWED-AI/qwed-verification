@@ -167,6 +167,26 @@ def test_reasoning_verifier_accepts_indented_numbered_trace():
     assert result.reasoning_trace == ["1. Extract 10 and 5", "2. Add them to get 15"]
 
 
+def test_reasoning_verifier_rejects_numbered_placeholder_trace():
+    class DummyProvider:
+        def complete(self, _prompt):
+            return "1. N/A\n2. unavailable"
+
+    verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=False)
+    verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+
+    task = SimpleNamespace(expression="10 + 5", reasoning="1. Add 10 and 5")
+
+    result = verifier.verify_understanding(
+        query="Alice has 10 apples and gets 5 more. How many apples does she have?",
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+
+    assert result.is_valid is False
+    assert "Reasoning trace unavailable or non-substantive" in result.issues
+
+
 def test_reasoning_verifier_cache_miss_result_does_not_mutate_cached_copy():
     class DummyProvider:
         def complete(self, _prompt):
@@ -197,6 +217,36 @@ def test_reasoning_verifier_cache_miss_result_does_not_mutate_cached_copy():
     assert second.cached is True
     assert "caller mutation" not in second.issues
     assert "999. fake step" not in second.reasoning_trace
+
+
+def test_reasoning_verifier_cache_is_not_shared_between_instances():
+    class DummyProvider:
+        def complete(self, _prompt):
+            return "1. Extract 10 and 5\n2. Add them to get 15"
+
+    first_verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=True)
+    second_verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=True)
+    first_verifier.clear_cache()
+    second_verifier.clear_cache()
+    first_verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+    second_verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+
+    task = SimpleNamespace(expression="10 + 5", reasoning="1. Add 10 and 5")
+    query = "Alice has 10 apples and gets 5 more. How many apples does she have?"
+
+    first_result = first_verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+    second_result = second_verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+
+    assert first_result.cached is False
+    assert second_result.cached is False
 
 
 def test_reasoning_verifier_cache_separates_cross_validation_modes():

@@ -80,9 +80,18 @@ class ReasoningVerifier:
         "percentage": ["percent", "%", "percentage", "rate"],
     }
     
-    # Cache for semantic parsing (LRU cache)
-    _cache: Dict[str, ReasoningValidation] = {}
     _cache_max_size: int = 1000
+    NON_SUBSTANTIVE_TRACE_MARKERS = (
+        "no llm provider",
+        "could not generate reasoning trace",
+        "no structured reasoning trace generated",
+        "failed to generate reasoning trace",
+        "n/a",
+        "unavailable",
+        "no reasoning",
+        "rate limit exceeded",
+    )
+
     def __init__(
         self, 
         providers: Optional[List[str]] = None,
@@ -103,6 +112,7 @@ class ReasoningVerifier:
         self.provider_names = providers or ["anthropic"]
         self.enable_cache = enable_cache
         self.cache_ttl = cache_ttl_seconds
+        self._cache: Dict[str, ReasoningValidation] = {}
         
         # Lazy-loaded providers
         self._providers: Dict[str, Any] = {}
@@ -400,7 +410,14 @@ class ReasoningVerifier:
 
         substantive = [
             entry for entry in reasoning_trace
-            if entry and (entry[0].isdigit() or entry.startswith("-"))
+            if (
+                entry
+                and (entry[0].isdigit() or entry.startswith("-"))
+                and not any(
+                    marker in entry.strip().lower()
+                    for marker in self.NON_SUBSTANTIVE_TRACE_MARKERS
+                )
+            )
         ]
         if not substantive:
             return ["Reasoning trace unavailable or non-substantive"]
@@ -633,7 +650,7 @@ Format as a numbered list."""
             [
                 query,
                 formula,
-                ",".join(self.provider_names),
+                ",".join(sorted(self.provider_names)),
                 "cross_validation=on" if enable_cross_validation else "cross_validation=off",
             ]
         )
