@@ -13,6 +13,7 @@ Enhanced Features:
 """
 
 import ast
+import copy
 from decimal import Decimal, localcontext
 import logging
 import operator
@@ -79,10 +80,18 @@ class ReasoningVerifier:
         "percentage": ["percent", "%", "percentage", "rate"],
     }
     
-    # Cache for semantic parsing (LRU cache)
-    _cache: Dict[str, ReasoningValidation] = {}
     _cache_max_size: int = 1000
-    
+    NON_SUBSTANTIVE_TRACE_MARKERS = (
+        "no llm provider",
+        "could not generate reasoning trace",
+        "no structured reasoning trace generated",
+        "failed to generate reasoning trace",
+        "n/a",
+        "unavailable",
+        "no reasoning",
+        "rate limit exceeded",
+    )
+
     def __init__(
         self, 
         providers: Optional[List[str]] = None,
@@ -103,6 +112,7 @@ class ReasoningVerifier:
         self.provider_names = providers or ["anthropic"]
         self.enable_cache = enable_cache
         self.cache_ttl = cache_ttl_seconds
+        self._cache: Dict[str, ReasoningValidation] = {}
         
         # Lazy-loaded providers
         self._providers: Dict[str, Any] = {}
@@ -165,8 +175,7 @@ class ReasoningVerifier:
             provider = self._get_provider(name)
             if provider and provider != primary:
                 return provider
-        # If only one provider, return it anyway
-        return primary
+        return None
     
     # =========================================================================
     # Main Verification
@@ -197,11 +206,14 @@ class ReasoningVerifier:
         start_time = time.time()
         
         # Check cache first
-        cache_key = self._get_cache_key(query, primary_task.expression)
+        cache_key = self._get_cache_key(
+            query,
+            primary_task.expression,
+            enable_cross_validation=enable_cross_validation,
+        )
         if self.enable_cache and cache_key in self._cache:
             cached = self._cache[cache_key]
-            cached.cached = True
-            return cached
+            return self._clone_cached_result(cached)
         
         issues = []
         
@@ -215,6 +227,7 @@ class ReasoningVerifier:
         
         # 3. Generate reasoning trace from primary LLM
         reasoning_trace = self._generate_reasoning_trace(query, primary_task)
+        issues.extend(self._validate_reasoning_trace(reasoning_trace))
         
         # 4. Validate formula semantics
         formula_issues = self._validate_formula_semantics(facts, primary_task.expression)
@@ -222,11 +235,15 @@ class ReasoningVerifier:
         
         # 5. Cross-validate with secondary LLM
         alternative_formula = None
-        if enable_cross_validation and self.secondary_llm:
-            alt_result = self._cross_validate(query, primary_task.expression)
-            alternative_formula = alt_result.get("formula")
-            if alt_result.get("issues"):
-                issues.extend(alt_result["issues"])
+        if enable_cross_validation:
+            secondary = self.secondary_llm
+            if not secondary:
+                issues.append("Cross-validation requested but no distinct secondary provider is available")
+            else:
+                alt_result = self._cross_validate(query, primary_task.expression)
+                alternative_formula = alt_result.get("formula")
+                if alt_result.get("issues"):
+                    issues.extend(alt_result["issues"])
         
         # 6. Calculate confidence
         confidence = self._calculate_confidence(issues, facts, reasoning_trace, cot_steps)
@@ -385,6 +402,26 @@ class ReasoningVerifier:
             issues.append("No reasoning steps found for complex operation")
         
         return issues
+
+    def _validate_reasoning_trace(self, reasoning_trace: List[str]) -> List[str]:
+        """Fail closed when the reasoning trace lacks substantive reasoning steps."""
+        if not reasoning_trace:
+            return ["Reasoning trace missing"]
+
+        substantive = [
+            entry for entry in reasoning_trace
+            if (
+                entry
+                and (entry[0].isdigit() or entry.startswith("-"))
+                and not any(
+                    marker in entry.strip().lower()
+                    for marker in self.NON_SUBSTANTIVE_TRACE_MARKERS
+                )
+            )
+        ]
+        if not substantive:
+            return ["Reasoning trace unavailable or non-substantive"]
+        return []
     
     # =========================================================================
     # Reasoning Trace Generation
@@ -425,7 +462,11 @@ Format as a numbered list."""
             
             # Parse into list
             lines = trace_text.split('\n')
-            trace = [line.strip() for line in lines if line.strip() and (line[0].isdigit() or line.startswith('-'))]
+            trace = []
+            for line in lines:
+                stripped = line.strip()
+                if stripped and (stripped[0].isdigit() or stripped.startswith('-')):
+                    trace.append(stripped)
             
             return trace if trace else ["No structured reasoning trace generated"]
             
@@ -597,9 +638,22 @@ Format as a numbered list."""
     # Caching
     # =========================================================================
     
-    def _get_cache_key(self, query: str, formula: str) -> str:
-        """Generate cache key for query + formula."""
-        content = f"{query}||{formula}"
+    def _get_cache_key(
+        self,
+        query: str,
+        formula: str,
+        *,
+        enable_cross_validation: bool,
+    ) -> str:
+        """Generate cache key for the full verification mode."""
+        content = "||".join(
+            [
+                query,
+                formula,
+                ",".join(sorted(self.provider_names)),
+                "cross_validation=on" if enable_cross_validation else "cross_validation=off",
+            ]
+        )
         return hashlib.sha256(content.encode()).hexdigest()[:16]
     
     def _cache_result(self, key: str, result: ReasoningValidation):
@@ -610,7 +664,31 @@ Format as a numbered list."""
             for k in oldest_keys:
                 del self._cache[k]
         
-        self._cache[key] = result
+        self._cache[key] = self._clone_result(result, cached=False)
+
+    def _clone_cached_result(self, cached: ReasoningValidation) -> ReasoningValidation:
+        """Return an immutable-style copy of a cached validation result."""
+        cloned = self._clone_result(cached, cached=True)
+        return cloned
+
+    def _clone_result(
+        self,
+        source: ReasoningValidation,
+        *,
+        cached: bool,
+    ) -> ReasoningValidation:
+        """Return a defensive copy of a validation result."""
+        return ReasoningValidation(
+            is_valid=source.is_valid,
+            confidence=source.confidence,
+            reasoning_trace=copy.deepcopy(source.reasoning_trace),
+            issues=copy.deepcopy(source.issues),
+            primary_formula=source.primary_formula,
+            alternative_formula=source.alternative_formula,
+            semantic_facts=copy.deepcopy(source.semantic_facts),
+            cached=cached,
+            verification_time_ms=source.verification_time_ms,
+        )
     
     def clear_cache(self):
         """
