@@ -95,6 +95,99 @@ def test_reasoning_verifier_safe_arithmetic_and_fallback():
     assert verifier._formulas_equivalent("1/0", "1") is False
 
 
+def test_reasoning_verifier_fails_closed_without_trace_provider():
+    verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=False)
+    verifier._provider_loaders["anthropic"] = lambda: None
+
+    task = SimpleNamespace(expression="10 + 5", reasoning="")
+
+    result = verifier.verify_understanding(
+        query="Alice has 10 apples and gets 5 more. How many apples does she have?",
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+
+    assert result.is_valid is False
+    assert "Reasoning trace unavailable or non-substantive" in result.issues
+
+
+def test_reasoning_verifier_requires_distinct_cross_validation_provider():
+    class DummyProvider:
+        def complete(self, _prompt):
+            return "1. Extract 10 and 5\n2. Add them to get 15"
+
+    verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=False)
+    verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+
+    task = SimpleNamespace(expression="10 + 5", reasoning="1. Add 10 and 5")
+
+    result = verifier.verify_understanding(
+        query="Alice has 10 apples and gets 5 more. How many apples does she have?",
+        primary_task=task,
+        enable_cross_validation=True,
+    )
+
+    assert result.is_valid is False
+    assert "Cross-validation requested but no distinct secondary provider is available" in result.issues
+
+
+def test_reasoning_verifier_rejects_unstructured_failure_trace():
+    verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=False)
+    task = SimpleNamespace(expression="10 + 5", reasoning="")
+
+    verifier._provider_loaders["anthropic"] = object
+    verifier._generate_reasoning_trace = lambda _query, _task: ["Rate limit exceeded, trace unavailable"]
+
+    result = verifier.verify_understanding(
+        query="Alice has 10 apples and gets 5 more. How many apples does she have?",
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+
+    assert result.is_valid is False
+    assert "Reasoning trace unavailable or non-substantive" in result.issues
+
+
+def test_reasoning_verifier_accepts_indented_numbered_trace():
+    class DummyProvider:
+        def complete(self, _prompt):
+            return "  1. Extract 10 and 5\n    2. Add them to get 15"
+
+    verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=False)
+    verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+
+    task = SimpleNamespace(expression="10 + 5", reasoning="1. Add 10 and 5")
+
+    result = verifier.verify_understanding(
+        query="Alice has 10 apples and gets 5 more. How many apples does she have?",
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+
+    assert result.is_valid is True
+    assert result.reasoning_trace == ["1. Extract 10 and 5", "2. Add them to get 15"]
+
+
+def test_reasoning_verifier_rejects_numbered_placeholder_trace():
+    class DummyProvider:
+        def complete(self, _prompt):
+            return "1. N/A\n2. unavailable"
+
+    verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=False)
+    verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+
+    task = SimpleNamespace(expression="10 + 5", reasoning="1. Add 10 and 5")
+
+    result = verifier.verify_understanding(
+        query="Alice has 10 apples and gets 5 more. How many apples does she have?",
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+
+    assert result.is_valid is False
+    assert "Reasoning trace unavailable or non-substantive" in result.issues
+
+
 def test_reasoning_verifier_cache_separates_cross_validation_modes():
     class DummyProvider:
         def complete(self, _prompt):
