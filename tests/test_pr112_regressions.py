@@ -18,6 +18,7 @@ from qwed_new.api import main as api_main
 from qwed_new.core.agent_service import AgentService
 from qwed_new.core.consensus_verifier import ConsensusVerifier
 from qwed_new.core.logic_verifier import LogicVerifier
+from qwed_new.core import reasoning_verifier as reasoning_module
 from qwed_new.core.reasoning_verifier import ReasoningVerifier
 from qwed_new.core import symbolic_verifier as symbolic_module
 from qwed_new.core.symbolic_verifier import SymbolicVerifier
@@ -92,6 +93,162 @@ def test_reasoning_verifier_safe_arithmetic_and_fallback():
     assert verifier._safe_arithmetic_eval("1 + 2 * 3") == Decimal("7")
     assert verifier._safe_arithmetic_eval("2 ** 3") == Decimal("8")
     assert verifier._formulas_equivalent("1/0", "1") is False
+
+
+def test_reasoning_verifier_cache_separates_cross_validation_modes():
+    class DummyProvider:
+        def complete(self, _prompt):
+            return "1. Extract 12 and 3\n2. Divide them to get 4"
+
+        def translate(self, _query):
+            return SimpleNamespace(expression="12 / 3")
+
+    verifier = ReasoningVerifier(providers=["anthropic", "openai"], enable_cache=True)
+    verifier.clear_cache()
+    verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+    verifier._provider_loaders["openai"] = lambda: DummyProvider()
+
+    task = SimpleNamespace(expression="12 / 3", reasoning="1. We divide 12 by 3.")
+    query = "What is 12 divided by 3?"
+
+    first = verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+    second = verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=True,
+    )
+
+    assert first.cached is False
+    assert second.cached is False
+
+
+def test_reasoning_verifier_cache_separates_provider_configurations():
+    class DummyProvider:
+        def complete(self, _prompt):
+            return "1. Extract 12 and 3\n2. Divide them to get 4"
+
+        def translate(self, _query):
+            return SimpleNamespace(expression="12 / 3")
+
+    verifier = ReasoningVerifier(providers=["anthropic", "openai"], enable_cache=True)
+    verifier.clear_cache()
+    verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+    verifier._provider_loaders["openai"] = lambda: DummyProvider()
+
+    task = SimpleNamespace(expression="12 / 3", reasoning="1. We divide 12 by 3.")
+    query = "What is 12 divided by 3?"
+
+    first = verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+    verifier.provider_names = ["anthropic"]
+    second = verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+
+    assert first.cached is False
+    assert second.cached is False
+
+
+def test_reasoning_verifier_cache_ttl_expires_entries(monkeypatch):
+    class DummyProvider:
+        def complete(self, _prompt):
+            return "1. Extract 12 and 3\n2. Divide them to get 4"
+
+    current_time = {"value": 1000.0}
+    monkeypatch.setattr(reasoning_module.time, "time", lambda: current_time["value"])
+
+    verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=True, cache_ttl_seconds=1)
+    verifier.clear_cache()
+    verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+
+    task = SimpleNamespace(expression="12 / 3", reasoning="1. We divide 12 by 3.")
+    query = "What is 12 divided by 3?"
+
+    first = verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+    current_time["value"] += 2.0
+    second = verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+
+    assert first.cached is False
+    assert second.cached is False
+
+
+def test_reasoning_verifier_cache_miss_result_does_not_mutate_cached_copy():
+    class DummyProvider:
+        def complete(self, _prompt):
+            return "1. Extract 12 and 3\n2. Divide them to get 4"
+
+    verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=True)
+    verifier.clear_cache()
+    verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+
+    task = SimpleNamespace(expression="12 / 3", reasoning="1. We divide 12 by 3.")
+    query = "What is 12 divided by 3?"
+
+    first = verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+    first.issues.append("caller mutation")
+    first.reasoning_trace.append("999. fake step")
+
+    second = verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+
+    assert first.cached is False
+    assert second.cached is True
+    assert "caller mutation" not in second.issues
+    assert "999. fake step" not in second.reasoning_trace
+
+
+def test_reasoning_verifier_cache_is_not_shared_between_instances():
+    class DummyProvider:
+        def complete(self, _prompt):
+            return "1. Extract 12 and 3\n2. Divide them to get 4"
+
+    first_verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=True)
+    second_verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=True)
+    first_verifier.clear_cache()
+    second_verifier.clear_cache()
+    first_verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+    second_verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+
+    task = SimpleNamespace(expression="12 / 3", reasoning="1. We divide 12 by 3.")
+    query = "What is 12 divided by 3?"
+
+    first_result = first_verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+    second_result = second_verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+
+    assert first_result.cached is False
+    assert second_result.cached is False
 
 
 def test_symbolic_verifier_reports_bounds_transform_error(monkeypatch):

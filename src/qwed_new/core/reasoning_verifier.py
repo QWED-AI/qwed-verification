@@ -13,6 +13,7 @@ Enhanced Features:
 """
 
 import ast
+import copy
 from decimal import Decimal, localcontext
 import logging
 import operator
@@ -37,6 +38,13 @@ class ReasoningValidation:
     semantic_facts: Optional[Dict[str, Any]] = None
     cached: bool = False
     verification_time_ms: float = 0.0
+
+
+@dataclass
+class ReasoningCacheEntry:
+    """A cached reasoning validation bound to its creation time."""
+    result: ReasoningValidation
+    created_at: float
 
 
 @dataclass
@@ -79,8 +87,6 @@ class ReasoningVerifier:
         "percentage": ["percent", "%", "percentage", "rate"],
     }
     
-    # Cache for semantic parsing (LRU cache)
-    _cache: Dict[str, ReasoningValidation] = {}
     _cache_max_size: int = 1000
     
     def __init__(
@@ -103,6 +109,7 @@ class ReasoningVerifier:
         self.provider_names = providers or ["anthropic"]
         self.enable_cache = enable_cache
         self.cache_ttl = cache_ttl_seconds
+        self._cache: Dict[str, ReasoningCacheEntry] = {}
         
         # Lazy-loaded providers
         self._providers: Dict[str, Any] = {}
@@ -197,11 +204,15 @@ class ReasoningVerifier:
         start_time = time.time()
         
         # Check cache first
-        cache_key = self._get_cache_key(query, primary_task.expression)
-        if self.enable_cache and cache_key in self._cache:
-            cached = self._cache[cache_key]
-            cached.cached = True
-            return cached
+        cache_key = self._get_cache_key(
+            query,
+            primary_task.expression,
+            enable_cross_validation=enable_cross_validation,
+        )
+        if self.enable_cache:
+            cached_result = self._get_cached_result(cache_key, start_time)
+            if cached_result is not None:
+                return cached_result
         
         issues = []
         
@@ -597,11 +608,34 @@ Format as a numbered list."""
     # Caching
     # =========================================================================
     
-    def _get_cache_key(self, query: str, formula: str) -> str:
-        """Generate cache key for query + formula."""
-        content = f"{query}||{formula}"
+    def _get_cache_key(
+        self,
+        query: str,
+        formula: str,
+        *,
+        enable_cross_validation: bool,
+    ) -> str:
+        """Generate a cache key bound to verification context."""
+        content = "||".join(
+            [
+                query,
+                formula,
+                ",".join(sorted(self.provider_names)),
+                "cross_validation=on" if enable_cross_validation else "cross_validation=off",
+            ]
+        )
         return hashlib.sha256(content.encode()).hexdigest()[:16]
-    
+
+    def _get_cached_result(self, key: str, now: float) -> Optional[ReasoningValidation]:
+        """Return a cached result only if it is still fresh."""
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        if now - entry.created_at > self.cache_ttl:
+            del self._cache[key]
+            return None
+        return self._clone_result(entry.result, cached=True)
+
     def _cache_result(self, key: str, result: ReasoningValidation):
         """Cache a result with size limit."""
         if len(self._cache) >= self._cache_max_size:
@@ -609,8 +643,30 @@ Format as a numbered list."""
             oldest_keys = list(self._cache.keys())[:100]
             for k in oldest_keys:
                 del self._cache[k]
-        
-        self._cache[key] = result
+
+        self._cache[key] = ReasoningCacheEntry(
+            result=self._clone_result(result, cached=False),
+            created_at=time.time(),
+        )
+
+    def _clone_result(
+        self,
+        source: ReasoningValidation,
+        *,
+        cached: bool,
+    ) -> ReasoningValidation:
+        """Return a defensive copy of a reasoning validation result."""
+        return ReasoningValidation(
+            is_valid=source.is_valid,
+            confidence=source.confidence,
+            reasoning_trace=copy.deepcopy(source.reasoning_trace),
+            issues=copy.deepcopy(source.issues),
+            primary_formula=source.primary_formula,
+            alternative_formula=source.alternative_formula,
+            semantic_facts=copy.deepcopy(source.semantic_facts),
+            cached=cached,
+            verification_time_ms=source.verification_time_ms,
+        )
     
     def clear_cache(self):
         """
