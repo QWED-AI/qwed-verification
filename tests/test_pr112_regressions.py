@@ -251,6 +251,38 @@ def test_reasoning_verifier_cache_separates_provider_configurations():
     assert second.cached is False
 
 
+def test_reasoning_verifier_cache_separates_provider_order():
+    class DummyProvider:
+        def complete(self, _prompt):
+            return "1. Extract 12 and 3\n2. Divide them to get 4"
+
+        def translate(self, _query):
+            return SimpleNamespace(expression="12 / 3")
+
+    verifier = ReasoningVerifier(providers=["anthropic", "openai"], enable_cache=True)
+    verifier.clear_cache()
+    verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+    verifier._provider_loaders["openai"] = lambda: DummyProvider()
+
+    task = SimpleNamespace(expression="12 / 3", reasoning="1. We divide 12 by 3.")
+    query = "What is 12 divided by 3?"
+
+    first = verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=True,
+    )
+    verifier.provider_names = ["openai", "anthropic"]
+    second = verifier.verify_understanding(
+        query=query,
+        primary_task=task,
+        enable_cross_validation=True,
+    )
+
+    assert first.cached is False
+    assert second.cached is False
+
+
 def test_reasoning_verifier_cache_ttl_expires_entries(monkeypatch):
     class DummyProvider:
         def complete(self, _prompt):

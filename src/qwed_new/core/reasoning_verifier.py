@@ -658,7 +658,7 @@ Format as a numbered list."""
             [
                 query,
                 formula,
-                ",".join(sorted(self.provider_names)),
+                ",".join(self.provider_names),
                 "cross_validation=on" if enable_cross_validation else "cross_validation=off",
             ]
         )
