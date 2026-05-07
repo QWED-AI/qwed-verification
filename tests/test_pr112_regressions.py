@@ -147,6 +147,26 @@ def test_reasoning_verifier_rejects_unstructured_failure_trace():
     assert "Reasoning trace unavailable or non-substantive" in result.issues
 
 
+def test_reasoning_verifier_accepts_indented_numbered_trace():
+    class DummyProvider:
+        def complete(self, _prompt):
+            return "  1. Extract 10 and 5\n    2. Add them to get 15"
+
+    verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=False)
+    verifier._provider_loaders["anthropic"] = lambda: DummyProvider()
+
+    task = SimpleNamespace(expression="10 + 5", reasoning="1. Add 10 and 5")
+
+    result = verifier.verify_understanding(
+        query="Alice has 10 apples and gets 5 more. How many apples does she have?",
+        primary_task=task,
+        enable_cross_validation=False,
+    )
+
+    assert result.is_valid is True
+    assert result.reasoning_trace == ["1. Extract 10 and 5", "2. Add them to get 15"]
+
+
 def test_reasoning_verifier_cache_miss_result_does_not_mutate_cached_copy():
     class DummyProvider:
         def complete(self, _prompt):

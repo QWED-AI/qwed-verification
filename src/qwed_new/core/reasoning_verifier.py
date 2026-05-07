@@ -445,7 +445,11 @@ Format as a numbered list."""
             
             # Parse into list
             lines = trace_text.split('\n')
-            trace = [line.strip() for line in lines if line.strip() and (line[0].isdigit() or line.startswith('-'))]
+            trace = []
+            for line in lines:
+                stripped = line.strip()
+                if stripped and (stripped[0].isdigit() or stripped.startswith('-')):
+                    trace.append(stripped)
             
             return trace if trace else ["No structured reasoning trace generated"]
             
