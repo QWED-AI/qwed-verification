@@ -17,7 +17,6 @@ import os
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, select
 
 from qwed_new.core.database import engine
@@ -41,7 +40,8 @@ class AuditLogger:
 
     def __init__(self, secret_key: Optional[str] = None):
         self.secret_key = self._resolve_secret_key(secret_key)
-        self.last_hash = self._load_last_hash()
+        self.last_hash = None
+        self._last_hash_by_org: Dict[int, Optional[str]] = {}
 
     def log_verification(
         self,
@@ -63,10 +63,14 @@ class AuditLogger:
 
         with Session(engine) as session:
             self._prepare_append_session(session)
-            latest_log = self._get_latest_log(session, for_update=True)
+            latest_log = self._get_latest_log(
+                session,
+                organization_id=organization_id,
+                for_update=True,
+            )
             previous_hash = self._extract_persisted_hash(latest_log)
-
-            if self.last_hash != previous_hash:
+            known_hash = self._last_hash_by_org.get(organization_id, previous_hash)
+            if known_hash != previous_hash:
                 raise SecurityError(
                     "Audit chain continuity mismatch: in-memory chain head does not match persisted audit trail"
                 )
@@ -103,6 +107,7 @@ class AuditLogger:
             session.commit()
             session.refresh(log_entry)
 
+            self._last_hash_by_org[organization_id] = entry_hash
             self.last_hash = entry_hash
 
             logger.info("Audit log created: %s with hash %s...", log_entry.id, entry_hash[:16])
@@ -130,17 +135,6 @@ class AuditLogger:
             )
         return configured_secret.encode("utf-8")
 
-    def _load_last_hash(self) -> Optional[str]:
-        """Load the persisted audit chain head from storage."""
-        try:
-            with Session(engine) as session:
-                latest_log = self._get_latest_log(session)
-                return self._extract_persisted_hash(latest_log)
-        except SQLAlchemyError as exc:
-            raise SecurityError(
-                "Audit logger could not load persisted chain continuity"
-            ) from exc
-
     def _prepare_append_session(self, session: Session) -> None:
         """Prepare a write session so chain-head validation and append stay serialized."""
         bind = session.get_bind()
@@ -150,11 +144,16 @@ class AuditLogger:
     def _get_latest_log(
         self,
         session: Session,
+        organization_id: int,
         *,
         for_update: bool = False,
     ) -> Optional[VerificationLog]:
-        """Return the latest persisted audit log entry, if any."""
-        statement = select(VerificationLog).order_by(VerificationLog.id.desc())
+        """Return the latest persisted audit log entry for an organization, if any."""
+        statement = (
+            select(VerificationLog)
+            .where(VerificationLog.organization_id == organization_id)
+            .order_by(VerificationLog.id.desc())
+        )
         bind = session.get_bind()
         if (
             for_update
@@ -205,8 +204,33 @@ class AuditLogger:
             }
 
         errors = []
+        hash_valid, signature_valid = self._verify_hash_and_signature(log_entry, errors)
+        prev_log = self._run_select(
+            session,
+            select(VerificationLog)
+            .where(VerificationLog.organization_id == log_entry.organization_id)
+            .where(VerificationLog.id < log_id)
+            .order_by(VerificationLog.id.desc()),
+        ).first()
+        chain_valid = self._verify_chain_link(log_entry, prev_log, errors)
 
-        reconstructed_data = {
+        is_valid = hash_valid and signature_valid and chain_valid
+
+        return {
+            "valid": is_valid,
+            "checks": {
+                "hash_valid": hash_valid,
+                "signature_valid": signature_valid,
+                "chain_valid": chain_valid,
+            },
+            "errors": errors,
+            "log_id": log_id,
+            "timestamp": log_entry.timestamp.isoformat(),
+        }
+
+    def _reconstruct_log_data(self, log_entry: VerificationLog) -> Dict[str, Any]:
+        """Rebuild the canonical payload for integrity verification."""
+        return {
             "organization_id": log_entry.organization_id,
             "user_id": log_entry.user_id,
             "query": log_entry.query,
@@ -217,6 +241,14 @@ class AuditLogger:
             "previous_hash": log_entry.previous_hash,
             "raw_llm_output": log_entry.raw_llm_output,
         }
+
+    def _verify_hash_and_signature(
+        self,
+        log_entry: VerificationLog,
+        errors: list[str],
+    ) -> tuple[bool, bool]:
+        """Verify the stored hash and HMAC for one audit row."""
+        reconstructed_data = self._reconstruct_log_data(log_entry)
         expected_hash = self._compute_hash(reconstructed_data)
         hash_present = bool(log_entry.entry_hash)
         hash_valid = hash_present and expected_hash == log_entry.entry_hash
@@ -241,39 +273,30 @@ class AuditLogger:
         if not signature_valid:
             errors.append("HMAC signature invalid")
 
-        chain_valid = True
-        prev_log = self._run_select(
-            session,
-            select(VerificationLog)
-            .where(VerificationLog.id < log_id)
-            .order_by(VerificationLog.id.desc()),
-        ).first()
+        return hash_valid, signature_valid
 
+    def _verify_chain_link(
+        self,
+        log_entry: VerificationLog,
+        prev_log: Optional[VerificationLog],
+        errors: list[str],
+    ) -> bool:
+        """Verify that one audit entry links to the correct previous entry."""
         if prev_log is None:
             if log_entry.previous_hash is not None:
-                chain_valid = False
                 errors.append("Hash chain broken: genesis entry must not reference a previous hash")
-        else:
-            if not prev_log.entry_hash:
-                chain_valid = False
-                errors.append("Hash chain broken: previous entry is missing its hash")
-            elif prev_log.entry_hash != log_entry.previous_hash:
-                chain_valid = False
-                errors.append("Hash chain broken: previous hash doesn't match")
+                return False
+            return True
 
-        is_valid = hash_valid and signature_valid and chain_valid
+        if not prev_log.entry_hash:
+            errors.append("Hash chain broken: previous entry is missing its hash")
+            return False
 
-        return {
-            "valid": is_valid,
-            "checks": {
-                "hash_valid": hash_valid,
-                "signature_valid": signature_valid,
-                "chain_valid": chain_valid,
-            },
-            "errors": errors,
-            "log_id": log_id,
-            "timestamp": log_entry.timestamp.isoformat(),
-        }
+        if prev_log.entry_hash != log_entry.previous_hash:
+            errors.append("Hash chain broken: previous hash doesn't match")
+            return False
+
+        return True
 
     def verify_audit_trail(
         self,

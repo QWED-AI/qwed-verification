@@ -58,7 +58,6 @@ def test_audit_logger_restores_chain_head_from_persisted_log(monkeypatch, tmp_pa
         persisted_first_hash = first_log.entry_hash
 
     logger_two = AuditLogger()
-    assert logger_two.last_hash == persisted_first_hash
 
     second_log_id = logger_two.log_verification(
         organization_id=1,
@@ -73,6 +72,7 @@ def test_audit_logger_restores_chain_head_from_persisted_log(monkeypatch, tmp_pa
         second_log = session.get(VerificationLog, int(second_log_id))
         assert second_log is not None
         assert second_log.previous_hash == persisted_first_hash
+        assert logger_two._last_hash_by_org[1] == second_log.entry_hash
         assert logger_two.last_hash == second_log.entry_hash
 
 
@@ -90,7 +90,7 @@ def test_audit_logger_rejects_invalid_root_continuation(monkeypatch, tmp_path):
     )
 
     diverged_logger = AuditLogger()
-    diverged_logger.last_hash = "tampered-chain-head"
+    diverged_logger._last_hash_by_org[1] = "tampered-chain-head"
 
     with pytest.raises(SecurityError, match="continuity mismatch"):
         diverged_logger.log_verification(
@@ -207,3 +207,51 @@ def test_audit_logger_detects_raw_llm_output_tampering(monkeypatch, tmp_path):
 
     assert verification["valid"] is False
     assert verification["checks"]["hash_valid"] is False
+
+
+def test_audit_logger_keeps_chains_isolated_per_organization(monkeypatch, tmp_path):
+    engine = _configure_audit_logger(monkeypatch, tmp_path)
+    logger = AuditLogger()
+
+    org_one_first = logger.log_verification(
+        organization_id=1,
+        user_id=None,
+        query="2 + 2",
+        result={"value": 4},
+        is_verified=True,
+        domain="math",
+    )
+    org_two_first = logger.log_verification(
+        organization_id=2,
+        user_id=None,
+        query="5 + 5",
+        result={"value": 10},
+        is_verified=True,
+        domain="math",
+    )
+    org_one_second = logger.log_verification(
+        organization_id=1,
+        user_id=None,
+        query="3 + 3",
+        result={"value": 6},
+        is_verified=True,
+        domain="math",
+    )
+
+    with Session(engine) as session:
+        org_one_first_log = session.get(VerificationLog, int(org_one_first))
+        org_two_first_log = session.get(VerificationLog, int(org_two_first))
+        org_one_second_log = session.get(VerificationLog, int(org_one_second))
+
+        assert org_one_first_log is not None
+        assert org_two_first_log is not None
+        assert org_one_second_log is not None
+        assert org_two_first_log.previous_hash is None
+        assert org_one_second_log.previous_hash == org_one_first_log.entry_hash
+        assert org_one_second_log.previous_hash != org_two_first_log.entry_hash
+
+        org_one_trail = logger.verify_audit_trail(1)
+        org_two_trail = logger.verify_audit_trail(2)
+
+    assert org_one_trail["valid"] is True
+    assert org_two_trail["valid"] is True
