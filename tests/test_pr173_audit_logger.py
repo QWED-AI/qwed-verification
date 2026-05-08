@@ -24,10 +24,10 @@ def _make_test_engine(tmp_path):
     return engine
 
 
-def _configure_audit_logger(monkeypatch, tmp_path, secret="test-secret"):
+def _configure_audit_logger(monkeypatch, tmp_path, audit_value="audit-fixture-value"):
     engine = _make_test_engine(tmp_path)
     monkeypatch.setattr(audit_module, "engine", engine)
-    monkeypatch.setenv(AUDIT_SECRET_ENV_VAR, secret)
+    monkeypatch.setenv(AUDIT_SECRET_ENV_VAR, audit_value)
     return engine
 
 
@@ -152,3 +152,58 @@ def test_audit_logger_detects_broken_previous_hash_during_verification(monkeypat
     assert verification["valid"] is False
     assert verification["checks"]["chain_valid"] is False
     assert "Hash chain broken: previous hash doesn't match" in verification["errors"]
+
+
+def test_audit_logger_detects_missing_entry_hash(monkeypatch, tmp_path):
+    engine = _configure_audit_logger(monkeypatch, tmp_path)
+    logger = AuditLogger()
+
+    with Session(engine) as session:
+        broken_log = VerificationLog(
+            organization_id=1,
+            user_id=None,
+            query="2 + 2",
+            result='{"value": 4}',
+            is_verified=True,
+            domain="math",
+            hmac_signature="not-a-real-signature",
+            previous_hash=None,
+        )
+        session.add(broken_log)
+        session.commit()
+        session.refresh(broken_log)
+
+        verification = logger.verify_log_entry(broken_log.id, session)
+
+    assert verification["valid"] is False
+    assert verification["checks"]["hash_valid"] is False
+    assert verification["checks"]["signature_valid"] is False
+    assert "Hash missing from audit entry" in verification["errors"]
+
+
+def test_audit_logger_detects_raw_llm_output_tampering(monkeypatch, tmp_path):
+    engine = _configure_audit_logger(monkeypatch, tmp_path)
+    logger = AuditLogger()
+
+    log_id = logger.log_verification(
+        organization_id=1,
+        user_id=None,
+        query="2 + 2",
+        result={"value": 4},
+        is_verified=True,
+        domain="math",
+        raw_llm_output="original output",
+    )
+
+    with Session(engine) as session:
+        log_entry = session.get(VerificationLog, int(log_id))
+        assert log_entry is not None
+        log_entry.raw_llm_output = "tampered output"
+        session.add(log_entry)
+        session.commit()
+        session.refresh(log_entry)
+
+        verification = logger.verify_log_entry(log_entry.id, session)
+
+    assert verification["valid"] is False
+    assert verification["checks"]["hash_valid"] is False

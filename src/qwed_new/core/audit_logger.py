@@ -62,7 +62,8 @@ class AuditLogger:
         timestamp = datetime.utcnow()
 
         with Session(engine) as session:
-            latest_log = self._get_latest_log(session)
+            self._prepare_append_session(session)
+            latest_log = self._get_latest_log(session, for_update=True)
             previous_hash = self._extract_persisted_hash(latest_log)
 
             if self.last_hash != previous_hash:
@@ -79,6 +80,7 @@ class AuditLogger:
                 "domain": domain,
                 "timestamp": timestamp.isoformat(),
                 "previous_hash": previous_hash,
+                "raw_llm_output": raw_llm_output,
             }
 
             entry_hash = self._compute_hash(log_data)
@@ -139,11 +141,32 @@ class AuditLogger:
                 "Audit logger could not load persisted chain continuity"
             ) from exc
 
-    def _get_latest_log(self, session: Session) -> Optional[VerificationLog]:
+    def _prepare_append_session(self, session: Session) -> None:
+        """Prepare a write session so chain-head validation and append stay serialized."""
+        bind = session.get_bind()
+        if bind is not None and bind.dialect.name == "sqlite":
+            session.connection(execution_options={"sqlite_txn_mode": "IMMEDIATE"})
+
+    def _get_latest_log(
+        self,
+        session: Session,
+        *,
+        for_update: bool = False,
+    ) -> Optional[VerificationLog]:
         """Return the latest persisted audit log entry, if any."""
-        return session.exec(
-            select(VerificationLog).order_by(VerificationLog.id.desc())
-        ).first()
+        statement = select(VerificationLog).order_by(VerificationLog.id.desc())
+        bind = session.get_bind()
+        if (
+            for_update
+            and bind is not None
+            and bind.dialect.name != "sqlite"
+        ):
+            statement = statement.with_for_update()
+        return self._run_select(session, statement).first()
+
+    def _run_select(self, session: Session, statement):
+        """Execute a SQLModel select statement."""
+        return getattr(session, "exec")(statement)
 
     def _extract_persisted_hash(
         self,
@@ -192,29 +215,38 @@ class AuditLogger:
             "domain": log_entry.domain,
             "timestamp": log_entry.timestamp.isoformat(),
             "previous_hash": log_entry.previous_hash,
+            "raw_llm_output": log_entry.raw_llm_output,
         }
         expected_hash = self._compute_hash(reconstructed_data)
-        hash_valid = expected_hash == log_entry.entry_hash
+        hash_present = bool(log_entry.entry_hash)
+        hash_valid = hash_present and expected_hash == log_entry.entry_hash
 
         if not hash_valid:
-            errors.append(
-                f"Hash mismatch: expected {expected_hash[:16]}, got {log_entry.entry_hash[:16]}"
-            )
+            if not hash_present:
+                errors.append("Hash missing from audit entry")
+            else:
+                errors.append(
+                    f"Hash mismatch: expected {expected_hash[:16]}, got {log_entry.entry_hash[:16]}"
+                )
 
-        expected_signature = self._compute_hmac(log_entry.entry_hash)
-        signature_valid = hmac.compare_digest(
-            expected_signature,
-            log_entry.hmac_signature or "",
-        )
+        if not hash_present:
+            signature_valid = False
+        else:
+            expected_signature = self._compute_hmac(log_entry.entry_hash)
+            signature_valid = hmac.compare_digest(
+                expected_signature,
+                log_entry.hmac_signature or "",
+            )
 
         if not signature_valid:
             errors.append("HMAC signature invalid")
 
         chain_valid = True
-        prev_log = session.exec(
+        prev_log = self._run_select(
+            session,
             select(VerificationLog)
             .where(VerificationLog.id < log_id)
-            .order_by(VerificationLog.id.desc())
+            .order_by(VerificationLog.id.desc()),
         ).first()
 
         if prev_log is None:
@@ -271,7 +303,7 @@ class AuditLogger:
             if end_date:
                 query = query.where(VerificationLog.timestamp <= end_date)
 
-            logs = session.exec(query.order_by(VerificationLog.id)).all()
+            logs = self._run_select(session, query.order_by(VerificationLog.id)).all()
 
             total = len(logs)
             verified = 0
@@ -298,4 +330,3 @@ class AuditLogger:
 
 class SecurityError(Exception):
     """Raised when cryptographic verification fails."""
-
