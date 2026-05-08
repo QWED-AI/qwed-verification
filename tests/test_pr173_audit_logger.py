@@ -1,4 +1,5 @@
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -209,6 +210,46 @@ def test_audit_logger_detects_raw_llm_output_tampering(monkeypatch, tmp_path):
     assert verification["checks"]["hash_valid"] is False
 
 
+def test_audit_logger_verifies_legacy_hash_payload(monkeypatch, tmp_path):
+    engine = _configure_audit_logger(monkeypatch, tmp_path)
+    logger = AuditLogger()
+
+    legacy_payload = {
+        "organization_id": 1,
+        "user_id": None,
+        "query": "2 + 2",
+        "result": {"value": 4},
+        "is_verified": True,
+        "domain": "math",
+        "timestamp": "2026-05-08T00:00:00",
+        "previous_hash": None,
+    }
+    entry_hash = logger._compute_hash(legacy_payload)
+    signature = logger._compute_hmac(entry_hash)
+
+    with Session(engine) as session:
+        legacy_log = VerificationLog(
+            organization_id=1,
+            user_id=None,
+            query="2 + 2",
+            result='{"value": 4}',
+            is_verified=True,
+            domain="math",
+            timestamp=datetime.fromisoformat(legacy_payload["timestamp"]),
+            entry_hash=entry_hash,
+            hmac_signature=signature,
+            previous_hash=None,
+            raw_llm_output="legacy raw output not covered by original hash",
+        )
+        session.add(legacy_log)
+        session.commit()
+        session.refresh(legacy_log)
+
+        verification = logger.verify_log_entry(legacy_log.id, session)
+
+    assert verification["valid"] is True
+
+
 def test_audit_logger_keeps_chains_isolated_per_organization(monkeypatch, tmp_path):
     engine = _configure_audit_logger(monkeypatch, tmp_path)
     logger = AuditLogger()
@@ -255,3 +296,35 @@ def test_audit_logger_keeps_chains_isolated_per_organization(monkeypatch, tmp_pa
 
     assert org_one_trail["valid"] is True
     assert org_two_trail["valid"] is True
+
+
+def test_audit_logger_rejects_tampered_persisted_head_before_append(monkeypatch, tmp_path):
+    engine = _configure_audit_logger(monkeypatch, tmp_path)
+    logger = AuditLogger()
+
+    log_id = logger.log_verification(
+        organization_id=1,
+        user_id=None,
+        query="2 + 2",
+        result={"value": 4},
+        is_verified=True,
+        domain="math",
+    )
+
+    with Session(engine) as session:
+        log_entry = session.get(VerificationLog, int(log_id))
+        assert log_entry is not None
+        log_entry.raw_llm_output = "tampered persisted head"
+        session.add(log_entry)
+        session.commit()
+
+    fresh_logger = AuditLogger()
+    with pytest.raises(SecurityError, match="Persisted audit chain head failed integrity verification"):
+        fresh_logger.log_verification(
+            organization_id=1,
+            user_id=None,
+            query="3 + 3",
+            result={"value": 6},
+            is_verified=True,
+            domain="math",
+        )

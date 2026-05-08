@@ -68,6 +68,7 @@ class AuditLogger:
                 organization_id=organization_id,
                 for_update=True,
             )
+            self._assert_appendable_head(latest_log, session)
             previous_hash = self._extract_persisted_hash(latest_log)
             known_hash = self._last_hash_by_org.get(organization_id, previous_hash)
             if known_hash != previous_hash:
@@ -153,6 +154,7 @@ class AuditLogger:
             select(VerificationLog)
             .where(VerificationLog.organization_id == organization_id)
             .order_by(VerificationLog.id.desc())
+            .limit(1)
         )
         bind = session.get_bind()
         if (
@@ -162,6 +164,21 @@ class AuditLogger:
         ):
             statement = statement.with_for_update()
         return self._run_select(session, statement).first()
+
+    def _assert_appendable_head(
+        self,
+        latest_log: Optional[VerificationLog],
+        session: Session,
+    ) -> None:
+        """Fail closed if the persisted chain head cannot be verified."""
+        if latest_log is None:
+            return
+
+        head_check = self.verify_log_entry(latest_log.id, session)
+        if not head_check["valid"]:
+            raise SecurityError(
+                "Persisted audit chain head failed integrity verification; refusing to append"
+            )
 
     def _run_select(self, session: Session, statement):
         """Execute a SQLModel select statement."""
@@ -242,23 +259,35 @@ class AuditLogger:
             "raw_llm_output": log_entry.raw_llm_output,
         }
 
+    def _reconstruct_legacy_log_data(self, log_entry: VerificationLog) -> Dict[str, Any]:
+        """Rebuild the legacy payload for entries hashed before raw_llm_output was covered."""
+        return {
+            "organization_id": log_entry.organization_id,
+            "user_id": log_entry.user_id,
+            "query": log_entry.query,
+            "result": json.loads(log_entry.result),
+            "is_verified": log_entry.is_verified,
+            "domain": log_entry.domain,
+            "timestamp": log_entry.timestamp.isoformat(),
+            "previous_hash": log_entry.previous_hash,
+        }
+
     def _verify_hash_and_signature(
         self,
         log_entry: VerificationLog,
         errors: list[str],
     ) -> tuple[bool, bool]:
         """Verify the stored hash and HMAC for one audit row."""
-        reconstructed_data = self._reconstruct_log_data(log_entry)
-        expected_hash = self._compute_hash(reconstructed_data)
         hash_present = bool(log_entry.entry_hash)
-        hash_valid = hash_present and expected_hash == log_entry.entry_hash
+        expected_hashes = self._expected_hashes(log_entry) if hash_present else []
+        hash_valid = hash_present and log_entry.entry_hash in expected_hashes
 
         if not hash_valid:
             if not hash_present:
                 errors.append("Hash missing from audit entry")
             else:
                 errors.append(
-                    f"Hash mismatch: expected {expected_hash[:16]}, got {log_entry.entry_hash[:16]}"
+                    "Hash mismatch: audit entry does not match current or legacy canonical payload"
                 )
 
         if not hash_present:
@@ -274,6 +303,13 @@ class AuditLogger:
             errors.append("HMAC signature invalid")
 
         return hash_valid, signature_valid
+
+    def _expected_hashes(self, log_entry: VerificationLog) -> list[str]:
+        """Return the acceptable canonical hashes for this entry."""
+        return [
+            self._compute_hash(self._reconstruct_log_data(log_entry)),
+            self._compute_hash(self._reconstruct_legacy_log_data(log_entry)),
+        ]
 
     def _verify_chain_link(
         self,
