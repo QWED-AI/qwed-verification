@@ -140,7 +140,7 @@ class AuditLogger:
         """Prepare a write session so chain-head validation and append stay serialized."""
         bind = session.get_bind()
         if bind is not None and bind.dialect.name == "sqlite":
-            session.connection(execution_options={"sqlite_txn_mode": "IMMEDIATE"})
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
 
     def _get_latest_log(
         self,
