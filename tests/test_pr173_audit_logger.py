@@ -182,6 +182,30 @@ def test_audit_logger_detects_missing_entry_hash(monkeypatch, tmp_path):
     assert "Hash missing from audit entry" in verification["errors"]
 
 
+def test_audit_logger_rejects_malformed_result_payload(monkeypatch, tmp_path):
+    engine = _configure_audit_logger(monkeypatch, tmp_path)
+    logger = AuditLogger()
+
+    with Session(engine) as session:
+        broken_log = VerificationLog(
+            organization_id=1,
+            user_id=None,
+            query="2 + 2",
+            result="{not-json",
+            is_verified=True,
+            domain="math",
+            entry_hash="placeholder-hash",
+            hmac_signature="placeholder-signature",
+            previous_hash=None,
+        )
+        session.add(broken_log)
+        session.commit()
+        session.refresh(broken_log)
+
+        with pytest.raises(SecurityError, match="malformed"):
+            logger.verify_log_entry(broken_log.id, session)
+
+
 def test_audit_logger_detects_raw_llm_output_tampering(monkeypatch, tmp_path):
     engine = _configure_audit_logger(monkeypatch, tmp_path)
     logger = AuditLogger()

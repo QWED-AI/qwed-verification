@@ -251,7 +251,7 @@ class AuditLogger:
             "organization_id": log_entry.organization_id,
             "user_id": log_entry.user_id,
             "query": log_entry.query,
-            "result": json.loads(log_entry.result),
+            "result": self._decode_result_payload(log_entry),
             "is_verified": log_entry.is_verified,
             "domain": log_entry.domain,
             "timestamp": log_entry.timestamp.isoformat(),
@@ -265,12 +265,21 @@ class AuditLogger:
             "organization_id": log_entry.organization_id,
             "user_id": log_entry.user_id,
             "query": log_entry.query,
-            "result": json.loads(log_entry.result),
+            "result": self._decode_result_payload(log_entry),
             "is_verified": log_entry.is_verified,
             "domain": log_entry.domain,
             "timestamp": log_entry.timestamp.isoformat(),
             "previous_hash": log_entry.previous_hash,
         }
+
+    def _decode_result_payload(self, log_entry: VerificationLog) -> Dict[str, Any]:
+        """Decode persisted result payload or fail closed."""
+        try:
+            return json.loads(log_entry.result)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise SecurityError(
+                "Audit entry result payload is malformed; cannot verify integrity"
+            ) from exc
 
     def _verify_hash_and_signature(
         self,
