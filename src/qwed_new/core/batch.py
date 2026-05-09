@@ -239,9 +239,14 @@ class BatchVerificationService:
                 parsed = parse_expr(expression)
                 simplified = simplify(parsed)
                 return {
-                    "is_valid": True,
+                    "is_valid": False,
+                    "status": "SIMPLIFIED",
                     "simplified": str(simplified),
-                    "type": "math"
+                    "type": "math",
+                    "message": (
+                        "Expression simplified, but no equality or proof claim "
+                        "was provided"
+                    ),
                 }
         
         elif item.verification_type == VerificationType.CODE:
