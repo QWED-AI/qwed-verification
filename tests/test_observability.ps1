@@ -1,4 +1,4 @@
-# Test QWED Observability Endpoints
+﻿# Test QWED Observability Endpoints
 # PowerShell Script
 
 $API_KEY = "qwed_359997473e4d21e2f1e3ba77c74b2fb3d4fb629907f1fe6aa80fabeae05f6c74"
