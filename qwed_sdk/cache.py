@@ -152,15 +152,24 @@ class VerificationCache:
 
         self.stats = CacheStats()
         self._init_db()
-        # Owner-only DB file: tighten after _init_db creates the file
-        os.chmod(self.db_path, 0o600)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _init_db(self) -> None:
-        """Initialize SQLite database with the v2 context-bound schema."""
+        """Initialize SQLite database with the v2 context-bound schema.
+
+        The DB file is pre-created with 0o600 permissions via os.open() before
+        sqlite3.connect() is called, closing the TOCTOU window where the file
+        would briefly be world-readable under a permissive umask.
+        """
+        # Pre-create the file with owner-only perms to close the TOCTOU window.
+        # O_CREAT | O_WRONLY with mode 0o600 ensures the file is never visible
+        # to other users, even for the brief instant before chmod would run.
+        if not self.db_path.exists():
+            fd = os.open(str(self.db_path), os.O_CREAT | os.O_WRONLY, 0o600)
+            os.close(fd)
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -299,10 +308,15 @@ class VerificationCache:
         cursor = conn.cursor()
 
         cursor.execute("""
-            INSERT OR REPLACE INTO cache_v2
+            INSERT INTO cache_v2
                 (key, context_fingerprint, query, context_json, result,
                  created_at, accessed_at, access_count)
             VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+            ON CONFLICT(key, context_fingerprint) DO UPDATE SET
+                result       = excluded.result,
+                context_json = excluded.context_json,
+                accessed_at  = excluded.accessed_at,
+                access_count = access_count + 1
         """, (key, ctx_fp, normalized, context_json, result_json, now, now))
 
         conn.commit()

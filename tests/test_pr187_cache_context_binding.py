@@ -13,17 +13,16 @@ import sqlite3
 from pathlib import Path
 
 import qwed_sdk.cache as cache_module
-from qwed_sdk.cache import CacheContext, VerificationCache
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_ctx(**overrides) -> CacheContext:
+def _make_ctx(**overrides) -> "cache_module.CacheContext":
     defaults = dict(provider="openai", model="gpt-4o", policy_version="v1", tenant_id=None)
     defaults.update(overrides)
-    return CacheContext(**defaults)
+    return cache_module.CacheContext(**defaults)
 
 
 RESULT_A = {"status": "VERIFIED", "verified": True, "provider": "openai"}
@@ -38,7 +37,7 @@ class TestContextBinding:
     """Cache key must include all context dimensions, not query alone."""
 
     def test_hit_on_exact_context_match(self, tmp_path):
-        cache = VerificationCache(cache_dir=str(tmp_path))
+        cache = cache_module.VerificationCache(cache_dir=str(tmp_path))
         ctx = _make_ctx()
         cache.set("2+2", RESULT_A, ctx)
 
@@ -49,7 +48,7 @@ class TestContextBinding:
 
     def test_miss_on_provider_change(self, tmp_path):
         """Provider switch must yield a cache miss — replay prevention."""
-        cache = VerificationCache(cache_dir=str(tmp_path))
+        cache = cache_module.VerificationCache(cache_dir=str(tmp_path))
         ctx_a = _make_ctx(provider="openai")
         ctx_b = _make_ctx(provider="claude")
 
@@ -60,7 +59,7 @@ class TestContextBinding:
 
     def test_miss_on_model_change(self, tmp_path):
         """Model change must yield a cache miss."""
-        cache = VerificationCache(cache_dir=str(tmp_path))
+        cache = cache_module.VerificationCache(cache_dir=str(tmp_path))
         ctx_a = _make_ctx(model="gpt-4o")
         ctx_b = _make_ctx(model="gpt-3.5-turbo")
 
@@ -71,7 +70,7 @@ class TestContextBinding:
 
     def test_miss_on_policy_version_change(self, tmp_path):
         """Policy version change must yield a cache miss."""
-        cache = VerificationCache(cache_dir=str(tmp_path))
+        cache = cache_module.VerificationCache(cache_dir=str(tmp_path))
         ctx_v1 = _make_ctx(policy_version="v1")
         ctx_v2 = _make_ctx(policy_version="v2")
 
@@ -82,7 +81,7 @@ class TestContextBinding:
 
     def test_miss_on_tenant_change(self, tmp_path):
         """Tenant/session scope change must yield a cache miss."""
-        cache = VerificationCache(cache_dir=str(tmp_path))
+        cache = cache_module.VerificationCache(cache_dir=str(tmp_path))
         ctx_tenant_a = _make_ctx(tenant_id="tenant-alpha")
         ctx_tenant_b = _make_ctx(tenant_id="tenant-beta")
 
@@ -93,7 +92,7 @@ class TestContextBinding:
 
     def test_miss_on_env_fingerprint_change(self, tmp_path):
         """Environment fingerprint change must yield a cache miss."""
-        cache = VerificationCache(cache_dir=str(tmp_path))
+        cache = cache_module.VerificationCache(cache_dir=str(tmp_path))
         ctx_env1 = _make_ctx(env_fingerprint="hash-abc")
         ctx_env2 = _make_ctx(env_fingerprint="hash-def")
 
@@ -104,7 +103,7 @@ class TestContextBinding:
 
     def test_same_query_different_context_both_stored_independently(self, tmp_path):
         """Different contexts for the same query must be stored as independent entries."""
-        cache = VerificationCache(cache_dir=str(tmp_path))
+        cache = cache_module.VerificationCache(cache_dir=str(tmp_path))
         ctx_a = _make_ctx(provider="openai")
         ctx_b = _make_ctx(provider="claude")
 
@@ -116,7 +115,7 @@ class TestContextBinding:
 
     def test_query_normalization_still_applies(self, tmp_path):
         """Query normalization (case, whitespace) must still produce a hit within same context."""
-        cache = VerificationCache(cache_dir=str(tmp_path))
+        cache = cache_module.VerificationCache(cache_dir=str(tmp_path))
         ctx = _make_ctx()
 
         cache.set("  2 + 2  ", RESULT_A, ctx)
@@ -131,7 +130,7 @@ class TestContextBinding:
         where old entries exist.  get() must treat them as misses — they have no
         context fingerprint and cannot satisfy the trust-bound hit contract.
         """
-        cache = VerificationCache(cache_dir=str(tmp_path))
+        cache = cache_module.VerificationCache(cache_dir=str(tmp_path))
         ctx = _make_ctx()
 
         # Insert a legacy-style row directly into a hypothetical 'cache' v1 table
@@ -160,7 +159,7 @@ class TestTTL:
     def test_expired_entry_is_a_miss(self, tmp_path, monkeypatch):
         monkeypatch.setattr(cache_module.time, "time", lambda: 1000.0)
 
-        cache = VerificationCache(cache_dir=str(tmp_path), ttl=10)
+        cache = cache_module.VerificationCache(cache_dir=str(tmp_path), ttl=10)
         ctx = _make_ctx()
         cache.set("2+2", RESULT_A, ctx)
 
@@ -176,7 +175,7 @@ class TestTTL:
 
 class TestStats:
     def test_hit_increments_hit_counter(self, tmp_path):
-        cache = VerificationCache(cache_dir=str(tmp_path))
+        cache = cache_module.VerificationCache(cache_dir=str(tmp_path))
         ctx = _make_ctx()
         cache.set("2+2", RESULT_A, ctx)
         cache.get("2+2", ctx)
@@ -185,7 +184,7 @@ class TestStats:
         assert cache.stats.misses == 0
 
     def test_miss_increments_miss_counter(self, tmp_path):
-        cache = VerificationCache(cache_dir=str(tmp_path))
+        cache = cache_module.VerificationCache(cache_dir=str(tmp_path))
         ctx = _make_ctx()
         cache.get("unseen query", ctx)
 
@@ -193,7 +192,7 @@ class TestStats:
         assert cache.stats.misses == 1
 
     def test_context_mismatch_increments_miss_counter(self, tmp_path):
-        cache = VerificationCache(cache_dir=str(tmp_path))
+        cache = cache_module.VerificationCache(cache_dir=str(tmp_path))
         ctx_a = _make_ctx(provider="openai")
         ctx_b = _make_ctx(provider="claude")
         cache.set("2+2", RESULT_A, ctx_a)
@@ -202,7 +201,7 @@ class TestStats:
         assert cache.stats.misses == 1
 
     def test_clear_resets_all_entries(self, tmp_path):
-        cache = VerificationCache(cache_dir=str(tmp_path))
+        cache = cache_module.VerificationCache(cache_dir=str(tmp_path))
         ctx = _make_ctx()
         cache.set("2+2", RESULT_A, ctx)
         cache.clear()
@@ -213,6 +212,8 @@ class TestStats:
     def test_print_stats_plain_fallback(self, tmp_path, capsys):
         """print_stats must work without colorama installed."""
         import builtins
+        import unittest.mock as mock
+
         original_import = builtins.__import__
 
         def fake_import(name, globals_=None, locals_=None, fromlist=(), level=0):
@@ -220,11 +221,10 @@ class TestStats:
                 raise ImportError("colorama unavailable in test")
             return original_import(name, globals_, locals_, fromlist, level)
 
-        cache = VerificationCache(cache_dir=str(tmp_path))
+        cache = cache_module.VerificationCache(cache_dir=str(tmp_path))
         ctx = _make_ctx()
         cache.set("2+2", RESULT_A, ctx)
 
-        import unittest.mock as mock
         with mock.patch("builtins.__import__", side_effect=fake_import):
             cache.print_stats()
 

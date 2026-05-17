@@ -602,10 +602,10 @@ class QWEDLocal:
         if self.use_cache:
             from qwed_sdk.cache import CacheContext, VerificationCache
             self._cache = VerificationCache(ttl=cache_ttl)
-            self._CacheContext = CacheContext
+            self._cache_context_class = CacheContext
         else:
             self._cache = None
-            self._CacheContext = None
+            self._cache_context_class = None
         
         # Initialize PII detector (optional)
         self.mask_pii = mask_pii
@@ -786,7 +786,7 @@ class QWEDLocal:
         
         # Check cache first (save $$!)
         if self._cache:
-            _math_ctx = self._CacheContext(
+            _math_ctx = self._cache_context_class(
                 provider=self.provider or "local",
                 model=self.model,
                 policy_version="v1",
@@ -915,7 +915,7 @@ SymPy code:"""
         
         # Check cache first
         if self._cache:
-            _logic_ctx = self._CacheContext(
+            _logic_ctx = self._cache_context_class(
                 provider=self.provider or "local",
                 model=self.model,
                 policy_version="v1",
@@ -1060,7 +1060,7 @@ Z3 code:"""
         # Check cache first
         cache_key = f"code:{code}"
         if self._cache:
-            _code_ctx = self._CacheContext(
+            _code_ctx = self._cache_context_class(
                 provider=self.provider or "local",
                 model="ast",
                 policy_version="v1",
