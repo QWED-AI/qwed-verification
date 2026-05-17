@@ -1,7 +1,10 @@
 # Test QWED Observability Endpoints
 # PowerShell Script
 
-$API_KEY = "qwed_359997473e4d21e2f1e3ba77c74b2fb3d4fb629907f1fe6aa80fabeae05f6c74"
+$API_KEY = $env:QWED_API_KEY
+if ([string]::IsNullOrWhiteSpace($API_KEY)) {
+    throw "Missing required environment variable: QWED_API_KEY"
+}
 $BASE_URL = "http://localhost:8000"
 
 Write-Host "Testing QWED Observability Dashboard" -ForegroundColor Cyan

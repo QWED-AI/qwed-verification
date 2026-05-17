@@ -1,7 +1,10 @@
 # Test Consensus Verification (Phase 2B)
 # PowerShell Script
 
-$API_KEY = "qwed_c3ec03e4443a8f3f00c427b3815771c48c7d0f9be924057ce1e18fda2fc84a20"
+$API_KEY = $env:QWED_API_KEY
+if ([string]::IsNullOrWhiteSpace($API_KEY)) {
+    throw "Missing required environment variable: QWED_API_KEY"
+}
 $BASE_URL = "http://localhost:8000"
 
 Write-Host "Testing QWED Multi-Engine Consensus (Phase 2B)" -ForegroundColor Cyan
@@ -22,7 +25,7 @@ try {
         -Headers @{"X-API-Key"=$API_KEY} `
         -ContentType "application/json" `
         -Body $singleBody
-    
+
     Write-Host "SUCCESS - Single Engine:" -ForegroundColor Green
     Write-Host "  Answer: $($result.final_answer)" -ForegroundColor Green
     Write-Host "  Confidence: $($result.confidence)%" -ForegroundColor Green
@@ -48,7 +51,7 @@ try {
         -Headers @{"X-API-Key"=$API_KEY} `
         -ContentType "application/json" `
         -Body $highBody
-    
+
     Write-Host "SUCCESS - High Confidence:" -ForegroundColor Green
     Write-Host "  Answer: $($result.final_answer)" -ForegroundColor Green
     Write-Host "  Confidence: $($result.confidence)%" -ForegroundColor Green
@@ -78,7 +81,7 @@ try {
         -Headers @{"X-API-Key"=$API_KEY} `
         -ContentType "application/json" `
         -Body $maxBody
-    
+
     Write-Host "SUCCESS - Maximum Verification:" -ForegroundColor Green
     Write-Host "  Answer: $($result.final_answer)" -ForegroundColor Green
     Write-Host "  Confidence: $($result.confidence)%" -ForegroundColor Green
@@ -116,7 +119,7 @@ try {
         -Headers @{"X-API-Key"=$API_KEY} `
         -ContentType "application/json" `
         -Body $strictBody
-    
+
     Write-Host "SUCCESS - Met high confidence requirement:" -ForegroundColor Green
     Write-Host "  Confidence: $($result.confidence)%" -ForegroundColor Green
     Write-Host ""
