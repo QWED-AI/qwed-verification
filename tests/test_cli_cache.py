@@ -36,8 +36,9 @@ assert result is not None, "Should be cache HIT"
 assert result["value"] == 4, "Value should be 4"
 print("  ✅ Cache HIT works")
 
-# Query normalization (case)
-result = cache.get("2+2".upper(), ctx)
+# Query normalization (case) — use a word query where case actually changes
+cache.set("Verify Math Query", {"verified": True, "value": "ok"}, ctx)
+result = cache.get("verify math query", ctx)   # lowercase lookup
 assert result is not None, "Should normalize case"
 print("  ✅ Case normalization works")
 

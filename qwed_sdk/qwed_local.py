@@ -600,10 +600,12 @@ class QWEDLocal:
         
         # Initialize cache if enabled
         if self.use_cache:
-            from qwed_sdk.cache import VerificationCache
+            from qwed_sdk.cache import CacheContext, VerificationCache
             self._cache = VerificationCache(ttl=cache_ttl)
+            self._CacheContext = CacheContext
         else:
             self._cache = None
+            self._CacheContext = None
         
         # Initialize PII detector (optional)
         self.mask_pii = mask_pii
@@ -784,7 +786,12 @@ class QWEDLocal:
         
         # Check cache first (save $$!)
         if self._cache:
-            cached_result = self._cache.get(query)
+            _math_ctx = self._CacheContext(
+                provider=self.provider or "local",
+                model=self.model,
+                policy_version="v1",
+            )
+            cached_result = self._cache.get(query, _math_ctx)
             if cached_result:
                 if HAS_COLOR and os.getenv("QWED_QUIET") != "1":
                     print(f"{QWED.SUCCESS}⚡ Cache HIT{QWED.RESET} {QWED.INFO}(saved API call!){QWED.RESET}")
@@ -856,7 +863,7 @@ SymPy code:"""
                         "confidence": result.confidence,
                         "evidence": result.evidence
                     }
-                    self._cache.set(query, cache_data)
+                    self._cache.set(query, cache_data, _math_ctx)
                 
                 # Show result with branding
                 if HAS_COLOR and os.getenv("QWED_QUIET") != "1":
@@ -908,7 +915,12 @@ SymPy code:"""
         
         # Check cache first
         if self._cache:
-            cached_result = self._cache.get(query)
+            _logic_ctx = self._CacheContext(
+                provider=self.provider or "local",
+                model=self.model,
+                policy_version="v1",
+            )
+            cached_result = self._cache.get(query, _logic_ctx)
             if cached_result:
                 if HAS_COLOR and os.getenv("QWED_QUIET") != "1":
                     print(f"{QWED.SUCCESS}⚡ Cache HIT{QWED.RESET} {QWED.INFO}(saved API call!){QWED.RESET}")
@@ -996,7 +1008,7 @@ Z3 code:"""
                         "confidence": verification_result.confidence,
                         "evidence": verification_result.evidence
                     }
-                    self._cache.set(query, cache_data)
+                    self._cache.set(query, cache_data, _logic_ctx)
                 
                 # Show result
                 if HAS_COLOR and os.getenv("QWED_QUIET") != "1":
@@ -1048,7 +1060,12 @@ Z3 code:"""
         # Check cache first
         cache_key = f"code:{code}"
         if self._cache:
-            cached_result = self._cache.get(cache_key)
+            _code_ctx = self._CacheContext(
+                provider=self.provider or "local",
+                model="ast",
+                policy_version="v1",
+            )
+            cached_result = self._cache.get(cache_key, _code_ctx)
             if cached_result:
                 if HAS_COLOR and os.getenv("QWED_QUIET") != "1":
                     print(f"{QWED.SUCCESS}⚡ Cache HIT{QWED.RESET} {QWED.INFO}(saved API call!){QWED.RESET}")
@@ -1112,7 +1129,7 @@ Z3 code:"""
                     "confidence": result.confidence,
                     "evidence": result.evidence
                 }
-                self._cache.set(cache_key, cache_data)
+                self._cache.set(cache_key, cache_data, _code_ctx)
             
             # Show result
             if HAS_COLOR and os.getenv("QWED_QUIET") != "1":

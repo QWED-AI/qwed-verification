@@ -9,9 +9,10 @@ Acceptance criteria:
 - Tests cover provider switch, policy version change, session/tenant change.
 """
 
-import pytest
+import sqlite3
 from pathlib import Path
 
+import qwed_sdk.cache as cache_module
 from qwed_sdk.cache import CacheContext, VerificationCache
 
 
@@ -123,6 +124,33 @@ class TestContextBinding:
 
         assert result is not None
 
+    def test_legacy_v1_entry_is_never_returned(self, tmp_path):
+        """Legacy query-only rows stored in the old 'cache' table must never be returned.
+
+        A direct DB insert into the legacy table simulates an upgrade scenario
+        where old entries exist.  get() must treat them as misses — they have no
+        context fingerprint and cannot satisfy the trust-bound hit contract.
+        """
+        cache = VerificationCache(cache_dir=str(tmp_path))
+        ctx = _make_ctx()
+
+        # Insert a legacy-style row directly into a hypothetical 'cache' v1 table
+        legacy_key = cache._hash_query("2+2")
+        db_path = Path(tmp_path) / "verifications.db"
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS cache "
+                "(key TEXT PRIMARY KEY, result TEXT, created_at INTEGER)"
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO cache (key, result, created_at) VALUES (?, ?, ?)",
+                (legacy_key, '{"verified": true, "value": 4}', 1_000_000),
+            )
+            conn.commit()
+
+        # get() must never touch the legacy table — deterministic miss
+        assert cache.get("2+2", ctx) is None
+
 
 # ---------------------------------------------------------------------------
 # TTL behaviour
@@ -130,16 +158,13 @@ class TestContextBinding:
 
 class TestTTL:
     def test_expired_entry_is_a_miss(self, tmp_path, monkeypatch):
-        import qwed_sdk.cache as cache_module
-
-        current_time = {"value": 1000.0}
-        monkeypatch.setattr(cache_module.time, "time", lambda: current_time["value"])
+        monkeypatch.setattr(cache_module.time, "time", lambda: 1000.0)
 
         cache = VerificationCache(cache_dir=str(tmp_path), ttl=10)
         ctx = _make_ctx()
         cache.set("2+2", RESULT_A, ctx)
 
-        current_time["value"] += 15.0  # advance past TTL
+        monkeypatch.setattr(cache_module.time, "time", lambda: 1015.0)  # advance past TTL
         result = cache.get("2+2", ctx)
 
         assert result is None

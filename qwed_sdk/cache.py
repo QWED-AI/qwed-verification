@@ -10,6 +10,7 @@ across trust boundaries.
 This design prevents cross-context replay of verification artifacts (Issue #187).
 """
 
+import os
 import sqlite3
 import hashlib
 import json
@@ -44,6 +45,28 @@ class CacheContext:
     policy_version: str
     tenant_id: Optional[str] = None
     env_fingerprint: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        """Reject blank required trust-context fields at construction time.
+
+        Empty or whitespace-only values for the required fields collapse
+        distinct verification contexts into the same fingerprint, allowing
+        replay of VERIFIED results across different trust boundaries.
+        """
+        for _field in ("provider", "model", "policy_version"):
+            _val = getattr(self, _field)
+            if not isinstance(_val, str) or not _val.strip():
+                raise ValueError(
+                    f"CacheContext.{_field} must be a non-empty string, got {_val!r}"
+                )
+        if self.tenant_id is not None and not self.tenant_id.strip():
+            raise ValueError(
+                "CacheContext.tenant_id must be None or a non-empty string"
+            )
+        if self.env_fingerprint is not None and not self.env_fingerprint.strip():
+            raise ValueError(
+                "CacheContext.env_fingerprint must be None or a non-empty string"
+            )
 
     def canonical_dict(self) -> Dict[str, Any]:
         """Return a deterministic dict for key derivation."""
@@ -122,11 +145,15 @@ class VerificationCache:
         else:
             self.cache_dir = Path.home() / ".qwed" / "cache"
 
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        # Owner-only directory: prevents other local users reading tenant metadata
+        self.cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(self.cache_dir, 0o700)
         self.db_path = self.cache_dir / "verifications.db"
 
         self.stats = CacheStats()
         self._init_db()
+        # Owner-only DB file: tighten after _init_db creates the file
+        os.chmod(self.db_path, 0o600)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -204,7 +231,7 @@ class VerificationCache:
         cursor = conn.cursor()
 
         cursor.execute("""
-            SELECT result, created_at, access_count, context_fingerprint
+            SELECT result, created_at, access_count, context_json
             FROM cache_v2
             WHERE key = ? AND context_fingerprint = ?
         """, (key, ctx_fp))
@@ -216,9 +243,14 @@ class VerificationCache:
             self.stats.misses += 1
             return None
 
-        result_json, created_at, access_count, stored_fp = row
+        result_json, created_at, access_count, stored_context_json = row
 
-        # Re-validate fingerprint (defence-in-depth)
+        # Real replay guard: re-derive the fingerprint from the stored canonical
+        # context JSON and compare it against the expected fingerprint.  The SQL
+        # WHERE clause already filters by context_fingerprint, but an attacker
+        # with direct DB write access could bypass that.  Re-hashing the stored
+        # JSON here catches any tampering with stored context data.
+        stored_fp = hashlib.sha256(stored_context_json.encode()).hexdigest()
         if stored_fp != ctx_fp:
             conn.close()
             self.stats.misses += 1
@@ -260,7 +292,7 @@ class VerificationCache:
         ctx_fp = self._hash_context(context)
         normalized = self._normalize_query(query)
         result_json = json.dumps(result)
-        context_json = json.dumps(context.canonical_dict(), sort_keys=True)
+        context_json = json.dumps(context.canonical_dict(), sort_keys=True, separators=(",", ":"))
         now = int(time.time())
 
         conn = sqlite3.connect(self.db_path)
