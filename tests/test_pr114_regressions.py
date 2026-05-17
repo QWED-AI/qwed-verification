@@ -66,10 +66,11 @@ def test_unreadable_code_challenge_requires_allow_unsafe_exec(monkeypatch):
 
 
 def test_cache_print_stats_falls_back_without_colorama(tmp_path, monkeypatch):
-    from qwed_sdk.cache import VerificationCache
+    from qwed_sdk.cache import CacheContext, VerificationCache
 
     cache = VerificationCache(cache_dir=str(tmp_path))
-    cache.set("2+2", {"verified": True, "value": 4})
+    ctx = CacheContext(provider="openai", model="gpt-4o", policy_version="v1")
+    cache.set("2+2", {"verified": True, "value": 4}, ctx)
 
     original_import = builtins.__import__
 
