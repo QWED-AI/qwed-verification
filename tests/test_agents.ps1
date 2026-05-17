@@ -1,7 +1,10 @@
-﻿# Test Agent Registry (Phase 2A)
+# Test Agent Registry (Phase 2A)
 # PowerShell Script
 
-$API_KEY = "qwed_c3ec03e4443a8f3f00c427b3815771c48c7d0f9be924057ce1e18fda2fc84a20"
+$API_KEY = $env:QWED_API_KEY
+if ([string]::IsNullOrWhiteSpace($API_KEY)) {
+    throw "Missing required environment variable: QWED_API_KEY"
+}
 $BASE_URL = "http://localhost:8000"
 
 Write-Host "Testing QWED Agent Registry (Phase 2)" -ForegroundColor Cyan
