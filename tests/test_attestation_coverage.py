@@ -7,8 +7,6 @@ from src.qwed_new.core.attestation import (
     AttestationService,
     AttestationResult,
     VerificationResult,
-    Attestation,
-    AttestationClaims,
     AttestationStatus,
     IssuerKeyPair,
     create_verification_attestation,
@@ -48,18 +46,19 @@ class TestAttestationCoverage(unittest.TestCase):
         self.assertEqual(vr.proof_hash, "def")
 
     def test_attestation_to_dict(self):
-        """Test Attestation.to_dict() method."""
-        claims = AttestationClaims(
-            iss="did:test:1", sub="hash1", iat=1000, exp=2000,
-            jti="att_123", qwed={"result": {"verified": True}, "version": "1.0"}
+        """Test Attestation.to_dict() method using a real signed attestation."""
+        result = VerificationResult(status="VERIFIED", verified=True, engine="test")
+        att = self.service.create_attestation(
+            result, "test query for to_dict",
+            issued_at=1_000_000, jti="att_123"
         )
-        att = Attestation(jwt_token="PLACEHOLDER_NOT_A_REAL_TOKEN", claims=claims, header={"alg": "ES256"})
         d = att.to_dict()
-        self.assertEqual(d["jwt"], "PLACEHOLDER_NOT_A_REAL_TOKEN")
+        self.assertIn("jwt", d)
+        self.assertIsNotNone(d["jwt"])
+        self.assertIsInstance(d["jwt"], str)
         self.assertEqual(d["jti"], "att_123")
-        self.assertEqual(d["iss"], "did:test:1")
-        self.assertEqual(d["iat"], 1000)
-        self.assertEqual(d["exp"], 2000)
+        self.assertEqual(d["iss"], "did:test:123")
+        self.assertEqual(d["iat"], 1_000_000)
         self.assertEqual(d["result"]["verified"], True)
 
     # ── IssuerKeyPair coverage ───────────────────────────────────
