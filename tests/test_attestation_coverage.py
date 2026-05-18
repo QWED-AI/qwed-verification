@@ -53,9 +53,9 @@ class TestAttestationCoverage(unittest.TestCase):
             iss="did:test:1", sub="hash1", iat=1000, exp=2000,
             jti="att_123", qwed={"result": {"verified": True}, "version": "1.0"}
         )
-        att = Attestation(jwt_token="tok.en.sig", claims=claims, header={"alg": "ES256"})
+        att = Attestation(jwt_token="PLACEHOLDER_NOT_A_REAL_TOKEN", claims=claims, header={"alg": "ES256"})
         d = att.to_dict()
-        self.assertEqual(d["jwt"], "tok.en.sig")
+        self.assertEqual(d["jwt"], "PLACEHOLDER_NOT_A_REAL_TOKEN")
         self.assertEqual(d["jti"], "att_123")
         self.assertEqual(d["iss"], "did:test:1")
         self.assertEqual(d["iat"], 1000)
@@ -299,7 +299,7 @@ class TestAttestationCoverage(unittest.TestCase):
         with patch("src.qwed_new.core.attestation.get_attestation_service", side_effect=Exception("Boom")):
             result = create_verification_attestation("s", True, "e", "q")
             self.assertIsNotNone(result, "Must never return None")
-            self.assertEqual(result.status, "BLOCKED")
+            self.assertEqual(result.status, AttestationStatus.BLOCKED)
             self.assertFalse(result.is_issued)
             self.assertEqual(result.error_code, "SIGNING_FAILURE")
             self.assertIsNone(result.token)

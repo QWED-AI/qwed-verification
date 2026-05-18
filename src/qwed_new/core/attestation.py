@@ -45,6 +45,10 @@ class AttestationStatus(Enum):
     UNVERIFIABLE = "unverifiable"   # Cannot attempt signing (e.g. crypto unavailable)
 
 
+# Allowlist for key continuity policy values — typos silently degrade auditability
+ALLOWED_KEY_CONTINUITY_POLICIES = {"ephemeral", "persistent"}
+
+
 @dataclass
 class AttestationResult:
     """Explicit typed result for attestation creation (Issue #188).
@@ -60,15 +64,15 @@ class AttestationResult:
             raise RuntimeError(f"Attestation unavailable: {result.error_code}")
         use(result.token)
     """
-    status: str                    # "ISSUED" | "BLOCKED" | "UNVERIFIABLE"
-    token: Optional[str]           # JWT string, present only when status == "ISSUED"
+    status: AttestationStatus      # ISSUED | BLOCKED | UNVERIFIABLE
+    token: Optional[str]           # JWT string, present only when status == ISSUED
     error_code: Optional[str]      # "SIGNING_FAILURE" | "CRYPTO_UNAVAILABLE" | None
     error: Optional[str]           # Human-readable error detail
 
     @property
     def is_issued(self) -> bool:
         """True only when the attestation was successfully signed and issued."""
-        return self.status == "ISSUED"
+        return self.status is AttestationStatus.ISSUED
 
 
 @dataclass
@@ -131,6 +135,12 @@ class IssuerKeyPair:
     ):
         if not HAS_CRYPTO:
             raise RuntimeError("cryptography package required for attestations")
+
+        if key_continuity_policy not in ALLOWED_KEY_CONTINUITY_POLICIES:
+            raise ValueError(
+                f"Invalid key_continuity_policy: {key_continuity_policy!r}. "
+                f"Must be one of {sorted(ALLOWED_KEY_CONTINUITY_POLICIES)}"
+            )
 
         self.issuer_did = issuer_did
         self.key_id = key_id
@@ -202,6 +212,12 @@ class AttestationService:
     ):
         self.issuer_did = issuer_did
         self.validity_days = validity_days
+
+        if key_continuity_policy not in ALLOWED_KEY_CONTINUITY_POLICIES:
+            raise ValueError(
+                f"Invalid key_continuity_policy: {key_continuity_policy!r}. "
+                f"Must be one of {sorted(ALLOWED_KEY_CONTINUITY_POLICIES)}"
+            )
         self.key_continuity_policy = key_continuity_policy
 
         # Key management - deterministic if key_suffix provided
@@ -236,6 +252,8 @@ class AttestationService:
         proof_data: Optional[str] = None,
         chain_id: Optional[str] = None,
         chain_index: Optional[int] = None,
+        issued_at: Optional[int] = None,
+        jti: Optional[str] = None,
     ) -> Attestation:
         """
         Create a signed attestation for a verification result.
@@ -246,6 +264,8 @@ class AttestationService:
             proof_data:          Optional proof data to include.
             chain_id:            Optional chain ID for linked attestations.
             chain_index:         Optional index in the chain.
+            issued_at:           Optional issuance epoch (injectable for determinism).
+            jti:                 Optional attestation ID (injectable for determinism).
 
         Returns:
             Attestation object with signed JWT.
@@ -255,9 +275,9 @@ class AttestationService:
         """
         key_pair = self._ensure_key_pair()
 
-        now = int(time.time())
+        now = issued_at if issued_at is not None else int(time.time())
         expiry = now + (self.validity_days * 24 * 60 * 60)
-        attestation_id = f"att_{uuid.uuid4().hex[:12]}"
+        attestation_id = jti if jti is not None else f"att_{uuid.uuid4().hex[:12]}"
 
         # Build QWED-specific claims
         qwed_claims = {
@@ -469,7 +489,7 @@ def create_verification_attestation(
             hashlib.sha256(query.encode()).hexdigest()[:16],
         )
         return AttestationResult(
-            status="UNVERIFIABLE",
+            status=AttestationStatus.UNVERIFIABLE,
             token=None,
             error_code="CRYPTO_UNAVAILABLE",
             error="cryptography/PyJWT package not installed",
@@ -485,7 +505,7 @@ def create_verification_attestation(
         )
         attestation = service.create_attestation(result, query, proof_data)
         return AttestationResult(
-            status="ISSUED",
+            status=AttestationStatus.ISSUED,
             token=attestation.jwt_token,
             error_code=None,
             error=None,
@@ -496,7 +516,7 @@ def create_verification_attestation(
             hashlib.sha256(query.encode()).hexdigest()[:16],
         )
         return AttestationResult(
-            status="BLOCKED",
+            status=AttestationStatus.BLOCKED,
             token=None,
             error_code="SIGNING_FAILURE",
             error="Attestation signing failed — see logs for detail",

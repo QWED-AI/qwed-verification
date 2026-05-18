@@ -19,11 +19,70 @@ from src.qwed_new.core.attestation import (
     AttestationStatus,
     HAS_CRYPTO,
     IssuerKeyPair,
-    VerificationResult,
     create_verification_attestation,
     get_attestation_service,
 )
 
+
+# ---------------------------------------------------------------------------
+# Tests that do NOT require real crypto (HAS_CRYPTO may be False)
+# These run unconditionally — they patch HAS_CRYPTO or test pure structure
+# ---------------------------------------------------------------------------
+
+class TestFailClosedNoCrypto(unittest.TestCase):
+    """Fail-closed assertions that must run even when crypto is absent."""
+
+    def test_crypto_unavailable_returns_unverifiable(self):
+        """When HAS_CRYPTO is False, result is UNVERIFIABLE — not None."""
+        with patch.object(attest_mod, "HAS_CRYPTO", False):
+            result = create_verification_attestation(
+                status="VERIFIED", verified=True, engine="math", query="2+2"
+            )
+
+        self.assertIsNotNone(result, "MUST NOT return None — fail-closed contract")
+        self.assertEqual(result.status, AttestationStatus.UNVERIFIABLE)
+        self.assertFalse(result.is_issued)
+        self.assertEqual(result.error_code, "CRYPTO_UNAVAILABLE")
+        self.assertIsNone(result.token)
+
+    def test_no_none_return_crypto_unavailable_path(self):
+        """Parametrized no-None check: crypto-unavailable path."""
+        with patch.object(attest_mod, "HAS_CRYPTO", False):
+            result = create_verification_attestation("VERIFIED", True, "math", "2+2")
+        self.assertIsNotNone(result)
+
+    def test_caller_must_hardblock_on_unverifiable(self):
+        """Callers must not treat UNVERIFIABLE result as VERIFIED."""
+        with patch.object(attest_mod, "HAS_CRYPTO", False):
+            result = create_verification_attestation("VERIFIED", True, "math", "q")
+
+        self.assertFalse(
+            result.is_issued,
+            "Caller MUST NOT proceed as VERIFIED when attestation is UNVERIFIABLE"
+        )
+
+    def test_is_issued_true_only_for_issued_status(self):
+        """is_issued must be True only when status is AttestationStatus.ISSUED."""
+        issued = AttestationResult(
+            status=AttestationStatus.ISSUED, token="tok", error_code=None, error=None
+        )
+        blocked = AttestationResult(
+            status=AttestationStatus.BLOCKED, token=None,
+            error_code="SIGNING_FAILURE", error="e"
+        )
+        unverifiable = AttestationResult(
+            status=AttestationStatus.UNVERIFIABLE, token=None,
+            error_code="CRYPTO_UNAVAILABLE", error="e"
+        )
+
+        self.assertTrue(issued.is_issued)
+        self.assertFalse(blocked.is_issued)
+        self.assertFalse(unverifiable.is_issued)
+
+
+# ---------------------------------------------------------------------------
+# Tests that DO require real crypto
+# ---------------------------------------------------------------------------
 
 @unittest.skipUnless(HAS_CRYPTO, "cryptography not installed")
 class TestFailClosedContract(unittest.TestCase):
@@ -31,10 +90,6 @@ class TestFailClosedContract(unittest.TestCase):
 
     def setUp(self):
         self.service = AttestationService(issuer_did="did:test:188", key_suffix="p0")
-
-    # ------------------------------------------------------------------
-    # Happy path
-    # ------------------------------------------------------------------
 
     def test_success_returns_issued_with_token(self):
         """Happy path: successful attestation returns ISSUED status with JWT."""
@@ -44,7 +99,7 @@ class TestFailClosedContract(unittest.TestCase):
             )
 
         self.assertIsInstance(result, AttestationResult)
-        self.assertEqual(result.status, "ISSUED")
+        self.assertEqual(result.status, AttestationStatus.ISSUED)
         self.assertTrue(result.is_issued)
         self.assertIsNotNone(result.token)
         self.assertIsNone(result.error_code)
@@ -62,12 +117,8 @@ class TestFailClosedContract(unittest.TestCase):
         self.assertTrue(is_valid, f"JWT verification failed: {err}")
         self.assertEqual(claims["qwed"]["result"]["engine"], "math")
 
-    # ------------------------------------------------------------------
-    # Signing failure → BLOCKED
-    # ------------------------------------------------------------------
-
     def test_signing_failure_returns_blocked_not_none(self):
-        """If signing raises, result must be BLOCKED — never None (core Issue #188 fix)."""
+        """If signing raises, result must be BLOCKED — never None."""
         broken_service = AttestationService(issuer_did="did:test:188", key_suffix="broken")
         broken_service.create_attestation = MagicMock(side_effect=RuntimeError("key corrupt"))
 
@@ -78,7 +129,7 @@ class TestFailClosedContract(unittest.TestCase):
 
         self.assertIsNotNone(result, "MUST NOT return None — fail-closed contract")
         self.assertIsInstance(result, AttestationResult)
-        self.assertEqual(result.status, "BLOCKED")
+        self.assertEqual(result.status, AttestationStatus.BLOCKED)
         self.assertFalse(result.is_issued)
         self.assertEqual(result.error_code, "SIGNING_FAILURE")
         self.assertIsNone(result.token)
@@ -90,44 +141,9 @@ class TestFailClosedContract(unittest.TestCase):
                 status="VERIFIED", verified=True, engine="math", query="q"
             )
 
-        self.assertEqual(result.status, "BLOCKED")
+        self.assertEqual(result.status, AttestationStatus.BLOCKED)
         self.assertEqual(result.error_code, "SIGNING_FAILURE")
         self.assertIsNone(result.token)
-
-    # ------------------------------------------------------------------
-    # Crypto unavailable → UNVERIFIABLE
-    # ------------------------------------------------------------------
-
-    def test_crypto_unavailable_returns_unverifiable(self):
-        """When HAS_CRYPTO is False, result is UNVERIFIABLE — not None."""
-        with patch.object(attest_mod, "HAS_CRYPTO", False):
-            result = create_verification_attestation(
-                status="VERIFIED", verified=True, engine="math", query="2+2"
-            )
-
-        self.assertIsNotNone(result, "MUST NOT return None — fail-closed contract")
-        self.assertEqual(result.status, "UNVERIFIABLE")
-        self.assertFalse(result.is_issued)
-        self.assertEqual(result.error_code, "CRYPTO_UNAVAILABLE")
-        self.assertIsNone(result.token)
-
-    # ------------------------------------------------------------------
-    # is_issued property
-    # ------------------------------------------------------------------
-
-    def test_is_issued_true_only_for_issued_status(self):
-        """is_issued must be True only when status == 'ISSUED'."""
-        issued = AttestationResult(status="ISSUED", token="tok", error_code=None, error=None)
-        blocked = AttestationResult(status="BLOCKED", token=None, error_code="SIGNING_FAILURE", error="e")
-        unverifiable = AttestationResult(status="UNVERIFIABLE", token=None, error_code="CRYPTO_UNAVAILABLE", error="e")
-
-        self.assertTrue(issued.is_issued)
-        self.assertFalse(blocked.is_issued)
-        self.assertFalse(unverifiable.is_issued)
-
-    # ------------------------------------------------------------------
-    # No None on any path — parametrized
-    # ------------------------------------------------------------------
 
     def test_no_none_return_success_path(self):
         with patch.object(attest_mod, "get_attestation_service", return_value=self.service):
@@ -141,39 +157,17 @@ class TestFailClosedContract(unittest.TestCase):
             result = create_verification_attestation("VERIFIED", True, "math", "2+2")
         self.assertIsNotNone(result)
 
-    def test_no_none_return_crypto_unavailable_path(self):
-        with patch.object(attest_mod, "HAS_CRYPTO", False):
-            result = create_verification_attestation("VERIFIED", True, "math", "2+2")
-        self.assertIsNotNone(result)
-
-    # ------------------------------------------------------------------
-    # Caller fail-closed enforcement
-    # ------------------------------------------------------------------
-
     def test_caller_must_hardblock_on_blocked(self):
-        """Callers must not treat BLOCKED result as VERIFIED — simulate policy check."""
+        """Callers must not treat BLOCKED result as VERIFIED."""
         broken = AttestationService(issuer_did="did:test:188", key_suffix="hb")
         broken.create_attestation = MagicMock(side_effect=RuntimeError("fail"))
 
         with patch.object(attest_mod, "get_attestation_service", return_value=broken):
             result = create_verification_attestation("VERIFIED", True, "math", "q")
 
-        # Policy: caller must raise/reject if not issued
-        caller_would_proceed = result.is_issued
         self.assertFalse(
-            caller_would_proceed,
+            result.is_issued,
             "Caller MUST NOT proceed as VERIFIED when attestation is BLOCKED"
-        )
-
-    def test_caller_must_hardblock_on_unverifiable(self):
-        """Callers must not treat UNVERIFIABLE result as VERIFIED."""
-        with patch.object(attest_mod, "HAS_CRYPTO", False):
-            result = create_verification_attestation("VERIFIED", True, "math", "q")
-
-        caller_would_proceed = result.is_issued
-        self.assertFalse(
-            caller_would_proceed,
-            "Caller MUST NOT proceed as VERIFIED when attestation is UNVERIFIABLE"
         )
 
 
@@ -182,23 +176,24 @@ class TestKeyLifecycleMetadata(unittest.TestCase):
     """Key continuity events must be explicit and auditable (Issue #188)."""
 
     def test_key_pair_has_generated_at(self):
-        """`generated_at` must be present on a newly created key pair."""
         kp = IssuerKeyPair("did:test:188", "key-test")
         self.assertIsInstance(kp.generated_at, int)
         self.assertGreater(kp.generated_at, 0)
 
     def test_key_pair_has_continuity_policy(self):
-        """`key_continuity_policy` defaults to 'ephemeral'."""
         kp = IssuerKeyPair("did:test:188", "key-test")
         self.assertEqual(kp.key_continuity_policy, "ephemeral")
 
     def test_key_pair_accepts_persistent_policy(self):
-        """Policy can be overridden to 'persistent'."""
         kp = IssuerKeyPair("did:test:188", "key-persist", key_continuity_policy="persistent")
         self.assertEqual(kp.key_continuity_policy, "persistent")
 
+    def test_invalid_policy_raises(self):
+        """Invalid key_continuity_policy must raise ValueError immediately."""
+        with self.assertRaises(ValueError):
+            IssuerKeyPair("did:test:188", "key-bad", key_continuity_policy="persistant")
+
     def test_get_issuer_info_exposes_key_lifecycle(self):
-        """get_issuer_info() must include key_generated_at and key_continuity_policy."""
         svc = AttestationService(issuer_did="did:test:188", key_suffix="lifecycle")
         info = svc.get_issuer_info()
         self.assertIn("key_generated_at", info)
@@ -214,15 +209,11 @@ class TestKeyLifecycleMetadata(unittest.TestCase):
             svc1 = get_attestation_service()
             kp1_pub = svc1._ensure_key_pair().public_key_pem
 
-            # Simulate restart: reset singleton
             attest_mod._default_service = None
             svc2 = get_attestation_service()
             kp2_pub = svc2._ensure_key_pair().public_key_pem
 
-            self.assertNotEqual(
-                kp1_pub, kp2_pub,
-                "Ephemeral key policy: each restart produces distinct key material"
-            )
+            self.assertNotEqual(kp1_pub, kp2_pub)
         finally:
             attest_mod._default_service = old
 
@@ -234,6 +225,16 @@ class TestKeyLifecycleMetadata(unittest.TestCase):
         audit_log = " ".join(cm.output)
         self.assertIn("attestation.key_generated", audit_log)
         self.assertIn("did:test:188", audit_log)
+
+    def test_injectable_issued_at_and_jti(self):
+        """create_attestation must use injected iat/jti for determinism."""
+        svc = AttestationService(issuer_did="did:test:188", key_suffix="det")
+        from src.qwed_new.core.attestation import VerificationResult
+        vr = VerificationResult(status="VERIFIED", verified=True, engine="math")
+        att = svc.create_attestation(vr, "2+2", issued_at=1_000_000, jti="att_deterministic")
+
+        self.assertEqual(att.claims.iat, 1_000_000)
+        self.assertEqual(att.claims.jti, "att_deterministic")
 
 
 @unittest.skipUnless(HAS_CRYPTO, "cryptography not installed")
