@@ -5,9 +5,8 @@ import json
 from unittest.mock import patch
 from src.qwed_new.core.attestation import (
     AttestationService,
+    AttestationResult,
     VerificationResult,
-    Attestation,
-    AttestationClaims,
     AttestationStatus,
     IssuerKeyPair,
     create_verification_attestation,
@@ -47,18 +46,19 @@ class TestAttestationCoverage(unittest.TestCase):
         self.assertEqual(vr.proof_hash, "def")
 
     def test_attestation_to_dict(self):
-        """Test Attestation.to_dict() method."""
-        claims = AttestationClaims(
-            iss="did:test:1", sub="hash1", iat=1000, exp=2000,
-            jti="att_123", qwed={"result": {"verified": True}, "version": "1.0"}
+        """Test Attestation.to_dict() method using a real signed attestation."""
+        result = VerificationResult(status="VERIFIED", verified=True, engine="test")
+        att = self.service.create_attestation(
+            result, "test query for to_dict",
+            issued_at=1_000_000, jti="att_123"
         )
-        att = Attestation(jwt_token="tok.en.sig", claims=claims, header={"alg": "ES256"})
         d = att.to_dict()
-        self.assertEqual(d["jwt"], "tok.en.sig")
+        self.assertIn("jwt", d)
+        self.assertIsNotNone(d["jwt"])
+        self.assertIsInstance(d["jwt"], str)
         self.assertEqual(d["jti"], "att_123")
-        self.assertEqual(d["iss"], "did:test:1")
-        self.assertEqual(d["iat"], 1000)
-        self.assertEqual(d["exp"], 2000)
+        self.assertEqual(d["iss"], "did:test:123")
+        self.assertEqual(d["iat"], 1_000_000)
         self.assertEqual(d["result"]["verified"], True)
 
     # ── IssuerKeyPair coverage ───────────────────────────────────
@@ -269,32 +269,39 @@ class TestAttestationCoverage(unittest.TestCase):
             mod._default_service = old
 
     def test_create_verification_attestation_helper(self):
-        """Test the convenience function."""
+        """Test the convenience function returns AttestationResult with ISSUED status."""
         with patch("src.qwed_new.core.attestation.get_attestation_service", return_value=self.service):
-            token = create_verification_attestation(
+            result = create_verification_attestation(
                 status="verified", verified=True,
                 engine="test_engine", query="test query"
             )
-            self.assertIsNotNone(token)
-            is_valid, claims, _ = self.service.verify_attestation(token)
+            self.assertIsInstance(result, AttestationResult)
+            self.assertTrue(result.is_issued)
+            self.assertIsNotNone(result.token)
+            is_valid, claims, _ = self.service.verify_attestation(result.token)
             self.assertTrue(is_valid)
             self.assertEqual(claims["qwed"]["result"]["engine"], "test_engine")
 
     def test_create_verification_attestation_with_proof(self):
-        """Test convenience function with proof_data."""
+        """Test convenience function with proof_data returns ISSUED result."""
         with patch("src.qwed_new.core.attestation.get_attestation_service", return_value=self.service):
-            token = create_verification_attestation(
+            result = create_verification_attestation(
                 status="verified", verified=True,
                 engine="test", query="q",
                 confidence=0.99, proof_data="proof_data_here"
             )
-            self.assertIsNotNone(token)
+            self.assertTrue(result.is_issued)
+            self.assertIsNotNone(result.token)
 
     def test_create_verification_attestation_failure(self):
-        """Test the convenience function handles exceptions."""
+        """Failure path must return AttestationResult with BLOCKED status, never None."""
         with patch("src.qwed_new.core.attestation.get_attestation_service", side_effect=Exception("Boom")):
-            token = create_verification_attestation("s", True, "e", "q")
-            self.assertIsNone(token)
+            result = create_verification_attestation("s", True, "e", "q")
+            self.assertIsNotNone(result, "Must never return None")
+            self.assertEqual(result.status, AttestationStatus.BLOCKED)
+            self.assertFalse(result.is_issued)
+            self.assertEqual(result.error_code, "SIGNING_FAILURE")
+            self.assertIsNone(result.token)
 
 
 if __name__ == '__main__':
