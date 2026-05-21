@@ -29,17 +29,13 @@ jobs:
         run: pip install build twine
       
       - name: Build package
-        run: |
-          cd sdk/python
-          python -m build
+        run: python -m build
       
       - name: Publish to PyPI
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          cd sdk/python
-          twine upload dist/* --skip-existing
+        run: twine upload dist/* --skip-existing
         continue-on-error: true  # Don't fail if PyPI token not set yet
 
   # ============================================
@@ -130,4 +126,4 @@ jobs:
           echo "Rust (crates.io): ${{ needs.publish-rust.result }}"
           echo "Go (tagged):      ${{ needs.tag-go.result }}"
           echo ""
-          echo "Note: Python publish skipped until PyPI token is set"
+          echo "Note: Python publish uses the repository root package metadata (pyproject.toml)."

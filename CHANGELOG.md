@@ -4,6 +4,41 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+## [5.1.1] - 2026-05-21
+### Release Consistency and Fail-Closed Follow-Through
+
+Patch release packaging the post-v5.1.0 trust-boundary and fail-closed corrections into a coherent publishable state across core package metadata, SDKs, deployment references, and release automation.
+
+#### Trust Boundary and Correctness Fixes
+- **Cache trust-context binding**: Bound verification cache artifacts to provider/model/policy/session trust context to prevent cross-context replay.
+- **Attestation hardening**: Strengthened attestation verification with fail-closed behavior and follow-up review remediations.
+- **Audit integrity improvements**: Tightened audit logging semantics around malformed payload handling, organization isolation, and transactional durability.
+- **Proof-path corrections**: Refined reasoning, symbolic, batch, and agent-service fail-closed behavior where proof prerequisites or safe defaults were ambiguous.
+
+#### Release and Deployment Alignment
+- **Version propagation**: Aligned core package, API version marker, Python SDK metadata, TypeScript SDK metadata, and Rust SDK crate version on `5.1.1`.
+- **Container reference alignment**: Updated Kubernetes deployment example to the published Docker Hub image/tag convention.
+- **Release metadata cleanup**: Prepared package metadata and deployment references for a clean `v5.1.1` publish flow.
+
+#### Included PRs and merged work since v5.1.0
+- `#157` docs: README follow-up
+- `#158` fix(docker): python 3.13 upgrade follow-up
+- `#159` chore(deps): npm/yarn dependency follow-up in `sdk-ts`
+- `#160` fix(schema): strict additional-properties enforcement follow-up
+- `#161` fix(symbolic): fail closed when no proof exists
+- `#168` fix(executor): secure executor fail-closed follow-up
+- `#176` fix(agent): deny and handle unknown agent actions safely
+- `#177` fix(reasoning): require proof prerequisites before reasoning acceptance
+- `#178` and `#192` fix(cache): bind verification cache keys to trust context and address review follow-ups
+- `#179` fix(audit): fail-closed audit logging, chain isolation, and transaction hardening
+- `#180` fix(batch): separate batch math simplification from proof path
+- `#186` chore(deps): pip dependency maintenance
+- `#193` fix(tests): test-secret cleanup and PowerShell encoding hygiene
+
+#### Upgrade Notes
+- Deployments using the Kubernetes example should pull `docker.io/qwedai/qwed-verification:5.1.1` instead of the older `ghcr.io/qwed-ai/qwed-core` reference.
+- This patch release focuses on stricter semantics, release consistency, and fail-closed enforcement rather than end-user feature expansion.
+
 ## [5.1.0] - 2026-04-19
 ### Agent State Governance and Fail-Closed Hardening
 

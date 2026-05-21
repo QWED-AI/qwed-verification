@@ -59,7 +59,20 @@
 
 ---
 
-## 🎯 Where QWED Fits First
+## Release Update: v5.1.1
+
+`v5.1.1` is a patch release focused on **fail-closed follow-through and release consistency** after `v5.1.0`.
+
+- Tightens cache trust-context binding to prevent cross-context verification replay
+- Hardens attestation and audit paths toward stricter fail-closed behavior
+- Cleans up proof-path handling across reasoning, symbolic, batch, and agent-service flows
+- Aligns package versions, API version markers, SDK metadata, and deployment references for a clean release boundary
+
+If you're upgrading from `v5.1.0`, review the [changelog](CHANGELOG.md) for deployment/image reference updates and patch-level boundary hardening notes.
+
+---
+
+## Where QWED Fits First
 
 Use QWED when an LLM or AI agent must not guess:
 
