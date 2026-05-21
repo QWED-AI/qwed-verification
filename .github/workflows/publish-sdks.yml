@@ -17,6 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     # Only run if PYPI_API_TOKEN exists
     if: ${{ vars.PYPI_ENABLED == 'true' || github.event_name == 'workflow_dispatch' }}
+    permissions:
+      id-token: write   # OIDC trusted publisher - no hardcoded credential needed
+      contents: read
     steps:
       - uses: actions/checkout@v4
       
@@ -32,9 +35,10 @@ jobs:
         run: python -m build
       
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # release/v1
+          # OIDC trusted publisher: no token/password field required.
+          # Configure at https://pypi.org/manage/project/qwed/settings/publishing/
         with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
 
   # ============================================
