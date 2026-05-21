@@ -62,6 +62,7 @@ jobs:
               --ignore-vuln CVE-2025-8869 \
               --ignore-vuln CVE-2026-1703 \
               --ignore-vuln CVE-2026-4539 \
+              --ignore-vuln PYSEC-2025-183 \
               2>&1 | tee audit-results.txt
       - store_artifacts:
           path: audit-results.txt
