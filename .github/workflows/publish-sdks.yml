@@ -17,6 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     # Only run if PYPI_API_TOKEN exists
     if: ${{ vars.PYPI_ENABLED == 'true' || github.event_name == 'workflow_dispatch' }}
+    permissions:
+      id-token: write   # OIDC trusted publisher - no hardcoded credential needed
+      contents: read
     steps:
       - uses: actions/checkout@v4
       
@@ -29,18 +32,14 @@ jobs:
         run: pip install build twine
       
       - name: Build package
-        run: |
-          cd sdk/python
-          python -m build
+        run: python -m build
       
       - name: Publish to PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          cd sdk/python
-          twine upload dist/* --skip-existing
-        continue-on-error: true  # Don't fail if PyPI token not set yet
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # release/v1
+          # OIDC trusted publisher: no token/password field required.
+          # Configure at https://pypi.org/manage/project/qwed/settings/publishing/
+        with:
+          skip-existing: true
 
   # ============================================
   # TypeScript SDK → npm
@@ -119,15 +118,16 @@ jobs:
   # ============================================
   summary:
     name: Publish Summary
-    needs: [publish-typescript, publish-rust, tag-go]
+    needs: [publish-python, publish-typescript, publish-rust, tag-go]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Summary
         run: |
           echo "=== SDK Publish Results ==="
+          echo "Python (PyPI):    ${{ needs.publish-python.result }}"
           echo "TypeScript (npm): ${{ needs.publish-typescript.result }}"
           echo "Rust (crates.io): ${{ needs.publish-rust.result }}"
           echo "Go (tagged):      ${{ needs.tag-go.result }}"
           echo ""
-          echo "Note: Python publish skipped until PyPI token is set"
+          echo "Note: Python publish uses the repository root package metadata (pyproject.toml)."

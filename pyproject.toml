@@ -1,6 +1,6 @@
 [project]
 name = "qwed"
-version = "5.1.0"
+version = "5.1.1"
 description = "The Deterministic Verification Protocol for AI - 11 verification engines for math, logic, code, SQL, facts, images, and more. Now with Agentic Security Guards."
 authors = [
     {name = "QWED Team", email = "rahul@qwedai.com"},
@@ -46,7 +46,7 @@ dependencies = [
     "sqlmodel>=0.0.14",
     "bcrypt>=4.0.1",
     "passlib[bcrypt]>=1.7.4",
-    "pyjwt>=2.8.0",
+    "pyjwt>=2.8.0,!=2.12.1",
     "python-multipart>=0.0.6",
     "pandas>=2.0.0",
     "numpy>=1.24.0",
@@ -121,4 +121,5 @@ pythonpath = [
     "src",
     ".",
 ]
+
 

@@ -32,7 +32,7 @@ TenantDependency = Annotated[TenantContext, Depends(get_current_tenant)]
 SessionDependency = Annotated[Session, Depends(get_session)]
 AgentTokenHeader = Annotated[str, Header(...)]
 
-APP_VERSION = "5.1.0"
+APP_VERSION = "5.1.1"
 
 app = FastAPI(
     title="QWED API",
@@ -153,7 +153,7 @@ def get_optional_api_key_record(
 
     hashed_key = hash_api_key(x_api_key)
     statement = select(ApiKey).where(ApiKey.key_hash == hashed_key, ApiKey.is_active)
-    api_key = session.exec(statement).first()
+    api_key = session.execute(statement).scalars().first()
 
     if not api_key:
         raise HTTPException(status_code=403, detail="Invalid or revoked API Key")
@@ -975,7 +975,7 @@ async def get_tenant_logs(
         VerificationLog.organization_id == tenant.organization_id
     ).order_by(VerificationLog.timestamp.desc()).limit(limit)
     
-    logs = session.exec(statement).all()
+    logs = session.execute(statement).scalars().all()
     
     return {
         "organization_id": tenant.organization_id,
@@ -1259,7 +1259,7 @@ async def get_agent_activity(
         AgentActivity.agent_id == agent_id
     ).order_by(AgentActivity.timestamp.desc()).limit(limit)
     
-    activities = session.exec(statement).all()
+    activities = session.execute(statement).scalars().all()
     
     return {
         "agent_id": agent_id,

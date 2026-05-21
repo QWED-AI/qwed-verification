@@ -57,11 +57,16 @@ jobs:
             # - CVE-2026-1703: pip wheel path traversal (CVSS 2.0 Low) — build-only, pinned hashes used
             # - CVE-2026-4539: pygments ReDoS in AdlLexer — local-only, no fix version available yet
             #                  [Expiry Guard - Owner: Security Team, Review Date: 2026-06-01]
+            # - PYSEC-2025-183: pyjwt weak-encryption advisory — mitigated by pyproject.toml pin
+            #                   (pyjwt>=2.8.0,!=2.12.1) and requirements.in exclusion.
+            #                   Suppressed as belt-and-suspenders only; root fix is the version pin.
+            #                   [Expiry Guard - Owner: Security Team, Review Date: 2026-08-01]
             /tmp/audit-env/bin/pip-audit --strict --desc \
               -r /tmp/audit-requirements.txt \
               --ignore-vuln CVE-2025-8869 \
               --ignore-vuln CVE-2026-1703 \
               --ignore-vuln CVE-2026-4539 \
+              --ignore-vuln PYSEC-2025-183 \
               2>&1 | tee audit-results.txt
       - store_artifacts:
           path: audit-results.txt
