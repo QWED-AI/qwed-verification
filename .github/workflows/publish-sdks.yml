@@ -36,7 +36,6 @@ jobs:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: twine upload dist/* --skip-existing
-        continue-on-error: true  # Don't fail if PyPI token not set yet
 
   # ============================================
   # TypeScript SDK → npm
@@ -115,13 +114,14 @@ jobs:
   # ============================================
   summary:
     name: Publish Summary
-    needs: [publish-typescript, publish-rust, tag-go]
+    needs: [publish-python, publish-typescript, publish-rust, tag-go]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Summary
         run: |
           echo "=== SDK Publish Results ==="
+          echo "Python (PyPI):    ${{ needs.publish-python.result }}"
           echo "TypeScript (npm): ${{ needs.publish-typescript.result }}"
           echo "Rust (crates.io): ${{ needs.publish-rust.result }}"
           echo "Go (tagged):      ${{ needs.tag-go.result }}"
