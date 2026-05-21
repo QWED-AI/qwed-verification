@@ -55,7 +55,8 @@ Thumbs.db
 
 # Node.js
 node_modules/
-package-lock.json
+# package-lock.json tracked for sdk-ts (required for npm ci in CI)
+!sdk-ts/package-lock.json
 npm-debug.log
 yarn-error.log
 .pnpm-debug.log
