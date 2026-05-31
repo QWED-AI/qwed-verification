@@ -1,4 +1,4 @@
-﻿"""
+"""
 CodSpeed performance benchmarks for QWED verification engines.
 
 Benchmarks cover the core deterministic verification engines:

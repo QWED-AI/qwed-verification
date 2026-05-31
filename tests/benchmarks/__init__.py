@@ -1,0 +1,1 @@
+"""Benchmark package for CodSpeed performance tests."""
