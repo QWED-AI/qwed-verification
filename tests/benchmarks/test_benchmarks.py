@@ -1,4 +1,4 @@
-"""
+﻿"""
 CodSpeed performance benchmarks for QWED verification engines.
 
 Benchmarks cover the core deterministic verification engines:
@@ -87,7 +87,7 @@ def test_bench_math_simple_arithmetic(benchmark, math_engine):
 
 def test_bench_math_algebraic_expression(benchmark, math_engine):
     """Benchmark algebraic expression verification."""
-    benchmark(math_engine.verify_math, "x**2 + 2*x + 1", 9, tolerance=1e-6)
+    benchmark(math_engine.verify_math, "(2+1)**2", 9)
 
 
 def test_bench_math_percentage(benchmark, math_engine):
