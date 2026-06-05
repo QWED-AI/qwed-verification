@@ -493,9 +493,8 @@ class RedisCache:
                 _STRICT_UNAVAILABLE_MSG +
                 _STRICT_COOLDOWN_MSG
             )
-        payload = json.dumps(result)  # JSON errors propagate naturally — not a Redis issue
-
         if client is not None:
+            payload = json.dumps(result)  # JSON errors propagate naturally -- not a Redis issue
             try:
                 client.setex(key, ttl, payload)
             except Exception as exc:
@@ -753,6 +752,7 @@ def get_cache(
     except Exception:
         with _cache_factory_lock:
             _constructing_events.pop(cache_key, None)
+            _redis_cache_retry_after[cache_key] = time.time() + RedisCache._CLIENT_RETRY_INTERVAL
         event.set()
         raise
 

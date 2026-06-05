@@ -174,6 +174,22 @@ class TestExplicitDegradedStartupDown:
         assert hit["_degraded_mode"] is True
         assert hit["_cache_backend"] == "local_degraded"
 
+    def test_set_uses_fallback_without_json_serializing_when_redis_down(self):
+        """
+        EXPLICIT_DEGRADED fallback stores Python objects directly; Redis JSON
+        serialization must not run when no Redis client is available.
+        """
+        sentinel = object()
+        with patch("qwed_new.core.redis_config.get_redis_client", return_value=None):
+            cache = RedisCache(mode=CacheBackendMode.EXPLICIT_DEGRADED)
+            cache.set("(= x 1)", {"status": "SAT", "sentinel": sentinel})
+            hit = cache.get("(= x 1)")
+
+        assert hit is not None
+        assert "sentinel" in hit
+        assert hit["_degraded_mode"] is True
+        assert hit["_cache_backend"] == "local_degraded"
+
     def test_stats_reports_degraded(self):
         """stats() must expose degraded=True when in fallback mode."""
         with patch("qwed_new.core.redis_config.get_redis_client", return_value=None):
@@ -516,6 +532,7 @@ class TestTenantIsolation:
         cache_mod._verification_caches.clear()
         cache_mod._redis_caches.clear()
         cache_mod._redis_cache_retry_after.clear()
+        cache_mod._constructing_events.clear()
         reset_redis_state()
 
     def test_different_tenants_get_different_caches(self):
@@ -678,3 +695,20 @@ class TestGetCacheAntiHammering:
             c1 = get_cache(use_redis=True, mode=CacheBackendMode.STRICT_DISTRIBUTED)
             c2 = get_cache(use_redis=True, mode=CacheBackendMode.STRICT_DISTRIBUTED)
         assert c1 is c2
+
+    def test_generic_construction_error_starts_retry_cooldown(self):
+        """
+        Non-availability RedisCache construction failures should also enter
+        cooldown so repeated callers do not hammer the factory path.
+        """
+        with patch.object(RedisCache, "__init__", side_effect=ValueError("bad mode")):
+            with pytest.raises(ValueError):
+                get_cache(use_redis=True, mode=CacheBackendMode.STRICT_DISTRIBUTED)
+
+        cache_key = (None, CacheBackendMode.STRICT_DISTRIBUTED)
+        assert cache_mod._redis_cache_retry_after[cache_key] > 0
+
+        with patch.object(RedisCache, "__init__") as mock_init:
+            with pytest.raises(CacheBackendUnavailableError):
+                get_cache(use_redis=True, mode=CacheBackendMode.STRICT_DISTRIBUTED)
+            mock_init.assert_not_called()
