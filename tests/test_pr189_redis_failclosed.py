@@ -670,6 +670,7 @@ class TestGetCacheAntiHammering:
         cache_mod._verification_caches.clear()
         cache_mod._redis_caches.clear()
         cache_mod._redis_cache_retry_after.clear()
+        cache_mod._constructing_events.clear()
         reset_redis_state()
 
     def test_second_call_raises_immediately_without_reconnect(self):
@@ -712,3 +713,19 @@ class TestGetCacheAntiHammering:
             with pytest.raises(CacheBackendUnavailableError):
                 get_cache(use_redis=True, mode=CacheBackendMode.STRICT_DISTRIBUTED)
             mock_init.assert_not_called()
+
+    def test_explicit_degraded_waiter_raises_after_construction_failure(self):
+        """
+        A waiter must not receive a bare unregistered VerificationCache after
+        another EXPLICIT_DEGRADED construction attempt fails.
+        """
+        cache_key = (None, CacheBackendMode.EXPLICIT_DEGRADED)
+        event = cache_mod.Event()
+        event.set()
+        cache_mod._constructing_events[cache_key] = event
+
+        with pytest.raises(CacheBackendUnavailableError) as exc_info:
+            get_cache(use_redis=True, mode=CacheBackendMode.EXPLICIT_DEGRADED)
+
+        assert "EXPLICIT_DEGRADED" in str(exc_info.value)
+        assert "Construction by another thread failed" in str(exc_info.value)

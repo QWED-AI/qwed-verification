@@ -729,13 +729,12 @@ def get_cache(
             cache = _redis_caches.get(cache_key)
             if cache is not None:
                 return cache
-            # Construction failed; let caller handle normally.
-            if mode == CacheBackendMode.STRICT_DISTRIBUTED:
-                raise CacheBackendUnavailableError(
-                    _STRICT_UNAVAILABLE_MSG +
-                    "Construction by another thread failed."
-                )
-            return VerificationCache()
+            # Construction failed. Do not hand out an unregistered local cache:
+            # it would silently lose writes and bypass EXPLICIT_DEGRADED markers.
+            raise CacheBackendUnavailableError(
+                f"RedisCache(mode={mode.value}): Construction by another thread failed. "
+                "Retry after cooldown."
+            )
         event = Event()
         _constructing_events[cache_key] = event
 
