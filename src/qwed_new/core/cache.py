@@ -526,6 +526,7 @@ class RedisCache:
                 _STRICT_COOLDOWN_MSG
             )
 
+        redis_failed = False
         if client is not None:
             try:
                 ret = client.delete(key) > 0
@@ -535,10 +536,17 @@ class RedisCache:
 
             except Exception as exc:
                 self._handle_runtime_redis_error("invalidate", exc)
+                redis_failed = True
 
         fallback = None
         with self._fallback_lock:
             fallback = self._fallback_cache
+
+        if redis_failed:
+            raise CacheBackendUnavailableError(
+                "RedisCache(mode=EXPLICIT_DEGRADED): Redis invalidate failed. "
+                "Cannot confirm distributed deletion from node-local fallback."
+            )
 
         if fallback is not None:
             return fallback.invalidate(dsl_code, variables)
@@ -579,6 +587,7 @@ class RedisCache:
                 _STRICT_UNAVAILABLE_MSG +
                 _STRICT_COOLDOWN_MSG
             )
+        redis_failed = False
         if client is not None:
             try:
                 if pattern is None:
@@ -594,10 +603,17 @@ class RedisCache:
 
             except Exception as exc:
                 self._handle_runtime_redis_error("clear", exc)
+                redis_failed = True
 
         fallback = None
         with self._fallback_lock:
             fallback = self._fallback_cache
+
+        if redis_failed:
+            raise CacheBackendUnavailableError(
+                "RedisCache(mode=EXPLICIT_DEGRADED): Redis clear failed. "
+                "Cannot confirm distributed deletion from node-local fallback."
+            )
 
         if fallback is not None:
             return fallback.clear()
@@ -666,6 +682,55 @@ _constructing_events: Dict[tuple, Event] = {}  # signals when construction compl
 _cache_factory_lock = Lock()
 
 
+def _get_or_create_local_cache(tenant_id: Optional[int]) -> VerificationCache:
+    with _cache_factory_lock:
+        cache = _verification_caches.get(tenant_id)
+        if cache is None:
+            cache = VerificationCache()
+            _verification_caches[tenant_id] = cache
+    return cache
+
+
+def _raise_if_retry_cooldown_active(cache_key: tuple, mode: CacheBackendMode) -> None:
+    retry_after = _redis_cache_retry_after.get(cache_key, 0.0)
+    if time.time() < retry_after:
+        raise CacheBackendUnavailableError(
+            f"RedisCache(mode={mode.value}): Redis backend unavailable "
+            f"(cooldown active for {retry_after - time.time():.0f}s). "
+            "Fail-closed."
+        )
+
+
+def _await_or_claim_redis_cache_construction(
+    cache_key: tuple,
+    mode: CacheBackendMode,
+) -> tuple[Optional[RedisCache], Event]:
+    while True:
+        with _cache_factory_lock:
+            cache = _redis_caches.get(cache_key)
+            if cache is not None:
+                return cache, Event()
+            _raise_if_retry_cooldown_active(cache_key, mode)
+            event = _constructing_events.get(cache_key)
+            if event is None:
+                event = Event()
+                _constructing_events[cache_key] = event
+                return None, event
+
+        completed = event.wait(timeout=10.0)
+        if not completed and mode == CacheBackendMode.STRICT_DISTRIBUTED:
+            raise CacheBackendUnavailableError(
+                f"RedisCache(mode={mode.value}): Cache construction timed out. "
+                "Fail-closed."
+            )
+
+
+def _record_redis_cache_construction_failure(cache_key: tuple) -> None:
+    with _cache_factory_lock:
+        _constructing_events.pop(cache_key, None)
+        _redis_cache_retry_after[cache_key] = time.time() + RedisCache._CLIENT_RETRY_INTERVAL
+
+
 def get_cache(
     use_redis: bool = True,
     tenant_id: Optional[int] = None,
@@ -689,61 +754,26 @@ def get_cache(
         CacheBackendUnavailableError: when use_redis=True,
             mode=STRICT_DISTRIBUTED, and Redis is unavailable.
     """
-    global _verification_caches, _redis_caches, _redis_cache_retry_after
-
     if not use_redis or mode == CacheBackendMode.LOCAL_ONLY:
-        with _cache_factory_lock:
-            cache = _verification_caches.get(tenant_id)
-            if cache is None:
-                cache = VerificationCache()
-                _verification_caches[tenant_id] = cache
-        return cache
+        return _get_or_create_local_cache(tenant_id)
 
     # Redis path — per-(tenant_id, mode) singleton, locked to prevent races
     cache_key = (tenant_id, mode)
 
-    # Fast path: return existing cache without blocking. If another thread is
-    # already constructing this key, wait outside the factory lock and re-check.
-    while True:
-        with _cache_factory_lock:
-            cache = _redis_caches.get(cache_key)
-            if cache is not None:
-                return cache
-            # Check per-key cooldown before attempting a new connection.
-            retry_after = _redis_cache_retry_after.get(cache_key, 0.0)
-            if time.time() < retry_after:
-                raise CacheBackendUnavailableError(
-                    f"RedisCache(mode={mode.value}): Redis backend unavailable "
-                    f"(cooldown active for {retry_after - time.time():.0f}s). "
-                    "Fail-closed."
-                )
-            event = _constructing_events.get(cache_key)
-            if event is None:
-                event = Event()
-                _constructing_events[cache_key] = event
-                break
-
-        completed = event.wait(timeout=10.0)
-        if not completed and mode == CacheBackendMode.STRICT_DISTRIBUTED:
-            raise CacheBackendUnavailableError(
-                f"RedisCache(mode={mode.value}): Cache construction timed out. "
-                "Fail-closed."
-            )
+    cache, event = _await_or_claim_redis_cache_construction(cache_key, mode)
+    if cache is not None:
+        return cache
 
     # Construct outside the lock -- RedisCache.__init__ calls
     # get_redis_client() which may block on a 5-second network timeout.
     try:
         new_cache = RedisCache(tenant_id=tenant_id, mode=mode)
     except CacheBackendUnavailableError:
-        with _cache_factory_lock:
-            _constructing_events.pop(cache_key, None)
-            _redis_cache_retry_after[cache_key] = time.time() + RedisCache._CLIENT_RETRY_INTERVAL
+        _record_redis_cache_construction_failure(cache_key)
         event.set()  # Wake waiters after state is consistent
         raise
     except Exception:
-        with _cache_factory_lock:
-            _constructing_events.pop(cache_key, None)
-            _redis_cache_retry_after[cache_key] = time.time() + RedisCache._CLIENT_RETRY_INTERVAL
+        _record_redis_cache_construction_failure(cache_key)
         event.set()
         raise
 

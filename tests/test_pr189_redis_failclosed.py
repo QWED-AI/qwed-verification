@@ -234,6 +234,19 @@ class TestExplicitDegradedRuntimeLoss:
 
         assert any("BACKEND_UNAVAILABLE_AT_RUNTIME" in r.message for r in caplog.records)
 
+    def test_invalidate_raises_on_runtime_redis_loss(self):
+        """
+        Redis-backed invalidation cannot be proven from a fresh local fallback;
+        report the backend failure explicitly instead of returning False.
+        """
+        cache, mock_client = self._make_degraded_cache_healthy_start()
+        mock_client.delete.side_effect = Exception("connection reset")
+
+        with pytest.raises(CacheBackendUnavailableError) as exc_info:
+            cache.invalidate("(= x 1)")
+
+        assert "invalidate failed" in str(exc_info.value)
+
     def test_cross_node_isolation_is_explicit_not_silent(self):
         """
         Two EXPLICIT_DEGRADED nodes with separate fallback caches produce
