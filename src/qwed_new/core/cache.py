@@ -632,10 +632,12 @@ class RedisCache:
                 "tenant_id": self.tenant_id,
             }
         except Exception:
+            with self._fallback_lock:
+                degraded = self._fallback_cache is not None
             return {
                 "backend": "redis",
                 "mode": self.mode,
-                "degraded": self._fallback_cache is not None,
+                "degraded": degraded,
                 "backend_error": True,
                 "hits": self._hits,
                 "misses": self._misses,
@@ -700,43 +702,33 @@ def get_cache(
     # Redis path — per-(tenant_id, mode) singleton, locked to prevent races
     cache_key = (tenant_id, mode)
 
-    # Fast path: return existing cache without blocking.
-    with _cache_factory_lock:
-        cache = _redis_caches.get(cache_key)
-        if cache is not None:
-            return cache
-        # Check per-key cooldown before attempting a new connection.
-        retry_after = _redis_cache_retry_after.get(cache_key, 0.0)
-        if time.time() < retry_after:
-            raise CacheBackendUnavailableError(
-                f"RedisCache(mode={mode.value}): Redis backend unavailable "
-                f"(cooldown active for {retry_after - time.time():.0f}s). "
-                "Fail-closed."
-            )
-        # Prevent concurrent construction pile-up: if another thread is
-        # already constructing this cache_key, don't start a second
-        # blocking network call.
-        if cache_key in _constructing_events:
-            # Another thread is constructing; wait for it instead of pile-up.
-            event = _constructing_events[cache_key]
-            # Release factory lock while waiting so we don't block others.
-            _cache_factory_lock.release()
-            try:
-                event.wait(timeout=10.0)  # bounded wait
-            finally:
-                _cache_factory_lock.acquire()
-            # After wait, the cache should be in the dict (or cooldown set).
+    # Fast path: return existing cache without blocking. If another thread is
+    # already constructing this key, wait outside the factory lock and re-check.
+    while True:
+        with _cache_factory_lock:
             cache = _redis_caches.get(cache_key)
             if cache is not None:
                 return cache
-            # Construction failed. Do not hand out an unregistered local cache:
-            # it would silently lose writes and bypass EXPLICIT_DEGRADED markers.
+            # Check per-key cooldown before attempting a new connection.
+            retry_after = _redis_cache_retry_after.get(cache_key, 0.0)
+            if time.time() < retry_after:
+                raise CacheBackendUnavailableError(
+                    f"RedisCache(mode={mode.value}): Redis backend unavailable "
+                    f"(cooldown active for {retry_after - time.time():.0f}s). "
+                    "Fail-closed."
+                )
+            event = _constructing_events.get(cache_key)
+            if event is None:
+                event = Event()
+                _constructing_events[cache_key] = event
+                break
+
+        completed = event.wait(timeout=10.0)
+        if not completed and mode == CacheBackendMode.STRICT_DISTRIBUTED:
             raise CacheBackendUnavailableError(
-                f"RedisCache(mode={mode.value}): Construction by another thread failed. "
-                "Retry after cooldown."
+                f"RedisCache(mode={mode.value}): Cache construction timed out. "
+                "Fail-closed."
             )
-        event = Event()
-        _constructing_events[cache_key] = event
 
     # Construct outside the lock -- RedisCache.__init__ calls
     # get_redis_client() which may block on a 5-second network timeout.

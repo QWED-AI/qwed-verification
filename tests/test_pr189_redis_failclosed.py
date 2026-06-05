@@ -720,12 +720,51 @@ class TestGetCacheAntiHammering:
         another EXPLICIT_DEGRADED construction attempt fails.
         """
         cache_key = (None, CacheBackendMode.EXPLICIT_DEGRADED)
-        event = cache_mod.Event()
-        event.set()
-        cache_mod._constructing_events[cache_key] = event
+        cache_mod._redis_cache_retry_after[cache_key] = float("inf")
 
         with pytest.raises(CacheBackendUnavailableError) as exc_info:
             get_cache(use_redis=True, mode=CacheBackendMode.EXPLICIT_DEGRADED)
 
         assert "EXPLICIT_DEGRADED" in str(exc_info.value)
-        assert "Construction by another thread failed" in str(exc_info.value)
+        assert "cooldown active" in str(exc_info.value)
+
+    def test_strict_distributed_waiter_timeout_fails_closed(self):
+        """STRICT_DISTRIBUTED waiters should fail closed on construction timeout."""
+        cache_key = (None, CacheBackendMode.STRICT_DISTRIBUTED)
+
+        class TimeoutEvent:
+            def wait(self, timeout):
+                return False
+
+        cache_mod._constructing_events[cache_key] = TimeoutEvent()
+
+        with pytest.raises(CacheBackendUnavailableError) as exc_info:
+            get_cache(use_redis=True, mode=CacheBackendMode.STRICT_DISTRIBUTED)
+
+        assert "timed out" in str(exc_info.value)
+
+    def test_explicit_degraded_waiter_rechecks_after_timeout(self):
+        """
+        EXPLICIT_DEGRADED waiters should not hard-fail on a bounded wait timeout;
+        they should keep waiting/rechecking until construction completes.
+        """
+        cache_key = (None, CacheBackendMode.EXPLICIT_DEGRADED)
+
+        class SlowEvent:
+            def __init__(self):
+                self.calls = 0
+
+            def wait(self, timeout):
+                self.calls += 1
+                if self.calls == 1:
+                    return False
+                cache_mod._redis_caches[cache_key] = VerificationCache()
+                return True
+
+        event = SlowEvent()
+        cache_mod._constructing_events[cache_key] = event
+
+        cache = get_cache(use_redis=True, mode=CacheBackendMode.EXPLICIT_DEGRADED)
+
+        assert isinstance(cache, VerificationCache)
+        assert event.calls == 2
