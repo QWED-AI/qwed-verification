@@ -26,44 +26,58 @@ _redis_available = None
 def get_redis_client():
     """
     Get the Redis client singleton with connection pooling.
-    
+
     Returns:
-        redis.Redis instance or None if Redis is unavailable
+        redis.Redis instance or None if Redis is unavailable.
+        Returns the cached client if one exists and is valid.
     """
     global _redis_client, _redis_available
-    
-    if _redis_available is False:
-        return None
-    
+
     if _redis_client is not None:
         return _redis_client
-    
+
     try:
         import redis
-        
-        _redis_client = redis.from_url(
+
+        # Build into a local variable first; only promote to the module-level
+        # singleton after a successful ping.  This avoids leaving a stale /
+        # broken client in the global on construction failure (which CodeQL
+        # correctly flags as an unused write when cleared in except blocks).
+        client = redis.from_url(
             REDIS_URL,
             max_connections=REDIS_MAX_CONNECTIONS,
             socket_timeout=REDIS_SOCKET_TIMEOUT,
             socket_connect_timeout=REDIS_SOCKET_TIMEOUT,
-            decode_responses=True  # Return strings instead of bytes
+            decode_responses=True,  # Return strings instead of bytes
         )
-        
-        # Test connection
-        _redis_client.ping()
+        client.ping()
+
+        _redis_client = client
         _redis_available = True
         logger.info(f"Redis connection established: {REDIS_URL}")
         return _redis_client
-        
+
     except ImportError:
-        logger.warning("redis-py not installed. Falling back to in-memory cache.")
-        _redis_available = False
+        logger.warning(
+            "redis-py not installed. Redis will be unavailable until it is installed."
+        )
         return None
     except Exception as e:
-        logger.warning(f"Redis connection failed: {e}. Falling back to in-memory cache.")
-        _redis_available = False
+        logger.warning(f"Redis connection failed: {e}. Will retry on next request.")
         return None
 
+
+def invalidate_redis_client() -> None:
+    """
+    Clear the cached module-level Redis client.
+
+    Called by RedisCache._handle_runtime_redis_error when the connection
+    breaks at runtime so that the next get_redis_client() call will
+    create a fresh connection instead of returning the stale object.
+    """
+    global _redis_client, _redis_available
+    _redis_client = None
+    _redis_available = None
 
 def is_redis_available() -> bool:
     """Check if Redis is available and connected."""
@@ -138,3 +152,15 @@ class CacheTTL:
     SQL_RESULT = 600        # 10 minutes
     CODE_RESULT = 600       # 10 minutes
     RATE_LIMIT_WINDOW = 60  # 1 minute sliding window
+
+
+def reset_redis_state() -> None:
+    """
+    Reset the module-level Redis singleton state.
+
+    For use in tests only -- allows each test to start with a clean
+    connection state so Redis availability can be simulated independently.
+    """
+    global _redis_client, _redis_available
+    _redis_client = None
+    _redis_available = None
