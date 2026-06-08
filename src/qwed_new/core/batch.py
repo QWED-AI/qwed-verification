@@ -220,14 +220,14 @@ class BatchVerificationService:
             )
         
         elif item.verification_type == VerificationType.MATH:
-            from sympy.parsing.sympy_parser import parse_expr
+            from qwed_new.core.safe_parser import safe_parse_expr
             from sympy import simplify
             
             expression = item.query
             if "=" in expression:
                 left, right = expression.split("=", 1)
-                left_expr = parse_expr(left)
-                right_expr = parse_expr(right)
+                left_expr = safe_parse_expr(left)
+                right_expr = safe_parse_expr(right)
                 diff = simplify(left_expr - right_expr)
                 is_valid = diff == 0
                 return {
@@ -236,7 +236,7 @@ class BatchVerificationService:
                     "message": "Identity verified" if is_valid else "Not equal"
                 }
             else:
-                parsed = parse_expr(expression)
+                parsed = safe_parse_expr(expression)
                 simplified = simplify(parsed)
                 return {
                     "is_valid": False,

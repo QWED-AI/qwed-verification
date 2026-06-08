@@ -18,7 +18,7 @@ from sympy import (
     diff, integrate, limit, oo,
     simplify, expand
 )
-from sympy.parsing.sympy_parser import parse_expr, standard_transformations, implicit_multiplication_application
+from qwed_new.core.safe_parser import safe_parse_expr, SAFE_TRANSFORMATIONS
 from typing import Any, Dict, List, Optional
 from decimal import Decimal, ROUND_HALF_UP
 from dataclasses import dataclass
@@ -52,7 +52,7 @@ class VerificationEngine:
     """
     
     # Parsing transformations for more natural input
-    TRANSFORMATIONS = standard_transformations + (implicit_multiplication_application,)
+    TRANSFORMATIONS = SAFE_TRANSFORMATIONS
     MAX_VERIFY_MATH_TOLERANCE_RATIO = Decimal("0.01")
     MIN_VERIFY_MATH_TOLERANCE_CAP = Decimal("0.01")
     
@@ -120,7 +120,7 @@ class VerificationEngine:
 
         try:
             # 1. Parse the expression safely
-            expr = parse_expr(expression, transformations=self.TRANSFORMATIONS)
+            expr = safe_parse_expr(expression)
             
             # 2. Evaluate deterministically
             if use_decimal:
@@ -197,8 +197,8 @@ class VerificationEngine:
             verify_identity("sin(x)**2 + cos(x)**2", "1")  # True
         """
         try:
-            left = parse_expr(lhs, transformations=self.TRANSFORMATIONS)
-            right = parse_expr(rhs, transformations=self.TRANSFORMATIONS)
+            left = safe_parse_expr(lhs)
+            right = safe_parse_expr(rhs)
             
             # Method 1: Simplify difference
             diff = simplify(left - right)
@@ -281,9 +281,9 @@ class VerificationEngine:
             order: Order of derivative (1 for first, 2 for second, etc.)
         """
         try:
-            expr = parse_expr(expression, transformations=self.TRANSFORMATIONS)
+            expr = safe_parse_expr(expression)
             var = Symbol(variable)
-            expected_expr = parse_expr(expected, transformations=self.TRANSFORMATIONS)
+            expected_expr = safe_parse_expr(expected)
             
             # Calculate derivative
             actual_derivative = diff(expr, var, order)
@@ -328,14 +328,14 @@ class VerificationEngine:
             upper_bound: Upper bound for definite integral
         """
         try:
-            expr = parse_expr(expression, transformations=self.TRANSFORMATIONS)
+            expr = safe_parse_expr(expression)
             var = Symbol(variable)
-            expected_expr = parse_expr(expected, transformations=self.TRANSFORMATIONS)
+            expected_expr = safe_parse_expr(expected)
             
             if lower_bound is not None and upper_bound is not None:
                 # Definite integral
-                lower = parse_expr(lower_bound, transformations=self.TRANSFORMATIONS)
-                upper = parse_expr(upper_bound, transformations=self.TRANSFORMATIONS)
+                lower = safe_parse_expr(lower_bound)
+                upper = safe_parse_expr(upper_bound)
                 actual_integral = integrate(expr, (var, lower, upper))
                 
                 # For definite integrals, compare values
@@ -385,9 +385,9 @@ class VerificationEngine:
             direction: "+" for right, "-" for left, "+-" for both
         """
         try:
-            expr = parse_expr(expression, transformations=self.TRANSFORMATIONS)
+            expr = safe_parse_expr(expression)
             var = Symbol(variable)
-            expected_expr = parse_expr(expected, transformations=self.TRANSFORMATIONS)
+            expected_expr = safe_parse_expr(expected)
             
             # Parse the point (handle infinity)
             if point.lower() in ['oo', 'inf', 'infinity']:
@@ -395,7 +395,7 @@ class VerificationEngine:
             elif point.lower() in ['-oo', '-inf', '-infinity']:
                 pt = -oo
             else:
-                pt = parse_expr(point, transformations=self.TRANSFORMATIONS)
+                pt = safe_parse_expr(point)
             
             # Calculate limit
             actual_limit = limit(expr, var, pt, dir=direction)
