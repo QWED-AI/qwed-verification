@@ -65,6 +65,40 @@ _DANGEROUS_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# Regex for validating variable names passed to Symbol().
+# Allows single-letter, Greek names, and conventional multi-letter math
+# variable names.  Must start with a letter and contain only alphanumerics
+# and underscores, with a reasonable length cap.
+_SAFE_VARIABLE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,49}$")
+
+
+def validate_variable_name(name: str) -> None:
+    """
+    Validate a user-supplied variable name before it reaches Symbol().
+
+    Applies the same length cap, denylist, and character-set checks that
+    safe_parse_expr applies to full expressions, keeping the hardened
+    boundary consistent across all user-controlled string inputs.
+
+    Raises:
+        ValueError: If the name is invalid or contains dangerous patterns.
+    """
+    if not isinstance(name, str):
+        raise ValueError("Variable name must be a string")
+
+    stripped = name.strip()
+    if not stripped:
+        raise ValueError("Variable name must not be empty")
+
+    if not _SAFE_VARIABLE_RE.match(stripped):
+        raise ValueError(
+            "Variable name must start with a letter, contain only "
+            "alphanumerics/underscores, and be at most 50 characters"
+        )
+
+    if _DANGEROUS_PATTERNS.search(stripped):
+        raise ValueError("Variable name contains disallowed constructs")
+
 
 def _build_safe_local_dict(extra_symbols: Optional[Dict[str, Any]] = None) -> dict:
     """
@@ -72,9 +106,11 @@ def _build_safe_local_dict(extra_symbols: Optional[Dict[str, Any]] = None) -> di
 
     Only mathematical symbols, constants, functions, and the internal
     sympy types that parse_expr's transformations emit are included.
+    Includes common Greek-letter and multi-letter symbolic variable names
+    used in standard mathematical and scientific notation.
     """
     safe = {
-        # Common symbolic variables
+        # Common single-letter symbolic variables
         "x": Symbol("x"),
         "y": Symbol("y"),
         "z": Symbol("z"),
@@ -91,6 +127,40 @@ def _build_safe_local_dict(extra_symbols: Optional[Dict[str, Any]] = None) -> di
         "u": Symbol("u"),
         "v": Symbol("v"),
         "w": Symbol("w"),
+        # Greek-letter symbolic variables (common in verification workloads)
+        "alpha": Symbol("alpha"),
+        "beta": Symbol("beta"),
+        "gamma": Symbol("gamma"),
+        "delta": Symbol("delta"),
+        "epsilon": Symbol("epsilon"),
+        "zeta": Symbol("zeta"),
+        "eta": Symbol("eta"),
+        "theta": Symbol("theta"),
+        "iota": Symbol("iota"),
+        "kappa": Symbol("kappa"),
+        "mu": Symbol("mu"),
+        "nu": Symbol("nu"),
+        "xi": Symbol("xi"),
+        "omicron": Symbol("omicron"),
+        "rho": Symbol("rho"),
+        "sigma": Symbol("sigma"),
+        "tau": Symbol("tau"),
+        "upsilon": Symbol("upsilon"),
+        "phi": Symbol("phi"),
+        "chi": Symbol("chi"),
+        "psi": Symbol("psi"),
+        "omega": Symbol("omega"),
+        # Capital Greek letters commonly used as symbols
+        "Alpha": Symbol("Alpha"),
+        "Beta": Symbol("Beta"),
+        "Gamma": Symbol("Gamma"),
+        "Delta": Symbol("Delta"),
+        "Theta": Symbol("Theta"),
+        "Lambda": Symbol("Lambda"),
+        "Sigma": Symbol("Sigma"),
+        "Phi": Symbol("Phi"),
+        "Psi": Symbol("Psi"),
+        "Omega": Symbol("Omega"),
         # Mathematical constants
         "pi": pi,
         "e": E,
@@ -141,7 +211,9 @@ def _build_safe_local_dict(extra_symbols: Optional[Dict[str, Any]] = None) -> di
     return safe
 
 
-# Pre-built global dict that strips builtins
+# Pre-built global dict that strips builtins.
+# IMPORTANT: A shallow copy is made per invocation (see safe_parse_expr)
+# to prevent cross-call mutation by SymPy transformations.
 _SAFE_GLOBAL_DICT: dict = {"__builtins__": {}}
 
 
@@ -192,7 +264,7 @@ def safe_parse_expr(
         return parse_expr(
             stripped,
             local_dict=local_dict,
-            global_dict=_SAFE_GLOBAL_DICT,
+            global_dict=dict(_SAFE_GLOBAL_DICT),
             transformations=transformations,
         )
     except Exception as exc:

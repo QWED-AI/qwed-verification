@@ -18,7 +18,7 @@ from sympy import (
     diff, integrate, limit, oo,
     simplify, expand
 )
-from qwed_new.core.safe_parser import safe_parse_expr, SAFE_TRANSFORMATIONS
+from qwed_new.core.safe_parser import safe_parse_expr, validate_variable_name, SAFE_TRANSFORMATIONS
 from typing import Any, Dict, List, Optional
 from decimal import Decimal, ROUND_HALF_UP
 from dataclasses import dataclass
@@ -282,6 +282,7 @@ class VerificationEngine:
         """
         try:
             expr = safe_parse_expr(expression)
+            validate_variable_name(variable)
             var = Symbol(variable)
             expected_expr = safe_parse_expr(expected)
             
@@ -329,6 +330,7 @@ class VerificationEngine:
         """
         try:
             expr = safe_parse_expr(expression)
+            validate_variable_name(variable)
             var = Symbol(variable)
             expected_expr = safe_parse_expr(expected)
             
@@ -386,6 +388,7 @@ class VerificationEngine:
         """
         try:
             expr = safe_parse_expr(expression)
+            validate_variable_name(variable)
             var = Symbol(variable)
             expected_expr = safe_parse_expr(expected)
             
