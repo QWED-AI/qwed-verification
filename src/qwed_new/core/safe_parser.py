@@ -95,9 +95,9 @@ def _sympy_tree_depth(expr: Any, current: int = 0) -> int:
 def _validate_sympy_result(result: Any) -> None:
     """Ensure parse_expr returned a valid SymPy expression within depth limits."""
     import sympy
-    if not isinstance(result, sympy.Basic):
+    if not isinstance(result, sympy.Expr):
         raise SafeParserError(
-            f"Parsed result is not a valid SymPy expression, got {type(result).__name__}"
+            f"Parsed result is not a supported arithmetic expression, got {type(result).__name__}"
         )
     depth = _sympy_tree_depth(result)
     if depth > _SYMPY_MAX_DEPTH:
@@ -201,8 +201,8 @@ def safe_parse_expr(
         return result
     except SafeParserError:
         raise
-    except Exception:
-        raise SafeParserError("Failed to parse expression") from None
+    except Exception as exc:
+        raise SafeParserError(f"Failed to parse expression: {exc}") from exc
 
 
 def validate_variable_name(variable: str) -> str:
