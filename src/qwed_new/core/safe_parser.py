@@ -54,13 +54,15 @@ _SAFE_GLOBAL_DICT_TEMPLATE: Dict[str, Any] = {"__builtins__": {}}
 
 
 def _check_ast_depth(expression: str) -> None:
-    """Reject expressions whose AST exceeds max depth (DoS defence)."""
+    """Reject Python-parseable expressions exceeding max AST depth (DoS defence).
+
+    Expressions using implicit multiplication (e.g. 2x, sin x) fail ast.parse
+    and skip this check — they are caught by the post-parse sympy depth check.
+    """
     try:
         tree = ast.parse(expression, mode="eval")
     except SyntaxError:
-        raise SafeParserError(
-            "Expression uses syntax that cannot be validated for safety"
-        )
+        return
     depth = _ast_node_depth(tree)
     if depth > _AST_MAX_DEPTH:
         raise SafeParserError(
@@ -77,12 +79,30 @@ def _ast_node_depth(node: ast.AST, current: int = 0) -> int:
     return max_depth
 
 
+_SYMPY_MAX_DEPTH = 40
+
+
+def _sympy_tree_depth(expr: Any, current: int = 0) -> int:
+    """Compute nesting depth of a SymPy expression tree."""
+    max_depth = current
+    for arg in getattr(expr, "args", ()):
+        child_depth = _sympy_tree_depth(arg, current + 1)
+        if child_depth > max_depth:
+            max_depth = child_depth
+    return max_depth
+
+
 def _validate_sympy_result(result: Any) -> None:
-    """Ensure parse_expr returned an expected SymPy type."""
+    """Ensure parse_expr returned a valid SymPy expression within depth limits."""
     import sympy
     if not isinstance(result, sympy.Basic):
         raise SafeParserError(
             f"Parsed result is not a valid SymPy expression, got {type(result).__name__}"
+        )
+    depth = _sympy_tree_depth(result)
+    if depth > _SYMPY_MAX_DEPTH:
+        raise SafeParserError(
+            f"Expression tree depth {depth} exceeds limit of {_SYMPY_MAX_DEPTH}"
         )
 
 
