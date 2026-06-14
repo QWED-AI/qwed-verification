@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: qwed-core
-          image: docker.io/qwedai/qwed-verification:5.1.1
+          image: docker.io/qwedai/qwed-verification:5.1.2
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000

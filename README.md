@@ -60,16 +60,16 @@
 
 ---
 
-## Release Update: v5.1.1
+## Release Update: v5.1.2
 
-`v5.1.1` is a patch release focused on **fail-closed follow-through and release consistency** after `v5.1.0`.
+`v5.1.2` is an **emergency security patch** fixing a **High severity (CVSS 8.8) authenticated RCE vulnerability** via unsafe SymPy `parse_expr()` calls.
 
-- Tightens cache trust-context binding to prevent cross-context verification replay
-- Hardens attestation and audit paths toward stricter fail-closed behavior
-- Cleans up proof-path handling across reasoning, symbolic, batch, and agent-service flows
-- Aligns package versions, API version markers, SDK metadata, and deployment references for a clean release boundary
+- **CWE-95 fix**: All 17 direct `parse_expr()` calls replaced with `safe_parse_expr()` — denylist + stripped builtins + allow-listed math namespace
+- **Calculus symbol consistency**: Fixed `n` variable mismatch in derivatives, integrals, and limits
+- **Defense-in-depth**: AST depth limits, SymPy tree validation, relational expression rejection
+- Cache Redis fail-closed hardening, CodSpeed benchmarks, TS SDK lockfile fixes
 
-If you're upgrading from `v5.1.0`, review the [changelog](CHANGELOG.md) for deployment/image reference updates and patch-level boundary hardening notes.
+If you're upgrading from `v5.1.1`, review the [changelog](CHANGELOG.md) for the full security advisory details.
 
 ---
 
