@@ -1,6 +1,6 @@
 [package]
 name = "qwed"
-version = "5.1.1"
+version = "5.1.2"
 edition = "2021"
 authors = ["QWED-AI"]
 description = "Rust SDK for QWED Verification Protocol"

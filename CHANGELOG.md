@@ -4,6 +4,27 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+## [5.1.2] - 2026-06-14
+### Security: SymPy Expression Injection Fix (CWE-95)
+
+Emergency patch fixing a **High severity (CVSS 8.8) authenticated RCE vulnerability** in SymPy `parse_expr()` across all math verification paths.
+
+#### Security Fix
+- **CWE-95 mitigation**: Added `safe_parse_expr()` wrapper with denylist, stripped `__builtins__`, allow-listed math namespace, per-call global dict copy, and post-parse validation. Replaced all 17 direct `parse_expr()` call sites in `main.py`, `verifier.py`, `batch.py`, and `validator.py`.
+- **Symbol consistency**: Added `get_safe_symbol()` to ensure calculus variables (`n`, Greek letters) match special SymPy assumptions, preventing incorrect `diff`/`integrate`/`limit` results.
+- **Defense-in-depth**: Pre-parse AST depth limit, post-parse SymPy tree depth validation, `sympy.Expr` type enforcement, `extra_symbols` key/value validation, and sanitized exception handling.
+
+#### Fixes and Hardening
+- **Cache Redis fail-closed**: Enforced fail-closed Redis backend for distributed cache mode (PR #199).
+- **Benchmarks CI**: CodSpeed performance benchmark workflow added (PR #198).
+- **TS SDK lockfile**: Restored `package-lock.json` for reliable `npm ci` in publish workflow (PR #197).
+
+#### Included PRs since v5.1.1
+- `#197` fix(ts-sdk): lockfile restore for npm ci publish
+- `#198` ci: CodSpeed performance benchmarks
+- `#199` fix(cache): fail-closed Redis backend for distributed mode
+- `#200` fix(math): restrict sympy expression parsing (CWE-95)
+
 ## [5.1.1] - 2026-05-21
 ### Release Consistency and Fail-Closed Follow-Through
 
