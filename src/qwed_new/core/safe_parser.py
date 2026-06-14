@@ -148,6 +148,14 @@ def _build_safe_local_dict(
     }
     if extra_symbols:
         for key, value in extra_symbols.items():
+            if not isinstance(key, str):
+                raise SafeParserError(
+                    f"extra_symbols keys must be strings, got {type(key).__name__}"
+                )
+            if _DENYLIST_PATTERN.search(key):
+                raise SafeParserError(
+                    f"extra_symbols key {key!r} contains disallowed construct"
+                )
             if not isinstance(value, (Symbol, sympy.Basic)):
                 raise SafeParserError(
                     f"extra_symbols[{key!r}] must be a SymPy Symbol or Basic, "
