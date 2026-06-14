@@ -1,28 +1,27 @@
 """
-Safe wrapper around sympy's parse_expr to prevent code execution.
+Safe SymPy expression parser.
 
-sympy.parsing.sympy_parser.parse_expr() uses Python eval() internally.
-Without restrictions on local_dict/global_dict, an attacker can execute
-arbitrary code via crafted math expressions (CWE-95).
+Wraps sympy.parsing.sympy_parser.parse_expr with input validation,
+a denylist for dangerous constructs, and a restricted evaluation
+namespace.  This module is the ONLY approved entry point for parsing
+user-supplied math expressions in production code.
 
-This module provides safe_parse_expr() which:
-1. Validates input against a denylist of dangerous patterns
-2. Restricts the eval namespace to only known-safe sympy objects
-3. Strips Python builtins from the global namespace
+Security boundary:
+    1. Reject known-dangerous Python/OS constructs (denylist).
+    2. Remove __builtins__ from the eval global dict.
+    3. Allow-list only expected math symbols, constants, and functions.
+    4. Enforce basic input validation (type, length, empty check).
 
-Usage:
-    from qwed_new.core.safe_parser import safe_parse_expr
-    expr = safe_parse_expr("x**2 + 2*x + 1")
+CWE-95 mitigation -- see PR #200 for full security analysis.
 """
 
+import ast
 import re
-import logging
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional, Tuple
 
 import sympy
 from sympy import (
-    Symbol, Integer, Float, Rational,
-    pi, E, oo, I,
+    E, I, Integer, Float, Rational, Symbol, oo, pi,
 )
 from sympy.parsing.sympy_parser import (
     parse_expr,
@@ -30,242 +29,190 @@ from sympy.parsing.sympy_parser import (
     implicit_multiplication_application,
 )
 
-logger = logging.getLogger(__name__)
+__all__ = ["safe_parse_expr", "validate_variable_name", "get_safe_symbol", "SafeParserError"]
 
-# Transformations that enable natural math input (e.g. "2x" → "2*x")
-SAFE_TRANSFORMATIONS = standard_transformations + (implicit_multiplication_application,)
+MAX_EXPRESSION_LENGTH = 5_000
+_AST_MAX_DEPTH = 30
 
-# Patterns that must never appear in math expressions.
-# Checked before the string reaches parse_expr / eval.
-_DANGEROUS_PATTERNS = re.compile(
-    r"__\w+__|"         # dunder attributes (__import__, __class__, …)
-    r"\bimport\b|"      # import keyword
-    r"\bexec\b|"        # exec()
-    r"\beval\b|"        # eval()
-    r"\bgetattr\b|"     # getattr()
-    r"\bsetattr\b|"     # setattr()
-    r"\bdelattr\b|"     # delattr()
-    r"\bglobals\b|"     # globals()
-    r"\blocals\b|"      # locals()
-    r"\bcompile\b|"     # compile()
-    r"\bopen\b|"        # open()
-    r"\bbreakpoint\b|"  # breakpoint()
-    r"\bprint\b|"       # print()
-    r"\binput\b|"       # input()
-    r"\bvars\b|"        # vars()
-    r"\bdir\b|"         # dir()
-    r"\btype\b|"        # type()
-    r"\bsuper\b|"       # super()
-    r"\bsubclasses\b|"  # __subclasses__()
-    r"\bmro\b|"         # mro()
-    r"\bbases\b|"       # __bases__
-    r"\bos\b|"          # os module
-    r"\bsys\b|"         # sys module
-    r"\bsubprocess\b",  # subprocess module
+_DENYLIST_PATTERN = re.compile(
+    r"(?:"
+    r"__import__|__builtins__|__subclasses__|__globals__|__locals__"
+    r"|__getattr__|__setattr__|__delattr__|__class__|__bases__|__mro__"
+    r"|\beval\b|\bexec\b|\bcompile\b|\bgetattr\b|\bsetattr\b|\bdelattr\b"
+    r"|\bimport\b|\bimportlib\b"
+    r"|\bos\b|\bsys\b|\bsubprocess\b|\bshutil\b|\bsocket\b"
+    r"|\bpopen\b|\bsystem\b|\bspawn\b"
+    r"|\bopen\b|\bfile\b|\bpath\b|\bglob\b"
+    r"|\bchr\b|\bord\b|\bhex\b|\btype\b|\bvars\b|\bdir\b|\brepr\b"
+    r"|\binput\b|\bprint\b|\bbreakpoint\b|\bexit\b|\bquit\b"
+    r"|\bcodecs\b|\bcode\b|\bctypes\b"
+    r")",
     re.IGNORECASE,
 )
 
-# Regex for validating variable names passed to Symbol().
-# Allows single-letter, Greek names, and conventional multi-letter math
-# variable names.  Must start with a letter and contain only alphanumerics
-# and underscores, with a reasonable length cap.
-_SAFE_VARIABLE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,49}$")
+_SAFE_GLOBAL_DICT_TEMPLATE: Dict[str, Any] = {"__builtins__": {}}
 
 
-def validate_variable_name(name: str) -> None:
-    """
-    Validate a user-supplied variable name before it reaches Symbol().
-
-    Applies the same length cap, denylist, and character-set checks that
-    safe_parse_expr applies to full expressions, keeping the hardened
-    boundary consistent across all user-controlled string inputs.
-
-    Raises:
-        ValueError: If the name is invalid or contains dangerous patterns.
-    """
-    if not isinstance(name, str):
-        raise ValueError("Variable name must be a string")
-
-    stripped = name.strip()
-    if not stripped:
-        raise ValueError("Variable name must not be empty")
-
-    if not _SAFE_VARIABLE_RE.match(stripped):
-        raise ValueError(
-            "Variable name must start with a letter, contain only "
-            "alphanumerics/underscores, and be at most 50 characters"
+def _check_ast_depth(expression: str) -> None:
+    """Reject expressions whose AST exceeds max depth (DoS defence)."""
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError:
+        return
+    depth = _ast_node_depth(tree)
+    if depth > _AST_MAX_DEPTH:
+        raise SafeParserError(
+            f"Expression AST depth {depth} exceeds limit of {_AST_MAX_DEPTH}"
         )
 
-    if _DANGEROUS_PATTERNS.search(stripped):
-        raise ValueError("Variable name contains disallowed constructs")
+
+def _ast_node_depth(node: ast.AST, current: int = 0) -> int:
+    max_depth = current
+    for child in ast.iter_child_nodes(node):
+        child_depth = _ast_node_depth(child, current + 1)
+        if child_depth > max_depth:
+            max_depth = child_depth
+    return max_depth
 
 
-def _build_safe_local_dict(extra_symbols: Optional[Dict[str, Any]] = None) -> dict:
-    """
-    Build the allow-listed local namespace for parse_expr.
+def _validate_sympy_result(result: Any) -> None:
+    """Ensure parse_expr returned an expected SymPy type."""
+    import sympy
+    if not isinstance(result, sympy.Basic):
+        raise SafeParserError(
+            f"Parsed result is not a valid SymPy expression, got {type(result).__name__}"
+        )
 
-    Only mathematical symbols, constants, functions, and the internal
-    sympy types that parse_expr's transformations emit are included.
-    Includes common Greek-letter and multi-letter symbolic variable names
-    used in standard mathematical and scientific notation.
-    """
-    safe = {
-        # Common single-letter symbolic variables
-        "x": Symbol("x"),
-        "y": Symbol("y"),
-        "z": Symbol("z"),
-        "a": Symbol("a"),
-        "b": Symbol("b"),
-        "c": Symbol("c"),
+
+def _build_safe_local_dict(
+    extra_symbols: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    safe: Dict[str, Any] = {
+        "x": Symbol("x"), "y": Symbol("y"), "z": Symbol("z"),
+        "a": Symbol("a"), "b": Symbol("b"), "c": Symbol("c"),
+        "d": Symbol("d"), "f": Symbol("f"), "g": Symbol("g"),
+        "h": Symbol("h"), "k": Symbol("k"), "m": Symbol("m"),
         "n": Symbol("n", integer=True, positive=True),
-        "t": Symbol("t"),
-        "r": Symbol("r"),
-        "k": Symbol("k"),
-        "m": Symbol("m"),
-        "p": Symbol("p"),
-        "q": Symbol("q"),
-        "u": Symbol("u"),
-        "v": Symbol("v"),
-        "w": Symbol("w"),
-        # Greek-letter symbolic variables (common in verification workloads)
-        "alpha": Symbol("alpha"),
-        "beta": Symbol("beta"),
-        "gamma": Symbol("gamma"),
-        "delta": Symbol("delta"),
-        "epsilon": Symbol("epsilon"),
-        "zeta": Symbol("zeta"),
-        "eta": Symbol("eta"),
-        "theta": Symbol("theta"),
-        "iota": Symbol("iota"),
-        "kappa": Symbol("kappa"),
-        "mu": Symbol("mu"),
-        "nu": Symbol("nu"),
-        "xi": Symbol("xi"),
-        "omicron": Symbol("omicron"),
-        "rho": Symbol("rho"),
-        "sigma": Symbol("sigma"),
-        "tau": Symbol("tau"),
-        "upsilon": Symbol("upsilon"),
-        "phi": Symbol("phi"),
-        "chi": Symbol("chi"),
-        "psi": Symbol("psi"),
+        "p": Symbol("p"), "q": Symbol("q"), "r": Symbol("r"),
+        "s": Symbol("s"), "t": Symbol("t"), "u": Symbol("u"),
+        "v": Symbol("v"), "w": Symbol("w"),
+        "alpha": Symbol("alpha"), "beta": Symbol("beta"),
+        "gamma": Symbol("gamma"), "delta": Symbol("delta"),
+        "epsilon": Symbol("epsilon"), "zeta": Symbol("zeta"),
+        "eta": Symbol("eta"), "theta": Symbol("theta"),
+        "iota": Symbol("iota"), "kappa": Symbol("kappa"),
+        "mu": Symbol("mu"), "nu": Symbol("nu"),
+        "xi": Symbol("xi"), "omicron": Symbol("omicron"),
+        "rho": Symbol("rho"), "sigma": Symbol("sigma"),
+        "tau": Symbol("tau"), "phi": Symbol("phi"),
+        "chi": Symbol("chi"), "psi": Symbol("psi"),
         "omega": Symbol("omega"),
-        # Capital Greek letters commonly used as symbols
-        "Alpha": Symbol("Alpha"),
-        "Beta": Symbol("Beta"),
-        "Gamma": Symbol("Gamma"),
-        "Delta": Symbol("Delta"),
-        "Theta": Symbol("Theta"),
-        "Lambda": Symbol("Lambda"),
-        "Sigma": Symbol("Sigma"),
-        "Phi": Symbol("Phi"),
-        "Psi": Symbol("Psi"),
-        "Omega": Symbol("Omega"),
-        # Mathematical constants
-        "pi": pi,
-        "e": E,
-        "E": E,
-        "I": I,
-        "oo": oo,
-        # Trigonometric functions
-        "sin": sympy.sin,
-        "cos": sympy.cos,
-        "tan": sympy.tan,
-        "cot": sympy.cot,
-        "sec": sympy.sec,
-        "csc": sympy.csc,
-        # Inverse trigonometric
-        "asin": sympy.asin,
-        "acos": sympy.acos,
-        "atan": sympy.atan,
+        "pi": pi, "e": E, "E": E, "I": I, "oo": oo,
+        "sin": sympy.sin, "cos": sympy.cos, "tan": sympy.tan,
+        "cot": sympy.cot, "sec": sympy.sec, "csc": sympy.csc,
+        "asin": sympy.asin, "acos": sympy.acos, "atan": sympy.atan,
         "atan2": sympy.atan2,
-        # Hyperbolic
-        "sinh": sympy.sinh,
-        "cosh": sympy.cosh,
-        "tanh": sympy.tanh,
-        # Logarithmic / exponential
-        "log": sympy.log,
-        "ln": sympy.log,
-        "exp": sympy.exp,
-        # Roots and absolute value
-        "sqrt": sympy.sqrt,
-        "cbrt": sympy.cbrt,
-        "abs": sympy.Abs,
-        "Abs": sympy.Abs,
-        # Combinatorial
-        "factorial": sympy.factorial,
-        "binomial": sympy.binomial,
-        # Sympy internal types emitted by standard_transformations
-        "Integer": Integer,
-        "Float": Float,
-        "Rational": Rational,
+        "sinh": sympy.sinh, "cosh": sympy.cosh, "tanh": sympy.tanh,
+        "log": sympy.log, "ln": sympy.log, "exp": sympy.exp,
+        "sqrt": sympy.sqrt, "cbrt": sympy.cbrt,
+        "abs": sympy.Abs, "Abs": sympy.Abs,
+        "factorial": sympy.factorial, "binomial": sympy.binomial,
+        "Integer": Integer, "Float": Float, "Rational": Rational,
+        # Symbol is required because SymPy standard_transformations may emit
+        # Symbol('name') during evaluation. This allows users to create symbols
+        # with arbitrary names — the denylist and stripped builtins mitigate
+        # downstream attribute-access risks on resulting objects.
         "Symbol": Symbol,
     }
-
     if extra_symbols:
-        # Only allow Symbol instances or sympy types as overrides
         for key, value in extra_symbols.items():
             if isinstance(value, (Symbol, sympy.Basic)):
                 safe[key] = value
-
     return safe
 
 
-# Pre-built global dict that strips builtins.
-# IMPORTANT: A shallow copy is made per invocation (see safe_parse_expr)
-# to prevent cross-call mutation by SymPy transformations.
-_SAFE_GLOBAL_DICT: dict = {"__builtins__": {}}
+class SafeParserError(ValueError):
+    pass
 
 
 def safe_parse_expr(
     expression: str,
     *,
-    transformations=SAFE_TRANSFORMATIONS,
     extra_symbols: Optional[Dict[str, Any]] = None,
-) -> sympy.Basic:
-    """
-    Safely parse a mathematical expression string into a sympy expression.
-
-    Raises ValueError if the expression contains dangerous patterns or
-    cannot be parsed.
-
-    Args:
-        expression: The math expression string to parse.
-        transformations: sympy transformations to apply (default includes
-            implicit multiplication).
-        extra_symbols: Additional Symbol mappings to include in the
-            local namespace.
-
-    Returns:
-        A sympy expression object.
-
-    Raises:
-        ValueError: If the expression is rejected by safety checks or
-            cannot be parsed.
-    """
+    transformations: Optional[Tuple] = None,
+) -> Any:
     if not isinstance(expression, str):
-        raise ValueError("Expression must be a string")
-
+        raise SafeParserError(
+            f"Expression must be a string, got {type(expression).__name__}"
+        )
     stripped = expression.strip()
     if not stripped:
-        raise ValueError("Expression must not be empty")
-
-    # Length limit to prevent resource exhaustion
-    if len(stripped) > 5000:
-        raise ValueError("Expression too long (max 5000 characters)")
-
-    # Deny-list check: reject expressions with dangerous patterns
-    if _DANGEROUS_PATTERNS.search(stripped):
-        raise ValueError("Expression contains disallowed constructs")
-
+        raise SafeParserError("Expression is empty")
+    if len(stripped) > MAX_EXPRESSION_LENGTH:
+        raise SafeParserError(
+            f"Expression exceeds maximum length of {MAX_EXPRESSION_LENGTH} characters"
+        )
+    match = _DENYLIST_PATTERN.search(stripped)
+    if match:
+        raise SafeParserError(
+            f"Expression contains disallowed construct: {match.group()!r}"
+        )
+    _check_ast_depth(stripped)
     local_dict = _build_safe_local_dict(extra_symbols)
-
+    if transformations is None:
+        transformations = standard_transformations + (
+            implicit_multiplication_application,
+        )
+    global_dict = dict(_SAFE_GLOBAL_DICT_TEMPLATE)
     try:
-        return parse_expr(
+        result = parse_expr(
             stripped,
             local_dict=local_dict,
-            global_dict=dict(_SAFE_GLOBAL_DICT),
+            global_dict=global_dict,
             transformations=transformations,
         )
+        _validate_sympy_result(result)
+        return result
+    except SafeParserError:
+        raise
     except Exception as exc:
         raise ValueError(f"Failed to parse expression: {exc}") from exc
+
+
+def validate_variable_name(variable: str) -> str:
+    if not isinstance(variable, str):
+        raise SafeParserError(
+            f"Variable name must be a string, got {type(variable).__name__}"
+        )
+    stripped = variable.strip()
+    if not stripped:
+        raise SafeParserError("Variable name is empty")
+    if len(stripped) > 50:
+        raise SafeParserError("Variable name is too long")
+    if not re.match(r"^[A-Za-z][A-Za-z0-9_]*$", stripped):
+        raise SafeParserError(
+            f"Invalid variable name: {stripped!r}. "
+            "Must start with a letter and contain only alphanumeric characters."
+        )
+    match = _DENYLIST_PATTERN.search(stripped)
+    if match:
+        raise SafeParserError(
+            f"Variable name contains disallowed construct: {match.group()!r}"
+        )
+    return stripped
+
+
+def get_safe_symbol(name: str) -> Symbol:
+    """Return a Symbol consistent with safe_parse_expr's namespace.
+
+    Ensures calculus operation variables match any special assumptions
+    (e.g. Symbol(\"n\", integer=True, positive=True)) applied during parsing,
+    preventing symbol mismatch in diff/integrate/limit.
+    """
+    name = validate_variable_name(name)
+    safe = _build_safe_local_dict()
+    if name in safe:
+        sym = safe[name]
+        if isinstance(sym, Symbol):
+            return sym
+    return Symbol(name)

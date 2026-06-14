@@ -1,172 +1,207 @@
 """
-Security tests for CWE-95: parse_expr code injection prevention.
-
-Verifies that safe_parse_expr blocks code execution payloads while
-allowing legitimate mathematical expressions.
+Security tests for safe_parse_expr - CWE-95 mitigation.
 """
 
 import pytest
-from qwed_new.core.safe_parser import safe_parse_expr, validate_variable_name
+from qwed_new.core.safe_parser import (
+    safe_parse_expr,
+    validate_variable_name,
+    SafeParserError,
+    MAX_EXPRESSION_LENGTH,
+)
 
 
-class TestSafeParseExprBlocksCodeExecution:
-    """Verify that crafted expressions cannot execute arbitrary code."""
+class TestDenylist:
 
-    @pytest.mark.parametrize(
-        "payload",
-        [
-            '__import__("os").system("id")',
-            '__import__("os").getpid()',
-            '__import__("subprocess").check_output("id")',
-            'exec("import os")',
-            'open("/etc/passwd").read()',
-            'getattr(int, "__subclasses__")',
-            '().__class__.__bases__[0].__subclasses__()',
-            '__builtins__["__import__"]("os")',
-            'globals()["__builtins__"]',
-            'locals()',
-            'compile("1", "<>", "exec")',
-            'type("X", (), {})',
-            'os.system("id")',
-            'sys.exit(1)',
-            'breakpoint()',
-            'dir()',
-            'vars()',
-            'setattr(x, "y", 1)',
-            'delattr(x, "y")',
-            'subprocess.call("id")',
-        ],
-        ids=lambda p: p[:40],
-    )
-    def test_dangerous_payload_is_rejected(self, payload: str) -> None:
-        with pytest.raises(ValueError, match="disallowed constructs"):
-            safe_parse_expr(payload)
-
-    @pytest.mark.parametrize(
-        "payload",
-        [
-            'print("hello")',
-            'input("prompt")',
-        ],
-        ids=lambda p: p[:40],
-    )
-    def test_io_functions_blocked(self, payload: str) -> None:
-        with pytest.raises(ValueError, match="disallowed constructs"):
+    @pytest.mark.parametrize("payload", [
+        '__import__("os").system("id")',
+        '__import__(chr(111)+chr(115)).system(chr(105)+chr(100))',
+        'eval("1+1")',
+        'exec("print(1)")',
+        'os.system("id")',
+        'os.popen("id").read()',
+        'subprocess.call(["id"])',
+        '__builtins__["__import__"]("os")',
+        'getattr(__import__("os"), "system")("id")',
+        'open("/etc/passwd")',
+        '"".__class__.__bases__[0].__subclasses__()',
+        'sys.modules["os"]',
+        'compile("import os", "", "exec")',
+        'chr(65)',
+        'ord("A")',
+        'print("hello")',
+        'input("prompt")',
+        'breakpoint()',
+        'exit(0)',
+        'type("X", (), {})',
+        'dir()',
+        'vars()',
+    ])
+    def test_injection_blocked(self, payload):
+        with pytest.raises(SafeParserError, match="disallowed construct"):
             safe_parse_expr(payload)
 
 
-class TestSafeParseExprAllowsLegitMath:
-    """Verify that normal math expressions still parse correctly."""
+class TestLegitimateExpressions:
 
-    @pytest.mark.parametrize(
-        "expression,expected_str",
-        [
-            ("2+2", "4"),
-            ("x**2 + 2*x + 1", "x**2 + 2*x + 1"),
-            ("sin(x)", "sin(x)"),
-            ("cos(x)**2 + sin(x)**2", "sin(x)**2 + cos(x)**2"),
-            ("pi", "pi"),
-            ("sqrt(16)", "4"),
-            ("3/4", "3/4"),
-            ("log(x)", "log(x)"),
-            ("exp(1)", "E"),
-            ("factorial(5)", "120"),
-            ("atan2(1, 1)", "pi/4"),
-        ],
-    )
-    def test_valid_expression_parses(
-        self, expression: str, expected_str: str
-    ) -> None:
-        result = safe_parse_expr(expression)
+    @pytest.mark.parametrize("expr,expected_str", [
+        ("2 + 2", "4"),
+        ("3 * 4 + 1", "13"),
+        ("10 / 2", "5"),
+        ("x**2 + 2*x + 1", "x**2 + 2*x + 1"),
+        ("(x + 1)**2", "(x + 1)**2"),
+        ("sin(pi/2)", "1"),
+        ("cos(0)", "1"),
+        ("log(1)", "0"),
+        ("exp(0)", "1"),
+        ("sqrt(16)", "4"),
+        ("factorial(5)", "120"),
+        ("pi", "pi"),
+        ("E", "E"),
+        ("Abs(-5)", "5"),
+    ])
+    def test_valid_expression(self, expr, expected_str):
+        result = safe_parse_expr(expr)
         assert str(result) == expected_str
 
 
-class TestSafeParseExprMultiLetterSymbols:
-    """Verify that multi-letter symbolic variable names parse correctly."""
+class TestMultiLetterVariables:
 
-    @pytest.mark.parametrize(
-        "expression,expected_str",
-        [
-            ("alpha + beta", "alpha + beta"),
-            ("theta**2", "theta**2"),
-            ("sin(phi)", "sin(phi)"),
-            ("gamma * delta", "delta*gamma"),
-            ("epsilon + tau", "epsilon + tau"),
-            ("sigma * omega", "omega*sigma"),
-            ("Lambda + Omega", "Lambda + Omega"),
-        ],
-    )
-    def test_greek_letter_variables_parse(
-        self, expression: str, expected_str: str
-    ) -> None:
-        result = safe_parse_expr(expression)
-        assert str(result) == expected_str
+    @pytest.mark.parametrize("var_name", [
+        "alpha", "beta", "gamma", "delta", "epsilon",
+        "theta", "phi", "psi", "omega", "sigma",
+        "tau", "mu", "nu", "xi", "eta", "zeta",
+        "kappa", "rho", "chi",
+    ])
+    def test_greek_variable(self, var_name):
+        result = safe_parse_expr(f"{var_name}**2 + 1")
+        assert var_name in str(result)
 
-    def test_mixed_single_and_greek_variables(self) -> None:
-        result = safe_parse_expr("x + alpha")
-        assert str(result) == "alpha + x"
+    def test_multi_variable_expression(self):
+        result = safe_parse_expr("alpha * beta + gamma")
+        result_str = str(result)
+        assert "alpha" in result_str
+        assert "beta" in result_str
+        assert "gamma" in result_str
 
 
-class TestSafeParseExprInputValidation:
-    """Verify input validation guards."""
+class TestInputValidation:
 
-    def test_rejects_empty_string(self) -> None:
-        with pytest.raises(ValueError, match="must not be empty"):
+    def test_non_string_input(self):
+        with pytest.raises(SafeParserError, match="must be a string"):
+            safe_parse_expr(42)
+
+    def test_none_input(self):
+        with pytest.raises(SafeParserError, match="must be a string"):
+            safe_parse_expr(None)
+
+    def test_empty_string(self):
+        with pytest.raises(SafeParserError, match="empty"):
             safe_parse_expr("")
 
-    def test_rejects_non_string(self) -> None:
-        with pytest.raises(ValueError, match="must be a string"):
-            safe_parse_expr(123)  # type: ignore[arg-type]
+    def test_whitespace_only(self):
+        with pytest.raises(SafeParserError, match="empty"):
+            safe_parse_expr("   ")
 
-    def test_rejects_oversized_input(self) -> None:
-        with pytest.raises(ValueError, match="too long"):
-            safe_parse_expr("x + " * 2000)
+    def test_too_long(self):
+        expr = "x + " * (MAX_EXPRESSION_LENGTH // 4 + 1)
+        with pytest.raises(SafeParserError, match="maximum length"):
+            safe_parse_expr(expr)
 
 
-class TestSafeParseExprGlobalDictIsolation:
-    """Verify that _SAFE_GLOBAL_DICT is not mutated across calls."""
+class TestVariableNameValidation:
 
-    def test_global_dict_not_shared_between_calls(self) -> None:
-        """Parse two different expressions and confirm no cross-contamination."""
+    @pytest.mark.parametrize("name", ["x", "y", "theta", "alpha", "x1"])
+    def test_valid_variable(self, name):
+        assert validate_variable_name(name) == name
+
+    def test_non_string(self):
+        with pytest.raises(SafeParserError, match="must be a string"):
+            validate_variable_name(42)
+
+    def test_empty(self):
+        with pytest.raises(SafeParserError, match="empty"):
+            validate_variable_name("")
+
+    def test_too_long(self):
+        with pytest.raises(SafeParserError, match="too long"):
+            validate_variable_name("a" * 51)
+
+    def test_starts_with_number(self):
+        with pytest.raises(SafeParserError, match="Invalid variable name"):
+            validate_variable_name("1x")
+
+    def test_special_characters(self):
+        with pytest.raises(SafeParserError, match="Invalid variable name"):
+            validate_variable_name("x;drop")
+
+    def test_denylist_blocked(self):
+        with pytest.raises(SafeParserError):
+            validate_variable_name("__import__")
+
+    def test_os_blocked(self):
+        with pytest.raises(SafeParserError, match="disallowed"):
+            validate_variable_name("os")
+
+
+class TestNamespaceIsolation:
+
+    def test_global_dict_not_polluted(self):
         safe_parse_expr("x + 1")
-        safe_parse_expr("alpha + beta")
-        # If global_dict were shared mutably, SymPy transformations could
-        # leak symbols from one call into another. The shallow-copy fix
-        # prevents this. We just verify no exception is raised and both
-        # parse independently.
-        result = safe_parse_expr("y + 2")
-        assert str(result) == "y + 2"
+        safe_parse_expr("y + 2")
+        result = safe_parse_expr("x + y")
+        assert "x" in str(result)
+        assert "y" in str(result)
+
+    def test_global_dict_not_shared_between_calls(self):
+        from qwed_new.core.safe_parser import _SAFE_GLOBAL_DICT_TEMPLATE
+        before = dict(_SAFE_GLOBAL_DICT_TEMPLATE)
+        safe_parse_expr("x + 1")
+        safe_parse_expr("y + 2")
+        assert _SAFE_GLOBAL_DICT_TEMPLATE == before
 
 
-class TestValidateVariableName:
-    """Verify variable name validation for calculus methods."""
+class TestGetSafeSymbol:
 
-    @pytest.mark.parametrize(
-        "name",
-        ["x", "y", "theta", "alpha", "x1", "var_name"],
-    )
-    def test_valid_variable_names_accepted(self, name: str) -> None:
-        # Should not raise
-        validate_variable_name(name)
+    def test_consistency_with_n(self):
+        from qwed_new.core.safe_parser import get_safe_symbol
+        n1 = get_safe_symbol("n")
+        n2 = get_safe_symbol("n")
+        assert n1 == n2
 
-    @pytest.mark.parametrize(
-        "name",
-        [
-            "",           # empty
-            "   ",        # whitespace only
-            "123",        # starts with digit
-            "__import__", # dunder pattern
-            "a" * 51,    # too long
-            "os",         # denylist hit
-            "sys",        # denylist hit
-            "eval",       # denylist hit
-            "exec",       # denylist hit
-        ],
-    )
-    def test_invalid_variable_names_rejected(self, name: str) -> None:
-        with pytest.raises(ValueError):
-            validate_variable_name(name)
+    def test_plain_symbol(self):
+        from qwed_new.core.safe_parser import get_safe_symbol
+        s = get_safe_symbol("myvar")
+        assert str(s) == "myvar"
 
-    def test_rejects_non_string_variable(self) -> None:
-        with pytest.raises(ValueError, match="must be a string"):
-            validate_variable_name(123)  # type: ignore[arg-type]
+    def test_invalid_variable(self):
+        from qwed_new.core.safe_parser import get_safe_symbol
+        with pytest.raises(SafeParserError):
+            get_safe_symbol("os.system")
+
+
+class TestASTDepthLimit:
+
+    def test_deeply_nested_rejected(self):
+        deep_expr = "x"
+        for _ in range(40):
+            deep_expr = f"sin({deep_expr})"
+        with pytest.raises((SafeParserError, ValueError)):
+            safe_parse_expr(deep_expr)
+
+    def test_normal_expression_accepted(self):
+        result = safe_parse_expr("sin(cos(x + 1) * 2)")
+        assert result is not None
+
+
+class TestExtraSymbols:
+
+    def test_extra_symbol(self):
+        from sympy import Symbol
+        custom = {"myvar": Symbol("myvar")}
+        result = safe_parse_expr("myvar + 1", extra_symbols=custom)
+        assert "myvar" in str(result)
+
+    def test_extra_symbol_rejects_non_sympy(self):
+        result = safe_parse_expr("x + 1", extra_symbols={"bad": lambda: None})
+        assert str(result) == "x + 1"

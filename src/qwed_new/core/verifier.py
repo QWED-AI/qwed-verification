@@ -18,7 +18,8 @@ from sympy import (
     diff, integrate, limit, oo,
     simplify, expand
 )
-from qwed_new.core.safe_parser import safe_parse_expr, validate_variable_name, SAFE_TRANSFORMATIONS
+from qwed_new.core.safe_parser import safe_parse_expr, validate_variable_name, get_safe_symbol
+from sympy.parsing.sympy_parser import standard_transformations, implicit_multiplication_application
 from typing import Any, Dict, List, Optional
 from decimal import Decimal, ROUND_HALF_UP
 from dataclasses import dataclass
@@ -52,7 +53,7 @@ class VerificationEngine:
     """
     
     # Parsing transformations for more natural input
-    TRANSFORMATIONS = SAFE_TRANSFORMATIONS
+    TRANSFORMATIONS = standard_transformations + (implicit_multiplication_application,)
     MAX_VERIFY_MATH_TOLERANCE_RATIO = Decimal("0.01")
     MIN_VERIFY_MATH_TOLERANCE_CAP = Decimal("0.01")
     
@@ -282,8 +283,7 @@ class VerificationEngine:
         """
         try:
             expr = safe_parse_expr(expression)
-            validate_variable_name(variable)
-            var = Symbol(variable)
+            var = get_safe_symbol(variable)
             expected_expr = safe_parse_expr(expected)
             
             # Calculate derivative
@@ -330,8 +330,7 @@ class VerificationEngine:
         """
         try:
             expr = safe_parse_expr(expression)
-            validate_variable_name(variable)
-            var = Symbol(variable)
+            var = get_safe_symbol(variable)
             expected_expr = safe_parse_expr(expected)
             
             if lower_bound is not None and upper_bound is not None:
@@ -388,8 +387,7 @@ class VerificationEngine:
         """
         try:
             expr = safe_parse_expr(expression)
-            validate_variable_name(variable)
-            var = Symbol(variable)
+            var = get_safe_symbol(variable)
             expected_expr = safe_parse_expr(expected)
             
             # Parse the point (handle infinity)
