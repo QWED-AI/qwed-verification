@@ -457,7 +457,7 @@ async def verify_math(
     
     try:
         import sympy
-        from sympy.parsing.sympy_parser import parse_expr
+        from qwed_new.core.safe_parser import safe_parse_expr
         from sympy import simplify, symbols, Eq, solve
         
         expression = request.get("expression")
@@ -472,8 +472,8 @@ async def verify_math(
             left_str, right_str = expression.split("=", 1)
             
             # Parse both sides
-            left = parse_expr(left_str)
-            right = parse_expr(right_str)
+            left = safe_parse_expr(left_str)
+            right = safe_parse_expr(right_str)
             
             # Simplify and check equivalence
             difference = simplify(left - right)
@@ -501,7 +501,7 @@ async def verify_math(
                     if re.search(r'/\d+\(', expression.replace(" ", "")):
                         is_ambiguous = True
                 
-                parsed = parse_expr(expression_normalized)
+                parsed = safe_parse_expr(expression_normalized)
                 
                 # Check for division by zero before simplifying
                 if "/0" in expression.replace(" ", "") or "/ 0" in expression:

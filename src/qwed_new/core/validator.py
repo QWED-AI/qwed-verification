@@ -10,7 +10,7 @@ Validation Checks:
 3. Evaluable: Can we calculate a numerical result?
 """
 
-from sympy.parsing.sympy_parser import parse_expr
+from qwed_new.core.safe_parser import safe_parse_expr
 from typing import Dict
 
 
@@ -61,7 +61,7 @@ class SemanticValidator:
         
         # Check 1: Syntax validation
         try:
-            expr = parse_expr(expression)
+            expr = safe_parse_expr(expression)
             checks_passed.append("syntax")
         except Exception as e:
             checks_failed.append("syntax")
