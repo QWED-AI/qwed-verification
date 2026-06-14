@@ -186,7 +186,7 @@ class TestASTDepthLimit:
         deep_expr = "x"
         for _ in range(40):
             deep_expr = f"sin({deep_expr})"
-        with pytest.raises((SafeParserError, ValueError)):
+        with pytest.raises(SafeParserError):
             safe_parse_expr(deep_expr)
 
     def test_normal_expression_accepted(self):
@@ -203,5 +203,5 @@ class TestExtraSymbols:
         assert "myvar" in str(result)
 
     def test_extra_symbol_rejects_non_sympy(self):
-        result = safe_parse_expr("x + 1", extra_symbols={"bad": lambda: None})
-        assert str(result) == "x + 1"
+        with pytest.raises(SafeParserError, match="must be a SymPy"):
+            safe_parse_expr("x + 1", extra_symbols={"bad": lambda: None})

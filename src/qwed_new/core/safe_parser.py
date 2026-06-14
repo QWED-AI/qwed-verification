@@ -58,7 +58,9 @@ def _check_ast_depth(expression: str) -> None:
     try:
         tree = ast.parse(expression, mode="eval")
     except SyntaxError:
-        return
+        raise SafeParserError(
+            "Expression uses syntax that cannot be validated for safety"
+        )
     depth = _ast_node_depth(tree)
     if depth > _AST_MAX_DEPTH:
         raise SafeParserError(
@@ -126,8 +128,12 @@ def _build_safe_local_dict(
     }
     if extra_symbols:
         for key, value in extra_symbols.items():
-            if isinstance(value, (Symbol, sympy.Basic)):
-                safe[key] = value
+            if not isinstance(value, (Symbol, sympy.Basic)):
+                raise SafeParserError(
+                    f"extra_symbols[{key!r}] must be a SymPy Symbol or Basic, "
+                    f"got {type(value).__name__}"
+                )
+            safe[key] = value
     return safe
 
 
@@ -175,8 +181,8 @@ def safe_parse_expr(
         return result
     except SafeParserError:
         raise
-    except Exception as exc:
-        raise ValueError(f"Failed to parse expression: {exc}") from exc
+    except Exception:
+        raise SafeParserError("Failed to parse expression") from None
 
 
 def validate_variable_name(variable: str) -> str:

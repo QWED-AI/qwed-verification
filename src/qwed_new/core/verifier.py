@@ -18,7 +18,7 @@ from sympy import (
     diff, integrate, limit, oo,
     simplify, expand
 )
-from qwed_new.core.safe_parser import safe_parse_expr, validate_variable_name, get_safe_symbol
+from qwed_new.core.safe_parser import safe_parse_expr, get_safe_symbol
 from sympy.parsing.sympy_parser import standard_transformations, implicit_multiplication_application
 from typing import Any, Dict, List, Optional
 from decimal import Decimal, ROUND_HALF_UP
