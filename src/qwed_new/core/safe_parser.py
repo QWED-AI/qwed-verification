@@ -129,7 +129,7 @@ def _build_safe_local_dict(
         "tau": Symbol("tau"), "phi": Symbol("phi"),
         "chi": Symbol("chi"), "psi": Symbol("psi"),
         "omega": Symbol("omega"),
-        "pi": pi, "e": E, "E": E, "I": I, "oo": oo,
+        "pi": pi, "E": E, "I": I, "oo": oo,
         "sin": sympy.sin, "cos": sympy.cos, "tan": sympy.tan,
         "cot": sympy.cot, "sec": sympy.sec, "csc": sympy.csc,
         "asin": sympy.asin, "acos": sympy.acos, "atan": sympy.atan,
