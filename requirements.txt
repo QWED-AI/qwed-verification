@@ -23,6 +23,10 @@ defusedxml==0.7.1 \
     --hash=sha256:1bb3032db185915b62d7c6209c5a8792be6a32ab2fedacc84e01b52c51aa3e69 \
     --hash=sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61
     # via -r requirements.in
+exceptiongroup==1.3.1 \
+    --hash=sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219 \
+    --hash=sha256:a7a39a3bd276781e98394987d3a5701d0c4edffb633bb7a5144577f82c773598
+    # via anyio
 h11==0.16.0 \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
@@ -49,9 +53,9 @@ mpmath==1.4.1 \
     --hash=sha256:dc4f0ea2304480d4a9a48a94c1020571558ade522b44a6912efac63a586e140f \
     --hash=sha256:efd6d1b75f09d69524a67609949812668b28e81ecbfe0ab449ced8c13e92642e
     # via sympy
-pyjwt==2.12.0 \
-    --hash=sha256:2f62390b667cd8257de560b850bb5a883102a388829274147f1d724453f8fb02 \
-    --hash=sha256:9bb459d1bdd0387967d287f5656bf7ec2b9a26645d1961628cda1764e087fd6e
+pyjwt==2.13.0 \
+    --hash=sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423 \
+    --hash=sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728
     # via -r requirements.in
 sentry-sdk==2.57.0 \
     --hash=sha256:4be8d1e71c32fb27f79c577a337ac8912137bba4bcbc64a4ec1da4d6d8dc5199 \
@@ -68,7 +72,10 @@ sympy==1.12 \
 typing-extensions==4.15.0 \
     --hash=sha256:0cea48d173cc12fa28ecabc3b837ea3cf6f38c6d1136f85cbaaf598984861466 \
     --hash=sha256:f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548
-    # via anyio
+    # via
+    #   anyio
+    #   exceptiongroup
+    #   pyjwt
 urllib3==2.7.0 \
     --hash=sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c \
     --hash=sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897
