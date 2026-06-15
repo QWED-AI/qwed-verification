@@ -1,11 +1,12 @@
 ## QWED Enforcement Checklist
 
-- [ ] No fallback execution added
-- [ ] No new raw `eval` / `exec` usage introduced
-- [ ] Verification is enforced before execution
-- [ ] No silent error handling or bypass-oriented retries added
-- [ ] No trust placed in LLM-provided expected values, reasoning, or confidence
-- [ ] Failure paths remain fail-closed
+- [ ] Verification before execution — no path bypasses verification
+- [ ] Fail closed — all failure paths block, not degrade
+- [ ] Approved paths only — no bare `eval` / `exec` / `parse_expr`
+- [ ] No silent degradation — no suppressed errors or bypass-oriented retries
+- [ ] No trust in LLM output — claims verified by deterministic computation
+- [ ] Vulnerability family thinking — similar bypass patterns considered
+- [ ] Existing issues not regressed — severity of unfixed issues unchanged
 
 ## Summary
 

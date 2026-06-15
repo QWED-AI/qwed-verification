@@ -39,6 +39,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Boundary Check (QWED Rules)
+      run: python scripts/check_boundary.py
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
