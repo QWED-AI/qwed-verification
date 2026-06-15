@@ -32,6 +32,19 @@ QWED is NOT just another LLM wrapper. Our philosophy:
 When contributor guidance and enforcement guidance appear to conflict, follow
 `QWED_RULES.md` as the authoritative source for boundary behavior.
 
+### ✅ Approved Paths
+
+Sensitive operations must go through approved wrappers — never bare calls:
+
+| Dangerous Operation | Approved Path |
+|---------------------|---------------|
+| `eval()` / `exec()` | `code_engine.safe_eval()` / `code_engine.safe_exec()` |
+| `parse_expr()` | `safe_parser.safe_parse_expr()` |
+| `os.system()` / `subprocess.Popen()` | `code_engine.safe_shell()` |
+
+Direct calls to these dangerous functions outside their approved wrappers will
+be caught by the CI boundary gate (see `scripts/check_boundary.py`).
+
 ### ❌ Common Misunderstandings
 
 | Wrong Approach | Correct Approach |
@@ -40,6 +53,8 @@ When contributor guidance and enforcement guidance appear to conflict, follow
 | "Add more LLM prompts to fix edge cases" | Add deterministic patterns/rules |
 | "Cache LLM responses" | Deterministic verification doesn't need caching |
 | "Trust LLM confidence scores" | Use symbolic proof verification |
+| "The system prompt will prevent X" | Add an explicit deterministic guard |
+| "The model said it's correct" | Verify with deterministic computation |
 
 ---
 

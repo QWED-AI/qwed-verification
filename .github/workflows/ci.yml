@@ -44,6 +44,9 @@ jobs:
       with:
         python-version: "3.11"
 
+    - name: Boundary Check (QWED Rules)
+      run: python scripts/check_boundary.py
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
