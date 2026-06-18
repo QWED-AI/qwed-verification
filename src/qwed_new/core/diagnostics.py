@@ -407,10 +407,9 @@ class DiagnosticResult:
         error = data.get("error")
         message = data.get("message", data.get("reasoning", ""))
 
-        # Truthiness check — legacy engines may use 1/0 instead of True/False
-        is_correct_truthy = bool(is_correct)
-
-        if legacy_status == "VERIFIED" or is_correct_truthy:
+        # Only explicit "VERIFIED" status is rejected here — truthy is_correct
+        # with unknown status falls through to the unrecognized-pattern raise below.
+        if legacy_status == "VERIFIED":
             raise ValueError(
                 "from_legacy_dict cannot migrate VERIFIED results — "
                 "proof artifacts were not retained by legacy engines. "
@@ -453,7 +452,7 @@ class DiagnosticResult:
                 },
             )
 
-        if not is_correct_truthy:
+        if not bool(is_correct):
             if error:
                 return cls.blocked(
                     agent_message="Verification blocked",
