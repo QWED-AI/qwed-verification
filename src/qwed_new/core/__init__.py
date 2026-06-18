@@ -20,6 +20,14 @@ from .exceptions import (
     wrap_error,
 )
 
+# Structured verification diagnostics (Issue #204)
+from .diagnostics import (
+    DiagnosticStatus,
+    DiagnosticResult,
+    AdvisoryCheck,
+    compute_proof_ref,
+)
+
 __all__ = [
     # Exceptions
     "QWEDError",
@@ -34,6 +42,11 @@ __all__ = [
     "QWEDAPIError",
     "QWEDDependencyError",
     "wrap_error",
+    # Diagnostics (#204)
+    "DiagnosticStatus",
+    "DiagnosticResult",
+    "AdvisoryCheck",
+    "compute_proof_ref",
 ]
 
 # Lazy imports for verifiers (avoid circular imports and missing deps)
