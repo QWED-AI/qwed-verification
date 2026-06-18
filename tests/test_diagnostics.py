@@ -434,6 +434,14 @@ class TestSerialization(unittest.TestCase):
             DiagnosticResult.from_dict({"status": "UNVERIFIABLE"})
         self.assertIn("agent_message", str(ctx.exception))
 
+    def test_from_dict_invalid_status_raises_with_guidance(self):
+        """Invalid status string must raise with valid options + from_legacy_dict pointer."""
+        with self.assertRaises(ValueError) as ctx:
+            DiagnosticResult.from_dict({"status": "CORRECTION_NEEDED", "agent_message": "x"})
+        msg = str(ctx.exception)
+        self.assertIn("CORRECTION_NEEDED", msg)
+        self.assertIn("from_legacy_dict", msg)
+
     def test_from_dict_empty_agent_message_raises(self):
         with self.assertRaises(ValueError):
             DiagnosticResult.from_dict({"status": "UNVERIFIABLE", "agent_message": "  "})

@@ -312,10 +312,20 @@ class DiagnosticResult:
             ValueError: If agent_message is missing or empty — Layer 1
                         diagnostics are mandatory and cannot be defaulted
                         during deserialization.
+            ValueError: If status is a string not in DiagnosticStatus —
+                        use from_legacy_dict() for pre-#204 engine data.
         """
         status = data.get("status", "UNVERIFIABLE")
         if isinstance(status, str):
-            status = DiagnosticStatus(status)
+            try:
+                status = DiagnosticStatus(status)
+            except ValueError:
+                valid = ", ".join(s.value for s in DiagnosticStatus)
+                raise ValueError(
+                    f"from_dict: invalid status {status!r} — "
+                    f"must be one of: {valid}. "
+                    "Use from_legacy_dict() for pre-#204 engine data."
+                ) from None
 
         agent_message = data.get("agent_message")
         if not agent_message or not str(agent_message).strip():
