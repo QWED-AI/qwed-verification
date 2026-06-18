@@ -226,14 +226,17 @@ class TestComputeProofRef(unittest.TestCase):
         ref2 = compute_proof_ref({"b": 2, "a": 1})
         self.assertEqual(ref1, ref2)
 
-    def test_non_serializable_falls_back_to_str(self):
-        """default=str in json.dumps stringifies non-serializable objects."""
-        ref = compute_proof_ref({"obj": object()})
-        self.assertTrue(ref.startswith("sha256:"))
+    def test_non_serializable_raises_value_error(self):
+        """Non-serializable objects must be rejected to ensure deterministic hashing."""
+        with self.assertRaises(ValueError) as ctx:
+            compute_proof_ref({"obj": object()})
+        self.assertIn("JSON-serializable", str(ctx.exception))
 
-    def test_nested_non_serializable_falls_back_to_str(self):
-        ref = compute_proof_ref({"data": {"inner": object()}})
-        self.assertTrue(ref.startswith("sha256:"))
+    def test_nested_non_serializable_raises_value_error(self):
+        """Nested non-serializable objects must also be rejected."""
+        with self.assertRaises(ValueError) as ctx:
+            compute_proof_ref({"data": {"inner": object()}})
+        self.assertIn("JSON-serializable", str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +249,11 @@ class TestAdvisoryCheck(unittest.TestCase):
     def test_default_advisory_only_is_true(self):
         ac = AdvisoryCheck(name="llm_fallback")
         self.assertTrue(ac.advisory_only)
+
+    def test_advisory_only_false_raises(self):
+        """advisory_only=False must raise — structurally enforced contract."""
+        with self.assertRaises(ValueError):
+            AdvisoryCheck(name="x", advisory_only=False)
 
     def test_advisory_check_to_dict(self):
         ac = AdvisoryCheck(
@@ -365,6 +373,16 @@ class TestSerialization(unittest.TestCase):
         r = DiagnosticResult.from_dict(d)
         self.assertEqual(r.status, DiagnosticStatus.UNVERIFIABLE)
 
+    def test_from_dict_missing_agent_message_raises(self):
+        """Missing agent_message must raise clear deserialization error."""
+        with self.assertRaises(ValueError) as ctx:
+            DiagnosticResult.from_dict({"status": "UNVERIFIABLE"})
+        self.assertIn("agent_message", str(ctx.exception))
+
+    def test_from_dict_empty_agent_message_raises(self):
+        with self.assertRaises(ValueError):
+            DiagnosticResult.from_dict({"status": "UNVERIFIABLE", "agent_message": "  "})
+
 
 # ---------------------------------------------------------------------------
 # from_legacy_dict — migration helper for ad-hoc engine dicts
@@ -413,10 +431,23 @@ class TestFromLegacyDict(unittest.TestCase):
         with self.assertRaises(ValueError):
             DiagnosticResult.from_legacy_dict(legacy, engine="math")
 
-    def test_unrecognized_status_becomes_unverifiable(self):
-        legacy = {"is_correct": False, "status": "UNKNOWN_STATUS"}
-        r = DiagnosticResult.from_legacy_dict(legacy, engine="test")
+    def test_is_correct_integer_one_raises(self):
+        """Legacy engines using 1 instead of True must be caught (identity bypass fix)."""
+        legacy = {"is_correct": 1, "status": "WHATEVER"}
+        with self.assertRaises(ValueError):
+            DiagnosticResult.from_legacy_dict(legacy, engine="math")
+
+    def test_is_correct_integer_zero_becomes_unverifiable(self):
+        """Legacy engines using 0 instead of False must be handled (identity bypass fix)."""
+        legacy = {"is_correct": 0, "status": "WHATEVER"}
+        r = DiagnosticResult.from_legacy_dict(legacy, engine="math")
         self.assertEqual(r.status, DiagnosticStatus.UNVERIFIABLE)
+
+    def test_unrecognized_truthy_raises(self):
+        """Unrecognized legacy patterns with truthy is_correct must raise (fail-loudly)."""
+        legacy = {"is_correct": "yes", "status": "UNKNOWN_STATUS"}
+        with self.assertRaises(ValueError):
+            DiagnosticResult.from_legacy_dict(legacy, engine="test")
 
     def test_no_status_no_is_correct_becomes_inconclusive(self):
         """When is_correct defaults to False with no error, result is inconclusive."""
@@ -507,7 +538,7 @@ class TestRealisticScenarios(unittest.TestCase):
             agent_message="Claim could not be deterministically verified",
             developer_fields={
                 "deterministic_verdict": "INSUFFICIENT_EVIDENCE",
-                "deterministic_confidence": 0.4,
+                "evidence_coverage_ratio": 0.4,
                 "advisory_checks": [
                     AdvisoryCheck(
                         name="llm_fallback",

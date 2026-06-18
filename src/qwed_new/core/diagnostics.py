@@ -104,6 +104,13 @@ class AdvisoryCheck:
     constraint_id: Optional[str] = None
     details: Dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if self.advisory_only is not True:
+            raise ValueError(
+                "AdvisoryCheck.advisory_only must be True — "
+                "advisory checks must never influence the verification verdict."
+            )
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
@@ -143,10 +150,12 @@ def compute_proof_ref(evidence: Dict[str, Any]) -> str:
     Note:
         The evidence dict is JSON-serialized with sort_keys=True for
         deterministic hashing. Non-JSON-serializable values must be
-        pre-converted to strings by the caller.
+        pre-converted to strings by the caller — they will raise
+        ValueError (fail-closed), preventing non-deterministic memory-
+        address-dependent hashes from entering the proof contract.
     """
     try:
-        payload = json.dumps(evidence, sort_keys=True, default=str)
+        payload = json.dumps(evidence, sort_keys=True)
     except (TypeError, ValueError) as exc:
         raise ValueError(
             f"Proof evidence must be JSON-serializable for proof_ref hashing: {exc}"
@@ -264,13 +273,26 @@ class DiagnosticResult:
 
         Tolerates status as str or DiagnosticStatus. Tolerates missing
         developer_fields (defaults to empty dict).
+
+        Raises:
+            ValueError: If agent_message is missing or empty — Layer 1
+                        diagnostics are mandatory and cannot be defaulted
+                        during deserialization.
         """
         status = data.get("status", "UNVERIFIABLE")
         if isinstance(status, str):
             status = DiagnosticStatus(status)
+
+        agent_message = data.get("agent_message")
+        if not agent_message or not str(agent_message).strip():
+            raise ValueError(
+                "from_dict: 'agent_message' is missing or empty — "
+                "Layer 1 diagnostics are mandatory for DiagnosticResult deserialization."
+            )
+
         return cls(
             status=status,
-            agent_message=data.get("agent_message", ""),
+            agent_message=agent_message,
             developer_fields=data.get("developer_fields", {}),
             proof_ref=data.get("proof_ref"),
         )
@@ -376,13 +398,19 @@ class DiagnosticResult:
         Raises:
             ValueError: If legacy data indicates VERIFIED — caller must use
                         DiagnosticResult.verified() with explicit evidence.
+            ValueError: If legacy data is unrecognized (no known status pattern
+                        and is_correct is truthy but not matching any branch) —
+                        fail-loudly per QWED_RULES to surface unexpected formats.
         """
         legacy_status = data.get("status", "")
         is_correct = data.get("is_correct", data.get("is_verified", data.get("verified", False)))
         error = data.get("error")
         message = data.get("message", data.get("reasoning", ""))
 
-        if legacy_status == "VERIFIED" or is_correct is True:
+        # Truthiness check — legacy engines may use 1/0 instead of True/False
+        is_correct_truthy = bool(is_correct)
+
+        if legacy_status == "VERIFIED" or is_correct_truthy:
             raise ValueError(
                 "from_legacy_dict cannot migrate VERIFIED results — "
                 "proof artifacts were not retained by legacy engines. "
@@ -425,7 +453,7 @@ class DiagnosticResult:
                 },
             )
 
-        if is_correct is False:
+        if not is_correct_truthy:
             if error:
                 return cls.blocked(
                     agent_message="Verification blocked",
@@ -441,12 +469,11 @@ class DiagnosticResult:
                 },
             )
 
-        return cls.unverifiable(
-            agent_message="Verification inconclusive — unrecognized legacy result",
-            developer_fields={
-                "constraint_id": f"{engine}.legacy_unrecognized",
-                "legacy_status": legacy_status,
-            },
+        # Unrecognized legacy pattern — fail loudly per QWED_RULES
+        raise ValueError(
+            f"from_legacy_dict cannot interpret unrecognized legacy data from {engine!r}: "
+            f"status={legacy_status!r}, is_correct={is_correct!r}. "
+            "Review engine output format and add explicit handling."
         )
 
 
