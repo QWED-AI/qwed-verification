@@ -265,6 +265,11 @@ class TestAdvisoryCheck(unittest.TestCase):
         with self.assertRaises(ValueError):
             AdvisoryCheck.from_dict({"name": "test", "advisory_only": 0})
 
+    def test_from_dict_rejects_string_advisory_only(self):
+        """from_dict must reject string 'false' — bool('false') is True in Python."""
+        with self.assertRaises(ValueError):
+            AdvisoryCheck.from_dict({"name": "test", "advisory_only": "false"})
+
     def test_advisory_check_to_dict(self):
         ac = AdvisoryCheck(
             name="vlm_analysis",
@@ -372,6 +377,25 @@ class TestSerialization(unittest.TestCase):
         self.assertEqual(r2.agent_message, r.agent_message)
         self.assertEqual(r2.proof_ref, r.proof_ref)
         self.assertEqual(r2.developer_fields, r.developer_fields)
+
+    def test_to_dict_serializes_advisory_check_instances(self):
+        """to_dict must serialize AdvisoryCheck instances to dicts (Sentry MEDIUM)."""
+        ac = AdvisoryCheck(name="llm", constraint_id="test", details={"verdict": "yes"})
+        r = DiagnosticResult.unverifiable("no", {"advisory_checks": [ac]})
+        d = r.to_dict()
+        checks = d["developer_fields"]["advisory_checks"]
+        self.assertEqual(len(checks), 1)
+        self.assertIsInstance(checks[0], dict)
+        self.assertEqual(checks[0]["name"], "llm")
+
+    def test_to_dict_json_serializable_with_advisory_checks(self):
+        """to_dict output must be JSON-serializable even with AdvisoryCheck instances."""
+        import json
+        ac = AdvisoryCheck(name="nli", constraint_id="graph.nli", details={"label": "entailment"})
+        r = DiagnosticResult.unverifiable("no", {"advisory_checks": [ac]})
+        d = r.to_dict()
+        payload = json.dumps(d)  # must not raise TypeError
+        self.assertIn("nli", payload)
 
     def test_unverifiable_round_trip(self):
         r = DiagnosticResult.unverifiable(

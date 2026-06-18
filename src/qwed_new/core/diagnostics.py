@@ -121,9 +121,19 @@ class AdvisoryCheck:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AdvisoryCheck":
+        raw_advisory_only = data.get("advisory_only", True)
+        if isinstance(raw_advisory_only, bool):
+            advisory_only = raw_advisory_only
+        elif isinstance(raw_advisory_only, int) and raw_advisory_only in (0, 1):
+            advisory_only = bool(raw_advisory_only)
+        else:
+            raise ValueError(
+                "AdvisoryCheck.advisory_only must be a bool or integer 0/1"
+            )
+
         return cls(
             name=data.get("name", ""),
-            advisory_only=bool(data.get("advisory_only", True)),
+            advisory_only=advisory_only,
             constraint_id=data.get("constraint_id"),
             details=data.get("details", {}),
         )
@@ -263,7 +273,8 @@ class DiagnosticResult:
                 try:
                     result.append(AdvisoryCheck.from_dict(item))
                 except ValueError:
-                    pass
+                    # Invalid advisory metadata is non-authoritative; skip it.
+                    continue
             elif isinstance(item, AdvisoryCheck):
                 result.append(item)
         return result
@@ -271,13 +282,21 @@ class DiagnosticResult:
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dict for API/SDK responses and attestation claims.
 
-        Returns a flat dict with all three layers. advisory_checks are
-        serialized as dicts inside developer_fields.
+        Returns a flat dict with all three layers. AdvisoryCheck instances
+        in developer_fields['advisory_checks'] are serialized to dicts.
         """
+        # Deep-copy developer_fields and serialize any AdvisoryCheck instances
+        fields = dict(self.developer_fields)
+        checks = fields.get("advisory_checks")
+        if isinstance(checks, list):
+            fields["advisory_checks"] = [
+                item.to_dict() if isinstance(item, AdvisoryCheck) else item
+                for item in checks
+            ]
         return {
             "status": self.status.value,
             "agent_message": self.agent_message,
-            "developer_fields": self.developer_fields,
+            "developer_fields": fields,
             "proof_ref": self.proof_ref,
             "is_authoritative": self.is_authoritative,
         }
