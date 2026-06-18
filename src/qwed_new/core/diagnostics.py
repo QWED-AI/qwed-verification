@@ -87,7 +87,7 @@ class DiagnosticStatus(str, Enum):
 # developer_fields.advisory_checks for audit/developer review only.
 # ---------------------------------------------------------------------------
 
-@dataclass
+@dataclass(frozen=True)
 class AdvisoryCheck:
     """A non-proof-bearing analysis result attached as advisory metadata.
 
@@ -178,7 +178,7 @@ def compute_proof_ref(evidence: Dict[str, Any]) -> str:
 # DiagnosticResult — the unified 3-layer diagnostic model.
 # ---------------------------------------------------------------------------
 
-@dataclass
+@dataclass(frozen=True)
 class DiagnosticResult:
     """Unified verification diagnostic result (Issue #204).
 
@@ -214,9 +214,9 @@ class DiagnosticResult:
                 "agent_message must be non-empty — Layer 1 diagnostics are mandatory"
             )
 
-        if self.status is DiagnosticStatus.VERIFIED and self.proof_ref is None:
+        if self.status is DiagnosticStatus.VERIFIED and not self.proof_ref:
             raise ValueError(
-                "VERIFIED status requires proof_ref is not None — "
+                "VERIFIED status requires proof_ref is not None and non-empty — "
                 "a claim cannot be marked proven without a proof artifact hash. "
                 "Use UNVERIFIABLE if no proof was established."
             )

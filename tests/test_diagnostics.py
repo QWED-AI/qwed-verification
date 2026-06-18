@@ -173,6 +173,22 @@ class TestAuthorityContract(unittest.TestCase):
         self.assertEqual(len(admissible), 1)
         self.assertTrue(admissible[0].is_verified)
 
+    def test_empty_string_proof_ref_raises(self):
+        """Empty string proof_ref must not bypass authority invariant (Greptile P1)."""
+        with self.assertRaises(ValueError):
+            DiagnosticResult(
+                status=DiagnosticStatus.VERIFIED,
+                agent_message="ok",
+                developer_fields={},
+                proof_ref="",
+            )
+
+    def test_frozen_dataclass_prevents_mutation(self):
+        """Post-construction proof_ref mutation must be blocked (Greptile P1)."""
+        r = DiagnosticResult.unverifiable("no", {})
+        with self.assertRaises((AttributeError, Exception)):
+            r.proof_ref = "sha256:fake"  # type: ignore[misc]
+
 
 # ---------------------------------------------------------------------------
 # Fail-closed enforcement
