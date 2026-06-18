@@ -255,6 +255,16 @@ class TestAdvisoryCheck(unittest.TestCase):
         with self.assertRaises(ValueError):
             AdvisoryCheck(name="x", advisory_only=False)
 
+    def test_from_dict_coerces_integer_advisory_only(self):
+        """from_dict must coerce 1 to True — cross-language APIs use int booleans."""
+        ac = AdvisoryCheck.from_dict({"name": "test", "advisory_only": 1})
+        self.assertTrue(ac.advisory_only)
+
+    def test_from_dict_rejects_zero_advisory_only(self):
+        """from_dict with advisory_only=0 coerces to False — must raise."""
+        with self.assertRaises(ValueError):
+            AdvisoryCheck.from_dict({"name": "test", "advisory_only": 0})
+
     def test_advisory_check_to_dict(self):
         ac = AdvisoryCheck(
             name="vlm_analysis",
@@ -311,6 +321,27 @@ class TestDeveloperFields(unittest.TestCase):
     def test_advisory_checks_empty_when_absent(self):
         r = DiagnosticResult.unverifiable("no", {})
         self.assertEqual(r.advisory_checks, [])
+
+    def test_advisory_checks_skips_invalid_items(self):
+        """Property must skip malformed items (fail-closed, never raise)."""
+        r = DiagnosticResult.unverifiable("no", {
+            "advisory_checks": [
+                {"name": "valid", "advisory_only": True, "details": {}},
+                {"name": "invalid", "advisory_only": False, "details": {}},
+                42,
+                "garbage",
+            ],
+        })
+        checks = r.advisory_checks
+        self.assertEqual(len(checks), 1)
+        self.assertEqual(checks[0].name, "valid")
+
+    def test_advisory_checks_accepts_existing_instances(self):
+        ac = AdvisoryCheck(name="prebuilt", constraint_id="test")
+        r = DiagnosticResult.unverifiable("no", {"advisory_checks": [ac]})
+        checks = r.advisory_checks
+        self.assertEqual(len(checks), 1)
+        self.assertEqual(checks[0].name, "prebuilt")
 
     def test_developer_fields_default_empty_dict(self):
         r = DiagnosticResult.unverifiable("no")

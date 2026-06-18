@@ -123,7 +123,7 @@ class AdvisoryCheck:
     def from_dict(cls, data: Dict[str, Any]) -> "AdvisoryCheck":
         return cls(
             name=data.get("name", ""),
-            advisory_only=data.get("advisory_only", True),
+            advisory_only=bool(data.get("advisory_only", True)),
             constraint_id=data.get("constraint_id"),
             details=data.get("details", {}),
         )
@@ -246,12 +246,27 @@ class DiagnosticResult:
 
     @property
     def advisory_checks(self) -> List[AdvisoryCheck]:
-        """Advisory checks from developer_fields, deserialized to AdvisoryCheck."""
+        """Advisory checks from developer_fields, deserialized to AdvisoryCheck.
+
+        Defensive: skips malformed or invalid items rather than raising.
+        Only dicts (converted via from_dict) and existing AdvisoryCheck
+        instances are included. This ensures the property never raises
+        ValueError at access time (Greptile P1) and doesn't propagate
+        garbage (CodeRabbit fail-closed suggestion).
+        """
         raw = self.developer_fields.get("advisory_checks", [])
         if not isinstance(raw, list):
             return []
-        return [AdvisoryCheck.from_dict(item) if isinstance(item, dict) else item
-                for item in raw]
+        result = []
+        for item in raw:
+            if isinstance(item, dict):
+                try:
+                    result.append(AdvisoryCheck.from_dict(item))
+                except ValueError:
+                    pass
+            elif isinstance(item, AdvisoryCheck):
+                result.append(item)
+        return result
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dict for API/SDK responses and attestation claims.
