@@ -4,6 +4,41 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+## [5.2.0] - 2026-06-19
+### Architecture: Structured Verification Diagnostics (#204)
+
+Establishes the unified 3-layer `DiagnosticResult` model — the diagnostic contract that all verification engines will conform to. This is an **additive** release: no existing engine return types are changed. Engine conformance is tracked in blocked issues (#129, #130, #131, #133, #134, #162, #163, #164, #190, #205).
+
+#### New: `DiagnosticResult` Model (`src/qwed_new/core/diagnostics.py`)
+
+Three disclosure layers:
+- **Layer 1 — Agent-Safe**: `agent_message: str` — agent/model-facing summary, no internals leaked
+- **Layer 2 — Developer**: `developer_fields: dict` — structured evidence (constraint_id, advisory_checks, methods_used, evidence)
+- **Layer 3 — Proof**: `proof_ref: Optional[str]` — sha256 hash of retained proof artifact; the authority bit
+
+Key design:
+- `DiagnosticStatus`: tri-state only (`VERIFIED` / `UNVERIFIABLE` / `BLOCKED`) — no proliferation
+- `proof_ref` is the authority bit: present = admissible for control flow, None = reject
+- `VERIFIED` requires `proof_ref` — structurally enforced in `__post_init__`
+- `AdvisoryCheck`: non-proof-bearing analysis (LLM fallback, NLI, VLM) — `advisory_only=True` enforced
+- `compute_proof_ref()`: deterministic sha256 hashing of JSON-serialized evidence
+- `from_legacy_dict()`: migration helper for ad-hoc engine dicts (fail-closed states only)
+- Both `DiagnosticResult` and `AdvisoryCheck` are `frozen=True` dataclasses — prevents post-construction bypass
+
+#### Version Propagation
+- `qwed` (PyPI): `5.1.2` -> `5.2.0`
+- `qwed_sdk` (Python): `5.1.1` -> `5.2.0`
+- `@qwed-ai/sdk` (NPM): `5.1.2` -> `5.2.0`
+- `qwed` (crates.io/Rust): `5.1.2` -> `5.2.0`
+- API version marker: `5.1.2` -> `5.2.0`
+- Kubernetes deployment image: `5.1.2` -> `5.2.0`
+
+#### Tests
+- 83 new tests covering status taxonomy, all 3 layers, authority contract, fail-closed enforcement, advisory checks, proof hashing, serialization round-trip, legacy migration, frozen dataclass immutability, and realistic scenarios drawn from the 10 blocked issues.
+
+#### Included PRs
+- `#206` feat(diagnostics): unified 3-layer DiagnosticResult model (#204)
+
 ## [5.1.2] - 2026-06-14
 ### Security: SymPy Expression Injection Fix (CWE-95)
 
