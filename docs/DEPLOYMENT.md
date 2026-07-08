@@ -19,11 +19,11 @@ The easiest way to run QWED locally or on a single server is using Docker Compos
 
 ### Dockerfile
 
-A `Dockerfile` is provided in the root directory. It builds the QWED core service based on `python:3.11-slim`.
+A `Dockerfile` is provided in the root directory. It builds the QWED core service based on `python:3.13-slim-bookworm`.
 
 ```bash
 # Build the image manually
-docker build -t qwed-core:2.0.0 .
+docker build -t qweda/qwed-verification:5.2.0 .
 ```
 
 ### Docker Compose
@@ -226,7 +226,7 @@ Before going to production, ensure the following:
 **Error:** `SecureCodeExecutor initialization failed`
 **Solution:**
 1. Check Docker is running: `docker ps`
-2. Check `python:3.10-slim` image exists: `docker pull python:3.10-slim` (The executor uses this image).
+2. Check `python:3.13-slim-bookworm` image exists: `docker pull python:3.13-slim-bookworm` (The executor uses this image).
 
 ---
 
