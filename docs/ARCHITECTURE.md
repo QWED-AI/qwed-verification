@@ -1,9 +1,9 @@
 # System Architecture — Historical Archive
 
-> ⚠️ **This document is a historical archive.** Current architecture diagrams and engine documentation live in the [mintlify docs](https://qweldocs.mintlify.app) and the curriculum [`ARCHITECTURE.md`](../ARCHITECTURE.md). The information below reflects an earlier (v2-v3 era) design with only 4 engines and no security guards.
+> ⚠️ **This document is a historical archive.** Current architecture diagrams and documentation live at [docs.qwedai.com](https://docs.qwedai.com). The information below reflects an earlier (v2-v3 era) design with only 4 engines and no security guards.
 
 ## Overview
-QWED is a **Neurosymbolic Verification Engine** that combines the flexibility of Large Language Models (LLMs) with the determinism of symbolic execution engines (SymPy, Z3, SQLGlot, etc.).
+QWED is a **deterministic verification layer for AI systems**. It verifies AI outputs using mathematics, symbolic reasoning, and formal methods (Z3, SMT, SymPy), creating an auditable trust boundary for agentic AI. Not generation. Verification.
 
 ## High-Level Design
 
