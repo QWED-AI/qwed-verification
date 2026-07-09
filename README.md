@@ -48,9 +48,8 @@
   <br>
   <a href="#-quick-start-install--verify-in-30-seconds">Quick Start</a> · 
   <a href="#-first-time-setup-qwed-init">🆕 qwed init</a> ·
-  <a href="#-new-in-v210-client-side-verification">⚡ QWEDLocal</a> ·
   <a href="#-the-llm-hallucination-problem-why-ai-cant-be-trusted">The Problem</a> · 
-  <a href="#-the-11-verification-engines-how-qwed-validates-llm-outputs">The 11 Engines</a> ·
+  <a href="#verification-engines-and-agent-security-guards">The Engines & Guards</a> ·
   <a href="docs/INTEGRATION.md">🔌 Integration</a> ·
   <a href="docs/QWED_LOCAL.md">⚡ QWEDLocal</a> ·
   <a href="docs/CLI.md">🖥️ CLI</a> ·
@@ -60,16 +59,18 @@
 
 ---
 
-## Release Update: v5.1.2
+## Release Update: v5.2.0 — Unified Diagnostic Model
 
-`v5.1.2` is an **emergency security patch** fixing a **High severity (CVSS 8.8) authenticated RCE vulnerability** via unsafe SymPy `parse_expr()` calls.
+`v5.2.0` introduces the **unified 3-layer `DiagnosticResult` model** — the diagnostic contract that all QWED engines will conform to (Issue #204).
 
-- **CWE-95 fix**: All 17 direct `parse_expr()` calls replaced with `safe_parse_expr()` — denylist + stripped builtins + allow-listed math namespace
-- **Calculus symbol consistency**: Fixed `n` variable mismatch in derivatives, integrals, and limits
-- **Defense-in-depth**: AST depth limits, SymPy tree validation, relational expression rejection
-- Cache Redis fail-closed hardening, CodSpeed benchmarks, TS SDK lockfile fixes
+- **Three disclosure layers:** `agent_message` (agent-safe), `developer_fields` (structured evidence), `proof_ref` (cryptographic proof hash)
+- **Authority contract:** `proof_ref` present = authoritative (admissible for control flow); `proof_ref` absent = non-authoritative (must not drive control flow)
+- **Tri-state taxonomy:** `VERIFIED` / `UNVERIFIABLE` / `BLOCKED` — no `HEURISTIC` or `SIMPLIFIED` status codes
+- **`AdvisoryCheck`**: Non-proof-bearing analysis clearly marked as advisory-only
+- **83 new tests** covering status taxonomy, authority contract, serialization, and legacy migration
+- Version propagated across all SDKs (Python, TypeScript, Rust), API marker, and Docker images
 
-If you're upgrading from `v5.1.1`, review the [changelog](CHANGELOG.md) for the full security advisory details.
+If you're upgrading from `v5.1.x`, review the [changelog](CHANGELOG.md) for the full migration notes.
 
 ---
 
@@ -108,7 +109,7 @@ QWED says: ❌ Blocked — SQL injection detected before execution.
 
 > **🔬 On "Deterministic" Verification**
 > 
-> QWED uses **deterministic computation** (no neural networks, no embeddings, no vibes) wherever possible. Math, Logic, SQL, Code, and Schema engines produce 100% reproducible results using symbolic solvers. For fact-checking, we use TF-IDF (not embeddings) because it's transparent and inspectable—same query always returns same score. For image/reasoning domains that require LLM fallback, we clearly mark outputs as `HEURISTIC` in the response.
+> QWED uses **deterministic computation** (no neural networks, no embeddings, no vibes) wherever possible. Math, Logic, SQL, Code, and Schema engines produce 100% reproducible results using symbolic solvers. For fact-checking, we use TF-IDF (not embeddings) because it's transparent and inspectable—same query always returns same score. Non-verifiable or heuristic signals are carried as `advisory_checks` in the diagnostic result — never promoted to a verification status.
 
 
 
@@ -330,14 +331,19 @@ We combine:
 - **Neural Networks** (LLMs) for natural language understanding
 - **Symbolic Reasoning** (SymPy, Z3, AST) for deterministic verification
 
-## 🛡️ New in v4: Agent Security
+## 🛡️ Agent Security Guards
 
-QWED now verifies not only outputs, but agent toolchains:
+QWED verifies not only outputs, but agent toolchains with specialized guards:
 
-- MCP Poison Guard
-- RAGGuard
-- ExfiltrationGuard
-- ProcessVerifier
+- **SystemGuard** — Shell command verification
+- **ConfigGuard** — Secrets scanning in configs
+- **RAGGuard** — RAG retrieval mismatch prevention
+- **MCPPoisonGuard** — MCP tool definition poisoning detection
+- **ExfiltrationGuard** — Runtime data exfiltration prevention
+- **SelfInitiatedCoTGuard** — Reasoning path verification
+- **SovereigntyGuard** — Agent sovereignty boundary enforcement
+- **StartupHookGuard** — Environment integrity startup detection
+- **ProcessVerifier** — Deterministic process validation (IRAC)
 
 ### The Core Philosophy: "The Untrusted Translator"
 
@@ -388,9 +394,9 @@ QWED wraps best-in-class libraries, abstracting their complex DSLs into a simple
 
 ---
 
-## 🔬 The Verification Engines
+## 🔬 Verification Engines and Agent Security Guards
 
-QWED routes queries to specialized engines that act as DSL interpreters:
+QWED routes queries to specialized engines that act as DSL interpreters, plus agent security guards for runtime protection.
 
 
 ```
@@ -505,7 +511,7 @@ client.verify_config({"api_key": "sk-proj-abc123..."})
 # -> ❌ SECRETS_DETECTED: OPENAI_API_KEY at 'api_key'
 ```
 
-> **Full list of engines:** Math, Logic, SQL, Code, System Integrity, Stats (Pandera), Fact (TF-IDF), Image, Consensus.
+> **Full list of engines:** Math (SymPy), Logic (Z3), SQL (SQLGlot), Code (AST), Schema, Stats (Pandera), Fact (TF-IDF), Graph, Image, Consensus, Reasoning, DSL Logic. **SDK guards:** SystemGuard, ConfigGuard, RAGGuard, MCPPoisonGuard, ExfiltrationGuard, SelfInitiatedCoTGuard, SovereigntyGuard, StartupHookGuard, ProcessVerifier.
 
 ---
 
@@ -595,7 +601,7 @@ In high-stakes industries (Finance, Legal, Healthcare), you cannot send sensitiv
 *   **100% Local Execution:** QWED runs inside your infrastructure (Docker/Kubernetes). Data never leaves your VPC.
 *   **Privacy Shield (New):** Built-in **PII Masking** redacts Credit Cards, SSNs, and Emails *before* they touch the LLM.
 *   **No "Model Training":** We do not train on your data. QWED is a deterministic code execution engine, not a generative model.
-*   **Audit Logs:** Every verification generates a cryptographically signed receipt (JWT) proving that the check passed.
+*   **Audit Logs:** Every verification generates a structured verification record with `proof_ref` — a SHA-256 hash binding the verdict to the evidence that justified it.
 
 > **"Don't trust the AI. Trust the Code."**
 
@@ -613,9 +619,9 @@ In high-stakes industries (Finance, Legal, Healthcare), you cannot send sensitiv
 
 We are building the **Universal Verification Standard** for the agentic web.
 
-*   **v4.0 (Live):** Agentic Security Guards (MCP, RAG, Exfiltration), Process Determinism, and Core Engines.
-*   **Q2 2026 - v4.1:** **QWED Client-Side** (WebAssembly) enables verification in the browser.
-*   **Q3 2026 - v4.2:** **Distributed Verification Network** introduces a decentralized network of verifier nodes.
+*   **v5.2.0 (Current):** Unified `DiagnosticResult` model, 3-layer diagnostics, `proof_ref` authority contract across all engines.
+*   **v5.3.0 (Upcoming):** Engine conformance to `DiagnosticResult` — migrating the 12 verification engines to the unified model.
+*   **v6.0 (Planned):** QWED Client-Side (WebAssembly), Distributed Verification Network, cross-ecosystem proof exchange.
 
 ---
 
@@ -627,14 +633,11 @@ QWED verification is available as specialized packages for different industries:
 
 | Package | Description | Install | Repo |
 |---------|-------------|---------|------|
-| **qwed** | Core verification + security guards | `pip install qwed` | [GitHub](https://github.com/QWED-AI/qwed-verification) |
-| **qwed-finance** 🏦 | Banking, loans, NPV, ISO 20022 | `pip install qwed-finance` | [GitHub](https://github.com/QWED-AI/qwed-finance) |
-| **qwed-legal** 🏛️ | Contracts, deadlines, citations, jurisdiction | `pip install qwed-legal` | [GitHub](https://github.com/QWED-AI/qwed-legal) |
-| **qwed-infra** ☁️ | IaC verification (Terraform, IAM, Cost) | `pip install qwed-infra` | [GitHub](https://github.com/QWED-AI/qwed-infra) |
-| **qwed-ucp** 🛒 | E-commerce cart/transaction verification | `pip install qwed-ucp` | [GitHub](https://github.com/QWED-AI/qwed-ucp) |
-| **qwed-mcp** 🔌 | Claude Desktop MCP integration | `pip install qwed-mcp` | [GitHub](https://github.com/QWED-AI/qwed-mcp) |
-| **open-responses** 🤖 | OpenAI Responses API + QWED guards | `pip install qwed-open-responses` | [GitHub](https://github.com/QWED-AI/qwed-open-responses) |
+| **qwed** (core) | Verification engines + agent security guards | `pip install qwed` | [GitHub](https://github.com/QWED-AI/qwed-verification) |
+| **qwed-infra** ☁️ | IaC verification (Terraform, IAM, Cost, Artifact boundary) | `pip install qwed-infra` | [GitHub](https://github.com/QWED-AI/qwed-infra) |
 | **qwed-tax** 💸 | Tax compliance & withholding verification middleware | `pip install qwed-tax` | [GitHub](https://github.com/QWED-AI/qwed-tax) |
+| **qwed-mcp** 🔌 | Claude Desktop MCP integration | `pip install qwed-mcp` | [GitHub](https://github.com/QWED-AI/qwed-mcp) |
+| **qwed-open-responses** 🤖 | OpenAI Responses API + QWED guards | `pip install qwed-open-responses` | [GitHub](https://github.com/QWED-AI/qwed-open-responses) |
 
 ### 🎬 GitHub Actions
 
@@ -644,26 +647,26 @@ Use QWED verification in your CI/CD pipelines:
 
 ```yaml
 # Secret Scanning - Detect leaked API keys
-- uses: QWED-AI/qwed-verification@v3
+- uses: QWED-AI/qwed-verification@v5
   with:
     action: scan-secrets
     paths: "**/*.env,**/*.json"
 
 # Code Security - Find dangerous patterns (eval, exec, subprocess)
-- uses: QWED-AI/qwed-verification@v3
+- uses: QWED-AI/qwed-verification@v5
   with:
     action: scan-code
     paths: "**/*.py"
     output_format: sarif  # Integrates with GitHub Security tab
 
 # Shell Script Linting - Block RCE patterns (curl|bash, rm -rf)
-- uses: QWED-AI/qwed-verification@v3
+- uses: QWED-AI/qwed-verification@v5
   with:
     action: verify-shell
     paths: "**/*.sh"
 
 # LLM Output Verification (Math, Logic, Code)
-- uses: QWED-AI/qwed-verification@v3
+- uses: QWED-AI/qwed-verification@v5
   with:
     action: verify
     engine: math
@@ -673,7 +676,7 @@ Use QWED verification in your CI/CD pipelines:
 
 | Action | Use Case | Marketplace |
 |--------|----------|-------------|
-| `QWED-AI/qwed-verification@v3` | **NEW!** Secret scanning, code analysis, SARIF output | [View](https://github.com/marketplace/actions/qwed-protocol-verification) |
+| `QWED-AI/qwed-verification@v5` | Secret scanning, code analysis, SARIF output | [View](https://github.com/marketplace/actions/qwed-protocol-verification) |
 | `QWED-AI/qwed-legal@v0.2.0` | Contract deadline, jurisdiction, citations | [View](https://github.com/marketplace/actions/qwed-legal-verification) |
 | `QWED-AI/qwed-finance@v1` | NPV, loan calculations, compliance | [View](https://github.com/marketplace/actions/qwed-finance-guard) |
 | `QWED-AI/qwed-ucp@v1` | E-commerce transactions | [View](https://github.com/marketplace/actions/qwed-commerce-auditor) |
@@ -907,14 +910,14 @@ If you use QWED in your research or project, please cite our archived paper:
   title = {QWED Protocol: Deterministic Verification for Large Language Models},
   year = {2025},
   publisher = {Zenodo},
-  version = {v1.0.0},
-  doi = {10.5281/zenodo.18110785},
-  url = {https://doi.org/10.5281/zenodo.18110785}
+  version = {v5.2.0},
+  doi = {10.5281/zenodo.18111675},
+  url = {https://doi.org/10.5281/zenodo.18111675}
 }
 ```
 
 **Plain text:**
-> Dass, R. (2025). QWED Protocol: Deterministic Verification for Large Language Models (Version v1.1.0). Zenodo. https://doi.org/10.5281/zenodo.18110785
+> Dass, R. (2025). QWED Protocol: Deterministic Verification for Large Language Models (Version v5.2.0). Zenodo. https://doi.org/10.5281/zenodo.18111675
 
 ---
 
