@@ -49,7 +49,7 @@
   <a href="#-quick-start-install--verify-in-30-seconds">Quick Start</a> · 
   <a href="#-first-time-setup-qwed-init">🆕 qwed init</a> ·
   <a href="#-the-llm-hallucination-problem-why-ai-cant-be-trusted">The Problem</a> · 
-  <a href="#-verification-engines-and-agent-security-guards">The Engines & Guards</a> ·
+  <a href="#verification-engines-and-agent-security-guards">The Engines & Guards</a> ·
   <a href="docs/INTEGRATION.md">🔌 Integration</a> ·
   <a href="docs/QWED_LOCAL.md">⚡ QWEDLocal</a> ·
   <a href="docs/CLI.md">🖥️ CLI</a> ·
@@ -620,7 +620,7 @@ In high-stakes industries (Finance, Legal, Healthcare), you cannot send sensitiv
 We are building the **Universal Verification Standard** for the agentic web.
 
 *   **v5.2.0 (Current):** Unified `DiagnosticResult` model, 3-layer diagnostics, `proof_ref` authority contract across all engines.
-*   **v5.3.0 (Upcoming):** Engine conformance to `DiagnosticResult` — migrating the 10+ verification engines to the unified model.
+*   **v5.3.0 (Upcoming):** Engine conformance to `DiagnosticResult` — migrating the 12 verification engines to the unified model.
 *   **v6.0 (Planned):** QWED Client-Side (WebAssembly), Distributed Verification Network, cross-ecosystem proof exchange.
 
 ---
@@ -914,6 +914,7 @@ If you use QWED in your research or project, please cite our archived paper:
   doi = {10.5281/zenodo.18111675},
   url = {https://doi.org/10.5281/zenodo.18111675}
 }
+```
 
 **Plain text:**
 > Dass, R. (2025). QWED Protocol: Deterministic Verification for Large Language Models (Version v5.2.0). Zenodo. https://doi.org/10.5281/zenodo.18111675
