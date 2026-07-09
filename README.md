@@ -333,16 +333,17 @@ We combine:
 
 ## 🛡️ Agent Security Guards
 
-QWED verifies not only outputs, but agent toolchains with 7+ guards:
+QWED verifies not only outputs, but agent toolchains with specialized guards:
 
-- SystemGuard — Shell command verification
-- ConfigGuard — Secrets scanning in configs
-- RAGGuard — RAG retrieval mismatch prevention
-- MCPPoisonGuard — MCP tool definition poisoning detection
-- ExfiltrationGuard — Runtime data exfiltration prevention
-- SelfInitiatedCoTGuard — Process logic path verification
-- ProcessVerifier — Deterministic process validation (IRAC)
-- StartupHookGuard — Environment integrity startup detection
+- **SystemGuard** — Shell command verification
+- **ConfigGuard** — Secrets scanning in configs
+- **RAGGuard** — RAG retrieval mismatch prevention
+- **MCPPoisonGuard** — MCP tool definition poisoning detection
+- **ExfiltrationGuard** — Runtime data exfiltration prevention
+- **SelfInitiatedCoTGuard** — Reasoning path verification
+- **SovereigntyGuard** — Agent sovereignty boundary enforcement
+- **StartupHookGuard** — Environment integrity startup detection
+- **ProcessVerifier** — Deterministic process validation (IRAC)
 
 ### The Core Philosophy: "The Untrusted Translator"
 
@@ -510,7 +511,7 @@ client.verify_config({"api_key": "sk-proj-abc123..."})
 # -> ❌ SECRETS_DETECTED: OPENAI_API_KEY at 'api_key'
 ```
 
-> **Full list of engines:** Math (SymPy), Logic (Z3), SQL (SQLGlot), Code (AST), Schema, Stats (Pandera), Fact (TF-IDF), Image, Consensus, Reasoning, Process (IRAC), plus DSL Logic and Graph engines. **Agent security guards:** SystemGuard, ConfigGuard, RAGGuard, MCPPoisonGuard, ExfiltrationGuard, SelfInitiatedCoTGuard, ProcessVerifier, StartupHookGuard.
+> **Full list of engines:** Math (SymPy), Logic (Z3), SQL (SQLGlot), Code (AST), Schema, Stats (Pandera), Fact (TF-IDF), Graph, Image, Consensus, Reasoning, DSL Logic. **SDK guards:** SystemGuard, ConfigGuard, RAGGuard, MCPPoisonGuard, ExfiltrationGuard, SelfInitiatedCoTGuard, SovereigntyGuard, StartupHookGuard, ProcessVerifier.
 
 ---
 
