@@ -145,14 +145,21 @@ class OutputSanitizer:
         
         # Layer 2: Remove data URIs (can contain base64-encoded malicious content)
         prefix = 'data:text/html'
-        while True:
-            idx = cleaned.lower().find(prefix)
+        lower = cleaned.lower()
+        out = []
+        i = 0
+        while i < len(cleaned):
+            idx = lower.find(prefix, i)
             if idx == -1:
+                out.append(cleaned[i:])
                 break
             comma = cleaned.find(',', idx)
             if comma == -1:
+                out.append(cleaned[i:])
                 break
-            cleaned = cleaned[:idx] + cleaned[comma + 1:]
+            out.append(cleaned[i:idx])
+            i = comma + 1
+        cleaned = ''.join(out)
         
         # Layer 3: HTML encode special characters
         # This prevents any remaining HTML from being executed
