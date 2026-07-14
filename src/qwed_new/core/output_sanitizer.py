@@ -139,27 +139,17 @@ class OutputSanitizer:
         
         cleaned = text
         
+        # Bound input length to mitigate polynomial ReDoS across all regex operations
+        # (CodeQL py/polynomial-redos recommendation: limit length to bound backtracking)
+        if len(cleaned) > 10000:
+            cleaned = cleaned[:10000]
+        
         # Layer 1: Remove dangerous patterns
         for pattern in self.dangerous_patterns:
             cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE | re.DOTALL)
         
         # Layer 2: Remove data URIs (can contain base64-encoded malicious content)
-        prefix = 'data:text/html'
-        lower = cleaned.lower()
-        out = []
-        i = 0
-        while i < len(cleaned):
-            idx = lower.find(prefix, i)
-            if idx == -1:
-                out.append(cleaned[i:])
-                break
-            comma = cleaned.find(',', idx)
-            if comma == -1:
-                out.append(cleaned[i:])
-                break
-            out.append(cleaned[i:idx])
-            i = comma + 1
-        cleaned = ''.join(out)
+        cleaned = re.sub(r'(?i)data:text/html[^,]*,', '', cleaned)
         
         # Layer 3: HTML encode special characters
         # This prevents any remaining HTML from being executed
