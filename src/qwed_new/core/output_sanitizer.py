@@ -14,6 +14,10 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# Compiled pattern for data URI prefix — used in a loop with re.search + str.find
+# to avoid the polynomial ReDoS flagged by CodeQL on the naive re.sub approach.
+_DATA_URI_PREFIX = re.compile(r'data:text/html', re.IGNORECASE)
+
 
 class OutputSanitizer:
     """
@@ -139,17 +143,28 @@ class OutputSanitizer:
         
         cleaned = text
         
-        # Bound input length to mitigate polynomial ReDoS across all regex operations
-        # (CodeQL py/polynomial-redos recommendation: limit length to bound backtracking)
-        if len(cleaned) > 10000:
-            cleaned = cleaned[:10000]
-        
         # Layer 1: Remove dangerous patterns
         for pattern in self.dangerous_patterns:
             cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE | re.DOTALL)
         
         # Layer 2: Remove data URIs (can contain base64-encoded malicious content)
-        cleaned = re.sub(r'(?i)data:text/html[^,]*,', '', cleaned)
+        # Uses re.search + str.find instead of re.sub with [^,]* to avoid
+        # the polynomial backtracking flagged by CodeQL py/polynomial-redos.
+        _out = []
+        _pos = 0
+        while True:
+            _m = _DATA_URI_PREFIX.search(cleaned, _pos)
+            if not _m:
+                _out.append(cleaned[_pos:])
+                break
+            _idx = _m.start()
+            _comma = cleaned.find(',', _idx)
+            if _comma == -1:
+                _out.append(cleaned[_pos:])
+                break
+            _out.append(cleaned[_pos:_idx])
+            _pos = _comma + 1
+        cleaned = ''.join(_out)
         
         # Layer 3: HTML encode special characters
         # This prevents any remaining HTML from being executed
