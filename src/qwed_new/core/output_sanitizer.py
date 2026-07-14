@@ -144,7 +144,15 @@ class OutputSanitizer:
             cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE | re.DOTALL)
         
         # Layer 2: Remove data URIs (can contain base64-encoded malicious content)
-        cleaned = re.sub(r'data:text/html[^,]*,', '', cleaned, flags=re.IGNORECASE)
+        prefix = 'data:text/html'
+        while True:
+            idx = cleaned.lower().find(prefix)
+            if idx == -1:
+                break
+            comma = cleaned.find(',', idx)
+            if comma == -1:
+                break
+            cleaned = cleaned[:idx] + cleaned[comma + 1:]
         
         # Layer 3: HTML encode special characters
         # This prevents any remaining HTML from being executed
