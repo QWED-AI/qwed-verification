@@ -158,10 +158,14 @@ class OutputSanitizer:
                 _out.append(cleaned[_pos:])
                 break
             _idx = _m.start()
-            _comma = cleaned.find(',', _idx)
+            # Bound comma search to this URI only (stop at next prefix)
+            _next_m = _DATA_URI_PREFIX.search(cleaned, _idx + 1)
+            _search_end = _next_m.start() if _next_m else len(cleaned)
+            _comma = cleaned.find(',', _idx, _search_end)
             if _comma == -1:
-                _out.append(cleaned[_pos:])
-                break
+                _out.append(cleaned[_pos:_search_end])
+                _pos = _search_end
+                continue
             _out.append(cleaned[_pos:_idx])
             _pos = _comma + 1
         cleaned = ''.join(_out)
