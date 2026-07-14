@@ -99,6 +99,50 @@ class TestOutputSanitizer:
         malicious = {"result": "<script>bad</script>"}
         self.sanitizer.sanitize_output(malicious, "math", 1)
         assert self.sanitizer.get_sanitization_count() > initial_count
+    
+    # ----- data URI removal tests (Layer 2 coverage) -----
+    
+    def test_data_uri_removed(self):
+        """Well-formed data:text/html URI is stripped."""
+        cleaned = self.sanitizer._strip_dangerous_content(
+            "before data:text/html,base64,content after"
+        )
+        assert cleaned == "before base64,content after"
+    
+    def test_data_uri_case_insensitive(self):
+        """Case variants of data:text/html prefix are matched."""
+        cleaned = self.sanitizer._strip_dangerous_content(
+            "before DATA:TEXT/HTML,payload after"
+        )
+        assert cleaned == "before payload after"
+    
+    def test_data_uri_no_comma_preserved(self):
+        """data:text/html without a comma is treated as plain text."""
+        cleaned = self.sanitizer._strip_dangerous_content(
+            "text data:text/html(nocomma) more"
+        )
+        assert cleaned == "text data:text/html(nocomma) more"
+    
+    def test_data_uri_malformed_then_valid(self):
+        """Malformed URI (no comma) followed by valid URI — only valid is stripped."""
+        cleaned = self.sanitizer._strip_dangerous_content(
+            "prefix data:text/html(nocomma) and data:text/html,keep after"
+        )
+        assert cleaned == "prefix data:text/html(nocomma) and keep after"
+    
+    def test_data_uri_consecutive(self):
+        """Two consecutive well-formed URIs are both stripped."""
+        cleaned = self.sanitizer._strip_dangerous_content(
+            "a data:text/html,first data:text/html,second z"
+        )
+        assert cleaned == "a first second z"
+    
+    def test_data_uri_unrelated_comma_inside(self):
+        """First comma consumed (prefix+first comma stripped)."""
+        cleaned = self.sanitizer._strip_dangerous_content(
+            "data:text/html(text, with comma),rest"
+        )
+        assert cleaned == " with comma),rest"
 
 
 if __name__ == "__main__":
