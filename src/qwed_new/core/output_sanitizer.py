@@ -50,6 +50,13 @@ class OutputSanitizer:
         # Sanitization event counter
         self.sanitization_count = 0
     
+    def _sanitize_for_log(self, value: Any) -> str:
+        """Return a log-safe string to prevent log injection/forgery."""
+        text = str(value)
+        text = text.replace("\r", "\\r").replace("\n", "\\n")
+        text = re.sub(r"[\x00-\x1f\x7f]", "", text)
+        return text
+
     def sanitize_output(
         self, 
         result: Dict[str, Any], 
@@ -78,8 +85,9 @@ class OutputSanitizer:
                 sanitized_value = self._strip_dangerous_content(value)
                 if sanitized_value != value:
                     changes_made = True
+                    safe_key = self._sanitize_for_log(key)
                     logger.warning(
-                        f"Sanitized output field '{key}' for org {organization_id}: "
+                        f"Sanitized output field '{safe_key}' for org {organization_id}: "
                         f"removed {len(value) - len(sanitized_value)} dangerous chars"
                     )
                 sanitized_result[key] = sanitized_value
