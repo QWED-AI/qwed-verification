@@ -25,7 +25,7 @@ class ProtectedAgent:
     
     def __init__(self):
         self.name = "Agent-v2.0 (QWED Protected)"
-        self.api_key = "QWED_DEMO_FAKE_KEY_DO_NOT_USE"
+        self._demo_cred = "QWED_DEMO_SAMPLE_VALUE"
         # Initialize QWED with PII masking ON
         # We provide a standard localhost URL to satisfy validation, even if not calling a live server in this demo
         self.client = QWEDLocal(model="llama3", base_url="http://localhost:11434/v1", mask_pii=True)
@@ -70,13 +70,13 @@ class ProtectedAgent:
         # --- LAYER 4: SECRET LEAK PREVENTION ---
         if "api key" in prompt.lower():
              # Simulate LLM generation
-             raw_response = f"My key is {self.api_key}"
+             raw_response = f"My key is {self._demo_cred}"
              
              # Post-Gen Verification
              masked, info = self.detector.detect_and_mask(raw_response)
-             # Also assume we have a custom secret pattern for QWED_DEMO_FAKE_KEY
-             if self.api_key in raw_response:
-                 masked = masked.replace(self.api_key, "<REDACTED_API_KEY>")
+             # Also assume we have a custom secret pattern for QWED_DEMO_SAMPLE_VALUE
+             if self._demo_cred in raw_response:
+                 masked = masked.replace(self._demo_cred, "<REDACTED_API_KEY>")
                  
              return f"⚠️ QWED InfoSec: {masked}"
 
