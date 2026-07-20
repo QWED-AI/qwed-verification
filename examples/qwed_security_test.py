@@ -1,4 +1,4 @@
-"""Demonstrates QWED Security v1.2 scanning capabilities."""
+"""Demonstrates QWED Security v1.3 scanning capabilities."""
 
 API_KEY = "QWED_TEST_DEMO_VALUE"
 
