@@ -8,32 +8,12 @@ Phase 1 of QWED's symbolic execution roadmap.
 """
 
 from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, field
 import ast
 import tempfile
 import os
 import sys
 
-
-@dataclass
-class SymbolicIssue:
-    """A symbolic verification issue."""
-    issue_type: str  # "counterexample", "error", "warning"
-    function_name: str
-    description: str
-    counterexample: Optional[Dict[str, Any]] = None
-    line_number: Optional[int] = None
-
-
-@dataclass
-class SymbolicResult:
-    """Result of symbolic verification."""
-    is_verified: bool
-    status: str  # "verified", "counterexample_found", "error", "timeout"
-    issues: List[SymbolicIssue] = field(default_factory=list)
-    functions_checked: int = 0
-    properties_verified: int = 0
-    counterexamples_found: int = 0
+from .diagnostics import DiagnosticResult
 
 
 class SymbolicVerifier:
@@ -80,93 +60,113 @@ class SymbolicVerifier:
         except ImportError:
             return False
     
-    def verify_code(self, code: str, check_assertions: bool = True) -> Dict[str, Any]:
+    def verify_code(self, code: str, check_assertions: bool = True) -> DiagnosticResult:
         """
         Verify Python code using symbolic execution.
-        
+
         Args:
             code: Python code to verify
             check_assertions: Whether to check assert statements
-            
+
         Returns:
-            Dict with verification results
+            DiagnosticResult describing the outcome. Note: this engine does not
+            yet emit VERIFIED — CrossHair's search is timeout-bounded, not a
+            completeness proof, so "no counterexample found" is reported as
+            UNVERIFIABLE rather than an authoritative proof (see issue #15).
+            Only UNVERIFIABLE and BLOCKED are currently produced.
         """
         if not self._crosshair_available:
-            return self._build_terminal_result(
-                status="crosshair_not_available",
-                message="CrossHair not installed. Run: pip install crosshair-tool",
+            return DiagnosticResult.blocked(
+                agent_message="Symbolic verification is unavailable: the CrossHair engine is not installed.",
+                developer_fields={"constraint_id": "symbolic_verifier.crosshair_not_available"},
             )
-        
+
         # Parse code to extract functions
         try:
             tree = ast.parse(code)
         except SyntaxError as e:
-            return self._build_terminal_result(
-                status="syntax_error",
-                message=str(e),
+            return DiagnosticResult.blocked(
+                agent_message="Symbolic verification blocked: the code could not be parsed.",
+                developer_fields={
+                    "constraint_id": "symbolic_verifier.syntax_error",
+                    "parse_error": str(e),
+                },
             )
-        
+
         # Find all functions with type hints (CrossHair needs types)
         functions = self._extract_functions(tree)
-        
+
         if not functions:
-            return self._no_verifiable_functions_result()
+            return DiagnosticResult.blocked(
+                agent_message="Symbolic verification blocked: no functions were found to verify.",
+                developer_fields={
+                    "constraint_id": "symbolic_verifier.no_verifiable_functions",
+                    "functions_discovered": 0,
+                },
+            )
 
         summary = self._summarize_verification_results(code, functions)
-        status, message = self._derive_verification_outcome(summary)
+        return self._diagnostic_from_summary(summary)
 
-        return {
-            "is_verified": summary["all_verified"],
-            "is_safe": summary["all_verified"],
-            "verified": summary["all_verified"],
-            "status": status,
-            "message": message,
+    def _diagnostic_from_summary(self, summary: Dict[str, Any]) -> DiagnosticResult:
+        """Map aggregated per-function counts to a DiagnosticResult (fail-closed)."""
+        developer_fields = {
+            "functions_discovered": summary["functions_discovered"],
             "functions_checked": summary["checked_count"],
             "functions_verified": summary["verified_count"],
             "functions_skipped": summary["skipped_count"],
             "functions_unverifiable": summary["unverifiable_count"],
-            "functions_discovered": summary["functions_discovered"],
             "counterexamples_found": summary["counterexample_count"],
-            "issues": summary["issues"]
+            "timeouts_found": summary["timeout_count"],
+            "issues": summary["issues"],
         }
 
-    def _build_terminal_result(self, status: str, message: str) -> Dict[str, Any]:
-        """Build a fail-closed terminal result for pre-verification exits."""
-        return {
-            "is_verified": False,
-            "is_safe": False,
-            "verified": False,
-            "status": status,
-            "message": message,
-            "issues": [],
-            "functions_checked": 0,
-            "functions_verified": 0,
-            "functions_skipped": 0,
-            "functions_unverifiable": 0,
-            "functions_discovered": 0,
-            "counterexamples_found": 0,
-        }
+        if summary["all_verified"]:
+            # CrossHair found no counterexample, but a timeout-bounded search is
+            # not a completeness proof — do not claim VERIFIED without a real
+            # proof_ref (see issue #15 discussion).
+            developer_fields["constraint_id"] = "symbolic_verifier.no_counterexample_found"
+            return DiagnosticResult.unverifiable(
+                agent_message=(
+                    "No counterexample was found for the checked functions, but "
+                    "exhaustive proof was not established."
+                ),
+                developer_fields=developer_fields,
+            )
 
-    def _no_verifiable_functions_result(self) -> Dict[str, Any]:
-        """Return a fail-closed result when no functions can be symbolically checked."""
-        return {
-            "is_verified": False,
-            "is_safe": False,
-            "verified": False,
-            "status": "no_verifiable_functions",
-            "message": "No functions found to verify symbolically",
-            "issues": [{
-                "type": "unverifiable",
-                "function": None,
-                "description": "No functions found in code to verify symbolically"
-            }],
-            "functions_checked": 0,
-            "functions_verified": 0,
-            "functions_skipped": 0,
-            "functions_unverifiable": 0,
-            "functions_discovered": 0,
-            "counterexamples_found": 0
-        }
+        if summary["counterexample_count"] > 0:
+            developer_fields["constraint_id"] = "symbolic_verifier.counterexample_found"
+            return DiagnosticResult.unverifiable(
+                agent_message="Symbolic verification found a counterexample disproving correctness for one or more functions.",
+                developer_fields=developer_fields,
+            )
+
+        if summary["timeout_count"] > 0:
+            developer_fields["constraint_id"] = "symbolic_verifier.timeout"
+            return DiagnosticResult.unverifiable(
+                agent_message="Symbolic verification did not converge within the configured timeout.",
+                developer_fields=developer_fields,
+            )
+
+        if summary["checked_count"] == 0:
+            developer_fields["constraint_id"] = "symbolic_verifier.no_typed_functions"
+            return DiagnosticResult.blocked(
+                agent_message="Symbolic verification blocked: no typed functions were available to check.",
+                developer_fields=developer_fields,
+            )
+
+        if summary["skipped_count"] > 0 or summary["unverifiable_count"] > 0:
+            developer_fields["constraint_id"] = "symbolic_verifier.incomplete_coverage"
+            return DiagnosticResult.unverifiable(
+                agent_message="Symbolic verification was incomplete; at least one function could not be checked.",
+                developer_fields=developer_fields,
+            )
+
+        developer_fields["constraint_id"] = "symbolic_verifier.verification_error"
+        return DiagnosticResult.blocked(
+            agent_message="Symbolic verification did not complete cleanly.",
+            developer_fields=developer_fields,
+        )
 
     def _summarize_verification_results(
         self,
@@ -180,6 +180,7 @@ class SymbolicVerifier:
         skipped_count = 0
         unverifiable_count = 0
         counterexample_count = 0
+        timeout_count = 0
 
         for func in functions:
             result = self._verify_function(code, func)
@@ -198,13 +199,17 @@ class SymbolicVerifier:
             counterexample_count += sum(
                 1 for issue in result_issues if issue.get("type") == "counterexample"
             )
+            timeout_count += sum(
+                1 for issue in result_issues if issue.get("type") == "timeout"
+            )
 
         all_verified = (
             checked_count > 0 and
             verified_count == checked_count and
             skipped_count == 0 and
             unverifiable_count == 0 and
-            counterexample_count == 0
+            counterexample_count == 0 and
+            timeout_count == 0
         )
 
         return {
@@ -215,20 +220,9 @@ class SymbolicVerifier:
             "skipped_count": skipped_count,
             "unverifiable_count": unverifiable_count,
             "counterexample_count": counterexample_count,
+            "timeout_count": timeout_count,
             "functions_discovered": len(functions),
         }
-
-    def _derive_verification_outcome(self, summary: Dict[str, Any]) -> tuple[str, str]:
-        """Map aggregated counts to a final verification status and message."""
-        if summary["all_verified"]:
-            return "verified", "All verifiable functions were proven symbolically."
-        if summary["counterexample_count"] > 0:
-            return "counterexamples_found", "CrossHair found counterexamples for one or more functions."
-        if summary["checked_count"] == 0:
-            return "no_verifiable_functions", "No typed functions could be symbolically verified."
-        if summary["skipped_count"] > 0 or summary["unverifiable_count"] > 0:
-            return "unverifiable", "Symbolic verification was incomplete; at least one function could not be proven."
-        return "verification_error", "Symbolic verification did not complete cleanly."
     
     def _extract_functions(self, tree: ast.AST) -> List[Dict[str, Any]]:
         """Extract function names and info from AST."""
@@ -444,18 +438,18 @@ class SymbolicVerifier:
         function_name: str,
         preconditions: Optional[List[str]] = None,
         postconditions: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
+    ) -> DiagnosticResult:
         """
         Verify a function satisfies its contract.
-        
+
         Args:
             code: Python code containing the function
             function_name: Name of function to verify
             preconditions: List of precondition expressions (e.g., ["x > 0", "y != 0"])
             postconditions: List of postcondition expressions (e.g., ["__return__ >= 0"])
-            
+
         Returns:
-            Dict with contract verification results
+            DiagnosticResult with contract verification results
         """
         # Add contract decorators and re-verify
         decorated_code = self._add_contracts(
@@ -725,10 +719,12 @@ class SymbolicVerifier:
                 "issues": [{"type": "error", "description": str(e)}],
             }
         
-        # Run verification on bounded code
-        result = self.verify_code(bounded_code)
-        
-        # Add bounded analysis info
+        # Run verification on bounded code. verify_code now returns a
+        # DiagnosticResult; this method still returns a plain dict (Phase 2
+        # will fold bounds/complexity metadata into developer_fields as
+        # AdvisoryCheck data instead of separate top-level keys).
+        diagnostic = self.verify_code(bounded_code)
+        result = diagnostic.to_dict()
         result["bounded"] = True
         result["bounds_applied"] = {
             "loop_bound": loop_bound,
@@ -736,7 +732,7 @@ class SymbolicVerifier:
             "prioritized": prioritize_paths
         }
         result["complexity_analysis"] = analysis
-        
+
         return result
     
     def _add_bounds_to_code(
