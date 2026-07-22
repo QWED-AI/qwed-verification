@@ -7,6 +7,7 @@ These tests verify the symbolic execution engine works correctly.
 import pytest
 import sys
 import os
+from types import SimpleNamespace
 from unittest.mock import patch
 
 # Add src to path
@@ -531,14 +532,20 @@ def simple(x: int) -> int:
         assert "bounds_applied" in result
         assert result["bounds_applied"]["loop_bound"] == 5
         assert result["bounds_applied"]["recursion_depth"] == 3
-    
+        # All branches share the DiagnosticResult.to_dict() shape.
+        assert "is_verified" in result
+        assert result["status"] in (DiagnosticStatus.UNVERIFIABLE.value, DiagnosticStatus.BLOCKED.value)
+
     def test_verify_bounded_syntax_error(self):
-        """Test bounded verification handles syntax errors."""
+        """Test bounded verification handles syntax errors using the same schema as every other branch."""
         code = """
 def broken(
 """
         result = self.verifier.verify_bounded(code)
-        assert result["status"] == "syntax_error"
+        assert result["status"] == DiagnosticStatus.BLOCKED.value
+        assert result["is_verified"] is False
+        assert result["bounded"] is False
+        assert result["developer_fields"]["constraint_id"] == "symbolic_verifier.syntax_error"
     
     def test_add_bounds_transforms_code(self):
         """Test that _add_bounds_to_code transforms functions."""
@@ -548,6 +555,41 @@ def recursive_func(n: int) -> int:
 """
         bounded = self.verifier._add_bounds_to_code(code, loop_bound=10, recursion_depth=5)
         assert "_qwed_depth" in bounded
+
+
+class TestCrossHairExitCodes:
+    """CrossHair's CLI distinguishes a disproving counterexample (exit 1) from
+    an engine-level failure (exit 2) — only exit 1 should be reported as a
+    counterexample."""
+
+    def setup_method(self):
+        self.verifier = SymbolicVerifier(timeout_seconds=5)
+
+    def test_exit_code_1_is_counterexample(self):
+        """Exit code 1 means CrossHair found a counterexample."""
+        fake_result = SimpleNamespace(returncode=1, stdout="Counterexample: x=0\n", stderr="")
+        with patch("subprocess.run", return_value=fake_result):
+            issues = self.verifier._run_crosshair_check("dummy.py", "divide")
+
+        assert len(issues) == 1
+        assert issues[0]["type"] == "counterexample"
+
+    def test_exit_code_2_is_error_not_counterexample(self):
+        """Exit code 2 is an engine failure and must not be mislabeled as a disproof."""
+        fake_result = SimpleNamespace(returncode=2, stdout="", stderr="internal error: crash")
+        with patch("subprocess.run", return_value=fake_result):
+            issues = self.verifier._run_crosshair_check("dummy.py", "divide")
+
+        assert len(issues) == 1
+        assert issues[0]["type"] == "error"
+
+    def test_exit_code_0_with_no_output_is_clean(self):
+        """Exit code 0 with no output means CrossHair found no issues."""
+        fake_result = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with patch("subprocess.run", return_value=fake_result):
+            issues = self.verifier._run_crosshair_check("dummy.py", "divide")
+
+        assert issues == []
 
 
 class TestVerificationBudget:

@@ -312,11 +312,15 @@ class SymbolicVerifier:
     def _run_crosshair_check(self, file_path: str, func_name: str) -> List[Dict[str, Any]]:
         """
         Run CrossHair check on a specific function.
-        
+
+        CrossHair's CLI distinguishes a disproving counterexample (exit 1)
+        from an engine-level failure (exit 2) — only exit 1 is reported as a
+        counterexample; any other nonzero exit is an error, not a disproof.
+
         Returns list of issues found.
         """
         import subprocess
-        
+
         # Run crosshair check command
         try:
             result = subprocess.run(
@@ -329,25 +333,35 @@ class SymbolicVerifier:
                 text=True,
                 timeout=self.timeout_seconds * 2
             )
-            
+
             issues = []
-            
-            # Parse CrossHair output
-            if result.returncode != 0 or result.stdout.strip():
-                output = result.stdout + result.stderr
-                
-                # CrossHair outputs counterexamples in specific format
+            output = result.stdout + result.stderr
+
+            if result.returncode == 1:
+                # Exit 1: CrossHair disproved the check with a counterexample.
                 for line in output.split('\n'):
-                    if line.strip():
-                        if 'error' in line.lower() or 'counterexample' in line.lower():
-                            issues.append({
-                                "type": "counterexample",
-                                "function": func_name,
-                                "description": line.strip()
-                            })
-            
+                    if line.strip() and ('error' in line.lower() or 'counterexample' in line.lower()):
+                        issues.append({
+                            "type": "counterexample",
+                            "function": func_name,
+                            "description": line.strip()
+                        })
+                if not issues:
+                    issues.append({
+                        "type": "counterexample",
+                        "function": func_name,
+                        "description": output.strip() or "CrossHair reported a counterexample (exit code 1)."
+                    })
+            elif result.returncode != 0:
+                # Any other nonzero exit (e.g. 2) is an engine failure, not a disproof.
+                issues.append({
+                    "type": "error",
+                    "function": func_name,
+                    "description": output.strip() or f"CrossHair exited with code {result.returncode}."
+                })
+
             return issues
-            
+
         except subprocess.TimeoutExpired:
             return [{
                 "type": "timeout",
@@ -695,44 +709,61 @@ class SymbolicVerifier:
             prioritize_paths: If True, check critical paths first
             
         Returns:
-            Dict with bounded verification results
+            Dict built from DiagnosticResult.to_dict() with bounds/complexity
+            metadata layered on top. All branches (syntax error, bounds-transform
+            error, and the main verification path) share this same shape —
+            Phase 2 will fold bounds/complexity into developer_fields as
+            AdvisoryCheck data instead of separate top-level keys.
         """
+        bounds_applied = {
+            "loop_bound": loop_bound,
+            "recursion_depth": recursion_depth,
+            "prioritized": prioritize_paths,
+        }
+
         # First analyze complexity
         analysis = self.analyze_complexity(code)
-        
+
         if analysis.get("status") == "syntax_error":
-            return {
-                "is_verified": False,
-                "status": "syntax_error",
-                "message": analysis.get("message")
-            }
-        
+            diagnostic = DiagnosticResult.blocked(
+                agent_message="Bounded verification blocked: the code could not be parsed.",
+                developer_fields={
+                    "constraint_id": "symbolic_verifier.syntax_error",
+                    "parse_error": analysis.get("message"),
+                },
+            )
+            return self._bounded_result(diagnostic, bounded=False, bounds_applied=bounds_applied, complexity_analysis=analysis)
+
         # Transform code to add bounds
         try:
             bounded_code = self._add_bounds_to_code(code, loop_bound, recursion_depth)
         except ValueError as e:
-            return {
-                "is_verified": False,
-                "status": "bounds_transform_error",
-                "message": str(e),
-                "bounded": False,
-                "issues": [{"type": "error", "description": str(e)}],
-            }
-        
-        # Run verification on bounded code. verify_code now returns a
-        # DiagnosticResult; this method still returns a plain dict (Phase 2
-        # will fold bounds/complexity metadata into developer_fields as
-        # AdvisoryCheck data instead of separate top-level keys).
-        diagnostic = self.verify_code(bounded_code)
-        result = diagnostic.to_dict()
-        result["bounded"] = True
-        result["bounds_applied"] = {
-            "loop_bound": loop_bound,
-            "recursion_depth": recursion_depth,
-            "prioritized": prioritize_paths
-        }
-        result["complexity_analysis"] = analysis
+            diagnostic = DiagnosticResult.blocked(
+                agent_message="Bounded verification blocked: failed to apply the bounded-model transform.",
+                developer_fields={
+                    "constraint_id": "symbolic_verifier.bounds_transform_error",
+                    "transform_error": str(e),
+                },
+            )
+            return self._bounded_result(diagnostic, bounded=False, bounds_applied=bounds_applied, complexity_analysis=analysis)
 
+        # Run verification on bounded code
+        diagnostic = self.verify_code(bounded_code)
+        return self._bounded_result(diagnostic, bounded=True, bounds_applied=bounds_applied, complexity_analysis=analysis)
+
+    def _bounded_result(
+        self,
+        diagnostic: "DiagnosticResult",
+        bounded: bool,
+        bounds_applied: Dict[str, Any],
+        complexity_analysis: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Serialize a DiagnosticResult into verify_bounded's dict shape, uniformly across all branches."""
+        result = diagnostic.to_dict()
+        result["is_verified"] = diagnostic.is_verified
+        result["bounded"] = bounded
+        result["bounds_applied"] = bounds_applied
+        result["complexity_analysis"] = complexity_analysis
         return result
     
     def _add_bounds_to_code(
