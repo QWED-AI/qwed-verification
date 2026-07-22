@@ -148,7 +148,11 @@ class SymbolicVerifier:
                 developer_fields=developer_fields,
             )
 
-        if summary["checked_count"] == 0:
+        if summary["checked_count"] == 0 and summary["unverifiable_count"] == summary["skipped_count"]:
+            # Only claim "no typed functions" when every unverifiable function
+            # was a genuine skip (missing type annotations). If any of them
+            # errored out instead, typed functions did exist — that falls
+            # through to incomplete_coverage below instead of this message.
             developer_fields["constraint_id"] = "symbolic_verifier.no_typed_functions"
             return DiagnosticResult.blocked(
                 agent_message="Symbolic verification blocked: no typed functions were available to check.",

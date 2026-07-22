@@ -416,6 +416,12 @@ def typed_add(a: int, b: int) -> int:
 
         assert result.developer_fields["functions_checked"] == 0
         assert result.developer_fields["functions_unverifiable"] == 1
+        # A typed function that errored out is not the same as "no typed
+        # functions" — it must fall through to incomplete_coverage/UNVERIFIABLE,
+        # not the no_typed_functions/BLOCKED message (which would be factually
+        # wrong here, since a typed function did exist and was attempted).
+        assert result.status is DiagnosticStatus.UNVERIFIABLE
+        assert result.developer_fields["constraint_id"] == "symbolic_verifier.incomplete_coverage"
 
     def test_skipped_function_result_is_not_marked_verified(self):
         """Function-level skip results must not claim successful verification."""
