@@ -186,7 +186,7 @@ class SymbolicVerifier:
             result = self._verify_function(code, func)
             if result.get("verified"):
                 verified_count += 1
-            if not result.get("skipped"):
+            if not result.get("skipped") and not result.get("unverifiable"):
                 checked_count += 1
 
             if result.get("skipped") or result.get("unverifiable"):

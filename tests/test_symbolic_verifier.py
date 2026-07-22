@@ -390,6 +390,33 @@ def typed_add(a: int, b: int) -> int:
         assert result.developer_fields["constraint_id"] == "symbolic_verifier.verification_error"
         assert result.agent_message == "Symbolic verification did not complete cleanly."
 
+    def test_errored_function_is_not_counted_as_checked(self):
+        """A function that errored out (unverifiable, but not skipped) must not inflate functions_checked."""
+        code = """
+def typed_add(a: int, b: int) -> int:
+    return a + b
+"""
+        with patch.object(self.verifier, "_crosshair_available", True):
+            with patch.object(
+                self.verifier,
+                "_verify_function",
+                return_value={
+                    "verified": False,
+                    "function": "typed_add",
+                    "skipped": False,
+                    "unverifiable": True,
+                    "issues": [{
+                        "type": "error",
+                        "function": "typed_add",
+                        "description": "CrossHair error: boom"
+                    }]
+                }
+            ):
+                result = self.verifier.verify_code(code)
+
+        assert result.developer_fields["functions_checked"] == 0
+        assert result.developer_fields["functions_unverifiable"] == 1
+
     def test_skipped_function_result_is_not_marked_verified(self):
         """Function-level skip results must not claim successful verification."""
         func_info = {"name": "add", "has_types": False}
