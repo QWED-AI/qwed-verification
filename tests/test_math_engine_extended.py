@@ -304,7 +304,7 @@ class TestEigenvalueCompleteness:
         )
         assert result["is_correct"] is False
         assert result["status"] == "CORRECTION_NEEDED"
-        assert "Incomplete eigenvalue claim" in result["error"]
+        assert "cardinality mismatch" in result["error"]
         assert result["calculated_count"] == 2
         assert result["claimed_count"] == 1
 
@@ -346,6 +346,28 @@ class TestEigenvalueCompleteness:
             operation="eigenvalues",
             matrices={"A": [[5]]},
             expected=[5],
+        )
+        assert result["is_correct"] is True
+        assert result["status"] == "VERIFIED"
+
+    def test_repeated_eigenvalue_incomplete_rejected(self, engine):
+        """diag(2,2) has eigenvalue 2 with multiplicity 2 — claim [2] is incomplete."""
+        result = engine.verify_matrix_operation(
+            operation="eigenvalues",
+            matrices={"A": [[2, 0], [0, 2]]},
+            expected=[2],
+        )
+        assert result["is_correct"] is False
+        assert result["status"] == "CORRECTION_NEEDED"
+        assert result["calculated_count"] == 2
+        assert result["claimed_count"] == 1
+
+    def test_repeated_eigenvalue_complete_verified(self, engine):
+        """diag(2,2) with claim [2, 2] accounts for multiplicity — VERIFIED."""
+        result = engine.verify_matrix_operation(
+            operation="eigenvalues",
+            matrices={"A": [[2, 0], [0, 2]]},
+            expected=[2, 2],
         )
         assert result["is_correct"] is True
         assert result["status"] == "VERIFIED"

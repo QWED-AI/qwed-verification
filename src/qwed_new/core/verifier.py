@@ -479,19 +479,22 @@ class VerificationEngine:
                 
             elif operation == "eigenvalues":
                 mat = list(sympy_matrices.values())[0]
-                eigenvals = list(mat.eigenvals().keys())
+                # Expand by algebraic multiplicity so repeated roots are counted
+                eigen_multiset = mat.eigenvals()
+                eigenvals = [v for v, m in eigen_multiset.items() for _ in range(m)]
                 eigenvals_float = sorted([complex(v.evalf()).real for v in eigenvals])
                 expected_sorted = sorted(expected)
-                # Cardinality check: incomplete claims must not pass (Issue #130)
+                # Cardinality check: claim must match exact eigenvalue count (Issue #130)
                 if len(eigenvals_float) != len(expected_sorted):
                     return {
                         "is_correct": False,
                         "status": "CORRECTION_NEEDED",
                         "error": (
-                            f"Incomplete eigenvalue claim: matrix has "
-                            f"{len(eigenvals_float)} eigenvalue(s) but "
-                            f"{len(expected_sorted)} claimed. All eigenvalues "
-                            f"must be specified for verification."
+                            f"Eigenvalue cardinality mismatch: matrix has "
+                            f"{len(eigenvals_float)} eigenvalue(s) (counting "
+                            f"multiplicity) but {len(expected_sorted)} claimed. "
+                            f"All eigenvalues including repeated roots must be "
+                            f"specified for verification."
                         ),
                         "calculated_eigenvalues": eigenvals_float,
                         "claimed_eigenvalues": list(expected),
