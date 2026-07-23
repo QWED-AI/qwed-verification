@@ -182,6 +182,73 @@ class TestMathEngineEdgeCases:
         )
         assert result["status"] == "ERROR"
 
+    # =========================================================================
+    # Mode ambiguity fail-closed (Issue #129)
+    # =========================================================================
+
+    def test_mode_ambiguous_blocked(self, engine):
+        """Multi-mode dataset must return BLOCKED, not VERIFIED (Issue #129)."""
+        result = engine.verify_statistics(
+            data=[1, 1, 2, 2],
+            statistic="mode",
+            expected=1
+        )
+        assert result["is_correct"] is False
+        assert result["status"] == "BLOCKED"
+        assert "Ambiguous mode" in result["error"]
+        assert sorted(result["ambiguous_modes"]) == [1, 2]
+
+    def test_mode_ambiguous_blocked_other_claim(self, engine):
+        """Multi-mode dataset blocks regardless of which value is claimed."""
+        result = engine.verify_statistics(
+            data=[1, 1, 2, 2],
+            statistic="mode",
+            expected=2
+        )
+        assert result["is_correct"] is False
+        assert result["status"] == "BLOCKED"
+
+    def test_mode_unique_verified(self, engine):
+        """Unique mode matches claim -> VERIFIED."""
+        result = engine.verify_statistics(
+            data=[1, 1, 2],
+            statistic="mode",
+            expected=1
+        )
+        assert result["is_correct"] is True
+        assert result["status"] == "VERIFIED"
+
+    def test_mode_unique_correction_needed(self, engine):
+        """Unique mode does NOT match claim -> CORRECTION_NEEDED."""
+        result = engine.verify_statistics(
+            data=[1, 1, 2],
+            statistic="mode",
+            expected=2
+        )
+        assert result["is_correct"] is False
+        assert result["status"] == "CORRECTION_NEEDED"
+
+    def test_mode_all_equal_verified(self, engine):
+        """All-equal dataset has a unique deterministic mode."""
+        result = engine.verify_statistics(
+            data=[3, 3, 3],
+            statistic="mode",
+            expected=3
+        )
+        assert result["is_correct"] is True
+        assert result["status"] == "VERIFIED"
+
+    def test_mode_three_way_tie_blocked(self, engine):
+        """Three-way tie must also be BLOCKED."""
+        result = engine.verify_statistics(
+            data=[1, 2, 3, 1, 2, 3],
+            statistic="mode",
+            expected=1
+        )
+        assert result["is_correct"] is False
+        assert result["status"] == "BLOCKED"
+        assert sorted(result["ambiguous_modes"]) == [1, 2, 3]
+
 
 class TestPercentageCalculations:
     """Test percentage verification."""
