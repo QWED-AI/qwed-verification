@@ -631,12 +631,18 @@ class VerificationEngine:
             if not cash_flows or len(cash_flows) < 2:
                 return {"is_correct": False, "status": "ERROR", "error": "Need at least 2 cash flows"}
 
-            # Descartes' rule of signs: count sign changes to detect multi-root ambiguity
+            # Descartes' rule of signs: count sign changes, skipping zeros
             sign_changes = 0
-            for i in range(1, len(cash_flows)):
-                if (cash_flows[i - 1] < 0 and cash_flows[i] > 0) or \
-                   (cash_flows[i - 1] > 0 and cash_flows[i] < 0):
-                    sign_changes += 1
+            last_sign = 0
+            for cf in cash_flows:
+                if cf > 0:
+                    if last_sign < 0:
+                        sign_changes += 1
+                    last_sign = 1
+                elif cf < 0:
+                    if last_sign > 0:
+                        sign_changes += 1
+                    last_sign = -1
 
             if sign_changes > 1:
                 return {

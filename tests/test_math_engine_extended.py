@@ -391,6 +391,16 @@ class TestIRRConvergenceProof:
         assert "Ambiguous IRR" in result["error"]
         assert result["sign_changes"] == 2
 
+    def test_zero_hidden_sign_change_blocked(self, engine):
+        """Zeros between sign changes must not hide multi-root ambiguity."""
+        result = engine.verify_irr(
+            cash_flows=[-100, 0, 230, -132],
+            expected=0.1,
+        )
+        assert result["is_correct"] is False
+        assert result["status"] == "BLOCKED"
+        assert result["sign_changes"] == 2
+
     def test_simple_irr_converges_verified(self, engine):
         """Standard cash flow with single sign change converges and verifies."""
         result = engine.verify_irr(
