@@ -30,6 +30,8 @@
   [![DOI](https://zenodo.org/badge/1115581942.svg)](https://doi.org/10.5281/zenodo.18111675)
   [![GitHub stars](https://img.shields.io/github/stars/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification)
 
+  [![Also on GitLab](https://img.shields.io/badge/Also%20on-GitLab%20(Enterprise)-FC6D26?logo=gitlab&logoColor=white)](https://gitlab.com/qwed-ai/qwed-verification)
+
   <a href="https://www.nvidia.com/en-us/startups/"><img src="./assets/badges/nvidia-inception.png" alt="NVIDIA Inception Program" height="40"></a>
   <a href="https://github.com/developer-program"><img src="https://img.shields.io/badge/GitHub_Developer_Program-Member-4183C4?style=for-the-badge&logo=github&logoColor=white" alt="GitHub Developer Program" height="40"></a>
 
