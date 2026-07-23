@@ -745,11 +745,11 @@ class VerificationEngine:
                         "error": (
                             f"Ambiguous mode: {len(modes)} values share the maximum "
                             f"frequency ({max_freq}). Cannot deterministically verify "
-                            f"a single mode. Modes: {sorted(modes)}"
+                            f"a single mode. Modes: {sorted(modes, key=str)}"
                         ),
                         "statistic": statistic,
                         "data_points": n,
-                        "ambiguous_modes": sorted(modes),
+                        "ambiguous_modes": sorted(modes, key=str),
                     }
                 calculated = modes[0]
             elif statistic == "variance":
