@@ -623,13 +623,41 @@ class VerificationEngine:
         """
         Verify Internal Rate of Return calculation.
         
-        IRR is the rate where NPV = 0
+        IRR is the rate where NPV = 0.
+        Fail-closed: non-convergence, derivative stall, and ambiguous
+        (multi-root) cash flow patterns are blocked, not verified.
         """
         try:
+            if not cash_flows or len(cash_flows) < 2:
+                return {"is_correct": False, "status": "ERROR", "error": "Need at least 2 cash flows"}
+
+            # Descartes' rule of signs: count sign changes to detect multi-root ambiguity
+            sign_changes = 0
+            for i in range(1, len(cash_flows)):
+                if (cash_flows[i - 1] < 0 and cash_flows[i] > 0) or \
+                   (cash_flows[i - 1] > 0 and cash_flows[i] < 0):
+                    sign_changes += 1
+
+            if sign_changes > 1:
+                return {
+                    "is_correct": False,
+                    "status": "BLOCKED",
+                    "error": (
+                        f"Ambiguous IRR: {sign_changes} sign changes in cash flows "
+                        f"implies up to {sign_changes} possible roots. Cannot "
+                        f"deterministically verify a unique IRR."
+                    ),
+                    "sign_changes": sign_changes,
+                    "cash_flows": cash_flows,
+                }
+
             # Newton-Raphson method to find IRR
             r = Decimal("0.1")  # Initial guess
-            
-            for _ in range(100):  # Max iterations
+            converged = False
+            convergence_threshold = Decimal("0.0001")
+            max_iterations = 100
+
+            for iteration in range(max_iterations):
                 npv = Decimal("0")
                 npv_derivative = Decimal("0")
                 
@@ -639,12 +667,40 @@ class VerificationEngine:
                     if t > 0:
                         npv_derivative -= t * cf_dec / ((1 + r) ** (t + 1))
                 
-                if abs(npv) < Decimal("0.0001"):
+                if abs(npv) < convergence_threshold:
+                    converged = True
                     break
-                    
-                if npv_derivative != 0:
-                    r = r - npv / npv_derivative
-            
+
+                if npv_derivative == 0:
+                    # Derivative stall: Newton's method cannot proceed
+                    return {
+                        "is_correct": False,
+                        "status": "BLOCKED",
+                        "error": (
+                            f"IRR verification failed: derivative is zero at "
+                            f"iteration {iteration + 1} (r={float(r):.6f}). "
+                            f"Newton-Raphson cannot converge from this path."
+                        ),
+                        "iterations_used": iteration + 1,
+                        "cash_flows": cash_flows,
+                    }
+
+                r = r - npv / npv_derivative
+
+            if not converged:
+                return {
+                    "is_correct": False,
+                    "status": "BLOCKED",
+                    "error": (
+                        f"IRR verification failed: Newton-Raphson did not converge "
+                        f"within {max_iterations} iterations. Final NPV residual: "
+                        f"{float(abs(npv)):.8f}."
+                    ),
+                    "iterations_used": max_iterations,
+                    "final_residual": float(abs(npv)),
+                    "cash_flows": cash_flows,
+                }
+
             irr = float(r)
             is_correct = abs(irr - expected) <= tolerance
             
@@ -653,6 +709,8 @@ class VerificationEngine:
                 "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
                 "calculated_irr": irr,
                 "claimed_irr": expected,
+                "converged": True,
+                "iterations_used": iteration + 1,
                 "cash_flows": cash_flows
             }
             

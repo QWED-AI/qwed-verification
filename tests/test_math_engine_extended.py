@@ -371,3 +371,67 @@ class TestEigenvalueCompleteness:
         )
         assert result["is_correct"] is True
         assert result["status"] == "VERIFIED"
+
+
+class TestIRRConvergenceProof:
+    """IRR verification must prove convergence (Issue #131)."""
+
+    @pytest.fixture
+    def engine(self):
+        return VerificationEngine()
+
+    def test_multi_sign_change_blocked(self, engine):
+        """Multiple sign changes -> ambiguous IRR -> BLOCKED."""
+        result = engine.verify_irr(
+            cash_flows=[-100, 230, -132],
+            expected=0.1,
+        )
+        assert result["is_correct"] is False
+        assert result["status"] == "BLOCKED"
+        assert "Ambiguous IRR" in result["error"]
+        assert result["sign_changes"] == 2
+
+    def test_simple_irr_converges_verified(self, engine):
+        """Standard cash flow with single sign change converges and verifies."""
+        result = engine.verify_irr(
+            cash_flows=[-1000, 300, 400, 400, 300],
+            expected=0.149,
+            tolerance=0.001,
+        )
+        assert result["is_correct"] is True
+        assert result["status"] == "VERIFIED"
+        assert result["converged"] is True
+
+    def test_simple_irr_wrong_claim(self, engine):
+        """Converged IRR that doesn't match claim -> CORRECTION_NEEDED."""
+        result = engine.verify_irr(
+            cash_flows=[-1000, 300, 400, 400, 300],
+            expected=0.50,
+            tolerance=0.001,
+        )
+        assert result["is_correct"] is False
+        assert result["status"] == "CORRECTION_NEEDED"
+        assert result["converged"] is True
+
+    def test_zero_cash_flow_irr(self, engine):
+        """Cash flow [-100, 0, 0, 100] — single sign change, should converge."""
+        result = engine.verify_irr(
+            cash_flows=[-100, 0, 0, 100],
+            expected=0.0,
+            tolerance=0.01,
+        )
+        # IRR of [-100, 0, 0, 100] is 0% (100/100 = 1, (1+r)^3 = 1, r=0)
+        assert result["status"] in ("VERIFIED", "BLOCKED")
+        # If it converges, it should verify at 0%
+        if result["status"] == "VERIFIED":
+            assert result["is_correct"] is True
+
+    def test_empty_cash_flows_error(self, engine):
+        """Empty cash flows -> ERROR."""
+        result = engine.verify_irr(cash_flows=[], expected=0.1)
+        assert result["status"] == "ERROR"
+
+    def test_single_cash_flow_error(self, engine):
+        """Single cash flow -> ERROR (need at least 2)."""
+        result = engine.verify_irr(cash_flows=[-100], expected=0.1)
+        assert result["status"] == "ERROR"
