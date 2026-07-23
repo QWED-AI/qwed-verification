@@ -482,6 +482,22 @@ class VerificationEngine:
                 eigenvals = list(mat.eigenvals().keys())
                 eigenvals_float = sorted([complex(v.evalf()).real for v in eigenvals])
                 expected_sorted = sorted(expected)
+                # Cardinality check: incomplete claims must not pass (Issue #130)
+                if len(eigenvals_float) != len(expected_sorted):
+                    return {
+                        "is_correct": False,
+                        "status": "CORRECTION_NEEDED",
+                        "error": (
+                            f"Incomplete eigenvalue claim: matrix has "
+                            f"{len(eigenvals_float)} eigenvalue(s) but "
+                            f"{len(expected_sorted)} claimed. All eigenvalues "
+                            f"must be specified for verification."
+                        ),
+                        "calculated_eigenvalues": eigenvals_float,
+                        "claimed_eigenvalues": list(expected),
+                        "calculated_count": len(eigenvals_float),
+                        "claimed_count": len(expected_sorted),
+                    }
                 is_correct = all(
                     abs(a - b) < 1e-6 
                     for a, b in zip(eigenvals_float, expected_sorted)
@@ -490,7 +506,7 @@ class VerificationEngine:
                     "is_correct": is_correct,
                     "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
                     "calculated_eigenvalues": eigenvals_float,
-                    "claimed_eigenvalues": expected
+                    "claimed_eigenvalues": list(expected)
                 }
             else:
                 return {"is_correct": False, "status": "ERROR", "error": f"Unknown operation: {operation}"}

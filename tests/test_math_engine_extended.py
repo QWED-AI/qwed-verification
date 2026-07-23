@@ -286,3 +286,66 @@ class TestPercentageCalculations:
             operation="decrease"
         )
         assert result["is_correct"] is True
+
+
+class TestEigenvalueCompleteness:
+    """Eigenvalue verification must require complete claims (Issue #130)."""
+
+    @pytest.fixture
+    def engine(self):
+        return VerificationEngine()
+
+    def test_incomplete_eigenvalue_claim_rejected(self, engine):
+        """Claiming [2] for a matrix with eigenvalues [2, 3] must NOT verify."""
+        result = engine.verify_matrix_operation(
+            operation="eigenvalues",
+            matrices={"A": [[2, 0], [0, 3]]},
+            expected=[2],
+        )
+        assert result["is_correct"] is False
+        assert result["status"] == "CORRECTION_NEEDED"
+        assert "Incomplete eigenvalue claim" in result["error"]
+        assert result["calculated_count"] == 2
+        assert result["claimed_count"] == 1
+
+    def test_complete_eigenvalue_claim_verified(self, engine):
+        """Claiming [2, 3] for a matrix with eigenvalues [2, 3] must verify."""
+        result = engine.verify_matrix_operation(
+            operation="eigenvalues",
+            matrices={"A": [[2, 0], [0, 3]]},
+            expected=[2, 3],
+        )
+        assert result["is_correct"] is True
+        assert result["status"] == "VERIFIED"
+
+    def test_complete_eigenvalue_wrong_values(self, engine):
+        """Claiming [2, 4] for eigenvalues [2, 3] -> CORRECTION_NEEDED."""
+        result = engine.verify_matrix_operation(
+            operation="eigenvalues",
+            matrices={"A": [[2, 0], [0, 3]]},
+            expected=[2, 4],
+        )
+        assert result["is_correct"] is False
+        assert result["status"] == "CORRECTION_NEEDED"
+
+    def test_overcomplete_eigenvalue_claim_rejected(self, engine):
+        """Claiming MORE eigenvalues than exist must also fail."""
+        result = engine.verify_matrix_operation(
+            operation="eigenvalues",
+            matrices={"A": [[2, 0], [0, 3]]},
+            expected=[2, 3, 5],
+        )
+        assert result["is_correct"] is False
+        assert result["status"] == "CORRECTION_NEEDED"
+        assert result["calculated_count"] == 2
+        assert result["claimed_count"] == 3
+
+    def test_single_eigenvalue_verified(self, engine):
+        """1x1 matrix with single eigenvalue — complete claim verifies."""
+        result = engine.verify_matrix_operation(
+            operation="eigenvalues",
+            matrices={"A": [[5]]},
+            expected=[5],
+        )
+        assert result["is_correct"] is True
+        assert result["status"] == "VERIFIED"
