@@ -736,7 +736,22 @@ class VerificationEngine:
             elif statistic == "mode":
                 from collections import Counter
                 counter = Counter(data)
-                calculated = counter.most_common(1)[0][0]
+                max_freq = max(counter.values())
+                modes = [val for val, freq in counter.items() if freq == max_freq]
+                if len(modes) > 1:
+                    return {
+                        "is_correct": False,
+                        "status": "BLOCKED",
+                        "error": (
+                            f"Ambiguous mode: {len(modes)} values share the maximum "
+                            f"frequency ({max_freq}). Cannot deterministically verify "
+                            f"a single mode. Modes: {sorted(modes, key=str)}"
+                        ),
+                        "statistic": statistic,
+                        "data_points": n,
+                        "ambiguous_modes": sorted(modes, key=str),
+                    }
+                calculated = modes[0]
             elif statistic == "variance":
                 mean = sum(data) / n
                 calculated = sum((x - mean) ** 2 for x in data) / n
