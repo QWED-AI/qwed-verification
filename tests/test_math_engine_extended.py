@@ -445,3 +445,10 @@ class TestIRRConvergenceProof:
         """Single cash flow -> ERROR (need at least 2)."""
         result = engine.verify_irr(cash_flows=[-100], expected=0.1)
         assert result["status"] == "ERROR"
+
+    def test_all_zero_cash_flows_blocked(self, engine):
+        """All-zero cash flows: IRR is undefined -> BLOCKED."""
+        result = engine.verify_irr(cash_flows=[0, 0, 0], expected=0.1)
+        assert result["is_correct"] is False
+        assert result["status"] == "BLOCKED"
+        assert "undefined" in result["error"]

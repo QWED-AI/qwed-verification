@@ -631,6 +631,15 @@ class VerificationEngine:
             if not cash_flows or len(cash_flows) < 2:
                 return {"is_correct": False, "status": "ERROR", "error": "Need at least 2 cash flows"}
 
+            # All-zero cash flows: IRR is mathematically undefined
+            if all(cf == 0 for cf in cash_flows):
+                return {
+                    "is_correct": False,
+                    "status": "BLOCKED",
+                    "error": "IRR is undefined: all cash flows are zero. Any rate satisfies NPV=0.",
+                    "cash_flows": cash_flows,
+                }
+
             # Descartes' rule of signs: count sign changes, skipping zeros
             sign_changes = 0
             last_sign = 0
