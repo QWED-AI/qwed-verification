@@ -202,10 +202,9 @@ def add(x: int, y: int) -> int:
         ):
             with patch.object(self.verifier, "_crosshair_available", True):
                 result = self.verifier.verify_code(code)
+        assert result.status is DiagnosticStatus.UNVERIFIABLE
+        assert result.developer_fields["constraint_id"] == "symbolic_verifier.no_counterexample_found"
         assert result.developer_fields["functions_checked"] > 0
-        # This engine does not yet emit VERIFIED (issue #15) — a clean symbolic
-        # search surfaces as UNVERIFIABLE since a timeout-bounded search isn't
-        # a completeness proof.
         assert result.is_verified is False
         assert result.proof_ref is None
 
