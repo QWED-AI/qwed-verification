@@ -647,7 +647,8 @@ def add(x, y):
     return x + y
 """
         result = self.verifier.get_verification_budget(code)
-        assert result["feasible"] == True
+        assert result.developer_fields["feasible"]
+        assert result.status == DiagnosticStatus.UNVERIFIABLE
     
     def test_complex_code_path_explosion(self):
         """Test that complex code triggers path explosion warning."""
@@ -661,8 +662,8 @@ def explosion(items):
                         print(a, b, c, d, e)
 """
         result = self.verifier.get_verification_budget(code, max_paths=100)
-        assert result["feasible"] == False
-        assert "path explosion" in result["message"].lower() or result["estimated_paths"] > 100
+        assert result.developer_fields["feasible"] is False
+        assert "path explosion" in result.agent_message.lower() or result.developer_fields["estimated_paths"] > 100
 
 
 if __name__ == "__main__":

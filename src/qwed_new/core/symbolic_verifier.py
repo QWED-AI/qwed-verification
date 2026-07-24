@@ -13,7 +13,7 @@ import tempfile
 import os
 import sys
 
-from .diagnostics import DiagnosticResult
+from .diagnostics import AdvisoryCheck, DiagnosticResult
 
 
 class SymbolicVerifier:
@@ -825,54 +825,63 @@ class SymbolicVerifier:
         self, 
         code: str,
         max_paths: int = 1000
-    ) -> Dict[str, Any]:
-        """
-        Calculate verification budget - estimated paths to explore.
-        
-        Helps decide if verification is feasible or needs stricter bounds.
-        
-        Args:
-            code: Code to analyze
-            max_paths: Maximum paths before warning
-            
-        Returns:
-            Dict with path estimation and recommendations
-        """
+    ) -> "DiagnosticResult":
+        """Calculate verification budget — estimated paths to explore."""
         analysis = self.analyze_complexity(code)
-        
+
         if analysis.get("status") == "syntax_error":
-            return analysis
-        
-        # Estimate paths (simplified heuristic)
+            return DiagnosticResult.unverifiable(
+                agent_message="Cannot estimate verification budget: syntax error in code.",
+                developer_fields={
+                    "constraint_id": "symbolic_verifier.syntax_error",
+                    "parse_error": analysis.get("message"),
+                },
+            )
+
         loops = analysis.get("loops", [])
         recursions = analysis.get("recursions", [])
-        
-        # Rough estimation: paths = iterations^depth for nested loops
+
         default_iterations = 10
         estimated_paths = 1
-        
+
         for loop in loops:
             if loop.get("iterable_type") == "range":
                 estimated_paths *= default_iterations
             else:
-                estimated_paths *= default_iterations * 2  # Unknown iterables are worse
-        
-        # Add recursion factor
+                estimated_paths *= default_iterations * 2
+
         if recursions:
             estimated_paths *= 2 ** len(recursions)
-        
+
         feasible = estimated_paths <= max_paths
-        
-        return {
-            "estimated_paths": min(estimated_paths, 999999),  # Cap for display
-            "max_paths": max_paths,
-            "feasible": feasible,
-            "recommendation": analysis.get("recommendation", {}),
-            "message": (
-                "Verification feasible within budget" if feasible 
-                else f"Path explosion risk: {estimated_paths} paths. Use stricter bounds."
-            )
-        }
+        capped = min(estimated_paths, 999999)
+
+        message = (
+            "Verification feasible within budget" if feasible
+            else f"Path explosion risk: {estimated_paths} paths. Use stricter bounds."
+        )
+
+        advisory = AdvisoryCheck(
+            name="verification_budget",
+            constraint_id="symbolic_verifier.verification_budget",
+            details={
+                "estimated_paths": capped,
+                "max_paths": max_paths,
+                "feasible": feasible,
+            },
+        )
+
+        return DiagnosticResult.unverifiable(
+            agent_message=message,
+            developer_fields={
+                "constraint_id": "symbolic_verifier.verification_budget",
+                "estimated_paths": capped,
+                "max_paths": max_paths,
+                "feasible": feasible,
+                "recommendation": analysis.get("recommendation", {}),
+                "advisory_checks": [advisory.to_dict()],
+            },
+        )
 
 
 # Factory function for easy access
