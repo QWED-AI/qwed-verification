@@ -570,9 +570,12 @@ def simple(x: int) -> int:
     return x + 1
 """
         result = self.verifier.verify_bounded(code, loop_bound=5, recursion_depth=3)
-        assert result.developer_fields["bounded"] == True
+        assert result.developer_fields["bounded"]
         assert result.developer_fields["bounds_applied"]["loop_bound"] == 5
         assert result.developer_fields["bounds_applied"]["recursion_depth"] == 3
+        assert result.developer_fields["bounds_applied"]["prioritized"] is True
+        assert result.developer_fields["verification_mode"] == "bounded_symbolic"
+        assert result.developer_fields["complexity_analysis"]["status"] == "analyzed"
         assert result.status in (DiagnosticStatus.UNVERIFIABLE, DiagnosticStatus.BLOCKED)
 
     def test_verify_bounded_syntax_error(self):
