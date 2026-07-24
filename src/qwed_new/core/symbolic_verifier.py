@@ -60,13 +60,12 @@ class SymbolicVerifier:
         except ImportError:
             return False
     
-    def verify_code(self, code: str, check_assertions: bool = True) -> DiagnosticResult:
+    def verify_code(self, code: str) -> DiagnosticResult:
         """
         Verify Python code using symbolic execution.
 
         Args:
             code: Python code to verify
-            check_assertions: Whether to check assert statements
 
         Returns:
             DiagnosticResult describing the outcome. Note: this engine does not
