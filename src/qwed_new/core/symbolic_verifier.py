@@ -77,7 +77,10 @@ class SymbolicVerifier:
         if not self._crosshair_available:
             return DiagnosticResult.blocked(
                 agent_message="Symbolic verification is unavailable: the CrossHair engine is not installed.",
-                developer_fields={"constraint_id": "symbolic_verifier.crosshair_not_available"},
+                developer_fields={
+                    "constraint_id": "symbolic_verifier.crosshair_not_available",
+                    "verification_mode": "symbolic",
+                },
             )
 
         # Parse code to extract functions
@@ -89,6 +92,7 @@ class SymbolicVerifier:
                 developer_fields={
                     "constraint_id": "symbolic_verifier.syntax_error",
                     "parse_error": str(e),
+                    "verification_mode": "symbolic",
                 },
             )
 
@@ -101,6 +105,7 @@ class SymbolicVerifier:
                 developer_fields={
                     "constraint_id": "symbolic_verifier.no_verifiable_functions",
                     "functions_discovered": 0,
+                    "verification_mode": "symbolic",
                 },
             )
 
@@ -110,6 +115,7 @@ class SymbolicVerifier:
     def _diagnostic_from_summary(self, summary: Dict[str, Any]) -> DiagnosticResult:
         """Map aggregated per-function counts to a DiagnosticResult (fail-closed)."""
         developer_fields = {
+            "verification_mode": "symbolic",
             "functions_discovered": summary["functions_discovered"],
             "functions_checked": summary["checked_count"],
             "functions_verified": summary["verified_count"],
@@ -765,6 +771,7 @@ class SymbolicVerifier:
         """Serialize a DiagnosticResult into verify_bounded's dict shape, uniformly across all branches."""
         result = diagnostic.to_dict()
         result["is_verified"] = diagnostic.is_verified
+        result["verification_mode"] = "bounded_symbolic"
         result["bounded"] = bounded
         result["bounds_applied"] = bounds_applied
         result["complexity_analysis"] = complexity_analysis
