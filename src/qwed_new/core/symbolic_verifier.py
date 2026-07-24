@@ -289,12 +289,13 @@ class SymbolicVerifier:
             try:
                 # Run CrossHair check
                 issues = self._run_crosshair_check(temp_path, func_name)
+                has_timeout = any(i.get("type") == "timeout" for i in issues)
                 
                 return {
                     "verified": len(issues) == 0,
                     "function": func_name,
                     "skipped": False,
-                    "unverifiable": False,
+                    "unverifiable": has_timeout,
                     "issues": issues
                 }
             finally:
