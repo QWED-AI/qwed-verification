@@ -391,10 +391,10 @@ def add(x: int, y: int) -> int:
 
     result = verifier.verify_bounded(code)
 
-    assert result["status"] == DiagnosticStatus.BLOCKED.value
-    assert result["is_verified"] is False
-    assert result["bounded"] is False
-    assert result["developer_fields"]["constraint_id"] == "symbolic_verifier.bounds_transform_error"
+    assert result.status == DiagnosticStatus.BLOCKED
+    assert result.is_verified is False
+    assert result.developer_fields["bounded"] is False
+    assert result.developer_fields["constraint_id"] == "symbolic_verifier.bounds_transform_error"
 
 
 def test_verification_engine_skips_domain_error_samples():

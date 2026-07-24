@@ -703,28 +703,7 @@ class SymbolicVerifier:
         loop_bound: int = 10,
         recursion_depth: int = 5,
         prioritize_paths: bool = True
-    ) -> Dict[str, Any]:
-        """
-        Verify code with bounded model checking.
-        
-        Prevents path explosion by limiting:
-        - Loop iterations
-        - Recursion depth
-        - Exploration paths
-        
-        Args:
-            code: Python code to verify
-            loop_bound: Maximum loop iterations to explore
-            recursion_depth: Maximum recursion depth
-            prioritize_paths: If True, check critical paths first
-            
-        Returns:
-            Dict built from DiagnosticResult.to_dict() with bounds/complexity
-            metadata layered on top. All branches (syntax error, bounds-transform
-            error, and the main verification path) share this same shape —
-            Phase 2 will fold bounds/complexity into developer_fields as
-            AdvisoryCheck data instead of separate top-level keys.
-        """
+    ) -> "DiagnosticResult":
         bounds_applied = {
             "loop_bound": loop_bound,
             "recursion_depth": recursion_depth,
@@ -767,15 +746,19 @@ class SymbolicVerifier:
         bounded: bool,
         bounds_applied: Dict[str, Any],
         complexity_analysis: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Serialize a DiagnosticResult into verify_bounded's dict shape, uniformly across all branches."""
-        result = diagnostic.to_dict()
-        result["is_verified"] = diagnostic.is_verified
-        result["developer_fields"]["verification_mode"] = "bounded_symbolic"
-        result["bounded"] = bounded
-        result["bounds_applied"] = bounds_applied
-        result["complexity_analysis"] = complexity_analysis
-        return result
+    ) -> "DiagnosticResult":
+        """Enrich a DiagnosticResult with bounded-model metadata in developer_fields."""
+        enriched = dict(diagnostic.developer_fields)
+        enriched["verification_mode"] = "bounded_symbolic"
+        enriched["bounded"] = bounded
+        enriched["bounds_applied"] = bounds_applied
+        enriched["complexity_analysis"] = complexity_analysis
+        return DiagnosticResult(
+            status=diagnostic.status,
+            agent_message=diagnostic.agent_message,
+            developer_fields=enriched,
+            proof_ref=diagnostic.proof_ref,
+        )
     
     def _add_bounds_to_code(
         self, 
