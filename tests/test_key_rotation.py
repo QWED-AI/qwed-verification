@@ -1,7 +1,6 @@
 """Tests for key_rotation.py — Key lifecycle management (Issue #224)."""
 
 from unittest.mock import patch, MagicMock
-import pytest
 from qwed_new.core.key_rotation import KeyManager
 
 
