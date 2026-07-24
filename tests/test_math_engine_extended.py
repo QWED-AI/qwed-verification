@@ -452,3 +452,11 @@ class TestIRRConvergenceProof:
         assert result["is_correct"] is False
         assert result["status"] == "BLOCKED"
         assert "undefined" in result["error"]
+
+    def test_same_sign_cash_flows_blocked(self, engine):
+        """All positive cash flows: no real IRR exists -> BLOCKED."""
+        result = engine.verify_irr(cash_flows=[100, 200, 300], expected=0.1)
+        assert result["is_correct"] is False
+        assert result["status"] == "BLOCKED"
+        assert "same sign" in result["error"]
+        assert result["sign_changes"] == 0

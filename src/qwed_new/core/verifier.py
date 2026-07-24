@@ -614,6 +614,59 @@ class VerificationEngine:
         except Exception as e:
             return {"is_correct": False, "status": "ERROR", "error": str(e)}
     
+    @staticmethod
+    def _count_sign_changes(cash_flows: List[float]) -> int:
+        """Count sign changes in cash flows, skipping zeros (Descartes' rule)."""
+        sign_changes = 0
+        last_sign = 0
+        for cf in cash_flows:
+            if cf > 0:
+                if last_sign < 0:
+                    sign_changes += 1
+                last_sign = 1
+            elif cf < 0:
+                if last_sign > 0:
+                    sign_changes += 1
+                last_sign = -1
+        return sign_changes
+
+    @staticmethod
+    def _find_irr_newton(cash_flows: List[float]) -> Dict[str, Any]:
+        """Run Newton-Raphson to find IRR. Returns result dict with convergence info."""
+        r = Decimal("0.1")
+        convergence_threshold = Decimal("0.0001")
+        max_iterations = 100
+
+        for iteration in range(max_iterations):
+            npv = Decimal("0")
+            npv_derivative = Decimal("0")
+
+            for t, cf in enumerate(cash_flows):
+                cf_dec = Decimal(str(cf))
+                npv += cf_dec / ((1 + r) ** t)
+                if t > 0:
+                    npv_derivative -= t * cf_dec / ((1 + r) ** (t + 1))
+
+            if abs(npv) < convergence_threshold:
+                return {"converged": True, "irr": float(r), "iterations": iteration + 1}
+
+            if npv_derivative == 0:
+                return {
+                    "converged": False,
+                    "reason": "derivative_stall",
+                    "iterations": iteration + 1,
+                    "r": float(r),
+                }
+
+            r = r - npv / npv_derivative
+
+        return {
+            "converged": False,
+            "reason": "max_iterations",
+            "iterations": max_iterations,
+            "residual": float(abs(npv)),
+        }
+
     def verify_irr(
         self,
         cash_flows: List[float],
@@ -640,18 +693,17 @@ class VerificationEngine:
                     "cash_flows": cash_flows,
                 }
 
-            # Descartes' rule of signs: count sign changes, skipping zeros
-            sign_changes = 0
-            last_sign = 0
-            for cf in cash_flows:
-                if cf > 0:
-                    if last_sign < 0:
-                        sign_changes += 1
-                    last_sign = 1
-                elif cf < 0:
-                    if last_sign > 0:
-                        sign_changes += 1
-                    last_sign = -1
+            # Descartes' rule of signs: detect multi-root or no-root ambiguity
+            sign_changes = self._count_sign_changes(cash_flows)
+
+            if sign_changes == 0:
+                return {
+                    "is_correct": False,
+                    "status": "BLOCKED",
+                    "error": "No real IRR exists: all cash flows have the same sign (zero sign changes).",
+                    "sign_changes": 0,
+                    "cash_flows": cash_flows,
+                }
 
             if sign_changes > 1:
                 return {
@@ -666,57 +718,31 @@ class VerificationEngine:
                     "cash_flows": cash_flows,
                 }
 
-            # Newton-Raphson method to find IRR
-            r = Decimal("0.1")  # Initial guess
-            converged = False
-            convergence_threshold = Decimal("0.0001")
-            max_iterations = 100
+            # Newton-Raphson to find IRR
+            newton_result = self._find_irr_newton(cash_flows)
 
-            for iteration in range(max_iterations):
-                npv = Decimal("0")
-                npv_derivative = Decimal("0")
-                
-                for t, cf in enumerate(cash_flows):
-                    cf_dec = Decimal(str(cf))
-                    npv += cf_dec / ((1 + r) ** t)
-                    if t > 0:
-                        npv_derivative -= t * cf_dec / ((1 + r) ** (t + 1))
-                
-                if abs(npv) < convergence_threshold:
-                    converged = True
-                    break
-
-                if npv_derivative == 0:
-                    # Derivative stall: Newton's method cannot proceed
-                    return {
-                        "is_correct": False,
-                        "status": "BLOCKED",
-                        "error": (
-                            f"IRR verification failed: derivative is zero at "
-                            f"iteration {iteration + 1} (r={float(r):.6f}). "
-                            f"Newton-Raphson cannot converge from this path."
-                        ),
-                        "iterations_used": iteration + 1,
-                        "cash_flows": cash_flows,
-                    }
-
-                r = r - npv / npv_derivative
-
-            if not converged:
+            if not newton_result["converged"]:
+                if newton_result["reason"] == "derivative_stall":
+                    error_msg = (
+                        f"IRR verification failed: derivative is zero at "
+                        f"iteration {newton_result['iterations']} (r={newton_result['r']:.6f}). "
+                        f"Newton-Raphson cannot converge from this path."
+                    )
+                else:
+                    error_msg = (
+                        f"IRR verification failed: Newton-Raphson did not converge "
+                        f"within {newton_result['iterations']} iterations. Final NPV residual: "
+                        f"{newton_result['residual']:.8f}."
+                    )
                 return {
                     "is_correct": False,
                     "status": "BLOCKED",
-                    "error": (
-                        f"IRR verification failed: Newton-Raphson did not converge "
-                        f"within {max_iterations} iterations. Final NPV residual: "
-                        f"{float(abs(npv)):.8f}."
-                    ),
-                    "iterations_used": max_iterations,
-                    "final_residual": float(abs(npv)),
+                    "error": error_msg,
+                    "iterations_used": newton_result["iterations"],
                     "cash_flows": cash_flows,
                 }
 
-            irr = float(r)
+            irr = newton_result["irr"]
             is_correct = abs(irr - expected) <= tolerance
             
             return {
@@ -725,7 +751,7 @@ class VerificationEngine:
                 "calculated_irr": irr,
                 "claimed_irr": expected,
                 "converged": True,
-                "iterations_used": iteration + 1,
+                "iterations_used": newton_result["iterations"],
                 "cash_flows": cash_flows
             }
             
