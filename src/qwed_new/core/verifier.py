@@ -614,6 +614,59 @@ class VerificationEngine:
         except Exception as e:
             return {"is_correct": False, "status": "ERROR", "error": str(e)}
     
+    @staticmethod
+    def _count_sign_changes(cash_flows: List[float]) -> int:
+        """Count sign changes in cash flows, skipping zeros (Descartes' rule)."""
+        sign_changes = 0
+        last_sign = 0
+        for cf in cash_flows:
+            if cf > 0:
+                if last_sign < 0:
+                    sign_changes += 1
+                last_sign = 1
+            elif cf < 0:
+                if last_sign > 0:
+                    sign_changes += 1
+                last_sign = -1
+        return sign_changes
+
+    @staticmethod
+    def _find_irr_newton(cash_flows: List[float]) -> Dict[str, Any]:
+        """Run Newton-Raphson to find IRR. Returns result dict with convergence info."""
+        r = Decimal("0.1")
+        convergence_threshold = Decimal("0.0001")
+        max_iterations = 100
+
+        for iteration in range(max_iterations):
+            npv = Decimal("0")
+            npv_derivative = Decimal("0")
+
+            for t, cf in enumerate(cash_flows):
+                cf_dec = Decimal(str(cf))
+                npv += cf_dec / ((1 + r) ** t)
+                if t > 0:
+                    npv_derivative -= t * cf_dec / ((1 + r) ** (t + 1))
+
+            if abs(npv) < convergence_threshold:
+                return {"converged": True, "irr": float(r), "iterations": iteration + 1}
+
+            if npv_derivative == 0:
+                return {
+                    "converged": False,
+                    "reason": "derivative_stall",
+                    "iterations": iteration + 1,
+                    "r": float(r),
+                }
+
+            r = r - npv / npv_derivative
+
+        return {
+            "converged": False,
+            "reason": "max_iterations",
+            "iterations": max_iterations,
+            "residual": float(abs(npv)),
+        }
+
     def verify_irr(
         self,
         cash_flows: List[float],
@@ -623,29 +676,73 @@ class VerificationEngine:
         """
         Verify Internal Rate of Return calculation.
         
-        IRR is the rate where NPV = 0
+        IRR is the rate where NPV = 0.
+        Fail-closed: non-convergence, derivative stall, and ambiguous
+        (multi-root) cash flow patterns are blocked, not verified.
         """
         try:
-            # Newton-Raphson method to find IRR
-            r = Decimal("0.1")  # Initial guess
-            
-            for _ in range(100):  # Max iterations
-                npv = Decimal("0")
-                npv_derivative = Decimal("0")
-                
-                for t, cf in enumerate(cash_flows):
-                    cf_dec = Decimal(str(cf))
-                    npv += cf_dec / ((1 + r) ** t)
-                    if t > 0:
-                        npv_derivative -= t * cf_dec / ((1 + r) ** (t + 1))
-                
-                if abs(npv) < Decimal("0.0001"):
-                    break
-                    
-                if npv_derivative != 0:
-                    r = r - npv / npv_derivative
-            
-            irr = float(r)
+            if not cash_flows or len(cash_flows) < 2:
+                return {"is_correct": False, "status": "ERROR", "error": "Need at least 2 cash flows"}
+
+            # All-zero cash flows: IRR is mathematically undefined
+            if all(cf == 0 for cf in cash_flows):
+                return {
+                    "is_correct": False,
+                    "status": "BLOCKED",
+                    "error": "IRR is undefined: all cash flows are zero. Any rate satisfies NPV=0.",
+                    "cash_flows": cash_flows,
+                }
+
+            # Descartes' rule of signs: detect multi-root or no-root ambiguity
+            sign_changes = self._count_sign_changes(cash_flows)
+
+            if sign_changes == 0:
+                return {
+                    "is_correct": False,
+                    "status": "BLOCKED",
+                    "error": "No real IRR exists: all cash flows have the same sign (zero sign changes).",
+                    "sign_changes": 0,
+                    "cash_flows": cash_flows,
+                }
+
+            if sign_changes > 1:
+                return {
+                    "is_correct": False,
+                    "status": "BLOCKED",
+                    "error": (
+                        f"Ambiguous IRR: {sign_changes} sign changes in cash flows "
+                        f"implies up to {sign_changes} possible roots. Cannot "
+                        f"deterministically verify a unique IRR."
+                    ),
+                    "sign_changes": sign_changes,
+                    "cash_flows": cash_flows,
+                }
+
+            # Newton-Raphson to find IRR
+            newton_result = self._find_irr_newton(cash_flows)
+
+            if not newton_result["converged"]:
+                if newton_result["reason"] == "derivative_stall":
+                    error_msg = (
+                        f"IRR verification failed: derivative is zero at "
+                        f"iteration {newton_result['iterations']} (r={newton_result['r']:.6f}). "
+                        f"Newton-Raphson cannot converge from this path."
+                    )
+                else:
+                    error_msg = (
+                        f"IRR verification failed: Newton-Raphson did not converge "
+                        f"within {newton_result['iterations']} iterations. Final NPV residual: "
+                        f"{newton_result['residual']:.8f}."
+                    )
+                return {
+                    "is_correct": False,
+                    "status": "BLOCKED",
+                    "error": error_msg,
+                    "iterations_used": newton_result["iterations"],
+                    "cash_flows": cash_flows,
+                }
+
+            irr = newton_result["irr"]
             is_correct = abs(irr - expected) <= tolerance
             
             return {
@@ -653,6 +750,8 @@ class VerificationEngine:
                 "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
                 "calculated_irr": irr,
                 "claimed_irr": expected,
+                "converged": True,
+                "iterations_used": newton_result["iterations"],
                 "cash_flows": cash_flows
             }
             
