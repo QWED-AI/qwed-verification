@@ -771,7 +771,7 @@ class SymbolicVerifier:
         """Serialize a DiagnosticResult into verify_bounded's dict shape, uniformly across all branches."""
         result = diagnostic.to_dict()
         result["is_verified"] = diagnostic.is_verified
-        result["verification_mode"] = "bounded_symbolic"
+        result["developer_fields"]["verification_mode"] = "bounded_symbolic"
         result["bounded"] = bounded
         result["bounds_applied"] = bounds_applied
         result["complexity_analysis"] = complexity_analysis
