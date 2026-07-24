@@ -22,6 +22,7 @@ from qwed_new.core import reasoning_verifier as reasoning_module
 from qwed_new.core.reasoning_verifier import ReasoningVerifier
 from qwed_new.core import symbolic_verifier as symbolic_module
 from qwed_new.core.symbolic_verifier import SymbolicVerifier
+from qwed_new.core.diagnostics import DiagnosticStatus
 from qwed_new.core.verifier import VerificationEngine
 
 
@@ -390,8 +391,10 @@ def add(x: int, y: int) -> int:
 
     result = verifier.verify_bounded(code)
 
-    assert result["status"] == "bounds_transform_error"
+    assert result["status"] == DiagnosticStatus.BLOCKED.value
+    assert result["is_verified"] is False
     assert result["bounded"] is False
+    assert result["developer_fields"]["constraint_id"] == "symbolic_verifier.bounds_transform_error"
 
 
 def test_verification_engine_skips_domain_error_samples():

@@ -7,12 +7,14 @@ These tests verify the symbolic execution engine works correctly.
 import pytest
 import sys
 import os
+from types import SimpleNamespace
 from unittest.mock import patch
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from qwed_new.core.symbolic_verifier import SymbolicVerifier, create_symbolic_verifier
+from qwed_new.core.diagnostics import DiagnosticStatus
 
 
 class TestSymbolicVerifierBasic:
@@ -155,31 +157,21 @@ print(x)
 """
         with patch.object(self.verifier, "_crosshair_available", True):
             result = self.verifier.verify_code(code)
-        assert result["is_verified"] is False
-        assert result["is_safe"] is False
-        assert result["verified"] is False
-        assert result["status"] == "no_verifiable_functions"
-        assert result["functions_discovered"] == 0
-        assert result["functions_checked"] == 0
-        assert result["functions_verified"] == 0
-        assert result["functions_skipped"] == 0
-        assert result["functions_unverifiable"] == 0
-        assert result["counterexamples_found"] == 0
-        assert result["issues"][0]["type"] == "unverifiable"
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.is_verified is False
+        assert result.proof_ref is None
+        assert result.developer_fields["constraint_id"] == "symbolic_verifier.no_verifiable_functions"
+        assert result.developer_fields["functions_discovered"] == 0
 
     def test_verify_crosshair_unavailable_returns_consistent_counts(self):
-        """CrossHair-unavailable terminal results should preserve the full result schema."""
+        """CrossHair-unavailable results must be BLOCKED with no proof."""
         with patch.object(self.verifier, "_crosshair_available", False):
             result = self.verifier.verify_code("def add(x: int, y: int) -> int:\n    return x + y\n")
 
-        assert result["is_verified"] is False
-        assert result["status"] == "crosshair_not_available"
-        assert result["functions_checked"] == 0
-        assert result["functions_verified"] == 0
-        assert result["functions_skipped"] == 0
-        assert result["functions_unverifiable"] == 0
-        assert result["functions_discovered"] == 0
-        assert result["counterexamples_found"] == 0
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.is_verified is False
+        assert result.proof_ref is None
+        assert result.developer_fields["constraint_id"] == "symbolic_verifier.crosshair_not_available"
 
     @pytest.mark.skipif(not _crosshair_available, reason="CrossHair not installed")
     def test_verify_syntax_error(self):
@@ -188,14 +180,9 @@ print(x)
 def broken(
 """
         result = self.verifier.verify_code(code)
-        assert result["status"] == "syntax_error"
-        assert result["functions_checked"] == 0
-        assert result["functions_verified"] == 0
-        assert result["functions_skipped"] == 0
-        assert result["functions_unverifiable"] == 0
-        assert result["functions_discovered"] == 0
-        assert result["counterexamples_found"] == 0
-    
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.developer_fields["constraint_id"] == "symbolic_verifier.syntax_error"
+
     @pytest.mark.skipif(not _crosshair_available, reason="CrossHair not installed")
     def test_verify_simple_function(self):
         """Test verification of simple typed function."""
@@ -204,10 +191,12 @@ def add(x: int, y: int) -> int:
     return x + y
 """
         result = self.verifier.verify_code(code)
-        # Simple addition should verify
-        assert result["functions_checked"] > 0
-        assert result["is_safe"] is result["is_verified"]
-        assert result["verified"] is result["is_verified"]
+        assert result.developer_fields["functions_checked"] > 0
+        # This engine does not yet emit VERIFIED (issue #15) — a clean symbolic
+        # search surfaces as UNVERIFIABLE since a timeout-bounded search isn't
+        # a completeness proof.
+        assert result.is_verified is False
+        assert result.proof_ref is None
 
     def test_verify_untyped_function_fails_closed(self):
         """Untyped functions must not be reported as verified."""
@@ -218,14 +207,15 @@ def add(a, b):
         with patch.object(self.verifier, "_crosshair_available", True):
             result = self.verifier.verify_code(code)
 
-        assert result["is_verified"] is False
-        assert result["status"] == "no_verifiable_functions"
-        assert result["functions_discovered"] == 1
-        assert result["functions_checked"] == 0
-        assert result["functions_skipped"] == 1
-        assert result["functions_unverifiable"] == 1
-        assert result["functions_verified"] == 0
-        assert any(issue["function"] == "add" for issue in result["issues"])
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.is_verified is False
+        assert result.developer_fields["constraint_id"] == "symbolic_verifier.no_typed_functions"
+        assert result.developer_fields["functions_discovered"] == 1
+        assert result.developer_fields["functions_checked"] == 0
+        assert result.developer_fields["functions_skipped"] == 1
+        assert result.developer_fields["functions_unverifiable"] == 1
+        assert result.developer_fields["functions_verified"] == 0
+        assert any(issue["function"] == "add" for issue in result.developer_fields["issues"])
 
     def test_verify_mixed_typed_and_untyped_functions_remains_unverifiable(self):
         """A skipped function must prevent an overall verified result."""
@@ -263,13 +253,14 @@ def untyped_add(a, b):
             ):
                 result = self.verifier.verify_code(code)
 
-        assert result["is_verified"] is False
-        assert result["status"] == "unverifiable"
-        assert result["functions_discovered"] == 2
-        assert result["functions_checked"] == 1
-        assert result["functions_verified"] == 1
-        assert result["functions_skipped"] == 1
-        assert result["functions_unverifiable"] == 1
+        assert result.status is DiagnosticStatus.UNVERIFIABLE
+        assert result.is_verified is False
+        assert result.developer_fields["constraint_id"] == "symbolic_verifier.incomplete_coverage"
+        assert result.developer_fields["functions_discovered"] == 2
+        assert result.developer_fields["functions_checked"] == 1
+        assert result.developer_fields["functions_verified"] == 1
+        assert result.developer_fields["functions_skipped"] == 1
+        assert result.developer_fields["functions_unverifiable"] == 1
 
     def test_verify_counterexample_takes_precedence_over_unverifiable(self):
         """Concrete counterexamples should outrank generic unverifiable status."""
@@ -311,14 +302,68 @@ def untyped_add(a, b):
             ):
                 result = self.verifier.verify_code(code)
 
-        assert result["is_verified"] is False
-        assert result["status"] == "counterexamples_found"
-        assert result["functions_discovered"] == 2
-        assert result["functions_checked"] == 1
-        assert result["counterexamples_found"] == 1
-        assert result["functions_skipped"] == 1
-        assert result["functions_unverifiable"] == 1
-        assert result["functions_verified"] == 0
+        assert result.status is DiagnosticStatus.UNVERIFIABLE
+        assert result.is_verified is False
+        assert result.developer_fields["constraint_id"] == "symbolic_verifier.counterexample_found"
+        assert result.developer_fields["functions_discovered"] == 2
+        assert result.developer_fields["functions_checked"] == 1
+        assert result.developer_fields["counterexamples_found"] == 1
+        assert result.developer_fields["functions_skipped"] == 1
+        assert result.developer_fields["functions_unverifiable"] == 1
+        assert result.developer_fields["functions_verified"] == 0
+
+    def test_verify_all_functions_clean_is_unverifiable_not_verified(self):
+        """A clean symbolic search (no counterexample) must not claim VERIFIED without a proof_ref."""
+        code = """
+def typed_add(a: int, b: int) -> int:
+    return a + b
+"""
+        with patch.object(self.verifier, "_crosshair_available", True):
+            with patch.object(
+                self.verifier,
+                "_verify_function",
+                return_value={
+                    "verified": True,
+                    "function": "typed_add",
+                    "skipped": False,
+                    "unverifiable": False,
+                    "issues": []
+                }
+            ):
+                result = self.verifier.verify_code(code)
+
+        assert result.status is DiagnosticStatus.UNVERIFIABLE
+        assert result.is_verified is False
+        assert result.proof_ref is None
+        assert result.developer_fields["constraint_id"] == "symbolic_verifier.no_counterexample_found"
+
+    def test_verify_timeout_is_unverifiable_not_verification_error(self):
+        """A per-function timeout must surface as its own UNVERIFIABLE state, not the verification_error catch-all."""
+        code = """
+def typed_add(a: int, b: int) -> int:
+    return a + b
+"""
+        with patch.object(self.verifier, "_crosshair_available", True):
+            with patch.object(
+                self.verifier,
+                "_verify_function",
+                return_value={
+                    "verified": False,
+                    "function": "typed_add",
+                    "skipped": False,
+                    "unverifiable": False,
+                    "issues": [{
+                        "type": "timeout",
+                        "function": "typed_add",
+                        "description": "Verification timed out after 5s"
+                    }]
+                }
+            ):
+                result = self.verifier.verify_code(code)
+
+        assert result.status is DiagnosticStatus.UNVERIFIABLE
+        assert result.developer_fields["constraint_id"] == "symbolic_verifier.timeout"
+        assert result.developer_fields["timeouts_found"] == 1
 
     def test_verify_inconsistent_function_result_falls_back_to_verification_error(self):
         """Unexpected verifier output must not silently pass or masquerade as another state."""
@@ -340,9 +385,43 @@ def typed_add(a: int, b: int) -> int:
             ):
                 result = self.verifier.verify_code(code)
 
-        assert result["is_verified"] is False
-        assert result["status"] == "verification_error"
-        assert result["message"] == "Symbolic verification did not complete cleanly."
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.is_verified is False
+        assert result.developer_fields["constraint_id"] == "symbolic_verifier.verification_error"
+        assert result.agent_message == "Symbolic verification did not complete cleanly."
+
+    def test_errored_function_is_not_counted_as_checked(self):
+        """A function that errored out (unverifiable, but not skipped) must not inflate functions_checked."""
+        code = """
+def typed_add(a: int, b: int) -> int:
+    return a + b
+"""
+        with patch.object(self.verifier, "_crosshair_available", True):
+            with patch.object(
+                self.verifier,
+                "_verify_function",
+                return_value={
+                    "verified": False,
+                    "function": "typed_add",
+                    "skipped": False,
+                    "unverifiable": True,
+                    "issues": [{
+                        "type": "error",
+                        "function": "typed_add",
+                        "description": "CrossHair error: boom"
+                    }]
+                }
+            ):
+                result = self.verifier.verify_code(code)
+
+        assert result.developer_fields["functions_checked"] == 0
+        assert result.developer_fields["functions_unverifiable"] == 1
+        # A typed function that errored out is not the same as "no typed
+        # functions" — it must fall through to incomplete_coverage/UNVERIFIABLE,
+        # not the no_typed_functions/BLOCKED message (which would be factually
+        # wrong here, since a typed function did exist and was attempted).
+        assert result.status is DiagnosticStatus.UNVERIFIABLE
+        assert result.developer_fields["constraint_id"] == "symbolic_verifier.incomplete_coverage"
 
     def test_skipped_function_result_is_not_marked_verified(self):
         """Function-level skip results must not claim successful verification."""
@@ -486,14 +565,20 @@ def simple(x: int) -> int:
         assert "bounds_applied" in result
         assert result["bounds_applied"]["loop_bound"] == 5
         assert result["bounds_applied"]["recursion_depth"] == 3
-    
+        # All branches share the DiagnosticResult.to_dict() shape.
+        assert "is_verified" in result
+        assert result["status"] in (DiagnosticStatus.UNVERIFIABLE.value, DiagnosticStatus.BLOCKED.value)
+
     def test_verify_bounded_syntax_error(self):
-        """Test bounded verification handles syntax errors."""
+        """Test bounded verification handles syntax errors using the same schema as every other branch."""
         code = """
 def broken(
 """
         result = self.verifier.verify_bounded(code)
-        assert result["status"] == "syntax_error"
+        assert result["status"] == DiagnosticStatus.BLOCKED.value
+        assert result["is_verified"] is False
+        assert result["bounded"] is False
+        assert result["developer_fields"]["constraint_id"] == "symbolic_verifier.syntax_error"
     
     def test_add_bounds_transforms_code(self):
         """Test that _add_bounds_to_code transforms functions."""
@@ -503,6 +588,41 @@ def recursive_func(n: int) -> int:
 """
         bounded = self.verifier._add_bounds_to_code(code, loop_bound=10, recursion_depth=5)
         assert "_qwed_depth" in bounded
+
+
+class TestCrossHairExitCodes:
+    """CrossHair's CLI distinguishes a disproving counterexample (exit 1) from
+    an engine-level failure (exit 2) — only exit 1 should be reported as a
+    counterexample."""
+
+    def setup_method(self):
+        self.verifier = SymbolicVerifier(timeout_seconds=5)
+
+    def test_exit_code_1_is_counterexample(self):
+        """Exit code 1 means CrossHair found a counterexample."""
+        fake_result = SimpleNamespace(returncode=1, stdout="Counterexample: x=0\n", stderr="")
+        with patch("subprocess.run", return_value=fake_result):
+            issues = self.verifier._run_crosshair_check("dummy.py", "divide")
+
+        assert len(issues) == 1
+        assert issues[0]["type"] == "counterexample"
+
+    def test_exit_code_2_is_error_not_counterexample(self):
+        """Exit code 2 is an engine failure and must not be mislabeled as a disproof."""
+        fake_result = SimpleNamespace(returncode=2, stdout="", stderr="internal error: crash")
+        with patch("subprocess.run", return_value=fake_result):
+            issues = self.verifier._run_crosshair_check("dummy.py", "divide")
+
+        assert len(issues) == 1
+        assert issues[0]["type"] == "error"
+
+    def test_exit_code_0_with_no_output_is_clean(self):
+        """Exit code 0 with no output means CrossHair found no issues."""
+        fake_result = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with patch("subprocess.run", return_value=fake_result):
+            issues = self.verifier._run_crosshair_check("dummy.py", "divide")
+
+        assert issues == []
 
 
 class TestVerificationBudget:
