@@ -570,14 +570,13 @@ def simple(x: int) -> int:
     return x + 1
 """
         result = self.verifier.verify_bounded(code, loop_bound=5, recursion_depth=3)
-        assert "bounded" in result
-        assert result["bounded"] == True
-        assert "bounds_applied" in result
-        assert result["bounds_applied"]["loop_bound"] == 5
-        assert result["bounds_applied"]["recursion_depth"] == 3
-        # All branches share the DiagnosticResult.to_dict() shape.
-        assert "is_verified" in result
-        assert result["status"] in (DiagnosticStatus.UNVERIFIABLE.value, DiagnosticStatus.BLOCKED.value)
+        assert result.developer_fields["bounded"]
+        assert result.developer_fields["bounds_applied"]["loop_bound"] == 5
+        assert result.developer_fields["bounds_applied"]["recursion_depth"] == 3
+        assert result.developer_fields["bounds_applied"]["prioritized"] is True
+        assert result.developer_fields["verification_mode"] == "bounded_symbolic"
+        assert result.developer_fields["complexity_analysis"]["status"] == "analyzed"
+        assert result.status in (DiagnosticStatus.UNVERIFIABLE, DiagnosticStatus.BLOCKED)
 
     def test_verify_bounded_syntax_error(self):
         """Test bounded verification handles syntax errors using the same schema as every other branch."""
@@ -585,10 +584,10 @@ def simple(x: int) -> int:
 def broken(
 """
         result = self.verifier.verify_bounded(code)
-        assert result["status"] == DiagnosticStatus.BLOCKED.value
-        assert result["is_verified"] is False
-        assert result["bounded"] is False
-        assert result["developer_fields"]["constraint_id"] == "symbolic_verifier.syntax_error"
+        assert result.status == DiagnosticStatus.BLOCKED
+        assert result.is_verified is False
+        assert result.developer_fields["bounded"] is False
+        assert result.developer_fields["constraint_id"] == "symbolic_verifier.syntax_error"
     
     def test_add_bounds_transforms_code(self):
         """Test that _add_bounds_to_code transforms functions."""
