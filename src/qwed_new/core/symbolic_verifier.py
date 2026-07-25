@@ -526,6 +526,14 @@ class SymbolicVerifier:
                     "constraint_id": CONSTRAINT_SYNTAX_ERROR,
                     "status": "syntax_error",
                     "parse_error": str(e),
+                    "loops": [],
+                    "recursions": [],
+                    "max_loop_depth": 0,
+                    "total_loops": 0,
+                    "total_recursive_functions": 0,
+                    "complexity_score": 0,
+                    "recommendation": {},
+                    "advisory_checks": [],
                 },
             )
 
