@@ -989,9 +989,9 @@ To prevent path explosion in programs with loops and recursion, QWED implements 
 ```python
 # Analyze code complexity
 analysis = verifier.analyze_complexity(code)
-print(analysis['max_loop_depth'])  # 3
-print(analysis['total_recursive_functions'])  # 1
-print(analysis['recommendation']['risk_level'])  # "medium"
+print(analysis.developer_fields['max_loop_depth'])  # 3
+print(analysis.developer_fields['total_recursive_functions'])  # 1
+print(analysis.developer_fields['recommendation']['risk_level'])  # "medium"
 
 # Verify with bounds
 result = verifier.verify_bounded(
