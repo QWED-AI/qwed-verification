@@ -52,6 +52,9 @@ def divide(x):
 """
         result = self.verifier.verify_safety_properties(code)
         assert result.status == DiagnosticStatus.UNVERIFIABLE
+        assert result.developer_fields["verification_mode"] == "symbolic"
+        assert len(result.advisory_checks) == 1
+        assert result.advisory_checks[0].advisory_only is True
         assert not result.developer_fields["is_safe"]
         assert any("division_by_zero" in str(i) for i in result.developer_fields["issues"])
 
@@ -84,6 +87,8 @@ def broken(
 """
         result = self.verifier.verify_safety_properties(code)
         assert result.status == DiagnosticStatus.BLOCKED
+        assert result.developer_fields["verification_mode"] == "symbolic"
+        assert "parse_error" in result.developer_fields
         assert not result.developer_fields["is_safe"]
 
 

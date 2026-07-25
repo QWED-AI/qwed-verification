@@ -387,6 +387,37 @@ class SymbolicVerifier:
                 "description": str(e)
             }]
     
+    def _check_division_safety(self, node, issues, properties_checked):
+        """Check a node for division-by-zero hazards."""
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, (ast.Div, ast.FloorDiv, ast.Mod)):
+            return
+        properties_checked.append("division_safety")
+        if isinstance(node.right, ast.Constant) and node.right.value == 0:
+            issues.append({
+                "type": "division_by_zero",
+                "line": node.lineno,
+                "description": "Division by literal zero detected",
+            })
+        elif isinstance(node.right, ast.Name):
+            issues.append({
+                "type": "potential_division_by_zero",
+                "line": node.lineno,
+                "variable": node.right.id,
+                "description": f"Division by variable '{node.right.id}' - could be zero",
+            })
+
+    def _check_subscript_safety(self, node, issues, properties_checked):
+        """Check a node for index-out-of-bounds hazards."""
+        if not isinstance(node, ast.Subscript):
+            return
+        properties_checked.append("index_safety")
+        if isinstance(node.slice, ast.Name):
+            issues.append({
+                "type": "potential_index_error",
+                "line": node.lineno,
+                "description": "Index access with variable index - bounds not verified",
+            })
+
     def verify_safety_properties(self, code: str) -> "DiagnosticResult":
         """Verify common safety properties: division by zero, index bounds, etc."""
         properties_checked = []
@@ -399,6 +430,8 @@ class SymbolicVerifier:
                 agent_message="Safety check blocked: the code could not be parsed.",
                 developer_fields={
                     "constraint_id": CONSTRAINT_SYNTAX_ERROR,
+                    "parse_error": str(e),
+                    "verification_mode": "symbolic",
                     "is_safe": False,
                     "issues": [],
                     "warnings": 0,
@@ -408,33 +441,8 @@ class SymbolicVerifier:
             )
 
         for node in ast.walk(tree):
-            if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Div, ast.FloorDiv, ast.Mod)):
-                properties_checked.append("division_safety")
-                if isinstance(node.right, ast.Constant) and node.right.value == 0:
-                    issues.append({
-                        "type": "division_by_zero",
-                        "line": node.lineno,
-                        "description": "Division by literal zero detected",
-                    })
-                elif isinstance(node.right, ast.Name):
-                    issues.append({
-                        "type": "potential_division_by_zero",
-                        "line": node.lineno,
-                        "variable": node.right.id,
-                        "description": f"Division by variable '{node.right.id}' - could be zero",
-                    })
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Subscript):
-                properties_checked.append("index_safety")
-                if isinstance(node.slice, ast.Name):
-                    issues.append({
-                        "type": "potential_index_error",
-                        "line": node.lineno,
-                        "description": "Index access with variable index - bounds not verified",
-                    })
-
-        for node in ast.walk(tree):
+            self._check_division_safety(node, issues, properties_checked)
+            self._check_subscript_safety(node, issues, properties_checked)
             if isinstance(node, ast.Call):
                 properties_checked.append("call_safety")
 
@@ -455,8 +463,9 @@ class SymbolicVerifier:
         return DiagnosticResult.unverifiable(
             agent_message=f"Safety check: {len(issues)} issues found" if issues else "Safety check: no issues detected",
             developer_fields={
+                "verification_mode": "symbolic",
                 "is_safe": safe,
-                "properties_checked": list(set(properties_checked)),
+                "properties_checked": list(dict.fromkeys(properties_checked)),
                 "issues": issues,
                 "warnings": warnings,
                 "errors": errors,
