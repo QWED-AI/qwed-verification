@@ -463,6 +463,7 @@ class SymbolicVerifier:
         return DiagnosticResult.unverifiable(
             agent_message=f"Safety check: {len(issues)} issues found" if issues else "Safety check: no issues detected",
             developer_fields={
+                "constraint_id": "symbolic_verifier.safety_properties",
                 "verification_mode": "symbolic",
                 "is_safe": safe,
                 "properties_checked": list(dict.fromkeys(properties_checked)),
