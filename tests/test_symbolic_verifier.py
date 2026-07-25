@@ -51,9 +51,13 @@ def divide(x):
     return x / 0
 """
         result = self.verifier.verify_safety_properties(code)
-        assert not result["is_safe"]
-        assert any("division_by_zero" in str(i) for i in result["issues"])
-    
+        assert result.status == DiagnosticStatus.UNVERIFIABLE
+        assert result.developer_fields["verification_mode"] == "symbolic"
+        assert len(result.advisory_checks) == 1
+        assert result.advisory_checks[0].advisory_only is True
+        assert not result.developer_fields["is_safe"]
+        assert any("division_by_zero" in str(i) for i in result.developer_fields["issues"])
+
     def test_detect_potential_division_by_variable(self):
         """Test detection of potential division by zero with variable."""
         code = """
@@ -61,10 +65,10 @@ def divide(x: int, y: int) -> float:
     return x / y
 """
         result = self.verifier.verify_safety_properties(code)
-        # Should flag as potential issue
-        assert len(result["issues"]) > 0
-        assert any("potential_division_by_zero" in str(i["type"]) for i in result["issues"])
-    
+        assert result.status == DiagnosticStatus.UNVERIFIABLE
+        assert len(result.developer_fields["issues"]) > 0
+        assert any("potential_division_by_zero" in str(i["type"]) for i in result.developer_fields["issues"])
+
     def test_safe_code(self):
         """Test that safe code passes."""
         code = """
@@ -72,9 +76,9 @@ def add(x: int, y: int) -> int:
     return x + y
 """
         result = self.verifier.verify_safety_properties(code)
-        # No division, should be clean
-        assert result["errors"] == 0
-    
+        assert result.status == DiagnosticStatus.UNVERIFIABLE
+        assert result.developer_fields["errors"] == 0
+
     def test_syntax_error_handling(self):
         """Test handling of syntax errors."""
         code = """
@@ -82,8 +86,10 @@ def broken(
     return x + 
 """
         result = self.verifier.verify_safety_properties(code)
-        assert not result["is_safe"]
-        assert result["status"] == "syntax_error"
+        assert result.status == DiagnosticStatus.BLOCKED
+        assert result.developer_fields["verification_mode"] == "symbolic"
+        assert "parse_error" in result.developer_fields
+        assert not result.developer_fields["is_safe"]
 
 
 class TestFunctionExtraction:

@@ -387,76 +387,92 @@ class SymbolicVerifier:
                 "description": str(e)
             }]
     
-    def verify_safety_properties(self, code: str) -> Dict[str, Any]:
-        """
-        Verify common safety properties in code:
-        - Division by zero
-        - Index out of bounds
-        - None dereference
-        - Integer overflow (where detectable)
-        
-        Args:
-            code: Python code to check
-            
-        Returns:
-            Dict with safety analysis results
-        """
+    def _check_division_safety(self, node, issues, properties_checked):
+        """Check a node for division-by-zero hazards."""
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, (ast.Div, ast.FloorDiv, ast.Mod)):
+            return
+        properties_checked.append("division_safety")
+        if isinstance(node.right, ast.Constant) and node.right.value == 0:
+            issues.append({
+                "type": "division_by_zero",
+                "line": node.lineno,
+                "description": "Division by literal zero detected",
+            })
+        elif isinstance(node.right, ast.Name):
+            issues.append({
+                "type": "potential_division_by_zero",
+                "line": node.lineno,
+                "variable": node.right.id,
+                "description": f"Division by variable '{node.right.id}' - could be zero",
+            })
+
+    def _check_subscript_safety(self, node, issues, properties_checked):
+        """Check a node for index-out-of-bounds hazards."""
+        if not isinstance(node, ast.Subscript):
+            return
+        properties_checked.append("index_safety")
+        if isinstance(node.slice, ast.Name):
+            issues.append({
+                "type": "potential_index_error",
+                "line": node.lineno,
+                "description": "Index access with variable index - bounds not verified",
+            })
+
+    def verify_safety_properties(self, code: str) -> "DiagnosticResult":
+        """Verify common safety properties: division by zero, index bounds, etc."""
         properties_checked = []
         issues = []
-        
+
         try:
             tree = ast.parse(code)
         except SyntaxError as e:
-            return {
-                "is_safe": False,
-                "status": "syntax_error",
-                "message": str(e)
-            }
-        
-        # Check for division operations
+            return DiagnosticResult.blocked(
+                agent_message="Safety check blocked: the code could not be parsed.",
+                developer_fields={
+                    "constraint_id": CONSTRAINT_SYNTAX_ERROR,
+                    "parse_error": str(e),
+                    "verification_mode": "symbolic",
+                    "is_safe": False,
+                    "issues": [],
+                    "warnings": 0,
+                    "errors": 0,
+                    "advisory_checks": [],
+                },
+            )
+
         for node in ast.walk(tree):
-            if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Div, ast.FloorDiv, ast.Mod)):
-                properties_checked.append("division_safety")
-                # Check if divisor could be zero (heuristic)
-                if isinstance(node.right, ast.Constant) and node.right.value == 0:
-                    issues.append({
-                        "type": "division_by_zero",
-                        "line": node.lineno,
-                        "description": "Division by literal zero detected"
-                    })
-                elif isinstance(node.right, ast.Name):
-                    issues.append({
-                        "type": "potential_division_by_zero",
-                        "line": node.lineno,
-                        "variable": node.right.id,
-                        "description": f"Division by variable '{node.right.id}' - could be zero"
-                    })
-        
-        # Check for index operations
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Subscript):
-                properties_checked.append("index_safety")
-                # Flag potential index issues
-                if isinstance(node.slice, ast.Name):
-                    issues.append({
-                        "type": "potential_index_error",
-                        "line": node.lineno,
-                        "description": "Index access with variable index - bounds not verified"
-                    })
-        
-        # Check for None comparisons that might indicate unhandled None
-        for node in ast.walk(tree):
+            self._check_division_safety(node, issues, properties_checked)
+            self._check_subscript_safety(node, issues, properties_checked)
             if isinstance(node, ast.Call):
                 properties_checked.append("call_safety")
-        
-        return {
-            "is_safe": len([i for i in issues if "potential" not in i["type"]]) == 0,
-            "status": "analyzed",
-            "properties_checked": list(set(properties_checked)),
-            "issues": issues,
-            "warnings": len([i for i in issues if "potential" in i["type"]]),
-            "errors": len([i for i in issues if "potential" not in i["type"]])
-        }
+
+        safe = len([i for i in issues if "potential" not in i["type"]]) == 0
+        warnings = len([i for i in issues if "potential" in i["type"]])
+        errors = len([i for i in issues if "potential" not in i["type"]])
+
+        advisory = AdvisoryCheck(
+            name="safety_properties",
+            constraint_id="symbolic_verifier.safety_properties",
+            details={
+                "is_safe": safe,
+                "warnings": warnings,
+                "errors": errors,
+            },
+        )
+
+        return DiagnosticResult.unverifiable(
+            agent_message=f"Safety check: {len(issues)} issues found" if issues else "Safety check: no issues detected",
+            developer_fields={
+                "constraint_id": "symbolic_verifier.safety_properties",
+                "verification_mode": "symbolic",
+                "is_safe": safe,
+                "properties_checked": list(dict.fromkeys(properties_checked)),
+                "issues": issues,
+                "warnings": warnings,
+                "errors": errors,
+                "advisory_checks": [advisory.to_dict()],
+            },
+        )
     
     def verify_function_contract(
         self, 
