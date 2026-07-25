@@ -549,6 +549,7 @@ class SymbolicVerifier:
                     "total_recursive_functions": 0,
                     "complexity_score": 0,
                     "recommendation": {},
+                    "verification_mode": "symbolic",
                     "advisory_checks": [],
                 },
             )
@@ -581,6 +582,7 @@ class SymbolicVerifier:
                 "total_recursive_functions": len(recursions),
                 "complexity_score": complexity_score,
                 "recommendation": recommendation,
+                "verification_mode": "symbolic",
                 "advisory_checks": [advisory.to_dict()],
             },
         )
@@ -868,6 +870,7 @@ class SymbolicVerifier:
                     "constraint_id": CONSTRAINT_SYNTAX_ERROR,
                     "parse_error": analysis.developer_fields.get("parse_error", analysis.agent_message),
                     "feasible": False,
+                    "verification_mode": "symbolic",
                     "advisory_checks": [],
                 },
             )
@@ -914,6 +917,7 @@ class SymbolicVerifier:
                 "max_paths": max_paths,
                 "feasible": feasible,
                 "recommendation": analysis.developer_fields.get("recommendation", {}),
+                "verification_mode": "symbolic",
                 "advisory_checks": [advisory.to_dict()],
             },
         )

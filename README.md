@@ -61,18 +61,18 @@
 
 ---
 
-## Release Update: v5.2.0 — Unified Diagnostic Model
+## Release Update: v5.3.0 — SymbolicVerifier: DiagnosticResult Reference Implementation
 
-`v5.2.0` introduces the **unified 3-layer `DiagnosticResult` model** — the diagnostic contract that all QWED engines will conform to (Issue #204).
+`v5.3.0` delivers the **first fully `DiagnosticResult`-conformant verification engine** — SymbolicVerifier is the reference implementation for all future engine migrations (META #216).
 
-- **Three disclosure layers:** `agent_message` (agent-safe), `developer_fields` (structured evidence), `proof_ref` (cryptographic proof hash)
-- **Authority contract:** `proof_ref` present = authoritative (admissible for control flow); `proof_ref` absent = non-authoritative (must not drive control flow)
-- **Tri-state taxonomy:** `VERIFIED` / `UNVERIFIABLE` / `BLOCKED` — no `HEURISTIC` or `SIMPLIFIED` status codes
-- **`AdvisoryCheck`**: Non-proof-bearing analysis clearly marked as advisory-only
-- **83 new tests** covering status taxonomy, authority contract, serialization, and legacy migration
-- Version propagated across all SDKs (Python, TypeScript, Rust), API marker, and Docker images
+- **Reference implementation complete:** All 6 public methods (`verify_code`, `verify_function_contract`, `verify_safety_properties`, `verify_bounded`, `analyze_complexity`, `get_verification_budget`) return `DiagnosticResult`
+- **`AdvisoryCheck` in production:** Non-proof-bearing analysis paths (budget advisory, complexity analysis, safety property checks) use the `advisory_checks` pattern — see `analyze_complexity`, `verify_safety_properties` in SymbolicVerifier for reference
+- **`verification_mode` field:** Tracks bounded vs. unbounded analysis across every return path
+- **Math fail-closed bugs fixed:** All three budget-exhaustion safety issues resolved (#129-#131)
+- **Key rotation security:** Attestation key rotation with proof chain (#224)
+- **12 engines remaining** — ecosystem-wide conformance tracked under META issue #216
 
-If you're upgrading from `v5.1.x`, review the [changelog](CHANGELOG.md) for the full migration notes.
+If you're upgrading from `v5.2.x`, review the [changelog](CHANGELOG.md) for the full migration notes.
 
 ---
 
@@ -513,7 +513,7 @@ client.verify_config({"api_key": "sk-proj-abc123..."})
 # -> ❌ SECRETS_DETECTED: OPENAI_API_KEY at 'api_key'
 ```
 
-> **Full list of engines:** Math (SymPy), Logic (Z3), SQL (SQLGlot), Code (AST), Schema, Stats (Pandera), Fact (TF-IDF), Graph, Image, Consensus, Reasoning, DSL Logic. **SDK guards:** SystemGuard, ConfigGuard, RAGGuard, MCPPoisonGuard, ExfiltrationGuard, SelfInitiatedCoTGuard, SovereigntyGuard, StartupHookGuard, ProcessVerifier.
+> **Full list of engines:** Math (SymPy), Logic (Z3), SQL (SQLGlot), Code (AST), Schema, Stats (Pandera), Fact (TF-IDF), Graph, Image, Consensus, Reasoning, DSL Logic. **SymbolicVerifier** is the first `DiagnosticResult`-conformant engine (reference implementation for META #216). **SDK guards:** SystemGuard, ConfigGuard, RAGGuard, MCPPoisonGuard, ExfiltrationGuard, SelfInitiatedCoTGuard, SovereigntyGuard, StartupHookGuard, ProcessVerifier.
 
 ---
 
@@ -621,9 +621,18 @@ In high-stakes industries (Finance, Legal, Healthcare), you cannot send sensitiv
 
 We are building the **Universal Verification Standard** for the agentic web.
 
-*   **v5.2.0 (Current):** Unified `DiagnosticResult` model, 3-layer diagnostics, `proof_ref` authority contract across all engines.
-*   **v5.3.0 (Upcoming):** Engine conformance to `DiagnosticResult` — migrating the 12 verification engines to the unified model.
-*   **v6.0 (Planned):** QWED Client-Side (WebAssembly), Distributed Verification Network, cross-ecosystem proof exchange.
+### Completed
+
+- **✔ DiagnosticResult model** — Unified 3-layer diagnostic contract, `proof_ref` authority bit, `AdvisoryCheck` pattern (v5.2.0)
+- **✔ SymbolicVerifier migration** — First fully `DiagnosticResult`-conformant engine; serves as reference implementation (v5.3.0)
+
+### In Progress
+
+- **Remaining verification engines (#216)** — Migrating the 12 remaining engines to the `DiagnosticResult` model
+
+### Planned
+
+- **v6.0:** QWED Client-Side (WebAssembly), Distributed Verification Network, cross-ecosystem proof exchange
 
 ---
 
@@ -912,14 +921,14 @@ If you use QWED in your research or project, please cite our archived paper:
   title = {QWED Protocol: Deterministic Verification for Large Language Models},
   year = {2025},
   publisher = {Zenodo},
-  version = {v5.2.0},
+  version = {v5.3.0},
   doi = {10.5281/zenodo.18111675},
   url = {https://doi.org/10.5281/zenodo.18111675}
 }
 ```
 
 **Plain text:**
-> Dass, R. (2025). QWED Protocol: Deterministic Verification for Large Language Models (Version v5.2.0). Zenodo. https://doi.org/10.5281/zenodo.18111675
+> Dass, R. (2025). QWED Protocol: Deterministic Verification for Large Language Models (Version v5.3.0). Zenodo. https://doi.org/10.5281/zenodo.18111675
 
 ---
 

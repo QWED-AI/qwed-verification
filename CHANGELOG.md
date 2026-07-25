@@ -4,6 +4,57 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+## [5.3.0] - 2026-07-25
+### SymbolicVerifier: DiagnosticResult Reference Implementation
+
+SymbolicVerifier is the first fully `DiagnosticResult`-conformant verification engine and serves as the reference implementation for future engine migrations. The unified diagnostic model is no longer aspirational — one of 13 engines now demonstrates the complete pattern.
+
+#### Completed (Phase 1 + Phase 2, META #216)
+- **Phase 1** — 6 public methods migrated to `DiagnosticResult`: `verify_code`, `verify_function_contract`, `verify_safety_properties`, `verify_bounded`, `analyze_complexity`, `get_verification_budget`
+- **Phase 2** — All internal code paths produce `AdvisoryCheck` for non-proof-bearing analysis; `developer_fields` provides structured evidence; `verification_mode` field tracks bounded vs. unbounded analysis
+- **Fail-closed math bugs (#129-#131)** — All three resolved, ensuring safety constraints always block when out of budget (PRs #217-#219)
+- **Key rotation (#224)** — Secure key attestation rotation implemented (PR #232)
+
+#### Version Propagation
+- `qwed` (PyPI): `5.2.0` -> `5.3.0`
+- `qwed_sdk` (Python): `5.2.0` -> `5.3.0`
+- `@qwed-ai/sdk` (NPM): `5.2.0` -> `5.3.0`
+- `qwed` (crates.io/Rust): `5.2.0` -> `5.3.0`
+- API version marker: `5.2.0` -> `5.3.0`
+- Kubernetes deployment image: `5.2.0` -> `5.3.0`
+
+#### Ecosystem Status
+- **1 of 13 engines conformant** — SymbolicVerifier as reference implementation
+- **Remaining engines tracked under META #216** (12 engines + security hardening + attestation consumption)
+- Open audit issues: #162-#164 (Logic/Graph/Reasoning), #205 (SecureCodeExecutor), #221-#231 (security hardening), #191 (attestation consumption)
+
+#### Included PRs
+
+**Core: SymbolicVerifier Migration (Phase 1 + Phase 2)**
+- `#212` feat: migrate SymbolicVerifier to DiagnosticResult (Phase 1)
+- `#239` feat: add verification_mode to SymbolicVerifier DiagnosticResults (#237)
+- `#240` feat(#236): migrate verify_bounded to return DiagnosticResult
+- `#241` feat(#234): migrate get_verification_budget to return DiagnosticResult
+- `#242` feat(#233): migrate analyze_complexity to return DiagnosticResult
+- `#243` feat(#235): migrate verify_safety_properties to return DiagnosticResult
+
+**Fail-Closed Bug Fixes (Math)**
+- `#217` fix(math): fail-closed on ambiguous mode — block multi-mode datasets (#129)
+- `#218` fix(math): require eigenvalue cardinality match before verification (#130)
+- `#219` fix(math): require IRR convergence proof before VERIFIED (#131)
+
+**Security & Key Rotation**
+- `#220` fix: remove unused check_assertions parameter from verify_code
+- `#232` fix: use PBKDF2 instead of raw SHA-256 for key rotation hashing
+
+**Code Quality & Tooling**
+- `#208` docs: archive stale docs — roadmap.md, ARCHITECTURE.md (historical), update DEPLOYMENT.md version refs
+- `#209` docs: sync README with v5.2.0 codebase — engines, guards, architecture
+- `#210` fix: Potential fix for code scanning alert no. 515: Log Injection
+- `#211` fix: replace polynomial regex with O(n) str.find loop for data URI removal
+- `#213` fix: silence CodeQL clear-text-logging false positives in security demo
+- `#215` Add GitLab badge to README
+
 ## [5.2.0] - 2026-06-19
 ### Architecture: Structured Verification Diagnostics (#204)
 
