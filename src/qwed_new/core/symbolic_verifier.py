@@ -15,6 +15,8 @@ import sys
 
 from .diagnostics import AdvisoryCheck, DiagnosticResult
 
+CONSTRAINT_SYNTAX_ERROR = "symbolic_verifier.syntax_error"
+
 
 class SymbolicVerifier:
     """
@@ -90,7 +92,7 @@ class SymbolicVerifier:
             return DiagnosticResult.blocked(
                 agent_message="Symbolic verification blocked: the code could not be parsed.",
                 developer_fields={
-                    "constraint_id": "symbolic_verifier.syntax_error",
+                    "constraint_id": CONSTRAINT_SYNTAX_ERROR,
                     "parse_error": str(e),
                     "verification_mode": "symbolic",
                 },
@@ -717,7 +719,7 @@ class SymbolicVerifier:
             diagnostic = DiagnosticResult.blocked(
                 agent_message="Bounded verification blocked: the code could not be parsed.",
                 developer_fields={
-                    "constraint_id": "symbolic_verifier.syntax_error",
+                    "constraint_id": CONSTRAINT_SYNTAX_ERROR,
                     "parse_error": analysis.get("message"),
                 },
             )
@@ -830,11 +832,13 @@ class SymbolicVerifier:
         analysis = self.analyze_complexity(code)
 
         if analysis.get("status") == "syntax_error":
-            return DiagnosticResult.unverifiable(
+            return DiagnosticResult.blocked(
                 agent_message="Cannot estimate verification budget: syntax error in code.",
                 developer_fields={
-                    "constraint_id": "symbolic_verifier.syntax_error",
+                    "constraint_id": CONSTRAINT_SYNTAX_ERROR,
                     "parse_error": analysis.get("message"),
+                    "feasible": False,
+                    "advisory_checks": [],
                 },
             )
 

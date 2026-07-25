@@ -13,7 +13,7 @@ from unittest.mock import patch
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from qwed_new.core.symbolic_verifier import SymbolicVerifier, create_symbolic_verifier
+from qwed_new.core.symbolic_verifier import CONSTRAINT_SYNTAX_ERROR, SymbolicVerifier, create_symbolic_verifier
 from qwed_new.core.diagnostics import DiagnosticStatus
 
 
@@ -647,9 +647,9 @@ def add(x, y):
     return x + y
 """
         result = self.verifier.get_verification_budget(code)
-        assert result.developer_fields["feasible"]
+        assert result.advisory_checks[0].details["feasible"]
         assert result.status == DiagnosticStatus.UNVERIFIABLE
-    
+
     def test_complex_code_path_explosion(self):
         """Test that complex code triggers path explosion warning."""
         code = """
@@ -662,8 +662,18 @@ def explosion(items):
                         print(a, b, c, d, e)
 """
         result = self.verifier.get_verification_budget(code, max_paths=100)
+        assert result.advisory_checks[0].details["feasible"] is False
+        assert "path explosion" in result.agent_message.lower()
+
+    def test_get_verification_budget_syntax_error(self):
+        """Test budget estimation returns BLOCKED on syntax error."""
+        code = """
+def broken(
+"""
+        result = self.verifier.get_verification_budget(code)
+        assert result.status == DiagnosticStatus.BLOCKED
         assert result.developer_fields["feasible"] is False
-        assert "path explosion" in result.agent_message.lower() or result.developer_fields["estimated_paths"] > 100
+        assert result.constraint_id == CONSTRAINT_SYNTAX_ERROR
 
 
 if __name__ == "__main__":
