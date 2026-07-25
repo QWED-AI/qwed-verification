@@ -13,7 +13,7 @@ import tempfile
 import os
 import sys
 
-from .diagnostics import AdvisoryCheck, DiagnosticResult
+from .diagnostics import AdvisoryCheck, DiagnosticResult, DiagnosticStatus
 
 CONSTRAINT_SYNTAX_ERROR = "symbolic_verifier.syntax_error"
 
@@ -515,43 +515,50 @@ class SymbolicVerifier:
     # Phase 2: Bounded Model Checking
     # =========================================================================
     
-    def analyze_complexity(self, code: str) -> Dict[str, Any]:
-        """
-        Analyze code complexity for bounded model checking.
-        
-        Identifies:
-        - Loops and their nesting depth
-        - Recursive functions
-        - Potentially infinite constructs
-        
-        Args:
-            code: Python code to analyze
-            
-        Returns:
-            Dict with complexity analysis
-        """
+    def analyze_complexity(self, code: str) -> "DiagnosticResult":
+        """Analyze code complexity for bounded model checking."""
         try:
             tree = ast.parse(code)
         except SyntaxError as e:
-            return {
-                "status": "syntax_error",
-                "message": str(e)
-            }
-        
+            return DiagnosticResult.blocked(
+                agent_message=str(e),
+                developer_fields={
+                    "constraint_id": CONSTRAINT_SYNTAX_ERROR,
+                    "status": "syntax_error",
+                },
+            )
+
         loops = self._find_loops(tree)
         recursions = self._find_recursions(tree)
         max_depth = self._calculate_max_loop_depth(tree)
-        
-        return {
-            "status": "analyzed",
-            "loops": loops,
-            "recursions": recursions,
-            "max_loop_depth": max_depth,
-            "total_loops": len(loops),
-            "total_recursive_functions": len(recursions),
-            "complexity_score": len(loops) + len(recursions) * 2 + max_depth,
-            "recommendation": self._get_bounding_recommendation(loops, recursions, max_depth)
-        }
+        complexity_score = len(loops) + len(recursions) * 2 + max_depth
+        recommendation = self._get_bounding_recommendation(loops, recursions, max_depth)
+
+        advisory = AdvisoryCheck(
+            name="complexity_analysis",
+            constraint_id="symbolic_verifier.complexity_analysis",
+            details={
+                "total_loops": len(loops),
+                "total_recursive_functions": len(recursions),
+                "max_loop_depth": max_depth,
+                "complexity_score": complexity_score,
+            },
+        )
+
+        return DiagnosticResult.unverifiable(
+            agent_message=f"Complexity analysis: {len(loops)} loops, {len(recursions)} recursions, depth {max_depth}",
+            developer_fields={
+                "status": "analyzed",
+                "loops": loops,
+                "recursions": recursions,
+                "max_loop_depth": max_depth,
+                "total_loops": len(loops),
+                "total_recursive_functions": len(recursions),
+                "complexity_score": complexity_score,
+                "recommendation": recommendation,
+                "advisory_checks": [advisory.to_dict()],
+            },
+        )
     
     def _find_loops(self, tree: ast.AST) -> List[Dict[str, Any]]:
         """Find all loops in the code with their properties."""
@@ -712,20 +719,19 @@ class SymbolicVerifier:
             "prioritized": prioritize_paths,
         }
 
-        # First analyze complexity
         analysis = self.analyze_complexity(code)
+        complexity_data = analysis.developer_fields
 
-        if analysis.get("status") == "syntax_error":
+        if analysis.status is DiagnosticStatus.BLOCKED:
             diagnostic = DiagnosticResult.blocked(
                 agent_message="Bounded verification blocked: the code could not be parsed.",
                 developer_fields={
                     "constraint_id": CONSTRAINT_SYNTAX_ERROR,
-                    "parse_error": analysis.get("message"),
+                    "parse_error": analysis.agent_message,
                 },
             )
-            return self._bounded_result(diagnostic, bounded=False, bounds_applied=bounds_applied, complexity_analysis=analysis)
+            return self._bounded_result(diagnostic, bounded=False, bounds_applied=bounds_applied, complexity_analysis=complexity_data)
 
-        # Transform code to add bounds
         try:
             bounded_code = self._add_bounds_to_code(code, loop_bound, recursion_depth)
         except ValueError as e:
@@ -736,11 +742,10 @@ class SymbolicVerifier:
                     "transform_error": str(e),
                 },
             )
-            return self._bounded_result(diagnostic, bounded=False, bounds_applied=bounds_applied, complexity_analysis=analysis)
+            return self._bounded_result(diagnostic, bounded=False, bounds_applied=bounds_applied, complexity_analysis=complexity_data)
 
-        # Run verification on bounded code
         diagnostic = self.verify_code(bounded_code)
-        return self._bounded_result(diagnostic, bounded=True, bounds_applied=bounds_applied, complexity_analysis=analysis)
+        return self._bounded_result(diagnostic, bounded=True, bounds_applied=bounds_applied, complexity_analysis=complexity_data)
 
     def _bounded_result(
         self,
@@ -831,19 +836,19 @@ class SymbolicVerifier:
         """Calculate verification budget — estimated paths to explore."""
         analysis = self.analyze_complexity(code)
 
-        if analysis.get("status") == "syntax_error":
+        if analysis.status is DiagnosticStatus.BLOCKED:
             return DiagnosticResult.blocked(
                 agent_message="Cannot estimate verification budget: syntax error in code.",
                 developer_fields={
                     "constraint_id": CONSTRAINT_SYNTAX_ERROR,
-                    "parse_error": analysis.get("message"),
+                    "parse_error": analysis.agent_message,
                     "feasible": False,
                     "advisory_checks": [],
                 },
             )
 
-        loops = analysis.get("loops", [])
-        recursions = analysis.get("recursions", [])
+        loops = analysis.developer_fields.get("loops", [])
+        recursions = analysis.developer_fields.get("recursions", [])
 
         default_iterations = 10
         estimated_paths = 1
@@ -882,7 +887,7 @@ class SymbolicVerifier:
                 "estimated_paths": capped,
                 "max_paths": max_paths,
                 "feasible": feasible,
-                "recommendation": analysis.get("recommendation", {}),
+                "recommendation": analysis.developer_fields.get("recommendation", {}),
                 "advisory_checks": [advisory.to_dict()],
             },
         )

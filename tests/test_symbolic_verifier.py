@@ -484,10 +484,10 @@ def iterate(items):
         print(item)
 """
         result = self.verifier.analyze_complexity(code)
-        assert result["status"] == "analyzed"
-        assert result["total_loops"] == 1
-        assert result["loops"][0]["type"] == "for"
-    
+        assert result.developer_fields["status"] == "analyzed"
+        assert result.developer_fields["total_loops"] == 1
+        assert result.developer_fields["loops"][0]["type"] == "for"
+
     def test_find_while_loop(self):
         """Test detection of while loop."""
         code = """
@@ -496,9 +496,9 @@ def countdown(n):
         n -= 1
 """
         result = self.verifier.analyze_complexity(code)
-        assert result["total_loops"] == 1
-        assert result["loops"][0]["type"] == "while"
-    
+        assert result.developer_fields["total_loops"] == 1
+        assert result.developer_fields["loops"][0]["type"] == "while"
+
     def test_nested_loops_depth(self):
         """Test detection of nested loop depth."""
         code = """
@@ -509,9 +509,9 @@ def matrix_ops(matrix):
                 print(item)
 """
         result = self.verifier.analyze_complexity(code)
-        assert result["max_loop_depth"] == 3
-        assert result["total_loops"] == 3
-    
+        assert result.developer_fields["max_loop_depth"] == 3
+        assert result.developer_fields["total_loops"] == 3
+
     def test_detect_direct_recursion(self):
         """Test detection of direct recursion."""
         code = """
@@ -521,9 +521,9 @@ def factorial(n: int) -> int:
     return n * factorial(n - 1)
 """
         result = self.verifier.analyze_complexity(code)
-        assert result["total_recursive_functions"] >= 1
-        assert any(r["type"] == "direct" for r in result["recursions"])
-    
+        assert result.developer_fields["total_recursive_functions"] >= 1
+        assert any(r["type"] == "direct" for r in result.developer_fields["recursions"])
+
     def test_complexity_score(self):
         """Test complexity score calculation."""
         simple_code = """
@@ -540,9 +540,9 @@ def complex_func(items):
 """
         simple_result = self.verifier.analyze_complexity(simple_code)
         complex_result = self.verifier.analyze_complexity(complex_code)
-        
-        assert simple_result["complexity_score"] < complex_result["complexity_score"]
-    
+
+        assert simple_result.developer_fields["complexity_score"] < complex_result.developer_fields["complexity_score"]
+
     def test_recommendation_for_complex_code(self):
         """Test that complex code gets appropriate recommendations."""
         code = """
@@ -554,7 +554,7 @@ def deeply_nested(items):
                     print(a, b, c, d)
 """
         result = self.verifier.analyze_complexity(code)
-        assert result["recommendation"]["risk_level"] in ["medium", "high"]
+        assert result.developer_fields["recommendation"]["risk_level"] in ["medium", "high"]
 
 
 class TestBoundedVerification:
