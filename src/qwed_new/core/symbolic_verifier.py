@@ -521,10 +521,11 @@ class SymbolicVerifier:
             tree = ast.parse(code)
         except SyntaxError as e:
             return DiagnosticResult.blocked(
-                agent_message=str(e),
+                agent_message="Complexity analysis blocked: the code could not be parsed.",
                 developer_fields={
                     "constraint_id": CONSTRAINT_SYNTAX_ERROR,
                     "status": "syntax_error",
+                    "parse_error": str(e),
                 },
             )
 
@@ -727,7 +728,7 @@ class SymbolicVerifier:
                 agent_message="Bounded verification blocked: the code could not be parsed.",
                 developer_fields={
                     "constraint_id": CONSTRAINT_SYNTAX_ERROR,
-                    "parse_error": analysis.agent_message,
+                    "parse_error": analysis.developer_fields.get("parse_error", analysis.agent_message),
                 },
             )
             return self._bounded_result(diagnostic, bounded=False, bounds_applied=bounds_applied, complexity_analysis=complexity_data)
@@ -841,7 +842,7 @@ class SymbolicVerifier:
                 agent_message="Cannot estimate verification budget: syntax error in code.",
                 developer_fields={
                     "constraint_id": CONSTRAINT_SYNTAX_ERROR,
-                    "parse_error": analysis.agent_message,
+                    "parse_error": analysis.developer_fields.get("parse_error", analysis.agent_message),
                     "feasible": False,
                     "advisory_checks": [],
                 },
@@ -866,8 +867,9 @@ class SymbolicVerifier:
         capped = min(estimated_paths, 999999)
 
         message = (
-            "Verification feasible within budget" if feasible
-            else f"Path explosion risk: {estimated_paths} paths. Use stricter bounds."
+            "Estimated verification feasible within budget (advisory, not proof-bearing)"
+            if feasible
+            else f"Estimated path explosion risk: {estimated_paths} paths. Use stricter bounds (advisory, not proof-bearing)."
         )
 
         advisory = AdvisoryCheck(

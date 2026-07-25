@@ -484,7 +484,11 @@ def iterate(items):
         print(item)
 """
         result = self.verifier.analyze_complexity(code)
+        assert result.status == DiagnosticStatus.UNVERIFIABLE
+        assert result.is_verified is False
         assert result.developer_fields["status"] == "analyzed"
+        assert len(result.advisory_checks) == 1
+        assert result.advisory_checks[0].name == "complexity_analysis"
         assert result.developer_fields["total_loops"] == 1
         assert result.developer_fields["loops"][0]["type"] == "for"
 
