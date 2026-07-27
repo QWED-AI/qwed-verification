@@ -111,7 +111,7 @@ QWED says: ❌ Blocked — SQL injection detected before execution.
 
 > **🔬 On "Deterministic" Verification**
 > 
-> QWED uses **deterministic computation** (no neural networks, no embeddings, no vibes) wherever possible. Math, Logic, SQL, Code, and Schema engines produce 100% reproducible results using symbolic solvers. For fact-checking, we use TF-IDF (not embeddings) because it's transparent and inspectable—same query always returns same score. Non-verifiable or heuristic signals are carried as `advisory_checks` in the diagnostic result — never promoted to a verification status. See [Engine Classification](#engine-classification) for which engines produce proofs vs. structured advisories.
+> QWED uses **deterministic computation** (no neural networks, no embeddings, no vibes) wherever possible. Math, Logic, SQL, Code, and Schema engines produce 100% reproducible results using symbolic solvers. For fact-checking, we use TF-IDF (not embeddings) because it's transparent and inspectable—same query always returns same score. Non-verifiable or heuristic signals are carried as `advisory_checks` in the diagnostic result — never promoted to a verification status. See [Engine Classification](#target-engine-architecture) for which engines produce proofs vs. structured advisories.
 
 
 
@@ -389,7 +389,7 @@ QWED wraps best-in-class libraries, abstracting their complex DSLs into a simple
 | **The "Judge"** | **Deterministic Solver** (Z3/SymPy) | Semantic Matcher (Embeddings) | Another LLM (GPT-4) |
 | **Mechanism** | Translation to DSL | Vector Similarity | Prompt Engineering |
 | **Verification Type** | **Mathematical Proof** | Policy Adherence | Consensus/Opinion |
-| **False Positives** | Bounded by proof semantics (see [Engine Classification](#engine-classification)) | Medium (Semantic drift) | High (Subjectivity) |
+| **False Positives** | Bounded by proof semantics (see [Engine Classification](#target-engine-architecture)) | Medium (Semantic drift) | High (Subjectivity) |
 | **Privacy** | **✅ 100% Local** | ❌ Cloud-based (usually) | ❌ Cloud-based |
 
 > **QWED differs because it provides PROOF, not just localized safety checks.**
@@ -515,7 +515,9 @@ client.verify_config({"api_key": "sk-proj-abc123..."})
 # -> ❌ SECRETS_DETECTED: OPENAI_API_KEY at 'api_key'
 ```
 
-### Engine Classification
+### Target Engine Architecture
+
+> **Note:** This section describes the target `DiagnosticResult` architecture under META #216. SymbolicVerifier is the reference implementation; remaining engines are being migrated incrementally. Most engines currently return legacy types (e.g., `Dict[str, Any]` with `verified` boolean, `ImageVerificationResult`).
 
 ```
                 QWED Verification
