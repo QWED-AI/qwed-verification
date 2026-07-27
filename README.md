@@ -8,7 +8,7 @@
   <p>
     <b>Don't fix the liar. Verify the lie.</b><br>
     <i>QWED verifies outputs, processes, and tool interactions before they enter production.</i><br>
-    <i>QWED does not reduce hallucinations. It makes them irrelevant.</i>
+    <i>For supported proof domains, hallucinations cannot bypass deterministic verification.</i>
   </p>
 
   <p>
@@ -111,7 +111,7 @@ QWED says: ❌ Blocked — SQL injection detected before execution.
 
 > **🔬 On "Deterministic" Verification**
 > 
-> QWED uses **deterministic computation** (no neural networks, no embeddings, no vibes) wherever possible. Math, Logic, SQL, Code, and Schema engines produce 100% reproducible results using symbolic solvers. For fact-checking, we use TF-IDF (not embeddings) because it's transparent and inspectable—same query always returns same score. Non-verifiable or heuristic signals are carried as `advisory_checks` in the diagnostic result — never promoted to a verification status.
+> QWED uses **deterministic computation** (no neural networks, no embeddings, no vibes) wherever possible. Math, Logic, SQL, Code, and Schema engines produce 100% reproducible results using symbolic solvers. For fact-checking, we use TF-IDF (not embeddings) because it's transparent and inspectable—same query always returns same score. Non-verifiable or heuristic signals are carried as `advisory_checks` in the diagnostic result — never promoted to a verification status. See [Engine Classification](#target-engine-architecture) for which engines produce proofs vs. structured advisories.
 
 
 
@@ -389,7 +389,7 @@ QWED wraps best-in-class libraries, abstracting their complex DSLs into a simple
 | **The "Judge"** | **Deterministic Solver** (Z3/SymPy) | Semantic Matcher (Embeddings) | Another LLM (GPT-4) |
 | **Mechanism** | Translation to DSL | Vector Similarity | Prompt Engineering |
 | **Verification Type** | **Mathematical Proof** | Policy Adherence | Consensus/Opinion |
-| **False Positives** | **~0%** (Logic-based) | Medium (Semantic drift) | High (Subjectivity) |
+| **False Positives** | Bounded by proof semantics (see [Engine Classification](#target-engine-architecture)) | Medium (Semantic drift) | High (Subjectivity) |
 | **Privacy** | **✅ 100% Local** | ❌ Cloud-based (usually) | ❌ Cloud-based |
 
 > **QWED differs because it provides PROOF, not just localized safety checks.**
@@ -436,7 +436,9 @@ QWED routes queries to specialized engines that act as DSL interpreters, plus ag
 
 | Approach | Accuracy | Deterministic | Explainable | Best For |
 |----------|----------|---------------|-------------|----------|
-| **QWED Verification** | ✅ 99%+ | ✅ Yes | ✅ Full trace | Production AI |
+| **QWED (Proof Engines)** | ✅ Proof-backed deterministic | ✅ Yes | ✅ Full trace + proof_ref | Production AI |
+| **QWED (Policy Enforcement Engines)** | ✅ Rule-based deterministic | ✅ Yes | ✅ Decision trace | Runtime guard |
+| **QWED (Advisory Engines)** | ⚠️ Structured heuristic | ❌ No | ✅ Structured diagnostics | Audit & review |
 | Fine-tuning / RLHF | ⚠️ ~85% | ❌ No | ❌ Black box | General improvement |
 | RAG (Retrieval) | ⚠️ ~80% | ❌ No | ⚠️ Limited | Knowledge grounding |
 | Prompt Engineering | ⚠️ ~70% | ❌ No | ⚠️ Limited | Quick fixes |
@@ -513,7 +515,48 @@ client.verify_config({"api_key": "sk-proj-abc123..."})
 # -> ❌ SECRETS_DETECTED: OPENAI_API_KEY at 'api_key'
 ```
 
-> **Full list of engines:** Math (SymPy), Logic (Z3), SQL (SQLGlot), Code (AST), Schema, Stats (Pandera), Fact (TF-IDF), Graph, Image, Consensus, Reasoning, DSL Logic. **SymbolicVerifier** is the first `DiagnosticResult`-conformant engine (reference implementation for META #216). **SDK guards:** SystemGuard, ConfigGuard, RAGGuard, MCPPoisonGuard, ExfiltrationGuard, SelfInitiatedCoTGuard, SovereigntyGuard, StartupHookGuard, ProcessVerifier.
+### Target Engine Architecture
+
+> **Note:** This section describes the target `DiagnosticResult` architecture under META #216. SymbolicVerifier is the reference implementation; remaining engines are being migrated incrementally. Most engines currently return legacy types (e.g., `Dict[str, Any]` with `verified` boolean, `ImageVerificationResult`).
+
+```
+                QWED Verification
+
+      ┌─────────────────────────────────┐
+      │        Proof Engines            │
+      │    VERIFIED + proof_ref         │
+      │    Deterministic verification   │
+      │    ───────────────────────      │
+      │    Output: Evidence             │
+      └─────────────────────────────────┘
+                    │
+                    ▼
+      ┌─────────────────────────────────┐
+      │ Policy Enforcement Engines      │
+      │ BLOCK / UNVERIFIABLE            │
+      │ Rule-based deterministic        │
+      │    ───────────────────────      │
+      │    Output: Decision             │
+      └─────────────────────────────────┘
+                    │
+                    ▼
+      ┌─────────────────────────────────┐
+      │ Advisory Engines                │
+      │ AdvisoryCheck only              │
+      │ Structured heuristic analysis   │
+      │    ───────────────────────      │
+      │    Output: Analysis             │
+      └─────────────────────────────────┘
+```
+
+**Proof Engines** — Deterministic verification with `proof_ref`. Can emit `VERIFIED`. `VERIFIED` requires a `proof_ref`.
+- Math (SymPy) · Logic (Z3) · SQL (SQLGlot) · Code (AST) · Schema · Stats (Pandera) · Symbolic (CrossHair)
+
+**Policy Enforcement Engines** — Apply deterministic policies and produce enforcement decisions. They do not produce mathematical proofs. Emit `BLOCK` / `UNVERIFIABLE`.
+- SystemGuard · ConfigGuard · RAGGuard · MCPPoisonGuard · ExfiltrationGuard · SelfInitiatedCoTGuard · SovereigntyGuard · StartupHookGuard · ProcessVerifier
+
+**Advisory Engines** — Structured heuristic analysis. Emit `AdvisoryCheck` only. These engines cannot emit `VERIFIED`.
+- Image · Graph · Reasoning · Consensus · Fact (TF-IDF)
 
 ---
 
@@ -548,6 +591,7 @@ We benchmarked **Claude Opus 4.5** (one of the world's best LLMs) on 215 critica
 
 > **Probabilistic systems should not be trusted with deterministic tasks.**
 > **If it can't be verified, it doesn't ship.**
+> *(When QWED is integrated into your deployment workflow.)*
 
 ---
 
