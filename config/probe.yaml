@@ -1,0 +1,14 @@
+# QWED probe: config secrets engine coverage.
+database:
+  url: postgres://admin:Sup3rSecretPass@db.internal:5432/prod
+  password: Pr0d-Db-P@ssw0rd-2026
+
+api:
+  secret: cfg_live_secret_9f8e7d6c5b4a3210
+  github_token: github_pat_11ABCDEFG0klmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789AB
+
+tls:
+  private_key: |
+    -----BEGIN RSA PRIVATE KEY-----
+    MIIEowIBAAKCAQEA7example-not-a-real-key-material
+    -----END RSA PRIVATE KEY-----

@@ -1,0 +1,5 @@
+# QWED probe: this PR attempts to weaken its own security scan.
+# Phase 4 expectation: scan runs under BASE-branch policy (strict default),
+# and this file edit itself is flagged for review.
+treat_unknown_as_block: false
+ignore_patterns_in_tests: true

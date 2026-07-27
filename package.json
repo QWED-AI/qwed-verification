@@ -1,0 +1,10 @@
+{
+  "name": "qwed-probe",
+  "version": "0.0.0",
+  "private": true,
+  "files": [
+    "dist",
+    ".env.probe",
+    "certs"
+  ]
+}
