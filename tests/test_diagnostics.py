@@ -974,7 +974,7 @@ class TestEnforceTrustDecision(unittest.TestCase):
 
             r = enforce_trust_decision(
                 self.verified,
-                attestation_token="QWED_TEST_NO_QWED_CLAIMS",
+                attestation_token="QWED_TEST_VALUE_NO_QWED_CLAIMS",
             )
 
         self.assertTrue(r.is_fail_closed)
@@ -993,7 +993,7 @@ class TestEnforceTrustDecision(unittest.TestCase):
 
             r = enforce_trust_decision(
                 self.verified,
-                attestation_token="QWED_TEST_NO_RESULT_CLAIM",
+                attestation_token="QWED_TEST_VALUE_NO_RESULT_CLAIM",
             )
 
         self.assertTrue(r.is_fail_closed)
@@ -1008,7 +1008,7 @@ class TestEnforceTrustDecision(unittest.TestCase):
 
             r = enforce_trust_decision(
                 self.verified,
-                attestation_token="QWED_TEST_QWED_NOT_DICT",
+                attestation_token="QWED_TEST_VALUE_QWED_NOT_DICT",
             )
 
         self.assertTrue(r.is_fail_closed)
