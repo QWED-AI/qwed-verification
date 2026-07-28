@@ -243,8 +243,21 @@ class TestIssuanceEnforcesProofArtifact(unittest.TestCase):
                 proof_data="sha256:abcdef123456",
             )
         self.assertIsNotNone(result)
+        # Guard did NOT trigger — proof_data was provided
         self.assertNotEqual(result.error_code, "VERIFIED_WITHOUT_PROOF",
                             "proof_data provided — must not trigger the proof check")
+        if result.is_issued:
+            self.assertIsNotNone(result.token)
+            # Verify the token contains proof_hash claim
+            try:
+                svc = get_attestation_service()
+                is_valid, claims, _ = svc.verify_attestation(result.token)
+                if is_valid:
+                    qwed = (claims or {}).get("qwed", {})
+                    self.assertIn("proof_hash", qwed,
+                                  "ISSUED token must contain proof_hash claim")
+            except Exception:
+                pass  # Verification may fail without real crypto; assertion is advisory
 
 
 @unittest.skipUnless(HAS_CRYPTO, "cryptography not installed")

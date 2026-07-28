@@ -529,12 +529,18 @@ class DiagnosticResult:
 # without required attestation artifact.
 # ---------------------------------------------------------------------------
 
+def _compute_query_hash(query: str) -> str:
+    """Compute a query hash in the same format as AttestationService._hash_content."""
+    return f"sha256:{hashlib.sha256(query.encode('utf-8')).hexdigest()}"
+
+
 def enforce_trust_decision(
     result: DiagnosticResult,
     *,
     attestation_token: Optional[str] = None,
     require_attestation: bool = True,
     trusted_issuers: Optional[List[str]] = None,
+    query: Optional[str] = None,
 ) -> DiagnosticResult:
     """Enforce trust-boundary gate: VERIFIED without required attestation → BLOCKED.
 
@@ -550,11 +556,14 @@ def enforce_trust_decision(
             attestation token is blocked. If False, attestation is advisory.
         trusted_issuers: Optional list of trusted issuer DIDs for token
             verification. Defaults to None (uses AttestationService default).
+        query: Original query string for query_hash binding validation.
+            If provided, the attestation token's qwed.query_hash claim must
+            match sha256(query). Without it, query binding is not checked.
 
     Returns:
         The original DiagnosticResult if all policy checks pass, or a BLOCKED
-        DiagnosticResult with fail-closed semantics if attestation is missing
-        or invalid.
+        DiagnosticResult with fail-closed semantics if attestation is missing,
+        invalid, or claims do not match the result.
 
     Audit event:
         Every block decision is logged at WARNING level with structured
@@ -569,7 +578,6 @@ def enforce_trust_decision(
     # No attestation token provided
     if not attestation_token:
         if not require_attestation:
-            # Optional policy + no token → pass through (advisory)
             return result
         logger.warning(
             "trust_gate.blocked constraint_id=%s reason=missing_attestation_token policy=%s",
@@ -592,7 +600,7 @@ def enforce_trust_decision(
         from .attestation import get_attestation_service
 
         service = get_attestation_service()
-        is_valid, _claims, error = service.verify_attestation(
+        is_valid, token_claims, error = service.verify_attestation(
             attestation_token,
             trusted_issuers=trusted_issuers,
         )
@@ -633,7 +641,69 @@ def enforce_trust_decision(
             },
         )
 
-    # Attestation valid — pass through
+    # Validate token claims against the result (bind token to this specific result)
+    qwed_claims = (token_claims or {}).get("qwed", {})
+
+    # Status must match
+    token_status = qwed_claims.get("result", {}).get("status")
+    if token_status and token_status != result.status.value:
+        logger.warning(
+            "trust_gate.blocked constraint_id=%s reason=claims_status_mismatch "
+            "token_status=%s result_status=%s policy=%s",
+            result.constraint_id or "unknown",
+            token_status,
+            result.status.value,
+            policy,
+        )
+        return DiagnosticResult.blocked(
+            agent_message="Verification blocked — attestation claims do not match result status",
+            developer_fields={
+                "constraint_id": "trust_gate.claims_status_mismatch",
+                "token_status": token_status,
+                "result_status": result.status.value,
+                "policy": policy,
+            },
+        )
+
+    # Query hash must match if query was provided
+    if query is not None:
+        expected_query_hash = _compute_query_hash(query)
+        token_query_hash = qwed_claims.get("query_hash")
+        if token_query_hash and token_query_hash != expected_query_hash:
+            logger.warning(
+                "trust_gate.blocked constraint_id=%s reason=claims_query_mismatch policy=%s",
+                result.constraint_id or "unknown",
+                policy,
+            )
+            return DiagnosticResult.blocked(
+                agent_message="Verification blocked — attestation query hash does not match",
+                developer_fields={
+                    "constraint_id": "trust_gate.claims_query_mismatch",
+                    "expected_query_hash": expected_query_hash,
+                    "token_query_hash": token_query_hash,
+                    "policy": policy,
+                },
+            )
+
+    # Proof hash must match the result's proof_ref (both non-null)
+    token_proof_hash = qwed_claims.get("proof_hash")
+    if token_proof_hash and result.proof_ref and token_proof_hash != result.proof_ref:
+        logger.warning(
+            "trust_gate.blocked constraint_id=%s reason=claims_proof_mismatch policy=%s",
+            result.constraint_id or "unknown",
+            policy,
+        )
+        return DiagnosticResult.blocked(
+            agent_message="Verification blocked — attestation proof hash does not match result",
+            developer_fields={
+                "constraint_id": "trust_gate.claims_proof_mismatch",
+                "token_proof_hash": token_proof_hash,
+                "result_proof_ref": result.proof_ref,
+                "policy": policy,
+            },
+        )
+
+    # Attestation valid and claims bound — pass through
     return result
 
 

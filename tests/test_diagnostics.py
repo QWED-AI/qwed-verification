@@ -16,6 +16,7 @@ Covers:
 - Constraint violations raise ValueError
 """
 
+import hashlib
 import unittest
 from unittest.mock import MagicMock, patch
 from src.qwed_new.core.diagnostics import (
@@ -760,10 +761,14 @@ class TestEnforceTrustDecision(unittest.TestCase):
     # --- (c) VERIFIED + valid token → passes ---
 
     def test_verified_valid_token_passes(self):
-        """VERIFIED with valid token must return the original result."""
+        """VERIFIED with valid token (matching claims) must return the original."""
         with patch("src.qwed_new.core.attestation.get_attestation_service") as mock_get:
             mock_svc = MagicMock()
-            mock_svc.verify_attestation.return_value = (True, {"qwed": {"result": {}}}, None)
+            mock_svc.verify_attestation.return_value = (
+                True,
+                {"qwed": {"result": {"status": "VERIFIED", "engine": "math"}}},
+                None,
+            )
             mock_get.return_value = mock_svc
 
             r = enforce_trust_decision(
@@ -774,6 +779,32 @@ class TestEnforceTrustDecision(unittest.TestCase):
         self.assertTrue(r.is_verified)
         self.assertEqual(r.constraint_id, "math.identity")
         self.assertIsNotNone(r.proof_ref)
+
+    def test_verified_valid_token_with_query_passes(self):
+        """VERIFIED with valid token + matching query_hash must pass."""
+        with patch("src.qwed_new.core.attestation.get_attestation_service") as mock_get:
+            mock_svc = MagicMock()
+            expected_qh = "sha256:" + hashlib.sha256(b"2+2=4").hexdigest()
+            mock_svc.verify_attestation.return_value = (
+                True,
+                {
+                    "qwed": {
+                        "result": {"status": "VERIFIED", "engine": "math"},
+                        "query_hash": expected_qh,
+                    }
+                },
+                None,
+            )
+            mock_get.return_value = mock_svc
+
+            r = enforce_trust_decision(
+                self.verified,
+                attestation_token="valid.jwt.token",
+                query="2+2=4",
+            )
+
+        self.assertTrue(r.is_verified)
+        self.assertEqual(r.constraint_id, "math.identity")
 
     # --- (d) Policy toggle: optional attestation ---
 
@@ -853,6 +884,85 @@ class TestEnforceTrustDecision(unittest.TestCase):
         self.assertEqual(
             r.developer_fields.get("constraint_id"),
             "trust_gate.mandatory_attestation_missing",
+        )
+
+    # --- Claims binding: token must match result ---
+
+    def test_claims_status_mismatch_blocks(self):
+        """Token with status != VERIFIED must be blocked."""
+        with patch("src.qwed_new.core.attestation.get_attestation_service") as mock_get:
+            mock_svc = MagicMock()
+            mock_svc.verify_attestation.return_value = (
+                True,
+                {"qwed": {"result": {"status": "FAILED"}}},
+                None,
+            )
+            mock_get.return_value = mock_svc
+
+            r = enforce_trust_decision(
+                self.verified,
+                attestation_token="mismatched.status.token",
+            )
+
+        self.assertTrue(r.is_fail_closed)
+        self.assertEqual(
+            r.developer_fields.get("constraint_id"),
+            "trust_gate.claims_status_mismatch",
+        )
+
+    def test_claims_query_mismatch_blocks(self):
+        """Token with wrong query_hash must be blocked."""
+        with patch("src.qwed_new.core.attestation.get_attestation_service") as mock_get:
+            mock_svc = MagicMock()
+            mock_svc.verify_attestation.return_value = (
+                True,
+                {
+                    "qwed": {
+                        "result": {"status": "VERIFIED"},
+                        "query_hash": "sha256:abc123",
+                    }
+                },
+                None,
+            )
+            mock_get.return_value = mock_svc
+
+            r = enforce_trust_decision(
+                self.verified,
+                attestation_token="wrong.query.token",
+                query="some other query",
+            )
+
+        self.assertTrue(r.is_fail_closed)
+        self.assertEqual(
+            r.developer_fields.get("constraint_id"),
+            "trust_gate.claims_query_mismatch",
+        )
+
+    def test_claims_proof_mismatch_blocks(self):
+        """Token with proof_hash != result.proof_ref must be blocked."""
+        with patch("src.qwed_new.core.attestation.get_attestation_service") as mock_get:
+            mock_svc = MagicMock()
+            mock_svc.verify_attestation.return_value = (
+                True,
+                {
+                    "qwed": {
+                        "result": {"status": "VERIFIED"},
+                        "proof_hash": "sha256:wrongproof",
+                    }
+                },
+                None,
+            )
+            mock_get.return_value = mock_svc
+
+            r = enforce_trust_decision(
+                self.verified,
+                attestation_token="wrong.proof.token",
+            )
+
+        self.assertTrue(r.is_fail_closed)
+        self.assertEqual(
+            r.developer_fields.get("constraint_id"),
+            "trust_gate.claims_proof_mismatch",
         )
 
 
