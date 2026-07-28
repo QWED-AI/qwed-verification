@@ -248,7 +248,7 @@ class TestEdgeCases:
             claim="Apple's CEO is Tim Cook",
             context="Tim Cook is Apple's CEO since 2011"
         )
-        assert len(result.developer_fields.get("claim_triples", [])) >= 0
+        assert len(result.developer_fields.get("claim_triples", [])) >= 1
 
 
 class TestTripleClass:

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 import re
 import struct
 
-from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus, AdvisoryCheck, compute_proof_ref
+from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck
 
 
 @dataclass
@@ -200,11 +200,14 @@ class ImageVerifier:
             )
 
         if result.verdict == "REFUTED":
-            evidence = {"metadata": analysis.get("metadata", {}), "reasoning": result.reasoning}
-            return DiagnosticResult.verified(
-                "Image claim refuted",
-                {"constraint_id": "image_verifier.deterministic", "methods_used": methods_used, "analysis": analysis, "refuted": True},
-                evidence,
+            return DiagnosticResult.blocked(
+                "Image claim refuted by deterministic metadata check",
+                {
+                    "constraint_id": "image_verifier.deterministic_refuted",
+                    "methods_used": methods_used,
+                    "analysis": analysis,
+                    "reasoning": result.reasoning,
+                },
             )
 
         return DiagnosticResult.unverifiable(
@@ -627,17 +630,18 @@ class MultiVLMVerifier:
             consensus_verdict = most_common[0]
             agreement_count = most_common[1]
 
-            advisory_checks.append(AdvisoryCheck(
-                name="multi_vlm_consensus",
-                constraint_id="multi_vlm_verifier.vlm_advisory_only",
-                details={
-                    "consensus_verdict": consensus_verdict,
-                    "agreement_count": agreement_count,
-                    "total_vlms": len(vlm_results),
-                    "min_agreement": min_agreement,
-                    "vlm_results": vlm_results,
-                }
-            ))
+            if agreement_count >= min_agreement:
+                advisory_checks.append(AdvisoryCheck(
+                    name="multi_vlm_consensus",
+                    constraint_id="multi_vlm_verifier.vlm_advisory_only",
+                    details={
+                        "consensus_verdict": consensus_verdict,
+                        "agreement_count": agreement_count,
+                        "total_vlms": len(vlm_results),
+                        "min_agreement": min_agreement,
+                        "agreement_met": True,
+                    }
+                ))
 
         return DiagnosticResult.unverifiable(
             "Image verification inconclusive — VLM consensus is advisory only",

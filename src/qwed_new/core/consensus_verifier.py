@@ -693,7 +693,7 @@ class ConsensusVerifier:
             return EngineResult(
                 engine_name="Stats", method="statistical_analysis",
                 result=result,
-                confidence=0.98 if result else 0.0,
+                confidence=0.98 if result is not None else 0.0,
                 latency_ms=(time.time() - start) * 1000,
                 success=result is not None,
                 status="VERIFIED" if result is not None else "UNVERIFIABLE",
@@ -777,11 +777,13 @@ class ConsensusVerifier:
             status = "split"
             confidence = min(0.7, best_weight / total_weight)
         
+        diagnostic_status = "VERIFIED" if status == "unanimous" else "UNVERIFIABLE"
+
         return {
             "answer": answer_values[best_answer],
             "confidence": confidence,
             "status": status,
-            "diagnostic_status": "VERIFIED",
+            "diagnostic_status": diagnostic_status,
         }
 
     @staticmethod
@@ -800,18 +802,16 @@ class ConsensusVerifier:
         
         Raises ValueError on translation failure — no fabricated fallback.
         """
-        from qwed_new.core.translator import TranslationLayer
-        translator = TranslationLayer()
         try:
+            from qwed_new.core.translator import TranslationLayer
+            translator = TranslationLayer()
             task = translator.translate(query)
         except Exception as exc:
             raise ValueError(f"Query translation failed: {exc}") from exc
 
-        if task.expected_value is None:
-            raise ValueError("Query missing expected value — cannot verify without a known result")
-        if isinstance(task.expected_value, Decimal):
-            return task.expression, task.expected_value
-        return task.expression, Decimal(str(task.expected_value))
+        if task.claimed_answer is None:
+            raise ValueError("Query missing claimed answer — cannot verify without a known result")
+        return task.expression, Decimal(str(task.claimed_answer))
     
     def _generate_verification_code(self, query: str) -> str:
         """Generate Python code for verification."""

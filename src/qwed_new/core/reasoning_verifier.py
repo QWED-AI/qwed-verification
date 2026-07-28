@@ -262,37 +262,35 @@ class ReasoningVerifier:
     def _to_diagnostic_result(
         self, rv: ReasoningValidation, has_provider: bool
     ) -> DiagnosticResult:
-        """Convert internal ReasoningValidation to DiagnosticResult."""
-        if not has_provider:
-            advisory = []
-            if rv.issues:
-                advisory.append(AdvisoryCheck(
-                    name="heuristic_consistency",
-                    constraint_id="reasoning_verifier.heuristic_advisory_only",
-                    details={"issues": rv.issues},
-                ))
-            return DiagnosticResult.unverifiable(
-                "Understanding not verified — no provider path available",
-                {"constraint_id": "reasoning_verifier.no_provider", "advisory_checks": advisory},
-            )
+        """Convert internal ReasoningValidation to DiagnosticResult.
 
-        if rv.is_valid:
-            return DiagnosticResult.verified(
-                "Understanding verified",
-                {"constraint_id": "reasoning_verifier.verified", "alternative_formula": rv.alternative_formula},
-                {"facts": rv.semantic_facts, "reasoning_trace": rv.reasoning_trace},
-            )
-
+        Heuristic validation + LLM reasoning trace is advisory only — never VERIFIED.
+        Only a deterministic proof artifact can produce VERIFIED.
+        """
         advisory = []
         if rv.issues:
             advisory.append(AdvisoryCheck(
-                name="reasoning_issues",
-                constraint_id="reasoning_verifier.advisory_issues",
+                name="heuristic_consistency",
+                constraint_id="reasoning_verifier.heuristic_advisory_only",
                 details={"issues": rv.issues},
             ))
+
+        fields: Dict[str, Any] = {
+            "advisory_checks": advisory,
+            "cached": rv.cached,
+        }
+
+        if not has_provider:
+            fields["constraint_id"] = "reasoning_verifier.no_provider"
+        elif rv.is_valid:
+            fields["constraint_id"] = "reasoning_verifier.advisory_valid"
+            fields["alternative_formula"] = rv.alternative_formula
+        else:
+            fields["constraint_id"] = "reasoning_verifier.inconclusive"
+
         return DiagnosticResult.unverifiable(
-            "Understanding could not be verified",
-            {"constraint_id": "reasoning_verifier.inconclusive", "advisory_checks": advisory},
+            "Understanding could not be deterministically verified — heuristic analysis is advisory only",
+            fields,
         )
     
     # =========================================================================

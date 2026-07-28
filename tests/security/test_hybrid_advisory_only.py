@@ -2,10 +2,10 @@
 Regression tests for Issue #257: Image, Graph, Reasoning, and Consensus
 engines must never return VERIFIED from heuristic/model fallback paths.
 """
-from src.qwed_new.core.image_verifier import ImageVerifier
-from src.qwed_new.core.graph_fact_verifier import GraphFactVerifier
-from src.qwed_new.core.reasoning_verifier import ReasoningVerifier
-from src.qwed_new.core.consensus_verifier import ConsensusVerifier
+from qwed_new.core.image_verifier import ImageVerifier
+from qwed_new.core.graph_fact_verifier import GraphFactVerifier
+from qwed_new.core.reasoning_verifier import ReasoningVerifier
+from qwed_new.core.consensus_verifier import ConsensusVerifier, EngineResult
 
 
 class StubVLMProvider:
@@ -165,6 +165,7 @@ class TestReasoningVerifierAdvisoryOnly:
             StubTask(),
         )
         checks = result.advisory_checks
+        assert len(checks) >= 1
         assert all(c.advisory_only for c in checks)
 
 
@@ -184,15 +185,12 @@ class TestConsensusVerifierAdvisoryOnly:
         assert result.error is not None
 
     def test_parse_math_missing_expected_blocked(self):
-        """Missing expected_value → BLOCKED (not defaulted to 0)."""
-        result = self.verifier._verify_with_math("What is 2+2?")
-        # If translation fails to provide expected_value, should be BLOCKED
+        """Missing claimed_answer → BLOCKED (not defaulted to 0)."""
         engine_result = self.verifier._verify_with_math("What is 2+2?")
         assert engine_result.status == "BLOCKED"
 
     def test_blocked_propagates_through_consensus(self):
         """BLOCKED engine status → consensus status is BLOCKED."""
-        from qwed_new.core.consensus_verifier import EngineResult
         results = [
             EngineResult(
                 engine_name="SymPy", method="math", result=None,
@@ -211,7 +209,6 @@ class TestConsensusVerifierAdvisoryOnly:
 
     def test_all_unverifiable_propagates(self):
         """All UNVERIFIABLE → consensus status UNVERIFIABLE."""
-        from qwed_new.core.consensus_verifier import EngineResult
         results = [
             EngineResult(
                 engine_name="SymPy", method="math", result=None,
@@ -228,8 +225,7 @@ class TestConsensusVerifierAdvisoryOnly:
         assert consensus["diagnostic_status"] == "UNVERIFIABLE"
 
     def test_verified_without_blocked(self):
-        """All VERIFIED → consensus VERIFIED with agreement."""
-        from qwed_new.core.consensus_verifier import EngineResult
+        """All VERIFIED (unanimous) → consensus VERIFIED with agreement."""
         results = [
             EngineResult(
                 engine_name="SymPy", method="math", result=4,

@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from enum import Enum
 import re
 
-from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck, compute_proof_ref
+from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck
 
 
 class VerificationStatus(Enum):
@@ -495,14 +495,14 @@ class GraphFactVerifier:
         if not claim_triples:
             return VerificationStatus.INSUFFICIENT
 
-        exact_matches = sum(1 for m in matches if m.score >= 0.9)
-        good_matches = sum(1 for m in matches if m.score >= 0.5)
+        near_exact = sum(1 for m in matches if m.score >= 0.9)
+        any_support = sum(1 for m in matches if m.score > 0)
 
-        # All triples must have exact or near-exact matches
-        if good_matches == len(claim_triples) and exact_matches > 0:
+        # Every claim triple must have near-exact support for VERIFIED
+        if near_exact == len(claim_triples):
             return VerificationStatus.VERIFIED
 
-        if good_matches > 0:
+        if any_support > 0:
             return VerificationStatus.INSUFFICIENT
 
         return VerificationStatus.NOT_VERIFIED
