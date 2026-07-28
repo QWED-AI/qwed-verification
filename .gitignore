@@ -28,6 +28,7 @@ wheels/
 venv/
 ENV/
 env/
+test_venv/
 
 # IDEs
 .vscode/
@@ -73,6 +74,12 @@ err.log
 coverage.xml
 htmlcov/
 .coverage
+*.py,cover
+
+# Local helper scripts (not part of project)
+check_prs.py
+update_cache.py
+fix_cache.py
 
 # Kubernetes secrets (contain credentials)
 deploy/kubernetes/secret.yaml

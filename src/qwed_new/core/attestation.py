@@ -15,6 +15,7 @@ import hashlib
 import json
 import base64
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -46,7 +47,7 @@ class AttestationStatus(Enum):
 
 
 # Allowlist for key continuity policy values — typos silently degrade auditability
-ALLOWED_KEY_CONTINUITY_POLICIES = {"ephemeral", "persistent"}
+ALLOWED_KEY_CONTINUITY_POLICIES = {"ephemeral"}
 
 
 @dataclass
@@ -122,9 +123,9 @@ class IssuerKeyPair:
     - Every instance records generated_at and key_continuity_policy.
     - A structured log entry is emitted on every new key generation so
       continuity events are auditable.
-    - Default policy is "ephemeral" (in-memory, non-persistent).
-      Set key_continuity_policy="persistent" when external KMS binding is
-      used and the key material is durably stored outside this process.
+    - The only supported policy is "ephemeral" (in-memory, non-persistent).
+      Restarting the process generates a new key; previously issued
+      attestations cannot be verified after restart.
     """
 
     def __init__(
@@ -231,14 +232,19 @@ class AttestationService:
         # Attestation registry (in-memory, should use DB in production)
         self._attestations: Dict[str, Attestation] = {}
 
+        # Thread safety for lazy key initialization
+        self._key_lock: threading.Lock = threading.Lock()
+
     def _ensure_key_pair(self) -> IssuerKeyPair:
-        """Lazily initialize key pair."""
+        """Lazily initialize key pair (thread-safe)."""
         if self._key_pair is None:
-            self._key_pair = IssuerKeyPair(
-                self.issuer_did,
-                self.key_id,
-                key_continuity_policy=self.key_continuity_policy,
-            )
+            with self._key_lock:
+                if self._key_pair is None:
+                    self._key_pair = IssuerKeyPair(
+                        self.issuer_did,
+                        self.key_id,
+                        key_continuity_policy=self.key_continuity_policy,
+                    )
         return self._key_pair
 
     def _hash_content(self, content: str) -> str:
@@ -273,8 +279,6 @@ class AttestationService:
         Raises:
             RuntimeError: if crypto is unavailable or signing fails.
         """
-        key_pair = self._ensure_key_pair()
-
         now = issued_at if issued_at is not None else int(time.time())
         expiry = now + (self.validity_days * 24 * 60 * 60)
         attestation_id = jti if jti is not None else f"att_{uuid.uuid4().hex[:12]}"
@@ -308,6 +312,17 @@ class AttestationService:
             "jti": attestation_id,
             "qwed": qwed_claims,
         }
+
+        # Validate encoded payload fits verify_attestation's 4096-byte limit
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode().rstrip("=")
+        if len(payload_b64) > 4096:
+            raise ValueError(
+                f"Attestation payload too large ({len(payload_b64)} bytes) — "
+                f"must fit within 4096-byte verify-side limit"
+            )
+
+        key_pair = self._ensure_key_pair()
 
         # Build header
         header = {
@@ -367,13 +382,20 @@ class AttestationService:
             # Security: We manually decode the payload to get 'iss' and then
             # perform FULL cryptographic verification with the correct key.
             try:
+                if len(jwt_token) > 8192:
+                    return False, None, "Token too large"
                 _, payload_segment, _ = jwt_token.split('.', 2)
+                if len(payload_segment) > 4096:
+                    return False, None, "Payload segment too large"
                 padding = '=' * (-len(payload_segment) % 4)
+                # qwed-sec: base64 decode of untrusted JWT payload; content is
+                # validated structurally (JSON/dict check) and cryptographically
+                # (signature verification below) before any claim is trusted.
                 payload_data = base64.urlsafe_b64decode(payload_segment + padding)
                 unverified = json.loads(payload_data)
                 if not isinstance(unverified, dict):
-                    raise ValueError("Payload is not a JSON object")
-            except Exception:
+                    return False, None, "Invalid token format"
+            except (IndexError, ValueError, TypeError):
                 return False, None, "Invalid token format"
 
             issuer = unverified.get("iss")

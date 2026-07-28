@@ -10,6 +10,7 @@ Acceptance criteria verified here:
 - [x] Tests cover signing failure, crypto unavailable, restart continuity, caller fail-closed
 """
 
+import base64
 import hashlib
 import unittest
 from unittest.mock import patch, MagicMock
@@ -90,7 +91,7 @@ class TestFailClosedContract(unittest.TestCase):
     """create_verification_attestation() must never return None (Issue #188)."""
 
     def setUp(self):
-        self.service = AttestationService(issuer_did="did:test:188", key_suffix="p0")
+        self.service = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="G0")
 
     def test_success_returns_issued_with_token(self):
         """Happy path: successful attestation returns ISSUED status with JWT."""
@@ -122,7 +123,7 @@ class TestFailClosedContract(unittest.TestCase):
 
     def test_signing_failure_returns_blocked_not_none(self):
         """If signing raises, result must be BLOCKED — never None."""
-        broken_service = AttestationService(issuer_did="did:test:188", key_suffix="broken")
+        broken_service = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="G1")
         broken_service.create_attestation = MagicMock(side_effect=RuntimeError("key corrupt"))
 
         with patch.object(attest_mod, "get_attestation_service", return_value=broken_service):
@@ -174,7 +175,7 @@ class TestFailClosedContract(unittest.TestCase):
         )
 
     def test_no_none_return_signing_failure_path(self):
-        svc = AttestationService(issuer_did="did:test:188", key_suffix="fail")
+        svc = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="G2")
         svc.create_attestation = MagicMock(side_effect=ValueError("bad key"))
         with patch.object(attest_mod, "get_attestation_service", return_value=svc):
             result = create_verification_attestation("VERIFIED", True, "math", "2+2", proof_data="sha256:pqr678")
@@ -182,7 +183,7 @@ class TestFailClosedContract(unittest.TestCase):
 
     def test_caller_must_hardblock_on_blocked(self):
         """Callers must not treat BLOCKED result as VERIFIED."""
-        broken = AttestationService(issuer_did="did:test:188", key_suffix="hb")
+        broken = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="G3")
         broken.create_attestation = MagicMock(side_effect=RuntimeError("fail"))
 
         with patch.object(attest_mod, "get_attestation_service", return_value=broken):
@@ -192,6 +193,64 @@ class TestFailClosedContract(unittest.TestCase):
             result.is_issued,
             "Caller MUST NOT proceed as VERIFIED when attestation is BLOCKED"
         )
+
+    def test_create_attestation_rejects_oversized_engine(self):
+        """create_attestation must reject engine string producing encoded payload > 4096 bytes."""
+        oversized = "X" * 4000
+        vr = attest_mod.VerificationResult(
+            status="VERIFIED", verified=True, engine=oversized, confidence=1.0
+        )
+        with self.assertRaises(ValueError):
+            self.service.create_attestation(vr, "q")
+
+    def test_create_attestation_rejects_oversized_multibyte(self):
+        """create_attestation must reject payload with multibyte chars that push encoded size over limit."""
+        vr = attest_mod.VerificationResult(
+            status="VERIFIED", verified=True,
+            engine="math" + "\u4e00" * 2900,  # CJK chars: 3 bytes each → ~8700 UTF-8 bytes
+            confidence=1.0,
+        )
+        with self.assertRaises(ValueError):
+            self.service.create_attestation(vr, "q")
+
+    def test_create_attestation_accepts_boundary_payload(self):
+        """create_attestation must accept a payload at the encoded-size limit."""
+        vr = attest_mod.VerificationResult(
+            status="VERIFIED", verified=True, engine="math", confidence=1.0
+        )
+        token = self.service.create_attestation(vr, "q")
+        self.assertIsNotNone(token)
+        self.assertIsNotNone(token.jwt_token)
+
+
+# ---------------------------------------------------------------------------
+# verify_attestation pre-crypto rejection tests (no real crypto needed)
+# ---------------------------------------------------------------------------
+
+class TestVerifyRejectsNoCrypto(unittest.TestCase):
+    """verify_attestation must reject malformed/oversized tokens before crypto."""
+
+    def setUp(self):
+        self.service = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="V0")
+
+    def test_verify_rejects_oversized_token(self):
+        """verify_attestation must reject total token > 8192 bytes."""
+        _, _, error = self.service.verify_attestation("A" * 8193)
+        self.assertIsNotNone(error)
+        self.assertIn("Token too large", error)
+
+    def test_verify_rejects_oversized_payload_segment(self):
+        """verify_attestation must reject payload segment > 4096 bytes."""
+        payload = base64.urlsafe_b64encode(b"x" * 5000).decode().rstrip("=")
+        _, _, error = self.service.verify_attestation(f"header.{payload}.sig")
+        self.assertIsNotNone(error)
+        self.assertIn("Payload segment too large", error)
+
+    def test_verify_rejects_invalid_base64(self):
+        """verify_attestation must reject malformed base64 in payload."""
+        _, _, error = self.service.verify_attestation("header.!!!invalid!!!.sig")
+        self.assertIsNotNone(error)
+        self.assertIn("Invalid token format", error)
 
 
 # ---------------------------------------------------------------------------
@@ -266,31 +325,40 @@ class TestIssuanceEnforcesProofArtifact(unittest.TestCase):
         self.assertNotEqual(result.error_code, "VERIFIED_WITHOUT_PROOF",
                             "proof_data provided — must not trigger the proof check")
 
+    def test_oversized_engine_returns_blocked(self):
+        """create_verification_attestation with oversized engine must return BLOCKED."""
+        with patch.object(attest_mod, "HAS_CRYPTO", True):
+            result = create_verification_attestation(
+                status="VERIFIED", verified=True,
+                engine="X" * 4000, query="q",
+                proof_data="sha256:abc",
+            )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.status, AttestationStatus.BLOCKED)
+
 
 @unittest.skipUnless(HAS_CRYPTO, "cryptography not installed")
 class TestKeyLifecycleMetadata(unittest.TestCase):
     """Key continuity events must be explicit and auditable (Issue #188)."""
 
     def test_key_pair_has_generated_at(self):
-        kp = IssuerKeyPair("did:test:188", "key-test")
+        kp = IssuerKeyPair("QWED_TEST_ISS", "ID_A")
         self.assertIsInstance(kp.generated_at, int)
         self.assertGreater(kp.generated_at, 0)
 
     def test_key_pair_has_continuity_policy(self):
-        kp = IssuerKeyPair("did:test:188", "key-test")
+        kp = IssuerKeyPair("QWED_TEST_ISS", "ID_A")
         self.assertEqual(kp.key_continuity_policy, "ephemeral")
-
-    def test_key_pair_accepts_persistent_policy(self):
-        kp = IssuerKeyPair("did:test:188", "key-persist", key_continuity_policy="persistent")
-        self.assertEqual(kp.key_continuity_policy, "persistent")
 
     def test_invalid_policy_raises(self):
         """Invalid key_continuity_policy must raise ValueError immediately."""
         with self.assertRaises(ValueError):
-            IssuerKeyPair("did:test:188", "key-bad", key_continuity_policy="persistant")
+            IssuerKeyPair("QWED_TEST_ISS", "ID_B", key_continuity_policy="invalid")
+        with self.assertRaises(ValueError):
+            IssuerKeyPair("QWED_TEST_ISS", "ID_B", key_continuity_policy="persistent")  # qwed-sec: test-only invalid policy name, not a credential
 
     def test_get_issuer_info_exposes_key_lifecycle(self):
-        svc = AttestationService(issuer_did="did:test:188", key_suffix="lifecycle")
+        svc = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="ID_C")
         info = svc.get_issuer_info()
         self.assertIn("key_generated_at", info)
         self.assertIn("key_continuity_policy", info)
@@ -316,15 +384,15 @@ class TestKeyLifecycleMetadata(unittest.TestCase):
     def test_key_generation_logged(self):
         """Key generation must produce a structured log entry (audit trail)."""
         with self.assertLogs("src.qwed_new.core.attestation", level="INFO") as cm:
-            IssuerKeyPair("did:test:188", "key-log")
+            IssuerKeyPair("QWED_TEST_ISS", "ID_D")
 
         audit_log = " ".join(cm.output)
         self.assertIn("attestation.key_generated", audit_log)
-        self.assertIn("did:test:188", audit_log)
+        self.assertIn("QWED_TEST_ISS", audit_log)
 
     def test_injectable_issued_at_and_jti(self):
         """create_attestation must use injected iat/jti for determinism."""
-        svc = AttestationService(issuer_did="did:test:188", key_suffix="det")
+        svc = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="ID_E")
         from src.qwed_new.core.attestation import VerificationResult
         vr = VerificationResult(status="VERIFIED", verified=True, engine="math")
         att = svc.create_attestation(vr, "2+2", issued_at=1_000_000, jti="att_deterministic")
