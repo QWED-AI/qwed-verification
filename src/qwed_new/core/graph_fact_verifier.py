@@ -455,14 +455,6 @@ class GraphFactVerifier:
             if entity1 in alias_group and entity2 in alias_group:
                 return True
         
-        # Check if words overlap significantly
-        words1 = set(entity1.split())
-        words2 = set(entity2.split())
-        if words1 and words2:
-            overlap = len(words1 & words2) / max(len(words1), len(words2))
-            if overlap >= 0.5:
-                return True
-        
         return False
     
     def _predicate_matches(self, pred1: str, pred2: str) -> bool:

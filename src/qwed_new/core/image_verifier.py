@@ -19,6 +19,8 @@ import struct
 
 from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck
 
+_INCONCLUSIVE_MSG = "Image verification inconclusive"
+
 
 @dataclass
 class ImageAnalysisResult:
@@ -113,86 +115,29 @@ class ImageVerifier:
         """
         if not image_bytes or not claim:
             return DiagnosticResult.unverifiable(
-                "Image verification inconclusive",
+                _INCONCLUSIVE_MSG,
                 {"constraint_id": "image_verifier.empty_input"}
             )
 
-        # Security: Prevent ReDoS attacks on regexes
         if len(claim) > 500:
             return DiagnosticResult.unverifiable(
-                "Image verification inconclusive",
+                _INCONCLUSIVE_MSG,
                 {"constraint_id": "image_verifier.claim_too_long"}
             )
 
-        methods_used = []
-        analysis = {}
-
-        # Step 1: Extract image metadata
+        methods_used = ["metadata_extraction"]
         metadata = self._extract_metadata(image_bytes)
-        analysis["metadata"] = {
-            "width": metadata.width,
-            "height": metadata.height,
-            "format": metadata.format
+        analysis = {
+            "metadata": {"width": metadata.width, "height": metadata.height, "format": metadata.format},
+            "claim_type": self._classify_claim(claim),
         }
-        methods_used.append("metadata_extraction")
 
-        # Step 2: Analyze claim type
-        claim_type = self._classify_claim(claim)
-        analysis["claim_type"] = claim_type
-
-        # Step 3: Apply appropriate verification method
-        if claim_type == "numeric":
-            result = self._verify_numeric_claim(image_bytes, claim, metadata)
-            methods_used.append("numeric_extraction")
-
-        elif claim_type == "color":
-            result = self._verify_color_claim(image_bytes, claim, metadata)
-            methods_used.append("color_analysis")
-
-        elif claim_type == "size":
-            result = self._verify_size_claim(claim, metadata)
-            methods_used.append("size_verification")
-
-        elif claim_type == "text":
-            result = self._verify_text_claim(image_bytes, claim, metadata)
-            methods_used.append("text_extraction")
-
-        else:
-            result = ImageVerificationResult(
-                verdict="VLM_REQUIRED",
-                confidence=0.0,
-                reasoning="Claim requires visual understanding"
-            )
-
-        # Step 4: Handle VLM-required path — advisory only, never VERIFIED
+        result = self._run_deterministic_verification(image_bytes, claim, metadata, methods_used, analysis["claim_type"])
         if result.verdict == "VLM_REQUIRED":
-            advisory_checks = []
-            if self.use_vlm_fallback and self.vlm_provider:
-                methods_used.append("vlm_analysis")
-                vlm_result = self._vlm_fallback(image_bytes, claim)
-                if vlm_result:
-                    advisory_checks.append(AdvisoryCheck(
-                        name="vlm_analysis",
-                        constraint_id="image_verifier.vlm_advisory_only",
-                        details={
-                            "vlm_verdict": vlm_result.get("verdict", "INCONCLUSIVE"),
-                            "vlm_confidence": vlm_result.get("confidence", 0.5),
-                            "vlm_reasoning": vlm_result.get("reasoning", ""),
-                        }
-                    ))
-            return DiagnosticResult.unverifiable(
-                "Image verification inconclusive — visual understanding requires model interpretation which is advisory only",
-                {
-                    "constraint_id": "image_verifier.vlm_advisory_only",
-                    "advisory_checks": advisory_checks,
-                    "methods_used": methods_used,
-                    "analysis": analysis,
-                }
-            )
+            return self._build_vlm_result(image_bytes, claim, methods_used, analysis)
 
-        # Step 5: Deterministic paths
         if result.verdict == "SUPPORTED":
-            evidence = {"metadata": analysis.get("metadata", {}), "reasoning": result.reasoning}
+            evidence = {"metadata": analysis["metadata"], "reasoning": result.reasoning}
             return DiagnosticResult.verified(
                 "Image claim verified",
                 {"constraint_id": "image_verifier.deterministic", "methods_used": methods_used, "analysis": analysis},
@@ -211,8 +156,63 @@ class ImageVerifier:
             )
 
         return DiagnosticResult.unverifiable(
-            "Image verification inconclusive",
+            _INCONCLUSIVE_MSG,
             {"constraint_id": "image_verifier.inconclusive", "methods_used": methods_used, "analysis": analysis}
+        )
+
+    def _run_deterministic_verification(
+        self,
+        image_bytes: bytes,
+        claim: str,
+        metadata: ImageAnalysisResult,
+        methods_used: List[str],
+        claim_type: str,
+    ) -> ImageVerificationResult:
+        if claim_type == "numeric":
+            methods_used.append("numeric_extraction")
+            return self._verify_numeric_claim(image_bytes, claim, metadata)
+        if claim_type == "color":
+            methods_used.append("color_analysis")
+            return self._verify_color_claim(image_bytes, claim, metadata)
+        if claim_type == "size":
+            methods_used.append("size_verification")
+            return self._verify_size_claim(claim, metadata)
+        if claim_type == "text":
+            methods_used.append("text_extraction")
+            return self._verify_text_claim(image_bytes, claim, metadata)
+        return ImageVerificationResult(
+            verdict="VLM_REQUIRED", confidence=0.0, reasoning="Claim requires visual understanding"
+        )
+
+    def _build_vlm_result(
+        self,
+        image_bytes: bytes,
+        claim: str,
+        methods_used: List[str],
+        analysis: Dict[str, Any],
+    ) -> DiagnosticResult:
+        advisory_checks = []
+        if self.use_vlm_fallback and self.vlm_provider:
+            methods_used.append("vlm_analysis")
+            vlm_result = self._vlm_fallback(image_bytes, claim)
+            if vlm_result:
+                advisory_checks.append(AdvisoryCheck(
+                    name="vlm_analysis",
+                    constraint_id="image_verifier.vlm_advisory_only",
+                    details={
+                        "vlm_verdict": vlm_result.get("verdict", "INCONCLUSIVE"),
+                        "vlm_confidence": vlm_result.get("confidence", 0.5),
+                        "vlm_reasoning": vlm_result.get("reasoning", ""),
+                    }
+                ))
+        return DiagnosticResult.unverifiable(
+            "Image verification inconclusive — visual understanding requires model interpretation which is advisory only",
+            {
+                "constraint_id": "image_verifier.vlm_advisory_only",
+                "advisory_checks": advisory_checks,
+                "methods_used": methods_used,
+                "analysis": analysis,
+            }
         )
     
     # =========================================================================
