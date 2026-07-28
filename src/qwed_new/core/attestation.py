@@ -378,7 +378,7 @@ class AttestationService:
             try:
                 _, payload_segment, _ = jwt_token.split('.', 2)
                 if len(payload_segment) > 4096:
-                    raise ValueError("Payload segment too large")
+                    return False, None, "Payload segment too large"
                 padding = '=' * (-len(payload_segment) % 4)
                 # qwed-sec: base64 decode of untrusted JWT payload; content is
                 # validated structurally (JSON/dict check) and cryptographically
@@ -386,8 +386,8 @@ class AttestationService:
                 payload_data = base64.urlsafe_b64decode(payload_segment + padding)
                 unverified = json.loads(payload_data)
                 if not isinstance(unverified, dict):
-                    raise ValueError("Payload is not a JSON object")
-            except Exception:
+                    return False, None, "Payload is not a JSON object"
+            except (IndexError, ValueError, json.JSONDecodeError, TypeError):
                 return False, None, "Invalid token format"
 
             issuer = unverified.get("iss")

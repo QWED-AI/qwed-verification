@@ -1,6 +1,4 @@
-﻿import sys
-import os
-import re
+﻿import os
 
 file_path = os.path.join("src", "qwed_new", "core", "cache.py")
 with open(file_path, "r", encoding="utf-8") as f:

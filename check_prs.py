@@ -1,4 +1,4 @@
-import json, sys, subprocess, os
+import json, subprocess, os
 
 os.chdir(r"C:\Users\rahul\.gemini\antigravity\playground\vector-meteoroid\qwed-a2a")
 
