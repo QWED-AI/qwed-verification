@@ -222,20 +222,31 @@ class TestFailClosedContract(unittest.TestCase):
         self.assertIsNotNone(token)
         self.assertIsNotNone(token.jwt_token)
 
-    def test_verify_attestation_rejects_oversized_token(self):
+
+# ---------------------------------------------------------------------------
+# verify_attestation pre-crypto rejection tests (no real crypto needed)
+# ---------------------------------------------------------------------------
+
+class TestVerifyRejectsNoCrypto(unittest.TestCase):
+    """verify_attestation must reject malformed/oversized tokens before crypto."""
+
+    def setUp(self):
+        self.service = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="V0")
+
+    def test_verify_rejects_oversized_token(self):
         """verify_attestation must reject total token > 8192 bytes."""
         _, _, error = self.service.verify_attestation("A" * 8193)
         self.assertIsNotNone(error)
         self.assertIn("Token too large", error)
 
-    def test_verify_attestation_rejects_oversized_payload_segment(self):
+    def test_verify_rejects_oversized_payload_segment(self):
         """verify_attestation must reject payload segment > 4096 bytes."""
         payload = base64.urlsafe_b64encode(b"x" * 5000).decode().rstrip("=")
         _, _, error = self.service.verify_attestation(f"header.{payload}.sig")
         self.assertIsNotNone(error)
         self.assertIn("Payload segment too large", error)
 
-    def test_verify_attestation_rejects_invalid_base64(self):
+    def test_verify_rejects_invalid_base64(self):
         """verify_attestation must reject malformed base64 in payload."""
         _, _, error = self.service.verify_attestation("header.!!!invalid!!!.sig")
         self.assertIsNotNone(error)

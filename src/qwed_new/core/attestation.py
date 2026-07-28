@@ -395,7 +395,7 @@ class AttestationService:
                 unverified = json.loads(payload_data)
                 if not isinstance(unverified, dict):
                     return False, None, "Invalid token format"
-            except (IndexError, ValueError, json.JSONDecodeError, TypeError):
+            except (IndexError, ValueError, TypeError):
                 return False, None, "Invalid token format"
 
             issuer = unverified.get("iss")
