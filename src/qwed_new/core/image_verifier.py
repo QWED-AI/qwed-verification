@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 import re
 import struct
 
+from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus, AdvisoryCheck, compute_proof_ref
+
 
 @dataclass
 class ImageAnalysisResult:
@@ -90,7 +92,7 @@ class ImageVerifier:
         image_bytes: bytes, 
         claim: str,
         context: Optional[str] = None
-    ) -> Dict[str, Any]:
+    ) -> DiagnosticResult:
         """
         Verify a claim against an image.
         
@@ -100,38 +102,31 @@ class ImageVerifier:
             context: Optional additional context.
             
         Returns:
-            Dict containing verdict, confidence, reasoning, and analysis.
+            DiagnosticResult with VERIFIED for deterministic paths,
+            UNVERIFIABLE for VLM/advisory paths, BLOCKED for errors.
 
         Example:
             >>> with open("image.jpg", "rb") as f:
             ...     img_data = f.read()
             >>> result = verifier.verify_image(img_data, "The image is 800x600")
-            >>> print(result["verdict"])
+            >>> print(result.status)
         """
         if not image_bytes or not claim:
-            return {
-                "verdict": "INCONCLUSIVE",
-                "confidence": 0.0,
-                "reasoning": "Empty image or claim provided",
-                "analysis": {},
-                "methods_used": [],
-                "engine": "ImageVerifier"
-            }
-            
+            return DiagnosticResult.unverifiable(
+                "Image verification inconclusive",
+                {"constraint_id": "image_verifier.empty_input"}
+            )
+
         # Security: Prevent ReDoS attacks on regexes
         if len(claim) > 500:
-            return {
-                "verdict": "INCONCLUSIVE",
-                "confidence": 0.0,
-                "reasoning": "Claim text too long (max 500 chars) - Security ReDoS protection",
-                "analysis": {},
-                "methods_used": [],
-                "engine": "ImageVerifier"
-            }
-        
+            return DiagnosticResult.unverifiable(
+                "Image verification inconclusive",
+                {"constraint_id": "image_verifier.claim_too_long"}
+            )
+
         methods_used = []
         analysis = {}
-        
+
         # Step 1: Extract image metadata
         metadata = self._extract_metadata(image_bytes)
         analysis["metadata"] = {
@@ -140,66 +135,82 @@ class ImageVerifier:
             "format": metadata.format
         }
         methods_used.append("metadata_extraction")
-        
+
         # Step 2: Analyze claim type
         claim_type = self._classify_claim(claim)
         analysis["claim_type"] = claim_type
-        
+
         # Step 3: Apply appropriate verification method
         if claim_type == "numeric":
-            # Try to extract numbers from image (basic pattern matching)
             result = self._verify_numeric_claim(image_bytes, claim, metadata)
             methods_used.append("numeric_extraction")
-            
+
         elif claim_type == "color":
-            # Verify color-based claims
             result = self._verify_color_claim(image_bytes, claim, metadata)
             methods_used.append("color_analysis")
-            
+
         elif claim_type == "size":
-            # Verify size/dimension claims
             result = self._verify_size_claim(claim, metadata)
             methods_used.append("size_verification")
-            
+
         elif claim_type == "text":
-            # Try to find text in image
             result = self._verify_text_claim(image_bytes, claim, metadata)
             methods_used.append("text_extraction")
-            
+
         else:
-            # Default: check if we need VLM
             result = ImageVerificationResult(
                 verdict="VLM_REQUIRED",
                 confidence=0.0,
                 reasoning="Claim requires visual understanding"
             )
-        
-        # Step 4: If VLM required and available, use it
-        if result.verdict == "VLM_REQUIRED" and self.use_vlm_fallback and self.vlm_provider:
-            methods_used.append("vlm_analysis")
-            vlm_result = self._vlm_fallback(image_bytes, claim)
-            if vlm_result:
-                result = ImageVerificationResult(
-                    verdict=vlm_result.get("verdict", "INCONCLUSIVE"),
-                    confidence=vlm_result.get("confidence", 0.5) * 0.8,  # Discount VLM confidence
-                    reasoning=vlm_result.get("reasoning", "VLM analysis")
-                )
-        elif result.verdict == "VLM_REQUIRED":
-            result = ImageVerificationResult(
-                verdict="INCONCLUSIVE",
-                confidence=0.3,
-                reasoning="Claim requires visual understanding but VLM not available"
+
+        # Step 4: Handle VLM-required path — advisory only, never VERIFIED
+        if result.verdict == "VLM_REQUIRED":
+            advisory_checks = []
+            if self.use_vlm_fallback and self.vlm_provider:
+                methods_used.append("vlm_analysis")
+                vlm_result = self._vlm_fallback(image_bytes, claim)
+                if vlm_result:
+                    advisory_checks.append(AdvisoryCheck(
+                        name="vlm_analysis",
+                        constraint_id="image_verifier.vlm_advisory_only",
+                        details={
+                            "vlm_verdict": vlm_result.get("verdict", "INCONCLUSIVE"),
+                            "vlm_confidence": vlm_result.get("confidence", 0.5),
+                            "vlm_reasoning": vlm_result.get("reasoning", ""),
+                        }
+                    ))
+            return DiagnosticResult.unverifiable(
+                "Image verification inconclusive — visual understanding requires model interpretation which is advisory only",
+                {
+                    "constraint_id": "image_verifier.vlm_advisory_only",
+                    "advisory_checks": advisory_checks,
+                    "methods_used": methods_used,
+                    "analysis": analysis,
+                }
             )
-        
-        return {
-            "verdict": result.verdict,
-            "confidence": round(result.confidence, 3),
-            "reasoning": result.reasoning,
-            "analysis": analysis,
-            "methods_used": methods_used,
-            "claim": claim,
-            "engine": "ImageVerifier"
-        }
+
+        # Step 5: Deterministic paths
+        if result.verdict == "SUPPORTED":
+            evidence = {"metadata": analysis.get("metadata", {}), "reasoning": result.reasoning}
+            return DiagnosticResult.verified(
+                "Image claim verified",
+                {"constraint_id": "image_verifier.deterministic", "methods_used": methods_used, "analysis": analysis},
+                evidence,
+            )
+
+        if result.verdict == "REFUTED":
+            evidence = {"metadata": analysis.get("metadata", {}), "reasoning": result.reasoning}
+            return DiagnosticResult.verified(
+                "Image claim refuted",
+                {"constraint_id": "image_verifier.deterministic", "methods_used": methods_used, "analysis": analysis, "refuted": True},
+                evidence,
+            )
+
+        return DiagnosticResult.unverifiable(
+            "Image verification inconclusive",
+            {"constraint_id": "image_verifier.inconclusive", "methods_used": methods_used, "analysis": analysis}
+        )
     
     # =========================================================================
     # Metadata Extraction
@@ -524,29 +535,26 @@ class ImageVerifier:
 
         Example:
             >>> result = verifier.verify_batch(img_data, ["Claim 1", "Claim 2"])
-            >>> print(result["summary"]["supported"])
+            >>> print(result["summary"]["verified"])
         """
         results = []
-        
+
         for claim in claims:
             result = self.verify_image(image_bytes, claim)
             results.append({
                 "claim": claim,
-                **result
+                **result.to_dict(),
             })
-        
-        # Summary
-        verdicts = [r["verdict"] for r in results]
-        
+
+        statuses = [r["status"] for r in results]
+
         return {
             "results": results,
             "summary": {
                 "total": len(claims),
-                "supported": verdicts.count("SUPPORTED"),
-                "refuted": verdicts.count("REFUTED"),
-                "inconclusive": verdicts.count("INCONCLUSIVE"),
-                "vlm_required": verdicts.count("VLM_REQUIRED"),
-                "average_confidence": sum(r["confidence"] for r in results) / len(results) if results else 0
+                "verified": statuses.count("VERIFIED"),
+                "unverifiable": statuses.count("UNVERIFIABLE"),
+                "blocked": statuses.count("BLOCKED"),
             }
         }
 
@@ -582,7 +590,7 @@ class MultiVLMVerifier:
         image_bytes: bytes, 
         claim: str,
         min_agreement: int = 2
-    ) -> Dict[str, Any]:
+    ) -> DiagnosticResult:
         """
         Verify claim using multiple VLMs and calculate consensus.
         
@@ -592,66 +600,50 @@ class MultiVLMVerifier:
             min_agreement: Minimum number of VLMs that must agree.
 
         Returns:
-            Dict containing consensus verdict and details.
-
-        Example:
-            >>> result = verifier.verify_with_consensus(img_data, "There is a cat", min_agreement=2)
-            >>> print(result["verdict"])
+            DiagnosticResult — UNVERIFIABLE with VLM advisory checks, never VERIFIED from VLM alone.
         """
         # First try deterministic methods
         base_result = self.base_verifier.verify_image(image_bytes, claim)
-        
-        if base_result["verdict"] in ["SUPPORTED", "REFUTED"]:
-            # Deterministic method succeeded
+
+        if base_result.is_verified:
             return base_result
-        
-        # Need VLM consensus
+
+        # Need VLM consensus — advisory only
         vlm_results = []
-        
+
         for provider in self.providers:
             try:
                 result = provider.verify_image(image_bytes, claim)
                 vlm_results.append(result)
             except Exception:
-                # A single provider failure should not block multi-VLM consensus.
                 pass
-        
-        if len(vlm_results) < min_agreement:
-            return {
-                "verdict": "INCONCLUSIVE",
-                "confidence": 0.3,
-                "reasoning": f"Only {len(vlm_results)} VLMs responded, need {min_agreement}",
-                "vlm_count": len(vlm_results)
+
+        advisory_checks = []
+        if len(vlm_results) >= min_agreement:
+            from collections import Counter
+            verdicts = [r.get("verdict", "UNKNOWN") for r in vlm_results]
+            verdict_counts = Counter(verdicts)
+            most_common = verdict_counts.most_common(1)[0]
+            consensus_verdict = most_common[0]
+            agreement_count = most_common[1]
+
+            advisory_checks.append(AdvisoryCheck(
+                name="multi_vlm_consensus",
+                constraint_id="multi_vlm_verifier.vlm_advisory_only",
+                details={
+                    "consensus_verdict": consensus_verdict,
+                    "agreement_count": agreement_count,
+                    "total_vlms": len(vlm_results),
+                    "min_agreement": min_agreement,
+                    "vlm_results": vlm_results,
+                }
+            ))
+
+        return DiagnosticResult.unverifiable(
+            "Image verification inconclusive — VLM consensus is advisory only",
+            {
+                "constraint_id": "multi_vlm_verifier.vlm_advisory_only",
+                "advisory_checks": advisory_checks,
+                "vlm_count": len(vlm_results),
             }
-        
-        # Calculate consensus
-        verdicts = [r.get("verdict", "UNKNOWN") for r in vlm_results]
-        from collections import Counter
-        verdict_counts = Counter(verdicts)
-        
-        most_common = verdict_counts.most_common(1)[0]
-        consensus_verdict = most_common[0]
-        agreement_count = most_common[1]
-        
-        if agreement_count >= min_agreement:
-            # Consensus reached
-            avg_confidence = sum(
-                r.get("confidence", 0.5) for r in vlm_results 
-                if r.get("verdict") == consensus_verdict
-            ) / agreement_count
-            
-            return {
-                "verdict": consensus_verdict,
-                "confidence": round(avg_confidence * 0.9, 3),  # Slight discount
-                "reasoning": f"{agreement_count}/{len(vlm_results)} VLMs agree",
-                "vlm_results": vlm_results,
-                "agreement_count": agreement_count
-            }
-        else:
-            return {
-                "verdict": "INCONCLUSIVE",
-                "confidence": 0.4,
-                "reasoning": "VLMs did not reach consensus",
-                "vlm_results": vlm_results,
-                "agreement_count": agreement_count
-            }
+        )
