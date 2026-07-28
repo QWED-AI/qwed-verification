@@ -90,7 +90,7 @@ class TestFailClosedContract(unittest.TestCase):
     """create_verification_attestation() must never return None (Issue #188)."""
 
     def setUp(self):
-        self.service = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="p0")
+        self.service = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="G0")
 
     def test_success_returns_issued_with_token(self):
         """Happy path: successful attestation returns ISSUED status with JWT."""
@@ -122,7 +122,7 @@ class TestFailClosedContract(unittest.TestCase):
 
     def test_signing_failure_returns_blocked_not_none(self):
         """If signing raises, result must be BLOCKED — never None."""
-        broken_service = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="broken")
+        broken_service = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="G1")
         broken_service.create_attestation = MagicMock(side_effect=RuntimeError("key corrupt"))
 
         with patch.object(attest_mod, "get_attestation_service", return_value=broken_service):
@@ -174,7 +174,7 @@ class TestFailClosedContract(unittest.TestCase):
         )
 
     def test_no_none_return_signing_failure_path(self):
-        svc = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="fail")
+        svc = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="G2")
         svc.create_attestation = MagicMock(side_effect=ValueError("bad key"))
         with patch.object(attest_mod, "get_attestation_service", return_value=svc):
             result = create_verification_attestation("VERIFIED", True, "math", "2+2", proof_data="sha256:pqr678")
@@ -182,7 +182,7 @@ class TestFailClosedContract(unittest.TestCase):
 
     def test_caller_must_hardblock_on_blocked(self):
         """Callers must not treat BLOCKED result as VERIFIED."""
-        broken = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="hb")
+        broken = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="G3")
         broken.create_attestation = MagicMock(side_effect=RuntimeError("fail"))
 
         with patch.object(attest_mod, "get_attestation_service", return_value=broken):
@@ -272,25 +272,21 @@ class TestKeyLifecycleMetadata(unittest.TestCase):
     """Key continuity events must be explicit and auditable (Issue #188)."""
 
     def test_key_pair_has_generated_at(self):
-        kp = IssuerKeyPair("QWED_TEST_ISS", "key-test")
+        kp = IssuerKeyPair("QWED_TEST_ISS", "ID_A")
         self.assertIsInstance(kp.generated_at, int)
         self.assertGreater(kp.generated_at, 0)
 
     def test_key_pair_has_continuity_policy(self):
-        kp = IssuerKeyPair("QWED_TEST_ISS", "key-test")
+        kp = IssuerKeyPair("QWED_TEST_ISS", "ID_A")
         self.assertEqual(kp.key_continuity_policy, "ephemeral")
-
-    def test_key_pair_accepts_persistent_policy(self):
-        kp = IssuerKeyPair("QWED_TEST_ISS", "key-persist", key_continuity_policy="persistent")
-        self.assertEqual(kp.key_continuity_policy, "persistent")
 
     def test_invalid_policy_raises(self):
         """Invalid key_continuity_policy must raise ValueError immediately."""
         with self.assertRaises(ValueError):
-            IssuerKeyPair("QWED_TEST_ISS", "key-bad", key_continuity_policy="persistant")
+            IssuerKeyPair("QWED_TEST_ISS", "ID_B", key_continuity_policy="invalid")
 
     def test_get_issuer_info_exposes_key_lifecycle(self):
-        svc = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="lifecycle")
+        svc = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="ID_C")
         info = svc.get_issuer_info()
         self.assertIn("key_generated_at", info)
         self.assertIn("key_continuity_policy", info)
@@ -316,7 +312,7 @@ class TestKeyLifecycleMetadata(unittest.TestCase):
     def test_key_generation_logged(self):
         """Key generation must produce a structured log entry (audit trail)."""
         with self.assertLogs("src.qwed_new.core.attestation", level="INFO") as cm:
-            IssuerKeyPair("QWED_TEST_ISS", "key-log")
+            IssuerKeyPair("QWED_TEST_ISS", "ID_D")
 
         audit_log = " ".join(cm.output)
         self.assertIn("attestation.key_generated", audit_log)
@@ -324,7 +320,7 @@ class TestKeyLifecycleMetadata(unittest.TestCase):
 
     def test_injectable_issued_at_and_jti(self):
         """create_attestation must use injected iat/jti for determinism."""
-        svc = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="det")
+        svc = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="ID_E")
         from src.qwed_new.core.attestation import VerificationResult
         vr = VerificationResult(status="VERIFIED", verified=True, engine="math")
         att = svc.create_attestation(vr, "2+2", issued_at=1_000_000, jti="att_deterministic")

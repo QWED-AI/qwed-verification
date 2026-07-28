@@ -46,7 +46,7 @@ class AttestationStatus(Enum):
 
 
 # Allowlist for key continuity policy values — typos silently degrade auditability
-ALLOWED_KEY_CONTINUITY_POLICIES = {"ephemeral", "persistent"}
+ALLOWED_KEY_CONTINUITY_POLICIES = {"ephemeral"}
 
 
 @dataclass
@@ -122,9 +122,9 @@ class IssuerKeyPair:
     - Every instance records generated_at and key_continuity_policy.
     - A structured log entry is emitted on every new key generation so
       continuity events are auditable.
-    - Default policy is "ephemeral" (in-memory, non-persistent).
-      Set key_continuity_policy to "persistent" when external KMS binding is
-      used and the key material is durably stored outside this process.
+    - The only supported policy is "ephemeral" (in-memory, non-persistent).
+      Restarting the process generates a new key; previously issued
+      attestations cannot be verified after restart.
     """
 
     def __init__(
@@ -274,6 +274,11 @@ class AttestationService:
             RuntimeError: if crypto is unavailable or signing fails.
         """
         key_pair = self._ensure_key_pair()
+
+        # Reject oversized claims — must fit within verify_attestation's
+        # 4096-byte payload segment limit to ensure round-trip verifiability.
+        if len(original_query) > 4096 or len(verification_result.engine) > 4096:
+            raise ValueError("Claim too large — must fit within 4096-byte payload limit")
 
         now = issued_at if issued_at is not None else int(time.time())
         expiry = now + (self.validity_days * 24 * 60 * 60)
