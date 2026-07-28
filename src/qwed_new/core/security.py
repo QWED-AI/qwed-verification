@@ -42,9 +42,6 @@ class SecurityGateway:
     """
     
     def __init__(self):
-        # Math keywords whitelist (don't flag as malicious)
-        self.math_whitelist = ['sqrt', 'log', 'ln', 'exp', 'sin', 'cos', 'tan', 'abs', 'max', 'min']
-        
         # Heuristic patterns for Prompt Injection
         # These are common "jailbreak" phrases.
         self.injection_patterns = [
@@ -78,17 +75,15 @@ class SecurityGateway:
         if len(prompt) > 10000:
             return False, "Input too long (max 10000 chars)"
 
-        # 2. Check if query contains whitelisted math terms (bypass checks)
-        prompt_lower = prompt.lower()
-        if any(math_term in prompt_lower for math_term in self.math_whitelist):
-            # Still check length but skip pattern matching
-            return True, None
+        # 2. Normalize whitespace — collapse tabs, newlines, repeated spaces
+        # into single spaces so whitespace-obfuscated injections match patterns.
+        normalized = re.sub(r'\s+', ' ', prompt).strip()
 
-        # 3. Heuristic Check
+        # 3. Heuristic Check — runs for ALL inputs (no whitelist bypass)
         for pattern in self.injection_patterns:
-            if re.search(pattern, prompt, re.IGNORECASE):
+            if re.search(pattern, normalized, re.IGNORECASE):
                 return False, f"Potential Prompt Injection detected: '{pattern}'"
-        
+
         return True, None
 
     def redact_pii(self, text: str) -> str:
