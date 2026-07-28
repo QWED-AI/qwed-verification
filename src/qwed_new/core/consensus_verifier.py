@@ -22,7 +22,7 @@ import threading
 
 logger = logging.getLogger(__name__)
 SECURE_EXECUTION_REQUIRED = "SECURE_EXECUTION_REQUIRED"
-_NONE_CONSENSUS_KEY = "__QWED_NONE__"
+_NONE_CONSENSUS_KEY = "<NONE>"
 
 
 class VerificationMode(str, Enum):
