@@ -467,13 +467,14 @@ class TestFactVerifierAdvisoryOnly:
         assert result.is_verified
         assert result.proof_ref is not None
 
-    def test_refuted_verified(self):
-        """REFUTED (negation conflict) → VERIFIED with proof_ref."""
+    def test_refuted_blocked(self):
+        """REFUTED (negation conflict) → BLOCKED."""
         result = self.verifier.verify_fact(
             "The policy covers water damage",
             "The policy does not cover water damage"
         )
-        assert result.is_verified
+        assert not result.is_verified
+        assert result.status.value == "BLOCKED"
         assert result.developer_fields["deterministic_verdict"] == "REFUTED"
 
     def test_neutral_unverifiable(self):

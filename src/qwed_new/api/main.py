@@ -371,13 +371,13 @@ async def verify_fact(
             organization_id=tenant.organization_id,
             query=claim,
             result=str(result),
-            is_verified=(result.get("verdict") == "SUPPORTED"),
+            is_verified=result.is_verified,
             domain="FACT"
         )
         session.add(log)
         session.commit()
         
-        return result
+        return result.to_dict()
         
     except Exception as e:
         logger.error(f"Fact verification error: {redact_pii(str(e))}", exc_info=False)

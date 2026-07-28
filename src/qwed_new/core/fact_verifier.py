@@ -135,47 +135,53 @@ class FactVerifier:
         scores = {}
         advisory_checks = []
 
-        # Step 1: Segment context into sentences
-        sentences = self._segment_sentences(context)
+        try:
+            # Step 1: Segment context into sentences
+            sentences = self._segment_sentences(context)
 
-        # Step 2: Find relevant sentences (citations)
-        citations = self._find_relevant_sentences(claim, sentences)
+            # Step 2: Find relevant sentences (citations)
+            citations = self._find_relevant_sentences(claim, sentences)
 
-        # Step 3: Semantic similarity scoring
-        semantic_score = self._calculate_semantic_similarity(claim, context)
-        scores["semantic_similarity"] = semantic_score
-        methods_used.append({"name": "semantic_similarity", "advisory_only": False})
+            # Step 3: Semantic similarity scoring
+            semantic_score = self._calculate_semantic_similarity(claim, context)
+            scores["semantic_similarity"] = semantic_score
+            methods_used.append({"name": "semantic_similarity", "advisory_only": False})
 
-        # Step 4: Keyword overlap analysis
-        keyword_score, keyword_details = self._analyze_keyword_overlap(claim, context)
-        scores["keyword_overlap"] = keyword_score
-        methods_used.append({"name": "keyword_overlap", "advisory_only": False})
+            # Step 4: Keyword overlap analysis
+            keyword_score, keyword_details = self._analyze_keyword_overlap(claim, context)
+            scores["keyword_overlap"] = keyword_score
+            methods_used.append({"name": "keyword_overlap", "advisory_only": False})
 
-        # Step 5: Entity matching (numbers, dates, names)
-        entity_match, entity_details = self._match_entities(claim, context)
-        scores["entity_match"] = entity_match
-        methods_used.append({"name": "entity_matching", "advisory_only": False})
+            # Step 5: Entity matching (numbers, dates, names)
+            entity_match, entity_details = self._match_entities(claim, context)
+            scores["entity_match"] = entity_match
+            methods_used.append({"name": "entity_matching", "advisory_only": False})
 
-        # Step 6: Negation detection
-        has_negation, negation_details = self._detect_negation_conflict(claim, citations)
-        scores["negation_conflict"] = 1.0 if has_negation else 0.0
-        methods_used.append({"name": "negation_detection", "advisory_only": False})
+            # Step 6: Negation detection
+            has_negation, negation_details = self._detect_negation_conflict(claim, citations)
+            scores["negation_conflict"] = 1.0 if has_negation else 0.0
+            methods_used.append({"name": "negation_detection", "advisory_only": False})
 
-        # Step 7: Calculate deterministic verdict
-        verdict, confidence, reasoning = self._calculate_verdict(
-            semantic_score=semantic_score,
-            keyword_score=keyword_score,
-            entity_match=entity_match,
-            has_negation=has_negation,
-            citations=citations,
-            keyword_details=keyword_details,
-            entity_details=entity_details,
-            negation_details=negation_details
-        )
+            # Step 7: Calculate deterministic verdict
+            verdict, confidence, reasoning = self._calculate_verdict(
+                semantic_score=semantic_score,
+                keyword_score=keyword_score,
+                entity_match=entity_match,
+                has_negation=has_negation,
+                citations=citations,
+                keyword_details=keyword_details,
+                entity_details=entity_details,
+                negation_details=negation_details
+            )
+        except Exception as exc:
+            return DiagnosticResult.blocked(
+                "Fact verification pipeline failed",
+                {"constraint_id": "fact_verifier.execution_error", "error": str(exc)},
+            )
 
-        # Step 8: LLM fallback is advisory-only (fixes #133)
+        # Step 8: LLM fallback is advisory-only (fixes #133), confidence-gated
         llm_advisory = None
-        if self.use_llm_fallback and provider:
+        if confidence < min_confidence and self.use_llm_fallback and provider:
             methods_used.append({"name": "llm_fallback", "advisory_only": True})
             llm_result = self._llm_fallback(claim, context, provider)
             if llm_result:
@@ -220,11 +226,9 @@ class FactVerifier:
 
         if verdict == "REFUTED":
             developer_fields["constraint_id"] = "fact_verifier.deterministic_refuted"
-            evidence = {"citations": developer_fields["citations"], "reasoning": reasoning}
-            return DiagnosticResult.verified(
-                "Fact claim deterministically refuted — negation conflict detected",
+            return DiagnosticResult.blocked(
+                "Fact claim refuted by deterministic analysis — negation conflict detected",
                 developer_fields,
-                evidence,
             )
 
         developer_fields["constraint_id"] = "fact_verifier.inconclusive"

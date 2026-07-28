@@ -260,10 +260,11 @@ class BatchVerificationService:
         elif item.verification_type == VerificationType.FACT:
             from qwed_new.core.fact_verifier import FactVerifier
             verifier = FactVerifier()
-            return verifier.verify_fact(
+            result = verifier.verify_fact(
                 item.query,
                 item.params.get("context", "")
             )
+            return result.to_dict()
         
         elif item.verification_type == VerificationType.SQL:
             from qwed_new.core.sql_verifier import SQLVerifier
