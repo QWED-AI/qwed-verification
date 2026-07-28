@@ -22,7 +22,7 @@ import threading
 
 logger = logging.getLogger(__name__)
 SECURE_EXECUTION_REQUIRED = "SECURE_EXECUTION_REQUIRED"
-_NONE_CONSENSUS_KEY = "<NONE>"
+_NONE_CONSENSUS_KEY = object()
 
 
 class VerificationMode(str, Enum):
@@ -727,10 +727,11 @@ class ConsensusVerifier:
         """Calculate weighted consensus from engine results.
 
         Preserves DiagnosticStatus through aggregation:
-        - BLOCKED engines are filtered out (not veto) — graceful degradation
+        - BLOCKED engines are filtered out for counting but prevent VERIFIED
         - All BLOCKED → consensus BLOCKED
+        - Any BLOCKED → maximum outcome is UNVERIFIABLE (fail-closed)
         - All UNVERIFIABLE → consensus UNVERIFIABLE
-        - Otherwise → VERIFIED with confidence-based agreement
+        - No BLOCKED, unanimous → VERIFIED
         """
         if not results:
             return {"answer": None, "confidence": 0.0, "status": "no_results", "diagnostic_status": "UNVERIFIABLE"}
@@ -738,11 +739,11 @@ class ConsensusVerifier:
         if any(r.error == SECURE_EXECUTION_REQUIRED for r in results):
             return {"answer": None, "confidence": 0.0, "status": "blocked_secure_execution", "diagnostic_status": "BLOCKED"}
 
-        # Filter out BLOCKED engines so they don't veto the consensus
+        blocked = [r for r in results if r.status == "BLOCKED"]
         active = [r for r in results if r.status != "BLOCKED"]
 
         if not active:
-            blocked_errors = [r.error for r in results if r.error]
+            blocked_errors = [r.error for r in blocked if r.error]
             return {
                 "answer": None,
                 "confidence": 0.0,
@@ -754,7 +755,6 @@ class ConsensusVerifier:
         successful = [r for r in active if r.success]
 
         if not successful:
-            # All failed — UNVERIFIABLE (not all_failed / confidence 0.0)
             return {"answer": None, "confidence": 0.0, "status": "all_failed", "diagnostic_status": "UNVERIFIABLE"}
 
         # Weight answers by engine reliability
@@ -780,7 +780,9 @@ class ConsensusVerifier:
             status = "split"
             confidence = min(0.7, best_weight / total_weight)
         
-        diagnostic_status = "VERIFIED" if status == "unanimous" else "UNVERIFIABLE"
+        # Fail closed: a BLOCKED engine means verification did not fully complete,
+        # so the outcome can never be VERIFIED even if survivors agree.
+        diagnostic_status = "VERIFIED" if (status == "unanimous" and not blocked) else "UNVERIFIABLE"
 
         return {
             "answer": answer_values[best_answer],

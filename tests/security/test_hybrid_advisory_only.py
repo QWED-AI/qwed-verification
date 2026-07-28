@@ -199,8 +199,8 @@ class TestConsensusVerifierAdvisoryOnly:
             ),
         ]
         consensus = self.verifier._calculate_consensus(results)
-        # Python is the only active engine → unanimous
-        assert consensus["diagnostic_status"] == "VERIFIED"
+        # Python is the only active engine → unanimous, but blocked engine prevents VERIFIED
+        assert consensus["diagnostic_status"] == "UNVERIFIABLE"
         assert consensus["status"] == "unanimous"
 
     def test_all_blocked_propagates(self):
@@ -303,12 +303,10 @@ class TestConsensusVerifierAdvisoryOnly:
 
     def test_stats_result_zero_gets_full_confidence(self):
         """Stats result=0 should get 0.98 confidence (not 0.0 from truthiness)."""
-        result = EngineResult(
-            engine_name="Stats", method="statistical_analysis",
-            result=0, confidence=0.98,
-            latency_ms=10, success=True, status="VERIFIED",
-        )
+        result = self.verifier._verify_with_stats("average of 0, 0, and 0")
+        assert result.result == 0
         assert result.confidence == 0.98
+        assert result.status == "VERIFIED"
 
 
 # ========================================================================

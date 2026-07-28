@@ -473,8 +473,8 @@ class GraphFactVerifier:
             if pred1 in synonyms and pred2 in synonyms:
                 return True
         
-        # Check word overlap
-        if pred1 in pred2 or pred2 in pred1:
+        # Word-boundary containment (avoids "is" matching "visits"/"exists")
+        if _word_boundary_contained(pred1, pred2) or _word_boundary_contained(pred2, pred1):
             return True
         
         return False
