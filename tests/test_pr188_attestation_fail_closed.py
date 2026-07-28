@@ -193,6 +193,45 @@ class TestFailClosedContract(unittest.TestCase):
             "Caller MUST NOT proceed as VERIFIED when attestation is BLOCKED"
         )
 
+    def test_create_attestation_rejects_oversized_engine(self):
+        """create_attestation must reject engine string producing encoded payload > 4096 bytes."""
+        oversized = "X" * 4000
+        vr = attest_mod.VerificationResult(
+            status="VERIFIED", verified=True, engine=oversized, confidence=1.0
+        )
+        with self.assertRaises(ValueError):
+            self.service.create_attestation(vr, "q")
+
+    def test_create_attestation_rejects_oversized_multibyte(self):
+        """create_attestation must reject payload with multibyte chars that push encoded size over limit."""
+        vr = attest_mod.VerificationResult(
+            status="VERIFIED", verified=True,
+            engine="math" + "\u4e00" * 2900,  # CJK chars: 3 bytes each → ~8700 UTF-8 bytes
+            confidence=1.0,
+        )
+        with self.assertRaises(ValueError):
+            self.service.create_attestation(vr, "q")
+
+    def test_create_verification_attestation_oversized_returns_blocked(self):
+        """Wrapper must return BLOCKED (not None, not ISSUED) when payload is too large."""
+        oversized = "X" * 4000
+        with patch.object(attest_mod, "get_attestation_service", return_value=self.service):
+            result = create_verification_attestation(
+                status="VERIFIED", verified=True, engine=oversized, query="q",
+                proof_data="sha256:abc",
+            )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.status, AttestationStatus.BLOCKED)
+
+    def test_create_attestation_accepts_boundary_payload(self):
+        """create_attestation must accept a payload at the encoded-size limit."""
+        vr = attest_mod.VerificationResult(
+            status="VERIFIED", verified=True, engine="math", confidence=1.0
+        )
+        token = self.service.create_attestation(vr, "q")
+        self.assertIsNotNone(token)
+        self.assertIsNotNone(token.jwt_token)
+
 
 # ---------------------------------------------------------------------------
 # Issue #191 — VERIFIED status requires proof artifact (issuance-side)
@@ -284,6 +323,8 @@ class TestKeyLifecycleMetadata(unittest.TestCase):
         """Invalid key_continuity_policy must raise ValueError immediately."""
         with self.assertRaises(ValueError):
             IssuerKeyPair("QWED_TEST_ISS", "ID_B", key_continuity_policy="invalid")
+        with self.assertRaises(ValueError):
+            IssuerKeyPair("QWED_TEST_ISS", "ID_B", key_continuity_policy="persistent")
 
     def test_get_issuer_info_exposes_key_lifecycle(self):
         svc = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="ID_C")

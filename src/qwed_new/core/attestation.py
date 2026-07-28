@@ -273,13 +273,6 @@ class AttestationService:
         Raises:
             RuntimeError: if crypto is unavailable or signing fails.
         """
-        key_pair = self._ensure_key_pair()
-
-        # Reject oversized claims — must fit within verify_attestation's
-        # 4096-byte payload segment limit to ensure round-trip verifiability.
-        if len(original_query) > 4096 or len(verification_result.engine) > 4096:
-            raise ValueError("Claim too large — must fit within 4096-byte payload limit")
-
         now = issued_at if issued_at is not None else int(time.time())
         expiry = now + (self.validity_days * 24 * 60 * 60)
         attestation_id = jti if jti is not None else f"att_{uuid.uuid4().hex[:12]}"
@@ -313,6 +306,17 @@ class AttestationService:
             "jti": attestation_id,
             "qwed": qwed_claims,
         }
+
+        # Validate encoded payload fits verify_attestation's 4096-byte limit
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode().rstrip("=")
+        if len(payload_b64) > 4096:
+            raise ValueError(
+                f"Attestation payload too large ({len(payload_b64)} bytes) — "
+                f"must fit within 4096-byte verify-side limit"
+            )
+
+        key_pair = self._ensure_key_pair()
 
         # Build header
         header = {
