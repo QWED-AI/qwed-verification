@@ -29,6 +29,13 @@ from dataclasses import dataclass
 from enum import Enum
 import re
 
+from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck
+
+
+def _word_boundary_contained(a: str, b: str) -> bool:
+    """True if a is a word-boundary-delimited substring of b."""
+    return bool(re.search(r'\b' + re.escape(a) + r'\b', b))
+
 
 class VerificationStatus(Enum):
     """Fact verification status."""
@@ -157,7 +164,7 @@ class GraphFactVerifier:
         claim: str,
         context: str,
         strict: bool = False
-    ) -> Dict[str, Any]:
+    ) -> DiagnosticResult:
         """
         Verify a claim against context using triple matching.
         
@@ -167,36 +174,16 @@ class GraphFactVerifier:
             strict: If True, require exact matches only.
             
         Returns:
-            Dict with verification results.
-            
-        Example:
-            >>> result = verifier.verify(
-            ...     claim="Elon Musk bought Twitter",
-            ...     context="In 2022, Elon Musk acquired Twitter for $44 billion"
-            ... )
-            >>> print(result["status"])
-            "verified"
+            DiagnosticResult — VERIFIED only when ALL material triples are matched;
+            UNVERIFIABLE for partial support or insufficient context.
         """
-        # Extract triples from claim
         claim_triples = self.extract_triples(claim)
-        
-        # Extract triples from context
         context_triples = self.extract_triples(context)
-        
-        # Match triples
         matches = self._match_triples(claim_triples, context_triples, strict)
-        
-        # Determine verification status
         status = self._determine_status(matches, claim_triples)
-        
-        # Build explanation
-        explanation = self._build_explanation(matches, status)
 
-        return {
-            "status": status.value,
-            "is_verified": status == VerificationStatus.VERIFIED,
-            "claim": claim,
-            "explanation": explanation,
+        developer_fields = {
+            "constraint_id": "graph_fact_verifier.coverage_threshold",
             "claim_triples": [
                 {"subject": t.subject, "predicate": t.predicate, "object": t.object}
                 for t in claim_triples
@@ -219,9 +206,36 @@ class GraphFactVerifier:
                 "context_triples_count": len(context_triples),
                 "matched_count": sum(1 for m in matches if m.score > 0),
                 "exact_matches": sum(1 for m in matches if m.match_type == "exact"),
-                "partial_matches": sum(1 for m in matches if "partial" in m.match_type)
-            }
+                "partial_matches": sum(1 for m in matches if "partial" in m.match_type),
+            },
         }
+
+        if status == VerificationStatus.VERIFIED:
+            evidence = {
+                "matches": [
+                    {
+                        "claim": str(m.claim_triple),
+                        "matched_with": str(m.matched_triple) if m.matched_triple else None,
+                        "match_type": m.match_type,
+                        "score": m.score,
+                    }
+                    for m in matches if m.score >= 0.9
+                ],
+            }
+            return DiagnosticResult.verified(
+                "Claim verified by graph triple matching",
+                developer_fields,
+                evidence,
+            )
+
+        developer_fields["constraint_id"] = "graph_fact_verifier.inconclusive"
+        if status == VerificationStatus.INSUFFICIENT:
+            matched = sum(1 for m in matches if m.score > 0)
+            developer_fields["coverage"] = f"{matched}/{len(claim_triples)}" if claim_triples else "0/0"
+        return DiagnosticResult.unverifiable(
+            "Claim could not be fully verified — partial or no support",
+            developer_fields,
+        )
     
     def extract_triples(self, text: str) -> List[Triple]:
         """
@@ -432,26 +446,18 @@ class GraphFactVerifier:
         return matches
     
     def _entity_matches(self, entity1: str, entity2: str) -> bool:
-        """Check if two entities match (exact or containment)."""
+        """Check if two entities match (exact or word-boundary containment)."""
         # Exact match
         if entity1 == entity2:
             return True
         
-        # Containment (one contains the other)
-        if entity1 in entity2 or entity2 in entity1:
+        # Word-boundary containment (e.g. "Modi" in "Narendra Modi" but NOT "Tim" in "Timothy")
+        if _word_boundary_contained(entity1, entity2) or _word_boundary_contained(entity2, entity1):
             return True
         
         # Check aliases
         for alias_group in self.ENTITY_ALIASES.values():
             if entity1 in alias_group and entity2 in alias_group:
-                return True
-        
-        # Check if words overlap significantly
-        words1 = set(entity1.split())
-        words2 = set(entity2.split())
-        if words1 and words2:
-            overlap = len(words1 & words2) / max(len(words1), len(words2))
-            if overlap >= 0.5:
                 return True
         
         return False
@@ -467,8 +473,8 @@ class GraphFactVerifier:
             if pred1 in synonyms and pred2 in synonyms:
                 return True
         
-        # Check word overlap
-        if pred1 in pred2 or pred2 in pred1:
+        # Word-boundary containment (avoids "is" matching "visits"/"exists")
+        if _word_boundary_contained(pred1, pred2) or _word_boundary_contained(pred2, pred1):
             return True
         
         return False
@@ -478,27 +484,24 @@ class GraphFactVerifier:
         matches: List[MatchResult],
         claim_triples: List[Triple]
     ) -> VerificationStatus:
-        """Determine verification status from matches."""
+        """Determine verification status from matches.
+        
+        ALL material claim triples must be supported for VERIFIED.
+        Partial support → INSUFFICIENT (fail-closed).
+        """
         if not claim_triples:
             return VerificationStatus.INSUFFICIENT
-        
-        # Count good matches (score >= 0.5)
-        good_matches = sum(1 for m in matches if m.score >= 0.5)
-        exact_matches = sum(1 for m in matches if m.score >= 0.9)
-        
-        # All triples have good matches
-        if good_matches == len(claim_triples) and exact_matches > 0:
+
+        near_exact = sum(1 for m in matches if m.score >= 0.9)
+        any_support = sum(1 for m in matches if m.score > 0)
+
+        # Every claim triple must have near-exact support for VERIFIED
+        if near_exact == len(claim_triples):
             return VerificationStatus.VERIFIED
-        
-        # Most triples have good matches
-        if good_matches >= len(claim_triples) * 0.5:
-            return VerificationStatus.VERIFIED
-        
-        # Some matches but not enough
-        if good_matches > 0:
+
+        if any_support > 0:
             return VerificationStatus.INSUFFICIENT
-        
-        # No matches at all
+
         return VerificationStatus.NOT_VERIFIED
     
     def _build_explanation(
@@ -536,49 +539,45 @@ class GraphFactVerifier:
         claim: str,
         context: str,
         model: str = "default"
-    ) -> Dict[str, Any]:
+    ) -> DiagnosticResult:
         """
-        Verify using NLI entailment as fallback.
+        Verify using NLI entailment as advisory fallback.
         
-        This uses a small NLI model (DeBERTa) for entailment checking.
-        The model outputs DETERMINISTIC labels: ENTAILMENT, NEUTRAL, CONTRADICTION.
-        
-        Note: This requires transformers library.
+        NLI output is advisory only — it populates advisory_checks and
+        never determines the final verification status.
         """
-        # First try graph-based verification
         graph_result = self.verify(claim, context)
-        
-        # If graph verification is conclusive, use it
-        if graph_result["status"] in ["verified", "contradicted"]:
-            graph_result["method"] = "graph_matching"
+
+        if graph_result.is_verified:
             return graph_result
-        
-        # Otherwise, try NLI (if available)
+
+        advisory_checks = []
         try:
             from transformers import pipeline
             nli = pipeline("text-classification", model="cross-encoder/nli-deberta-v3-small")
-            
-            result = nli(f"{context} [SEP] {claim}")[0]
-            label = result["label"].lower()
-            
-            if "entail" in label:
-                status = "verified"
-            elif "contradict" in label:
-                status = "contradicted"
-            else:
-                status = "not_verified"
-            
-            return {
-                "status": status,
-                "is_verified": status == "verified",
-                "claim": claim,
-                "method": "nli_fallback",
-                "nli_label": result["label"],
-                "explanation": f"NLI model determined: {result['label']}",
-                "graph_result": graph_result
-            }
-        
+
+            nli_output = nli(f"{context} [SEP] {claim}")[0]
+            advisory_checks.append(AdvisoryCheck(
+                name="nli_fallback",
+                constraint_id="graph_fact_verifier.nli_advisory_only",
+                details={
+                    "nli_label": nli_output["label"],
+                    "nli_score": nli_output["score"],
+                    "advisory_only": True,
+                }
+            ))
         except Exception:
-            # NLI not available, return graph result
-            graph_result["method"] = "graph_matching_only"
-            return graph_result
+            advisory_checks.append(AdvisoryCheck(
+                name="nli_fallback",
+                constraint_id="graph_fact_verifier.nli_unavailable",
+                details={"error": "NLI model not available"},
+            ))
+
+        return DiagnosticResult.unverifiable(
+            "Claim could not be fully verified — NLI analysis is advisory only",
+            {
+                "constraint_id": "graph_fact_verifier.nli_advisory_only",
+                "advisory_checks": advisory_checks,
+                "graph_result": graph_result.to_dict(),
+            }
+        )

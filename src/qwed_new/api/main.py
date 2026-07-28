@@ -703,13 +703,13 @@ async def verify_image(
             organization_id=tenant.organization_id,
             query=f"Image claim: {claim}",
             result=str(result),
-            is_verified=result.get("verdict") == "SUPPORTED",
+            is_verified=result.is_verified,
             domain="IMAGE"
         )
         session.add(log)
         session.commit()
-        
-        return result
+
+        return result.to_dict()
         
     except HTTPException:
         raise
