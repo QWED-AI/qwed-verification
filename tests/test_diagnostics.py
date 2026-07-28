@@ -17,11 +17,13 @@ Covers:
 """
 
 import unittest
+from unittest.mock import MagicMock, patch
 from src.qwed_new.core.diagnostics import (
     DiagnosticStatus,
     DiagnosticResult,
     AdvisoryCheck,
     compute_proof_ref,
+    enforce_trust_decision,
 )
 
 
@@ -695,6 +697,163 @@ class TestRealisticScenarios(unittest.TestCase):
         admitted = [r for r in results if r.is_authoritative]
         self.assertEqual(len(admitted), 1)
         self.assertEqual(admitted[0].constraint_id, "a")
+
+
+
+
+
+# ---------------------------------------------------------------------------
+# Issue #191 — enforce_trust_decision: consumption-side attestation enforcement
+# ---------------------------------------------------------------------------
+
+class TestEnforceTrustDecision(unittest.TestCase):
+    """Issue #191: trust-boundary gates must enforce attestation presence."""
+
+    def setUp(self):
+        self.verified = DiagnosticResult.verified(
+            agent_message="Math check passed",
+            developer_fields={"constraint_id": "math.identity"},
+            evidence={"result": 42},
+        )
+        self.unverifiable = DiagnosticResult.unverifiable(
+            agent_message="Math check inconclusive",
+            developer_fields={"constraint_id": "math.inconclusive"},
+        )
+        self.blocked = DiagnosticResult.blocked(
+            agent_message="Math check blocked",
+            developer_fields={"constraint_id": "math.blocked"},
+        )
+
+    # --- (a) VERIFIED + no token → BLOCKED ---
+
+    def test_verified_no_token_returns_blocked(self):
+        """VERIFIED without attestation token must return BLOCKED."""
+        r = enforce_trust_decision(self.verified)
+        self.assertTrue(r.is_fail_closed)
+        self.assertEqual(
+            r.developer_fields.get("constraint_id"),
+            "trust_gate.mandatory_attestation_missing",
+        )
+        self.assertIn("proof artifact missing", r.agent_message.lower())
+
+    # --- (b) VERIFIED + invalid token → BLOCKED ---
+
+    def test_verified_invalid_token_returns_blocked(self):
+        """VERIFIED with invalid token must return BLOCKED."""
+        with patch("src.qwed_new.core.attestation.get_attestation_service") as mock_get:
+            mock_svc = MagicMock()
+            mock_svc.verify_attestation.return_value = (False, None, "signature invalid")
+            mock_get.return_value = mock_svc
+
+            r = enforce_trust_decision(
+                self.verified,
+                attestation_token="invalid.jwt.token",
+            )
+
+        self.assertTrue(r.is_fail_closed)
+        self.assertEqual(
+            r.developer_fields.get("constraint_id"),
+            "trust_gate.invalid_attestation_token",
+        )
+        self.assertIn("proof artifact invalid", r.agent_message.lower())
+
+    # --- (c) VERIFIED + valid token → passes ---
+
+    def test_verified_valid_token_passes(self):
+        """VERIFIED with valid token must return the original result."""
+        with patch("src.qwed_new.core.attestation.get_attestation_service") as mock_get:
+            mock_svc = MagicMock()
+            mock_svc.verify_attestation.return_value = (True, {"qwed": {"result": {}}}, None)
+            mock_get.return_value = mock_svc
+
+            r = enforce_trust_decision(
+                self.verified,
+                attestation_token="valid.jwt.token",
+            )
+
+        self.assertTrue(r.is_verified)
+        self.assertEqual(r.constraint_id, "math.identity")
+        self.assertIsNotNone(r.proof_ref)
+
+    # --- (d) Policy toggle: optional attestation ---
+
+    def test_verified_optional_attestation_without_token_passes(self):
+        """require_attestation=False must allow VERIFIED without token."""
+        r = enforce_trust_decision(
+            self.verified,
+            require_attestation=False,
+            attestation_token=None,
+        )
+        self.assertTrue(r.is_verified)
+        self.assertEqual(r.constraint_id, "math.identity")
+
+    def test_verified_optional_policy_still_blocks_invalid_token(self):
+        """Even with optional policy, invalid token must still be blocked."""
+        with patch("src.qwed_new.core.attestation.get_attestation_service") as mock_get:
+            mock_svc = MagicMock()
+            mock_svc.verify_attestation.return_value = (False, None, "bad sig")
+            mock_get.return_value = mock_svc
+
+            r = enforce_trust_decision(
+                self.verified,
+                require_attestation=False,
+                attestation_token="bad.token.here",
+            )
+
+        self.assertTrue(r.is_fail_closed)
+        self.assertEqual(
+            r.developer_fields.get("constraint_id"),
+            "trust_gate.invalid_attestation_token",
+        )
+
+    # --- Fail-closed states pass through regardless ---
+
+    def test_unverifiable_passes_through_without_token(self):
+        """UNVERIFIABLE must pass through without attestation."""
+        r = enforce_trust_decision(self.unverifiable)
+        self.assertTrue(r.is_fail_closed)
+        self.assertEqual(r.constraint_id, "math.inconclusive")
+
+    def test_blocked_passes_through_without_token(self):
+        """BLOCKED must pass through without attestation."""
+        r = enforce_trust_decision(self.blocked)
+        self.assertTrue(r.is_fail_closed)
+        self.assertEqual(r.constraint_id, "math.blocked")
+
+    def test_unverifiable_with_token_passes_through(self):
+        """UNVERIFIABLE must pass through even with a token (attestation irrelevant)."""
+        r = enforce_trust_decision(self.unverifiable, attestation_token="some.token")
+        self.assertTrue(r.is_fail_closed)
+        self.assertEqual(r.constraint_id, "math.inconclusive")
+
+    # --- Edge cases ---
+
+    def test_verified_verification_error_returns_blocked(self):
+        """If attestation verification raises, result must be BLOCKED."""
+        with patch("src.qwed_new.core.attestation.get_attestation_service") as mock_get:
+            mock_svc = MagicMock()
+            mock_svc.verify_attestation.side_effect = RuntimeError("crypto failure")
+            mock_get.return_value = mock_svc
+
+            r = enforce_trust_decision(
+                self.verified,
+                attestation_token="raising.token",
+            )
+
+        self.assertTrue(r.is_fail_closed)
+        self.assertEqual(
+            r.developer_fields.get("constraint_id"),
+            "trust_gate.attestation_verification_error",
+        )
+
+    def test_verified_with_empty_token_is_blocked(self):
+        """Empty string token should be treated as missing."""
+        r = enforce_trust_decision(self.verified, attestation_token="")
+        self.assertTrue(r.is_fail_closed)
+        self.assertEqual(
+            r.developer_fields.get("constraint_id"),
+            "trust_gate.mandatory_attestation_missing",
+        )
 
 
 if __name__ == "__main__":

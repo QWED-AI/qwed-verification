@@ -41,9 +41,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -520,9 +523,119 @@ class DiagnosticResult:
         )
 
 
+# ---------------------------------------------------------------------------
+# Trust boundary enforcement — consumption-side attestation validation.
+# Issue #191: No trust-boundary path can return/consume effective VERIFIED
+# without required attestation artifact.
+# ---------------------------------------------------------------------------
+
+def enforce_trust_decision(
+    result: DiagnosticResult,
+    *,
+    attestation_token: Optional[str] = None,
+    require_attestation: bool = True,
+    trusted_issuers: Optional[List[str]] = None,
+) -> DiagnosticResult:
+    """Enforce trust-boundary gate: VERIFIED without required attestation → BLOCKED.
+
+    This is the single enforcement point for consumption-side attestation
+    validation. Every release gate / trust boundary MUST route verification
+    results through this function before making admission decisions.
+
+    Args:
+        result: The verification DiagnosticResult from the engine.
+        attestation_token: The JWT attestation token (from
+            attestation.create_verification_attestation). May be None.
+        require_attestation: If True (default), VERIFIED without a valid
+            attestation token is blocked. If False, attestation is advisory.
+        trusted_issuers: Optional list of trusted issuer DIDs for token
+            verification. Defaults to None (uses AttestationService default).
+
+    Returns:
+        The original DiagnosticResult if all policy checks pass, or a BLOCKED
+        DiagnosticResult with fail-closed semantics if attestation is missing
+        or invalid.
+
+    Audit event:
+        Every block decision is logged at WARNING level with structured
+        fields: action, token_present, policy, reason, constraint_id.
+    """
+    # Fail-closed states pass through — no attestation needed
+    if result.is_fail_closed:
+        return result
+
+    # No attestation token provided
+    if not attestation_token:
+        if not require_attestation:
+            # Optional policy + no token → pass through (advisory)
+            return result
+        logger.warning(
+            "trust_gate.blocked constraint_id=%s reason=missing_attestation_token policy=mandatory",
+            result.constraint_id or "unknown",
+        )
+        return DiagnosticResult.blocked(
+            agent_message="Verification blocked — proof artifact missing",
+            developer_fields={
+                "constraint_id": "trust_gate.mandatory_attestation_missing",
+                "missing": "attestation_token",
+                "policy": "mandatory",
+                "verdict_status": result.status.value,
+                "verdict_proof_ref": result.proof_ref,
+            },
+        )
+
+    # Verify the attestation token
+    try:
+        from .attestation import get_attestation_service
+
+        service = get_attestation_service()
+        is_valid, claims, error = service.verify_attestation(
+            attestation_token,
+            trusted_issuers=trusted_issuers,
+        )
+    except Exception as exc:
+        logger.warning(
+            "trust_gate.blocked constraint_id=%s reason=attestation_verification_failed "
+            "error=%s",
+            result.constraint_id or "unknown",
+            exc,
+        )
+        return DiagnosticResult.blocked(
+            agent_message="Verification blocked — proof artifact verification failed",
+            developer_fields={
+                "constraint_id": "trust_gate.attestation_verification_error",
+                "error": str(exc),
+                "policy": "mandatory",
+                "verdict_status": result.status.value,
+                "verdict_proof_ref": result.proof_ref,
+            },
+        )
+
+    if not is_valid:
+        logger.warning(
+            "trust_gate.blocked constraint_id=%s reason=invalid_attestation_token error=%s",
+            result.constraint_id or "unknown",
+            error,
+        )
+        return DiagnosticResult.blocked(
+            agent_message="Verification blocked — proof artifact invalid",
+            developer_fields={
+                "constraint_id": "trust_gate.invalid_attestation_token",
+                "validation_error": error,
+                "policy": "mandatory",
+                "verdict_status": result.status.value,
+                "verdict_proof_ref": result.proof_ref,
+            },
+        )
+
+    # Attestation valid — pass through
+    return result
+
+
 __all__ = [
     "DiagnosticStatus",
     "DiagnosticResult",
     "AdvisoryCheck",
     "compute_proof_ref",
+    "enforce_trust_decision",
 ]

@@ -95,7 +95,8 @@ class TestFailClosedContract(unittest.TestCase):
         """Happy path: successful attestation returns ISSUED status with JWT."""
         with patch.object(attest_mod, "get_attestation_service", return_value=self.service):
             result = create_verification_attestation(
-                status="VERIFIED", verified=True, engine="math", query="2+2=4"
+                status="VERIFIED", verified=True, engine="math", query="2+2=4",
+                proof_data="sha256:abc123"
             )
 
         self.assertIsInstance(result, AttestationResult)
@@ -109,7 +110,8 @@ class TestFailClosedContract(unittest.TestCase):
         """The token inside AttestationResult must be a verifiable JWT."""
         with patch.object(attest_mod, "get_attestation_service", return_value=self.service):
             result = create_verification_attestation(
-                status="VERIFIED", verified=True, engine="math", query="is 4 prime?"
+                status="VERIFIED", verified=True, engine="math", query="is 4 prime?",
+                proof_data="sha256:def456"
             )
 
         self.assertTrue(result.is_issued)
@@ -124,7 +126,8 @@ class TestFailClosedContract(unittest.TestCase):
 
         with patch.object(attest_mod, "get_attestation_service", return_value=broken_service):
             result = create_verification_attestation(
-                status="VERIFIED", verified=True, engine="math", query="2+2"
+                status="VERIFIED", verified=True, engine="math", query="2+2",
+                proof_data="sha256:ghi789"
             )
 
         self.assertIsNotNone(result, "MUST NOT return None — fail-closed contract")
@@ -138,7 +141,8 @@ class TestFailClosedContract(unittest.TestCase):
         """If get_attestation_service() itself raises, result is BLOCKED."""
         with patch.object(attest_mod, "get_attestation_service", side_effect=Exception("svc down")):
             result = create_verification_attestation(
-                status="VERIFIED", verified=True, engine="math", query="q"
+                status="VERIFIED", verified=True, engine="math", query="q",
+                proof_data="sha256:jkl012"
             )
 
         self.assertEqual(result.status, AttestationStatus.BLOCKED)
@@ -147,14 +151,14 @@ class TestFailClosedContract(unittest.TestCase):
 
     def test_no_none_return_success_path(self):
         with patch.object(attest_mod, "get_attestation_service", return_value=self.service):
-            result = create_verification_attestation("VERIFIED", True, "math", "2+2")
+            result = create_verification_attestation("VERIFIED", True, "math", "2+2", proof_data="sha256:mno345")
         self.assertIsNotNone(result)
 
     def test_no_none_return_signing_failure_path(self):
         svc = AttestationService(issuer_did="did:test:188", key_suffix="fail")
         svc.create_attestation = MagicMock(side_effect=ValueError("bad key"))
         with patch.object(attest_mod, "get_attestation_service", return_value=svc):
-            result = create_verification_attestation("VERIFIED", True, "math", "2+2")
+            result = create_verification_attestation("VERIFIED", True, "math", "2+2", proof_data="sha256:pqr678")
         self.assertIsNotNone(result)
 
     def test_caller_must_hardblock_on_blocked(self):
@@ -163,12 +167,73 @@ class TestFailClosedContract(unittest.TestCase):
         broken.create_attestation = MagicMock(side_effect=RuntimeError("fail"))
 
         with patch.object(attest_mod, "get_attestation_service", return_value=broken):
-            result = create_verification_attestation("VERIFIED", True, "math", "q")
+            result = create_verification_attestation("VERIFIED", True, "math", "q", proof_data="sha256:stu901")
 
         self.assertFalse(
             result.is_issued,
             "Caller MUST NOT proceed as VERIFIED when attestation is BLOCKED"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #191 — VERIFIED status requires proof artifact (issuance-side)
+# These tests patch HAS_CRYPTO=True to reach the VERIFIED_WITHOUT_PROOF guard.
+# They do NOT require the cryptography package to be actually installed.
+# ---------------------------------------------------------------------------
+
+class TestIssuanceEnforcesProofArtifact(unittest.TestCase):
+    """Issue #191: attestation issuance must reject VERIFIED without proof."""
+
+    def test_verified_without_proof_returns_blocked(self):
+        """verified=True + proof_data=None must return BLOCKED, never ISSUED."""
+        with patch.object(attest_mod, "HAS_CRYPTO", True):
+            result = create_verification_attestation(
+                status="VERIFIED", verified=True,
+                engine="math", query="2+2",
+            )
+        self.assertIsNotNone(result, "MUST NOT return None — fail-closed contract")
+        self.assertEqual(result.status, AttestationStatus.BLOCKED)
+        self.assertFalse(result.is_issued)
+        self.assertEqual(result.error_code, "VERIFIED_WITHOUT_PROOF")
+        self.assertIsNone(result.token)
+        self.assertIn("proof", (result.error or "").lower())
+
+    def test_verified_without_proof_explicit_none(self):
+        """verified=True + proof_data=None (explicit) must also be BLOCKED."""
+        with patch.object(attest_mod, "HAS_CRYPTO", True):
+            result = create_verification_attestation(
+                status="VERIFIED", verified=True,
+                engine="math", query="2+2",
+                proof_data=None,
+            )
+        self.assertEqual(result.status, AttestationStatus.BLOCKED)
+        self.assertEqual(result.error_code, "VERIFIED_WITHOUT_PROOF")
+
+    def test_unverified_without_proof_not_blocked(self):
+        """verified=False + no proof_data must NOT be blocked (UNVERIFIABLE needs no proof)."""
+        with patch.object(attest_mod, "HAS_CRYPTO", True):
+            result = create_verification_attestation(
+                status="FAILED", verified=False,
+                engine="math", query="2+2",
+            )
+        # Should reach the Exception path (no real crypto) or ATTEMPT to sign
+        # Regardless, it should NOT be VERIFIED_WITHOUT_PROOF error
+        self.assertIsNotNone(result)
+        self.assertNotEqual(result.error_code, "VERIFIED_WITHOUT_PROOF",
+                            "verified=False must not trigger the proof check")
+
+    def test_verified_with_proof_not_blocked(self):
+        """verified=True + proof_data present must proceed past the guard (may still
+        fail at signing, but NOT with VERIFIED_WITHOUT_PROOF)."""
+        with patch.object(attest_mod, "HAS_CRYPTO", True):
+            result = create_verification_attestation(
+                status="VERIFIED", verified=True,
+                engine="math", query="2+2",
+                proof_data="sha256:abcdef123456",
+            )
+        self.assertIsNotNone(result)
+        self.assertNotEqual(result.error_code, "VERIFIED_WITHOUT_PROOF",
+                            "proof_data provided — must not trigger the proof check")
 
 
 @unittest.skipUnless(HAS_CRYPTO, "cryptography not installed")
