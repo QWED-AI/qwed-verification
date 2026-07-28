@@ -1,0 +1,21 @@
+# Dependencies
+__pycache__/
+*.pyc
+*.pyo
+*venv/
+*test_venv/
+.pytest_cache/
+
+# VCS
+.git/
+.gitignore
+
+# Debug / test — NOT for production images
+scripts/
+tests/
+check_prs.py
+fix_cache.py
+update_cache.py
+
+# Docs
+*.md

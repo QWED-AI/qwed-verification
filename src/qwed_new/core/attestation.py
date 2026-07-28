@@ -123,7 +123,7 @@ class IssuerKeyPair:
     - A structured log entry is emitted on every new key generation so
       continuity events are auditable.
     - Default policy is "ephemeral" (in-memory, non-persistent).
-      Set key_continuity_policy="persistent" when external KMS binding is
+      Set key_continuity_policy to "persistent" when external KMS binding is
       used and the key material is durably stored outside this process.
     """
 
@@ -368,7 +368,12 @@ class AttestationService:
             # perform FULL cryptographic verification with the correct key.
             try:
                 _, payload_segment, _ = jwt_token.split('.', 2)
+                if len(payload_segment) > 4096:
+                    raise ValueError("Payload segment too large")
                 padding = '=' * (-len(payload_segment) % 4)
+                # qwed-sec: base64 decode of untrusted JWT payload; content is
+                # validated structurally (JSON/dict check) and cryptographically
+                # (signature verification below) before any claim is trusted.
                 payload_data = base64.urlsafe_b64decode(payload_segment + padding)
                 unverified = json.loads(payload_data)
                 if not isinstance(unverified, dict):
