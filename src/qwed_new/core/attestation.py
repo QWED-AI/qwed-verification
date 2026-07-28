@@ -14,8 +14,8 @@ Security contract (Issue #188):
 import hashlib
 import json
 import base64
-import binascii
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -232,14 +232,19 @@ class AttestationService:
         # Attestation registry (in-memory, should use DB in production)
         self._attestations: Dict[str, Attestation] = {}
 
+        # Thread safety for lazy key initialization
+        self._key_lock: threading.Lock = threading.Lock()
+
     def _ensure_key_pair(self) -> IssuerKeyPair:
-        """Lazily initialize key pair."""
+        """Lazily initialize key pair (thread-safe)."""
         if self._key_pair is None:
-            self._key_pair = IssuerKeyPair(
-                self.issuer_did,
-                self.key_id,
-                key_continuity_policy=self.key_continuity_policy,
-            )
+            with self._key_lock:
+                if self._key_pair is None:
+                    self._key_pair = IssuerKeyPair(
+                        self.issuer_did,
+                        self.key_id,
+                        key_continuity_policy=self.key_continuity_policy,
+                    )
         return self._key_pair
 
     def _hash_content(self, content: str) -> str:
@@ -377,6 +382,8 @@ class AttestationService:
             # Security: We manually decode the payload to get 'iss' and then
             # perform FULL cryptographic verification with the correct key.
             try:
+                if len(jwt_token) > 8192:
+                    return False, None, "Token too large"
                 _, payload_segment, _ = jwt_token.split('.', 2)
                 if len(payload_segment) > 4096:
                     return False, None, "Payload segment too large"
@@ -388,7 +395,7 @@ class AttestationService:
                 unverified = json.loads(payload_data)
                 if not isinstance(unverified, dict):
                     return False, None, "Invalid token format"
-            except (IndexError, ValueError, binascii.Error, json.JSONDecodeError, TypeError):
+            except (IndexError, ValueError, json.JSONDecodeError, TypeError):
                 return False, None, "Invalid token format"
 
             issuer = unverified.get("iss")

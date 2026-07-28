@@ -10,6 +10,7 @@ Acceptance criteria verified here:
 - [x] Tests cover signing failure, crypto unavailable, restart continuity, caller fail-closed
 """
 
+import base64
 import hashlib
 import unittest
 from unittest.mock import patch, MagicMock
@@ -220,6 +221,25 @@ class TestFailClosedContract(unittest.TestCase):
         token = self.service.create_attestation(vr, "q")
         self.assertIsNotNone(token)
         self.assertIsNotNone(token.jwt_token)
+
+    def test_verify_attestation_rejects_oversized_token(self):
+        """verify_attestation must reject total token > 8192 bytes."""
+        _, _, error = self.service.verify_attestation("A" * 8193)
+        self.assertIsNotNone(error)
+        self.assertIn("Token too large", error)
+
+    def test_verify_attestation_rejects_oversized_payload_segment(self):
+        """verify_attestation must reject payload segment > 4096 bytes."""
+        payload = base64.urlsafe_b64encode(b"x" * 5000).decode().rstrip("=")
+        _, _, error = self.service.verify_attestation(f"header.{payload}.sig")
+        self.assertIsNotNone(error)
+        self.assertIn("Payload segment too large", error)
+
+    def test_verify_attestation_rejects_invalid_base64(self):
+        """verify_attestation must reject malformed base64 in payload."""
+        _, _, error = self.service.verify_attestation("header.!!!invalid!!!.sig")
+        self.assertIsNotNone(error)
+        self.assertIn("Invalid token format", error)
 
 
 # ---------------------------------------------------------------------------
