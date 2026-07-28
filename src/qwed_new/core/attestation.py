@@ -495,7 +495,7 @@ def create_verification_attestation(
             error="cryptography/PyJWT package not installed",
         )
 
-    if verified and proof_data is None:
+    if verified and not proof_data:
         logger.warning(
             "attestation.blocked query_hash=%s reason=VERIFIED_WITHOUT_PROOF",
             hashlib.sha256(query.encode()).hexdigest()[:16],

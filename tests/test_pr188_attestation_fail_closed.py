@@ -209,6 +209,17 @@ class TestIssuanceEnforcesProofArtifact(unittest.TestCase):
         self.assertEqual(result.status, AttestationStatus.BLOCKED)
         self.assertEqual(result.error_code, "VERIFIED_WITHOUT_PROOF")
 
+    def test_verified_with_empty_string_proof(self):
+        """verified=True + proof_data='' (empty) must also be BLOCKED."""
+        with patch.object(attest_mod, "HAS_CRYPTO", True):
+            result = create_verification_attestation(
+                status="VERIFIED", verified=True,
+                engine="math", query="2+2",
+                proof_data="",
+            )
+        self.assertEqual(result.status, AttestationStatus.BLOCKED)
+        self.assertEqual(result.error_code, "VERIFIED_WITHOUT_PROOF")
+
     def test_unverified_without_proof_not_blocked(self):
         """verified=False + no proof_data must NOT be blocked (UNVERIFIABLE needs no proof)."""
         with patch.object(attest_mod, "HAS_CRYPTO", True):
