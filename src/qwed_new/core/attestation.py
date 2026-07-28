@@ -495,6 +495,18 @@ def create_verification_attestation(
             error="cryptography/PyJWT package not installed",
         )
 
+    if verified and not proof_data:
+        logger.warning(
+            "attestation.blocked query_hash=%s reason=VERIFIED_WITHOUT_PROOF",
+            hashlib.sha256(query.encode()).hexdigest()[:16],
+        )
+        return AttestationResult(
+            status=AttestationStatus.BLOCKED,
+            token=None,
+            error_code="VERIFIED_WITHOUT_PROOF",
+            error="VERIFIED status requires proof_data — cannot sign attestation without proof artifact",
+        )
+
     try:
         service = get_attestation_service()
         result = VerificationResult(

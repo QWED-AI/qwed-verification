@@ -41,9 +41,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +146,7 @@ class AdvisoryCheck:
 # Proof reference computation — deterministic hash of retained evidence.
 # ---------------------------------------------------------------------------
 
-def compute_proof_ref(evidence: Dict[str, Any]) -> str:
+def compute_proof_ref(evidence: Dict[str, Any] | str) -> str:
     """Compute a deterministic proof reference hash from retained evidence.
 
     The proof_ref binds the verdict (status=VERIFIED) to the specific evidence
@@ -152,24 +155,32 @@ def compute_proof_ref(evidence: Dict[str, Any]) -> str:
 
     Args:
         evidence: The proof artifact dict (e.g., convergence trace, frequency
-                  counts, eigenvalue comparison, Z3 assertion stack).
+                  counts, eigenvalue comparison, Z3 assertion stack) or a
+                  pre-serialized string. When a string is passed, it is hashed
+                  directly — this ensures callers can pass the same
+                  ``json.dumps(evidence_dict, sort_keys=True)`` that the
+                  attestation issuer used as ``proof_data``, guaranteeing the
+                  resulting hash matches the attestation token's ``proof_hash``.
 
     Returns:
         sha256-prefixed hex digest string, e.g. "sha256:abcdef...".
 
     Note:
-        The evidence dict is JSON-serialized with sort_keys=True for
+        When a dict is passed, it is JSON-serialized with sort_keys=True for
         deterministic hashing. Non-JSON-serializable values must be
         pre-converted to strings by the caller — they will raise
         ValueError (fail-closed), preventing non-deterministic memory-
         address-dependent hashes from entering the proof contract.
     """
-    try:
-        payload = json.dumps(evidence, sort_keys=True)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"Proof evidence must be JSON-serializable for proof_ref hashing: {exc}"
-        ) from exc
+    if isinstance(evidence, str):
+        payload = evidence
+    else:
+        try:
+            payload = json.dumps(evidence, sort_keys=True)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Proof evidence must be JSON-serializable for proof_ref hashing: {exc}"
+            ) from exc
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return f"sha256:{digest}"
 
@@ -347,6 +358,7 @@ class DiagnosticResult:
         agent_message: str,
         developer_fields: Dict[str, Any],
         evidence: Dict[str, Any],
+        proof_data: Optional[str] = None,
     ) -> "DiagnosticResult":
         """Construct a VERIFIED result with proof_ref computed from evidence.
 
@@ -354,6 +366,12 @@ class DiagnosticResult:
             agent_message: Agent-safe summary (Layer 1).
             developer_fields: Structured developer evidence (Layer 2).
             evidence: Proof artifact dict — hashed to produce proof_ref (Layer 3).
+            proof_data: Optional pre-serialized proof string. When provided,
+                ``proof_ref`` is computed directly from this string (via
+                :func:`compute_proof_ref`) instead of from *evidence*. This
+                ensures the hash matches the attestation token's ``proof_hash``
+                when the same string is passed as ``proof_data`` to
+                :func:`create_verification_attestation`.
 
         Returns:
             DiagnosticResult with status=VERIFIED and proof_ref=compute_proof_ref(evidence).
@@ -362,7 +380,7 @@ class DiagnosticResult:
             status=DiagnosticStatus.VERIFIED,
             agent_message=agent_message,
             developer_fields=developer_fields,
-            proof_ref=compute_proof_ref(evidence),
+            proof_ref=compute_proof_ref(proof_data if proof_data is not None else evidence),
         )
 
     @classmethod
@@ -520,9 +538,233 @@ class DiagnosticResult:
         )
 
 
+# ---------------------------------------------------------------------------
+# Trust boundary enforcement — consumption-side attestation validation.
+# Issue #191: No trust-boundary path can return/consume effective VERIFIED
+# without required attestation artifact.
+# ---------------------------------------------------------------------------
+
+def _compute_query_hash(query: str) -> str:
+    """Compute a query hash in the same format as AttestationService._hash_content."""
+    return f"sha256:{hashlib.sha256(query.encode('utf-8')).hexdigest()}"
+
+
+def _verify_attestation_token(
+    attestation_token: str,
+    trusted_issuers: Optional[List[str]],
+    result: DiagnosticResult,
+    policy: str,
+) -> Optional[Tuple[bool, Dict[str, Any], Optional[str]]]:
+    """Verify the attestation token, returning (is_valid, claims, error) or a blocked result."""
+    try:
+        from .attestation import get_attestation_service
+
+        service = get_attestation_service()
+        is_valid, token_claims, error = service.verify_attestation(
+            attestation_token,
+            trusted_issuers=trusted_issuers,
+        )
+    except Exception as exc:
+        logger.warning(
+            "trust_gate.blocked constraint_id=%s reason=attestation_verification_failed "
+            "error=%s policy=%s",
+            result.constraint_id or "unknown",
+            exc,
+            policy,
+        )
+        return DiagnosticResult.blocked(
+            agent_message="Verification blocked — proof artifact verification failed",
+            developer_fields={
+                "constraint_id": "trust_gate.attestation_verification_error",
+                "error": str(exc),
+                "policy": policy,
+                "verdict_status": result.status.value,
+                "verdict_proof_ref": result.proof_ref,
+            },
+        )
+
+    if not is_valid:
+        logger.warning(
+            "trust_gate.blocked constraint_id=%s reason=invalid_attestation_token error=%s policy=%s",
+            result.constraint_id or "unknown",
+            error,
+            policy,
+        )
+        return DiagnosticResult.blocked(
+            agent_message="Verification blocked — proof artifact invalid",
+            developer_fields={
+                "constraint_id": "trust_gate.invalid_attestation_token",
+                "validation_error": error,
+                "policy": policy,
+                "verdict_status": result.status.value,
+                "verdict_proof_ref": result.proof_ref,
+            },
+        )
+
+    return is_valid, token_claims, error
+
+
+def _validate_attestation_claims(
+    result: DiagnosticResult,
+    token_claims: Dict[str, Any],
+    query: Optional[str],
+    policy: str,
+) -> Optional[DiagnosticResult]:
+    """Validate token claims against result. Returns a blocked result or None."""
+    raw_qwed = (token_claims or {}).get("qwed")
+    qwed_claims = raw_qwed if isinstance(raw_qwed, dict) else None
+    raw_result_claims = qwed_claims.get("result") if qwed_claims else None
+    result_claims = raw_result_claims if isinstance(raw_result_claims, dict) else None
+    if result_claims is None:
+        logger.warning(
+            "trust_gate.blocked constraint_id=%s reason=claims_missing_or_malformed policy=%s",
+            result.constraint_id or "unknown",
+            policy,
+        )
+        return DiagnosticResult.blocked(
+            agent_message="Verification blocked — attestation claims missing or malformed",
+            developer_fields={
+                "constraint_id": "trust_gate.claims_missing",
+                "policy": policy,
+                "verdict_status": result.status.value,
+                "verdict_proof_ref": result.proof_ref,
+            },
+        )
+
+    token_status = result_claims.get("status")
+    if token_status != result.status.value:
+        logger.warning(
+            "trust_gate.blocked constraint_id=%s reason=claims_status_mismatch "
+            "token_status=%s result_status=%s policy=%s",
+            result.constraint_id or "unknown",
+            token_status,
+            result.status.value,
+            policy,
+        )
+        return DiagnosticResult.blocked(
+            agent_message="Verification blocked — attestation claims do not match result status",
+            developer_fields={
+                "constraint_id": "trust_gate.claims_status_mismatch",
+                "token_status": token_status,
+                "result_status": result.status.value,
+                "policy": policy,
+            },
+        )
+
+    if query is not None:
+        expected_query_hash = _compute_query_hash(query)
+        token_query_hash = qwed_claims.get("query_hash")
+        if token_query_hash != expected_query_hash:
+            logger.warning(
+                "trust_gate.blocked constraint_id=%s reason=claims_query_mismatch policy=%s",
+                result.constraint_id or "unknown",
+                policy,
+            )
+            return DiagnosticResult.blocked(
+                agent_message="Verification blocked — attestation query hash does not match",
+                developer_fields={
+                    "constraint_id": "trust_gate.claims_query_mismatch",
+                    "expected_query_hash": expected_query_hash,
+                    "token_query_hash": token_query_hash,
+                    "policy": policy,
+                },
+            )
+
+    token_proof_hash = qwed_claims.get("proof_hash")
+    if token_proof_hash != result.proof_ref:
+        logger.warning(
+            "trust_gate.blocked constraint_id=%s reason=claims_proof_mismatch policy=%s",
+            result.constraint_id or "unknown",
+            policy,
+        )
+        return DiagnosticResult.blocked(
+            agent_message="Verification blocked — attestation proof hash does not match result",
+            developer_fields={
+                "constraint_id": "trust_gate.claims_proof_mismatch",
+                "token_proof_hash": token_proof_hash,
+                "result_proof_ref": result.proof_ref,
+                "policy": policy,
+            },
+        )
+
+    return None
+
+
+def enforce_trust_decision(
+    result: DiagnosticResult,
+    *,
+    attestation_token: Optional[str] = None,
+    require_attestation: bool = True,
+    trusted_issuers: Optional[List[str]] = None,
+    query: Optional[str] = None,
+) -> DiagnosticResult:
+    """Enforce trust-boundary gate: VERIFIED without required attestation → BLOCKED.
+
+    This is the single enforcement point for consumption-side attestation
+    validation. Every release gate / trust boundary MUST route verification
+    results through this function before making admission decisions.
+
+    Args:
+        result: The verification DiagnosticResult from the engine.
+        attestation_token: The JWT attestation token (from
+            attestation.create_verification_attestation). May be None.
+        require_attestation: If True (default), VERIFIED without a valid
+            attestation token is blocked. If False, attestation is advisory.
+        trusted_issuers: Optional list of trusted issuer DIDs for token
+            verification. Defaults to None (uses AttestationService default).
+        query: Original query string for query_hash binding validation.
+            If provided, the attestation token's qwed.query_hash claim must
+            match sha256(query). Without it, query binding is not checked.
+
+    Returns:
+        The original DiagnosticResult if all policy checks pass, or a BLOCKED
+        DiagnosticResult with fail-closed semantics if attestation is missing,
+        invalid, or claims do not match the result.
+
+    Audit event:
+        Every block decision is logged at WARNING level with structured
+        fields: constraint_id, reason, policy, and error where applicable.
+    """
+    policy = "mandatory" if require_attestation else "optional"
+
+    if result.is_fail_closed:
+        return result
+
+    if not attestation_token:
+        if not require_attestation:
+            return result
+        logger.warning(
+            "trust_gate.blocked constraint_id=%s reason=missing_attestation_token policy=%s",
+            result.constraint_id or "unknown",
+            policy,
+        )
+        return DiagnosticResult.blocked(
+            agent_message="Verification blocked — proof artifact missing",
+            developer_fields={
+                "constraint_id": "trust_gate.mandatory_attestation_missing",
+                "missing": "attestation_token",
+                "policy": policy,
+                "verdict_status": result.status.value,
+                "verdict_proof_ref": result.proof_ref,
+            },
+        )
+
+    verification = _verify_attestation_token(attestation_token, trusted_issuers, result, policy)
+    if isinstance(verification, DiagnosticResult):
+        return verification
+    _is_valid, token_claims, _error = verification
+
+    validation = _validate_attestation_claims(result, token_claims, query, policy)
+    if validation is not None:
+        return validation
+
+    return result
+
+
 __all__ = [
     "DiagnosticStatus",
     "DiagnosticResult",
     "AdvisoryCheck",
     "compute_proof_ref",
+    "enforce_trust_decision",
 ]

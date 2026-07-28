@@ -5,6 +5,7 @@ This module orchestrates the entire request lifecycle:
 Request -> Policy Check -> Routing -> Translation -> Verification -> Response
 """
 
+import hashlib
 import time
 import logging
 from typing import Dict, Any, Optional
@@ -17,6 +18,7 @@ from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.core.observability import metrics_collector
 from qwed_new.core.security import EnhancedSecurityGateway, redact_pii
 from qwed_new.core.output_sanitizer import OutputSanitizer
+from qwed_new.core.diagnostics import DiagnosticResult, enforce_trust_decision
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +132,31 @@ class ControlPlane:
             response_status = self._determine_math_response_status(verification_result)
             trust_boundary = self._build_math_trust_boundary(provider, verification_result)
             trust_boundary["overall_status"] = response_status
+
+            # 4.5 Trust Boundary Enforcement (Issue #191)
+            # Convert legacy dict to DiagnosticResult for enforcement.
+            # Advisory mode (require_attestation=False) until engines are
+            # fully migrated to DiagnosticResult.
+            try:
+                dr = DiagnosticResult.from_legacy_dict(verification_result, engine="math")
+                enforced = enforce_trust_decision(
+                    dr,
+                    require_attestation=False,
+                    query=query,
+                )
+                trust_boundary["trust_enforced"] = enforced.status.value
+                trust_boundary["attestation_policy"] = "advisory"
+            except ValueError as exc:
+                # Legacy VERIFIED results without proof_ref cannot be
+                # represented as DiagnosticResult (from_legacy_dict raises).
+                # Log the specific reason and mark enforcement as skipped.
+                logger.warning(
+                    "trust_boundary.enforcement_skipped query_hash=%s reason=from_legacy_dict error=%s",
+                    hashlib.sha256(query.encode()).hexdigest()[:16] if query else "unknown",
+                    exc,
+                )
+                trust_boundary["trust_enforced"] = "not_applicable"
+                trust_boundary["attestation_policy"] = "advisory"
             
             # 5. Response Construction
             response = {

@@ -273,7 +273,8 @@ class TestAttestationCoverage(unittest.TestCase):
         with patch("src.qwed_new.core.attestation.get_attestation_service", return_value=self.service):
             result = create_verification_attestation(
                 status="verified", verified=True,
-                engine="test_engine", query="test query"
+                engine="test_engine", query="test query",
+                proof_data="sha256:abc123"
             )
             self.assertIsInstance(result, AttestationResult)
             self.assertTrue(result.is_issued)
@@ -296,7 +297,7 @@ class TestAttestationCoverage(unittest.TestCase):
     def test_create_verification_attestation_failure(self):
         """Failure path must return AttestationResult with BLOCKED status, never None."""
         with patch("src.qwed_new.core.attestation.get_attestation_service", side_effect=Exception("Boom")):
-            result = create_verification_attestation("s", True, "e", "q")
+            result = create_verification_attestation("s", True, "e", "q", proof_data="sha256:abc123")
             self.assertIsNotNone(result, "Must never return None")
             self.assertEqual(result.status, AttestationStatus.BLOCKED)
             self.assertFalse(result.is_issued)

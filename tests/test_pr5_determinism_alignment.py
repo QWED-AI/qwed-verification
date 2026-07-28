@@ -67,6 +67,8 @@ async def test_control_plane_marks_translated_math_as_inconclusive(monkeypatch):
         "translation_claim_self_consistent": True,
         "provider_used": "openai_compat",
         "overall_status": "INCONCLUSIVE",
+        "trust_enforced": "not_applicable",
+        "attestation_policy": "advisory",
     }
     assert captured["organization_id"] == 42
     assert captured["status"] == "INCONCLUSIVE"
