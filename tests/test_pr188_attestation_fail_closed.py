@@ -212,17 +212,6 @@ class TestFailClosedContract(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.service.create_attestation(vr, "q")
 
-    def test_create_verification_attestation_oversized_returns_blocked(self):
-        """Wrapper must return BLOCKED (not None, not ISSUED) when payload is too large."""
-        oversized = "X" * 4000
-        with patch.object(attest_mod, "get_attestation_service", return_value=self.service):
-            result = create_verification_attestation(
-                status="VERIFIED", verified=True, engine=oversized, query="q",
-                proof_data="sha256:abc",
-            )
-        self.assertIsNotNone(result)
-        self.assertEqual(result.status, AttestationStatus.BLOCKED)
-
     def test_create_attestation_accepts_boundary_payload(self):
         """create_attestation must accept a payload at the encoded-size limit."""
         vr = attest_mod.VerificationResult(
@@ -304,6 +293,17 @@ class TestIssuanceEnforcesProofArtifact(unittest.TestCase):
         # Guard did NOT trigger — proof_data was provided
         self.assertNotEqual(result.error_code, "VERIFIED_WITHOUT_PROOF",
                             "proof_data provided — must not trigger the proof check")
+
+    def test_oversized_engine_returns_blocked(self):
+        """create_verification_attestation with oversized engine must return BLOCKED."""
+        with patch.object(attest_mod, "HAS_CRYPTO", True):
+            result = create_verification_attestation(
+                status="VERIFIED", verified=True,
+                engine="X" * 4000, query="q",
+                proof_data="sha256:abc",
+            )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.status, AttestationStatus.BLOCKED)
 
 
 @unittest.skipUnless(HAS_CRYPTO, "cryptography not installed")
