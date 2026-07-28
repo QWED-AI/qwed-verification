@@ -608,7 +608,7 @@ class MultiVLMVerifier:
         # First try deterministic methods
         base_result = self.base_verifier.verify_image(image_bytes, claim)
 
-        if base_result.is_verified:
+        if base_result.is_verified or base_result.status.value == "BLOCKED":
             return base_result
 
         # Need VLM consensus — advisory only

@@ -240,3 +240,114 @@ class TestConsensusVerifierAdvisoryOnly:
         ]
         consensus = self.verifier._calculate_consensus(results)
         assert consensus["diagnostic_status"] == "VERIFIED"
+
+    def test_majority_consensus_unverifiable(self):
+        """Majority agreement → consensus UNVERIFIABLE (not unanimous)."""
+        results = [
+            EngineResult(
+                engine_name="SymPy", method="math", result=4,
+                confidence=1.0, latency_ms=10, success=True,
+                status="VERIFIED",
+            ),
+            EngineResult(
+                engine_name="Python", method="code", result=5,
+                confidence=0.99, latency_ms=10, success=True,
+                status="VERIFIED",
+            ),
+            EngineResult(
+                engine_name="Z3", method="logic", result=4,
+                confidence=0.995, latency_ms=10, success=True,
+                status="VERIFIED",
+            ),
+        ]
+        consensus = self.verifier._calculate_consensus(results)
+        assert consensus["diagnostic_status"] == "UNVERIFIABLE"
+        assert consensus["status"] == "majority"
+
+    def test_split_consensus_unverifiable(self):
+        """Split agreement (3 engines, 3 different answers) → consensus UNVERIFIABLE."""
+        results = [
+            EngineResult(
+                engine_name="SymPy", method="math", result=4,
+                confidence=1.0, latency_ms=10, success=True,
+                status="VERIFIED",
+            ),
+            EngineResult(
+                engine_name="Python", method="code", result=5,
+                confidence=0.99, latency_ms=10, success=True,
+                status="VERIFIED",
+            ),
+            EngineResult(
+                engine_name="Z3", method="logic", result=6,
+                confidence=0.995, latency_ms=10, success=True,
+                status="VERIFIED",
+            ),
+        ]
+        consensus = self.verifier._calculate_consensus(results)
+        assert consensus["diagnostic_status"] == "UNVERIFIABLE"
+        assert consensus["status"] == "split"
+
+    def test_stats_result_zero_gets_full_confidence(self):
+        """Stats result=0 should get 0.98 confidence (not 0.0 from truthiness)."""
+        result = EngineResult(
+            engine_name="Stats", method="statistical_analysis",
+            result=0, confidence=0.98,
+            latency_ms=10, success=True, status="VERIFIED",
+        )
+        assert result.confidence == 0.98
+
+
+# ========================================================================
+# ImageVerifier — deterministic refutation and MultiVLM edge cases
+# ========================================================================
+
+class TestImageVerifierEdgeCases:
+
+    def setup_method(self):
+        self.verifier = ImageVerifier(use_vlm_fallback=False)
+
+    def test_deterministic_refutation_blocked(self):
+        """Dimension mismatch → BLOCKED (not VERIFIED)."""
+        png_header = b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\x00IHDR'
+        w, h = 100, 200
+        header = png_header + w.to_bytes(4, 'big') + h.to_bytes(4, 'big')
+        # Claim 800x600 but actual is 100x200
+        result = self.verifier.verify_image(header + b'A' * 100, "800x600")
+        assert not result.is_verified
+        assert result.status.value == "BLOCKED"
+        assert result.constraint_id == "image_verifier.deterministic_refuted"
+
+    def test_image_width_refutation_blocked(self):
+        """Width mismatch → BLOCKED."""
+        png_header = b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\x00IHDR'
+        w, h = 100, 200
+        header = png_header + w.to_bytes(4, 'big') + h.to_bytes(4, 'big')
+        result = self.verifier.verify_image(header + b'A' * 100, "width is 999")
+        assert not result.is_verified
+        assert result.status.value == "BLOCKED"
+
+
+# ========================================================================
+# GraphFactVerifier — near-exact threshold edge cases
+# ========================================================================
+
+class TestGraphFactVerifierThresholdEdgeCases:
+
+    def setup_method(self):
+        self.verifier = GraphFactVerifier()
+
+    def test_mixed_scores_partial_and_absent(self):
+        """One near-exact + one partial → UNVERIFIABLE, not VERIFIED."""
+        result = self.verifier.verify(
+            "Alice founded Acme. Bob founded Twitter.",
+            "Alice founded Acme. Charlie founded Twitter.",
+        )
+        assert not result.is_verified
+
+    def test_all_near_exact_verified(self):
+        """All triples with near-exact scores → VERIFIED."""
+        result = self.verifier.verify(
+            "Alice founded Acme. Bob founded Twitter.",
+            "Alice founded Acme. Bob founded Twitter.",
+        )
+        assert result.is_verified
