@@ -17,7 +17,9 @@ def test_fact_verifier_bounded_regex():
     result = verifier.verify_fact(claim, context)
     
     # Verify entity matching logic still works
-    assert "2024" in result["reasoning"] or result["scores"]["entity_match"] > 0.5
+    entity_match = result.developer_fields["scores"]["entity_match"]
+    evidence = result.developer_fields.get("evidence", "")
+    assert "2024" in evidence or entity_match > 0.5
     
     # 2. Long Input - Should be truncated/handled safely
     # Create valid sentence structure but very long
@@ -27,7 +29,7 @@ def test_fact_verifier_bounded_regex():
     # This triggers _segment_sentences with the new safe_pattern
     result = verifier.verify_fact("test", long_context)
     # Should run without timeout/error
-    assert result["verdict"] is not None
+    assert result.status is not None
 
 def test_image_verifier_bounded_regex():
     """
