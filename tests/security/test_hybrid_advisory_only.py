@@ -535,13 +535,42 @@ class TestFactVerifierLLMAdvisoryOnly:
     def test_llm_does_not_change_verdict(self):
         """LLM advisory is separate — verdict stays deterministic."""
         verifier = FactVerifier(use_llm_fallback=True)
-        # Low-confidence claim will trigger LLM path
         result = verifier.verify_fact(
             "Random unrelated claim",
             "Completely different topic here",
             provider="dummy",
         )
-        # Even with provider set, LLM result is advisory only
         assert hasattr(result, "status")
-        # The deterministic verdict is stored in developer_fields
         assert "deterministic_verdict" in result.developer_fields
+
+    def test_llm_advisory_check_populated(self, monkeypatch):
+        """When LLM returns a result, advisory_checks are populated."""
+        verifier = FactVerifier(use_llm_fallback=True)
+
+        def mock_llm(claim, context, provider):
+            return {"verdict": "SUPPORTED", "confidence": 0.85, "reasoning": "Mock LLM analysis"}
+
+        monkeypatch.setattr(verifier, "_llm_fallback", mock_llm)
+        result = verifier.verify_fact(
+            "Random unrelated claim",
+            "Completely different topic here",
+            provider="dummy",
+        )
+        checks = result.advisory_checks
+        assert len(checks) >= 1
+        llm_check = [c for c in checks if c.name == "llm_fallback"]
+        assert len(llm_check) == 1
+        assert llm_check[0].advisory_only
+        assert llm_check[0].details["llm_verdict"] == "SUPPORTED"
+
+    def test_pipeline_exception_returns_blocked(self, monkeypatch):
+        """Exception in deterministic pipeline → BLOCKED."""
+        verifier = FactVerifier(use_llm_fallback=False)
+
+        def crash(*args, **kwargs):
+            raise RuntimeError("Something broke")
+
+        monkeypatch.setattr(verifier, "_segment_sentences", crash)
+        result = verifier.verify_fact("claim", "context")
+        assert result.status.value == "BLOCKED"
+        assert result.constraint_id == "fact_verifier.execution_error"
