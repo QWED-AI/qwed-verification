@@ -84,6 +84,45 @@ def test_verify_fact_exception_handling():
         assert data["error"] == "Internal verification error"
         assert "API_KEY_LEAK" not in str(data)
 
+def test_verify_fact_success_path():
+    """
+    Test that verify_fact success returns DiagnosticResult via to_dict().
+    """
+    from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck, DiagnosticStatus
+    mock_result = DiagnosticResult(
+        status=DiagnosticStatus.VERIFIED,
+        agent_message="Test verified",
+        developer_fields={
+            "methods_used": [{"name": "heuristic", "advisory_only": False}],
+            "advisory_checks": [
+                AdvisoryCheck(
+                    name="llm_fallback",
+                    details={"llm_verdict": "SUPPORTED", "confidence": 0.85},
+                )
+            ],
+        },
+        proof_ref="test_ref",
+    )
+    with patch('qwed_new.core.fact_verifier.FactVerifier.verify_fact', return_value=mock_result):
+        response = client.post(
+            "/verify/fact",
+            json={
+                "claim": "Test claim",
+                "context": "Test context"
+            }
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "VERIFIED"
+        assert data["proof_ref"] == "test_ref"
+        assert data["is_authoritative"] is True
+        assert "developer_fields" in data
+        checks = data["developer_fields"]["advisory_checks"]
+        assert len(checks) == 1
+        assert checks[0]["name"] == "llm_fallback"
+        assert checks[0]["advisory_only"] is True
+
 def test_verify_code_exception_handling():
     """
     Test that verify_code catches internal errors and returns a sanitized message.
