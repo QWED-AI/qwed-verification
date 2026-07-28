@@ -324,7 +324,7 @@ class TestKeyLifecycleMetadata(unittest.TestCase):
         with self.assertRaises(ValueError):
             IssuerKeyPair("QWED_TEST_ISS", "ID_B", key_continuity_policy="invalid")
         with self.assertRaises(ValueError):
-            IssuerKeyPair("QWED_TEST_ISS", "ID_B", key_continuity_policy="persistent")
+            IssuerKeyPair("QWED_TEST_ISS", "ID_B", key_continuity_policy="persistent")  # qwed-sec: test-only invalid policy name, not a credential
 
     def test_get_issuer_info_exposes_key_lifecycle(self):
         svc = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="ID_C")
