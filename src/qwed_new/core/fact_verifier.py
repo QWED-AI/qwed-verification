@@ -15,9 +15,12 @@ from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 import re
 import math
+import logging
 from collections import Counter
 
 from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -174,9 +177,10 @@ class FactVerifier:
                 negation_details=negation_details
             )
         except Exception as exc:
+            logger.exception("Fact verification pipeline failed")
             return DiagnosticResult.blocked(
                 "Fact verification pipeline failed",
-                {"constraint_id": "fact_verifier.execution_error", "error": str(exc)},
+                {"constraint_id": "fact_verifier.execution_error", "error_type": type(exc).__name__},
             )
 
         # Step 8: LLM fallback is advisory-only (fixes #133), confidence-gated
