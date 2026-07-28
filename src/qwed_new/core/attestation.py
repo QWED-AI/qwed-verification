@@ -14,6 +14,7 @@ Security contract (Issue #188):
 import hashlib
 import json
 import base64
+import binascii
 import logging
 import time
 import uuid
@@ -386,8 +387,8 @@ class AttestationService:
                 payload_data = base64.urlsafe_b64decode(payload_segment + padding)
                 unverified = json.loads(payload_data)
                 if not isinstance(unverified, dict):
-                    return False, None, "Payload is not a JSON object"
-            except (IndexError, ValueError, json.JSONDecodeError, TypeError):
+                    return False, None, "Invalid token format"
+            except (IndexError, ValueError, binascii.Error, json.JSONDecodeError, TypeError):
                 return False, None, "Invalid token format"
 
             issuer = unverified.get("iss")
