@@ -42,9 +42,6 @@ class SecurityGateway:
     """
     
     def __init__(self):
-        # Math keywords whitelist (don't flag as malicious)
-        self.math_whitelist = ['sqrt', 'log', 'ln', 'exp', 'sin', 'cos', 'tan', 'abs', 'max', 'min']
-        
         # Heuristic patterns for Prompt Injection
         # These are common "jailbreak" phrases.
         self.injection_patterns = [
