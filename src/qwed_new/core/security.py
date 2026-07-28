@@ -78,17 +78,20 @@ class SecurityGateway:
         if len(prompt) > 10000:
             return False, "Input too long (max 10000 chars)"
 
-        # 2. Check if query contains whitelisted math terms (bypass checks)
-        prompt_lower = prompt.lower()
-        if any(math_term in prompt_lower for math_term in self.math_whitelist):
-            # Still check length but skip pattern matching
-            return True, None
-
-        # 3. Heuristic Check
+        # 2. Heuristic Check — runs for ALL inputs (no whitelist bypass)
         for pattern in self.injection_patterns:
             if re.search(pattern, prompt, re.IGNORECASE):
                 return False, f"Potential Prompt Injection detected: '{pattern}'"
-        
+
+        # 3. Math whitelist token check — not a bypass, just an additional
+        # validation that the input resembles a legitimate math expression.
+        prompt_lower = prompt.lower()
+        if any(
+            re.search(rf"\b{re.escape(term)}\b", prompt_lower)
+            for term in self.math_whitelist
+        ):
+            return True, None
+
         return True, None
 
     def redact_pii(self, text: str) -> str:
