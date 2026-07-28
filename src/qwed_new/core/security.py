@@ -78,19 +78,14 @@ class SecurityGateway:
         if len(prompt) > 10000:
             return False, "Input too long (max 10000 chars)"
 
-        # 2. Heuristic Check — runs for ALL inputs (no whitelist bypass)
-        for pattern in self.injection_patterns:
-            if re.search(pattern, prompt, re.IGNORECASE):
-                return False, f"Potential Prompt Injection detected: '{pattern}'"
+        # 2. Normalize whitespace — collapse tabs, newlines, repeated spaces
+        # into single spaces so whitespace-obfuscated injections match patterns.
+        normalized = re.sub(r'\s+', ' ', prompt).strip()
 
-        # 3. Math whitelist token check — not a bypass, just an additional
-        # validation that the input resembles a legitimate math expression.
-        prompt_lower = prompt.lower()
-        if any(
-            re.search(rf"\b{re.escape(term)}\b", prompt_lower)
-            for term in self.math_whitelist
-        ):
-            return True, None
+        # 3. Heuristic Check — runs for ALL inputs (no whitelist bypass)
+        for pattern in self.injection_patterns:
+            if re.search(pattern, normalized, re.IGNORECASE):
+                return False, f"Potential Prompt Injection detected: '{pattern}'"
 
         return True, None
 
