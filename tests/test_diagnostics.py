@@ -748,7 +748,7 @@ class TestEnforceTrustDecision(unittest.TestCase):
 
             r = enforce_trust_decision(
                 self.verified,
-                attestation_token="invalid.jwt.token",
+                attestation_token="QWED_TEST_INVALID_TOKEN",
             )
 
         self.assertTrue(r.is_fail_closed)
@@ -760,20 +760,25 @@ class TestEnforceTrustDecision(unittest.TestCase):
 
     # --- (c) VERIFIED + valid token → passes ---
 
+    def _verified_claims(self) -> dict:
+        """Build a claim set matching self.verified (proof_ref + status)."""
+        return {
+            "qwed": {
+                "result": {"status": "VERIFIED", "engine": "math"},
+                "proof_hash": self.verified.proof_ref,
+            },
+        }
+
     def test_verified_valid_token_passes(self):
         """VERIFIED with valid token (matching claims) must return the original."""
         with patch("src.qwed_new.core.attestation.get_attestation_service") as mock_get:
             mock_svc = MagicMock()
-            mock_svc.verify_attestation.return_value = (
-                True,
-                {"qwed": {"result": {"status": "VERIFIED", "engine": "math"}}},
-                None,
-            )
+            mock_svc.verify_attestation.return_value = (True, self._verified_claims(), None)
             mock_get.return_value = mock_svc
 
             r = enforce_trust_decision(
                 self.verified,
-                attestation_token="valid.jwt.token",
+                attestation_token="QWED_TEST_VALID_TOKEN",
             )
 
         self.assertTrue(r.is_verified)
@@ -784,22 +789,15 @@ class TestEnforceTrustDecision(unittest.TestCase):
         """VERIFIED with valid token + matching query_hash must pass."""
         with patch("src.qwed_new.core.attestation.get_attestation_service") as mock_get:
             mock_svc = MagicMock()
+            claims = self._verified_claims()
             expected_qh = "sha256:" + hashlib.sha256(b"2+2=4").hexdigest()
-            mock_svc.verify_attestation.return_value = (
-                True,
-                {
-                    "qwed": {
-                        "result": {"status": "VERIFIED", "engine": "math"},
-                        "query_hash": expected_qh,
-                    }
-                },
-                None,
-            )
+            claims["qwed"]["query_hash"] = expected_qh
+            mock_svc.verify_attestation.return_value = (True, claims, None)
             mock_get.return_value = mock_svc
 
             r = enforce_trust_decision(
                 self.verified,
-                attestation_token="valid.jwt.token",
+                attestation_token="QWED_TEST_VALID_TOKEN",
                 query="2+2=4",
             )
 
@@ -828,7 +826,7 @@ class TestEnforceTrustDecision(unittest.TestCase):
             r = enforce_trust_decision(
                 self.verified,
                 require_attestation=False,
-                attestation_token="bad.token.here",
+                attestation_token="QWED_TEST_BAD_TOKEN",
             )
 
         self.assertTrue(r.is_fail_closed)
@@ -853,7 +851,7 @@ class TestEnforceTrustDecision(unittest.TestCase):
 
     def test_unverifiable_with_token_passes_through(self):
         """UNVERIFIABLE must pass through even with a token (attestation irrelevant)."""
-        r = enforce_trust_decision(self.unverifiable, attestation_token="some.token")
+        r = enforce_trust_decision(self.unverifiable, attestation_token="QWED_TEST_DUMMY_TOKEN")
         self.assertTrue(r.is_fail_closed)
         self.assertEqual(r.constraint_id, "math.inconclusive")
 
@@ -868,7 +866,7 @@ class TestEnforceTrustDecision(unittest.TestCase):
 
             r = enforce_trust_decision(
                 self.verified,
-                attestation_token="raising.token",
+                attestation_token="QWED_TEST_RAISING_TOKEN",
             )
 
         self.assertTrue(r.is_fail_closed)
@@ -901,7 +899,7 @@ class TestEnforceTrustDecision(unittest.TestCase):
 
             r = enforce_trust_decision(
                 self.verified,
-                attestation_token="mismatched.status.token",
+                attestation_token="QWED_TEST_MISMATCHED_STATUS_TOKEN",
             )
 
         self.assertTrue(r.is_fail_closed)
@@ -928,7 +926,7 @@ class TestEnforceTrustDecision(unittest.TestCase):
 
             r = enforce_trust_decision(
                 self.verified,
-                attestation_token="wrong.query.token",
+                attestation_token="QWED_TEST_WRONG_QUERY_TOKEN",
                 query="some other query",
             )
 
@@ -956,7 +954,7 @@ class TestEnforceTrustDecision(unittest.TestCase):
 
             r = enforce_trust_decision(
                 self.verified,
-                attestation_token="wrong.proof.token",
+                attestation_token="QWED_TEST_WRONG_PROOF_TOKEN",
             )
 
         self.assertTrue(r.is_fail_closed)
@@ -964,6 +962,57 @@ class TestEnforceTrustDecision(unittest.TestCase):
             r.developer_fields.get("constraint_id"),
             "trust_gate.claims_proof_mismatch",
         )
+
+    # --- Claims binding: missing / malformed claims ---
+
+    def test_claims_missing_qwed_blocked(self):
+        """Token without qwed claims must be blocked (fail-closed)."""
+        with patch("src.qwed_new.core.attestation.get_attestation_service") as mock_get:
+            mock_svc = MagicMock()
+            mock_svc.verify_attestation.return_value = (True, {}, None)
+            mock_get.return_value = mock_svc
+
+            r = enforce_trust_decision(
+                self.verified,
+                attestation_token="QWED_TEST_NO_QWED_CLAIMS",
+            )
+
+        self.assertTrue(r.is_fail_closed)
+        self.assertEqual(r.developer_fields.get("constraint_id"), "trust_gate.claims_missing")
+
+    def test_claims_missing_result_blocked(self):
+        """Token with qwed but no result must be blocked."""
+        with patch("src.qwed_new.core.attestation.get_attestation_service") as mock_get:
+            mock_svc = MagicMock()
+            mock_svc.verify_attestation.return_value = (
+                True,
+                {"qwed": {"query_hash": "sha256:abc"}},
+                None,
+            )
+            mock_get.return_value = mock_svc
+
+            r = enforce_trust_decision(
+                self.verified,
+                attestation_token="QWED_TEST_NO_RESULT_CLAIM",
+            )
+
+        self.assertTrue(r.is_fail_closed)
+        self.assertEqual(r.developer_fields.get("constraint_id"), "trust_gate.claims_missing")
+
+    def test_claims_qwed_not_dict_blocked(self):
+        """Token where qwed is not a dict must be blocked."""
+        with patch("src.qwed_new.core.attestation.get_attestation_service") as mock_get:
+            mock_svc = MagicMock()
+            mock_svc.verify_attestation.return_value = (True, {"qwed": "not_a_dict"}, None)
+            mock_get.return_value = mock_svc
+
+            r = enforce_trust_decision(
+                self.verified,
+                attestation_token="QWED_TEST_QWED_NOT_DICT",
+            )
+
+        self.assertTrue(r.is_fail_closed)
+        self.assertEqual(r.developer_fields.get("constraint_id"), "trust_gate.claims_missing")
 
 
 if __name__ == "__main__":

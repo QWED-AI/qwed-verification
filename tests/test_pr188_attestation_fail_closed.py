@@ -10,6 +10,7 @@ Acceptance criteria verified here:
 - [x] Tests cover signing failure, crypto unavailable, restart continuity, caller fail-closed
 """
 
+import hashlib
 import unittest
 from unittest.mock import patch, MagicMock
 import src.qwed_new.core.attestation as attest_mod
@@ -154,6 +155,24 @@ class TestFailClosedContract(unittest.TestCase):
             result = create_verification_attestation("VERIFIED", True, "math", "2+2", proof_data="sha256:mno345")
         self.assertIsNotNone(result)
 
+    def test_issued_with_proof_hash(self):
+        """ISSUED token with proof_data must contain proof_hash matching the artifact."""
+        with patch.object(attest_mod, "get_attestation_service", return_value=self.service):
+            result = create_verification_attestation(
+                "VERIFIED", True, "math", "2+2",
+                proof_data="sha256:abcdef123456",
+            )
+        self.assertTrue(result.is_issued, f"Expected ISSUED, got {result.error}")
+        self.assertIsNotNone(result.token)
+        is_valid, claims, err = self.service.verify_attestation(result.token)
+        self.assertTrue(is_valid, f"Token verification failed: {err}")
+        qwed = (claims or {}).get("qwed", {})
+        self.assertIn("proof_hash", qwed, "ISSUED token must contain proof_hash claim")
+        self.assertEqual(
+            qwed["proof_hash"],
+            "sha256:" + hashlib.sha256("sha256:abcdef123456".encode()).hexdigest(),
+        )
+
     def test_no_none_return_signing_failure_path(self):
         svc = AttestationService(issuer_did="did:test:188", key_suffix="fail")
         svc.create_attestation = MagicMock(side_effect=ValueError("bad key"))
@@ -246,18 +265,6 @@ class TestIssuanceEnforcesProofArtifact(unittest.TestCase):
         # Guard did NOT trigger — proof_data was provided
         self.assertNotEqual(result.error_code, "VERIFIED_WITHOUT_PROOF",
                             "proof_data provided — must not trigger the proof check")
-        if result.is_issued:
-            self.assertIsNotNone(result.token)
-            # Verify the token contains proof_hash claim
-            try:
-                svc = get_attestation_service()
-                is_valid, claims, _ = svc.verify_attestation(result.token)
-                if is_valid:
-                    qwed = (claims or {}).get("qwed", {})
-                    self.assertIn("proof_hash", qwed,
-                                  "ISSUED token must contain proof_hash claim")
-            except Exception:
-                pass  # Verification may fail without real crypto; assertion is advisory
 
 
 @unittest.skipUnless(HAS_CRYPTO, "cryptography not installed")

@@ -5,6 +5,7 @@ This module orchestrates the entire request lifecycle:
 Request -> Policy Check -> Routing -> Translation -> Verification -> Response
 """
 
+import hashlib
 import time
 import logging
 from typing import Dict, Any, Optional
@@ -145,9 +146,15 @@ class ControlPlane:
                 )
                 trust_boundary["trust_enforced"] = enforced.status.value
                 trust_boundary["attestation_policy"] = "advisory"
-            except ValueError:
+            except ValueError as exc:
                 # Legacy VERIFIED results without proof_ref cannot be
-                # represented as DiagnosticResult. Skip enforcement.
+                # represented as DiagnosticResult (from_legacy_dict raises).
+                # Log the specific reason and mark enforcement as skipped.
+                logger.warning(
+                    "trust_boundary.enforcement_skipped query_hash=%s reason=from_legacy_dict error=%s",
+                    hashlib.sha256(query.encode()).hexdigest()[:16] if query else "unknown",
+                    exc,
+                )
                 trust_boundary["trust_enforced"] = "not_applicable"
                 trust_boundary["attestation_policy"] = "advisory"
             

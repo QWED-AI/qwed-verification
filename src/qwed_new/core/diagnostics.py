@@ -567,7 +567,7 @@ def enforce_trust_decision(
 
     Audit event:
         Every block decision is logged at WARNING level with structured
-        fields: action, token_present, policy, reason, constraint_id.
+        fields: constraint_id, reason, policy, and error where applicable.
     """
     policy = "mandatory" if require_attestation else "optional"
 
@@ -642,11 +642,29 @@ def enforce_trust_decision(
         )
 
     # Validate token claims against the result (bind token to this specific result)
-    qwed_claims = (token_claims or {}).get("qwed", {})
+    raw_qwed = (token_claims or {}).get("qwed")
+    qwed_claims = raw_qwed if isinstance(raw_qwed, dict) else None
+    raw_result_claims = qwed_claims.get("result") if qwed_claims else None
+    result_claims = raw_result_claims if isinstance(raw_result_claims, dict) else None
+    if result_claims is None:
+        logger.warning(
+            "trust_gate.blocked constraint_id=%s reason=claims_missing_or_malformed policy=%s",
+            result.constraint_id or "unknown",
+            policy,
+        )
+        return DiagnosticResult.blocked(
+            agent_message="Verification blocked — attestation claims missing or malformed",
+            developer_fields={
+                "constraint_id": "trust_gate.claims_missing",
+                "policy": policy,
+                "verdict_status": result.status.value,
+                "verdict_proof_ref": result.proof_ref,
+            },
+        )
 
     # Status must match
-    token_status = qwed_claims.get("result", {}).get("status")
-    if token_status and token_status != result.status.value:
+    token_status = result_claims.get("status")
+    if token_status != result.status.value:
         logger.warning(
             "trust_gate.blocked constraint_id=%s reason=claims_status_mismatch "
             "token_status=%s result_status=%s policy=%s",
@@ -669,7 +687,7 @@ def enforce_trust_decision(
     if query is not None:
         expected_query_hash = _compute_query_hash(query)
         token_query_hash = qwed_claims.get("query_hash")
-        if token_query_hash and token_query_hash != expected_query_hash:
+        if token_query_hash != expected_query_hash:
             logger.warning(
                 "trust_gate.blocked constraint_id=%s reason=claims_query_mismatch policy=%s",
                 result.constraint_id or "unknown",
@@ -685,9 +703,9 @@ def enforce_trust_decision(
                 },
             )
 
-    # Proof hash must match the result's proof_ref (both non-null)
+    # Proof hash must match the result's proof_ref
     token_proof_hash = qwed_claims.get("proof_hash")
-    if token_proof_hash and result.proof_ref and token_proof_hash != result.proof_ref:
+    if token_proof_hash != result.proof_ref:
         logger.warning(
             "trust_gate.blocked constraint_id=%s reason=claims_proof_mismatch policy=%s",
             result.constraint_id or "unknown",
