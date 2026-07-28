@@ -44,7 +44,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,7 @@ class AdvisoryCheck:
 # Proof reference computation — deterministic hash of retained evidence.
 # ---------------------------------------------------------------------------
 
-def compute_proof_ref(evidence: Union[Dict[str, Any], str]) -> str:
+def compute_proof_ref(evidence: Dict[str, Any] | str) -> str:
     """Compute a deterministic proof reference hash from retained evidence.
 
     The proof_ref binds the verdict (status=VERIFIED) to the specific evidence
