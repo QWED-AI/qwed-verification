@@ -438,7 +438,8 @@ class ConsensusVerifier:
                         confidence=0.0,
                         latency_ms=timeout_seconds * 1000,
                         success=False,
-                        error="Timeout"
+                        error="Timeout",
+                        status="BLOCKED",
                     ))
         except Exception as e:
             # Partial engine results are still usable for consensus calculation.
@@ -450,7 +451,8 @@ class ConsensusVerifier:
                 confidence=0.0,
                 latency_ms=(time.time() - start_time) * 1000,
                 success=False,
-                error=str(e)
+                error=str(e),
+                status="BLOCKED",
             ))
         
         consensus = self._calculate_consensus(results)
@@ -533,7 +535,8 @@ class ConsensusVerifier:
                     confidence=0.0,
                     latency_ms=0,
                     success=False,
-                    error=str(e)
+                    error=str(e),
+                    status="BLOCKED",
                 ))
         
         return results
@@ -556,7 +559,8 @@ class ConsensusVerifier:
                         confidence=0.0,
                         latency_ms=0,
                         success=False,
-                        error=str(e)
+                        error=str(e),
+                        status="BLOCKED",
                     ))
         
         return results
