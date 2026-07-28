@@ -32,6 +32,11 @@ import re
 from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck
 
 
+def _word_boundary_contained(a: str, b: str) -> bool:
+    """True if a is a word-boundary-delimited substring of b."""
+    return bool(re.search(r'\b' + re.escape(a) + r'\b', b))
+
+
 class VerificationStatus(Enum):
     """Fact verification status."""
     VERIFIED = "verified"
@@ -441,13 +446,13 @@ class GraphFactVerifier:
         return matches
     
     def _entity_matches(self, entity1: str, entity2: str) -> bool:
-        """Check if two entities match (exact or containment)."""
+        """Check if two entities match (exact or word-boundary containment)."""
         # Exact match
         if entity1 == entity2:
             return True
         
-        # Containment (one contains the other)
-        if entity1 in entity2 or entity2 in entity1:
+        # Word-boundary containment (e.g. "Modi" in "Narendra Modi" but NOT "Tim" in "Timothy")
+        if _word_boundary_contained(entity1, entity2) or _word_boundary_contained(entity2, entity1):
             return True
         
         # Check aliases

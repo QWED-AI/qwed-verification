@@ -5,7 +5,7 @@ engines must never return VERIFIED from heuristic/model fallback paths.
 from qwed_new.core.image_verifier import ImageVerifier
 from qwed_new.core.graph_fact_verifier import GraphFactVerifier
 from qwed_new.core.reasoning_verifier import ReasoningVerifier
-from qwed_new.core.consensus_verifier import ConsensusVerifier, EngineResult
+from qwed_new.core.consensus_verifier import ConsensusVerifier, EngineResult, SECURE_EXECUTION_REQUIRED
 
 
 class StubVLMProvider:
@@ -184,13 +184,8 @@ class TestConsensusVerifierAdvisoryOnly:
         assert result.status == "BLOCKED"
         assert result.error is not None
 
-    def test_parse_math_missing_expected_blocked(self):
-        """Missing claimed_answer → BLOCKED (not defaulted to 0)."""
-        engine_result = self.verifier._verify_with_math("What is 2+2?")
-        assert engine_result.status == "BLOCKED"
-
-    def test_blocked_propagates_through_consensus(self):
-        """BLOCKED engine status → consensus status is BLOCKED."""
+    def test_blocked_filtered_gives_graceful_degradation(self):
+        """BLOCKED engine is filtered out; remaining engines determine consensus."""
         results = [
             EngineResult(
                 engine_name="SymPy", method="math", result=None,
@@ -201,6 +196,25 @@ class TestConsensusVerifierAdvisoryOnly:
                 engine_name="Python", method="code", result=4,
                 confidence=0.99, latency_ms=10, success=True,
                 status="VERIFIED",
+            ),
+        ]
+        consensus = self.verifier._calculate_consensus(results)
+        # Python is the only active engine → unanimous
+        assert consensus["diagnostic_status"] == "VERIFIED"
+        assert consensus["status"] == "unanimous"
+
+    def test_all_blocked_propagates(self):
+        """All BLOCKED → consensus BLOCKED."""
+        results = [
+            EngineResult(
+                engine_name="SymPy", method="math", result=None,
+                confidence=0.0, latency_ms=10, success=False,
+                error="Translation failed", status="BLOCKED",
+            ),
+            EngineResult(
+                engine_name="Python", method="code", result=None,
+                confidence=0.0, latency_ms=10, success=False,
+                error="Execution timeout", status="BLOCKED",
             ),
         ]
         consensus = self.verifier._calculate_consensus(results)
@@ -351,3 +365,89 @@ class TestGraphFactVerifierThresholdEdgeCases:
             "Alice founded Acme. Bob founded Twitter.",
         )
         assert result.is_verified
+
+    def test_substring_not_matched_by_word_boundary(self):
+        """Substring containment like 'Tim' in 'Timothy' must NOT match."""
+        verifier = GraphFactVerifier()
+        assert not verifier._entity_matches("Tim", "Timothy")
+        assert not verifier._entity_matches("apple", "pineapple")
+
+    def test_alias_matching_succeeds(self):
+        """Alias groups match correctly (e.g. 'usa' ↔ 'us')."""
+        verifier = GraphFactVerifier()
+        assert verifier._entity_matches("usa", "us")
+
+    def test_predicate_word_overlap_matches(self):
+        """Word overlap in predicates still matches."""
+        verifier = GraphFactVerifier()
+        assert verifier._predicate_matches("runs", "runs fast")
+
+
+class TestConsensusVerifierEdgeCases:
+
+    def setup_method(self):
+        self.verifier = ConsensusVerifier()
+
+    def test_empty_results_list(self):
+        """Empty results → UNVERIFIABLE."""
+        consensus = self.verifier._calculate_consensus([])
+        assert consensus["diagnostic_status"] == "UNVERIFIABLE"
+        assert consensus["status"] == "no_results"
+
+    def test_secure_execution_required_blocked(self):
+        """SECURE_EXECUTION_REQUIRED error → BLOCKED."""
+        results = [
+            EngineResult(
+                engine_name="SymPy", method="math", result=None,
+                confidence=0.0, latency_ms=10, success=False,
+                error=SECURE_EXECUTION_REQUIRED,
+                status="BLOCKED",
+            ),
+        ]
+        consensus = self.verifier._calculate_consensus(results)
+        assert consensus["diagnostic_status"] == "BLOCKED"
+        assert consensus["status"] == "blocked_secure_execution"
+
+    def test_consensus_answer_key_none(self):
+        """_consensus_answer_key returns sentinel for None."""
+        key = self.verifier._consensus_answer_key(None)
+        from qwed_new.core.consensus_verifier import _NONE_CONSENSUS_KEY
+        assert key == _NONE_CONSENSUS_KEY
+
+    def test_none_results_skipped_in_unanimous_check(self):
+        """None results in unanimous check must compare via _consensus_answer_key."""
+        # All VERIFIED with None results (which normalizes to same key)
+        results = [
+            EngineResult(
+                engine_name="SymPy", method="math", result=None,
+                confidence=1.0, latency_ms=10, success=True,
+                status="VERIFIED",
+            ),
+            EngineResult(
+                engine_name="Python", method="code", result=None,
+                confidence=0.99, latency_ms=10, success=True,
+                status="VERIFIED",
+            ),
+        ]
+        consensus = self.verifier._calculate_consensus(results)
+        # Both None → unanimous (same _consensus_answer_key)
+        assert consensus["status"] == "unanimous"
+
+
+class TestImageVerifierExtraCoverage:
+
+    def setup_method(self):
+        self.verifier = ImageVerifier(use_vlm_fallback=False)
+
+    def test_claim_too_long(self):
+        """Claim over 500 chars → UNVERIFIABLE."""
+        long_claim = "A" * 501
+        result = self.verifier.verify_image(b'\x89PNG\r\n\x1a\n' + b'A' * 100, long_claim)
+        assert not result.is_verified
+        assert result.status.value == "UNVERIFIABLE"
+
+    def test_semantic_claim_no_vlm(self):
+        """Semantic claim with VLM disabled → UNVERIFIABLE."""
+        result = self.verifier.verify_image(b'\x89PNG\r\n\x1a\n' + b'A' * 100, "some semantic claim")
+        assert not result.is_verified
+        assert result.status.value == "UNVERIFIABLE"

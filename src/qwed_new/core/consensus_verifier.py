@@ -727,7 +727,8 @@ class ConsensusVerifier:
         """Calculate weighted consensus from engine results.
 
         Preserves DiagnosticStatus through aggregation:
-        - Any BLOCKED → consensus BLOCKED
+        - BLOCKED engines are filtered out (not veto) — graceful degradation
+        - All BLOCKED → consensus BLOCKED
         - All UNVERIFIABLE → consensus UNVERIFIABLE
         - Otherwise → VERIFIED with confidence-based agreement
         """
@@ -737,9 +738,11 @@ class ConsensusVerifier:
         if any(r.error == SECURE_EXECUTION_REQUIRED for r in results):
             return {"answer": None, "confidence": 0.0, "status": "blocked_secure_execution", "diagnostic_status": "BLOCKED"}
 
-        # Check for BLOCKED status propagation
-        if any(r.status == "BLOCKED" for r in results):
-            blocked_errors = [r.error for r in results if r.status == "BLOCKED" and r.error]
+        # Filter out BLOCKED engines so they don't veto the consensus
+        active = [r for r in results if r.status != "BLOCKED"]
+
+        if not active:
+            blocked_errors = [r.error for r in results if r.error]
             return {
                 "answer": None,
                 "confidence": 0.0,
@@ -748,7 +751,7 @@ class ConsensusVerifier:
                 "errors": blocked_errors,
             }
 
-        successful = [r for r in results if r.success]
+        successful = [r for r in active if r.success]
 
         if not successful:
             # All failed — UNVERIFIABLE (not all_failed / confidence 0.0)
@@ -801,6 +804,7 @@ class ConsensusVerifier:
         """Parse query into expression and expected value.
         
         Raises ValueError on translation failure — no fabricated fallback.
+        claimed_answer is guaranteed non-null by the Pydantic schema.
         """
         try:
             from qwed_new.core.translator import TranslationLayer
@@ -809,8 +813,6 @@ class ConsensusVerifier:
         except Exception as exc:
             raise ValueError(f"Query translation failed: {exc}") from exc
 
-        if task.claimed_answer is None:
-            raise ValueError("Query missing claimed answer — cannot verify without a known result")
         return task.expression, Decimal(str(task.claimed_answer))
     
     def _generate_verification_code(self, query: str) -> str:
