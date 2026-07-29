@@ -269,7 +269,8 @@ def _run_init_smoke_suite() -> list[dict]:
     )
 
     logic_bad = logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"])
-    logic_bad_passed = not logic_bad.is_verified
+    from qwed_new.core.diagnostics import DiagnosticStatus
+    logic_bad_passed = logic_bad.status == DiagnosticStatus.UNVERIFIABLE
     tests.append(
         {
             "label": LOGIC_LABEL_UNSAT,
@@ -1553,18 +1554,20 @@ def _run_full_engine_tests() -> List[dict]:
         add_engine_error_cases("Logic", [LOGIC_LABEL_UNSAT, "x>3 AND x<10", "approval=1 AND approval=0"], exc)
 
     if logic_engine is not None:
-        def _logic_is_not_proved(p):
-            return not p.is_verified
+        from qwed_new.core.diagnostics import DiagnosticStatus
+
+        def _logic_is_unverifiable(p):
+            return p.status == DiagnosticStatus.UNVERIFIABLE
 
         def _logic_is_proved(p):
-            return p.is_verified
+            return p.status == DiagnosticStatus.VERIFIED
 
         run_case(
             "Logic",
             LOGIC_LABEL_UNSAT,
             "UNVERIFIABLE (contradiction)",
             lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"]),
-            _logic_is_not_proved,
+            _logic_is_unverifiable,
             lambda payload: f"status={payload.status.value}",
         )
         run_case(
@@ -1580,7 +1583,7 @@ def _run_full_engine_tests() -> List[dict]:
             "approval=1 AND approval=0",
             "UNVERIFIABLE (contradiction)",
             lambda: logic_engine.verify_logic({"approval": "Int"}, ["approval == 1", "approval == 0"]),
-            _logic_is_not_proved,
+            _logic_is_unverifiable,
             lambda payload: f"status={payload.status.value}",
         )
 

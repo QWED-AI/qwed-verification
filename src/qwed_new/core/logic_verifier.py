@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import re
 import logging
 
-from qwed_new.core.diagnostics import DiagnosticResult, compute_proof_ref
+from qwed_new.core.diagnostics import DiagnosticResult
 
 logger = logging.getLogger(__name__)
 
@@ -118,16 +118,21 @@ class LogicVerifier:
 
             solver = Solver()
             solver.set("timeout", self.timeout_ms)
+            if prove_unsat:
+                solver.set("unsat_core", True)
 
             z3_vars = self._create_z3_variables(variables)
             if isinstance(z3_vars, DiagnosticResult):
                 return z3_vars
 
-            for constr in constraints:
+            for i, constr in enumerate(constraints):
                 try:
                     z3_constraint = self._parse_constraint(constr, z3_vars)
                     if z3_constraint is not None:
-                        solver.add(z3_constraint)
+                        if prove_unsat:
+                            solver.assert_and_track(z3_constraint, f"c{i}")
+                        else:
+                            solver.add(z3_constraint)
                 except Exception as e:
                     return DiagnosticResult.blocked(
                         "Logic verification blocked: invalid constraint",
@@ -197,9 +202,24 @@ class LogicVerifier:
                 )
 
             all_vars = dict(variables)
+
+            if constraints:
+                blocked = self._ensure_sanitizer()
+                if blocked:
+                    return blocked
+                constraints = self._sanitize(constraints, variables)
+
+            free_vars = self._create_z3_variables(variables)
+            if isinstance(free_vars, DiagnosticResult):
+                return free_vars
+
+            solver = Solver()
+            solver.set("timeout", self.timeout_ms)
+
             for qf in quantified_formulas:
+                scope_vars = dict(variables)
                 for name, type_str in qf.bound_vars:
-                    existing = all_vars.get(name)
+                    existing = scope_vars.get(name)
                     if existing is not None and existing.lower() != type_str.lower():
                         return DiagnosticResult.blocked(
                             "Logic verification blocked: bound variable conflicts with declaration",
@@ -210,24 +230,16 @@ class LogicVerifier:
                                 "bound_type": type_str,
                             },
                         )
-                    all_vars[name] = type_str
+                    scope_vars[name] = type_str
 
-            if constraints:
-                blocked = self._ensure_sanitizer()
-                if blocked:
-                    return blocked
-                constraints = self._sanitize(constraints, all_vars)
+                scope_z3 = self._create_z3_variables(scope_vars)
+                if isinstance(scope_z3, DiagnosticResult):
+                    return scope_z3
 
-            solver = Solver()
-            solver.set("timeout", self.timeout_ms)
+                sanitized_body = self._sanitize([qf.body], scope_vars)[0]
+                body = self._parse_constraint(sanitized_body, scope_z3)
+                bound_z3_vars = [scope_z3[name] for name, _ in qf.bound_vars]
 
-            z3_vars = self._create_z3_variables(all_vars)
-            if isinstance(z3_vars, DiagnosticResult):
-                return z3_vars
-
-            for qf in quantified_formulas:
-                bound_z3_vars = [z3_vars[name] for name, _ in qf.bound_vars]
-                body = self._parse_constraint(qf.body, z3_vars)
                 if qf.quantifier.lower() == "forall":
                     quantified = ForAll(bound_z3_vars, body)
                 elif qf.quantifier.lower() == "exists":
@@ -238,8 +250,12 @@ class LogicVerifier:
                         {"constraint_id": "logic_verifier.unknown_quantifier", "quantifier": qf.quantifier},
                     )
                 solver.add(quantified)
+                all_vars.update(scope_vars)
 
             if constraints:
+                z3_vars = self._create_z3_variables(all_vars)
+                if isinstance(z3_vars, DiagnosticResult):
+                    return z3_vars
                 for constr in constraints:
                     z3_constraint = self._parse_constraint(constr, z3_vars)
                     if z3_constraint is not None:
@@ -470,6 +486,7 @@ class LogicVerifier:
             if blocked:
                 return blocked
             premises = self._sanitize(premises, variables)
+            conclusion = self._sanitize([conclusion], variables)[0]
 
             solver = Solver()
             solver.set("timeout", self.timeout_ms)
