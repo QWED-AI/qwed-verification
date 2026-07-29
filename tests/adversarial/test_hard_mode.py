@@ -255,7 +255,7 @@ class TestContradictoryInstructions:
                 f"rate == {user_rate}",
             ],
         )
-        assert result.status == "UNSAT", "Two different rates should be contradictory"
+        assert not result.is_verified, "Two different rates should be contradictory"
 
     @pytest.mark.skipif(
         not __import__("os").getenv("CUSTOM_BASE_URL"),

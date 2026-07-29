@@ -367,7 +367,7 @@ class TestCoTContradiction:
             {"x": "Int"},
             ["x > 10", "x == 5"],  # Contradictory!
         )
-        assert result.status == "UNSAT", "Z3 should find contradiction"
+        assert not result.is_verified, "Z3 should find contradiction"
 
     def test_consistent_claims_offline(self):
         """Offline: Z3 accepts consistent claims."""
@@ -377,7 +377,7 @@ class TestCoTContradiction:
             {"x": "Int"},
             ["x > 10", "x == 15"],  # Consistent
         )
-        assert result.status == "SAT", "Z3 should find solution"
+        assert result.is_verified, "Z3 should find solution"
 
     def test_theorem_proving_catches_bad_logic(self):
         """Offline: prove_theorem catches invalid reasoning."""
@@ -389,7 +389,7 @@ class TestCoTContradiction:
             premises=["x > 10"],
             conclusion="x > 5",
         )
-        assert valid.status == "SAT", "Valid theorem should be proved"
+        assert valid.is_verified, "Valid theorem should be proved"
 
         # Invalid: if x > 10 then x > 20
         invalid = verifier.prove_theorem(
@@ -397,7 +397,7 @@ class TestCoTContradiction:
             premises=["x > 10"],
             conclusion="x > 20",
         )
-        assert invalid.status == "UNSAT", "Invalid theorem should be refuted"
+        assert not invalid.is_verified, "Invalid theorem should be refuted"
 
     @pytest.mark.skipif(
         not __import__("os").getenv("CUSTOM_BASE_URL"),
@@ -440,15 +440,15 @@ class TestCoTContradiction:
         print(f"\n{'='*60}")
         print("CoT CONTRADICTION TEST")
         print(f"LLM says dividends possible: {'NO' if should_be_no else 'YES'}")
-        print(f"Z3 verdict: {result.status}")
-        print(f"Z3 confirms: dividends are {'IMPOSSIBLE' if result.status == 'UNSAT' else 'POSSIBLE'}")
-        if should_be_no and result.status == "UNSAT":
+        print(f"Z3 verdict: {result.status.value}")
+        print(f"Z3 confirms: dividends are {'IMPOSSIBLE' if not result.is_verified else 'POSSIBLE'}")
+        if should_be_no and not result.is_verified:
             print("✅ LLM and Z3 AGREE — reasoning is faithful")
-        elif not should_be_no and result.status == "UNSAT":
+        elif not should_be_no and not result.is_verified:
             print("🚨 CONTRADICTION — LLM says YES but Z3 proves NO")
         print(f"{'='*60}")
 
-        assert result.status == "UNSAT", "Z3 should prove dividends impossible"
+        assert not result.is_verified, "Z3 should prove dividends impossible"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

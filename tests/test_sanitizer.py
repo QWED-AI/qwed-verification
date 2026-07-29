@@ -13,11 +13,11 @@ def test_sanitizer():
     vars1 = {'x': 'Int'}
     constrs1 = ["x = 5", "x > 0"]
     result1 = verifier.verify_logic(vars1, constrs1)
-    print(f"Result: {result1.status}")
-    if result1.status == "SAT":
+    print(f"Result: {result1.status.value}")
+    if result1.is_verified:
         print("✅ PASSED (Sanitizer fixed '=')")
     else:
-        print(f"❌ FAILED: {result1.error}")
+        print(f"❌ FAILED: {result1.agent_message}")
     print("-" * 30)
 
     # Case 2: Bitwise '|' (Not implemented yet, but checking behavior)

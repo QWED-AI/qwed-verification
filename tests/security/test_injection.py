@@ -14,9 +14,9 @@ def test_no_eval_injection():
     variables = {"x": "Int"}
     constraints = ["x == __import__('os').system('echo pwned')"]
     
-    # Should return ERROR status, not execute
+    # Should return BLOCKED status, not execute
     result = verifier.verify_logic(variables, constraints, prove_unsat=False)
-    assert result.status == "ERROR"
+    assert not result.is_verified, f"Expected BLOCKED, got {result.status.value}"
 
 def test_path_traversal_prevention():
     """Ensure file paths cannot be manipulated."""

@@ -267,11 +267,12 @@ def _run_init_smoke_suite() -> list[dict]:
     )
 
     logic_bad = logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"])
+    logic_bad_passed = not getattr(logic_bad, "is_verified", getattr(logic_bad, "status", "UNSAT") != "UNSAT")
     tests.append(
         {
             "label": LOGIC_LABEL_UNSAT,
-            "passed": logic_bad.status == "UNSAT",
-            "result": "UNSAT",
+            "passed": logic_bad_passed,
+            "result": "UNVERIFIABLE",
         }
     )
 
@@ -1550,29 +1551,41 @@ def _run_full_engine_tests() -> List[dict]:
         add_engine_error_cases("Logic", [LOGIC_LABEL_UNSAT, "x>3 AND x<10", "approval=1 AND approval=0"], exc)
 
     if logic_engine is not None:
+        def _logic_is_not_proved(p):
+            iv = getattr(p, "is_verified", None)
+            if iv is not None:
+                return not iv
+            return getattr(p, "status", None) in ("UNSAT", "BLOCKED")
+
+        def _logic_is_proved(p):
+            iv = getattr(p, "is_verified", None)
+            if iv is not None:
+                return iv
+            return getattr(p, "status", None) == "SAT"
+
         run_case(
             "Logic",
             LOGIC_LABEL_UNSAT,
-            "UNSAT (contradiction)",
+            "UNVERIFIABLE (contradiction)",
             lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"]),
-            lambda payload: payload.status == "UNSAT",
-            lambda payload: f"status={payload.status}",
+            _logic_is_not_proved,
+            lambda payload: f"status={getattr(payload, 'status', payload)}",
         )
         run_case(
             "Logic",
             "x>3 AND x<10",
-            "SAT {x=4}",
+            "VERIFIED {x=4}",
             lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 3", "x < 10", "x == 4"]),
-            lambda payload: payload.status == "SAT",
-            lambda payload: f"model={payload.model}",
+            _logic_is_proved,
+            lambda payload: f"model={getattr(payload, 'developer_fields', getattr(payload, 'model', payload))}",
         )
         run_case(
             "Logic",
             "approval=1 AND approval=0",
-            "UNSAT (contradiction)",
+            "UNVERIFIABLE (contradiction)",
             lambda: logic_engine.verify_logic({"approval": "Int"}, ["approval == 1", "approval == 0"]),
-            lambda payload: payload.status == "UNSAT",
-            lambda payload: f"status={payload.status}",
+            _logic_is_not_proved,
+            lambda payload: f"status={getattr(payload, 'status', payload)}",
         )
 
     try:
