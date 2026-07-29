@@ -94,6 +94,15 @@ class LogicVerifier:
         return [{"name": name, "type": type_str} for name, type_str in sorted(variables.items())]
 
     @staticmethod
+    def _build_bitvector_model(solver: Solver) -> Dict[str, str]:
+        model = solver.model()
+        result = {}
+        for d in model.decls():
+            val = model[d]
+            result[d.name()] = hex(val.as_long()) if is_bv(val) else str(val)
+        return result
+
+    @staticmethod
     def _build_proof_data(solver: Solver, extra: Optional[List[str]] = None) -> Optional[str]:
         """Return raw assertion string for proof_ref hashing (no double-hash)."""
         assertions = [str(a) for a in solver.assertions()]
@@ -420,11 +429,7 @@ class LogicVerifier:
             fields["deterministic_verdict"] = str(result).upper()
 
             if result == sat:
-                model = solver.model()
-                solution = {}
-                for d in model.decls():
-                    val = model[d]
-                    solution[d.name()] = hex(val.as_long()) if is_bv(val) else str(val)
+                solution = self._build_bitvector_model(solver)
                 fields["model"] = solution
                 proof_data = self._build_proof_data(solver)
                 return DiagnosticResult.verified(
