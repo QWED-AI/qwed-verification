@@ -192,6 +192,9 @@ class LogicVerifier:
             blocked = self._ensure_sanitizer()
             if blocked:
                 return blocked
+            blocked = self._ensure_safe_evaluator()
+            if blocked:
+                return blocked
             constraints = self._sanitize(constraints, variables)
 
             solver = Solver()
@@ -314,6 +317,9 @@ class LogicVerifier:
                 blocked = self._ensure_sanitizer()
                 if blocked:
                     return blocked
+                blocked = self._ensure_safe_evaluator()
+                if blocked:
+                    return blocked
                 sanitized_body = self._sanitize([qf.body], scope_vars)[0]
                 body = self._parse_constraint(sanitized_body, scope_z3)
                 if body is None:
@@ -334,6 +340,9 @@ class LogicVerifier:
 
             if constraints:
                 blocked = self._ensure_sanitizer()
+                if blocked:
+                    return blocked
+                blocked = self._ensure_safe_evaluator()
                 if blocked:
                     return blocked
                 constraints = self._sanitize(constraints, variables)
@@ -411,6 +420,9 @@ class LogicVerifier:
                 z3_vars[name] = BitVec(name, width)
 
             blocked = self._ensure_sanitizer()
+            if blocked:
+                return blocked
+            blocked = self._ensure_safe_evaluator()
             if blocked:
                 return blocked
             constraint_strs = {name: f"BitVec[{w}]" for name, w in variables.items()}
@@ -499,6 +511,9 @@ class LogicVerifier:
             blocked = self._ensure_sanitizer()
             if blocked:
                 return blocked
+            blocked = self._ensure_safe_evaluator()
+            if blocked:
+                return blocked
             constraints = self._sanitize(constraints, all_symbols)
 
             z3_vars['Select'] = Select
@@ -563,6 +578,9 @@ class LogicVerifier:
             blocked = self._ensure_sanitizer()
             if blocked:
                 return blocked
+            blocked = self._ensure_safe_evaluator()
+            if blocked:
+                return blocked
             premises = self._sanitize(premises, variables)
             conclusion = self._sanitize([conclusion], variables)[0]
 
@@ -579,6 +597,11 @@ class LogicVerifier:
                     solver.add(z3_constraint)
 
             conclusion_z3 = self._parse_constraint(conclusion, z3_vars)
+            if conclusion_z3 is None:
+                return DiagnosticResult.blocked(
+                    "Logic verification blocked: invalid conclusion",
+                    {"constraint_id": "logic_verifier.invalid_constraint", "constraint": conclusion},
+                )
             solver.add(Not(conclusion_z3))
 
             result = solver.check()
@@ -663,6 +686,14 @@ class LogicVerifier:
 
         return z3_vars
 
+    def _ensure_safe_evaluator(self) -> Optional[DiagnosticResult]:
+        if self.safe_evaluator is None:
+            return DiagnosticResult.blocked(
+                "Logic verification blocked: constraint safe evaluator unavailable",
+                {"constraint_id": "logic_verifier.safe_evaluator_unavailable"},
+            )
+        return None
+
     def _parse_constraint(self, constr: str, z3_vars: Dict) -> Any:
         """Parse a constraint string into Z3 expression."""
         if self.safe_evaluator:
@@ -706,6 +737,9 @@ class LogicVerifier:
                 )
 
             blocked = self._ensure_sanitizer()
+            if blocked:
+                return blocked
+            blocked = self._ensure_safe_evaluator()
             if blocked:
                 return blocked
             sanitized = self._sanitize([formula1, formula2], variables)
@@ -780,6 +814,9 @@ class LogicVerifier:
             blocked = self._ensure_sanitizer()
             if blocked:
                 return blocked
+            blocked = self._ensure_safe_evaluator()
+            if blocked:
+                return blocked
             constraints = self._sanitize(constraints, variables)
             objective = self._sanitize([objective], variables)[0]
 
@@ -796,6 +833,11 @@ class LogicVerifier:
                     opt.add(z3_constraint)
 
             obj_expr = self._parse_constraint(objective, z3_vars)
+            if obj_expr is None:
+                return DiagnosticResult.blocked(
+                    "Logic verification blocked: invalid objective",
+                    {"constraint_id": "logic_verifier.invalid_constraint", "constraint": objective},
+                )
             if maximize:
                 handle = opt.maximize(obj_expr)
             else:
@@ -845,6 +887,9 @@ class LogicVerifier:
             blocked = self._ensure_sanitizer()
             if blocked:
                 return blocked
+            blocked = self._ensure_safe_evaluator()
+            if blocked:
+                return blocked
             antecedent = self._sanitize([antecedent], variables)[0]
 
             solver = Solver()
@@ -855,6 +900,11 @@ class LogicVerifier:
                 return z3_vars
 
             ant_expr = self._parse_constraint(antecedent, z3_vars)
+            if ant_expr is None:
+                return DiagnosticResult.blocked(
+                    "Logic verification blocked: invalid antecedent",
+                    {"constraint_id": "logic_verifier.invalid_constraint", "constraint": antecedent},
+                )
             solver.add(ant_expr)
 
             result = solver.check()
