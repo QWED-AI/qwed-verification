@@ -1,7 +1,7 @@
 # Copyright (c) 2024 QWED Team
 # SPDX-License-Identifier: Apache-2.0
 
-
+from unittest.mock import patch
 
 from qwed_new.core.diagnostics import DiagnosticStatus
 from qwed_new.core.logic_verifier import LogicVerifier
@@ -10,12 +10,12 @@ def test_no_eval_injection():
     """Verify that the logic engine does not execute arbitrary code."""
     verifier = LogicVerifier()
 
-    # Attempt to inject code via logic expression
     variables = {"x": "Int"}
     constraints = ["x == __import__('os').system('echo pwned')"]
 
-    # Should return BLOCKED status, not execute
-    result = verifier.verify_logic(variables, constraints, prove_unsat=False)
+    with patch("os.system") as mock_system:
+        result = verifier.verify_logic(variables, constraints, prove_unsat=False)
+        mock_system.assert_not_called()
     assert result.status == DiagnosticStatus.BLOCKED, (
         f"Expected BLOCKED, got {result.status.value}: {result.agent_message}"
     )
@@ -23,4 +23,12 @@ def test_no_eval_injection():
 
 def test_path_traversal_prevention():
     """Ensure file paths cannot be manipulated."""
-    pass
+    verifier = LogicVerifier()
+
+    variables = {"x": "Int"}
+    constraints = ["open('/etc/passwd')"]
+
+    with patch("builtins.open") as mock_open:
+        result = verifier.verify_logic(variables, constraints, prove_unsat=False)
+        mock_open.assert_not_called()
+    assert result.status == DiagnosticStatus.BLOCKED

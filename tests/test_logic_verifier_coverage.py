@@ -62,7 +62,7 @@ def test_quantifiers_sat():
     qf = QuantifiedFormula("forall", [("x", "Int")], "x == x")
     result = v.verify_with_quantifiers({}, [qf])
     assert result.status == DiagnosticStatus.VERIFIED
-    assert result.developer_fields.get("deterministic_verdict") == "sat"
+    assert result.developer_fields.get("deterministic_verdict") == "SAT"
 
 
 def test_quantifiers_unsat():
@@ -71,7 +71,7 @@ def test_quantifiers_unsat():
     qf = QuantifiedFormula("forall", [("x", "Int")], "And(x > 10, x < 5)")
     result = v.verify_with_quantifiers({}, [qf])
     assert result.status == DiagnosticStatus.UNVERIFIABLE
-    assert result.developer_fields.get("deterministic_verdict") == "unsat"
+    assert result.developer_fields.get("deterministic_verdict") == "UNSAT"
 
 
 def test_quantifiers_exists():
@@ -530,7 +530,7 @@ def test_quantifiers_unknown():
         with patch.object(v, "_create_z3_variables", return_value=mock_z3):
             result = v.verify_with_quantifiers({"x": "Int"}, [], constraints=["x > 0"])
             assert result.status == DiagnosticStatus.UNVERIFIABLE
-            assert result.developer_fields.get("deterministic_verdict") == "unknown"
+            assert result.developer_fields.get("deterministic_verdict") == "UNKNOWN"
 
 
 # =========================================================================
@@ -557,7 +557,7 @@ def test_bitvector_unknown():
         mock_solver.check.return_value = unknown
         result = v.verify_bitvector({"x": 8}, ["x > 0"])
         assert result.status == DiagnosticStatus.UNVERIFIABLE
-        assert result.developer_fields.get("deterministic_verdict") == "unknown"
+        assert result.developer_fields.get("deterministic_verdict") == "UNKNOWN"
 
 
 # =========================================================================
@@ -595,7 +595,7 @@ def test_array_unknown():
         mock_solver.check.return_value = unknown
         result = v.verify_array({}, {"x": "Int"}, ["x > 0"])
         assert result.status == DiagnosticStatus.UNVERIFIABLE
-        assert result.developer_fields.get("deterministic_verdict") == "unknown"
+        assert result.developer_fields.get("deterministic_verdict") == "UNKNOWN"
 
 
 # =========================================================================
@@ -779,33 +779,71 @@ def test_vacuity_unknown():
 
 
 # =========================================================================
+# Remaining uncovered lines: cross-qf conflict, sanitizer in qf loop, BitVec width
+# =========================================================================
+
+def test_quantifiers_cross_qf_bound_var_conflict():
+    """Cover line 289: cross-quantifier bound variable conflict."""
+    v = LogicVerifier()
+    qf1 = QuantifiedFormula("forall", [("x", "Int")], "x == x")
+    qf2 = QuantifiedFormula("forall", [("x", "Real")], "x == x")
+    result = v.verify_with_quantifiers({}, [qf1, qf2])
+    assert result.status == DiagnosticStatus.BLOCKED
+    assert result.constraint_id == "logic_verifier.bound_variable_conflict"
+
+
+def test_quantifiers_sanitizer_blocked_in_qf_loop():
+    """Cover line 307: sanitizer blocked inside qf loop."""
+    v = LogicVerifier()
+    blocked = DiagnosticResult.blocked("test", {"constraint_id": "logic_verifier.sanitizer_unavailable"})
+    qf = QuantifiedFormula("forall", [("x", "Int")], "x == x")
+    with patch.object(v, "_ensure_sanitizer", return_value=blocked):
+        result = v.verify_with_quantifiers({"x": "Int"}, [qf])
+        assert result.status == DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "logic_verifier.sanitizer_unavailable"
+
+
+def test_bitvector_invalid_width():
+    """Cover line 391: malformed BitVec width."""
+    v = LogicVerifier()
+    result = v.verify_bitvector({"x": 0}, [])
+    assert result.status == DiagnosticStatus.BLOCKED
+    assert result.constraint_id == "dsl_compiler.type_validation"
+
+
+# =========================================================================
 # Remaining uncovered lines: 237, 258, 567
 # =========================================================================
 
 def test_quantifiers_scope_z3_error():
-    """Cover line 237: scope_z3 _create_z3_variables error."""
+    """Cover line 300: scope_z3 _create_z3_variables error."""
     v = LogicVerifier()
     from z3 import Int
-    valid_z3 = {"x": Int("x")}
     blocked = DiagnosticResult.blocked("mock", {"constraint_id": "logic_verifier.explicit_declarations_required"})
+    call_n = [0]
+    def mock_create(vars_dict):
+        call_n[0] += 1
+        if call_n[0] == 1:
+            return blocked
+        return {name: Int(name) for name in vars_dict}
     qf = QuantifiedFormula("forall", [("y", "Int")], "y == y")
-    with patch.object(v, "_create_z3_variables", side_effect=[valid_z3, blocked]):
+    with patch.object(v, "_create_z3_variables", side_effect=mock_create):
         result = v.verify_with_quantifiers({"x": "Int"}, [qf])
         assert result.status == DiagnosticStatus.BLOCKED
         assert result.constraint_id == "logic_verifier.explicit_declarations_required"
 
 
 def test_quantifiers_all_vars_z3_error():
-    """Cover line 258: all_vars _create_z3_variables error with constraints."""
+    """Cover z3_vars error for constraints with quantifiers."""
     v = LogicVerifier()
     from z3 import Int
     blocked = DiagnosticResult.blocked("mock", {"constraint_id": "logic_verifier.explicit_declarations_required"})
     call_n = [0]
-    def mock_create(variables):
+    def mock_create(vars_dict):
         call_n[0] += 1
-        if call_n[0] == 3:
+        if call_n[0] == 2:
             return blocked
-        return {name: Int(name) for name in variables}
+        return {name: Int(name) for name in vars_dict}
     qf = QuantifiedFormula("forall", [("y", "Int")], "y == y")
     with patch.object(v, "_create_z3_variables", side_effect=mock_create):
         result = v.verify_with_quantifiers({"x": "Int"}, [qf], constraints=["x > 0"])

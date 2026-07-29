@@ -8,7 +8,7 @@ Uses Z3 Theorem Prover (Microsoft Research) to verify logical constraints.
 """
 
 from z3 import *
-from typing import Dict, List, Optional, Any, Union, Tuple
+from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 import re
 import logging
@@ -16,6 +16,18 @@ import logging
 from qwed_new.core.diagnostics import DiagnosticResult
 
 logger = logging.getLogger(__name__)
+
+# ------------------------------------------------------------------
+# Constants (avoid SonarQube duplication warnings)
+# ------------------------------------------------------------------
+_EXPLICIT_DECLARATIONS_REQUIRED_MSG = (
+    "Logic verification blocked: explicit variable declarations are required"
+)
+_PIPELINE_ERROR_MSG = "Logic verification blocked: pipeline error"
+
+_CONSTRAINT_ID_EXPLICIT_DECLARATIONS = "logic_verifier.explicit_declarations_required"
+_CONSTRAINT_ID_EXECUTION_ERROR = "logic_verifier.execution_error"
+_CONSTRAINT_ID_TYPE_VALIDATION = "dsl_compiler.type_validation"
 
 
 @dataclass
@@ -94,6 +106,63 @@ class LogicVerifier:
     def _base_developer_fields(self, variables: Dict[str, str]) -> Dict[str, Any]:
         return {"symbol_table": self._build_symbol_table(variables)}
 
+    def _add_z3_constraint(
+        self, solver: Solver, constr: str, z3_vars: Dict, prove_unsat: bool, i: int
+    ) -> None:
+        z3_constraint = self._parse_constraint(constr, z3_vars)
+        if z3_constraint is not None:
+            if prove_unsat:
+                solver.assert_and_track(z3_constraint, f"c{i}")
+            else:
+                solver.add(z3_constraint)
+
+    def _handle_opt_sat(
+        self, opt: Optimize, handle, fields: Dict, objective: str, maximize: bool
+    ) -> DiagnosticResult:
+        obj_value = handle.value()
+        obj_str = str(obj_value)
+        if obj_str in ("oo", "-oo"):
+            fields["deterministic_verdict"] = "UNBOUNDED"
+            return DiagnosticResult.unverifiable(
+                "Objective is unbounded — no finite optimum exists",
+                fields,
+            )
+        model = opt.model()
+        solution = {d.name(): str(model[d]) for d in model.decls()}
+        fields["model"] = solution
+        fields["deterministic_verdict"] = "OPTIMAL"
+        fields["objective_value"] = obj_str
+        direction = "maximize" if maximize else "minimize"
+        proof_data = self._build_proof_data(opt, extra=[f"{direction}: {objective}"])
+        return DiagnosticResult.verified(
+            "Optimal solution found",
+            fields,
+            {"model": solution, "objective": objective, "objective_value": obj_str},
+            proof_data=proof_data,
+        )
+
+    def _build_array_z3_vars(
+        self, array_decls: Dict[str, Tuple[str, str]]
+    ) -> Tuple[Dict, Dict] | DiagnosticResult:
+        z3_vars = {}
+        type_map = {"int": IntSort(), "bool": BoolSort(), "real": RealSort()}
+        all_symbols = {}
+        for name, (idx_type, val_type) in array_decls.items():
+            idx_sort = type_map.get(idx_type.lower())
+            val_sort = type_map.get(val_type.lower())
+            if idx_sort is None or val_sort is None:
+                return DiagnosticResult.blocked(
+                    "Logic verification blocked: unsupported array sort declaration",
+                    {
+                        "constraint_id": _CONSTRAINT_ID_TYPE_VALIDATION,
+                        "variable": name,
+                        "declared_type": f"Array[{idx_type}, {val_type}]",
+                    },
+                )
+            z3_vars[name] = Array(name, idx_sort, val_sort)
+            all_symbols[name] = f"Array[{idx_type}, {val_type}]"
+        return z3_vars, all_symbols
+
     # =========================================================================
     # Main Verification
     # =========================================================================
@@ -107,8 +176,8 @@ class LogicVerifier:
         try:
             if not variables:
                 return DiagnosticResult.blocked(
-                    "Logic verification blocked: explicit variable declarations are required",
-                    {"constraint_id": "logic_verifier.explicit_declarations_required"},
+                    _EXPLICIT_DECLARATIONS_REQUIRED_MSG,
+                    {"constraint_id": _CONSTRAINT_ID_EXPLICIT_DECLARATIONS},
                 )
 
             blocked = self._ensure_sanitizer()
@@ -127,12 +196,7 @@ class LogicVerifier:
 
             for i, constr in enumerate(constraints):
                 try:
-                    z3_constraint = self._parse_constraint(constr, z3_vars)
-                    if z3_constraint is not None:
-                        if prove_unsat:
-                            solver.assert_and_track(z3_constraint, f"c{i}")
-                        else:
-                            solver.add(z3_constraint)
+                    self._add_z3_constraint(solver, constr, z3_vars, prove_unsat, i)
                 except Exception as e:
                     return DiagnosticResult.blocked(
                         "Logic verification blocked: invalid constraint",
@@ -180,8 +244,8 @@ class LogicVerifier:
         except Exception as exc:
             logger.exception("Logic verification pipeline failed")
             return DiagnosticResult.blocked(
-                "Logic verification blocked: pipeline error",
-                {"constraint_id": "logic_verifier.execution_error", "error_type": type(exc).__name__},
+                _PIPELINE_ERROR_MSG,
+                {"constraint_id": _CONSTRAINT_ID_EXECUTION_ERROR, "error_type": type(exc).__name__},
             )
 
     # =========================================================================
@@ -197,21 +261,11 @@ class LogicVerifier:
         try:
             if not variables and not quantified_formulas:
                 return DiagnosticResult.blocked(
-                    "Logic verification blocked: explicit variable declarations are required",
-                    {"constraint_id": "logic_verifier.explicit_declarations_required"},
+                    _EXPLICIT_DECLARATIONS_REQUIRED_MSG,
+                    {"constraint_id": _CONSTRAINT_ID_EXPLICIT_DECLARATIONS},
                 )
 
-            all_vars = dict(variables)
-
-            if constraints:
-                blocked = self._ensure_sanitizer()
-                if blocked:
-                    return blocked
-                constraints = self._sanitize(constraints, variables)
-
-            free_vars = self._create_z3_variables(variables)
-            if isinstance(free_vars, DiagnosticResult):
-                return free_vars
+            seen_bound = {}  # cross-qf bound var conflict detection
 
             solver = Solver()
             solver.set("timeout", self.timeout_ms)
@@ -230,12 +284,27 @@ class LogicVerifier:
                                 "bound_type": type_str,
                             },
                         )
+                    prev_bound = seen_bound.get(name)
+                    if prev_bound is not None and prev_bound.lower() != type_str.lower():
+                        return DiagnosticResult.blocked(
+                            "Logic verification blocked: bound variable conflicts across quantified formulas",
+                            {
+                                "constraint_id": "logic_verifier.bound_variable_conflict",
+                                "variable": name,
+                                "declared_type": prev_bound,
+                                "bound_type": type_str,
+                            },
+                        )
                     scope_vars[name] = type_str
+                    seen_bound[name] = type_str
 
                 scope_z3 = self._create_z3_variables(scope_vars)
                 if isinstance(scope_z3, DiagnosticResult):
                     return scope_z3
 
+                blocked = self._ensure_sanitizer()
+                if blocked:
+                    return blocked
                 sanitized_body = self._sanitize([qf.body], scope_vars)[0]
                 body = self._parse_constraint(sanitized_body, scope_z3)
                 bound_z3_vars = [scope_z3[name] for name, _ in qf.bound_vars]
@@ -250,10 +319,14 @@ class LogicVerifier:
                         {"constraint_id": "logic_verifier.unknown_quantifier", "quantifier": qf.quantifier},
                     )
                 solver.add(quantified)
-                all_vars.update(scope_vars)
 
             if constraints:
-                z3_vars = self._create_z3_variables(all_vars)
+                blocked = self._ensure_sanitizer()
+                if blocked:
+                    return blocked
+                constraints = self._sanitize(constraints, variables)
+
+                z3_vars = self._create_z3_variables(variables)
                 if isinstance(z3_vars, DiagnosticResult):
                     return z3_vars
                 for constr in constraints:
@@ -263,8 +336,9 @@ class LogicVerifier:
 
             result = solver.check()
 
-            fields = self._base_developer_fields(all_vars)
-            fields["deterministic_verdict"] = str(result)
+            fields = self._base_developer_fields(variables)
+            verdict = str(result)
+            fields["deterministic_verdict"] = verdict.upper()
 
             if result == sat:
                 model = solver.model()
@@ -291,8 +365,8 @@ class LogicVerifier:
         except Exception as exc:
             logger.exception("Quantified verification pipeline failed")
             return DiagnosticResult.blocked(
-                "Logic verification blocked: pipeline error",
-                {"constraint_id": "logic_verifier.execution_error", "error_type": type(exc).__name__},
+                _PIPELINE_ERROR_MSG,
+                {"constraint_id": _CONSTRAINT_ID_EXECUTION_ERROR, "error_type": type(exc).__name__},
             )
 
     # =========================================================================
@@ -307,9 +381,22 @@ class LogicVerifier:
         try:
             if not variables:
                 return DiagnosticResult.blocked(
-                    "Logic verification blocked: explicit variable declarations are required",
-                    {"constraint_id": "logic_verifier.explicit_declarations_required"},
+                    _EXPLICIT_DECLARATIONS_REQUIRED_MSG,
+                    {"constraint_id": _CONSTRAINT_ID_EXPLICIT_DECLARATIONS},
                 )
+
+            z3_vars = {}
+            for name, width in variables.items():
+                if not isinstance(width, int) or width <= 0:
+                    return DiagnosticResult.blocked(
+                        "Logic verification blocked: malformed BitVec width declaration",
+                        {
+                            "constraint_id": _CONSTRAINT_ID_TYPE_VALIDATION,
+                            "variable": name,
+                            "declared_type": f"BitVec[{width}]",
+                        },
+                    )
+                z3_vars[name] = BitVec(name, width)
 
             blocked = self._ensure_sanitizer()
             if blocked:
@@ -319,10 +406,6 @@ class LogicVerifier:
 
             solver = Solver()
             solver.set("timeout", self.timeout_ms)
-
-            z3_vars = {}
-            for name, width in variables.items():
-                z3_vars[name] = BitVec(name, width)
 
             for constr in constraints:
                 z3_constraint = self._parse_constraint(constr, z3_vars)
@@ -334,7 +417,7 @@ class LogicVerifier:
             fields = self._base_developer_fields(
                 {name: f"BitVec[{w}]" for name, w in variables.items()}
             )
-            fields["deterministic_verdict"] = str(result)
+            fields["deterministic_verdict"] = str(result).upper()
 
             if result == sat:
                 model = solver.model()
@@ -364,8 +447,8 @@ class LogicVerifier:
         except Exception as exc:
             logger.exception("Bitvector verification pipeline failed")
             return DiagnosticResult.blocked(
-                "Logic verification blocked: pipeline error",
-                {"constraint_id": "logic_verifier.execution_error", "error_type": type(exc).__name__},
+                _PIPELINE_ERROR_MSG,
+                {"constraint_id": _CONSTRAINT_ID_EXECUTION_ERROR, "error_type": type(exc).__name__},
             )
 
     # =========================================================================
@@ -382,34 +465,16 @@ class LogicVerifier:
             if not variables and not array_decls:
                 return DiagnosticResult.blocked(
                     "Logic verification blocked: explicit variable or array declarations are required",
-                    {"constraint_id": "logic_verifier.explicit_declarations_required"},
+                    {"constraint_id": _CONSTRAINT_ID_EXPLICIT_DECLARATIONS},
                 )
-
-            blocked = self._ensure_sanitizer()
-            if blocked:
-                return blocked
-            constraints = self._sanitize(constraints, variables)
 
             solver = Solver()
             solver.set("timeout", self.timeout_ms)
 
-            z3_vars = {}
-            type_map = {"int": IntSort(), "bool": BoolSort(), "real": RealSort()}
-            all_symbols = {}  # track all names for duplicate detection
-            for name, (idx_type, val_type) in array_decls.items():
-                idx_sort = type_map.get(idx_type.lower())
-                val_sort = type_map.get(val_type.lower())
-                if idx_sort is None or val_sort is None:
-                    return DiagnosticResult.blocked(
-                        "Logic verification blocked: unsupported array sort declaration",
-                        {
-                            "constraint_id": "dsl_compiler.type_validation",
-                            "variable": name,
-                            "declared_type": f"Array[{idx_type}, {val_type}]",
-                        },
-                    )
-                z3_vars[name] = Array(name, idx_sort, val_sort)
-                all_symbols[name] = f"Array[{idx_type}, {val_type}]"
+            array_built = self._build_array_z3_vars(array_decls)
+            if isinstance(array_built, DiagnosticResult):
+                return array_built
+            z3_vars, all_symbols = array_built
 
             regular_vars = self._create_z3_variables(variables)
             if isinstance(regular_vars, DiagnosticResult):
@@ -423,6 +488,11 @@ class LogicVerifier:
             z3_vars.update(regular_vars)
             all_symbols.update(variables)
 
+            blocked = self._ensure_sanitizer()
+            if blocked:
+                return blocked
+            constraints = self._sanitize(constraints, all_symbols)
+
             z3_vars['Select'] = Select
             z3_vars['Store'] = Store
 
@@ -434,7 +504,7 @@ class LogicVerifier:
             result = solver.check()
 
             fields = self._base_developer_fields(all_symbols)
-            fields["deterministic_verdict"] = str(result)
+            fields["deterministic_verdict"] = str(result).upper()
 
             if result == sat:
                 model = solver.model()
@@ -461,8 +531,8 @@ class LogicVerifier:
         except Exception as exc:
             logger.exception("Array verification pipeline failed")
             return DiagnosticResult.blocked(
-                "Logic verification blocked: pipeline error",
-                {"constraint_id": "logic_verifier.execution_error", "error_type": type(exc).__name__},
+                _PIPELINE_ERROR_MSG,
+                {"constraint_id": _CONSTRAINT_ID_EXECUTION_ERROR, "error_type": type(exc).__name__},
             )
 
     # =========================================================================
@@ -478,8 +548,8 @@ class LogicVerifier:
         try:
             if not variables:
                 return DiagnosticResult.blocked(
-                    "Logic verification blocked: explicit variable declarations are required",
-                    {"constraint_id": "logic_verifier.explicit_declarations_required"},
+                    _EXPLICIT_DECLARATIONS_REQUIRED_MSG,
+                    {"constraint_id": _CONSTRAINT_ID_EXPLICIT_DECLARATIONS},
                 )
 
             blocked = self._ensure_sanitizer()
@@ -537,15 +607,15 @@ class LogicVerifier:
         except Exception as exc:
             logger.exception("Theorem proving pipeline failed")
             return DiagnosticResult.blocked(
-                "Logic verification blocked: pipeline error",
-                {"constraint_id": "logic_verifier.execution_error", "error_type": type(exc).__name__},
+                _PIPELINE_ERROR_MSG,
+                {"constraint_id": _CONSTRAINT_ID_EXECUTION_ERROR, "error_type": type(exc).__name__},
             )
 
     # =========================================================================
     # Helper Methods
     # =========================================================================
 
-    def _create_z3_variables(self, variables: Dict[str, str]) -> Union[Dict, DiagnosticResult]:
+    def _create_z3_variables(self, variables: Dict[str, str]) -> dict | DiagnosticResult:
         """Create Z3 variables from type declarations."""
         z3_vars = {}
 
@@ -567,7 +637,7 @@ class LogicVerifier:
                     return DiagnosticResult.blocked(
                         "Logic verification blocked: malformed BitVec type declaration",
                         {
-                            "constraint_id": "dsl_compiler.type_validation",
+                            "constraint_id": _CONSTRAINT_ID_TYPE_VALIDATION,
                             "variable": name,
                             "declared_type": type_str,
                             "error": f"Expected BitVec[N] where N is a positive integer, got '{type_str}'",
@@ -577,7 +647,7 @@ class LogicVerifier:
                 return DiagnosticResult.blocked(
                     "Logic verification blocked: unsupported type declaration",
                     {
-                        "constraint_id": "dsl_compiler.type_validation",
+                        "constraint_id": _CONSTRAINT_ID_TYPE_VALIDATION,
                         "variable": name,
                         "declared_type": type_str,
                     },
@@ -623,8 +693,8 @@ class LogicVerifier:
         try:
             if not variables:
                 return DiagnosticResult.blocked(
-                    "Logic verification blocked: explicit variable declarations are required",
-                    {"constraint_id": "logic_verifier.explicit_declarations_required"},
+                    _EXPLICIT_DECLARATIONS_REQUIRED_MSG,
+                    {"constraint_id": _CONSTRAINT_ID_EXPLICIT_DECLARATIONS},
                 )
 
             blocked = self._ensure_sanitizer()
@@ -677,8 +747,8 @@ class LogicVerifier:
         except Exception as exc:
             logger.exception("Equivalence check pipeline failed")
             return DiagnosticResult.blocked(
-                "Logic verification blocked: pipeline error",
-                {"constraint_id": "logic_verifier.execution_error", "error_type": type(exc).__name__},
+                _PIPELINE_ERROR_MSG,
+                {"constraint_id": _CONSTRAINT_ID_EXECUTION_ERROR, "error_type": type(exc).__name__},
             )
 
     # =========================================================================
@@ -695,14 +765,15 @@ class LogicVerifier:
         try:
             if not variables:
                 return DiagnosticResult.blocked(
-                    "Logic verification blocked: explicit variable declarations are required",
-                    {"constraint_id": "logic_verifier.explicit_declarations_required"},
+                    _EXPLICIT_DECLARATIONS_REQUIRED_MSG,
+                    {"constraint_id": _CONSTRAINT_ID_EXPLICIT_DECLARATIONS},
                 )
 
             blocked = self._ensure_sanitizer()
             if blocked:
                 return blocked
             constraints = self._sanitize(constraints, variables)
+            objective = self._sanitize([objective], variables)[0]
 
             opt = Optimize()
             opt.set("timeout", self.timeout_ms)
@@ -729,27 +800,7 @@ class LogicVerifier:
             fields["maximize"] = maximize
 
             if result == sat:
-                obj_value = handle.value()
-                obj_str = str(obj_value)
-                if obj_str in ("oo", "-oo"):
-                    fields["deterministic_verdict"] = "UNBOUNDED"
-                    return DiagnosticResult.unverifiable(
-                        "Objective is unbounded — no finite optimum exists",
-                        fields,
-                    )
-                model = opt.model()
-                solution = {d.name(): str(model[d]) for d in model.decls()}
-                fields["model"] = solution
-                fields["deterministic_verdict"] = "OPTIMAL"
-                fields["objective_value"] = obj_str
-                direction = "maximize" if maximize else "minimize"
-                proof_data = self._build_proof_data(opt, extra=[f"{direction}: {objective}"])
-                return DiagnosticResult.verified(
-                    "Optimal solution found",
-                    fields,
-                    {"model": solution, "objective": objective, "objective_value": obj_str},
-                    proof_data=proof_data,
-                )
+                return self._handle_opt_sat(opt, handle, fields, objective, maximize)
             elif result == unsat:
                 fields["deterministic_verdict"] = "UNSAT"
                 return DiagnosticResult.unverifiable(
@@ -766,8 +817,8 @@ class LogicVerifier:
         except Exception as exc:
             logger.exception("Optimization pipeline failed")
             return DiagnosticResult.blocked(
-                "Logic verification blocked: pipeline error",
-                {"constraint_id": "logic_verifier.execution_error", "error_type": type(exc).__name__},
+                _PIPELINE_ERROR_MSG,
+                {"constraint_id": _CONSTRAINT_ID_EXECUTION_ERROR, "error_type": type(exc).__name__},
             )
 
     def check_vacuity(
@@ -779,8 +830,8 @@ class LogicVerifier:
         try:
             if not variables:
                 return DiagnosticResult.blocked(
-                    "Logic verification blocked: explicit variable declarations are required",
-                    {"constraint_id": "logic_verifier.explicit_declarations_required"},
+                    _EXPLICIT_DECLARATIONS_REQUIRED_MSG,
+                    {"constraint_id": _CONSTRAINT_ID_EXPLICIT_DECLARATIONS},
                 )
 
             blocked = self._ensure_sanitizer()
@@ -830,6 +881,6 @@ class LogicVerifier:
         except Exception as exc:
             logger.exception("Vacuity check pipeline failed")
             return DiagnosticResult.blocked(
-                "Logic verification blocked: pipeline error",
-                {"constraint_id": "logic_verifier.execution_error", "error_type": type(exc).__name__},
+                _PIPELINE_ERROR_MSG,
+                {"constraint_id": _CONSTRAINT_ID_EXECUTION_ERROR, "error_type": type(exc).__name__},
             )
