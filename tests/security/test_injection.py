@@ -19,16 +19,17 @@ def test_no_eval_injection():
     assert result.status == DiagnosticStatus.BLOCKED, (
         f"Expected BLOCKED, got {result.status.value}: {result.agent_message}"
     )
-    assert result.constraint_id is not None, "BLOCKED result should have constraint_id"
+    assert result.constraint_id == "logic_verifier.invalid_constraint"
 
 def test_path_traversal_prevention():
     """Ensure file paths cannot be manipulated."""
     verifier = LogicVerifier()
 
     variables = {"x": "Int"}
-    constraints = ["open('/etc/passwd')"]
+    constraints = ["open('/tmp/../etc/passwd')"]
 
     with patch("builtins.open") as mock_open:
         result = verifier.verify_logic(variables, constraints, prove_unsat=False)
         mock_open.assert_not_called()
     assert result.status == DiagnosticStatus.BLOCKED
+    assert result.constraint_id == "logic_verifier.invalid_constraint"
