@@ -34,6 +34,8 @@ except ImportError:
     click.echo("Error: QWED SDK not installed. Run: pip install qwed", err=True)
     sys.exit(1)
 
+from qwed_new.core.security import redact_pii
+
 logger = logging.getLogger(__name__)
 
 
@@ -267,7 +269,7 @@ def _run_init_smoke_suite() -> list[dict]:
     )
 
     logic_bad = logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"])
-    logic_bad_passed = not getattr(logic_bad, "is_verified", getattr(logic_bad, "status", "UNSAT") != "UNSAT")
+    logic_bad_passed = not logic_bad.is_verified
     tests.append(
         {
             "label": LOGIC_LABEL_UNSAT,
@@ -1031,7 +1033,7 @@ def init(
     try:
         profile = _resolve_onboarding_profile(provider_choice, non_interactive, provider_map)
     except RuntimeError as exc:
-        click.echo(str(exc), err=True)
+        click.echo(redact_pii(str(exc)), err=True)
         sys.exit(1)
 
     click.echo(f"\n{SEPARATOR}")
@@ -1073,7 +1075,7 @@ def init(
             non_interactive=non_interactive,
         )
     except RuntimeError as exc:
-        click.echo(str(exc), err=True)
+        click.echo(redact_pii(str(exc)), err=True)
         sys.exit(1)
 
     click.echo(f"\n{SEPARATOR}")
@@ -1084,10 +1086,10 @@ def init(
         organization_name = _resolve_organization_name(organization_name, non_interactive)
         normalized_server_url = _normalize_local_server_url(server_url)
     except RuntimeError as exc:
-        click.echo(str(exc), err=True)
+        click.echo(redact_pii(str(exc)), err=True)
         sys.exit(1)
     except ValueError as exc:
-        click.echo(f"  [x] Invalid server URL: {exc}", err=True)
+        click.echo(f"  [x] Invalid server URL: {redact_pii(str(exc))}", err=True)
         sys.exit(1)
 
     click.echo("\n  Starting local server...")
@@ -1552,16 +1554,10 @@ def _run_full_engine_tests() -> List[dict]:
 
     if logic_engine is not None:
         def _logic_is_not_proved(p):
-            iv = getattr(p, "is_verified", None)
-            if iv is not None:
-                return not iv
-            return getattr(p, "status", None) in ("UNSAT", "BLOCKED")
+            return not p.is_verified
 
         def _logic_is_proved(p):
-            iv = getattr(p, "is_verified", None)
-            if iv is not None:
-                return iv
-            return getattr(p, "status", None) == "SAT"
+            return p.is_verified
 
         run_case(
             "Logic",
@@ -1569,7 +1565,7 @@ def _run_full_engine_tests() -> List[dict]:
             "UNVERIFIABLE (contradiction)",
             lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"]),
             _logic_is_not_proved,
-            lambda payload: f"status={getattr(payload, 'status', payload)}",
+            lambda payload: f"status={payload.status.value}",
         )
         run_case(
             "Logic",
@@ -1577,7 +1573,7 @@ def _run_full_engine_tests() -> List[dict]:
             "VERIFIED {x=4}",
             lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 3", "x < 10", "x == 4"]),
             _logic_is_proved,
-            lambda payload: f"model={getattr(payload, 'developer_fields', getattr(payload, 'model', payload))}",
+            lambda payload: f"model={payload.developer_fields.get('model', payload)}",
         )
         run_case(
             "Logic",
@@ -1585,7 +1581,7 @@ def _run_full_engine_tests() -> List[dict]:
             "UNVERIFIABLE (contradiction)",
             lambda: logic_engine.verify_logic({"approval": "Int"}, ["approval == 1", "approval == 0"]),
             _logic_is_not_proved,
-            lambda payload: f"status={getattr(payload, 'status', payload)}",
+            lambda payload: f"status={payload.status.value}",
         )
 
     try:

@@ -5,15 +5,6 @@
 Enterprise Logic Verification Engine.
 
 Uses Z3 Theorem Prover (Microsoft Research) to verify logical constraints.
-
-Enhanced Features:
-1. Basic types: Int, Bool, Real
-2. Quantifiers: ForAll, Exists
-3. Bitvector operations (for crypto/low-level)
-4. Array theory
-5. Uninterpreted functions
-6. Proof generation
-7. Model explanation
 """
 
 from z3 import *
@@ -22,7 +13,7 @@ from dataclasses import dataclass
 import re
 import logging
 
-from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus, compute_proof_ref
+from qwed_new.core.diagnostics import DiagnosticResult, compute_proof_ref
 
 logger = logging.getLogger(__name__)
 
@@ -40,32 +31,9 @@ class LogicVerifier:
     Enterprise Logic Verification Engine.
 
     Uses Z3 for satisfiability checking and theorem proving.
-
-    Supports:
-    - Basic types: Int, Bool, Real
-    - Quantifiers: ForAll, Exists
-    - Bitvectors: BitVec (for crypto)
-    - Arrays: Array theory
-    - Arithmetic: +, -, *, /, mod
-    - Logical: And, Or, Not, Implies, Iff
-
-    Attributes:
-        timeout_ms (int): Solver timeout in milliseconds.
     """
 
-    RESERVED_KEYWORDS = {
-        'True', 'False', 'and', 'or', 'not', 'And', 'Or', 'Not',
-        'Implies', 'If', 'ForAll', 'Exists', 'Sum', 'Product',
-        'BitVec', 'Array', 'Select', 'Store', 'Int', 'Bool', 'Real'
-    }
-
     def __init__(self, timeout_ms: int = 5000):
-        """
-        Initialize Logic Verifier.
-
-        Args:
-            timeout_ms: Solver timeout in milliseconds.
-        """
         self.timeout_ms = timeout_ms
         self._sanitizer = None
         self._safe_evaluator = None
@@ -93,26 +61,38 @@ class LogicVerifier:
         return self._safe_evaluator
 
     # ------------------------------------------------------------------
-    # Helpers: symbol_table, proof_ref, developer_fields
+    # Helpers: sanitizer, symbol_table, proof_ref, developer_fields
     # ------------------------------------------------------------------
+
+    def _ensure_sanitizer(self) -> Optional[DiagnosticResult]:
+        """Fail-closed: return BLOCKED if sanitizer unavailable."""
+        if self.sanitizer is None:
+            return DiagnosticResult.blocked(
+                "Logic verification blocked: constraint sanitizer unavailable",
+                {"constraint_id": "logic_verifier.sanitizer_unavailable"},
+            )
+        return None
+
+    def _sanitize(self, constraints: List[str], variables: Dict[str, str]) -> List[str]:
+        """Apply sanitizer (caller must have checked _ensure_sanitizer)."""
+        return self.sanitizer.sanitize(constraints, variables)
 
     @staticmethod
     def _build_symbol_table(variables: Dict[str, str]) -> List[Dict[str, str]]:
-        """Build a symbol table listing every declared variable and its type."""
         return [{"name": name, "type": type_str} for name, type_str in sorted(variables.items())]
 
     @staticmethod
-    def _build_proof_ref(solver: Solver) -> Optional[str]:
-        """Compute proof_ref from Z3 solver assertion stack."""
+    def _build_proof_data(solver: Solver, extra: Optional[List[str]] = None) -> Optional[str]:
+        """Return raw assertion string for proof_ref hashing (no double-hash)."""
         assertions = [str(a) for a in solver.assertions()]
+        if extra:
+            assertions.extend(extra)
         if not assertions:
             return None
-        return compute_proof_ref(str(assertions))
+        return str(assertions)
 
     def _base_developer_fields(self, variables: Dict[str, str]) -> Dict[str, Any]:
-        return {
-            "symbol_table": self._build_symbol_table(variables),
-        }
+        return {"symbol_table": self._build_symbol_table(variables)}
 
     # =========================================================================
     # Main Verification
@@ -124,25 +104,6 @@ class LogicVerifier:
         constraints: List[str],
         prove_unsat: bool = False
     ) -> DiagnosticResult:
-        """
-        Check if a set of constraints is satisfiable.
-
-        Args:
-            variables: Variable declarations {"x": "Int", "P": "Bool", "bv": "BitVec[8]"}.
-            constraints: List of constraint strings.
-            prove_unsat: If True and UNSAT, try to explain why.
-
-        Returns:
-            DiagnosticResult — VERIFIED with model if SAT, UNVERIFIABLE if UNSAT, BLOCKED on error.
-
-        Example:
-            >>> result = verifier.verify_logic(
-            ...     {"x": "Int", "y": "Int"},
-            ...     ["x > 0", "y > 0", "x + y == 10"]
-            ... )
-            >>> result.is_verified
-            True
-        """
         try:
             if not variables:
                 return DiagnosticResult.blocked(
@@ -150,8 +111,10 @@ class LogicVerifier:
                     {"constraint_id": "logic_verifier.explicit_declarations_required"},
                 )
 
-            if self.sanitizer:
-                constraints = self.sanitizer.sanitize(constraints, variables)
+            blocked = self._ensure_sanitizer()
+            if blocked:
+                return blocked
+            constraints = self._sanitize(constraints, variables)
 
             solver = Solver()
             solver.set("timeout", self.timeout_ms)
@@ -185,14 +148,13 @@ class LogicVerifier:
                 solution = {d.name(): str(model[d]) for d in model.decls()}
                 fields["model"] = solution
                 fields["deterministic_verdict"] = "SAT"
-                proof_ref = self._build_proof_ref(solver)
+                proof_data = self._build_proof_data(solver)
                 return DiagnosticResult.verified(
                     "Logic constraints are satisfiable — model found",
                     fields,
                     {"model": solution, "constraints": constraints},
-                    proof_data=proof_ref,
+                    proof_data=proof_data,
                 )
-
             elif result == unsat:
                 fields["deterministic_verdict"] = "UNSAT"
                 explanation = None
@@ -203,7 +165,6 @@ class LogicVerifier:
                     "Logic constraints are unsatisfiable — no model exists",
                     fields,
                 )
-
             else:
                 fields["deterministic_verdict"] = "UNKNOWN"
                 return DiagnosticResult.unverifiable(
@@ -226,28 +187,39 @@ class LogicVerifier:
         self,
         variables: Dict[str, str],
         quantified_formulas: List[QuantifiedFormula],
-        constraints: List[str] = None
+        constraints: Optional[List[str]] = None
     ) -> DiagnosticResult:
-        """
-        Verify formulas with quantifiers (ForAll, Exists).
-
-        Returns:
-            DiagnosticResult — VERIFIED if SAT, UNVERIFIABLE if UNSAT/UNKNOWN, BLOCKED on error.
-        """
         try:
-            if not variables:
+            if not variables and not quantified_formulas:
                 return DiagnosticResult.blocked(
                     "Logic verification blocked: explicit variable declarations are required",
                     {"constraint_id": "logic_verifier.explicit_declarations_required"},
                 )
 
-            solver = Solver()
-            solver.set("timeout", self.timeout_ms)
-
             all_vars = dict(variables)
             for qf in quantified_formulas:
                 for name, type_str in qf.bound_vars:
+                    existing = all_vars.get(name)
+                    if existing is not None and existing.lower() != type_str.lower():
+                        return DiagnosticResult.blocked(
+                            "Logic verification blocked: bound variable conflicts with declaration",
+                            {
+                                "constraint_id": "logic_verifier.bound_variable_conflict",
+                                "variable": name,
+                                "declared_type": existing,
+                                "bound_type": type_str,
+                            },
+                        )
                     all_vars[name] = type_str
+
+            if constraints:
+                blocked = self._ensure_sanitizer()
+                if blocked:
+                    return blocked
+                constraints = self._sanitize(constraints, all_vars)
+
+            solver = Solver()
+            solver.set("timeout", self.timeout_ms)
 
             z3_vars = self._create_z3_variables(all_vars)
             if isinstance(z3_vars, DiagnosticResult):
@@ -256,7 +228,6 @@ class LogicVerifier:
             for qf in quantified_formulas:
                 bound_z3_vars = [z3_vars[name] for name, _ in qf.bound_vars]
                 body = self._parse_constraint(qf.body, z3_vars)
-
                 if qf.quantifier.lower() == "forall":
                     quantified = ForAll(bound_z3_vars, body)
                 elif qf.quantifier.lower() == "exists":
@@ -266,7 +237,6 @@ class LogicVerifier:
                         "Logic verification blocked: unknown quantifier",
                         {"constraint_id": "logic_verifier.unknown_quantifier", "quantifier": qf.quantifier},
                     )
-
                 solver.add(quantified)
 
             if constraints:
@@ -277,19 +247,19 @@ class LogicVerifier:
 
             result = solver.check()
 
-            fields = self._base_developer_fields(variables)
+            fields = self._base_developer_fields(all_vars)
             fields["deterministic_verdict"] = str(result)
 
             if result == sat:
                 model = solver.model()
                 solution = {d.name(): str(model[d]) for d in model.decls()}
                 fields["model"] = solution
-                proof_ref = self._build_proof_ref(solver)
+                proof_data = self._build_proof_data(solver)
                 return DiagnosticResult.verified(
                     "Quantified constraints are satisfiable — model found",
                     fields,
                     {"model": solution},
-                    proof_data=proof_ref,
+                    proof_data=proof_data,
                 )
             elif result == unsat:
                 return DiagnosticResult.unverifiable(
@@ -318,18 +288,18 @@ class LogicVerifier:
         variables: Dict[str, int],
         constraints: List[str]
     ) -> DiagnosticResult:
-        """
-        Verify bitvector constraints (for crypto/low-level verification).
-
-        Returns:
-            DiagnosticResult — VERIFIED if SAT, UNVERIFIABLE if UNSAT/UNKNOWN, BLOCKED on error.
-        """
         try:
             if not variables:
                 return DiagnosticResult.blocked(
                     "Logic verification blocked: explicit variable declarations are required",
                     {"constraint_id": "logic_verifier.explicit_declarations_required"},
                 )
+
+            blocked = self._ensure_sanitizer()
+            if blocked:
+                return blocked
+            constraint_strs = {name: f"BitVec[{w}]" for name, w in variables.items()}
+            constraints = self._sanitize(constraints, constraint_strs)
 
             solver = Solver()
             solver.set("timeout", self.timeout_ms)
@@ -357,12 +327,12 @@ class LogicVerifier:
                     val = model[d]
                     solution[d.name()] = hex(val.as_long()) if is_bv(val) else str(val)
                 fields["model"] = solution
-                proof_ref = self._build_proof_ref(solver)
+                proof_data = self._build_proof_data(solver)
                 return DiagnosticResult.verified(
                     "Bitvector constraints are satisfiable — model found",
                     fields,
                     {"model": solution},
-                    proof_data=proof_ref,
+                    proof_data=proof_data,
                 )
             elif result == unsat:
                 return DiagnosticResult.unverifiable(
@@ -392,33 +362,50 @@ class LogicVerifier:
         variables: Dict[str, str],
         constraints: List[str]
     ) -> DiagnosticResult:
-        """
-        Verify constraints involving arrays.
-
-        Returns:
-            DiagnosticResult — VERIFIED if SAT, UNVERIFIABLE if UNSAT/UNKNOWN, BLOCKED on error.
-        """
         try:
-            if not variables:
+            if not variables and not array_decls:
                 return DiagnosticResult.blocked(
-                    "Logic verification blocked: explicit variable declarations are required",
+                    "Logic verification blocked: explicit variable or array declarations are required",
                     {"constraint_id": "logic_verifier.explicit_declarations_required"},
                 )
+
+            blocked = self._ensure_sanitizer()
+            if blocked:
+                return blocked
+            constraints = self._sanitize(constraints, variables)
 
             solver = Solver()
             solver.set("timeout", self.timeout_ms)
 
             z3_vars = {}
             type_map = {"int": IntSort(), "bool": BoolSort(), "real": RealSort()}
+            all_symbols = {}  # track all names for duplicate detection
             for name, (idx_type, val_type) in array_decls.items():
-                idx_sort = type_map.get(idx_type.lower(), IntSort())
-                val_sort = type_map.get(val_type.lower(), IntSort())
+                idx_sort = type_map.get(idx_type.lower())
+                val_sort = type_map.get(val_type.lower())
+                if idx_sort is None or val_sort is None:
+                    return DiagnosticResult.blocked(
+                        "Logic verification blocked: unsupported array sort declaration",
+                        {
+                            "constraint_id": "dsl_compiler.type_validation",
+                            "variable": name,
+                            "declared_type": f"Array[{idx_type}, {val_type}]",
+                        },
+                    )
                 z3_vars[name] = Array(name, idx_sort, val_sort)
+                all_symbols[name] = f"Array[{idx_type}, {val_type}]"
 
             regular_vars = self._create_z3_variables(variables)
             if isinstance(regular_vars, DiagnosticResult):
                 return regular_vars
+            overlap = set(regular_vars) & set(z3_vars)
+            if overlap:
+                return DiagnosticResult.blocked(
+                    "Logic verification blocked: duplicate symbol declaration",
+                    {"constraint_id": "logic_verifier.duplicate_symbol", "symbols": sorted(overlap)},
+                )
             z3_vars.update(regular_vars)
+            all_symbols.update(variables)
 
             z3_vars['Select'] = Select
             z3_vars['Store'] = Store
@@ -430,19 +417,19 @@ class LogicVerifier:
 
             result = solver.check()
 
-            fields = self._base_developer_fields(variables)
+            fields = self._base_developer_fields(all_symbols)
             fields["deterministic_verdict"] = str(result)
 
             if result == sat:
                 model = solver.model()
                 solution = {d.name(): str(model[d]) for d in model.decls()}
                 fields["model"] = solution
-                proof_ref = self._build_proof_ref(solver)
+                proof_data = self._build_proof_data(solver)
                 return DiagnosticResult.verified(
                     "Array constraints are satisfiable — model found",
                     fields,
                     {"model": solution},
-                    proof_data=proof_ref,
+                    proof_data=proof_data,
                 )
             elif result == unsat:
                 return DiagnosticResult.unverifiable(
@@ -472,22 +459,17 @@ class LogicVerifier:
         premises: List[str],
         conclusion: str
     ) -> DiagnosticResult:
-        """
-        Prove that conclusion follows from premises.
-
-        Uses proof by contradiction: premises AND NOT(conclusion) should be UNSAT.
-
-        Returns:
-            DiagnosticResult — VERIFIED (theorem proved) if contradiction found,
-            BLOCKED (counterexample) if conclusion does not follow,
-            UNVERIFIABLE if unknown.
-        """
         try:
             if not variables:
                 return DiagnosticResult.blocked(
                     "Logic verification blocked: explicit variable declarations are required",
                     {"constraint_id": "logic_verifier.explicit_declarations_required"},
                 )
+
+            blocked = self._ensure_sanitizer()
+            if blocked:
+                return blocked
+            premises = self._sanitize(premises, variables)
 
             solver = Solver()
             solver.set("timeout", self.timeout_ms)
@@ -512,12 +494,12 @@ class LogicVerifier:
 
             if result == unsat:
                 fields["deterministic_verdict"] = "contradiction_confirmed"
-                proof_ref = self._build_proof_ref(solver)
+                proof_data = self._build_proof_data(solver)
                 return DiagnosticResult.verified(
                     "Theorem proved by contradiction",
                     fields,
                     {"premises": premises, "conclusion": conclusion},
-                    proof_data=proof_ref,
+                    proof_data=proof_data,
                 )
             elif result == sat:
                 model = solver.model()
@@ -560,9 +542,9 @@ class LogicVerifier:
             elif type_lower == 'real':
                 z3_vars[name] = Real(name)
             elif type_lower.startswith('bitvec'):
-                match = re.match(r'bitvec\[(\d+)\]', type_lower)
-                if match:
-                    width = int(match.group(1))
+                match = re.fullmatch(r'bitvec\[(\d+)\]', type_lower)
+                width = int(match.group(1)) if match else 0
+                if width > 0:
                     z3_vars[name] = BitVec(name, width)
                 else:
                     return DiagnosticResult.blocked(
@@ -590,18 +572,16 @@ class LogicVerifier:
         """Parse a constraint string into Z3 expression."""
         if self.safe_evaluator:
             return self.safe_evaluator.safe_eval(constr, z3_vars)
-
         raise RuntimeError("SafeEvaluator is required for constraint parsing")
 
     def _explain_unsat(self, solver: Solver, constraints: List[str]) -> str:
         """Try to explain why constraints are unsatisfiable."""
         try:
-            solver.set("unsat_core", True)
             core = solver.unsat_core()
             if core:
                 return f"Conflicting constraints: {[str(c) for c in core]}"
         except Exception:
-            pass
+            logger.debug("Unsat core extraction unavailable", exc_info=True)
 
         return "Constraints are logically inconsistent"
 
@@ -615,12 +595,6 @@ class LogicVerifier:
         antecedent: str,
         consequent: str
     ) -> DiagnosticResult:
-        """
-        Check if antecedent implies consequent.
-
-        Returns:
-            DiagnosticResult — VERIFIED if implication holds, BLOCKED if counterexample found.
-        """
         return self.prove_theorem(variables, [antecedent], consequent)
 
     def check_equivalence(
@@ -629,18 +603,18 @@ class LogicVerifier:
         formula1: str,
         formula2: str
     ) -> DiagnosticResult:
-        """
-        Check if two formulas are logically equivalent.
-
-        Returns:
-            DiagnosticResult — VERIFIED if equivalent, BLOCKED if differ, UNVERIFIABLE if unknown.
-        """
         try:
             if not variables:
                 return DiagnosticResult.blocked(
                     "Logic verification blocked: explicit variable declarations are required",
                     {"constraint_id": "logic_verifier.explicit_declarations_required"},
                 )
+
+            blocked = self._ensure_sanitizer()
+            if blocked:
+                return blocked
+            sanitized = self._sanitize([formula1, formula2], variables)
+            formula1, formula2 = sanitized[0], sanitized[1]
 
             solver = Solver()
             solver.set("timeout", self.timeout_ms)
@@ -660,12 +634,12 @@ class LogicVerifier:
 
             if result == unsat:
                 fields["deterministic_verdict"] = "equivalent"
-                proof_ref = self._build_proof_ref(solver)
+                proof_data = self._build_proof_data(solver)
                 return DiagnosticResult.verified(
                     "Formulas are logically equivalent",
                     fields,
                     {"formula1": formula1, "formula2": formula2},
-                    proof_data=proof_ref,
+                    proof_data=proof_data,
                 )
             elif result == sat:
                 model = solver.model()
@@ -701,18 +675,17 @@ class LogicVerifier:
         objective: str,
         maximize: bool = True
     ) -> DiagnosticResult:
-        """
-        Optimize an objective function subject to constraints.
-
-        Returns:
-            DiagnosticResult — VERIFIED with optimal model if SAT, UNVERIFIABLE if UNSAT/UNKNOWN.
-        """
         try:
             if not variables:
                 return DiagnosticResult.blocked(
                     "Logic verification blocked: explicit variable declarations are required",
                     {"constraint_id": "logic_verifier.explicit_declarations_required"},
                 )
+
+            blocked = self._ensure_sanitizer()
+            if blocked:
+                return blocked
+            constraints = self._sanitize(constraints, variables)
 
             opt = Optimize()
             opt.set("timeout", self.timeout_ms)
@@ -728,9 +701,9 @@ class LogicVerifier:
 
             obj_expr = self._parse_constraint(objective, z3_vars)
             if maximize:
-                opt.maximize(obj_expr)
+                handle = opt.maximize(obj_expr)
             else:
-                opt.minimize(obj_expr)
+                handle = opt.minimize(obj_expr)
 
             result = opt.check()
 
@@ -739,16 +712,26 @@ class LogicVerifier:
             fields["maximize"] = maximize
 
             if result == sat:
+                obj_value = handle.value()
+                obj_str = str(obj_value)
+                if obj_str in ("oo", "-oo"):
+                    fields["deterministic_verdict"] = "UNBOUNDED"
+                    return DiagnosticResult.unverifiable(
+                        "Objective is unbounded — no finite optimum exists",
+                        fields,
+                    )
                 model = opt.model()
                 solution = {d.name(): str(model[d]) for d in model.decls()}
                 fields["model"] = solution
                 fields["deterministic_verdict"] = "OPTIMAL"
-                proof_ref = self._build_proof_ref(opt)
+                fields["objective_value"] = obj_str
+                direction = "maximize" if maximize else "minimize"
+                proof_data = self._build_proof_data(opt, extra=[f"{direction}: {objective}"])
                 return DiagnosticResult.verified(
                     "Optimal solution found",
                     fields,
-                    {"model": solution, "objective": objective},
-                    proof_data=proof_ref,
+                    {"model": solution, "objective": objective, "objective_value": obj_str},
+                    proof_data=proof_data,
                 )
             elif result == unsat:
                 fields["deterministic_verdict"] = "UNSAT"
@@ -774,20 +757,19 @@ class LogicVerifier:
         self,
         variables: Dict[str, str],
         antecedent: str,
-        consequent: str
+        consequent: Optional[str] = None
     ) -> DiagnosticResult:
-        """
-        Check for vacuous truth (e.g., "If False then Anything").
-
-        Returns:
-            DiagnosticResult — UNVERIFIABLE if vacuous, VERIFIED if non-vacuous.
-        """
         try:
             if not variables:
                 return DiagnosticResult.blocked(
                     "Logic verification blocked: explicit variable declarations are required",
                     {"constraint_id": "logic_verifier.explicit_declarations_required"},
                 )
+
+            blocked = self._ensure_sanitizer()
+            if blocked:
+                return blocked
+            antecedent = self._sanitize([antecedent], variables)[0]
 
             solver = Solver()
             solver.set("timeout", self.timeout_ms)
@@ -803,21 +785,30 @@ class LogicVerifier:
 
             fields = self._base_developer_fields(variables)
             fields["antecedent"] = antecedent
-            fields["deterministic_verdict"] = str(result)
+            if consequent:
+                fields["consequent"] = consequent
 
             if result == unsat:
+                fields["deterministic_verdict"] = "VACUOUS"
                 return DiagnosticResult.unverifiable(
                     "Rule is vacuously true — antecedent can never be satisfied",
                     fields,
                 )
-
-            proof_ref = self._build_proof_ref(solver)
-            return DiagnosticResult.verified(
-                "Rule is non-vacuous — antecedent is satisfiable",
-                fields,
-                {"antecedent": antecedent},
-                proof_data=proof_ref,
-            )
+            elif result == sat:
+                fields["deterministic_verdict"] = "NON_VACUOUS"
+                proof_data = self._build_proof_data(solver)
+                return DiagnosticResult.verified(
+                    "Rule is non-vacuous — antecedent is satisfiable",
+                    fields,
+                    {"antecedent": antecedent},
+                    proof_data=proof_data,
+                )
+            else:
+                fields["deterministic_verdict"] = "UNKNOWN"
+                return DiagnosticResult.unverifiable(
+                    "Vacuity check did not converge",
+                    fields,
+                )
 
         except Exception as exc:
             logger.exception("Vacuity check pipeline failed")
