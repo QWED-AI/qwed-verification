@@ -6,6 +6,7 @@ from qwed_new.core.image_verifier import ImageVerifier
 from qwed_new.core.graph_fact_verifier import GraphFactVerifier
 from qwed_new.core.reasoning_verifier import ReasoningVerifier
 from qwed_new.core.consensus_verifier import ConsensusVerifier, EngineResult, SECURE_EXECUTION_REQUIRED
+from qwed_new.core.fact_verifier import FactVerifier
 
 
 class StubVLMProvider:
@@ -449,3 +450,127 @@ class TestImageVerifierExtraCoverage:
         result = self.verifier.verify_image(b'\x89PNG\r\n\x1a\n' + b'A' * 100, "some semantic claim")
         assert not result.is_verified
         assert result.status.value == "UNVERIFIABLE"
+
+
+# ========================================================================
+# FactVerifier — advisory-only tests (#259, #133)
+# ========================================================================
+
+class TestFactVerifierAdvisoryOnly:
+
+    def setup_method(self):
+        self.verifier = FactVerifier(use_llm_fallback=False)
+
+    def test_supported_verified(self):
+        """Deterministic SUPPORTED → VERIFIED with proof_ref."""
+        result = self.verifier.verify_fact("The sky is blue", "The sky is blue today")
+        assert result.is_verified
+        assert result.proof_ref is not None
+
+    def test_refuted_blocked(self):
+        """REFUTED (negation conflict) → BLOCKED."""
+        result = self.verifier.verify_fact(
+            "The policy covers water damage",
+            "The policy does not cover water damage"
+        )
+        assert not result.is_verified
+        assert result.status.value == "BLOCKED"
+        assert result.developer_fields["deterministic_verdict"] == "REFUTED"
+
+    def test_neutral_unverifiable(self):
+        """NEUTRAL → UNVERIFIABLE."""
+        result = self.verifier.verify_fact(
+            "Quantum physics is complex",
+            "The weather is nice today"
+        )
+        assert not result.is_verified
+        assert result.status.value == "UNVERIFIABLE"
+
+    def test_empty_input_unverifiable(self):
+        """Empty claim → UNVERIFIABLE."""
+        result = self.verifier.verify_fact("", "context")
+        assert not result.is_verified
+        assert result.constraint_id == "fact_verifier.empty_input"
+
+    def test_insufficient_evidence_unverifiable(self):
+        """Low aggregate → UNVERIFIABLE."""
+        result = self.verifier.verify_fact(
+            "Unrelated claim about nothing",
+            "Completely different context here"
+        )
+        assert not result.is_verified
+
+    def test_methods_used_structured(self):
+        """methods_used contains structured entries with advisory_only flag."""
+        result = self.verifier.verify_fact("The sky is blue", "The sky is blue today")
+        methods = result.developer_fields["methods_used"]
+        assert len(methods) >= 4
+        for m in methods:
+            assert "name" in m
+            assert "advisory_only" in m
+
+    def test_deterministic_confidence_in_fields(self):
+        """Confidence is in developer_fields, not in status."""
+        result = self.verifier.verify_fact("The sky is blue", "The sky is blue today")
+        assert "deterministic_confidence" in result.developer_fields
+        # No confidence field at top level
+        d = result.to_dict()
+        assert "confidence" not in d.get("developer_fields", {})
+
+    def test_evidence_in_developer_fields(self):
+        """Deterministic reasoning is in developer_fields evidence."""
+        result = self.verifier.verify_fact("The sky is blue", "The sky is blue today")
+        assert "evidence" in result.developer_fields
+
+    def test_citations_included(self):
+        """Citations are included in developer_fields."""
+        result = self.verifier.verify_fact("The sky is blue", "The sky is blue today")
+        assert len(result.developer_fields.get("citations", [])) > 0
+
+
+class TestFactVerifierLLMAdvisoryOnly:
+
+    """LLM fallback never overwrites deterministic verdict (#133)."""
+
+    def test_llm_does_not_change_verdict(self):
+        """LLM advisory is separate — verdict stays deterministic."""
+        verifier = FactVerifier(use_llm_fallback=True)
+        result = verifier.verify_fact(
+            "Random unrelated claim",
+            "Completely different topic here",
+            provider="dummy",
+        )
+        assert hasattr(result, "status")
+        assert "deterministic_verdict" in result.developer_fields
+
+    def test_llm_advisory_check_populated(self, monkeypatch):
+        """When LLM returns a result, advisory_checks are populated."""
+        verifier = FactVerifier(use_llm_fallback=True)
+
+        def mock_llm(claim, context, provider):
+            return {"verdict": "SUPPORTED", "confidence": 0.85, "reasoning": "Mock LLM analysis"}
+
+        monkeypatch.setattr(verifier, "_llm_fallback", mock_llm)
+        result = verifier.verify_fact(
+            "Random unrelated claim",
+            "Completely different topic here",
+            provider="dummy",
+        )
+        checks = result.advisory_checks
+        assert len(checks) >= 1
+        llm_check = [c for c in checks if c.name == "llm_fallback"]
+        assert len(llm_check) == 1
+        assert llm_check[0].advisory_only
+        assert llm_check[0].details["llm_verdict"] == "SUPPORTED"
+
+    def test_pipeline_exception_returns_blocked(self, monkeypatch):
+        """Exception in deterministic pipeline → BLOCKED."""
+        verifier = FactVerifier(use_llm_fallback=False)
+
+        def crash(*args, **kwargs):
+            raise RuntimeError("Something broke")
+
+        monkeypatch.setattr(verifier, "_segment_sentences", crash)
+        result = verifier.verify_fact("claim", "context")
+        assert result.status.value == "BLOCKED"
+        assert result.constraint_id == "fact_verifier.execution_error"

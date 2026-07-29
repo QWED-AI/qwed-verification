@@ -2,21 +2,25 @@
 Enterprise Fact Verification Engine.
 
 Verifies factual claims against source context using deterministic methods:
-1. Semantic Similarity - sentence embeddings comparison
+1. Semantic Similarity - TF-IDF cosine similarity
 2. Citation Extraction - finds supporting/refuting sentences
 3. Keyword Overlap - lexical matching
 4. Entity Matching - proper nouns, numbers, dates
-5. Multi-Source Validation - cross-reference multiple sources
+5. Negation Detection - identifies conflicts
 
-This is NOT an LLM passthrough. The LLM is only used as a fallback
-for complex reasoning after deterministic methods are exhausted.
+LLM fallback is advisory-only and never determines the final verdict.
 """
 
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 import re
 import math
+import logging
 from collections import Counter
+
+from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -107,106 +111,135 @@ class FactVerifier:
         context: str, 
         provider: Optional[str] = None,
         min_confidence: float = 0.7
-    ) -> Dict[str, Any]:
+    ) -> DiagnosticResult:
         """
         Verify a factual claim against a source context.
-        
-        Args:
-            claim: The statement to verify (e.g., "The policy covers water damage").
-            context: The source text (e.g., policy document, article).
-            provider: Optional LLM provider for fallback.
-            min_confidence: Minimum confidence to return verdict without LLM.
-            
-        Returns:
-            dict: {
-                "verdict": "SUPPORTED" | "REFUTED" | "NEUTRAL" | "INSUFFICIENT_EVIDENCE",
-                "confidence": float,
-                "reasoning": str,
-                "citations": list[dict],
-                "methods_used": list[str]
-            }
 
-        Example:
-            >>> context = "The sky is blue."
-            >>> result = verifier.verify_fact("The sky is blue", context)
-            >>> print(result["verdict"])
-            'SUPPORTED'
+        LLM fallback is advisory-only — it populates advisory_checks and
+        never overwrites the deterministic verdict (fixes #133).
+
+        Args:
+            claim: The statement to verify.
+            context: The source text.
+            provider: Optional LLM provider for advisory fallback.
+            min_confidence: Minimum confidence for deterministic verdict.
+
+        Returns:
+            DiagnosticResult — VERIFIED for deterministic SUPPORTED/REFUTED,
+            UNVERIFIABLE for NEUTRAL/INSUFFICIENT_EVIDENCE, BLOCKED on error.
         """
         if not claim or not context:
-            return {
-                "verdict": "INSUFFICIENT_EVIDENCE",
-                "confidence": 0.0,
-                "reasoning": "Empty claim or context provided",
-                "citations": [],
-                "methods_used": []
-            }
-        
+            return DiagnosticResult.unverifiable(
+                "Empty claim or context provided",
+                {"constraint_id": "fact_verifier.empty_input"}
+            )
+
         methods_used = []
         scores = {}
-        
-        # Step 1: Segment context into sentences
-        sentences = self._segment_sentences(context)
-        
-        # Step 2: Find relevant sentences (citations)
-        citations = self._find_relevant_sentences(claim, sentences)
-        
-        # Step 3: Semantic similarity scoring
-        semantic_score = self._calculate_semantic_similarity(claim, context)
-        scores["semantic_similarity"] = semantic_score
-        methods_used.append("semantic_similarity")
-        
-        # Step 4: Keyword overlap analysis
-        keyword_score, keyword_details = self._analyze_keyword_overlap(claim, context)
-        scores["keyword_overlap"] = keyword_score
-        methods_used.append("keyword_overlap")
-        
-        # Step 5: Entity matching (numbers, dates, names)
-        entity_match, entity_details = self._match_entities(claim, context)
-        scores["entity_match"] = entity_match
-        methods_used.append("entity_matching")
-        
-        # Step 6: Negation detection
-        has_negation, negation_details = self._detect_negation_conflict(claim, citations)
-        scores["negation_conflict"] = 1.0 if has_negation else 0.0
-        methods_used.append("negation_detection")
-        
-        # Step 7: Calculate aggregate verdict
-        verdict, confidence, reasoning = self._calculate_verdict(
-            semantic_score=semantic_score,
-            keyword_score=keyword_score,
-            entity_match=entity_match,
-            has_negation=has_negation,
-            citations=citations,
-            keyword_details=keyword_details,
-            entity_details=entity_details,
-            negation_details=negation_details
-        )
-        
-        # Step 8: If low confidence and LLM fallback enabled, consult LLM
+        advisory_checks = []
+
+        try:
+            # Step 1: Segment context into sentences
+            sentences = self._segment_sentences(context)
+
+            # Step 2: Find relevant sentences (citations)
+            citations = self._find_relevant_sentences(claim, sentences)
+
+            # Step 3: Semantic similarity scoring
+            semantic_score = self._calculate_semantic_similarity(claim, context)
+            scores["semantic_similarity"] = semantic_score
+            methods_used.append({"name": "semantic_similarity", "advisory_only": False})
+
+            # Step 4: Keyword overlap analysis
+            keyword_score, keyword_details = self._analyze_keyword_overlap(claim, context)
+            scores["keyword_overlap"] = keyword_score
+            methods_used.append({"name": "keyword_overlap", "advisory_only": False})
+
+            # Step 5: Entity matching (numbers, dates, names)
+            entity_match, entity_details = self._match_entities(claim, context)
+            scores["entity_match"] = entity_match
+            methods_used.append({"name": "entity_matching", "advisory_only": False})
+
+            # Step 6: Negation detection
+            has_negation, negation_details = self._detect_negation_conflict(claim, citations)
+            scores["negation_conflict"] = 1.0 if has_negation else 0.0
+            methods_used.append({"name": "negation_detection", "advisory_only": False})
+
+            # Step 7: Calculate deterministic verdict
+            verdict, confidence, reasoning = self._calculate_verdict(
+                semantic_score=semantic_score,
+                keyword_score=keyword_score,
+                entity_match=entity_match,
+                has_negation=has_negation,
+                citations=citations,
+                keyword_details=keyword_details,
+                entity_details=entity_details,
+                negation_details=negation_details
+            )
+        except Exception as exc:
+            logger.exception("Fact verification pipeline failed")
+            return DiagnosticResult.blocked(
+                "Fact verification pipeline failed",
+                {"constraint_id": "fact_verifier.execution_error", "error_type": type(exc).__name__},
+            )
+
+        # Step 8: LLM fallback is advisory-only (fixes #133), confidence-gated
+        llm_advisory = None
         if confidence < min_confidence and self.use_llm_fallback and provider:
-            methods_used.append("llm_fallback")
+            methods_used.append({"name": "llm_fallback", "advisory_only": True})
             llm_result = self._llm_fallback(claim, context, provider)
             if llm_result:
-                # Blend LLM result with our deterministic result
-                verdict = llm_result.get("verdict", verdict)
-                confidence = max(confidence, llm_result.get("confidence", 0) * 0.8)  # Discount LLM confidence
-                reasoning += f"\n\nLLM Analysis: {llm_result.get('reasoning', '')}"
-        
-        return {
-            "verdict": verdict,
-            "confidence": round(confidence, 3),
-            "reasoning": reasoning,
+                llm_advisory = AdvisoryCheck(
+                    name="llm_fallback",
+                    constraint_id="fact_verifier.llm_advisory_only",
+                    details={
+                        "llm_verdict": llm_result.get("verdict"),
+                        "llm_confidence": llm_result.get("confidence"),
+                        "llm_reasoning": llm_result.get("reasoning"),
+                        "advisory_only": True,
+                    }
+                )
+                advisory_checks.append(llm_advisory)
+
+        developer_fields: Dict[str, Any] = {
+            "methods_used": methods_used,
+            "deterministic_confidence": round(confidence, 3),
+            "deterministic_verdict": verdict,
+            "evidence": reasoning,
             "citations": [
                 {
                     "sentence": c.sentence,
                     "relevance_score": round(c.relevance_score, 3),
                     "support_type": c.support_type
                 }
-                for c in citations[:5]  # Top 5 citations
+                for c in citations[:5]
             ],
-            "methods_used": methods_used,
-            "scores": {k: round(v, 3) for k, v in scores.items()}
+            "scores": {k: round(v, 3) for k, v in scores.items()},
         }
+        if advisory_checks:
+            developer_fields["advisory_checks"] = advisory_checks
+
+        # Map deterministic verdict to DiagnosticResult
+        if verdict == "SUPPORTED":
+            evidence = {"citations": developer_fields["citations"], "reasoning": reasoning}
+            return DiagnosticResult.verified(
+                "Fact claim verified by deterministic analysis",
+                developer_fields,
+                evidence,
+            )
+
+        if verdict == "REFUTED":
+            developer_fields["constraint_id"] = "fact_verifier.deterministic_refuted"
+            return DiagnosticResult.blocked(
+                "Fact claim refuted by deterministic analysis — negation conflict detected",
+                developer_fields,
+            )
+
+        developer_fields["constraint_id"] = "fact_verifier.inconclusive"
+        return DiagnosticResult.unverifiable(
+            "Fact claim could not be deterministically verified",
+            developer_fields,
+        )
     
     # =========================================================================
     # Sentence Segmentation
@@ -601,22 +634,18 @@ class BatchFactVerifier:
         
         for claim in claims:
             result = self.verifier.verify_fact(claim, context, provider)
-            results.append({
-                "claim": claim,
-                **result
-            })
+            d = result.to_dict()
+            d["claim"] = claim
+            results.append(d)
         
-        # Summary statistics
-        verdicts = [r["verdict"] for r in results]
+        statuses = [r["status"] for r in results]
         
         return {
             "results": results,
             "summary": {
                 "total": len(claims),
-                "supported": verdicts.count("SUPPORTED"),
-                "refuted": verdicts.count("REFUTED"),
-                "neutral": verdicts.count("NEUTRAL"),
-                "insufficient": verdicts.count("INSUFFICIENT_EVIDENCE"),
-                "average_confidence": sum(r["confidence"] for r in results) / len(results) if results else 0
+                "verified": statuses.count("VERIFIED"),
+                "unverifiable": statuses.count("UNVERIFIABLE"),
+                "blocked": statuses.count("BLOCKED"),
             }
         }
