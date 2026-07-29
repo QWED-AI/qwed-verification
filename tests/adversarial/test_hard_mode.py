@@ -14,6 +14,7 @@ import json
 
 import pytest
 
+from qwed_new.core.diagnostics import DiagnosticStatus
 from qwed_new.core.verifier import VerificationEngine
 from qwed_new.core.logic_verifier import LogicVerifier
 from tests.adversarial.test_hidden_reasoning import (
@@ -255,7 +256,12 @@ class TestContradictoryInstructions:
                 f"rate == {user_rate}",
             ],
         )
-        assert result.status == "UNSAT", "Two different rates should be contradictory"
+        assert result.status == DiagnosticStatus.UNVERIFIABLE, (
+            f"Expected UNVERIFIABLE for contradictory rates, got {result.status.value}: {result.agent_message}"
+        )
+        assert result.developer_fields.get("deterministic_verdict") == "UNSAT", (
+            f"Expected UNSAT verdict, got {result.developer_fields.get('deterministic_verdict')}"
+        )
 
     @pytest.mark.skipif(
         not __import__("os").getenv("CUSTOM_BASE_URL"),

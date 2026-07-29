@@ -34,6 +34,8 @@ except ImportError:
     click.echo("Error: QWED SDK not installed. Run: pip install qwed", err=True)
     sys.exit(1)
 
+from qwed_new.core.security import redact_pii
+
 logger = logging.getLogger(__name__)
 
 
@@ -267,11 +269,13 @@ def _run_init_smoke_suite() -> list[dict]:
     )
 
     logic_bad = logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"])
+    from qwed_new.core.diagnostics import DiagnosticStatus
+    logic_bad_passed = logic_bad.status == DiagnosticStatus.UNVERIFIABLE
     tests.append(
         {
             "label": LOGIC_LABEL_UNSAT,
-            "passed": logic_bad.status == "UNSAT",
-            "result": "UNSAT",
+            "passed": logic_bad_passed,
+            "result": "UNVERIFIABLE",
         }
     )
 
@@ -1030,7 +1034,7 @@ def init(
     try:
         profile = _resolve_onboarding_profile(provider_choice, non_interactive, provider_map)
     except RuntimeError as exc:
-        click.echo(str(exc), err=True)
+        click.echo(redact_pii(str(exc)), err=True)
         sys.exit(1)
 
     click.echo(f"\n{SEPARATOR}")
@@ -1072,7 +1076,7 @@ def init(
             non_interactive=non_interactive,
         )
     except RuntimeError as exc:
-        click.echo(str(exc), err=True)
+        click.echo(redact_pii(str(exc)), err=True)
         sys.exit(1)
 
     click.echo(f"\n{SEPARATOR}")
@@ -1083,10 +1087,10 @@ def init(
         organization_name = _resolve_organization_name(organization_name, non_interactive)
         normalized_server_url = _normalize_local_server_url(server_url)
     except RuntimeError as exc:
-        click.echo(str(exc), err=True)
+        click.echo(redact_pii(str(exc)), err=True)
         sys.exit(1)
     except ValueError as exc:
-        click.echo(f"  [x] Invalid server URL: {exc}", err=True)
+        click.echo(f"  [x] Invalid server URL: {redact_pii(str(exc))}", err=True)
         sys.exit(1)
 
     click.echo("\n  Starting local server...")
@@ -1550,29 +1554,37 @@ def _run_full_engine_tests() -> List[dict]:
         add_engine_error_cases("Logic", [LOGIC_LABEL_UNSAT, "x>3 AND x<10", "approval=1 AND approval=0"], exc)
 
     if logic_engine is not None:
+        from qwed_new.core.diagnostics import DiagnosticStatus
+
+        def _logic_is_unverifiable(p):
+            return p.status == DiagnosticStatus.UNVERIFIABLE
+
+        def _logic_is_proved(p):
+            return p.status == DiagnosticStatus.VERIFIED
+
         run_case(
             "Logic",
             LOGIC_LABEL_UNSAT,
-            "UNSAT (contradiction)",
+            "UNVERIFIABLE (contradiction)",
             lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"]),
-            lambda payload: payload.status == "UNSAT",
-            lambda payload: f"status={payload.status}",
+            _logic_is_unverifiable,
+            lambda payload: f"status={payload.status.value}",
         )
         run_case(
             "Logic",
             "x>3 AND x<10",
-            "SAT {x=4}",
+            "VERIFIED {x=4}",
             lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 3", "x < 10", "x == 4"]),
-            lambda payload: payload.status == "SAT",
-            lambda payload: f"model={payload.model}",
+            _logic_is_proved,
+            lambda payload: f"model={payload.developer_fields.get('model', payload)}",
         )
         run_case(
             "Logic",
             "approval=1 AND approval=0",
-            "UNSAT (contradiction)",
+            "UNVERIFIABLE (contradiction)",
             lambda: logic_engine.verify_logic({"approval": "Int"}, ["approval == 1", "approval == 0"]),
-            lambda payload: payload.status == "UNSAT",
-            lambda payload: f"status={payload.status}",
+            _logic_is_unverifiable,
+            lambda payload: f"status={payload.status.value}",
         )
 
     try:

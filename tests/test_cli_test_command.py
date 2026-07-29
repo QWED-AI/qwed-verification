@@ -60,10 +60,12 @@ def test_run_full_engine_tests_returns_expected_shape(
         {"status": "CORRECTION_NEEDED", "calculated_value": 4.0},
         {"status": "VERIFIED", "calculated_value": 994010994.0},
     ]
+    from qwed_new.core.diagnostics import DiagnosticStatus, DiagnosticResult
+
     mock_logic.verify_logic.side_effect = [
-        type("LogicResult", (), {"status": "UNSAT", "model": None})(),
-        type("LogicResult", (), {"status": "SAT", "model": {"x": "4"}})(),
-        type("LogicResult", (), {"status": "UNSAT", "model": None})(),
+        DiagnosticResult.unverifiable("UNSAT", {"constraint_id": "test.mock"}),
+        DiagnosticResult.verified("SAT", {"model": {"x": "4"}}, {"model": {"x": "4"}}, proof_data="proof"),
+        DiagnosticResult.unverifiable("UNSAT", {"constraint_id": "test.mock"}),
     ]
     mock_sql.verify_sql.side_effect = [
         {"status": "SAFE"},

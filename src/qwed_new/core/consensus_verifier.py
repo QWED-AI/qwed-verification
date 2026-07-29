@@ -658,11 +658,11 @@ class ConsensusVerifier:
         try:
             variables, constraints = self._model_as_logic(query)
             result = self.logic_verifier.verify_logic(variables, constraints)
-            is_sat = result.status == "SAT"
+            is_sat = result.is_verified
 
             return EngineResult(
                 engine_name="Z3", method="constraint_solving",
-                result=result.status,
+                result=result.developer_fields.get("deterministic_verdict", result.status.value),
                 confidence=0.995 if is_sat else 0.0,
                 latency_ms=(time.time() - start) * 1000, success=is_sat,
                 status="VERIFIED" if is_sat else "UNVERIFIABLE",
