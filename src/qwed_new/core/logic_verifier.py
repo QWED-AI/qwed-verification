@@ -316,6 +316,9 @@ class LogicVerifier:
                     return blocked
                 sanitized_body = self._sanitize([qf.body], scope_vars)[0]
                 body = self._parse_constraint(sanitized_body, scope_z3)
+                if body is None:
+                    continue
+
                 bound_z3_vars = [scope_z3[name] for name, _ in qf.bound_vars]
 
                 if qf.quantifier.lower() == "forall":
