@@ -27,6 +27,7 @@ _PIPELINE_ERROR_MSG = "Logic verification blocked: pipeline error"
 
 _CONSTRAINT_ID_EXPLICIT_DECLARATIONS = "logic_verifier.explicit_declarations_required"
 _CONSTRAINT_ID_EXECUTION_ERROR = "logic_verifier.execution_error"
+_CONSTRAINT_ID_INVALID_CONSTRAINT = "logic_verifier.invalid_constraint"
 _CONSTRAINT_ID_TYPE_VALIDATION = "dsl_compiler.type_validation"
 
 
@@ -103,13 +104,11 @@ class LogicVerifier:
         return result
 
     @staticmethod
-    def _build_proof_data(solver: Solver, extra: Optional[List[str]] = None) -> Optional[str]:
+    def _build_proof_data(solver: Solver, extra: Optional[List[str]] = None) -> str:
         """Return raw assertion string for proof_ref hashing (no double-hash)."""
         assertions = [str(a) for a in solver.assertions()]
         if extra:
             assertions.extend(extra)
-        if not assertions:
-            return None
         return str(assertions)
 
     def _base_developer_fields(self, variables: Dict[str, str]) -> Dict[str, Any]:
@@ -213,7 +212,7 @@ class LogicVerifier:
                     return DiagnosticResult.blocked(
                         "Logic verification blocked: invalid constraint",
                         {
-                            "constraint_id": "logic_verifier.invalid_constraint",
+                            "constraint_id": _CONSTRAINT_ID_INVALID_CONSTRAINT,
                             "error_type": type(e).__name__,
                             "constraint": constr,
                         },
@@ -600,7 +599,7 @@ class LogicVerifier:
             if conclusion_z3 is None:
                 return DiagnosticResult.blocked(
                     "Logic verification blocked: invalid conclusion",
-                    {"constraint_id": "logic_verifier.invalid_constraint", "constraint": conclusion},
+                    {"constraint_id": _CONSTRAINT_ID_INVALID_CONSTRAINT, "constraint": conclusion},
                 )
             solver.add(Not(conclusion_z3))
 
@@ -754,6 +753,16 @@ class LogicVerifier:
 
             f1 = self._parse_constraint(formula1, z3_vars)
             f2 = self._parse_constraint(formula2, z3_vars)
+            if f1 is None:
+                return DiagnosticResult.blocked(
+                    "Logic verification blocked: invalid formula",
+                    {"constraint_id": _CONSTRAINT_ID_INVALID_CONSTRAINT, "constraint": formula1},
+                )
+            if f2 is None:
+                return DiagnosticResult.blocked(
+                    "Logic verification blocked: invalid formula",
+                    {"constraint_id": _CONSTRAINT_ID_INVALID_CONSTRAINT, "constraint": formula2},
+                )
 
             solver.add(Not(f1 == f2))
 
@@ -836,7 +845,7 @@ class LogicVerifier:
             if obj_expr is None:
                 return DiagnosticResult.blocked(
                     "Logic verification blocked: invalid objective",
-                    {"constraint_id": "logic_verifier.invalid_constraint", "constraint": objective},
+                    {"constraint_id": _CONSTRAINT_ID_INVALID_CONSTRAINT, "constraint": objective},
                 )
             if maximize:
                 handle = opt.maximize(obj_expr)
@@ -903,7 +912,7 @@ class LogicVerifier:
             if ant_expr is None:
                 return DiagnosticResult.blocked(
                     "Logic verification blocked: invalid antecedent",
-                    {"constraint_id": "logic_verifier.invalid_constraint", "constraint": antecedent},
+                    {"constraint_id": _CONSTRAINT_ID_INVALID_CONSTRAINT, "constraint": antecedent},
                 )
             solver.add(ant_expr)
 

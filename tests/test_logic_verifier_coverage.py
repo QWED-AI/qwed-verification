@@ -262,7 +262,7 @@ def test_build_proof_data_empty_assertions():
     from z3 import Solver
     s = Solver()
     result = v._build_proof_data(s)
-    assert result is None
+    assert result == "[]"
 
 
 # =========================================================================
