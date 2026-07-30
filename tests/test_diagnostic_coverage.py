@@ -13,7 +13,7 @@ from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
 def client():
     from qwed_new.api.main import app, get_current_tenant, get_session
 
-    mock_tenant = MagicMock(organization_id=1, api_key="QWED_TEST_VALUE", organization_name="Test Org")
+    mock_tenant = MagicMock(organization_id=1, api_key="sk-test-fixture-key-do-not-use-in-production", organization_name="Test Org")
     mock_session = MagicMock(add=MagicMock(), commit=MagicMock())
 
     app.dependency_overrides[get_current_tenant] = lambda: mock_tenant
@@ -39,12 +39,11 @@ def test_verify_natural_language_success_path(client):
 
     assert response.status_code == 200
     data = response.json()
-    assert "proof_ref" in data
-    assert "diagnostic_status" in data
+    assert data["status"] == "UNVERIFIABLE"
 
 
-def test_verify_natural_language_legacy_verified(client):
-    """Cover from_legacy_dict ValueError -> VERIFIED passthrough for VERIFIED legacy."""
+def test_verify_natural_language_legacy_conversion_fails(client):
+    """Cover from_legacy_dict ValueError -> UNVERIFIABLE (fail-closed)."""
     mock_result = {
         "verification": {"is_correct": True, "status": "VERIFIED"},
     }
@@ -57,11 +56,12 @@ def test_verify_natural_language_legacy_verified(client):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["diagnostic_status"] == "VERIFIED"
+    assert data["status"] == "UNVERIFIABLE"
+    assert data["proof_ref"] is None
 
 
 def test_verify_natural_language_legacy_unrecognized(client):
-    """Cover from_legacy_dict ValueError -> BLOCKED for unrecognized legacy."""
+    """Cover from_legacy_dict ValueError -> UNVERIFIABLE for unrecognized legacy."""
     mock_result = {
         "verification": {"is_correct": True, "status": "XYZZY"},
     }
@@ -74,7 +74,7 @@ def test_verify_natural_language_legacy_unrecognized(client):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["diagnostic_status"] == "BLOCKED"
+    assert data["status"] == "UNVERIFIABLE"
     assert data["proof_ref"] is None
 
 
@@ -97,8 +97,8 @@ def test_verify_logic_sat_path(client):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "SAT"
-    assert data["diagnostic_status"] == "VERIFIED"
+    assert data["status"] == "VERIFIED"
+    assert data["agent_message"] == "Logic constraints are satisfiable"
 
 
 def test_verify_logic_unsat_path(client):
@@ -120,8 +120,8 @@ def test_verify_logic_unsat_path(client):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "UNSAT"
-    assert data["diagnostic_status"] == "UNVERIFIABLE"
+    assert data["status"] == "UNVERIFIABLE"
+    assert data["agent_message"] == "Logic constraints are unsatisfiable"
 
 
 def test_verify_stats_success_unverifiable(client):
@@ -168,7 +168,6 @@ def test_verify_fact_legacy_object_verified(client):
     mock_result.to_dict.return_value = {"verdict": "SUPPORTED", "confidence": 0.95}
     mock_result.is_verified = True
     mock_result.verdict = "SUPPORTED"
-    mock_result.__class__.__module__ = "unittest.mock"
 
     with patch("qwed_new.core.fact_verifier.FactVerifier.verify_fact", return_value=mock_result), \
          patch("qwed_new.api.main.check_rate_limit"):
@@ -187,7 +186,6 @@ def test_verify_fact_legacy_object_unverified(client):
     mock_result = MagicMock()
     mock_result.to_dict.return_value = {"verdict": "NEUTRAL", "confidence": 0.5}
     mock_result.is_verified = False
-    mock_result.__class__.__module__ = "unittest.mock"
 
     with patch("qwed_new.core.fact_verifier.FactVerifier.verify_fact", return_value=mock_result), \
          patch("qwed_new.api.main.check_rate_limit"):
@@ -277,8 +275,9 @@ def test_verify_consensus_blocked_status(client):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["diagnostic_status"] == "BLOCKED"
+    assert data["status"] == "BLOCKED"
     assert data["is_authoritative"] is False
+    assert data["final_answer"] is None
 
 
 def test_verify_consensus_unverifiable_status(client):
@@ -303,8 +302,9 @@ def test_verify_consensus_unverifiable_status(client):
 
         assert response.status_code == 200
         data = response.json()
-        assert data["diagnostic_status"] == "UNVERIFIABLE"
+        assert data["status"] == "UNVERIFIABLE"
         assert data["is_authoritative"] is False
+        assert data["final_answer"] == "maybe"
 
 
 def test_verify_consensus_no_agreement(client):
@@ -329,5 +329,5 @@ def test_verify_consensus_no_agreement(client):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["diagnostic_status"] == "UNVERIFIABLE"
+    assert data["status"] == "UNVERIFIABLE"
     assert data["is_authoritative"] is False

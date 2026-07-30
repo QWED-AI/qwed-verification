@@ -214,28 +214,24 @@ async def verify_natural_language(
 ):
     check_rate_limit(tenant.api_key)
 
-    result = await control_plane.process_natural_language(
-        request.query,
-        organization_id=tenant.organization_id,
-        preferred_provider=request.provider
-    )
+    try:
+        result = await control_plane.process_natural_language(
+            request.query,
+            organization_id=tenant.organization_id,
+            preferred_provider=request.provider
+        )
+    except Exception as e:
+        logger.error("Natural language verification error: %s", redact_pii(str(e)), exc_info=False)
+        result = {"error": INTERNAL_VERIFICATION_ERROR}
 
     verification_result = result.get("verification", {})
     try:
         dr = DiagnosticResult.from_legacy_dict(verification_result, engine="math")
     except ValueError:
-        legacy_status = verification_result.get("status")
-        if legacy_status == "VERIFIED":
-            dr = DiagnosticResult.verified(
-                "Verification succeeded",
-                developer_fields=verification_result,
-                evidence={"legacy_status": legacy_status, "result_data": str(verification_result)},
-            )
-        else:
-            dr = DiagnosticResult.blocked(
-                "Verification blocked — proof artifact unavailable",
-                {"constraint_id": "api.natural_language.legacy_conversion_failed", "legacy_status": legacy_status},
-            )
+        dr = DiagnosticResult.unverifiable(
+            "Verification result unavailable — legacy engine did not retain proof artifacts",
+            {"constraint_id": "api.natural_language.legacy_conversion_failed", "legacy_status": verification_result.get("status")},
+        )
     dr = _enforce_trust(dr, query=request.query)
 
     log = VerificationLog(
@@ -249,9 +245,12 @@ async def verify_natural_language(
     session.add(log)
     session.commit()
 
-    return result | {"proof_ref": dr.proof_ref, "diagnostic_status": dr.status.value, "is_authoritative": dr.is_authoritative}
+    return _merge_response(dr)
 
-@app.post("/verify/logic")
+@app.post(
+    "/verify/logic",
+    responses={403: {"description": "Logic verification blocked by engine"}},
+)
 async def verify_logic(
     request: VerifyRequest,
     tenant: TenantContext = Depends(get_current_tenant),
@@ -298,7 +297,8 @@ async def verify_logic(
         session.add(log)
         session.commit()
 
-        return result | {"proof_ref": dr.proof_ref, "diagnostic_status": dr.status.value, "is_authoritative": dr.is_authoritative}
+        return _merge_response(dr)
+
 
     except HTTPException:
         raise
@@ -311,7 +311,7 @@ async def verify_logic(
             else control_plane.router.route(request.query, request.provider)
         )
         dr = DiagnosticResult.blocked(
-            "Internal verification error",
+            INTERNAL_VERIFICATION_ERROR,
             {"constraint_id": "api.logic.execution_error", "provider_used": provider_used},
         )
         dr = _enforce_trust(dr, query=request.query)
@@ -390,7 +390,7 @@ async def verify_stats(
     except Exception as e:
         logger.error(f"Stats verification error: {redact_pii(str(e))}", exc_info=False)
         dr = DiagnosticResult.blocked(
-            "Internal processing error",
+            INTERNAL_PROCESSING_ERROR,
             {"constraint_id": "api.stats.execution_error"},
         )
         dr = _enforce_trust(dr, query=query)
@@ -440,10 +440,11 @@ async def verify_fact(
         if isinstance(result, DiagnosticResult):
             dr = result
         elif hasattr(result, "to_dict") and hasattr(result, "is_verified"):
+            verdict = result.verdict if hasattr(result, "verdict") else "UNKNOWN"
             dr = DiagnosticResult.verified(
                 "Fact verification complete",
                 developer_fields=result.to_dict(),
-                evidence={"claim": claim, "verdict": result.verdict if hasattr(result, "verdict") else "UNKNOWN"},
+                evidence={"claim": claim, "verdict": verdict},
             ) if result.is_verified else DiagnosticResult.unverifiable(
                 "Fact not supported",
                 developer_fields=result.to_dict(),
@@ -472,7 +473,7 @@ async def verify_fact(
     except Exception as e:
         logger.error(f"Fact verification error: {redact_pii(str(e))}", exc_info=False)
         dr = DiagnosticResult.blocked(
-            "Internal verification error",
+            INTERNAL_VERIFICATION_ERROR,
             {"constraint_id": "api.fact.execution_error", "verdict": "ERROR"},
         )
         dr = _enforce_trust(dr, query=claim)
@@ -543,7 +544,7 @@ async def verify_code(
     except Exception as e:
         logger.error(f"Code verification error: {redact_pii(str(e))}", exc_info=False)
         dr = DiagnosticResult.blocked(
-            "Internal verification error",
+            INTERNAL_VERIFICATION_ERROR,
             {"constraint_id": "api.code.execution_error", "is_safe": False},
         )
         dr = _enforce_trust(dr, query=code)
@@ -668,7 +669,7 @@ async def verify_math(
     except Exception as e:
         logger.error(f"Math verification error: {redact_pii(str(e))}", exc_info=False)
         dr = DiagnosticResult.blocked(
-            "Internal verification error",
+            INTERNAL_VERIFICATION_ERROR,
             {"constraint_id": "api.math.execution_error"},
         )
         dr = _enforce_trust(dr, query=expression)
@@ -736,7 +737,7 @@ async def verify_sql(
     except Exception as e:
         logger.error(f"SQL verification error: {redact_pii(str(e))}", exc_info=False)
         dr = DiagnosticResult.blocked(
-            "Internal verification error",
+            INTERNAL_VERIFICATION_ERROR,
             {"constraint_id": "api.sql.execution_error", "is_valid": False},
         )
         dr = _enforce_trust(dr, query=query)
@@ -793,7 +794,8 @@ async def verify_image(
         if isinstance(result, DiagnosticResult):
             dr = result
         else:
-            evidence = {"claim": claim, "verdict": result.verdict if hasattr(result, "verdict") else "UNKNOWN"}
+            image_verdict = result.verdict if hasattr(result, "verdict") else "UNKNOWN"
+            evidence = {"claim": claim, "verdict": image_verdict}
             if result.is_verified:
                 dr = DiagnosticResult.verified(
                     "Image claim verified",
@@ -824,7 +826,7 @@ async def verify_image(
     except Exception as e:
         logger.error(f"Image verification error: {redact_pii(str(e))}", exc_info=False)
         dr = DiagnosticResult.blocked(
-            "Internal processing error",
+            INTERNAL_PROCESSING_ERROR,
             {"constraint_id": "api.image.execution_error", "verdict": "INCONCLUSIVE", "confidence": 0.0},
         )
         dr = _enforce_trust(dr, query=claim)
@@ -900,7 +902,7 @@ async def verify_rag(
             )
         except ValueError as exc:
             logger.warning("RAG config error: %s", redact_pii(str(exc)))
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail="Invalid RAG guard configuration") from exc
         
         audit_result = {
             "verified": result.get("verified", False),
@@ -1210,7 +1212,10 @@ async def _process_agent_verification(agent: Agent, request: AgentVerifyRequest)
         logger.error(f"Agent verification failed: {redact_pii(str(e))}", exc_info=False)
         raise HTTPException(status_code=500, detail="Internal agent verification error") from e
 
-@app.post("/agents/register")
+@app.post(
+    "/agents/register",
+    responses={500: {"description": "Agent registration failed due to an internal error"}},
+)
 async def register_agent(
     request: AgentRegistrationRequest,
     tenant: TenantContext = Depends(get_current_tenant),
@@ -1242,7 +1247,7 @@ async def register_agent(
         }
     except Exception as e:
         logger.error(f"Agent registration error: {redact_pii(str(e))}", exc_info=False)
-        raise HTTPException(status_code=500, detail="Agent registration failed")
+        raise HTTPException(status_code=500, detail="Agent registration failed") from e
 
 @app.post(
     "/agents/{agent_id}/verify",
@@ -1521,7 +1526,7 @@ async def verify_with_consensus(
         "total_latency_ms": round(result.total_latency_ms, 2),
         "meets_requirement": result.confidence >= request.min_confidence,
     }
-    return response | {"proof_ref": dr.proof_ref, "diagnostic_status": dr.status.value, "is_authoritative": dr.is_authoritative}
+    return response | _merge_response(dr)
 # --- Enterprise Security Endpoints (Week 2) ---
 
 from qwed_new.core.compliance_exporter import ComplianceExporter
