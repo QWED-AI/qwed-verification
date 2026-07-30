@@ -362,9 +362,10 @@ async def verify_stats(
             raise HTTPException(status_code=403, detail="Verification blocked by security policy")
 
         if result.get("status") == "SUCCESS":
-            dr = DiagnosticResult.unverifiable(
+            dr = DiagnosticResult.verified(
                 "Statistical analysis executed",
                 developer_fields=result,
+                evidence=result,
             )
         else:
             dr = DiagnosticResult.blocked(
@@ -902,7 +903,7 @@ async def verify_rag(
             )
         except ValueError as exc:
             logger.warning("RAG config error: %s", redact_pii(str(exc)))
-            raise HTTPException(status_code=400, detail="Invalid RAG guard configuration") from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         
         audit_result = {
             "verified": result.get("verified", False),
@@ -1526,7 +1527,7 @@ async def verify_with_consensus(
         "total_latency_ms": round(result.total_latency_ms, 2),
         "meets_requirement": result.confidence >= request.min_confidence,
     }
-    return response | _merge_response(dr)
+    return _merge_response(dr) | response
 # --- Enterprise Security Endpoints (Week 2) ---
 
 from qwed_new.core.compliance_exporter import ComplianceExporter

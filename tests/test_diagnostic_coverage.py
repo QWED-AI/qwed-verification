@@ -2,6 +2,7 @@
 
 Targets uncovered code paths reported by SonarQube for #264.
 """
+import os
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
@@ -13,7 +14,7 @@ from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
 def client():
     from qwed_new.api.main import app, get_current_tenant, get_session
 
-    mock_tenant = MagicMock(organization_id=1, api_key="sk-test-fixture-key-do-not-use-in-production", organization_name="Test Org")
+    mock_tenant = MagicMock(organization_id=1, api_key=os.environ.get("QWED_TEST_API_KEY", "sentinel"), organization_name="Test Org")
     mock_session = MagicMock(add=MagicMock(), commit=MagicMock())
 
     app.dependency_overrides[get_current_tenant] = lambda: mock_tenant
@@ -40,6 +41,7 @@ def test_verify_natural_language_success_path(client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "UNVERIFIABLE"
+    assert data["proof_ref"] is None
 
 
 def test_verify_natural_language_legacy_conversion_fails(client):
@@ -99,6 +101,7 @@ def test_verify_logic_sat_path(client):
     data = response.json()
     assert data["status"] == "VERIFIED"
     assert data["agent_message"] == "Logic constraints are satisfiable"
+    assert data["proof_ref"]
 
 
 def test_verify_logic_unsat_path(client):
@@ -122,10 +125,11 @@ def test_verify_logic_unsat_path(client):
     data = response.json()
     assert data["status"] == "UNVERIFIABLE"
     assert data["agent_message"] == "Logic constraints are unsatisfiable"
+    assert data["proof_ref"] is None
 
 
 def test_verify_stats_success_unverifiable(client):
-    """Cover stats SUCCESS -> UNVERIFIABLE (execution != verification)."""
+    """Cover stats SUCCESS -> VERIFIED (execution result IS the evidence)."""
     with patch("qwed_new.core.stats_verifier.StatsVerifier.verify_stats", return_value={"status": "SUCCESS", "analysis": "mean=2.0"}), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
@@ -136,8 +140,9 @@ def test_verify_stats_success_unverifiable(client):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "UNVERIFIABLE"
-    assert data["is_authoritative"] is False
+    assert data["status"] == "VERIFIED"
+    assert data["is_authoritative"] is True
+    assert data["proof_ref"]
 
 
 def test_verify_fact_preserves_diagnostic_result(client):
@@ -160,6 +165,7 @@ def test_verify_fact_preserves_diagnostic_result(client):
     assert data["status"] == "BLOCKED"
     assert data["agent_message"] == "Fact refuted by evidence"
     assert data["verdict"] == "REFUTED"
+    assert data["proof_ref"] is None
 
 
 def test_verify_fact_legacy_object_verified(client):
@@ -179,6 +185,7 @@ def test_verify_fact_legacy_object_verified(client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "VERIFIED"
+    assert data["proof_ref"]
 
 
 def test_verify_fact_legacy_object_unverified(client):
@@ -197,6 +204,7 @@ def test_verify_fact_legacy_object_unverified(client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "UNVERIFIABLE"
+    assert data["proof_ref"] is None
 
 
 def test_verify_fact_unknown_result(client):
@@ -211,6 +219,7 @@ def test_verify_fact_unknown_result(client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "UNVERIFIABLE"
+    assert data["proof_ref"] is None
 
 
 def test_verify_sql_unverified(client):
@@ -225,6 +234,7 @@ def test_verify_sql_unverified(client):
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "BLOCKED"
+        assert data["proof_ref"] is None
 
 
 def test_verify_code_missing_code_returns_400(client):
@@ -251,6 +261,7 @@ def test_verify_code_review_status(client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "UNVERIFIABLE"
+    assert data["proof_ref"] is None
 
 
 def test_verify_consensus_blocked_status(client):
@@ -278,6 +289,7 @@ def test_verify_consensus_blocked_status(client):
     assert data["status"] == "BLOCKED"
     assert data["is_authoritative"] is False
     assert data["final_answer"] is None
+    assert data["proof_ref"] is None
 
 
 def test_verify_consensus_unverifiable_status(client):
@@ -300,11 +312,12 @@ def test_verify_consensus_unverifiable_status(client):
             json={"query": "test", "verification_mode": "high", "min_confidence": 0.0},
         )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "UNVERIFIABLE"
-        assert data["is_authoritative"] is False
-        assert data["final_answer"] == "maybe"
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "UNVERIFIABLE"
+    assert data["proof_ref"] is None
+    assert data["is_authoritative"] is False
+    assert data["final_answer"] == "maybe"
 
 
 def test_verify_consensus_no_agreement(client):
@@ -331,3 +344,4 @@ def test_verify_consensus_no_agreement(client):
     data = response.json()
     assert data["status"] == "UNVERIFIABLE"
     assert data["is_authoritative"] is False
+    assert data["proof_ref"] is None
