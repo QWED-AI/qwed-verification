@@ -122,6 +122,7 @@ def test_stats_api_masks_secure_runtime_unavailability(client):
     data = response.json()
     assert data["status"] == "BLOCKED"
     assert data["agent_message"] == "Service temporarily unavailable"
+    assert data["proof_ref"] is None
 
 
 def test_stats_api_preserves_security_policy_blocks(client):
@@ -141,6 +142,7 @@ def test_stats_api_preserves_security_policy_blocks(client):
     data = response.json()
     assert data["status"] == "BLOCKED"
     assert data["agent_message"] == "Verification blocked by security policy"
+    assert data["proof_ref"] is None
 
 
 def test_consensus_code_engine_requires_secure_executor():

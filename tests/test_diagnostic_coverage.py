@@ -3,6 +3,7 @@
 Targets uncovered code paths reported by SonarQube for #264.
 """
 import os
+import secrets
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
@@ -23,7 +24,8 @@ def client():
 
     yield TestClient(app)
 
-    app.dependency_overrides.clear()
+    del app.dependency_overrides[get_current_tenant]
+    del app.dependency_overrides[get_session]
 
 
 def test_verify_natural_language_success_path(client):
@@ -394,9 +396,11 @@ def test_get_optional_api_key_record_success():
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = mock_api_key
 
-    with patch("qwed_new.api.main.hash_api_key", return_value="test_hash"):
+    fake_hash = secrets.token_hex(8)
+    fake_key = secrets.token_hex(8)
+    with patch("qwed_new.api.main.hash_api_key", return_value=fake_hash):
         result = get_optional_api_key_record(
-            x_api_key="test_value",
+            x_api_key=fake_key,
             session=mock_session,
         )
 

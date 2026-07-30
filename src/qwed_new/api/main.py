@@ -230,7 +230,7 @@ async def verify_natural_language(
         )
 
     if dr is None:
-        verification_result = result.get("verification", {})
+        verification_result = result.get("verification", {}) if isinstance(result, dict) else {}
         try:
             dr = DiagnosticResult.from_legacy_dict(verification_result, engine="math")
         except ValueError:
@@ -263,6 +263,7 @@ async def verify_logic(
     session: Session = Depends(get_session)
 ):
     check_rate_limit(tenant.api_key)
+    result = None
 
     try:
         result = await control_plane.process_logic_query(
@@ -310,10 +311,9 @@ async def verify_logic(
         raise
     except Exception as e:
         logger.error(f"Logic verification error: {redact_pii(str(e))}", exc_info=False)
-        response_result = locals().get("result")
         provider_used = (
-            response_result.get("provider_used")
-            if isinstance(response_result, dict) and response_result.get("provider_used")
+            result.get("provider_used")
+            if isinstance(result, dict) and result.get("provider_used")
             else control_plane.router.route(request.query, request.provider)
         )
         dr = DiagnosticResult.blocked(
@@ -641,7 +641,7 @@ async def verify_math(
                 )
             elif simplified.is_real is False and context_data.get("domain") == "real":
                 dr = DiagnosticResult.blocked(
-                    "Square root of negative number is undefined in real domain",
+                    "Expression is not real-valued in the requested real domain",
                     developer_fields={"is_valid": False, "error": "domain error"},
                 )
             elif is_ambiguous:
@@ -714,16 +714,15 @@ async def verify_sql(
     query = request.get("query")
     if not query:
         raise HTTPException(status_code=400, detail="Missing 'query'")
+    schema_ddl = request.get("schema_ddl")
+    if not schema_ddl:
+        raise HTTPException(status_code=400, detail="Missing 'schema_ddl'")
 
     try:
         from qwed_new.core.sql_verifier import SQLVerifier
         verifier = SQLVerifier()
 
-        schema_ddl = request.get("schema_ddl")
         dialect = request.get("dialect", "sqlite")
-
-        if not schema_ddl:
-            raise HTTPException(status_code=400, detail="Missing 'schema_ddl'")
 
         result = verifier.verify_sql(query, schema_ddl, dialect=dialect)
 
@@ -969,14 +968,15 @@ async def verify_rag(
         raise
     except Exception as e:
         logger.error(f"RAG verification error: {redact_pii(str(e))}", exc_info=False)
+        doc_id = getattr(request, 'target_document_id', 'unknown')
         dr = DiagnosticResult.blocked(
             INTERNAL_PROCESSING_ERROR,
             {"constraint_id": "api.rag.execution_error", "verified": False},
         )
-        dr = _enforce_trust(dr, query=getattr(request, 'target_document_id', 'unknown'))
+        dr = _enforce_trust(dr, query=doc_id)
         log = VerificationLog(
             organization_id=tenant.organization_id,
-            query=f"RAG Document Verify: {request.target_document_id}",
+            query=f"RAG Document Verify: {doc_id}",
             result=str(dr.to_dict()),
             is_verified=False,
             domain="RAG"

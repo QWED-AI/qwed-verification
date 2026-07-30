@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 from qwed_new.api.main import app, get_current_tenant, get_session, check_rate_limit, TenantContext
@@ -19,10 +20,12 @@ def mock_get_session():
 def mock_check_rate_limit(api_key: str):
     pass # No-op
 
-# Apply overrides
-app.dependency_overrides[get_current_tenant] = mock_get_current_tenant
-app.dependency_overrides[get_session] = mock_get_session
-app.dependency_overrides[check_rate_limit] = mock_check_rate_limit
+@pytest.fixture(autouse=True)
+def _apply_overrides():
+    app.dependency_overrides[get_current_tenant] = mock_get_current_tenant
+    app.dependency_overrides[get_session] = mock_get_session
+    app.dependency_overrides[check_rate_limit] = mock_check_rate_limit
+    yield
 
 client = TestClient(app)
 

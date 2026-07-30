@@ -14,7 +14,8 @@ def client():
     
     yield TestClient(app)
     
-    app.dependency_overrides.clear()
+    del app.dependency_overrides[get_current_tenant]
+    del app.dependency_overrides[get_session]
 
 def test_verify_process_endpoint(client):
     response = client.post("/verify/process", json={
@@ -121,7 +122,7 @@ def test_verify_rag_endpoint_rejects_empty_document_id(client):
     assert response.status_code == 422
 
 @patch("qwed_sdk.guards.rag_guard.RAGGuard.verify_retrieval_context", side_effect=ValueError("Invalid chunk metadata"))
-def test_verify_rag_endpoint_invalid_guard_input_returns_400(mock_verify_retrieval_context, client):
+def test_verify_rag_endpoint_guard_rejection_returns_unverifiable(mock_verify_retrieval_context, client):
     response = client.post("/verify/rag", json={
         "target_document_id": "doc123",
         "chunks": [{"text": "Hello world"}],
@@ -131,6 +132,7 @@ def test_verify_rag_endpoint_invalid_guard_input_returns_400(mock_verify_retriev
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "UNVERIFIABLE"
+    assert data["proof_ref"] is None
 
 @patch("qwed_sdk.guards.rag_guard.RAGGuard.__init__", side_effect=RuntimeError("SecretDBPassword123"))
 def test_verify_rag_endpoint_exception_no_leak(mock_rag_init, client):
@@ -143,6 +145,7 @@ def test_verify_rag_endpoint_exception_no_leak(mock_rag_init, client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "BLOCKED"
+    assert data["proof_ref"] is None
     assert "SecretDBPassword123" not in str(data)
     assert "agent_message" in data
 

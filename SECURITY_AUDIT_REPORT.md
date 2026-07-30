@@ -12,7 +12,7 @@
 
 The QWED verification framework has a well-designed `DiagnosticResult` model with structurally enforced invariants (VERIFIED requires `proof_ref`, non-VERIFIED forbids it). However, **the majority of verification endpoints bypass this model entirely**, returning raw dicts where `status: "VERIFIED"` is set without cryptographic proof artifacts. The `enforce_trust_decision` gate exists but is called in advisory-only mode (`require_attestation=False`) on the main code path. Several engines emit VERIFIED based on heuristic/probabilistic methods rather than deterministic proof. These are architectural failures that can violate the core verification thesis.
 
-**Critical findings: 3 | High: 5 | Medium: 4 | Low: 2 | Informational: 2**
+**Critical findings: 3 | High: 5 | Medium: 4 | Low: 2**
 
 ---
 
@@ -151,9 +151,9 @@ An attacker submits a claim "The sky is blue" with context "The sky appears blue
 - `keyword_score` = keyword overlap (0.75)
 - `entity_match` = entity matching (1.0)
 - `has_negation` = False
-- `aggregate` = 0.85 * 0.3 + 0.75 * 0.3 + 1.0 * 0.2 + 0.2 = 0.78
+- `aggregate` = 0.85 * 0.3 + 0.75 * 0.3 + 1.0 * 0.2 + 0.2 = 0.88
 
-Since `aggregate >= 0.7` and support citations >= refute citations, `verdict = "SUPPORTED"`, `confidence = 0.78`. The verifier returns `DiagnosticResult.verified(...)` with `evidence = {"citations": ..., "reasoning": ...}`.
+Since `aggregate >= 0.7` and support citations >= refute citations, `verdict = "SUPPORTED"`, `confidence = 0.88`. The verifier returns `DiagnosticResult.verified(...)` with `evidence = {"citations": ..., "reasoning": ...}`.
 
 The `proof_ref` is computed as `compute_proof_ref(evidence)` where evidence is `{"citations": [...], "reasoning": "..."}`. This is a hash of heuristic analysis output, not a cryptographic proof of factual correctness.
 
@@ -434,8 +434,8 @@ An attacker can enumerate trusted issuer DIDs by observing error messages. This 
 
 ### Attack Scenario
 An attacker submits two state payloads:
-1. `{"name": "café", "value": 1}` (NFC form: `é` = U+00E9)
-2. `{"name": "café", "value": 1}` (NFD form: `é` = U+0065 + U+0301)
+1. `{"name": "caf\u00e9", "value": 1}` (NFC form: `é` = U+00E9)
+2. `{"name": "cafe\u0301", "value": 1}` (NFD form: `é` = U+0065 + U+0301)
 
 Both are semantically identical, but `_canonicalize` sorts dict keys and recursively processes values without Unicode normalization. The two payloads produce different `normalized_state` outputs and different verification results if compared.
 
