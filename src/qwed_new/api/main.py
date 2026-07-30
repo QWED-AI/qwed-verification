@@ -809,22 +809,7 @@ async def verify_image(
         verifier = ImageVerifier(use_vlm_fallback=False)
         result = verifier.verify_image(image_bytes, claim)
 
-        if isinstance(result, DiagnosticResult):
-            dr = result
-        else:
-            image_verdict = result.verdict if hasattr(result, "verdict") else "UNKNOWN"
-            evidence = {"claim": claim, "verdict": image_verdict}
-            if result.is_verified:
-                dr = DiagnosticResult.verified(
-                    "Image claim verified",
-                    developer_fields=result.to_dict(),
-                    evidence=evidence,
-                )
-            else:
-                dr = DiagnosticResult.unverifiable(
-                    "Image claim not supported",
-                    developer_fields=result.to_dict(),
-                )
+        dr = result
         dr = _enforce_trust(dr, query=claim)
 
         log = VerificationLog(
