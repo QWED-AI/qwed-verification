@@ -14,6 +14,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
 
+from qwed_new.core.diagnostics import DiagnosticResult, enforce_trust_decision, merge_diagnostic_result
+from qwed_new.core.attestation import create_verification_attestation, AttestationStatus
+
 logger = logging.getLogger(__name__)
 
 
@@ -220,34 +223,7 @@ class BatchVerificationService:
             )
         
         elif item.verification_type == VerificationType.MATH:
-            from qwed_new.core.safe_parser import safe_parse_expr
-            from sympy import simplify
-            
-            expression = item.query
-            if "=" in expression:
-                left, right = expression.split("=", 1)
-                left_expr = safe_parse_expr(left)
-                right_expr = safe_parse_expr(right)
-                diff = simplify(left_expr - right_expr)
-                is_valid = diff == 0
-                return {
-                    "is_valid": is_valid,
-                    "type": "math",
-                    "message": "Identity verified" if is_valid else "Not equal"
-                }
-            else:
-                parsed = safe_parse_expr(expression)
-                simplified = simplify(parsed)
-                return {
-                    "is_valid": False,
-                    "status": "SIMPLIFIED",
-                    "simplified": str(simplified),
-                    "type": "math",
-                    "message": (
-                        "Expression simplified, but no equality or proof claim "
-                        "was provided"
-                    ),
-                }
+            return self._verify_batch_math(item)
         
         elif item.verification_type == VerificationType.CODE:
             from qwed_new.core.code_verifier import CodeVerifier
@@ -277,7 +253,68 @@ class BatchVerificationService:
         
         else:
             raise ValueError(f"Unknown verification type: {item.verification_type}")
-    
+
+    def _verify_batch_math(self, item: BatchItem) -> Dict[str, Any]:
+        """Verify a MATH batch item through the DiagnosticResult + attestation trust boundary (#271)."""
+        from qwed_new.core.safe_parser import safe_parse_expr
+        from sympy import simplify
+
+        expression = item.query.strip()
+        if "=" not in expression:
+            parsed = safe_parse_expr(expression)
+            simplified = simplify(parsed)
+            dr = DiagnosticResult.unverifiable(
+                "Expression simplified, but no equality or proof claim was provided",
+                developer_fields={"simplified": str(simplified), "type": "math", "is_valid": False, "query": expression},
+            )
+            return merge_diagnostic_result(enforce_trust_decision(dr, require_attestation=False, query=item.query))
+
+        left, right = expression.split("=", 1)
+        left_expr = safe_parse_expr(left)
+        right_expr = safe_parse_expr(right)
+        diff = simplify(left_expr - right_expr)
+        is_valid = diff == 0
+        evidence = {"left": left.strip(), "right": right.strip(), "diff": str(diff)}
+
+        if not is_valid:
+            dr = DiagnosticResult.unverifiable(
+                f"Not equal: {left_expr} != {right_expr}",
+                developer_fields={"query": expression, "type": "math", "is_valid": False, "diff": str(diff)},
+            )
+            return merge_diagnostic_result(enforce_trust_decision(dr, require_attestation=False, query=item.query))
+
+        # VERIFIED math identity: proof_ref + attestation are mandatory (#271)
+        developer_fields = {"query": expression, "type": "math", "is_valid": True, "diff": str(diff)}
+        att_result = create_verification_attestation(
+            status="VERIFIED",
+            verified=True,
+            engine="batch_math",
+            query=item.query,
+            confidence=1.0,
+            proof_data=str(evidence),
+        )
+        if att_result.status is not AttestationStatus.ISSUED:
+            developer_fields["constraint_id"] = "api.attestation.signing_error"
+            developer_fields["attestation_error"] = att_result.error_code
+            dr = DiagnosticResult.unverifiable(
+                "Attestation unavailable — cannot sign batch VERIFIED result",
+                developer_fields=developer_fields,
+            )
+            return merge_diagnostic_result(enforce_trust_decision(dr, require_attestation=False, query=item.query))
+
+        dr = DiagnosticResult.verified(
+            "Identity verified",
+            developer_fields=developer_fields,
+            evidence=evidence,
+            proof_data=str(evidence),
+        )
+        return merge_diagnostic_result(enforce_trust_decision(
+            dr,
+            require_attestation=True,
+            attestation_token=att_result.token,
+            query=item.query,
+        ))
+
     def get_job(self, job_id: str) -> Optional[BatchJob]:
         """Get a batch job by ID."""
         return self._jobs.get(job_id)

@@ -761,10 +761,27 @@ def enforce_trust_decision(
     return result
 
 
+DIAGNOSTIC_RESPONSE_KEYS = frozenset({
+    "status", "agent_message", "developer_fields", "proof_ref", "is_authoritative",
+})
+
+
+def merge_diagnostic_result(dr: DiagnosticResult) -> Dict[str, Any]:
+    """Merge DiagnosticResult with developer fields, ensuring diagnostic keys win.
+
+    Replaces the duplicated _merge_response helpers in api.main and core.batch.
+    """
+    serialized = dr.to_dict()
+    fields = serialized.get("developer_fields", {})
+    safe = {k: v for k, v in fields.items() if k not in DIAGNOSTIC_RESPONSE_KEYS}
+    return serialized | safe
+
+
 __all__ = [
     "DiagnosticStatus",
     "DiagnosticResult",
     "AdvisoryCheck",
     "compute_proof_ref",
     "enforce_trust_decision",
+    "merge_diagnostic_result",
 ]
