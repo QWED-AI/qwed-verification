@@ -4,8 +4,9 @@ Targets uncovered code paths reported by SonarQube for #264.
 """
 import os
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock, AsyncMock, sentinel
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
 from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
 
@@ -68,6 +69,21 @@ def test_verify_natural_language_legacy_unrecognized(client):
         "verification": {"is_correct": True, "status": "XYZZY"},
     }
     with patch("qwed_new.api.main.control_plane.process_natural_language", new_callable=AsyncMock, return_value=mock_result), \
+         patch("qwed_new.api.main.check_rate_limit"):
+        response = client.post(
+            "/verify/natural_language",
+            json={"query": "test query"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "UNVERIFIABLE"
+    assert data["proof_ref"] is None
+
+
+def test_verify_natural_language_internal_error(client):
+    """Cover process_natural_language exception -> fail-closed UNVERIFIABLE."""
+    with patch("qwed_new.api.main.control_plane.process_natural_language", new_callable=AsyncMock, side_effect=Exception("Engine down")), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/natural_language",
@@ -345,3 +361,59 @@ def test_verify_consensus_no_agreement(client):
     assert data["status"] == "UNVERIFIABLE"
     assert data["is_authoritative"] is False
     assert data["proof_ref"] is None
+
+
+# --- Direct unit tests for auth functions (SonarQube uncovered paths) ---
+
+
+def test_get_optional_current_user_success():
+    """Cover get_optional_current_user success path: return user."""
+    from qwed_new.api.main import get_optional_current_user
+
+    mock_user = MagicMock()
+    mock_session = MagicMock()
+    mock_session.get.return_value = mock_user
+
+    with patch("qwed_new.api.main.get_current_user_token", return_value={"sub": "42"}):
+        result = get_optional_current_user(
+            authorization="Bearer my.jwt.token",
+            session=mock_session,
+        )
+
+    assert result is mock_user
+    mock_session.get.assert_called_once()
+
+
+def test_get_optional_api_key_record_success():
+    """Cover get_optional_api_key_record success path: return api_key."""
+    from qwed_new.api.main import get_optional_api_key_record
+
+    mock_api_key = MagicMock()
+    mock_session = MagicMock()
+    mock_session.execute.return_value.scalars.return_value.first.return_value = mock_api_key
+
+    with patch("qwed_new.api.main.hash_api_key", return_value="hashed_value"):
+        result = get_optional_api_key_record(
+            x_api_key="sk-test-key",
+            session=mock_session,
+        )
+
+    assert result is mock_api_key
+    mock_session.execute.assert_called_once()
+
+
+def test_require_metrics_access_authentication_required():
+    """Cover require_metrics_access 401 branch: no user, no api key."""
+    from qwed_new.api.main import require_metrics_access
+
+    mock_session = MagicMock()
+
+    with pytest.raises(HTTPException) as exc_info:
+        require_metrics_access(
+            current_user=None,
+            api_key_record=None,
+            session=mock_session,
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Authentication required"
