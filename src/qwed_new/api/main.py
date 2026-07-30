@@ -133,12 +133,13 @@ def _merge_response(dr: DiagnosticResult) -> dict:
 def _safe_commit_log(session, log):
     """Write a VerificationLog safely, rolling back on failure."""
     try:
-        _safe_commit_log(session, log)
+        session.add(log)
+        session.commit()
     except Exception:
         try:
             session.rollback()
         except Exception:
-            pass
+            logger.exception("Rollback failed while handling commit/log failure")
 
 
 class VerifyRequest(BaseModel):
@@ -372,11 +373,20 @@ async def verify_stats(
         result = verifier.verify_stats(query, df, provider=None)
 
         if result.get("status") == "SUCCESS":
-            dr = DiagnosticResult.verified(
-                "Statistical analysis executed",
-                developer_fields=result,
-                evidence={"status": "SUCCESS", "analysis": str(result.get("analysis", ""))},
-            )
+            # SUCCESS means analysis executed — not that the claim was proven.
+            # Only return VERIFIED if the result explicitly confirms the claim.
+            claim_supported = result.get("claim_supported")
+            if claim_supported is True:
+                dr = DiagnosticResult.verified(
+                    "Statistical claim verified",
+                    developer_fields=result,
+                    evidence={"status": "SUCCESS", "claim_supported": True, "analysis": str(result.get("analysis", ""))},
+                )
+            else:
+                dr = DiagnosticResult.unverifiable(
+                    "Statistical analysis completed but claim not established",
+                    developer_fields=result,
+                )
         elif result.get("status") == "BLOCKED" and result.get("error") == SECURE_STATS_BLOCKED_CODE:
             dr = DiagnosticResult.blocked(
                 "Service temporarily unavailable",
@@ -1515,6 +1525,23 @@ async def verify_with_consensus(
     if result.agreement_status == "blocked_secure_execution":
         dr = DiagnosticResult.blocked(
             "Consensus verification: blocked — secure execution",
+            developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
+        )
+        dr = _enforce_trust(dr, query=request.query)
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=request.query,
+            result=f"Consensus: {result.agreement_status}",
+            is_verified=dr.is_authoritative,
+            domain="CONSENSUS"
+        )
+        _safe_commit_log(session, log)
+        return _merge_response(dr)
+
+    # All engines blocked — preserve BLOCKED status (fail-closed)
+    if result.agreement_status == "blocked":
+        dr = DiagnosticResult.blocked(
+            "Consensus verification: all engines blocked",
             developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
         )
         dr = _enforce_trust(dr, query=request.query)

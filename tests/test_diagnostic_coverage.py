@@ -149,8 +149,8 @@ def test_verify_logic_unsat_path(client):
 
 
 def test_verify_stats_success_verified(client):
-    """Cover stats SUCCESS -> VERIFIED (execution result IS the evidence)."""
-    with patch("qwed_new.core.stats_verifier.StatsVerifier.verify_stats", return_value={"status": "SUCCESS", "analysis": "mean=2.0"}), \
+    """Cover stats SUCCESS + claim_supported -> VERIFIED."""
+    with patch("qwed_new.core.stats_verifier.StatsVerifier.verify_stats", return_value={"status": "SUCCESS", "claim_supported": True, "analysis": "mean=2.0"}), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/stats",
@@ -163,6 +163,21 @@ def test_verify_stats_success_verified(client):
     assert data["status"] == "VERIFIED"
     assert data["is_authoritative"] is True
     assert data["proof_ref"]
+
+
+def test_verify_stats_success_without_claim_supported_is_unverifiable(client):
+    """Cover stats SUCCESS without claim_supported -> UNVERIFIABLE (execution ≠ proof)."""
+    with patch("qwed_new.core.stats_verifier.StatsVerifier.verify_stats", return_value={"status": "SUCCESS", "analysis": "mean=2.0"}), \
+         patch("qwed_new.api.main.check_rate_limit"):
+        response = client.post(
+            "/verify/stats",
+            files={"file": ("data.csv", b"value\n1\n2\n3\n", "text/csv")},
+            data={"query": "What is the mean?"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "UNVERIFIABLE"
 
 
 def test_verify_fact_preserves_diagnostic_result(client):
@@ -339,6 +354,33 @@ def test_verify_consensus_unverifiable_status(client):
     assert data["is_authoritative"] is False
     assert data["final_answer"] == "maybe"
 
+
+
+
+def test_verify_consensus_all_engines_blocked(client):
+    """Cover consensus agreement_status=blocked -> BLOCKED (fail-closed)."""
+    from qwed_new.core.consensus_verifier import ConsensusResult
+
+    fake = MagicMock(spec=ConsensusResult)
+    fake.final_answer = None
+    fake.confidence = 0.0
+    fake.engines_used = 2
+    fake.agreement_status = "blocked"
+    fake.status = "BLOCKED"
+    fake.verification_chain = []
+    fake.total_latency_ms = 5.0
+
+    with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake),          patch("qwed_new.api.main.check_rate_limit"):
+        response = client.post(
+            "/verify/consensus",
+            json={"query": "test", "verification_mode": "high", "min_confidence": 0.0},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "BLOCKED"
+    assert data["is_authoritative"] is False
+    assert data["proof_ref"] is None
 
 def test_verify_consensus_no_agreement(client):
     """Cover else branch (no_consensus/split) -> UNVERIFIABLE."""
