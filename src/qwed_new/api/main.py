@@ -1571,33 +1571,9 @@ async def verify_with_consensus(
         _safe_commit_log(session, log)
         return _merge_response(dr)
 
-    if result.agreement_status == "unanimous":
-        if hasattr(result, "status") and result.status == "BLOCKED":
-            dr = DiagnosticResult.blocked(
-                "Consensus verification: blocked",
-                developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
-            )
-        elif hasattr(result, "status") and result.status == "UNVERIFIABLE":
-            dr = DiagnosticResult.unverifiable(
-                "Consensus verification: incomplete — some engines blocked",
-                developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
-            )
-        else:
-            dr = DiagnosticResult.verified(
-                "Consensus verification: unanimous",
-                developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
-                evidence={"agreement_status": result.agreement_status, "confidence": result.confidence},
-            )
-    elif result.agreement_status == "majority":
-        dr = DiagnosticResult.unverifiable(
-            "Consensus verification: majority agreement",
-            developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
-        )
-    else:
-        dr = DiagnosticResult.unverifiable(
-            "Consensus verification: no agreement",
-            developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
-        )
+    # Convert consensus result via its own to_diagnostic_result() method —
+    # it handles proof_ref, attestation evidence, and DiagnosticStatus mapping.
+    dr = result.to_diagnostic_result()
     dr = _enforce_trust(dr, query=request.query)
 
     log = VerificationLog(

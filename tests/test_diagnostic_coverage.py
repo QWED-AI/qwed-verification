@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from fastapi import HTTPException
 
 from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
+from qwed_new.core.consensus_verifier import ConsensusResult
 
 
 @pytest.fixture
@@ -303,14 +304,15 @@ def test_verify_consensus_blocked_status(client):
     """Cover consensus agreement_status=unanimous with result.status=BLOCKED."""
     from qwed_new.core.consensus_verifier import ConsensusResult
 
-    fake = MagicMock(spec=ConsensusResult)
-    fake.final_answer = None
-    fake.confidence = 0.0
-    fake.engines_used = 2
-    fake.agreement_status = "unanimous"
-    fake.status = "BLOCKED"
-    fake.verification_chain = []
-    fake.total_latency_ms = 5.0
+    fake = ConsensusResult(
+        final_answer=None,
+        confidence=0.0,
+        engines_used=2,
+        agreement_status="unanimous",
+        verification_chain=[],
+        total_latency_ms=5.0,
+        status=DiagnosticStatus.BLOCKED,
+    )
 
     with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake), \
          patch("qwed_new.api.main.check_rate_limit"):
@@ -331,14 +333,15 @@ def test_verify_consensus_unverifiable_status(client):
     """Cover consensus agreement_status=unanimous with result.status=UNVERIFIABLE."""
     from qwed_new.core.consensus_verifier import ConsensusResult
 
-    fake = MagicMock(spec=ConsensusResult)
-    fake.final_answer = "maybe"
-    fake.confidence = 0.5
-    fake.engines_used = 2
-    fake.agreement_status = "unanimous"
-    fake.status = "UNVERIFIABLE"
-    fake.verification_chain = []
-    fake.total_latency_ms = 5.0
+    fake = ConsensusResult(
+        final_answer="maybe",
+        confidence=0.5,
+        engines_used=2,
+        agreement_status="unanimous",
+        verification_chain=[],
+        total_latency_ms=5.0,
+        status=DiagnosticStatus.UNVERIFIABLE,
+    )
 
     with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake), \
          patch("qwed_new.api.main.check_rate_limit"):
@@ -355,22 +358,51 @@ def test_verify_consensus_unverifiable_status(client):
     assert data["final_answer"] == "maybe"
 
 
+def test_verify_consensus_verified_with_proof_ref(client):
+    """Cover VERIFIED consensus with proof_ref included in response (#266)."""
+    from qwed_new.core.consensus_verifier import ConsensusResult
+
+    fake = ConsensusResult(
+        final_answer="4",
+        confidence=0.99,
+        engines_used=2,
+        agreement_status="unanimous",
+        verification_chain=[],
+        total_latency_ms=5.0,
+        status=DiagnosticStatus.VERIFIED,
+    )
+
+    with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake), \
+         patch("qwed_new.api.main.check_rate_limit"):
+        response = client.post(
+            "/verify/consensus",
+            json={"query": "test", "verification_mode": "high", "min_confidence": 0.0},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "VERIFIED"
+    assert data["proof_ref"] is not None
+    assert data["proof_ref"].startswith("sha256:")
+    assert data["is_authoritative"] is True
 
 
 def test_verify_consensus_all_engines_blocked(client):
     """Cover consensus agreement_status=blocked -> BLOCKED (fail-closed)."""
     from qwed_new.core.consensus_verifier import ConsensusResult
 
-    fake = MagicMock(spec=ConsensusResult)
-    fake.final_answer = None
-    fake.confidence = 0.0
-    fake.engines_used = 2
-    fake.agreement_status = "blocked"
-    fake.status = "BLOCKED"
-    fake.verification_chain = []
-    fake.total_latency_ms = 5.0
+    fake = ConsensusResult(
+        final_answer=None,
+        confidence=0.0,
+        engines_used=2,
+        agreement_status="blocked",
+        verification_chain=[],
+        total_latency_ms=5.0,
+        status=DiagnosticStatus.BLOCKED,
+    )
 
-    with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake),          patch("qwed_new.api.main.check_rate_limit"):
+    with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake), \
+         patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/consensus",
             json={"query": "test", "verification_mode": "high", "min_confidence": 0.0},
@@ -382,18 +414,20 @@ def test_verify_consensus_all_engines_blocked(client):
     assert data["is_authoritative"] is False
     assert data["proof_ref"] is None
 
+
 def test_verify_consensus_no_agreement(client):
     """Cover else branch (no_consensus/split) -> UNVERIFIABLE."""
     from qwed_new.core.consensus_verifier import ConsensusResult
 
-    fake = MagicMock(spec=ConsensusResult)
-    fake.final_answer = None
-    fake.confidence = 0.3
-    fake.engines_used = 3
-    fake.agreement_status = "split"
-    fake.status = None
-    fake.verification_chain = []
-    fake.total_latency_ms = 10.0
+    fake = ConsensusResult(
+        final_answer=None,
+        confidence=0.3,
+        engines_used=3,
+        agreement_status="split",
+        verification_chain=[],
+        total_latency_ms=10.0,
+        status=None,
+    )
 
     with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake), \
          patch("qwed_new.api.main.check_rate_limit"):

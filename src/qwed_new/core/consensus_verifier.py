@@ -19,6 +19,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
+from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
+
 
 logger = logging.getLogger(__name__)
 SECURE_EXECUTION_REQUIRED = "SECURE_EXECUTION_REQUIRED"
@@ -62,7 +64,45 @@ class ConsensusResult:
     verification_chain: List[EngineResult]
     total_latency_ms: float
     parallel_execution: bool = False
-    status: Optional[str] = None  # DiagnosticStatus — preserved from engines
+    status: Optional[DiagnosticStatus] = None  # from _calculate_consensus
+    proof_ref: Optional[str] = None  # Populated for VERIFIED consensus results
+    verified_evidence: Optional[Dict[str, Any]] = None  # evidence used for proof_ref, equals verification_chain at VERIFIED
+
+    def to_diagnostic_result(self) -> DiagnosticResult:
+        """Convert this ConsensusResult to a DiagnosticResult.
+
+        This is the canonical path for the /verify/consensus endpoint —
+        the conversion logic lives here so the endpoint is a thin wrapper.
+        """
+        developer_fields: Dict[str, Any] = {
+            "agreement_status": self.agreement_status,
+            "confidence": self.confidence,
+            "engines_used": self.engines_used,
+        }
+        if self.status is DiagnosticStatus.VERIFIED:
+            return DiagnosticResult.verified(
+                "Consensus verification: unanimous",
+                developer_fields=developer_fields,
+                evidence=self.verified_evidence or {
+                    "agreement_status": self.agreement_status,
+                    "confidence": self.confidence,
+                },
+            )
+        elif self.status is DiagnosticStatus.BLOCKED:
+            return DiagnosticResult.blocked(
+                "Consensus verification: blocked",
+                developer_fields=developer_fields,
+            )
+        else:
+            msg = "Consensus verification: no agreement"
+            if self.agreement_status == "majority":
+                msg = "Consensus verification: majority agreement"
+            elif self.status is DiagnosticStatus.UNVERIFIABLE:
+                msg = "Consensus verification: incomplete — some engines blocked"
+            return DiagnosticResult.unverifiable(
+                msg,
+                developer_fields=developer_fields,
+            )
 
 
 @dataclass
@@ -380,6 +420,8 @@ class ConsensusVerifier:
             total_latency_ms=total_latency,
             parallel_execution=parallel and len(engine_methods) > 1,
             status=consensus.get("diagnostic_status"),
+            proof_ref=consensus.get("proof_ref"),
+            verified_evidence=consensus.get("verified_evidence"),
         )
     
     # =========================================================================
@@ -467,12 +509,14 @@ class ConsensusVerifier:
             total_latency_ms=total_latency,
             parallel_execution=True,
             status=consensus.get("diagnostic_status"),
+            proof_ref=consensus.get("proof_ref"),
+            verified_evidence=consensus.get("verified_evidence"),
         )
-    
+
     # =========================================================================
     # Engine Selection
     # =========================================================================
-    
+
     def _select_engines(self, query: str, mode: VerificationMode) -> List[Tuple[str, Callable]]:
         """Select engines based on mode and query type."""
         engines = []
@@ -741,10 +785,10 @@ class ConsensusVerifier:
         - No BLOCKED, unanimous → VERIFIED
         """
         if not results:
-            return {"answer": None, "confidence": 0.0, "status": "no_results", "diagnostic_status": "UNVERIFIABLE"}
+            return {"answer": None, "confidence": 0.0, "status": "no_results", "diagnostic_status": DiagnosticStatus.UNVERIFIABLE}
 
         if any(r.error == SECURE_EXECUTION_REQUIRED for r in results):
-            return {"answer": None, "confidence": 0.0, "status": "blocked_secure_execution", "diagnostic_status": "BLOCKED"}
+            return {"answer": None, "confidence": 0.0, "status": "blocked_secure_execution", "diagnostic_status": DiagnosticStatus.BLOCKED}
 
         blocked = [r for r in results if r.status == "BLOCKED"]
         active = [r for r in results if r.status != "BLOCKED"]
@@ -755,14 +799,14 @@ class ConsensusVerifier:
                 "answer": None,
                 "confidence": 0.0,
                 "status": "blocked",
-                "diagnostic_status": "BLOCKED",
+                "diagnostic_status": DiagnosticStatus.BLOCKED,
                 "errors": blocked_errors,
             }
 
         successful = [r for r in active if r.success]
 
         if not successful:
-            return {"answer": None, "confidence": 0.0, "status": "all_failed", "diagnostic_status": "UNVERIFIABLE"}
+            return {"answer": None, "confidence": 0.0, "status": "all_failed", "diagnostic_status": DiagnosticStatus.UNVERIFIABLE}
 
         # Weight answers by engine reliability
         weighted_answers: Dict[str, float] = {}
@@ -793,13 +837,34 @@ class ConsensusVerifier:
         # advisory-only results (e.g. Stats computation) cannot contribute
         # to a VERIFIED consensus (#270).
         all_verified = all(r.status == "VERIFIED" for r in successful)
-        diagnostic_status = "VERIFIED" if (status == "unanimous" and not blocked and all_verified) else "UNVERIFIABLE"
+        diagnostic_status = DiagnosticStatus.VERIFIED if (status == "unanimous" and not blocked and all_verified) else DiagnosticStatus.UNVERIFIABLE
+
+        # Bind proof_ref to the VERIFIED consensus: evidence includes the
+        # engine chain details so the attestation can be audited downstream.
+        proof_ref = None
+        if diagnostic_status is DiagnosticStatus.VERIFIED:
+            evidence = {
+                "agreement_status": status,
+                "confidence": confidence,
+                "engines_used": len(successful),
+                "chain": [
+                    {"engine": r.engine_name, "method": r.method, "confidence": r.confidence}
+                    for r in successful
+                ],
+            }
+            proof_ref = DiagnosticResult.verified(
+                "Consensus verification: unanimous",
+                developer_fields={"agreement_status": status, "confidence": confidence},
+                evidence=evidence,
+            ).proof_ref
 
         return {
             "answer": answer_values[best_answer],
             "confidence": confidence,
             "status": status,
             "diagnostic_status": diagnostic_status,
+            "proof_ref": proof_ref,
+            "verified_evidence": evidence if diagnostic_status is DiagnosticStatus.VERIFIED else None,
         }
 
     @staticmethod
