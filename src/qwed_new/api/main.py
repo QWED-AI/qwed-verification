@@ -121,6 +121,13 @@ def _enforce_trust(
     """
     return enforce_trust_decision(dr, require_attestation=False, query=query)
 
+
+_DIAGNOSTIC_KEYS = frozenset({"status", "agent_message", "developer_fields", "proof_ref", "is_authoritative"})
+def _merge_response(dr: DiagnosticResult) -> dict:
+    """Merge diagnostic result with developer fields, ensuring diagnostic keys win."""
+    safe = {k: v for k, v in dr.developer_fields.items() if k not in _DIAGNOSTIC_KEYS}
+    return dr.to_dict() | safe
+
 class VerifyRequest(BaseModel):
     query: str
     provider: Optional[str] = None
@@ -217,10 +224,9 @@ async def verify_natural_language(
     try:
         dr = DiagnosticResult.from_legacy_dict(verification_result, engine="math")
     except ValueError:
-        dr = DiagnosticResult.verified(
-            "Verification complete",
-            developer_fields=verification_result,
-            evidence=verification_result,
+        dr = DiagnosticResult.blocked(
+            "Verification blocked — proof artifact unavailable",
+            {"constraint_id": "api.natural_language.legacy_conversion_failed", "legacy_status": verification_result.get("status")},
         )
     dr = _enforce_trust(dr, query=request.query)
 
@@ -310,7 +316,7 @@ async def verify_logic(
         )
         session.add(log)
         session.commit()
-        return dr.to_dict() | dr.developer_fields
+        return _merge_response(dr)
 
 @app.post(
     "/verify/stats",
@@ -348,10 +354,9 @@ async def verify_stats(
             raise HTTPException(status_code=403, detail="Verification blocked by security policy")
 
         if result.get("status") == "SUCCESS":
-            dr = DiagnosticResult.verified(
-                "Statistical analysis complete",
+            dr = DiagnosticResult.unverifiable(
+                "Statistical analysis executed",
                 developer_fields=result,
-                evidence={"query": query, "analysis": result.get("analysis", "")},
             )
         else:
             dr = DiagnosticResult.blocked(
@@ -370,7 +375,7 @@ async def verify_stats(
         session.add(log)
         session.commit()
 
-        return dr.to_dict() | dr.developer_fields
+        return _merge_response(dr)
     except HTTPException:
         raise
 
@@ -390,7 +395,7 @@ async def verify_stats(
         )
         session.add(log)
         session.commit()
-        return dr.to_dict() | dr.developer_fields
+        return _merge_response(dr)
 
 
 @app.post("/verify/fact")
@@ -410,13 +415,13 @@ async def verify_fact(
     }
     """
     check_rate_limit(tenant.api_key)
-    
+    claim = request.get("claim")
+    context = request.get("context")
+
     try:
         from qwed_new.core.fact_verifier import FactVerifier
         verifier = FactVerifier()
         
-        claim = request.get("claim")
-        context = request.get("context")
         provider = request.get("provider")
         
         if not claim or not context:
@@ -424,18 +429,19 @@ async def verify_fact(
         
         result = verifier.verify_fact(claim, context, provider=provider)
 
-        # FactVerifier may return DiagnosticResult or FactCheckResult
-        if hasattr(result, "to_dict") and hasattr(result, "is_verified"):
+        if isinstance(result, DiagnosticResult):
+            dr = result
+        elif hasattr(result, "to_dict") and hasattr(result, "is_verified"):
             dr = DiagnosticResult.verified(
-                result.get("message", "Fact verification complete") if isinstance(result, dict) else str(result),
-                developer_fields=result.to_dict() if hasattr(result, "to_dict") else {},
+                "Fact verification complete",
+                developer_fields=result.to_dict(),
                 evidence={"claim": claim, "verdict": result.verdict if hasattr(result, "verdict") else "UNKNOWN"},
             ) if result.is_verified else DiagnosticResult.unverifiable(
                 "Fact not supported",
-                developer_fields=result.to_dict() if hasattr(result, "to_dict") else {},
+                developer_fields=result.to_dict(),
             )
         else:
-            dr = result if isinstance(result, DiagnosticResult) else DiagnosticResult.unverifiable(
+            dr = DiagnosticResult.unverifiable(
                 "Fact verification inconclusive",
                 developer_fields={"result": str(result)},
             )
@@ -451,7 +457,7 @@ async def verify_fact(
         session.add(log)
         session.commit()
 
-        return dr.to_dict() | dr.developer_fields
+        return _merge_response(dr)
 
     except Exception as e:
         logger.error(f"Fact verification error: {redact_pii(str(e))}", exc_info=False)
@@ -469,7 +475,7 @@ async def verify_fact(
         )
         session.add(log)
         session.commit()
-        return dr.to_dict() | dr.developer_fields
+        return _merge_response(dr)
 
 
 @app.post("/verify/code")
@@ -479,12 +485,12 @@ async def verify_code(
     session: Session = Depends(get_session)
 ):
     check_rate_limit(tenant.api_key)
+    code = request.get("code")
 
     try:
         from qwed_new.core.code_verifier import CodeVerifier
         verifier = CodeVerifier()
 
-        code = request.get("code")
         language = request.get("language", "python")
 
         if not code:
@@ -492,12 +498,16 @@ async def verify_code(
 
         result = verifier.verify_code(code, language=language)
 
-        is_safe = result.get("is_safe", False)
-        if is_safe:
+        if result.get("status") == "SAFE":
             dr = DiagnosticResult.verified(
                 "Code is safe",
                 developer_fields=result,
                 evidence={"language": language, "analysis": result.get("analysis", "")},
+            )
+        elif result.get("status") == "REVIEW":
+            dr = DiagnosticResult.unverifiable(
+                "Code requires manual review",
+                developer_fields=result,
             )
         else:
             dr = DiagnosticResult.blocked(
@@ -516,7 +526,7 @@ async def verify_code(
         session.add(log)
         session.commit()
 
-        return dr.to_dict() | dr.developer_fields
+        return _merge_response(dr)
 
     except Exception as e:
         logger.error(f"Code verification error: {redact_pii(str(e))}", exc_info=False)
@@ -534,7 +544,7 @@ async def verify_code(
         )
         session.add(log)
         session.commit()
-        return dr.to_dict() | dr.developer_fields
+        return _merge_response(dr)
 
 
 @app.post("/verify/math")
@@ -544,13 +554,13 @@ async def verify_math(
     session: Session = Depends(get_session)
 ):
     check_rate_limit(tenant.api_key)
+    expression = request.get("expression")
 
     try:
         import sympy
         from qwed_new.core.safe_parser import safe_parse_expr
         from sympy import simplify, symbols, Eq, solve
 
-        expression = request.get("expression")
         context_data = request.get("context", {})
 
         if not expression:
@@ -588,44 +598,37 @@ async def verify_math(
                     is_ambiguous = True
 
             parsed = safe_parse_expr(expression_normalized)
+            simplified = simplify(parsed)
 
-            if "/0" in expression.replace(" ", "") or "/ 0" in expression:
+            if simplified.has(sympy.zoo) or simplified.has(sympy.nan):
                 dr = DiagnosticResult.blocked(
                     "Expression contains division by zero",
                     developer_fields={"is_valid": False, "error": "Division by zero"},
                 )
-            elif "log(0)" in expression.replace(" ", ""):
+            elif simplified.has(sympy.oo) or simplified.has(-sympy.oo):
                 dr = DiagnosticResult.blocked(
-                    "log(0) is undefined",
+                    "Expression is undefined",
                     developer_fields={"is_valid": False, "error": "undefined"},
                 )
-            elif "sqrt(-" in expression.replace(" ", ""):
-                if context_data.get("domain") == "real":
-                    dr = DiagnosticResult.blocked(
-                        "Square root of negative number is undefined in real domain",
-                        developer_fields={"is_valid": False, "error": "domain error"},
-                    )
-                else:
-                    simplified = simplify(parsed)
-                    dr = DiagnosticResult.verified(
-                        "Expression evaluated",
-                        developer_fields={"is_valid": True, "simplified": str(simplified), "original": str(parsed), "is_complex": True},
-                        evidence={"simplified": str(simplified), "original": str(parsed)},
-                    )
+            elif simplified.is_real is False and context_data.get("domain") == "real":
+                dr = DiagnosticResult.blocked(
+                    "Square root of negative number is undefined in real domain",
+                    developer_fields={"is_valid": False, "error": "domain error"},
+                )
             elif is_ambiguous:
-                simplified = simplify(parsed)
                 dr = DiagnosticResult.blocked(
                     "Expression may be ambiguous due to implicit multiplication after division",
                     developer_fields={"is_valid": False, "result": False, "status": "BLOCKED", "warning": "ambiguous", "simplified": str(simplified), "note": "Interpreted using standard order of operations", "original": str(parsed)},
                 )
             else:
-                simplified = simplify(parsed)
+                is_numeric = simplified.free_symbols == set()
                 try:
+                    exact = sympy.nsimplify(simplified) if is_numeric else simplified
                     value = float(simplified)
                     dr = DiagnosticResult.verified(
                         "Expression evaluated",
-                        developer_fields={"is_valid": True, "value": value, "simplified": str(simplified), "original": str(parsed)},
-                        evidence={"value": value, "simplified": str(simplified)},
+                        developer_fields={"is_valid": True, "value": value, "exact_value": str(exact), "simplified": str(simplified), "original": str(parsed)},
+                        evidence={"exact_value": str(exact), "simplified": str(simplified)},
                     )
                 except Exception:
                     dr = DiagnosticResult.verified(
@@ -646,7 +649,7 @@ async def verify_math(
         session.add(log)
         session.commit()
 
-        return dr.to_dict() | dr.developer_fields
+        return _merge_response(dr)
 
     except HTTPException:
         raise
@@ -666,21 +669,7 @@ async def verify_math(
         )
         session.add(log)
         session.commit()
-        return dr.to_dict() | dr.developer_fields
-
-    dr = _enforce_trust(dr, query=expression)
-
-    log = VerificationLog(
-        organization_id=tenant.organization_id,
-        query=expression,
-        result=str(dr.to_dict()),
-        is_verified=dr.is_authoritative,
-        domain="MATH"
-    )
-    session.add(log)
-    session.commit()
-
-    return dr.to_dict() | dr.developer_fields
+        return _merge_response(dr)
 
 
 @app.post("/verify/sql")
@@ -690,12 +679,12 @@ async def verify_sql(
     session: Session = Depends(get_session)
 ):
     check_rate_limit(tenant.api_key)
+    query = request.get("query")
 
     try:
         from qwed_new.core.sql_verifier import SQLVerifier
         verifier = SQLVerifier()
 
-        query = request.get("query")
         schema_ddl = request.get("schema_ddl")
         dialect = request.get("dialect", "sqlite")
 
@@ -728,7 +717,7 @@ async def verify_sql(
         session.add(log)
         session.commit()
 
-        return dr.to_dict() | dr.developer_fields
+        return _merge_response(dr)
 
     except Exception as e:
         logger.error(f"SQL verification error: {redact_pii(str(e))}", exc_info=False)
@@ -746,7 +735,7 @@ async def verify_sql(
         )
         session.add(log)
         session.commit()
-        return dr.to_dict() | dr.developer_fields
+        return _merge_response(dr)
 
 
 @app.post("/verify/image")
@@ -787,18 +776,21 @@ async def verify_image(
         verifier = ImageVerifier(use_vlm_fallback=False)
         result = verifier.verify_image(image_bytes, claim)
 
-        evidence = {"claim": claim, "verdict": result.verdict if hasattr(result, "verdict") else "UNKNOWN"}
-        if result.is_verified:
-            dr = DiagnosticResult.verified(
-                "Image claim verified",
-                developer_fields=result.to_dict(),
-                evidence=evidence,
-            )
+        if isinstance(result, DiagnosticResult):
+            dr = result
         else:
-            dr = DiagnosticResult.unverifiable(
-                "Image claim not supported",
-                developer_fields=result.to_dict(),
-            )
+            evidence = {"claim": claim, "verdict": result.verdict if hasattr(result, "verdict") else "UNKNOWN"}
+            if result.is_verified:
+                dr = DiagnosticResult.verified(
+                    "Image claim verified",
+                    developer_fields=result.to_dict(),
+                    evidence=evidence,
+                )
+            else:
+                dr = DiagnosticResult.unverifiable(
+                    "Image claim not supported",
+                    developer_fields=result.to_dict(),
+                )
         dr = _enforce_trust(dr, query=claim)
 
         log = VerificationLog(
@@ -811,7 +803,7 @@ async def verify_image(
         session.add(log)
         session.commit()
 
-        return dr.to_dict() | dr.developer_fields
+        return _merge_response(dr)
 
     except HTTPException:
         raise
@@ -831,7 +823,7 @@ async def verify_image(
         )
         session.add(log)
         session.commit()
-        return dr.to_dict() | dr.developer_fields
+        return _merge_response(dr)
 
 class RAGVerifyRequest(BaseModel):
     target_document_id: str
@@ -1455,11 +1447,17 @@ async def verify_with_consensus(
     
     # Log to database
     if result.agreement_status == "unanimous":
-        dr = DiagnosticResult.verified(
-            "Consensus verification: unanimous",
-            developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
-            evidence={"agreement_status": result.agreement_status, "confidence": result.confidence},
-        )
+        if hasattr(result, "status") and result.status == "BLOCKED":
+            dr = DiagnosticResult.blocked(
+                "Consensus verification: blocked",
+                developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
+            )
+        else:
+            dr = DiagnosticResult.verified(
+                "Consensus verification: unanimous",
+                developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
+                evidence={"agreement_status": result.agreement_status, "confidence": result.confidence},
+            )
     elif result.agreement_status == "majority":
         dr = DiagnosticResult.unverifiable(
             "Consensus verification: majority agreement",
