@@ -863,7 +863,8 @@ class ConsensusVerifier:
                 "agreement_status": status,
                 "confidence": confidence,
                 "contributing_engines": len(successful),
-                "answer": str(answer_values[best_answer]),
+                # None stays as JSON null; repr carries type info for non-None (#266).
+                "answer": None if answer_values[best_answer] is None else repr(answer_values[best_answer]),
                 "chain": [
                     {"engine": r.engine_name, "method": r.method, "confidence": r.confidence}
                     for r in successful
