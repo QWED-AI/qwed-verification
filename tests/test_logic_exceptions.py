@@ -32,8 +32,8 @@ async def test_verify_logic_exception_handling(client):
 
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "ERROR"
-        assert data["error"] == "Internal verification error"
+        assert data["status"] == "BLOCKED"
+        assert data["agent_message"] == "Internal verification error"
         assert data["provider_used"] == "openai"
         assert "SENSITIVE_LOGIC_ERROR" not in str(data)
 
@@ -52,8 +52,8 @@ def test_verify_logic_exception_integration(client):
 
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "ERROR"
-        assert data["error"] == "Internal verification error"
+        assert data["status"] == "BLOCKED"
+        assert data["agent_message"] == "Internal verification error"
         assert data["provider_used"] == "openai"
         assert "SENSITIVE_FAILURE" not in str(data)
 
