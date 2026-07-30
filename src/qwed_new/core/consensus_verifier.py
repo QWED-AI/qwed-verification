@@ -697,11 +697,15 @@ class ConsensusVerifier:
                     error=error, status="BLOCKED",
                 )
 
+            # Code execution is advisory-only — the code ran without runtime
+            # errors, but executing an expression is not proving its result
+            # matches an expected answer or satisfies the query's semantics.
+            # Empirical runtime success disproves (by crashing); it cannot prove (#269).
             return EngineResult(
                 engine_name="Python", method="code_execution",
                 result=output, confidence=0.99,
                 latency_ms=(time.time() - start) * 1000, success=True,
-                status="VERIFIED",
+                status="UNVERIFIABLE",
             )
         except Exception as e:
             return EngineResult(
