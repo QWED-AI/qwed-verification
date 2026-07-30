@@ -789,7 +789,11 @@ class ConsensusVerifier:
         
         # Fail closed: a BLOCKED engine means verification did not fully complete,
         # so the outcome can never be VERIFIED even if survivors agree.
-        diagnostic_status = "VERIFIED" if (status == "unanimous" and not blocked) else "UNVERIFIABLE"
+        # Additionally, every successful result must have status="VERIFIED" —
+        # advisory-only results (e.g. Stats computation) cannot contribute
+        # to a VERIFIED consensus (#270).
+        all_verified = all(r.status == "VERIFIED" for r in successful)
+        diagnostic_status = "VERIFIED" if (status == "unanimous" and not blocked and all_verified) else "UNVERIFIABLE"
 
         return {
             "answer": answer_values[best_answer],
