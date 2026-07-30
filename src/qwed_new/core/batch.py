@@ -6,6 +6,7 @@ with progress tracking and result aggregation.
 """
 
 import asyncio
+import hashlib
 import time
 import uuid
 import logging
@@ -13,6 +14,18 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
+
+from qwed_new.core.diagnostics import DiagnosticResult, enforce_trust_decision
+from qwed_new.core.attestation import create_verification_attestation, AttestationStatus
+
+_BATCH_DIAGNOSTIC_KEYS = frozenset({"status", "agent_message", "developer_fields", "proof_ref", "is_authoritative"})
+
+def _batch_merge_response(dr: DiagnosticResult) -> Dict[str, Any]:
+    """Merge DiagnosticResult with developer fields (same contract as api.main._merge_response)."""
+    serialized = dr.to_dict()
+    fields = serialized.get("developer_fields", {})
+    safe = {k: v for k, v in fields.items() if k not in _BATCH_DIAGNOSTIC_KEYS}
+    return serialized | safe
 
 logger = logging.getLogger(__name__)
 
@@ -222,32 +235,65 @@ class BatchVerificationService:
         elif item.verification_type == VerificationType.MATH:
             from qwed_new.core.safe_parser import safe_parse_expr
             from sympy import simplify
-            
-            expression = item.query
+
+            expression = item.query.strip()
             if "=" in expression:
                 left, right = expression.split("=", 1)
                 left_expr = safe_parse_expr(left)
                 right_expr = safe_parse_expr(right)
                 diff = simplify(left_expr - right_expr)
                 is_valid = diff == 0
-                return {
-                    "is_valid": is_valid,
-                    "type": "math",
-                    "message": "Identity verified" if is_valid else "Not equal"
+
+                evidence = {
+                    "left": left.strip(),
+                    "right": right.strip(),
+                    "diff": str(diff),
                 }
+                if is_valid:
+                    developer_fields = {"query": expression, "type": "math", "is_valid": True, "diff": str(diff)}
+                    dr = DiagnosticResult.verified(
+                        "Identity verified",
+                        developer_fields=developer_fields,
+                        evidence=evidence,
+                        proof_data=str(evidence),
+                    )
+                    att_result = create_verification_attestation(
+                        status="VERIFIED",
+                        verified=True,
+                        engine="batch_math",
+                        query=item.query,
+                        confidence=1.0,
+                        proof_data=str(evidence),
+                    )
+                    if att_result.status is not AttestationStatus.ISSUED:
+                        dr = DiagnosticResult.unverifiable(
+                            "Attestation unavailable — cannot sign batch VERIFIED result",
+                            developer_fields={"constraint_id": "api.attestation.signing_error"},
+                        )
+                        dr = enforce_trust_decision(dr, require_attestation=False, query=item.query)
+                    else:
+                        dr = enforce_trust_decision(
+                            dr,
+                            require_attestation=True,
+                            attestation_token=att_result.token,
+                            query=item.query,
+                        )
+                else:
+                    dr = DiagnosticResult.unverifiable(
+                        f"Not equal: {left_expr} != {right_expr}",
+                        developer_fields={"query": expression, "type": "math", "is_valid": False, "diff": str(diff)},
+                    )
+                    dr = enforce_trust_decision(dr, require_attestation=False, query=item.query)
             else:
                 parsed = safe_parse_expr(expression)
                 simplified = simplify(parsed)
-                return {
-                    "is_valid": False,
-                    "status": "SIMPLIFIED",
-                    "simplified": str(simplified),
-                    "type": "math",
-                    "message": (
-                        "Expression simplified, but no equality or proof claim "
-                        "was provided"
-                    ),
-                }
+                dr = DiagnosticResult.unverifiable(
+                    "Expression simplified, but no equality or proof claim was provided",
+                    developer_fields={"simplified": str(simplified), "type": "math", "is_valid": False},
+                )
+                dr = enforce_trust_decision(dr, require_attestation=False, query=item.query)
+
+            return _batch_merge_response(dr)
         
         elif item.verification_type == VerificationType.CODE:
             from qwed_new.core.code_verifier import CodeVerifier
