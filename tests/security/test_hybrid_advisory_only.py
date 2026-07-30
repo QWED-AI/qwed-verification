@@ -327,6 +327,29 @@ class TestConsensusVerifierAdvisoryOnly:
         assert consensus["diagnostic_status"] == "UNVERIFIABLE"
         assert consensus["status"] == "unanimous"
 
+    def test_verified_evidence_answer_none_stays_null_and_type_differs(self):
+        """Verified consensus evidence: answer None→null, repr carries type info (#266)."""
+        from decimal import Decimal
+
+        verifier = ConsensusVerifier(enable_circuit_breaker=False)
+
+        none_result = verifier._calculate_consensus([
+            EngineResult("Logic", "logic", None, 1.0, 1.0, True, status="VERIFIED"),
+            EngineResult("Math", "symbolic_math", None, 1.0, 1.0, True, status="VERIFIED"),
+        ])
+        assert none_result["verified_evidence"]["answer"] is None
+
+        typed_result = verifier._calculate_consensus([
+            EngineResult("Logic", "logic", Decimal("1.0"), 1.0, 1.0, True, status="VERIFIED"),
+            EngineResult("Math", "symbolic_math", Decimal("1.0"), 1.0, 1.0, True, status="VERIFIED"),
+        ])
+        float_result = verifier._calculate_consensus([
+            EngineResult("Logic", "logic", 1.0, 1.0, 1.0, True, status="VERIFIED"),
+            EngineResult("Math", "symbolic_math", 1.0, 1.0, 1.0, True, status="VERIFIED"),
+        ])
+
+        assert typed_result["verified_evidence"]["answer"] != float_result["verified_evidence"]["answer"]
+
 
 # ========================================================================
 # ImageVerifier — deterministic refutation and MultiVLM edge cases
