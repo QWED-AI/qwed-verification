@@ -13,7 +13,7 @@ from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
 def client():
     from qwed_new.api.main import app, get_current_tenant, get_session
 
-    mock_tenant = MagicMock(organization_id=1, api_key="placeholder", organization_name="Test Org")
+    mock_tenant = MagicMock(organization_id=1, api_key="QWED_TEST_VALUE", organization_name="Test Org")
     mock_session = MagicMock(add=MagicMock(), commit=MagicMock())
 
     app.dependency_overrides[get_current_tenant] = lambda: mock_tenant
@@ -27,7 +27,7 @@ def client():
 def test_verify_natural_language_success_path(client):
     """Cover from_legacy_dict success path, _enforce_trust, and VerificationLog."""
     mock_result = {
-        "verification": {"is_correct": True, "status": "VERIFIED"},
+        "verification": {"is_correct": True},
         "proof_ref": "abc123",
     }
     with patch("qwed_new.api.main.control_plane.process_natural_language", new_callable=AsyncMock, return_value=mock_result), \
@@ -43,10 +43,27 @@ def test_verify_natural_language_success_path(client):
     assert "diagnostic_status" in data
 
 
-def test_verify_natural_language_legacy_fallback(client):
-    """Cover from_legacy_dict ValueError -> blocked fallback."""
+def test_verify_natural_language_legacy_verified(client):
+    """Cover from_legacy_dict ValueError -> VERIFIED passthrough for VERIFIED legacy."""
     mock_result = {
         "verification": {"is_correct": True, "status": "VERIFIED"},
+    }
+    with patch("qwed_new.api.main.control_plane.process_natural_language", new_callable=AsyncMock, return_value=mock_result), \
+         patch("qwed_new.api.main.check_rate_limit"):
+        response = client.post(
+            "/verify/natural_language",
+            json={"query": "test query"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["diagnostic_status"] == "VERIFIED"
+
+
+def test_verify_natural_language_legacy_unrecognized(client):
+    """Cover from_legacy_dict ValueError -> BLOCKED for unrecognized legacy."""
+    mock_result = {
+        "verification": {"is_correct": True, "status": "XYZZY"},
     }
     with patch("qwed_new.api.main.control_plane.process_natural_language", new_callable=AsyncMock, return_value=mock_result), \
          patch("qwed_new.api.main.check_rate_limit"):
@@ -145,6 +162,73 @@ def test_verify_fact_preserves_diagnostic_result(client):
     assert data["verdict"] == "REFUTED"
 
 
+def test_verify_fact_legacy_object_verified(client):
+    """Cover fact endpoint hasattr(result, 'to_dict') with is_verified=True."""
+    mock_result = MagicMock()
+    mock_result.to_dict.return_value = {"verdict": "SUPPORTED", "confidence": 0.95}
+    mock_result.is_verified = True
+    mock_result.verdict = "SUPPORTED"
+    mock_result.__class__.__module__ = "unittest.mock"
+
+    with patch("qwed_new.core.fact_verifier.FactVerifier.verify_fact", return_value=mock_result), \
+         patch("qwed_new.api.main.check_rate_limit"):
+        response = client.post(
+            "/verify/fact",
+            json={"claim": "Sky is blue", "context": "Sky is blue"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "VERIFIED"
+
+
+def test_verify_fact_legacy_object_unverified(client):
+    """Cover fact endpoint hasattr(result, 'to_dict') with is_verified=False."""
+    mock_result = MagicMock()
+    mock_result.to_dict.return_value = {"verdict": "NEUTRAL", "confidence": 0.5}
+    mock_result.is_verified = False
+    mock_result.__class__.__module__ = "unittest.mock"
+
+    with patch("qwed_new.core.fact_verifier.FactVerifier.verify_fact", return_value=mock_result), \
+         patch("qwed_new.api.main.check_rate_limit"):
+        response = client.post(
+            "/verify/fact",
+            json={"claim": "maybe", "context": "uncertain"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "UNVERIFIABLE"
+
+
+def test_verify_fact_unknown_result(client):
+    """Cover fact endpoint else branch (bare string result)."""
+    with patch("qwed_new.core.fact_verifier.FactVerifier.verify_fact", return_value="plain string result"), \
+         patch("qwed_new.api.main.check_rate_limit"):
+        response = client.post(
+            "/verify/fact",
+            json={"claim": "test", "context": "test context"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "UNVERIFIABLE"
+
+
+def test_verify_sql_unverified(client):
+    """Cover SQL endpoint is_valid=False -> BLOCKED."""
+    with patch("qwed_new.core.sql_verifier.SQLVerifier.verify_sql", return_value={"is_valid": False, "message": "Invalid syntax"}), \
+         patch("qwed_new.api.main.check_rate_limit"):
+        response = client.post(
+            "/verify/sql",
+            json={"query": "SELECT *", "schema_ddl": "CREATE TABLE t (id int)", "type": "postgres"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "BLOCKED"
+
+
 def test_verify_code_missing_code_returns_400(client):
     """Cover HTTPException from missing code field in verify_code."""
     with patch("qwed_new.api.main.check_rate_limit"):
@@ -191,10 +275,10 @@ def test_verify_consensus_blocked_status(client):
             json={"query": "test", "verification_mode": "high", "min_confidence": 0.0},
         )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["diagnostic_status"] == "BLOCKED"
-        assert data["is_authoritative"] is False
+    assert response.status_code == 200
+    data = response.json()
+    assert data["diagnostic_status"] == "BLOCKED"
+    assert data["is_authoritative"] is False
 
 
 def test_verify_consensus_unverifiable_status(client):

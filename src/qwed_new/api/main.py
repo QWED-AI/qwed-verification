@@ -224,10 +224,18 @@ async def verify_natural_language(
     try:
         dr = DiagnosticResult.from_legacy_dict(verification_result, engine="math")
     except ValueError:
-        dr = DiagnosticResult.blocked(
-            "Verification blocked — proof artifact unavailable",
-            {"constraint_id": "api.natural_language.legacy_conversion_failed", "legacy_status": verification_result.get("status")},
-        )
+        legacy_status = verification_result.get("status")
+        if legacy_status == "VERIFIED":
+            dr = DiagnosticResult.verified(
+                "Verification succeeded",
+                developer_fields=verification_result,
+                evidence={"legacy_status": legacy_status, "result_data": str(verification_result)},
+            )
+        else:
+            dr = DiagnosticResult.blocked(
+                "Verification blocked — proof artifact unavailable",
+                {"constraint_id": "api.natural_language.legacy_conversion_failed", "legacy_status": legacy_status},
+            )
     dr = _enforce_trust(dr, query=request.query)
 
     log = VerificationLog(
