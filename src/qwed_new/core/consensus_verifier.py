@@ -81,13 +81,17 @@ class ConsensusResult:
         }
         status_val = self.status.value if isinstance(self.status, DiagnosticStatus) else str(self.status)
         if status_val == DiagnosticStatus.VERIFIED.value:
+            if not self.verified_evidence:
+                # A VERIFIED status without its canonical evidence is a contract
+                # violation — fail closed rather than fabricating a weaker proof.
+                return DiagnosticResult.unverifiable(
+                    "Consensus verification: VERIFIED status missing canonical evidence",
+                    developer_fields=developer_fields,
+                )
             return DiagnosticResult.verified(
                 "Consensus verification: unanimous",
                 developer_fields=developer_fields,
-                evidence=self.verified_evidence or {
-                    "agreement_status": self.agreement_status,
-                    "confidence": self.confidence,
-                },
+                evidence=self.verified_evidence,
             )
         elif status_val == DiagnosticStatus.BLOCKED.value:
             return DiagnosticResult.blocked(
@@ -95,12 +99,19 @@ class ConsensusResult:
                 developer_fields=developer_fields,
             )
         else:
+            blocked_count = sum(1 for r in self.verification_chain if r.status in ("BLOCKED", DiagnosticStatus.BLOCKED.value))
             if self.agreement_status == "majority":
                 msg = "Consensus verification: majority agreement"
             elif self.agreement_status == "split":
                 msg = "Consensus verification: no agreement"
-            elif status_val == DiagnosticStatus.UNVERIFIABLE.value:
+            elif self.agreement_status == "no_results":
+                msg = "Consensus verification: no engine results available"
+            elif self.agreement_status == "all_failed":
+                msg = "Consensus verification: all engines failed"
+            elif status_val == DiagnosticStatus.UNVERIFIABLE.value and blocked_count > 0:
                 msg = "Consensus verification: incomplete — some engines blocked"
+            elif status_val == DiagnosticStatus.UNVERIFIABLE.value:
+                msg = "Consensus verification: support conditions unmet — advisory engines cannot verify claims"
             else:
                 msg = "Consensus verification: no agreement"
             return DiagnosticResult.unverifiable(
@@ -846,11 +857,12 @@ class ConsensusVerifier:
         # Bind proof_ref to the VERIFIED consensus: evidence includes the
         # engine chain details so the attestation can be audited downstream.
         proof_ref = None
+        evidence = None
         if diagnostic_status is DiagnosticStatus.VERIFIED:
             evidence = {
                 "agreement_status": status,
                 "confidence": confidence,
-                "engines_used": len(successful),
+                "contributing_engines": len(successful),
                 "answer": str(answer_values[best_answer]),
                 "chain": [
                     {"engine": r.engine_name, "method": r.method, "confidence": r.confidence}
