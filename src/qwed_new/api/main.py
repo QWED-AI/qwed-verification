@@ -651,19 +651,26 @@ async def verify_math(
                 )
             else:
                 is_numeric = simplified.free_symbols == set()
-                try:
-                    exact = sympy.nsimplify(simplified) if is_numeric else simplified
-                    value = float(simplified)
+                if not is_numeric:
                     dr = DiagnosticResult.verified(
-                        "Expression evaluated",
-                        developer_fields={"is_valid": True, "value": value, "exact_value": str(exact), "simplified": str(simplified), "original": str(parsed)},
-                        evidence={"exact_value": str(exact), "simplified": str(simplified)},
+                        "Expression simplified",
+                        developer_fields={"is_valid": True, "simplified": str(simplified), "original": str(parsed), "is_symbolic": True},
+                        evidence={"simplified": str(simplified)},
                     )
-                except (TypeError, ValueError):
-                    dr = DiagnosticResult.unverifiable(
-                        "Expression is not numeric",
-                        developer_fields={"is_valid": False, "simplified": str(simplified), "original": str(parsed)},
-                    )
+                else:
+                    try:
+                        exact = sympy.nsimplify(simplified)
+                        value = float(simplified)
+                        dr = DiagnosticResult.verified(
+                            "Expression evaluated",
+                            developer_fields={"is_valid": True, "value": value, "exact_value": str(exact), "simplified": str(simplified), "original": str(parsed)},
+                            evidence={"exact_value": str(exact), "simplified": str(simplified)},
+                        )
+                    except (TypeError, ValueError):
+                        dr = DiagnosticResult.unverifiable(
+                            "Expression is not numeric",
+                            developer_fields={"is_valid": False, "simplified": str(simplified), "original": str(parsed)},
+                        )
 
         dr = _enforce_trust(dr, query=expression)
 
