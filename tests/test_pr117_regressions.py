@@ -226,8 +226,10 @@ def test_consensus_api_masks_secure_execution_block(client):
             headers={"x-api-key": "fake-key"},
         )
 
-    assert response.status_code == 503
-    assert response.json()["detail"] == "Service temporarily unavailable"
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "BLOCKED"
+    assert data["is_authoritative"] is False
 
 
 def test_stats_verifier_blocks_if_docker_drops_after_selection():

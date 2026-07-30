@@ -1597,7 +1597,7 @@ async def verify_with_consensus(
     # Format response
     response = {
         "final_answer": result.final_answer,
-        "confidence": round(result.confidence * 100, 2),
+        "confidence": round(result.confidence, 4),
         "engines_used": result.engines_used,
         "agreement_status": result.agreement_status,
         "verification_chain": [
@@ -1605,7 +1605,7 @@ async def verify_with_consensus(
                 "engine": r.engine_name,
                 "method": r.method,
                 "result": str(r.result),
-                "confidence": round(r.confidence * 100, 2),
+                "confidence": round(r.confidence, 4),
                 "latency_ms": round(r.latency_ms, 2),
                 "success": r.success,
             }
