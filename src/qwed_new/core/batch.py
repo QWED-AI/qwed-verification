@@ -302,7 +302,6 @@ class BatchVerificationService:
             )
             return merge_diagnostic_result(enforce_trust_decision(dr, require_attestation=False, query=item.query))
 
-        developer_fields["attestation_token"] = att_result.token
         dr = DiagnosticResult.verified(
             "Identity verified",
             developer_fields=developer_fields,
