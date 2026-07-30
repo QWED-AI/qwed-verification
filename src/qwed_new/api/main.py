@@ -130,6 +130,17 @@ def _merge_response(dr: DiagnosticResult) -> dict:
     safe = {k: v for k, v in fields.items() if k not in _DIAGNOSTIC_KEYS}
     return serialized | safe
 
+def _safe_commit_log(session, log):
+    """Write a VerificationLog safely, rolling back on failure."""
+    try:
+        _safe_commit_log(session, log)
+    except Exception:
+        try:
+            session.rollback()
+        except Exception:
+            pass
+
+
 class VerifyRequest(BaseModel):
     query: str
     provider: Optional[str] = None
@@ -250,8 +261,7 @@ async def verify_natural_language(
         is_verified=dr.is_authoritative,
         domain="MATH"
     )
-    session.add(log)
-    session.commit()
+    _safe_commit_log(session, log)
 
     return _merge_response(dr)
 
@@ -301,8 +311,7 @@ async def verify_logic(
             is_verified=dr.is_authoritative,
             domain="LOGIC"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
 
         return _merge_response(dr)
 
@@ -328,8 +337,7 @@ async def verify_logic(
             is_verified=False,
             domain="LOGIC"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
         return _merge_response(dr)
 
 @app.post(
@@ -398,8 +406,7 @@ async def verify_stats(
             is_verified=dr.is_authoritative,
             domain="STATS"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
 
         return _merge_response(dr)
     except HTTPException:
@@ -419,8 +426,7 @@ async def verify_stats(
             is_verified=False,
             domain="STATS"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
         return _merge_response(dr)
 
 
@@ -480,8 +486,7 @@ async def verify_fact(
             is_verified=dr.is_authoritative,
             domain="FACT"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
 
         return _merge_response(dr)
 
@@ -501,8 +506,7 @@ async def verify_fact(
             is_verified=False,
             domain="FACT"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
         return _merge_response(dr)
 
 
@@ -551,8 +555,7 @@ async def verify_code(
             is_verified=dr.is_authoritative,
             domain="CODE"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
 
         return _merge_response(dr)
 
@@ -572,8 +575,7 @@ async def verify_code(
             is_verified=False,
             domain="CODE"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
         return _merge_response(dr)
 
 
@@ -681,8 +683,7 @@ async def verify_math(
             is_verified=dr.is_authoritative,
             domain="MATH"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
 
         return _merge_response(dr)
 
@@ -702,8 +703,7 @@ async def verify_math(
             is_verified=False,
             domain="MATH"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
         return _merge_response(dr)
 
 
@@ -753,8 +753,7 @@ async def verify_sql(
             is_verified=dr.is_authoritative,
             domain="SQL"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
 
         return _merge_response(dr)
 
@@ -774,8 +773,7 @@ async def verify_sql(
             is_verified=False,
             domain="SQL"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
         return _merge_response(dr)
 
 
@@ -827,8 +825,7 @@ async def verify_image(
             is_verified=dr.is_authoritative,
             domain="IMAGE"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
 
         return _merge_response(dr)
 
@@ -848,8 +845,7 @@ async def verify_image(
             is_verified=False,
             domain="IMAGE"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
         return _merge_response(dr)
 
 class RAGVerifyRequest(BaseModel):
@@ -925,8 +921,7 @@ async def verify_rag(
                 is_verified=False,
                 domain="RAG"
             )
-            session.add(log)
-            session.commit()
+            _safe_commit_log(session, log)
             return _merge_response(dr)
         
         is_verified = result.get("verified", False)
@@ -950,8 +945,7 @@ async def verify_rag(
             is_verified=dr.is_authoritative,
             domain="RAG"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
         
         return _merge_response(dr)
         
@@ -972,8 +966,7 @@ async def verify_rag(
             is_verified=False,
             domain="RAG"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
         return _merge_response(dr)
 
 class ProcessVerifyRequest(BaseModel):
@@ -1037,8 +1030,7 @@ async def verify_process(
             is_verified=dr.is_authoritative,
             domain="PROCESS"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
         
         return _merge_response(dr)
         
@@ -1058,8 +1050,7 @@ async def verify_process(
             is_verified=False,
             domain="PROCESS"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
         return _merge_response(dr)
 
 
@@ -1534,8 +1525,7 @@ async def verify_with_consensus(
             is_verified=dr.is_authoritative,
             domain="CONSENSUS"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
         return _merge_response(dr)
 
     if result.confidence < request.min_confidence:
@@ -1551,8 +1541,7 @@ async def verify_with_consensus(
             is_verified=dr.is_authoritative,
             domain="CONSENSUS"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
         return _merge_response(dr)
 
     if result.agreement_status == "unanimous":
@@ -1591,8 +1580,7 @@ async def verify_with_consensus(
         is_verified=dr.is_authoritative,
         domain="CONSENSUS"
     )
-    session.add(log)
-    session.commit()
+    _safe_commit_log(session, log)
 
     # Format response
     response = {
