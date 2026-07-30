@@ -37,6 +37,44 @@ def test_batch_math_identity_verification_returns_valid(monkeypatch):
     assert result["is_authoritative"] is True
 
 
+def test_batch_math_verified_attestation_failure_preserves_fields(monkeypatch):
+    """When attestation signing fails, batch math must return UNVERIFIABLE
+    while preserving type/query/is_valid/diff developer fields (#271)."""
+    service = BatchVerificationService()
+    item = BatchItem(
+        id="math-attestation-fail",
+        query="x + x = 2*x",
+        verification_type=VerificationType.MATH,
+    )
+
+    from qwed_new.core.attestation import AttestationResult, AttestationStatus
+    monkeypatch.setattr(
+        "qwed_new.core.batch.create_verification_attestation",
+        lambda **kwargs: AttestationResult(
+            status=AttestationStatus.UNVERIFIABLE,
+            token=None,
+            error_code="CRYPTO_UNAVAILABLE",
+            error="signing unavailable",
+        ),
+    )
+    monkeypatch.setattr(
+        "qwed_new.core.batch.enforce_trust_decision",
+        lambda result, **kwargs: result,
+    )
+
+    result = asyncio.run(service._verify_item(item, organization_id=1))
+
+    assert result["status"] == "UNVERIFIABLE"
+    assert result["proof_ref"] is None
+    # is_valid comes from the math evaluation, not the attestation outcome.
+    # Signing failure marks the verdict unverifiable; the math itself was proven.
+    assert result["is_valid"] is True
+    assert result["type"] == "math"
+    assert result["query"] == "x + x = 2*x"
+    assert result["constraint_id"] == "api.attestation.signing_error"
+    assert result["attestation_error"] == "CRYPTO_UNAVAILABLE"
+
+
 def test_batch_math_non_identity_verification_returns_invalid():
     service = BatchVerificationService()
     item = BatchItem(

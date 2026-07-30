@@ -8,7 +8,7 @@ import logging
 from fractions import Fraction
 
 from qwed_new.core.security import redact_pii
-from qwed_new.core.diagnostics import DiagnosticResult, enforce_trust_decision
+from qwed_new.core.diagnostics import DiagnosticResult, enforce_trust_decision, merge_diagnostic_result
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -122,13 +122,7 @@ def _enforce_trust(
     return enforce_trust_decision(dr, require_attestation=False, query=query)
 
 
-_DIAGNOSTIC_KEYS = frozenset({"status", "agent_message", "developer_fields", "proof_ref", "is_authoritative"})
-def _merge_response(dr: DiagnosticResult) -> dict:
-    """Merge diagnostic result with developer fields, ensuring diagnostic keys win."""
-    serialized = dr.to_dict()
-    fields = serialized.get("developer_fields", {})
-    safe = {k: v for k, v in fields.items() if k not in _DIAGNOSTIC_KEYS}
-    return serialized | safe
+_merge_response = merge_diagnostic_result  # shared merge helper (#271)
 
 def _safe_commit_log(session, log):
     """Write a VerificationLog safely, rolling back on failure."""
