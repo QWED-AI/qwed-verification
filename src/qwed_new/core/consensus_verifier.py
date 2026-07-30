@@ -694,13 +694,16 @@ class ConsensusVerifier:
             else:
                 result = None
             
+            # Statistical computation is advisory-only — calculating a value
+            # is not verification. Only comparison against a claimed value
+            # with proof of correctness should produce VERIFIED (#270).
             return EngineResult(
                 engine_name="Stats", method="statistical_analysis",
                 result=result,
                 confidence=0.98 if result is not None else 0.0,
                 latency_ms=(time.time() - start) * 1000,
                 success=result is not None,
-                status="VERIFIED" if result is not None else "UNVERIFIABLE",
+                status="UNVERIFIABLE",
             )
         except Exception as e:
             return EngineResult(
@@ -786,7 +789,11 @@ class ConsensusVerifier:
         
         # Fail closed: a BLOCKED engine means verification did not fully complete,
         # so the outcome can never be VERIFIED even if survivors agree.
-        diagnostic_status = "VERIFIED" if (status == "unanimous" and not blocked) else "UNVERIFIABLE"
+        # Additionally, every successful result must have status="VERIFIED" —
+        # advisory-only results (e.g. Stats computation) cannot contribute
+        # to a VERIFIED consensus (#270).
+        all_verified = all(r.status == "VERIFIED" for r in successful)
+        diagnostic_status = "VERIFIED" if (status == "unanimous" and not blocked and all_verified) else "UNVERIFIABLE"
 
         return {
             "answer": answer_values[best_answer],

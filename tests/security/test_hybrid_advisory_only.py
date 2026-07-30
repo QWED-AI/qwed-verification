@@ -307,7 +307,25 @@ class TestConsensusVerifierAdvisoryOnly:
         result = self.verifier._verify_with_stats("average of 0, 0, and 0")
         assert result.result == 0
         assert result.confidence == 0.98
-        assert result.status == "VERIFIED"
+        assert result.status == "UNVERIFIABLE"
+
+    def test_stats_unverifiable_cannot_produce_verified_consensus(self):
+        """Stats UNVERIFIABLE result prevents VERIFIED consensus even if unanimous."""
+        results = [
+            EngineResult(
+                engine_name="SymPy", method="math", result=4,
+                confidence=1.0, latency_ms=10, success=True,
+                status="VERIFIED",
+            ),
+            EngineResult(
+                engine_name="Stats", method="statistical_analysis", result=4,
+                confidence=0.98, latency_ms=10, success=True,
+                status="UNVERIFIABLE",
+            ),
+        ]
+        consensus = self.verifier._calculate_consensus(results)
+        assert consensus["diagnostic_status"] == "UNVERIFIABLE"
+        assert consensus["status"] == "unanimous"
 
 
 # ========================================================================
