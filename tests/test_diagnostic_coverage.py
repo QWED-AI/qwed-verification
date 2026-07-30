@@ -415,6 +415,34 @@ def test_verify_consensus_all_engines_blocked(client):
     assert data["proof_ref"] is None
 
 
+def test_verify_consensus_unverifiable_with_high_confidence_not_requirements_met(client):
+    """Cover that high confidence alone cannot flip UNVERIFIABLE consensus to meets_requirement (#269)."""
+    from qwed_new.core.consensus_verifier import ConsensusResult
+
+    fake = ConsensusResult(
+        final_answer="2",
+        confidence=0.99,
+        engines_used=2,
+        agreement_status="unanimous",
+        verification_chain=[],
+        total_latency_ms=5.0,
+        status=DiagnosticStatus.UNVERIFIABLE,
+    )
+
+    with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake), \
+         patch("qwed_new.api.main.check_rate_limit"):
+        response = client.post(
+            "/verify/consensus",
+            json={"query": "test", "verification_mode": "high", "min_confidence": 0.95},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "UNVERIFIABLE"
+    assert data["meets_requirement"] is False
+    assert data["is_authoritative"] is False
+
+
 def test_verify_consensus_unverifiable_no_blocked_engines_message(client):
     """Cover unanimous + UNVERIFIABLE with zero blocked engines (#266) — message reflects source, not blocked fallback."""
     from qwed_new.core.consensus_verifier import ConsensusResult, EngineResult
