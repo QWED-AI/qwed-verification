@@ -26,6 +26,9 @@ def _apply_overrides():
     app.dependency_overrides[get_session] = mock_get_session
     app.dependency_overrides[check_rate_limit] = mock_check_rate_limit
     yield
+    app.dependency_overrides.pop(get_current_tenant, None)
+    app.dependency_overrides.pop(get_session, None)
+    app.dependency_overrides.pop(check_rate_limit, None)
 
 client = TestClient(app)
 
