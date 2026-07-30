@@ -307,7 +307,7 @@ class TestConsensusVerifierAdvisoryOnly:
         result = self.verifier._verify_with_stats("average of 0, 0, and 0")
         assert result.result == 0
         assert result.confidence == 0.98
-        assert result.status == "VERIFIED"
+        assert result.status == "UNVERIFIABLE"
 
 
 # ========================================================================

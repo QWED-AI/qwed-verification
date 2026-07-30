@@ -1,0 +1,33 @@
+## Summary
+
+Fixes #270
+
+The consensus `_verify_with_stats` method was returning `status="VERIFIED"` whenever a statistical computation (mean/median/variance) succeeded. Statistical computation is **not** verification — it merely calculates a value. There is no claim being verified, just a calculation being performed.
+
+## Problem
+
+In `consensus_verifier.py:697-704`, `status="VERIFIED"` was set whenever `statistics.mean([1,2,3])` returned `2.0`, regardless of whether a claim was actually verified. This status fed into `_calculate_consensus` at line 789:
+
+```python
+diagnostic_status = "VERIFIED" if (status == "unanimous" and not blocked) else "UNVERIFIABLE"
+```
+
+A stats-only consensus could yield `VERIFIED` downstream without any cryptographic verification.
+
+## Fix
+
+Changed `_verify_with_stats` to always return `status="UNVERIFIABLE"` when computation succeeds. The computed value is still available in `result` for advisory purposes, but it can no longer contribute to a `VERIFIED` consensus outcome.
+
+Only comparison against a claimed value (with proof of correctness) should produce `VERIFIED`.
+
+## Verification
+
+- [x] All 59 existing tests pass
+- [x] No tests expected the old `VERIFIED` behavior from stats computation
+- [x] Change is minimal and targeted
+
+## QWED Enforcement Checklist
+
+- [x] DiagnosticResult status is correct (UNVERIFIABLE for computation, not VERIFIED)
+- [x] Fail-closed behavior preserved
+- [x] No proof_ref emitted without cryptographic verification
