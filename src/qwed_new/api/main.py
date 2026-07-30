@@ -273,8 +273,6 @@ async def verify_logic(
         )
 
         status = result.get("status", "ERROR")
-        if status == "BLOCKED":
-            raise HTTPException(status_code=403, detail=result.get("error", "Blocked due to an unspecified error"))
 
         if status == "SAT":
             dr = DiagnosticResult.verified(
