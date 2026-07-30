@@ -666,7 +666,7 @@ async def verify_math(
                             developer_fields={"is_valid": True, "value": value, "exact_value": str(exact), "simplified": str(simplified), "original": str(parsed)},
                             evidence={"exact_value": str(exact), "simplified": str(simplified)},
                         )
-                    except (TypeError, ValueError):
+                    except (TypeError, ValueError, OverflowError):
                         dr = DiagnosticResult.unverifiable(
                             "Expression is not numeric",
                             developer_fields={"is_valid": False, "simplified": str(simplified), "original": str(parsed)},
@@ -1522,16 +1522,39 @@ async def verify_with_consensus(
     )
 
     if result.agreement_status == "blocked_secure_execution":
-        raise HTTPException(status_code=503, detail="Service temporarily unavailable")
-    
-    # Check if confidence meets requirement
-    if result.confidence < request.min_confidence:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Confidence ({result.confidence:.1%}) below required minimum ({request.min_confidence:.1%})"
+        dr = DiagnosticResult.blocked(
+            "Consensus verification: blocked — secure execution",
+            developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
         )
-    
-    # Log to database
+        dr = _enforce_trust(dr, query=request.query)
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=request.query,
+            result=f"Consensus: {result.agreement_status}",
+            is_verified=dr.is_authoritative,
+            domain="CONSENSUS"
+        )
+        session.add(log)
+        session.commit()
+        return _merge_response(dr)
+
+    if result.confidence < request.min_confidence:
+        dr = DiagnosticResult.unverifiable(
+            f"Confidence ({result.confidence:.1%}) below required minimum ({request.min_confidence:.1%})",
+            developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used, "min_confidence": request.min_confidence},
+        )
+        dr = _enforce_trust(dr, query=request.query)
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=request.query,
+            result=f"Consensus: {result.agreement_status}, Confidence: {result.confidence:.1%}",
+            is_verified=dr.is_authoritative,
+            domain="CONSENSUS"
+        )
+        session.add(log)
+        session.commit()
+        return _merge_response(dr)
+
     if result.agreement_status == "unanimous":
         if hasattr(result, "status") and result.status == "BLOCKED":
             dr = DiagnosticResult.blocked(
