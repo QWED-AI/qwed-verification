@@ -459,6 +459,8 @@ async def verify_fact(
 
         return _merge_response(dr)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Fact verification error: {redact_pii(str(e))}", exc_info=False)
         dr = DiagnosticResult.blocked(
@@ -528,6 +530,8 @@ async def verify_code(
 
         return _merge_response(dr)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Code verification error: {redact_pii(str(e))}", exc_info=False)
         dr = DiagnosticResult.blocked(
@@ -537,7 +541,7 @@ async def verify_code(
         dr = _enforce_trust(dr, query=code)
         log = VerificationLog(
             organization_id=tenant.organization_id,
-            query=code[:200],
+            query=(code or "")[:200],
             result=str(dr.to_dict()),
             is_verified=False,
             domain="CODE"
@@ -719,6 +723,8 @@ async def verify_sql(
 
         return _merge_response(dr)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"SQL verification error: {redact_pii(str(e))}", exc_info=False)
         dr = DiagnosticResult.blocked(
@@ -885,7 +891,8 @@ async def verify_rag(
                 retrieved_chunks=request.chunks
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            logger.warning("RAG config error: %s", redact_pii(str(exc)))
+            raise HTTPException(status_code=400, detail="Invalid RAG configuration") from exc
         
         audit_result = {
             "verified": result.get("verified", False),
@@ -1226,7 +1233,8 @@ async def register_agent(
             "message": "Agent registered successfully. Store the agent_token securely."
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Agent registration error: {redact_pii(str(e))}", exc_info=False)
+        raise HTTPException(status_code=500, detail="Agent registration failed")
 
 @app.post(
     "/agents/{agent_id}/verify",
