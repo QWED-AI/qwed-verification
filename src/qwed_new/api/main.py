@@ -125,8 +125,10 @@ def _enforce_trust(
 _DIAGNOSTIC_KEYS = frozenset({"status", "agent_message", "developer_fields", "proof_ref", "is_authoritative"})
 def _merge_response(dr: DiagnosticResult) -> dict:
     """Merge diagnostic result with developer fields, ensuring diagnostic keys win."""
-    safe = {k: v for k, v in dr.developer_fields.items() if k not in _DIAGNOSTIC_KEYS}
-    return dr.to_dict() | safe
+    serialized = dr.to_dict()
+    fields = serialized.get("developer_fields", {})
+    safe = {k: v for k, v in fields.items() if k not in _DIAGNOSTIC_KEYS}
+    return serialized | safe
 
 class VerifyRequest(BaseModel):
     query: str
