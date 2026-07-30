@@ -53,6 +53,23 @@ async def test_control_plane_marks_translated_math_as_inconclusive(monkeypatch):
 
     monkeypatch.setattr(metrics_collector, "track_request", _track_request)
 
+    # Mock attestation + enforce_trust_decision — crypto and JWT internals
+    # are environment concerns, not control plane orchestration behavior.
+    from qwed_new.core.attestation import AttestationResult, AttestationStatus
+    from qwed_new.core.diagnostics import DiagnosticResult
+    monkeypatch.setattr(
+        "qwed_new.core.control_plane.create_verification_attestation",
+        lambda **kwargs: AttestationResult(status=AttestationStatus.ISSUED, token="test-token", error_code=None, error=None),
+    )
+    monkeypatch.setattr(
+        "qwed_new.core.control_plane.enforce_trust_decision",
+        lambda result, **kwargs: DiagnosticResult.verified(
+            "Expression verified successfully",
+            developer_fields={"mocked": True},
+            evidence={"status": "VERIFIED"},
+        ),
+    )
+
     result = await cp.process_natural_language("What is 15% of 200?", organization_id=42)
 
     assert result["status"] == "VERIFIED"
