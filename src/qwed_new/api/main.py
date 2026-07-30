@@ -892,7 +892,7 @@ async def verify_rag(
             )
         except ValueError as exc:
             logger.warning("RAG config error: %s", redact_pii(str(exc)))
-            raise HTTPException(status_code=400, detail="Invalid RAG configuration") from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         
         audit_result = {
             "verified": result.get("verified", False),
@@ -1458,6 +1458,11 @@ async def verify_with_consensus(
         if hasattr(result, "status") and result.status == "BLOCKED":
             dr = DiagnosticResult.blocked(
                 "Consensus verification: blocked",
+                developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
+            )
+        elif hasattr(result, "status") and result.status == "UNVERIFIABLE":
+            dr = DiagnosticResult.unverifiable(
+                "Consensus verification: incomplete — some engines blocked",
                 developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
             )
         else:
