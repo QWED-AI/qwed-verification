@@ -183,6 +183,7 @@ def test_consensus_code_engine_uses_secure_executor_output():
     assert result.success is True
     assert result.result == "4"
     assert result.engine_name == "Python"
+    assert result.status == "UNVERIFIABLE"  # Code execution is advisory-only (#269)
 
 
 def test_consensus_codegen_assigns_result_variable():

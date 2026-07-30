@@ -1599,11 +1599,14 @@ async def verify_with_consensus(
                 "confidence": round(r.confidence, 4),
                 "latency_ms": round(r.latency_ms, 2),
                 "success": r.success,
+                "status": r.status,
             }
             for r in result.verification_chain
         ],
         "total_latency_ms": round(result.total_latency_ms, 2),
-        "meets_requirement": result.confidence >= request.min_confidence,
+        # TRUE only when consensus is both VERIFIED at the trust boundary AND
+        # confidence meets the threshold — never confidence alone (#269).
+        "meets_requirement": dr.is_verified and result.confidence >= request.min_confidence,
     }
     return _merge_response(dr) | response
 # --- Enterprise Security Endpoints (Week 2) ---
