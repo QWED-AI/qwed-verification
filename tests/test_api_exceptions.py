@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 from qwed_new.api.main import app, get_current_tenant, get_session, check_rate_limit, TenantContext
@@ -19,10 +20,15 @@ def mock_get_session():
 def mock_check_rate_limit(api_key: str):
     pass # No-op
 
-# Apply overrides
-app.dependency_overrides[get_current_tenant] = mock_get_current_tenant
-app.dependency_overrides[get_session] = mock_get_session
-app.dependency_overrides[check_rate_limit] = mock_check_rate_limit
+@pytest.fixture(autouse=True)
+def _apply_overrides():
+    app.dependency_overrides[get_current_tenant] = mock_get_current_tenant
+    app.dependency_overrides[get_session] = mock_get_session
+    app.dependency_overrides[check_rate_limit] = mock_check_rate_limit
+    yield
+    app.dependency_overrides.pop(get_current_tenant, None)
+    app.dependency_overrides.pop(get_session, None)
+    app.dependency_overrides.pop(check_rate_limit, None)
 
 client = TestClient(app)
 
@@ -41,8 +47,8 @@ def test_verify_math_exception_handling():
         # It should return 200 OK (soft failure) as per our logic, or handle it gracefully
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "ERROR"
-        assert data["error"] == "Internal verification error"
+        assert data["status"] == "BLOCKED"
+        assert data["agent_message"] == "Internal verification error"
         assert "CRITICAL SENSITIVE STACK TRACE" not in str(data) # Ensure leak prevention
 
 def test_verify_sql_exception_handling():
@@ -61,8 +67,8 @@ def test_verify_sql_exception_handling():
         
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "ERROR"
-        assert data["error"] == "Internal verification error"
+        assert data["status"] == "BLOCKED"
+        assert data["agent_message"] == "Internal verification error"
         assert "DB_PASSWORD" not in str(data)
 
 def test_verify_fact_exception_handling():
@@ -80,8 +86,8 @@ def test_verify_fact_exception_handling():
         
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "ERROR"
-        assert data["error"] == "Internal verification error"
+        assert data["status"] == "BLOCKED"
+        assert data["agent_message"] == "Internal verification error"
         assert "API_KEY_LEAK" not in str(data)
 
 def test_verify_fact_success_path():
@@ -135,8 +141,8 @@ def test_verify_code_exception_handling():
         
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "ERROR"
-        assert data["error"] == "Internal verification error"
+        assert data["status"] == "BLOCKED"
+        assert data["agent_message"] == "Internal verification error"
         assert "INTERNAL_PATH_LEAK" not in str(data)
 
 def test_verify_image_exception_handling():
@@ -154,8 +160,8 @@ def test_verify_image_exception_handling():
         
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "ERROR"
-        assert data["error"] == "Internal processing error"
+        assert data["status"] == "BLOCKED"
+        assert data["agent_message"] == "Internal processing error"
         assert "VLM_API_KEY_LEAK" not in str(data)
 
 
@@ -174,8 +180,8 @@ def test_verify_stats_exception_handling():
         
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "ERROR"
-        assert data["error"] == "Internal processing error"
+        assert data["status"] == "BLOCKED"
+        assert data["agent_message"] == "Internal processing error"
         assert "SENSITIVE_DATA_LEAK" not in str(data)
 
 def test_agent_tool_call_exception_handling():

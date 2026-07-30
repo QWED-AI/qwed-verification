@@ -31,7 +31,7 @@ def test_verify_math_ambiguous_expression_fails_closed_and_logs_unverified():
         assert data["is_valid"] is False
         assert data["result"] is False
         assert data["warning"] == "ambiguous"
-        assert "implicit multiplication after division" in data["message"]
+        assert "implicit multiplication after division" in data["agent_message"]
 
         logged = mock_session.add.call_args[0][0]
         assert logged.is_verified is False

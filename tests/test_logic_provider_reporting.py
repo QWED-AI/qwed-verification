@@ -31,8 +31,8 @@ async def test_verify_logic_error_uses_routed_provider(monkeypatch):
         session=session,
     )
 
-    assert result["status"] == "ERROR"
-    assert result["error"] == "Internal verification error"
+    assert result["status"] == "BLOCKED"
+    assert result["agent_message"] == "Internal verification error"
     assert result["provider_used"] == "openai_compat"
 
 

@@ -8,6 +8,7 @@ import logging
 from fractions import Fraction
 
 from qwed_new.core.security import redact_pii
+from qwed_new.core.diagnostics import DiagnosticResult, enforce_trust_decision
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -108,6 +109,39 @@ def on_startup():
 # Initialize Kernel (Control Plane)
 control_plane = ControlPlane()
 
+# Trust boundary enforcement helper (currently advisory until #265)
+def _enforce_trust(
+    dr: DiagnosticResult, query: str
+) -> DiagnosticResult:
+    """Route a DiagnosticResult through trust boundary enforcement.
+
+    Currently operates in advisory mode (require_attestation=False) pending
+    attestation issuance wiring. Callers must use the returned DiagnosticResult
+    for audit logging and response construction.
+    """
+    return enforce_trust_decision(dr, require_attestation=False, query=query)
+
+
+_DIAGNOSTIC_KEYS = frozenset({"status", "agent_message", "developer_fields", "proof_ref", "is_authoritative"})
+def _merge_response(dr: DiagnosticResult) -> dict:
+    """Merge diagnostic result with developer fields, ensuring diagnostic keys win."""
+    serialized = dr.to_dict()
+    fields = serialized.get("developer_fields", {})
+    safe = {k: v for k, v in fields.items() if k not in _DIAGNOSTIC_KEYS}
+    return serialized | safe
+
+def _safe_commit_log(session, log):
+    """Write a VerificationLog safely, rolling back on failure."""
+    try:
+        session.add(log)
+        session.commit()
+    except Exception:
+        try:
+            session.rollback()
+        except Exception:
+            logger.exception("Rollback failed while handling commit/log failure")
+
+
 class VerifyRequest(BaseModel):
     query: str
     provider: Optional[str] = None
@@ -192,92 +226,120 @@ async def verify_natural_language(
     tenant: TenantContext = Depends(get_current_tenant),
     session: Session = Depends(get_session)
 ):
-    """
-    Main entry point: Verifies a natural language math query.
-    Now routed through the QWED Control Plane with multi-tenancy.
-    
-    Rate Limits:
-    - Per API Key: 100 requests/minute
-    - Global: 1000 requests/minute
-    """
-    # Check rate limits
     check_rate_limit(tenant.api_key)
-    
-    result = await control_plane.process_natural_language(
-        request.query,
-        organization_id=tenant.organization_id,
-        preferred_provider=request.provider
-    )
-    
-    # Log request to audit trail
+
+    dr = None
+    result = None
+    try:
+        result = await control_plane.process_natural_language(
+            request.query,
+            organization_id=tenant.organization_id,
+            preferred_provider=request.provider
+        )
+    except Exception as e:
+        logger.error("Natural language verification error: %s", redact_pii(str(e)), exc_info=False)
+        dr = DiagnosticResult.blocked(
+            INTERNAL_VERIFICATION_ERROR,
+            {"constraint_id": "api.natural_language.execution_error"},
+        )
+
+    if dr is None:
+        verification_result = result.get("verification", {}) if isinstance(result, dict) else {}
+        try:
+            dr = DiagnosticResult.from_legacy_dict(verification_result, engine="math")
+        except ValueError:
+            dr = DiagnosticResult.unverifiable(
+                "Verification result unavailable — legacy engine did not retain proof artifacts",
+                {"constraint_id": "api.natural_language.legacy_conversion_failed", "legacy_status": verification_result.get("status")},
+            )
+    dr = _enforce_trust(dr, query=request.query)
+
     log = VerificationLog(
         organization_id=tenant.organization_id,
         user_id=tenant.user_id if hasattr(tenant, 'user_id') else None,
         query=request.query,
-        result=str(result),
-        is_verified=result.get("status") == "VERIFIED",
+        result=str(dr.to_dict()),
+        is_verified=dr.is_authoritative,
         domain="MATH"
     )
-    session.add(log)
-    session.commit()
-        
-    return result
+    _safe_commit_log(session, log)
 
-@app.post("/verify/logic")
+    return _merge_response(dr)
+
+@app.post(
+    "/verify/logic",
+    responses={403: {"description": "Logic verification blocked by engine"}},
+)
 async def verify_logic(
     request: VerifyRequest,
     tenant: TenantContext = Depends(get_current_tenant),
     session: Session = Depends(get_session)
 ):
-    """
-    Verifies a logic puzzle.
-    Now routed through the QWED Control Plane.
-    
-    Rate Limits:
-    - Per API Key: 100 requests/minute
-    - Global: 1000 requests/minute
-    """
-    # Check rate limits
     check_rate_limit(tenant.api_key)
-    
+    result = None
+
     try:
         result = await control_plane.process_logic_query(
             request.query,
             organization_id=tenant.organization_id,
             preferred_provider=request.provider
         )
-        
-        if result["status"] == "BLOCKED":
-            raise HTTPException(status_code=403, detail=result["error"])
-        
-        # Log to database
+
+        status = result.get("status", "ERROR")
+
+        if status == "SAT":
+            dr = DiagnosticResult.verified(
+                "Logic constraints are satisfiable",
+                developer_fields=result,
+                evidence={"model": str(result.get("model")), "dsl_code": result.get("dsl_code", "")},
+            )
+        elif status == "UNSAT":
+            dr = DiagnosticResult.unverifiable(
+                "Logic constraints are unsatisfiable",
+                developer_fields=result,
+            )
+        else:
+            dr = DiagnosticResult.blocked(
+                result.get("error", "Logic verification failed"),
+                developer_fields=result,
+            )
+        dr = _enforce_trust(dr, query=request.query)
+
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=request.query,
-            result=str(result),
-            is_verified=(result["status"] == "SAT" or result["status"] == "UNSAT"),
+            result=str(dr.to_dict()),
+            is_verified=dr.is_authoritative,
             domain="LOGIC"
         )
-        session.add(log)
-        session.commit()
-            
-        return result
-        
+        _safe_commit_log(session, log)
+
+        return _merge_response(dr)
+
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Logic verification error: {redact_pii(str(e))}", exc_info=False)
-        response_result = locals().get("result")
         provider_used = (
-            response_result.get("provider_used")
-            if isinstance(response_result, dict) and response_result.get("provider_used")
+            result.get("provider_used")
+            if isinstance(result, dict) and result.get("provider_used")
             else control_plane.router.route(request.query, request.provider)
         )
-        return {
-            "status": "ERROR",
-            "error": INTERNAL_VERIFICATION_ERROR,
-            "provider_used": provider_used,
-        }
+        dr = DiagnosticResult.blocked(
+            INTERNAL_VERIFICATION_ERROR,
+            {"constraint_id": "api.logic.execution_error", "provider_used": provider_used},
+        )
+        dr = _enforce_trust(dr, query=request.query)
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=request.query,
+            result=str(dr.to_dict()),
+            is_verified=False,
+            domain="LOGIC"
+        )
+        _safe_commit_log(session, log)
+        return _merge_response(dr)
 
 @app.post(
     "/verify/stats",
@@ -309,31 +371,73 @@ async def verify_stats(
         verifier = StatsVerifier()
         
         result = verifier.verify_stats(query, df, provider=None)
-        if result.get("status") == "BLOCKED" and result.get("error") == SECURE_STATS_BLOCKED_CODE:
-            raise HTTPException(status_code=503, detail="Service temporarily unavailable")
-        if result.get("status") == "BLOCKED":
-            raise HTTPException(status_code=403, detail="Verification blocked by security policy")
-        
+
+        if result.get("status") == "SUCCESS":
+            # SUCCESS means analysis executed — not that the claim was proven.
+            # Only return VERIFIED if the result explicitly confirms the claim.
+            claim_supported = result.get("claim_supported")
+            if claim_supported is True:
+                dr = DiagnosticResult.verified(
+                    "Statistical claim verified",
+                    developer_fields=result,
+                    evidence={"status": "SUCCESS", "claim_supported": True, "analysis": str(result.get("analysis", ""))},
+                )
+            else:
+                dr = DiagnosticResult.unverifiable(
+                    "Statistical analysis completed but claim not established",
+                    developer_fields=result,
+                )
+        elif result.get("status") == "BLOCKED" and result.get("error") == SECURE_STATS_BLOCKED_CODE:
+            dr = DiagnosticResult.blocked(
+                "Service temporarily unavailable",
+                developer_fields=result,
+            )
+        elif result.get("status") == "BLOCKED":
+            dr = DiagnosticResult.blocked(
+                "Verification blocked by security policy",
+                developer_fields=result,
+            )
+        elif result.get("status") in ("ERROR", "EXECUTION_FAILED"):
+            dr = DiagnosticResult.unverifiable(
+                result.get("message", "Statistical analysis failed"),
+                developer_fields=result,
+            )
+        else:
+            dr = DiagnosticResult.blocked(
+                "Statistical analysis failed",
+                developer_fields=result,
+            )
+        dr = _enforce_trust(dr, query=query)
+
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=query,
-            result=str(result),
-            is_verified=(result["status"] == "SUCCESS"),
+            result=str(dr.to_dict()),
+            is_verified=dr.is_authoritative,
             domain="STATS"
         )
-        session.add(log)
-        session.commit()
-        
-        return result
+        _safe_commit_log(session, log)
+
+        return _merge_response(dr)
     except HTTPException:
         raise
-        
+
     except Exception as e:
         logger.error(f"Stats verification error: {redact_pii(str(e))}", exc_info=False)
-        return {
-            "status": "ERROR",
-            "error": INTERNAL_PROCESSING_ERROR
-        }
+        dr = DiagnosticResult.blocked(
+            INTERNAL_PROCESSING_ERROR,
+            {"constraint_id": "api.stats.execution_error"},
+        )
+        dr = _enforce_trust(dr, query=query)
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=query,
+            result=str(dr.to_dict()),
+            is_verified=False,
+            domain="STATS"
+        )
+        _safe_commit_log(session, log)
+        return _merge_response(dr)
 
 
 @app.post("/verify/fact")
@@ -353,39 +457,67 @@ async def verify_fact(
     }
     """
     check_rate_limit(tenant.api_key)
-    
+    claim = request.get("claim")
+    context = request.get("context")
+    if not claim or not context:
+        raise HTTPException(status_code=400, detail="Missing 'claim' or 'context'")
+
     try:
         from qwed_new.core.fact_verifier import FactVerifier
         verifier = FactVerifier()
         
-        claim = request.get("claim")
-        context = request.get("context")
         provider = request.get("provider")
         
-        if not claim or not context:
-            raise HTTPException(status_code=400, detail="Missing 'claim' or 'context'")
-        
         result = verifier.verify_fact(claim, context, provider=provider)
-        
+
+        if isinstance(result, DiagnosticResult):
+            dr = result
+        elif hasattr(result, "to_dict") and hasattr(result, "is_verified"):
+            verdict = result.verdict if hasattr(result, "verdict") else "UNKNOWN"
+            dr = DiagnosticResult.verified(
+                "Fact verification complete",
+                developer_fields=result.to_dict(),
+                evidence={"claim": claim, "verdict": verdict},
+            ) if result.is_verified else DiagnosticResult.unverifiable(
+                "Fact not supported",
+                developer_fields=result.to_dict(),
+            )
+        else:
+            dr = DiagnosticResult.unverifiable(
+                "Fact verification inconclusive",
+                developer_fields={"result": str(result)},
+            )
+        dr = _enforce_trust(dr, query=claim)
+
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=claim,
-            result=str(result),
-            is_verified=result.is_verified,
+            result=str(dr.to_dict()),
+            is_verified=dr.is_authoritative,
             domain="FACT"
         )
-        session.add(log)
-        session.commit()
-        
-        return result.to_dict()
-        
+        _safe_commit_log(session, log)
+
+        return _merge_response(dr)
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Fact verification error: {redact_pii(str(e))}", exc_info=False)
-        return {
-            "status": "ERROR",
-            "error": INTERNAL_VERIFICATION_ERROR,
-            "verdict": "ERROR"
-        }
+        dr = DiagnosticResult.blocked(
+            INTERNAL_VERIFICATION_ERROR,
+            {"constraint_id": "api.fact.execution_error", "verdict": "ERROR"},
+        )
+        dr = _enforce_trust(dr, query=claim)
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=claim,
+            result=str(dr.to_dict()),
+            is_verified=False,
+            domain="FACT"
+        )
+        _safe_commit_log(session, log)
+        return _merge_response(dr)
 
 
 @app.post("/verify/code")
@@ -394,48 +526,67 @@ async def verify_code(
     tenant: TenantContext = Depends(get_current_tenant),
     session: Session = Depends(get_session)
 ):
-    """
-    Verify code for security vulnerabilities using AST analysis.
-    
-    Request body:
-    {
-        "code": "import os\\nos.system('ls')",
-        "language": "python" (optional, default: python)
-    }
-    """
     check_rate_limit(tenant.api_key)
-    
+    code = request.get("code")
+
     try:
         from qwed_new.core.code_verifier import CodeVerifier
         verifier = CodeVerifier()
-        
-        code = request.get("code")
+
         language = request.get("language", "python")
-        
+
         if not code:
             raise HTTPException(status_code=400, detail="Missing 'code'")
-        
+
         result = verifier.verify_code(code, language=language)
-        
+
+        if result.get("status") == "SAFE":
+            dr = DiagnosticResult.verified(
+                "Code is safe",
+                developer_fields=result,
+                evidence={"language": language, "analysis": result.get("analysis", "")},
+            )
+        elif result.get("status") == "REVIEW":
+            dr = DiagnosticResult.unverifiable(
+                "Code requires manual review",
+                developer_fields=result,
+            )
+        else:
+            dr = DiagnosticResult.blocked(
+                result.get("message", "Code contains security vulnerabilities"),
+                developer_fields=result,
+            )
+        dr = _enforce_trust(dr, query=code)
+
         log = VerificationLog(
             organization_id=tenant.organization_id,
-            query=code[:200],  # Truncate for logging
-            result=str(result),
-            is_verified=result.get("is_safe", False),
+            query=code[:200],
+            result=str(dr.to_dict()),
+            is_verified=dr.is_authoritative,
             domain="CODE"
         )
-        session.add(log)
-        session.commit()
-        
-        return result
-        
+        _safe_commit_log(session, log)
+
+        return _merge_response(dr)
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Code verification error: {redact_pii(str(e))}", exc_info=False)
-        return {
-            "status": "ERROR",
-            "error": INTERNAL_VERIFICATION_ERROR,
-            "is_safe": False
-        }
+        dr = DiagnosticResult.blocked(
+            INTERNAL_VERIFICATION_ERROR,
+            {"constraint_id": "api.code.execution_error", "is_safe": False},
+        )
+        dr = _enforce_trust(dr, query=code)
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=(code or "")[:200],
+            result=str(dr.to_dict()),
+            is_verified=False,
+            domain="CODE"
+        )
+        _safe_commit_log(session, log)
+        return _merge_response(dr)
 
 
 @app.post("/verify/math")
@@ -444,220 +595,196 @@ async def verify_math(
     tenant: TenantContext = Depends(get_current_tenant),
     session: Session = Depends(get_session)
 ):
-    """
-    Verify mathematical expression or equation.
-    
-    Request body:
-    {
-        "expression": "2+2=4" or "x**2 - y**2 = (x-y)*(x+y)",
-        "context": {"domain": "real"} (optional)
-    }
-    """
     check_rate_limit(tenant.api_key)
-    
+    expression = request.get("expression")
+    if not expression:
+        raise HTTPException(status_code=400, detail="Missing 'expression'")
+
     try:
         import sympy
         from qwed_new.core.safe_parser import safe_parse_expr
         from sympy import simplify, symbols, Eq, solve
-        
-        expression = request.get("expression")
+
         context_data = request.get("context", {})
-        
-        if not expression:
-            raise HTTPException(status_code=400, detail="Missing 'expression'")
-        
-        # Check if it's an equation (contains =) or just an expression
+
         if "=" in expression:
-            # It's an equation - verify if it's true/false
             left_str, right_str = expression.split("=", 1)
-            
-            # Parse both sides
             left = safe_parse_expr(left_str)
             right = safe_parse_expr(right_str)
-            
-            # Simplify and check equivalence
             difference = simplify(left - right)
             is_valid = difference == 0
-            
-            result = {
-                "is_valid": is_valid,
-                "result": is_valid,
+
+            fields = {
                 "left_side": str(left),
                 "right_side": str(right),
                 "simplified_difference": str(difference),
-                "message": "Identity is true" if is_valid else "Identity is false"
             }
+            if is_valid:
+                dr = DiagnosticResult.verified(
+                    "Identity is true",
+                    developer_fields={"is_valid": True, "result": True, **fields},
+                    evidence=fields,
+                )
+            else:
+                dr = DiagnosticResult.unverifiable(
+                    "Identity is false",
+                    developer_fields={"is_valid": False, "result": False, **fields},
+                )
         else:
-            # Just an expression - evaluate or simplify
-            try:
-                # Convert implicit multiplication to explicit (e.g., 2(x+1) -> 2*(x+1))
-                import re
-                expression_normalized = re.sub(r'(\d)(\()', r'\1*\2', expression)
-                
-                # Check for ambiguous expressions BEFORE parsing
-                is_ambiguous = False
-                if "/" in expression and "(" in expression:
-                    # Match patterns like /2(, /10(, etc. (division followed by number then parenthesis)
-                    if re.search(r'/\d+\(', expression.replace(" ", "")):
-                        is_ambiguous = True
-                
-                parsed = safe_parse_expr(expression_normalized)
-                
-                # Check for division by zero before simplifying
-                if "/0" in expression.replace(" ", "") or "/ 0" in expression:
-                    result = {
-                        "is_valid": False,
-                        "error": "Division by zero",
-                        "message": "Expression contains division by zero"
-                    }
-                    
-                # Check for log(0) or log(negative)
-                elif "log(0)" in expression.replace(" ", ""):
-                    result = {
-                        "is_valid": False,
-                        "error": "undefined",
-                        "message": "log(0) is undefined"
-                    }
-                    
-                # Check for sqrt of negative in real domain
-                elif "sqrt(-" in expression.replace(" ", ""):
-                    if context_data.get("domain") == "real":
-                        result = {
-                            "is_valid": False,
-                            "error": "domain error",
-                            "message": "Square root of negative number is undefined in real domain"
-                        }
-                    else:
-                        simplified = simplify(parsed)
-                        result = {
-                            "is_valid": True,
-                            "simplified": str(simplified),
-                            "original": str(parsed),
-                            "is_complex": True
-                        }
-                        
-                # Check for ambiguous expressions (BEFORE simplification)
-                elif is_ambiguous:
-                    simplified = simplify(parsed)
-                    result = {
-                        "is_valid": False,
-                        "result": False,
-                        "status": "BLOCKED",
-                        "warning": "ambiguous",
-                        "message": "Expression may be ambiguous due to implicit multiplication after division",
-                        "simplified": str(simplified),
-                        "note": "Interpreted using standard order of operations",
-                        "original": str(parsed)
-                    }
-                    
-                # Normal expression - evaluate or simplify
+            import re
+            expression_normalized = re.sub(r'(\d)(\()', r'\1*\2', expression)
+            is_ambiguous = False
+            if "/" in expression and "(" in expression:
+                if re.search(r'/\d+\(', expression.replace(" ", "")):
+                    is_ambiguous = True
+
+            parsed = safe_parse_expr(expression_normalized)
+            simplified = simplify(parsed)
+
+            if simplified.has(sympy.zoo) or simplified.has(sympy.nan):
+                dr = DiagnosticResult.blocked(
+                    "Expression contains division by zero",
+                    developer_fields={"is_valid": False, "error": "Division by zero"},
+                )
+            elif simplified.has(sympy.oo) or simplified.has(-sympy.oo):
+                dr = DiagnosticResult.blocked(
+                    "Expression is undefined",
+                    developer_fields={"is_valid": False, "error": "undefined"},
+                )
+            elif simplified.is_real is False and context_data.get("domain") == "real":
+                dr = DiagnosticResult.blocked(
+                    "Expression is not real-valued in the requested real domain",
+                    developer_fields={"is_valid": False, "error": "domain error"},
+                )
+            elif is_ambiguous:
+                dr = DiagnosticResult.blocked(
+                    "Expression may be ambiguous due to implicit multiplication after division",
+                    developer_fields={"is_valid": False, "result": False, "status": "BLOCKED", "warning": "ambiguous", "simplified": str(simplified), "note": "Interpreted using standard order of operations", "original": str(parsed)},
+                )
+            else:
+                is_numeric = simplified.free_symbols == set()
+                if not is_numeric:
+                    dr = DiagnosticResult.verified(
+                        "Expression simplified",
+                        developer_fields={"is_valid": True, "simplified": str(simplified), "original": str(parsed), "is_symbolic": True},
+                        evidence={"simplified": str(simplified)},
+                    )
                 else:
-                    simplified = simplify(parsed)
-                    
-                    # Try to evaluate if it's numeric
                     try:
+                        exact = sympy.nsimplify(simplified)
                         value = float(simplified)
-                        result = {
-                            "is_valid": True,
-                            "value": value,
-                            "simplified": str(simplified),
-                            "original": str(parsed)
-                        }
-                    except Exception:
-                        # Symbolic expression
-                        result = {
-                            "is_valid": True,
-                            "simplified": str(simplified),
-                            "original": str(parsed),
-                            "is_symbolic": True
-                        }
-            except ZeroDivisionError:
-                result = {
-                    "is_valid": False,
-                    "error": "Division by zero",
-                    "message": "Expression contains division by zero"
-                }
-            except Exception as e:
-                if "log" in str(e).lower() or "sqrt" in str(e).lower():
-                    result = {
-                        "is_valid": False,
-                        "error": "Domain error",
-                        "message": str(e)
-                    }
-                else:
-                    raise
-        
+                        dr = DiagnosticResult.verified(
+                            "Expression evaluated",
+                            developer_fields={"is_valid": True, "value": value, "exact_value": str(exact), "simplified": str(simplified), "original": str(parsed)},
+                            evidence={"exact_value": str(exact), "simplified": str(simplified)},
+                        )
+                    except (TypeError, ValueError, OverflowError):
+                        dr = DiagnosticResult.unverifiable(
+                            "Expression is not numeric",
+                            developer_fields={"is_valid": False, "simplified": str(simplified), "original": str(parsed)},
+                        )
+
+        dr = _enforce_trust(dr, query=expression)
+
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=expression,
-            result=str(result),
-            is_verified=result.get("is_valid", False),
+            result=str(dr.to_dict()),
+            is_verified=dr.is_authoritative,
             domain="MATH"
         )
-        session.add(log)
-        session.commit()
-        
-        return result
-        
+        _safe_commit_log(session, log)
+
+        return _merge_response(dr)
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Math verification error: {redact_pii(str(e))}", exc_info=False)
-        return {
-            "status": "ERROR",
-            "error": INTERNAL_VERIFICATION_ERROR,
-            "is_valid": False
-        }
+        dr = DiagnosticResult.blocked(
+            INTERNAL_VERIFICATION_ERROR,
+            {"constraint_id": "api.math.execution_error"},
+        )
+        dr = _enforce_trust(dr, query=expression)
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=expression,
+            result=str(dr.to_dict()),
+            is_verified=False,
+            domain="MATH"
+        )
+        _safe_commit_log(session, log)
+        return _merge_response(dr)
 
 
-@app.post("/verify/sql")
+@app.post(
+    "/verify/sql",
+    responses={400: {"description": "Missing required field: 'query' or 'schema_ddl'"}},
+)
 async def verify_sql(
     request: dict,
     tenant: TenantContext = Depends(get_current_tenant),
     session: Session = Depends(get_session)
 ):
-    """
-    Verify SQL query against a provided schema.
-    
-    Request body:
-    {
-        "query": "SELECT * FROM users",
-        "schema_ddl": "CREATE TABLE users (id INT, name TEXT)",
-        "dialect": "sqlite" (optional, default: sqlite)
-    }
-    """
     check_rate_limit(tenant.api_key)
-    
+    query = request.get("query")
+    if not query:
+        raise HTTPException(status_code=400, detail="Missing 'query'")
+    schema_ddl = request.get("schema_ddl")
+    if not schema_ddl:
+        raise HTTPException(status_code=400, detail="Missing 'schema_ddl'")
+
     try:
         from qwed_new.core.sql_verifier import SQLVerifier
         verifier = SQLVerifier()
-        
-        query = request.get("query")
-        schema_ddl = request.get("schema_ddl")
+
         dialect = request.get("dialect", "sqlite")
-        
-        if not query or not schema_ddl:
-            raise HTTPException(status_code=400, detail="Missing 'query' or 'schema_ddl'")
-        
+
         result = verifier.verify_sql(query, schema_ddl, dialect=dialect)
-        
+
+        is_valid = result.get("is_valid", False)
+        if is_valid:
+            dr = DiagnosticResult.verified(
+                "SQL query is valid for the given schema",
+                developer_fields=result,
+                evidence={"query": query, "dialect": dialect, "analysis": result.get("analysis", "")},
+            )
+        else:
+            dr = DiagnosticResult.blocked(
+                result.get("message", "SQL query is invalid or unsafe"),
+                developer_fields=result,
+            )
+        dr = _enforce_trust(dr, query=query)
+
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=query,
-            result=str(result),
-            is_verified=result.get("is_valid", False),
+            result=str(dr.to_dict()),
+            is_verified=dr.is_authoritative,
             domain="SQL"
         )
-        session.add(log)
-        session.commit()
-        
-        return result
-        
+        _safe_commit_log(session, log)
+
+        return _merge_response(dr)
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"SQL verification error: {redact_pii(str(e))}", exc_info=False)
-        return {
-            "status": "ERROR",
-            "error": INTERNAL_VERIFICATION_ERROR,
-            "is_valid": False
-        }
+        dr = DiagnosticResult.blocked(
+            INTERNAL_VERIFICATION_ERROR,
+            {"constraint_id": "api.sql.execution_error", "is_valid": False},
+        )
+        dr = _enforce_trust(dr, query=query)
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=query,
+            result=str(dr.to_dict()),
+            is_verified=False,
+            domain="SQL"
+        )
+        _safe_commit_log(session, log)
+        return _merge_response(dr)
 
 
 @app.post("/verify/image")
@@ -697,30 +824,39 @@ async def verify_image(
         # Verify claim against image
         verifier = ImageVerifier(use_vlm_fallback=False)
         result = verifier.verify_image(image_bytes, claim)
-        
-        # Log the verification
+
+        dr = result
+        dr = _enforce_trust(dr, query=claim)
+
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=f"Image claim: {claim}",
-            result=str(result),
-            is_verified=result.is_verified,
+            result=str(dr.to_dict()),
+            is_verified=dr.is_authoritative,
             domain="IMAGE"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
 
-        return result.to_dict()
-        
+        return _merge_response(dr)
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Image verification error: {redact_pii(str(e))}", exc_info=False)
-        return {
-            "status": "ERROR",
-            "error": "Internal processing error",
-            "verdict": "INCONCLUSIVE",
-            "confidence": 0.0
-        }
+        dr = DiagnosticResult.blocked(
+            INTERNAL_PROCESSING_ERROR,
+            {"constraint_id": "api.image.execution_error", "verdict": "INCONCLUSIVE", "confidence": 0.0},
+        )
+        dr = _enforce_trust(dr, query=claim)
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=f"Image claim: {claim}",
+            result=str(dr.to_dict()),
+            is_verified=False,
+            domain="IMAGE"
+        )
+        _safe_commit_log(session, log)
+        return _merge_response(dr)
 
 class RAGVerifyRequest(BaseModel):
     target_document_id: str
@@ -782,37 +918,66 @@ async def verify_rag(
                 retrieved_chunks=request.chunks
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            logger.warning("RAG config error: %s", redact_pii(str(exc)))
+            dr = DiagnosticResult.unverifiable(
+                "RAG configuration error",
+                developer_fields={"constraint_id": "api.rag.config_error"},
+            )
+            dr = _enforce_trust(dr, query=request.target_document_id)
+            log = VerificationLog(
+                organization_id=tenant.organization_id,
+                query=f"RAG Document Verify: {request.target_document_id}",
+                result=str(dr.to_dict()),
+                is_verified=False,
+                domain="RAG"
+            )
+            _safe_commit_log(session, log)
+            return _merge_response(dr)
         
-        audit_result = {
-            "verified": result.get("verified", False),
-            "risk": result.get("risk"),
-            "drm_rate": result.get("drm_rate"),
-            "chunks_checked": result.get("chunks_checked"),
-            "mismatched_count": result.get("mismatched_count"),
-        }
+        is_verified = result.get("verified", False)
+        if is_verified:
+            dr = DiagnosticResult.verified(
+                "RAG context verified",
+                developer_fields=result,
+                evidence={"verified": True, "drm_rate": result.get("drm_rate")},
+            )
+        else:
+            dr = DiagnosticResult.unverifiable(
+                "RAG context mismatch detected",
+                developer_fields=result,
+            )
+        dr = _enforce_trust(dr, query=request.target_document_id)
 
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=f"RAG Document Verify: {request.target_document_id}",
-            result=str(audit_result),
-            is_verified=result.get("verified", False),
+            result=str(dr.to_dict()),
+            is_verified=dr.is_authoritative,
             domain="RAG"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
         
-        return result
+        return _merge_response(dr)
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"RAG verification error: {redact_pii(str(e))}", exc_info=False)
-        return {
-            "status": "ERROR",
-            "error": INTERNAL_PROCESSING_ERROR,
-            "verified": False
-        }
+        doc_id = getattr(request, 'target_document_id', 'unknown')
+        dr = DiagnosticResult.blocked(
+            INTERNAL_PROCESSING_ERROR,
+            {"constraint_id": "api.rag.execution_error", "verified": False},
+        )
+        dr = _enforce_trust(dr, query=doc_id)
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=f"RAG Document Verify: {doc_id}",
+            result=str(dr.to_dict()),
+            is_verified=False,
+            domain="RAG"
+        )
+        _safe_commit_log(session, log)
+        return _merge_response(dr)
 
 class ProcessVerifyRequest(BaseModel):
     trace: str
@@ -854,28 +1019,49 @@ async def verify_process(
                 status_code=400,
                 detail="Invalid mode. Use 'irac' or 'milestones'."
             )
+        
+        if result.get("verified"):
+            dr = DiagnosticResult.verified(
+                "Process verification passed",
+                developer_fields=result,
+                evidence={"mode": request.mode, "verified": True},
+            )
+        else:
+            dr = DiagnosticResult.unverifiable(
+                "Process verification did not pass",
+                developer_fields=result,
+            )
+        dr = _enforce_trust(dr, query=request.trace)
             
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=f"Process Verification ({request.mode})",
-            result=str(result),
-            is_verified=result.get("verified", False),
+            result=str(dr.to_dict()),
+            is_verified=dr.is_authoritative,
             domain="PROCESS"
         )
-        session.add(log)
-        session.commit()
+        _safe_commit_log(session, log)
         
-        return result
+        return _merge_response(dr)
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Process verification error: {redact_pii(str(e))}", exc_info=False)
-        return {
-            "status": "ERROR",
-            "error": INTERNAL_PROCESSING_ERROR,
-            "verified": False
-        }
+        dr = DiagnosticResult.blocked(
+            INTERNAL_PROCESSING_ERROR,
+            {"constraint_id": "api.process.execution_error", "verified": False},
+        )
+        dr = _enforce_trust(dr, query=request.trace)
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=f"Process Verification ({request.mode})",
+            result=str(dr.to_dict()),
+            is_verified=False,
+            domain="PROCESS"
+        )
+        _safe_commit_log(session, log)
+        return _merge_response(dr)
 
 
 # ============================================================
@@ -1092,7 +1278,10 @@ async def _process_agent_verification(agent: Agent, request: AgentVerifyRequest)
         logger.error(f"Agent verification failed: {redact_pii(str(e))}", exc_info=False)
         raise HTTPException(status_code=500, detail="Internal agent verification error") from e
 
-@app.post("/agents/register")
+@app.post(
+    "/agents/register",
+    responses={500: {"description": "Agent registration failed due to an internal error"}},
+)
 async def register_agent(
     request: AgentRegistrationRequest,
     tenant: TenantContext = Depends(get_current_tenant),
@@ -1123,7 +1312,8 @@ async def register_agent(
             "message": "Agent registered successfully. Store the agent_token securely."
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Agent registration error: {redact_pii(str(e))}", exc_info=False)
+        raise HTTPException(status_code=500, detail="Agent registration failed") from e
 
 @app.post(
     "/agents/{agent_id}/verify",
@@ -1333,30 +1523,96 @@ async def verify_with_consensus(
     )
 
     if result.agreement_status == "blocked_secure_execution":
-        raise HTTPException(status_code=503, detail="Service temporarily unavailable")
-    
-    # Check if confidence meets requirement
-    if result.confidence < request.min_confidence:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Confidence ({result.confidence:.1%}) below required minimum ({request.min_confidence:.1%})"
+        dr = DiagnosticResult.blocked(
+            "Consensus verification: blocked — secure execution",
+            developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
         )
-    
-    # Log to database
+        dr = _enforce_trust(dr, query=request.query)
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=request.query,
+            result=f"Consensus: {result.agreement_status}",
+            is_verified=dr.is_authoritative,
+            domain="CONSENSUS"
+        )
+        _safe_commit_log(session, log)
+        return _merge_response(dr)
+
+    # All engines blocked — preserve BLOCKED status (fail-closed)
+    if result.agreement_status == "blocked":
+        dr = DiagnosticResult.blocked(
+            "Consensus verification: all engines blocked",
+            developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
+        )
+        dr = _enforce_trust(dr, query=request.query)
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=request.query,
+            result=f"Consensus: {result.agreement_status}",
+            is_verified=dr.is_authoritative,
+            domain="CONSENSUS"
+        )
+        _safe_commit_log(session, log)
+        return _merge_response(dr)
+
+    if result.confidence < request.min_confidence:
+        dr = DiagnosticResult.unverifiable(
+            f"Confidence ({result.confidence:.1%}) below required minimum ({request.min_confidence:.1%})",
+            developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used, "min_confidence": request.min_confidence},
+        )
+        dr = _enforce_trust(dr, query=request.query)
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=request.query,
+            result=f"Consensus: {result.agreement_status}, Confidence: {result.confidence:.1%}",
+            is_verified=dr.is_authoritative,
+            domain="CONSENSUS"
+        )
+        _safe_commit_log(session, log)
+        return _merge_response(dr)
+
+    if result.agreement_status == "unanimous":
+        if hasattr(result, "status") and result.status == "BLOCKED":
+            dr = DiagnosticResult.blocked(
+                "Consensus verification: blocked",
+                developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
+            )
+        elif hasattr(result, "status") and result.status == "UNVERIFIABLE":
+            dr = DiagnosticResult.unverifiable(
+                "Consensus verification: incomplete — some engines blocked",
+                developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
+            )
+        else:
+            dr = DiagnosticResult.verified(
+                "Consensus verification: unanimous",
+                developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
+                evidence={"agreement_status": result.agreement_status, "confidence": result.confidence},
+            )
+    elif result.agreement_status == "majority":
+        dr = DiagnosticResult.unverifiable(
+            "Consensus verification: majority agreement",
+            developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
+        )
+    else:
+        dr = DiagnosticResult.unverifiable(
+            "Consensus verification: no agreement",
+            developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
+        )
+    dr = _enforce_trust(dr, query=request.query)
+
     log = VerificationLog(
         organization_id=tenant.organization_id,
         query=request.query,
         result=f"Consensus: {result.agreement_status}, Confidence: {result.confidence:.1%}",
-        is_verified=(result.confidence >= request.min_confidence),
+        is_verified=dr.is_authoritative,
         domain="CONSENSUS"
     )
-    session.add(log)
-    session.commit()
-    
+    _safe_commit_log(session, log)
+
     # Format response
-    return {
+    response = {
         "final_answer": result.final_answer,
-        "confidence": round(result.confidence * 100, 2),  # Convert to percentage
+        "confidence": round(result.confidence, 4),
         "engines_used": result.engines_used,
         "agreement_status": result.agreement_status,
         "verification_chain": [
@@ -1364,15 +1620,16 @@ async def verify_with_consensus(
                 "engine": r.engine_name,
                 "method": r.method,
                 "result": str(r.result),
-                "confidence": round(r.confidence * 100, 2),
+                "confidence": round(r.confidence, 4),
                 "latency_ms": round(r.latency_ms, 2),
-                "success": r.success
+                "success": r.success,
             }
             for r in result.verification_chain
         ],
         "total_latency_ms": round(result.total_latency_ms, 2),
-        "meets_requirement": result.confidence >= request.min_confidence
+        "meets_requirement": result.confidence >= request.min_confidence,
     }
+    return _merge_response(dr) | response
 # --- Enterprise Security Endpoints (Week 2) ---
 
 from qwed_new.core.compliance_exporter import ComplianceExporter
