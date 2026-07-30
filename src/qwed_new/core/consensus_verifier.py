@@ -79,7 +79,8 @@ class ConsensusResult:
             "confidence": self.confidence,
             "engines_used": self.engines_used,
         }
-        if self.status is DiagnosticStatus.VERIFIED:
+        status_val = self.status.value if isinstance(self.status, DiagnosticStatus) else str(self.status)
+        if status_val == DiagnosticStatus.VERIFIED.value:
             return DiagnosticResult.verified(
                 "Consensus verification: unanimous",
                 developer_fields=developer_fields,
@@ -88,17 +89,20 @@ class ConsensusResult:
                     "confidence": self.confidence,
                 },
             )
-        elif self.status is DiagnosticStatus.BLOCKED:
+        elif status_val == DiagnosticStatus.BLOCKED.value:
             return DiagnosticResult.blocked(
                 "Consensus verification: blocked",
                 developer_fields=developer_fields,
             )
         else:
-            msg = "Consensus verification: no agreement"
             if self.agreement_status == "majority":
                 msg = "Consensus verification: majority agreement"
-            elif self.status is DiagnosticStatus.UNVERIFIABLE:
+            elif self.agreement_status == "split":
+                msg = "Consensus verification: no agreement"
+            elif status_val == DiagnosticStatus.UNVERIFIABLE.value:
                 msg = "Consensus verification: incomplete — some engines blocked"
+            else:
+                msg = "Consensus verification: no agreement"
             return DiagnosticResult.unverifiable(
                 msg,
                 developer_fields=developer_fields,
@@ -847,6 +851,7 @@ class ConsensusVerifier:
                 "agreement_status": status,
                 "confidence": confidence,
                 "engines_used": len(successful),
+                "answer": str(answer_values[best_answer]),
                 "chain": [
                     {"engine": r.engine_name, "method": r.method, "confidence": r.confidence}
                     for r in successful

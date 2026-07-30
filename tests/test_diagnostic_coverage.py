@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 from fastapi import HTTPException
 
 from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
-from qwed_new.core.consensus_verifier import ConsensusResult
 
 
 @pytest.fixture
