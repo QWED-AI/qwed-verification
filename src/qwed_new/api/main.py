@@ -659,11 +659,10 @@ async def verify_math(
                         developer_fields={"is_valid": True, "value": value, "exact_value": str(exact), "simplified": str(simplified), "original": str(parsed)},
                         evidence={"exact_value": str(exact), "simplified": str(simplified)},
                     )
-                except Exception:
-                    dr = DiagnosticResult.verified(
-                        "Expression simplified",
-                        developer_fields={"is_valid": True, "simplified": str(simplified), "original": str(parsed), "is_symbolic": True},
-                        evidence={"simplified": str(simplified)},
+                except (TypeError, ValueError):
+                    dr = DiagnosticResult.unverifiable(
+                        "Expression is not numeric",
+                        developer_fields={"is_valid": False, "simplified": str(simplified), "original": str(parsed)},
                     )
 
         dr = _enforce_trust(dr, query=expression)
