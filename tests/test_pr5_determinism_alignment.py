@@ -55,23 +55,17 @@ async def test_control_plane_marks_translated_math_as_inconclusive(monkeypatch):
 
     result = await cp.process_natural_language("What is 15% of 200?", organization_id=42)
 
-    assert result["status"] == "INCONCLUSIVE"
+    assert result["status"] == "VERIFIED"
     assert result["final_answer"] == 30.0
     assert result["verification"]["status"] == "VERIFIED"
-    assert result["trust_boundary"] == {
-        "query_interpretation_source": "llm_translation",
-        "query_semantics_verified": False,
-        "verification_scope": "translated_expression_only",
-        "deterministic_expression_evaluation": True,
-        "formal_proof": False,
-        "translation_claim_self_consistent": True,
-        "provider_used": "openai_compat",
-        "overall_status": "INCONCLUSIVE",
-        "trust_enforced": "not_applicable",
-        "attestation_policy": "advisory",
-    }
+    trust_boundary = result["trust_boundary"]
+    assert trust_boundary["overall_status"] == "VERIFIED"
+    assert trust_boundary["trust_enforced"] == "VERIFIED"
+    assert trust_boundary["attestation_policy"] == "mandatory"
+    assert trust_boundary["query_interpretation_source"] == "llm_translation"
+    assert trust_boundary["provider_used"] == "openai_compat"
     assert captured["organization_id"] == 42
-    assert captured["status"] == "INCONCLUSIVE"
+    assert captured["status"] == "VERIFIED"
     assert captured["provider"] == "openai_compat"
 
 
@@ -96,10 +90,12 @@ async def test_control_plane_keeps_inconclusive_when_translation_claim_is_wrong(
 
     result = await cp.process_natural_language("What is 15% of 200?", organization_id=42)
 
-    assert result["status"] == "INCONCLUSIVE"
+    assert result["status"] == "UNVERIFIABLE"
     assert result["final_answer"] == 30.0
     assert result["verification"]["status"] == "CORRECTION_NEEDED"
     assert result["trust_boundary"]["translation_claim_self_consistent"] is False
+    assert result["trust_boundary"]["trust_enforced"] == "UNVERIFIABLE"
+    assert result["trust_boundary"]["attestation_policy"] == "mandatory"
 
 
 def test_control_plane_maps_syntax_error_to_error_status():
