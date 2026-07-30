@@ -1599,6 +1599,7 @@ async def verify_with_consensus(
                 "confidence": round(r.confidence, 4),
                 "latency_ms": round(r.latency_ms, 2),
                 "success": r.success,
+                "status": r.status,
             }
             for r in result.verification_chain
         ],
