@@ -238,7 +238,7 @@ async def verify_natural_language(
         organization_id=tenant.organization_id,
         user_id=tenant.user_id if hasattr(tenant, 'user_id') else None,
         query=request.query,
-        result=str(result),
+        result=str(dr.to_dict()),
         is_verified=dr.is_authoritative,
         domain="MATH"
     )
@@ -290,7 +290,7 @@ async def verify_logic(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=request.query,
-            result=str(result),
+            result=str(dr.to_dict()),
             is_verified=dr.is_authoritative,
             domain="LOGIC"
         )
@@ -356,20 +356,31 @@ async def verify_stats(
         verifier = StatsVerifier()
         
         result = verifier.verify_stats(query, df, provider=None)
-        if result.get("status") == "BLOCKED" and result.get("error") == SECURE_STATS_BLOCKED_CODE:
-            raise HTTPException(status_code=503, detail="Service temporarily unavailable")
-        if result.get("status") == "BLOCKED":
-            raise HTTPException(status_code=403, detail="Verification blocked by security policy")
 
         if result.get("status") == "SUCCESS":
             dr = DiagnosticResult.verified(
                 "Statistical analysis executed",
                 developer_fields=result,
-                evidence=result,
+                evidence={"status": "SUCCESS", "analysis": str(result.get("analysis", ""))},
+            )
+        elif result.get("status") == "BLOCKED" and result.get("error") == SECURE_STATS_BLOCKED_CODE:
+            dr = DiagnosticResult.blocked(
+                "Service temporarily unavailable",
+                developer_fields=result,
+            )
+        elif result.get("status") == "BLOCKED":
+            dr = DiagnosticResult.blocked(
+                "Verification blocked by security policy",
+                developer_fields=result,
+            )
+        elif result.get("status") in ("ERROR", "EXECUTION_FAILED"):
+            dr = DiagnosticResult.unverifiable(
+                result.get("message", "Statistical analysis failed"),
+                developer_fields=result,
             )
         else:
             dr = DiagnosticResult.blocked(
-                result.get("message", "Statistical analysis failed"),
+                "Statistical analysis failed",
                 developer_fields=result,
             )
         dr = _enforce_trust(dr, query=query)
@@ -903,37 +914,67 @@ async def verify_rag(
             )
         except ValueError as exc:
             logger.warning("RAG config error: %s", redact_pii(str(exc)))
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            dr = DiagnosticResult.unverifiable(
+                "RAG configuration error",
+                developer_fields={"constraint_id": "api.rag.config_error", "detail": str(exc)},
+            )
+            dr = _enforce_trust(dr, query=request.target_document_id)
+            log = VerificationLog(
+                organization_id=tenant.organization_id,
+                query=f"RAG Document Verify: {request.target_document_id}",
+                result=str(dr.to_dict()),
+                is_verified=False,
+                domain="RAG"
+            )
+            session.add(log)
+            session.commit()
+            return _merge_response(dr)
         
-        audit_result = {
-            "verified": result.get("verified", False),
-            "risk": result.get("risk"),
-            "drm_rate": result.get("drm_rate"),
-            "chunks_checked": result.get("chunks_checked"),
-            "mismatched_count": result.get("mismatched_count"),
-        }
+        is_verified = result.get("verified", False)
+        if is_verified:
+            dr = DiagnosticResult.verified(
+                "RAG context verified",
+                developer_fields=result,
+                evidence={"verified": True, "drm_rate": result.get("drm_rate")},
+            )
+        else:
+            dr = DiagnosticResult.unverifiable(
+                "RAG context mismatch detected",
+                developer_fields=result,
+            )
+        dr = _enforce_trust(dr, query=request.target_document_id)
 
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=f"RAG Document Verify: {request.target_document_id}",
-            result=str(audit_result),
-            is_verified=result.get("verified", False),
+            result=str(dr.to_dict()),
+            is_verified=dr.is_authoritative,
             domain="RAG"
         )
         session.add(log)
         session.commit()
         
-        return result
+        return _merge_response(dr)
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"RAG verification error: {redact_pii(str(e))}", exc_info=False)
-        return {
-            "status": "ERROR",
-            "error": INTERNAL_PROCESSING_ERROR,
-            "verified": False
-        }
+        dr = DiagnosticResult.blocked(
+            INTERNAL_PROCESSING_ERROR,
+            {"constraint_id": "api.rag.execution_error", "verified": False},
+        )
+        dr = _enforce_trust(dr, query=getattr(request, 'target_document_id', 'unknown'))
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=f"RAG Document Verify: {request.target_document_id}",
+            result=str(dr.to_dict()),
+            is_verified=False,
+            domain="RAG"
+        )
+        session.add(log)
+        session.commit()
+        return _merge_response(dr)
 
 class ProcessVerifyRequest(BaseModel):
     trace: str

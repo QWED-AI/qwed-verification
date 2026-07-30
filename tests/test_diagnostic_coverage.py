@@ -4,7 +4,7 @@ Targets uncovered code paths reported by SonarQube for #264.
 """
 import os
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock, sentinel
+from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 from fastapi import HTTPException
 
@@ -94,6 +94,7 @@ def test_verify_natural_language_internal_error(client):
     data = response.json()
     assert data["status"] == "UNVERIFIABLE"
     assert data["proof_ref"] is None
+    assert "Engine down" not in response.text
 
 
 def test_verify_logic_sat_path(client):
@@ -144,7 +145,7 @@ def test_verify_logic_unsat_path(client):
     assert data["proof_ref"] is None
 
 
-def test_verify_stats_success_unverifiable(client):
+def test_verify_stats_success_verified(client):
     """Cover stats SUCCESS -> VERIFIED (execution result IS the evidence)."""
     with patch("qwed_new.core.stats_verifier.StatsVerifier.verify_stats", return_value={"status": "SUCCESS", "analysis": "mean=2.0"}), \
          patch("qwed_new.api.main.check_rate_limit"):
@@ -392,9 +393,9 @@ def test_get_optional_api_key_record_success():
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = mock_api_key
 
-    with patch("qwed_new.api.main.hash_api_key", return_value="hashed_value"):
+    with patch("qwed_new.api.main.hash_api_key", return_value="QWED_TEST_VALUE"):
         result = get_optional_api_key_record(
-            x_api_key="sk-test-key",
+            x_api_key="QWED_TEST_VALUE",
             session=mock_session,
         )
 
