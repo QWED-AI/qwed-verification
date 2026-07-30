@@ -118,8 +118,10 @@ def test_stats_api_masks_secure_runtime_unavailability(client):
             headers={"x-api-key": "fake-key"},
         )
 
-    assert response.status_code == 503
-    assert response.json()["detail"] == "Service temporarily unavailable"
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "BLOCKED"
+    assert data["agent_message"] == "Service temporarily unavailable"
 
 
 def test_stats_api_preserves_security_policy_blocks(client):
@@ -135,8 +137,10 @@ def test_stats_api_preserves_security_policy_blocks(client):
             headers={"x-api-key": "fake-key"},
         )
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Verification blocked by security policy"
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "BLOCKED"
+    assert data["agent_message"] == "Verification blocked by security policy"
 
 
 def test_consensus_code_engine_requires_secure_executor():

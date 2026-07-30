@@ -214,6 +214,7 @@ async def verify_natural_language(
 ):
     check_rate_limit(tenant.api_key)
 
+    dr = None
     try:
         result = await control_plane.process_natural_language(
             request.query,
@@ -222,16 +223,20 @@ async def verify_natural_language(
         )
     except Exception as e:
         logger.error("Natural language verification error: %s", redact_pii(str(e)), exc_info=False)
-        result = {"error": INTERNAL_VERIFICATION_ERROR}
-
-    verification_result = result.get("verification", {})
-    try:
-        dr = DiagnosticResult.from_legacy_dict(verification_result, engine="math")
-    except ValueError:
-        dr = DiagnosticResult.unverifiable(
-            "Verification result unavailable — legacy engine did not retain proof artifacts",
-            {"constraint_id": "api.natural_language.legacy_conversion_failed", "legacy_status": verification_result.get("status")},
+        dr = DiagnosticResult.blocked(
+            INTERNAL_VERIFICATION_ERROR,
+            {"constraint_id": "api.natural_language.execution_error"},
         )
+
+    if dr is None:
+        verification_result = result.get("verification", {})
+        try:
+            dr = DiagnosticResult.from_legacy_dict(verification_result, engine="math")
+        except ValueError:
+            dr = DiagnosticResult.unverifiable(
+                "Verification result unavailable — legacy engine did not retain proof artifacts",
+                {"constraint_id": "api.natural_language.legacy_conversion_failed", "legacy_status": verification_result.get("status")},
+            )
     dr = _enforce_trust(dr, query=request.query)
 
     log = VerificationLog(
@@ -705,6 +710,8 @@ async def verify_sql(
 ):
     check_rate_limit(tenant.api_key)
     query = request.get("query")
+    if not query:
+        raise HTTPException(status_code=400, detail="Missing 'query'")
 
     try:
         from qwed_new.core.sql_verifier import SQLVerifier
@@ -713,8 +720,8 @@ async def verify_sql(
         schema_ddl = request.get("schema_ddl")
         dialect = request.get("dialect", "sqlite")
 
-        if not query or not schema_ddl:
-            raise HTTPException(status_code=400, detail="Missing 'query' or 'schema_ddl'")
+        if not schema_ddl:
+            raise HTTPException(status_code=400, detail="Missing 'schema_ddl'")
 
         result = verifier.verify_sql(query, schema_ddl, dialect=dialect)
 
@@ -916,7 +923,7 @@ async def verify_rag(
             logger.warning("RAG config error: %s", redact_pii(str(exc)))
             dr = DiagnosticResult.unverifiable(
                 "RAG configuration error",
-                developer_fields={"constraint_id": "api.rag.config_error", "detail": str(exc)},
+                developer_fields={"constraint_id": "api.rag.config_error"},
             )
             dr = _enforce_trust(dr, query=request.target_document_id)
             log = VerificationLog(

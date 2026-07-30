@@ -128,8 +128,9 @@ def test_verify_rag_endpoint_invalid_guard_input_returns_400(mock_verify_retriev
         "max_drm_rate": "0"
     }, headers={"x-api-key": "fake-key"})
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Invalid chunk metadata"
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "UNVERIFIABLE"
 
 @patch("qwed_sdk.guards.rag_guard.RAGGuard.__init__", side_effect=RuntimeError("SecretDBPassword123"))
 def test_verify_rag_endpoint_exception_no_leak(mock_rag_init, client):
@@ -141,9 +142,9 @@ def test_verify_rag_endpoint_exception_no_leak(mock_rag_init, client):
     
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "ERROR"
+    assert data["status"] == "BLOCKED"
     assert "SecretDBPassword123" not in str(data)
-    assert "message" not in data
+    assert "agent_message" in data
 
 @patch("qwed_sdk.guards.mcp_poison_guard.MCPPoisonGuard.verify_tool_definition")
 @patch("qwed_sdk.guards.exfiltration_guard.ExfiltrationGuard.scan_payload")

@@ -82,7 +82,7 @@ def test_verify_natural_language_legacy_unrecognized(client):
 
 
 def test_verify_natural_language_internal_error(client):
-    """Cover process_natural_language exception -> fail-closed UNVERIFIABLE."""
+    """Cover process_natural_language exception -> BLOCKED."""
     with patch("qwed_new.api.main.control_plane.process_natural_language", new_callable=AsyncMock, side_effect=Exception("Engine down")), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
@@ -92,7 +92,8 @@ def test_verify_natural_language_internal_error(client):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "UNVERIFIABLE"
+    assert data["status"] == "BLOCKED"
+    assert data["agent_message"] == "Internal verification error"
     assert data["proof_ref"] is None
     assert "Engine down" not in response.text
 
@@ -393,9 +394,9 @@ def test_get_optional_api_key_record_success():
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = mock_api_key
 
-    with patch("qwed_new.api.main.hash_api_key", return_value="QWED_TEST_VALUE"):
+    with patch("qwed_new.api.main.hash_api_key", return_value="test-hash-0000"):
         result = get_optional_api_key_record(
-            x_api_key="QWED_TEST_VALUE",
+            x_api_key="test-key-0000",
             session=mock_session,
         )
 
