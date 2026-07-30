@@ -130,9 +130,7 @@ class ControlPlane:
                 expression=task.expression,
                 expected_value=task.claimed_answer
             )
-            response_status = self._determine_math_response_status(verification_result)
             trust_boundary = self._build_math_trust_boundary(provider, verification_result)
-            trust_boundary["overall_status"] = response_status
 
             # 4.5 Trust Boundary Enforcement (Issue #191 / #265)
             # Attestation is always required — advisory mode was a
@@ -142,7 +140,8 @@ class ControlPlane:
                 # VERIFIED requires proof_ref. Build DiagnosticResult.verified()
                 # from the computation evidence and issue an attestation.
                 evidence = {
-                    "expression": verification_result.get("calculated_value"),
+                    "expression": task.expression,
+                    "calculated_value": verification_result.get("calculated_value"),
                     "claimed_value": verification_result.get("claimed_value"),
                     "diff": verification_result.get("diff"),
                     "precision_mode": verification_result.get("precision_mode"),
@@ -169,11 +168,12 @@ class ControlPlane:
                         hashlib.sha256(query.encode()).hexdigest()[:16] if query else "unknown",
                         att_result.status.value,
                     )
-                    dr = DiagnosticResult.unverifiable(
+                    dr = DiagnosticResult.blocked(
                         "Attestation unavailable — cannot sign VERIFIED result",
                         developer_fields={"constraint_id": "api.attestation.signing_error"},
                     )
-                    enforced = enforce_trust_decision(dr, require_attestation=False, query=query)
+                    enforced = dr
+                    trust_boundary["attestation_error"] = att_result.error_code
                 else:
                     enforced = enforce_trust_decision(
                         dr,
@@ -181,8 +181,6 @@ class ControlPlane:
                         attestation_token=att_result.token,
                         query=query,
                     )
-                trust_boundary["trust_enforced"] = enforced.status.value
-                trust_boundary["attestation_policy"] = "mandatory"
             else:
                 # Non-VERIFIED path: convert legacy dict and enforce.
                 # from_legacy_dict raises only for VERIFIED without proof_ref,
@@ -193,8 +191,8 @@ class ControlPlane:
                     require_attestation=True,
                     query=query,
                 )
-                trust_boundary["trust_enforced"] = enforced.status.value
-                trust_boundary["attestation_policy"] = "mandatory"
+            trust_boundary["trust_enforced"] = enforced.status.value
+            trust_boundary["attestation_policy"] = "mandatory"
             response_status = enforced.status.value
             trust_boundary["overall_status"] = enforced.status.value
 
