@@ -215,6 +215,7 @@ async def verify_natural_language(
     check_rate_limit(tenant.api_key)
 
     dr = None
+    result = None
     try:
         result = await control_plane.process_natural_language(
             request.query,
@@ -442,15 +443,14 @@ async def verify_fact(
     check_rate_limit(tenant.api_key)
     claim = request.get("claim")
     context = request.get("context")
+    if not claim or not context:
+        raise HTTPException(status_code=400, detail="Missing 'claim' or 'context'")
 
     try:
         from qwed_new.core.fact_verifier import FactVerifier
         verifier = FactVerifier()
         
         provider = request.get("provider")
-        
-        if not claim or not context:
-            raise HTTPException(status_code=400, detail="Missing 'claim' or 'context'")
         
         result = verifier.verify_fact(claim, context, provider=provider)
 
@@ -585,6 +585,8 @@ async def verify_math(
 ):
     check_rate_limit(tenant.api_key)
     expression = request.get("expression")
+    if not expression:
+        raise HTTPException(status_code=400, detail="Missing 'expression'")
 
     try:
         import sympy
@@ -592,9 +594,6 @@ async def verify_math(
         from sympy import simplify, symbols, Eq, solve
 
         context_data = request.get("context", {})
-
-        if not expression:
-            raise HTTPException(status_code=400, detail="Missing 'expression'")
 
         if "=" in expression:
             left_str, right_str = expression.split("=", 1)
@@ -702,7 +701,10 @@ async def verify_math(
         return _merge_response(dr)
 
 
-@app.post("/verify/sql")
+@app.post(
+    "/verify/sql",
+    responses={400: {"description": "Missing required field: 'query' or 'schema_ddl'"}},
+)
 async def verify_sql(
     request: dict,
     tenant: TenantContext = Depends(get_current_tenant),

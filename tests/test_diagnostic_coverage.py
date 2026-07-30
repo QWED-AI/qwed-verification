@@ -394,9 +394,9 @@ def test_get_optional_api_key_record_success():
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = mock_api_key
 
-    with patch("qwed_new.api.main.hash_api_key", return_value="test-hash-0000"):
+    with patch("qwed_new.api.main.hash_api_key", return_value="test_hash"):
         result = get_optional_api_key_record(
-            x_api_key="test-key-0000",
+            x_api_key="test_value",
             session=mock_session,
         )
 
