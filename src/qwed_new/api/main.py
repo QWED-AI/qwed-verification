@@ -1025,28 +1025,51 @@ async def verify_process(
                 status_code=400,
                 detail="Invalid mode. Use 'irac' or 'milestones'."
             )
+        
+        if result.get("verified"):
+            dr = DiagnosticResult.verified(
+                "Process verification passed",
+                developer_fields=result,
+                evidence={"mode": request.mode, "verified": True},
+            )
+        else:
+            dr = DiagnosticResult.unverifiable(
+                "Process verification did not pass",
+                developer_fields=result,
+            )
+        dr = _enforce_trust(dr, query=request.trace)
             
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=f"Process Verification ({request.mode})",
-            result=str(result),
-            is_verified=result.get("verified", False),
+            result=str(dr.to_dict()),
+            is_verified=dr.is_authoritative,
             domain="PROCESS"
         )
         session.add(log)
         session.commit()
         
-        return result
+        return _merge_response(dr)
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Process verification error: {redact_pii(str(e))}", exc_info=False)
-        return {
-            "status": "ERROR",
-            "error": INTERNAL_PROCESSING_ERROR,
-            "verified": False
-        }
+        dr = DiagnosticResult.blocked(
+            INTERNAL_PROCESSING_ERROR,
+            {"constraint_id": "api.process.execution_error", "verified": False},
+        )
+        dr = _enforce_trust(dr, query=request.trace)
+        log = VerificationLog(
+            organization_id=tenant.organization_id,
+            query=f"Process Verification ({request.mode})",
+            result=str(dr.to_dict()),
+            is_verified=False,
+            domain="PROCESS"
+        )
+        session.add(log)
+        session.commit()
+        return _merge_response(dr)
 
 
 # ============================================================

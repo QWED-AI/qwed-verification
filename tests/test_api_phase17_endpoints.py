@@ -84,10 +84,9 @@ def test_verify_process_endpoint_exception_uses_verified_flag(mock_verify_irac, 
 
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "ERROR"
-    assert data["error"] == "Internal processing error"
+    assert data["status"] == "BLOCKED"
+    assert data["agent_message"] == "Internal processing error"
     assert data["verified"] is False
-    assert "is_valid" not in data
 
 @patch("qwed_sdk.guards.rag_guard.RAGGuard.verify_retrieval_context")
 def test_verify_rag_endpoint(mock_verify_retrieval_context, client):
