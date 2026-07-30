@@ -21,11 +21,9 @@ def test_verify_identity_sampling_fails_closed_without_formal_proof():
     assert result["method"] == "numerical_sampling_rejected"
 
 
-@pytest.mark.asyncio
-async def test_control_plane_marks_translated_math_as_inconclusive(monkeypatch):
+def _build_cp(monkeypatch, claimed_answer):
+    """Build a ControlPlane with all provider components mocked out."""
     cp = ControlPlane()
-    captured: dict[str, object] = {}
-
     monkeypatch.setattr(cp.security_gateway, "detect_advanced_injection", lambda _: (True, ""))
     monkeypatch.setattr(cp.policy, "check_policy", lambda _query, organization_id=None: (True, ""))
     monkeypatch.setattr(cp.router, "route", lambda _query, preferred_provider=None: "openai_compat")
@@ -35,11 +33,20 @@ async def test_control_plane_marks_translated_math_as_inconclusive(monkeypatch):
         "translate",
         lambda query, provider=None: MathVerificationTask(
             expression="0.15 * 200",
-            claimed_answer=30.0,
+            claimed_answer=claimed_answer,
             reasoning="15 percent is 0.15, multiplied by 200",
             confidence=0.99,
         ),
     )
+    return cp
+
+
+@pytest.mark.asyncio
+async def test_control_plane_marks_translated_math_as_verified(monkeypatch):
+    """Coordinated trust enforcement marks VERIFIED results with mandatory
+    attestation, proving the trust gate is no longer advisory-only (#265)."""
+    cp = _build_cp(monkeypatch, claimed_answer=30.0)
+    captured: dict[str, object] = {}
 
     def _track_request(*, organization_id, status, latency_ms, provider):
         captured.update(
@@ -53,53 +60,92 @@ async def test_control_plane_marks_translated_math_as_inconclusive(monkeypatch):
 
     monkeypatch.setattr(metrics_collector, "track_request", _track_request)
 
+    # Mock attestation — crypto availability is a deployment concern,
+    # not control plane orchestration behavior.
+    from qwed_new.core.attestation import AttestationResult, AttestationStatus
+    from qwed_new.core.diagnostics import DiagnosticResult
+    monkeypatch.setattr(
+        "qwed_new.core.control_plane.create_verification_attestation",
+        lambda **kwargs: AttestationResult(
+            status=AttestationStatus.ISSUED,
+            token="test-sentinel-token",
+            error_code=None,
+            error=None,
+        ),
+    )
+
+    captured_enforce_kwargs: dict = {}
+
+    def _mock_enforce(result, **kwargs):
+        captured_enforce_kwargs.update(kwargs)
+        return DiagnosticResult.verified(
+            "Expression verified successfully",
+            developer_fields={"mocked": True},
+            evidence={"status": "VERIFIED"},
+        )
+
+    monkeypatch.setattr("qwed_new.core.control_plane.enforce_trust_decision", _mock_enforce)
+
     result = await cp.process_natural_language("What is 15% of 200?", organization_id=42)
 
-    assert result["status"] == "INCONCLUSIVE"
+    assert result["status"] == "VERIFIED"
     assert result["final_answer"] == 30.0
     assert result["verification"]["status"] == "VERIFIED"
-    assert result["trust_boundary"] == {
-        "query_interpretation_source": "llm_translation",
-        "query_semantics_verified": False,
-        "verification_scope": "translated_expression_only",
-        "deterministic_expression_evaluation": True,
-        "formal_proof": False,
-        "translation_claim_self_consistent": True,
-        "provider_used": "openai_compat",
-        "overall_status": "INCONCLUSIVE",
-        "trust_enforced": "not_applicable",
-        "attestation_policy": "advisory",
-    }
+    trust_boundary = result["trust_boundary"]
+    assert trust_boundary["overall_status"] == "VERIFIED"
+    assert trust_boundary["trust_enforced"] == "VERIFIED"
+    assert trust_boundary["attestation_policy"] == "mandatory"
+    assert trust_boundary["query_interpretation_source"] == "llm_translation"
+    assert trust_boundary["provider_used"] == "openai_compat"
+    # Assert enforce_trust_decision was called with mandatory attestation args
+    assert captured_enforce_kwargs["require_attestation"] is True
+    assert captured_enforce_kwargs["attestation_token"] == "test-sentinel-token"
     assert captured["organization_id"] == 42
-    assert captured["status"] == "INCONCLUSIVE"
+    assert captured["status"] == "VERIFIED"
     assert captured["provider"] == "openai_compat"
 
 
 @pytest.mark.asyncio
-async def test_control_plane_keeps_inconclusive_when_translation_claim_is_wrong(monkeypatch):
-    cp = ControlPlane()
+async def test_control_plane_returns_unverifiable_when_translation_claim_is_wrong(monkeypatch):
+    cp = _build_cp(monkeypatch, claimed_answer=40.0)
 
-    monkeypatch.setattr(cp.security_gateway, "detect_advanced_injection", lambda _: (True, ""))
-    monkeypatch.setattr(cp.policy, "check_policy", lambda _query, organization_id=None: (True, ""))
-    monkeypatch.setattr(cp.router, "route", lambda _query, preferred_provider=None: "openai_compat")
-    monkeypatch.setattr(cp.output_sanitizer, "sanitize_output", lambda result, output_type, organization_id: result)
+    result = await cp.process_natural_language("What is 15% of 200?", organization_id=42)
+
+    assert result["status"] == "UNVERIFIABLE"
+    assert result["final_answer"] == 30.0
+    assert result["verification"]["status"] == "CORRECTION_NEEDED"
+    assert result["trust_boundary"]["translation_claim_self_consistent"] is False
+    assert result["trust_boundary"]["trust_enforced"] == "UNVERIFIABLE"
+    assert result["trust_boundary"]["attestation_policy"] == "mandatory"
+
+
+@pytest.mark.asyncio
+async def test_control_plane_attestation_failure_returns_blocked(monkeypatch):
+    """When attestation signing fails (e.g. crypto unavailable), the VERIFIED
+    result must downgrade to BLOCKED — fail-closed (#265)."""
+    cp = _build_cp(monkeypatch, claimed_answer=30.0)
+
+    from qwed_new.core.attestation import AttestationResult, AttestationStatus
     monkeypatch.setattr(
-        cp.translator,
-        "translate",
-        lambda query, provider=None: MathVerificationTask(
-            expression="0.15 * 200",
-            claimed_answer=40.0,
-            reasoning="Incorrectly interpreted result",
-            confidence=0.99,
+        "qwed_new.core.control_plane.create_verification_attestation",
+        lambda **kwargs: AttestationResult(
+            status=AttestationStatus.UNVERIFIABLE,
+            token=None,
+            error_code="CRYPTO_UNAVAILABLE",
+            error="cryptography/PyJWT package not installed",
         ),
     )
 
     result = await cp.process_natural_language("What is 15% of 200?", organization_id=42)
 
-    assert result["status"] == "INCONCLUSIVE"
+    assert result["status"] == "BLOCKED"
+    # final_answer retains the computed value for debugging,
+    # but BLOCKED status indicates it cannot be trusted
     assert result["final_answer"] == 30.0
-    assert result["verification"]["status"] == "CORRECTION_NEEDED"
-    assert result["trust_boundary"]["translation_claim_self_consistent"] is False
+    trust_boundary = result["trust_boundary"]
+    assert trust_boundary["trust_enforced"] == "BLOCKED"
+    assert trust_boundary["attestation_error"] == "CRYPTO_UNAVAILABLE"
+    assert trust_boundary["attestation_policy"] == "mandatory"
 
 
 def test_control_plane_maps_syntax_error_to_error_status():

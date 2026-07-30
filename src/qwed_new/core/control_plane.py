@@ -19,6 +19,7 @@ from qwed_new.core.observability import metrics_collector
 from qwed_new.core.security import EnhancedSecurityGateway, redact_pii
 from qwed_new.core.output_sanitizer import OutputSanitizer
 from qwed_new.core.diagnostics import DiagnosticResult, enforce_trust_decision
+from qwed_new.core.attestation import create_verification_attestation, AttestationStatus
 
 logger = logging.getLogger(__name__)
 
@@ -129,35 +130,72 @@ class ControlPlane:
                 expression=task.expression,
                 expected_value=task.claimed_answer
             )
-            response_status = self._determine_math_response_status(verification_result)
             trust_boundary = self._build_math_trust_boundary(provider, verification_result)
-            trust_boundary["overall_status"] = response_status
 
-            # 4.5 Trust Boundary Enforcement (Issue #191)
-            # Convert legacy dict to DiagnosticResult for enforcement.
-            # Advisory mode (require_attestation=False) until engines are
-            # fully migrated to DiagnosticResult.
-            try:
+            # 4.5 Trust Boundary Enforcement (Issue #191 / #265)
+            # Attestation is always required — advisory mode was a
+            # temporary migration measure (#265).
+            legacy_status = verification_result.get("status", "ERROR")
+            if legacy_status == "VERIFIED":
+                # VERIFIED requires proof_ref. Build DiagnosticResult.verified()
+                # from the computation evidence and issue an attestation.
+                evidence = {
+                    "expression": task.expression,
+                    "calculated_value": verification_result.get("calculated_value"),
+                    "claimed_value": verification_result.get("claimed_value"),
+                    "diff": verification_result.get("diff"),
+                    "precision_mode": verification_result.get("precision_mode"),
+                    "status": "VERIFIED",
+                }
+                dr = DiagnosticResult.verified(
+                    "Expression verified successfully",
+                    developer_fields=verification_result,
+                    evidence=evidence,
+                    proof_data=str(evidence),
+                )
+                # Issue attestation for the VERIFIED result
+                att_result = create_verification_attestation(
+                    status="VERIFIED",
+                    verified=True,
+                    engine="math",
+                    query=query,
+                    confidence=1.0,
+                    proof_data=str(evidence),
+                )
+                if att_result.status is not AttestationStatus.ISSUED:
+                    logger.warning(
+                        "trust_boundary.attestation_failed query_hash=%s status=%s",
+                        hashlib.sha256(query.encode()).hexdigest()[:16] if query else "unknown",
+                        att_result.status.value,
+                    )
+                    dr = DiagnosticResult.blocked(
+                        "Attestation unavailable — cannot sign VERIFIED result",
+                        developer_fields={"constraint_id": "api.attestation.signing_error"},
+                    )
+                    enforced = dr
+                    trust_boundary["attestation_error"] = att_result.error_code
+                else:
+                    enforced = enforce_trust_decision(
+                        dr,
+                        require_attestation=True,
+                        attestation_token=att_result.token,
+                        query=query,
+                    )
+            else:
+                # Non-VERIFIED path: convert legacy dict and enforce.
+                # from_legacy_dict raises only for VERIFIED without proof_ref,
+                # which is already handled above.
                 dr = DiagnosticResult.from_legacy_dict(verification_result, engine="math")
                 enforced = enforce_trust_decision(
                     dr,
-                    require_attestation=False,
+                    require_attestation=True,
                     query=query,
                 )
-                trust_boundary["trust_enforced"] = enforced.status.value
-                trust_boundary["attestation_policy"] = "advisory"
-            except ValueError as exc:
-                # Legacy VERIFIED results without proof_ref cannot be
-                # represented as DiagnosticResult (from_legacy_dict raises).
-                # Log the specific reason and mark enforcement as skipped.
-                logger.warning(
-                    "trust_boundary.enforcement_skipped query_hash=%s reason=from_legacy_dict error=%s",
-                    hashlib.sha256(query.encode()).hexdigest()[:16] if query else "unknown",
-                    exc,
-                )
-                trust_boundary["trust_enforced"] = "not_applicable"
-                trust_boundary["attestation_policy"] = "advisory"
-            
+            trust_boundary["trust_enforced"] = enforced.status.value
+            trust_boundary["attestation_policy"] = "mandatory"
+            response_status = enforced.status.value
+            trust_boundary["overall_status"] = enforced.status.value
+
             # 5. Response Construction
             response = {
                 "status": response_status,
