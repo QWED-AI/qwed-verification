@@ -502,11 +502,16 @@ class TestFactVerifierAdvisoryOnly:
     def setup_method(self):
         self.verifier = FactVerifier(use_llm_fallback=False)
 
-    def test_supported_verified(self):
-        """Deterministic SUPPORTED → VERIFIED with proof_ref."""
+    def test_supported_unverifiable_heuristic_only(self):
+        """Heuristic SUPPORTED → UNVERIFIABLE, never VERIFIED #267."""
         result = self.verifier.verify_fact("The sky is blue", "The sky is blue today")
-        assert result.is_verified
-        assert result.proof_ref is not None
+        assert result.status.value == "UNVERIFIABLE"
+        assert result.is_verified is False
+        assert result.proof_ref is None
+        assert result.developer_fields["deterministic_verdict"] == "SUPPORTED"
+        assert result.developer_fields["constraint_id"] == "fact_verifier.heuristic_supported"
+        # Heuristic verdict must live in advisory_checks, not in status (#267)
+        assert result.developer_fields["advisory_checks"][0].constraint_id == "fact_verifier.tfidf_cosine_similarity"
 
     def test_refuted_blocked(self):
         """REFUTED (negation conflict) → BLOCKED."""

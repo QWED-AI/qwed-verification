@@ -219,13 +219,33 @@ class FactVerifier:
         if advisory_checks:
             developer_fields["advisory_checks"] = advisory_checks
 
-        # Map deterministic verdict to DiagnosticResult
+        # Map deterministic verdict to DiagnosticResult.
+        # NOTE (#267): Heuristic analysis (TF-IDF cosine, keyword overlap,
+        # entity matching, negation detection) cannot produce VERIFIED.
+        # Two different claims with similar token distributions can yield
+        # the same heuristic verdict — advisory-only per QWED fail-closed contract.
         if verdict == "SUPPORTED":
-            evidence = {"citations": developer_fields["citations"], "reasoning": reasoning}
-            return DiagnosticResult.verified(
-                "Fact claim verified by deterministic analysis",
+            developer_fields["constraint_id"] = "fact_verifier.heuristic_supported"
+            advisory_checks.append(
+                AdvisoryCheck(
+                    name="heuristic_supported",
+                    advisory_only=True,
+                    constraint_id="fact_verifier.tfidf_cosine_similarity",
+                    details={
+                        "deterministic_verdict": verdict,
+                        # Reuse deterministic_confidence computed once upstream —
+                        # never re-round in detail blocks (avoids binary float drift).
+                        "confidence": str(developer_fields["deterministic_confidence"]),
+                        "reasoning": reasoning,
+                        "citations": developer_fields["citations"],
+                        "scores": developer_fields["scores"],
+                    },
+                )
+            )
+            developer_fields["advisory_checks"] = advisory_checks
+            return DiagnosticResult.unverifiable(
+                "Fact claim supported by heuristic analysis — not a deterministic proof",
                 developer_fields,
-                evidence,
             )
 
         if verdict == "REFUTED":
