@@ -105,6 +105,9 @@ class VerificationCache:
     - LRU eviction
     - TTL (time-to-live) support
     - Hit rate tracking
+
+    #274 tenant isolation: pass tenant_id to get/set/invalidate to isolate
+    cache keyspace per tenant. tenant_id=None preserves pre-#274 single-tenant hash.
     """
 
     def __init__(
@@ -124,21 +127,37 @@ class VerificationCache:
         self._hits = 0
         self._misses = 0
 
-    def _generate_key(self, dsl_code: str, variables: Optional[list] = None) -> str:
-        """Generate an unambiguous cache key from DSL code and optional variables."""
+    def _generate_key(self, dsl_code: str, variables: Optional[list] = None,
+                      tenant_id: Optional[str] = None) -> str:
+        """Generate an unambiguous cache key from DSL code and optional variables.
+
+        (#274) When tenant_id is None: uses the pre-#274 hash format ({"dsl":...,"vars":...}, no tenant marker) — same key as today. Explicit tenant_id adds "tenant" to the hash material, isolating keyspace per tenant.
+        """
         normalized = ' '.join(dsl_code.split())
         # Use a structured JSON object so "foo" + vars=[1] never collides with
-        # "foo[1]" + vars=None (plain string concatenation would cause that).
-        key_material = json.dumps(
-            {"dsl": normalized, "vars": variables},
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        if tenant_id is not None:
+            key_material = json.dumps(
+                {"tenant": tenant_id, "dsl": normalized, "vars": variables},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        else:
+            key_material = json.dumps(
+                {"dsl": normalized, "vars": variables},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
         return hashlib.sha256(key_material.encode()).hexdigest()[:32]
 
-    def get(self, dsl_code: str, variables: Optional[list] = None) -> Optional[Dict[str, Any]]:
+    def get(self, dsl_code: str, variables: Optional[list] = None,
+            tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Get cached result for DSL code.
+
+        Args:
+            dsl_code: QWED-DSL expression
+            variables: Variable declarations
+            tenant_id: Optional tenant identifier for multi-tenant key isolation (#274)
 
         Returns:
             Cached result dict or None if not found/expired
@@ -146,7 +165,7 @@ class VerificationCache:
         if not self.enabled:
             return None
 
-        key = self._generate_key(dsl_code, variables)
+        key = self._generate_key(dsl_code, variables, tenant_id)
 
         with self._lock:
             if key not in self._cache:
@@ -174,13 +193,21 @@ class VerificationCache:
         self,
         dsl_code: str,
         result: Dict[str, Any],
-        variables: Optional[list] = None
+        variables: Optional[list] = None,
+        tenant_id: Optional[str] = None,
     ) -> None:
-        """Cache a verification result."""
+        """Cache a verification result.
+
+        Args:
+            dsl_code: QWED-DSL expression
+            result: Verification result dict
+            variables: Variable declarations
+            tenant_id: Optional tenant identifier for multi-tenant key isolation (#274)
+        """
         if not self.enabled:
             return
 
-        key = self._generate_key(dsl_code, variables)
+        key = self._generate_key(dsl_code, variables, tenant_id)
 
         with self._lock:
             # If the key already exists, remove it first so the size
@@ -197,9 +224,10 @@ class VerificationCache:
                 created_at=time.time()
             )
 
-    def invalidate(self, dsl_code: str, variables: Optional[list] = None) -> bool:
+    def invalidate(self, dsl_code: str, variables: Optional[list] = None,
+                   tenant_id: Optional[str] = None) -> bool:
         """Remove a specific entry from cache."""
-        key = self._generate_key(dsl_code, variables)
+        key = self._generate_key(dsl_code, variables, tenant_id)
 
         with self._lock:
             if key in self._cache:
@@ -683,6 +711,11 @@ _cache_factory_lock = Lock()
 
 
 def _get_or_create_local_cache(tenant_id: Optional[int]) -> VerificationCache:
+    """Get a tenant-scoped VerificationCache singleton.
+
+    Factory creates one VerificationCache per tenant_id. tenant_id=None marks
+    the global single-tenant shared cache — other tenant IDs get their own
+    keyspace from the factory pool (#274)."""
     with _cache_factory_lock:
         cache = _verification_caches.get(tenant_id)
         if cache is None:
@@ -793,6 +826,7 @@ def cached_verify(
     dsl_code: str,
     variables: Optional[list] = None,
     verify_fn: Optional[Callable[[], Dict[str, Any]]] = None,
+    tenant_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Verify with caching (single-process convenience wrapper).
@@ -805,6 +839,9 @@ def cached_verify(
         dsl_code: The QWED-DSL expression
         variables: Variable declarations
         verify_fn: Function to call on cache miss (should return result dict)
+        tenant_id: Optional tenant identifier. When provided, cache keys are
+            isolated per tenant so different tenants cannot share results
+            (#274). Backward compat: absent tenant_id uses the old global key.
 
     Returns:
         Verification result (from cache or fresh)
@@ -813,7 +850,7 @@ def cached_verify(
     cache = get_cache(use_redis=False, mode=CacheBackendMode.LOCAL_ONLY)
 
     # Check cache first
-    cached_result = cache.get(dsl_code, variables)
+    cached_result = cache.get(dsl_code, variables, tenant_id=tenant_id)
     if cached_result is not None:
         cached_result['_cached'] = True
         return cached_result
@@ -827,7 +864,7 @@ def cached_verify(
 
     # Only cache successful results
     if result.get('status') in ['SAT', 'UNSAT', 'SUCCESS']:
-        cache.set(dsl_code, result, variables)
+        cache.set(dsl_code, result, variables, tenant_id=tenant_id)
 
     return result
 
