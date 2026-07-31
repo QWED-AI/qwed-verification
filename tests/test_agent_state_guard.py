@@ -469,8 +469,10 @@ def test_commit_proof_ref_reproducible_from_committed_bytes(tmp_path):
     )
 
     assert result["verified"] is True
-    committed_bytes = target_path.read_text(encoding="utf-8")
-    assert compute_proof_ref(committed_bytes) == result["proof_ref"]
+    # Hash against raw file bytes decoded as UTF-8 — byte-level fidelity of
+    # committed payload is the property being validated (#268)
+    committed_bytes = target_path.read_bytes()
+    assert compute_proof_ref(committed_bytes.decode("utf-8")) == result["proof_ref"]
     # transition proof stays preserved in a separate field
     assert result["transition_proof_ref"].startswith("sha256:")
     assert list(tmp_path.glob("*.tmp")) == []
