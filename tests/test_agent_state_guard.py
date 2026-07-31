@@ -435,6 +435,44 @@ def test_commits_verified_transition_atomically(tmp_path):
         '{"agent_id":"a1","status":"running","step_count":2,'
         '"tasks":[{"done":true,"id":"task-1"},{"done":false,"id":"task-2"}]}'
     )
+
+
+def test_commit_proof_ref_reproducible_from_committed_bytes(tmp_path):
+    """proof_ref returned by verify_transition_and_commit_state must be
+    recomputable from the exact bytes written to the committed file (#268)."""
+    from qwed_new.core.diagnostics import compute_proof_ref
+
+    guard = _build_commit_guard(tmp_path)
+    target_path = tmp_path / "state.json"
+
+    result = guard.verify_transition_and_commit_state(
+        """
+        {
+          "agent_id": "a1",
+          "status": "pending",
+          "step_count": 1,
+          "tasks": [{"id": "task-1", "done": false}]
+        }
+        """,
+        """
+        {
+          "tasks": [
+            {"done": true, "id": "task-1"},
+            {"done": false, "id": "task-2"}
+          ],
+          "step_count": 2,
+          "status": "running",
+          "agent_id": "a1"
+        }
+        """,
+        str(target_path),
+    )
+
+    assert result["verified"] is True
+    committed_bytes = target_path.read_text(encoding="utf-8")
+    assert compute_proof_ref(committed_bytes) == result["proof_ref"]
+    # transition proof stays preserved in a separate field
+    assert result["transition_proof_ref"].startswith("sha256:")
     assert list(tmp_path.glob("*.tmp")) == []
 
 
