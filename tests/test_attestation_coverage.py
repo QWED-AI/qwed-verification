@@ -161,36 +161,41 @@ class TestAttestationCoverage(unittest.TestCase):
         self.assertEqual(claims["qwed"]["result"]["verified"], True)
 
     def test_verify_invalid_token_format_not_json(self):
-        """Test handling of tokens with non-JSON payloads."""
+        """Non-JSON token payloads rejected at silent boundary (#275)."""
         header = "eyJhbGciOiJFUzI1NiJ9"
         payload = base64.urlsafe_b64encode(b"not json").decode().rstrip("=")
         token = f"{header}.{payload}.signature"
 
         is_valid, _, error = self.service.verify_attestation(token)
         self.assertFalse(is_valid)
-        self.assertIn("Invalid token format", error)
+        self.assertEqual(error, "Invalid token")
 
     def test_verify_invalid_token_not_dict(self):
-        """Test handling of tokens where payload is not a JSON object."""
+        """JSON payload that's not a dict rejected at silent boundary (#275)."""
         header = "eyJhbGciOiJFUzI1NiJ9"
         payload = base64.urlsafe_b64encode(b'"just a string"').decode().rstrip("=")
         token = f"{header}.{payload}.signature"
 
         is_valid, _, error = self.service.verify_attestation(token)
         self.assertFalse(is_valid)
-        self.assertIn("Invalid token format", error)
+        self.assertEqual(error, "Invalid token")
 
     def test_verify_untrusted_issuer(self):
-        """Test verification with an untrusted issuer (#275 — enumeration-resistant)."""
-        other = AttestationService(issuer_did="did:malicious:999", key_suffix="evil")
-        result = VerificationResult(status="fake", verified=True, engine="fake")
-        att = other.create_attestation(result, "query")
+        """Test verification with an untrusted issuer (#275 — enumeration-resistant).
 
-        is_valid, _, error = self.service.verify_attestation(att.jwt_token)
+        Attest with self.service, verify against empty trusted list → post-signature
+        authorization rejects inside `claims.get("iss") not in trusted_issuers`.
+        """
+        result = VerificationResult(status="ok", verified=True, engine="test")
+        att = self.service.create_attestation(result, "query")
+
+        is_valid, claims, error = self.service.verify_attestation(
+            att.jwt_token,
+            trusted_issuers=[],
+        )
         self.assertFalse(is_valid)
-        # #275: silent generic only — never leak issuer state
+        self.assertIsNone(claims)
         self.assertEqual(error, "Invalid token")
-        self.assertNotIn("malicious", error)
 
     def test_verify_external_issuer_not_implemented(self):
         """External trusted issuers rejected at silent boundary (#275)."""

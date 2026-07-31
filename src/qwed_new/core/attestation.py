@@ -197,6 +197,12 @@ class IssuerKeyPair:
         }
 
 
+# (#275) Single source of truth for the generic attestation rejection message.
+# Every caller-sensitive failure returns this exactly, so attackers cannot
+# enumerate trusted issuers, probe expirations, or read implementation state.
+_INVALID_TOKEN_MSG = "Invalid token"
+
+
 class AttestationService:
     """
     Service for creating and verifying QWED attestations.
@@ -383,20 +389,16 @@ class AttestationService:
             # perform FULL cryptographic verification with the correct key.
             try:
                 if len(jwt_token) > 8192:
-                    return False, None, "Token too large"
+                    return False, None, _INVALID_TOKEN_MSG
                 _, payload_segment, _ = jwt_token.split('.', 2)
                 if len(payload_segment) > 4096:
-                    return False, None, "Payload segment too large"
-                padding = '=' * (-len(payload_segment) % 4)
-                # qwed-sec: base64 decode of untrusted JWT payload; content is
-                # validated structurally (JSON/dict check) and cryptographically
-                # (signature verification below) before any claim is trusted.
-                payload_data = base64.urlsafe_b64decode(payload_segment + padding)
+                    return False, None, _INVALID_TOKEN_MSG
+                payload_data = base64.urlsafe_b64decode(payload_segment + '=' * (-len(payload_segment) % 4))
                 unverified = json.loads(payload_data)
                 if not isinstance(unverified, dict):
-                    return False, None, "Invalid token format"
+                    return False, None, _INVALID_TOKEN_MSG
             except (IndexError, ValueError, TypeError):
-                return False, None, "Invalid token format"
+                return False, None, _INVALID_TOKEN_MSG
 
             issuer = unverified.get("iss")
 
@@ -406,8 +408,10 @@ class AttestationService:
             else:
                 # (#275) External issuer resolution not implemented — silent generic
                 # error. Never enumerate trusted issuers or expose external-issuer state.
-                logger.debug("Attestation issuer not supported (silent): %s", issuer)
-                return False, None, "Invalid token"
+                # Sanitize CR/LF from attacker-controlled JWT payload to prevent log forging.
+                safe_issuer = str(issuer)[:128].replace('\r', '').replace('\n', '')
+                logger.debug("Attestation issuer not supported (silent): %s", safe_issuer)
+                return False, None, _INVALID_TOKEN_MSG
 
             # Verify signature and claims
             claims = jwt.decode(
@@ -419,23 +423,24 @@ class AttestationService:
 
             # Now verified: apply trusted issuer authorization
             if claims.get("iss") not in trusted_issuers:
-                logger.debug("Untrusted issuer (verified): %s", issuer)
-                return False, None, "Invalid token"
+                safe_issuer = str(claims.get("iss"))[:128].replace('\r', '').replace('\n', '')
+                logger.debug("Untrusted issuer (verified): %s", safe_issuer)
+                return False, None, _INVALID_TOKEN_MSG
 
             # Check revocation
             jti = claims.get("jti")
             if jti in self._revoked_attestations:
                 logger.debug("Revoked attestation jti=%s rejected", jti)
-                return False, None, "Invalid token"
+                return False, None, _INVALID_TOKEN_MSG
 
             return True, claims, None
 
         except jwt.ExpiredSignatureError:
             logger.debug("Attestation expired (silent)")
-            return False, None, "Invalid token"
+            return False, None, _INVALID_TOKEN_MSG
         except jwt.InvalidTokenError as e:
             logger.debug(f"Attestation verification failed (silent): {type(e).__name__}")
-            return False, None, "Invalid token"
+            return False, None, _INVALID_TOKEN_MSG
 
     def revoke_attestation(self, attestation_id: str) -> bool:
         """Revoke an attestation by ID."""
