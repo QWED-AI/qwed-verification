@@ -382,8 +382,9 @@ class TestCachedVerifyBackwardCompat:
         assert r2["_cached"] is False
 
         # tenant-a calls again — cache hit from own cache
+        set_count_before_third_call = set_count
         r3 = cached_verify("(= z 1)", verify_fn=compute, tenant_id="tenant-a")
-        assert set_count == 2  # compute NOT called again
+        assert set_count == set_count_before_third_call  # compute NOT called again
         assert r3["_cached"] is True
 
     def test_verification_cache_tenant_id_parameterized_keys(self):
@@ -391,6 +392,10 @@ class TestCachedVerifyBackwardCompat:
         cache = VerificationCache()
         none_key = cache._generate_key("(= q 1)")
         tenant_key = cache._generate_key("(= q 1)", tenant_id="org-42")
+
+        # #274 contract: tenant_id=None must produce the identical pre-#274 key
+        # from legacy canonical payload {"dsl":"(= q 1)","vars":null}
+        assert none_key == "67236b672611776bedbdf526a1c78c69"
 
         assert tenant_key != none_key     # tenant_id=X changes keyspace
         assert cache._generate_key("(= q 1)", tenant_id="org-42") == tenant_key  # deterministic

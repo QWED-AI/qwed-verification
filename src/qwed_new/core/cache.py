@@ -847,7 +847,8 @@ def cached_verify(
         Verification result (from cache or fresh)
     """
     # LOCAL_ONLY: deterministic, no distributed concerns
-    cache = get_cache(use_redis=False, mode=CacheBackendMode.LOCAL_ONLY)
+    # (#274) Pass tenant_id so factory returns a tenant-scoped singleton (LRU capacity, eviction, lifecycle stay per-tenant).
+    cache = get_cache(use_redis=False, tenant_id=tenant_id, mode=CacheBackendMode.LOCAL_ONLY)
 
     # Check cache first
     cached_result = cache.get(dsl_code, variables, tenant_id=tenant_id)
