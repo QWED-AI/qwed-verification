@@ -114,7 +114,7 @@ class AgentStateGuard:
                 self._serialize_json_deterministically({"normalized_state": state_data})
             ),
             "developer_fields": {"proof_reason": "State payload matched the configured strict schema."},
-            "normalized_state": state_data,
+            "normalized_state": self._canonicalize(state_data),
         }
 
     def verify_state_transition(
