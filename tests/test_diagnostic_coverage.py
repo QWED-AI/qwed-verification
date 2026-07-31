@@ -181,33 +181,26 @@ def test_verify_stats_success_without_claim_supported_is_unverifiable(client):
 
 
 def test_verify_fact_heuristic_supported_never_returns_verified(client):
-    """Cover that TF-IDF SUPPORTED verdict cannot produce VERIFIED #267."""
-    with patch("qwed_new.core.fact_verifier.FactVerifier.verify_fact", return_value=DiagnosticResult(
-        status=DiagnosticStatus.UNVERIFIABLE,
-        agent_message="Fact claim supported by heuristic analysis — not a deterministic proof",
-        developer_fields={
-            "constraint_id": "fact_verifier.heuristic_supported",
-            "deterministic_verdict": "SUPPORTED",
-            "advisory_checks": [{
-                "name": "heuristic_supported",
-                "advisory_only": True,
-                "constraint_id": "fact_verifier.tfidf_cosine_similarity",
-                "details": {"verdict": "SUPPORTED"},
-            }],
-        },
-        proof_ref=None,
-    )), \
-         patch("qwed_new.api.main.check_rate_limit"):
+    """Cover that real FactVerifier SUPPORTED verdict cannot produce VERIFIED #267.
+    Uses a claim-context pair that reliably triggers the SUPPORTED heuristic path — never mocks the engine."""
+    with patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/fact",
-            json={"claim": "Rayleigh scattering causes the sky to be blue.", "context": "The sky appears blue because Rayleigh scattering scatters short-wavelength blue light more than other colors."},
+            json={
+                "claim": "Rayleigh scattering causes the sky to appear blue during the daytime.",
+                "context": "The sky appears blue because Rayleigh scattering scatters short-wavelength blue light more than other colors.",
+            },
         )
 
     assert response.status_code == 200
     data = response.json()
+    # Assert #267 SUPPORTED heuristic branch was exercised (not insufficient-evidence / neutral fallthrough)
     assert data["status"] == "UNVERIFIABLE"
     assert data["proof_ref"] is None
     assert data["is_authoritative"] is False
+    assert data["deterministic_verdict"] == "SUPPORTED"  # reached the changed branch
+    assert data["constraint_id"] == "fact_verifier.heuristic_supported"
+    assert any(c["name"] == "heuristic_supported" for c in data["advisory_checks"])  # advisory present
     assert data["status"] != "VERIFIED"  # Never verified for heuristic work (#267)
 
 
