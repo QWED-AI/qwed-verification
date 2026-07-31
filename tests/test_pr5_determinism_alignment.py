@@ -64,14 +64,18 @@ async def test_control_plane_marks_translated_math_as_verified(monkeypatch):
     # not control plane orchestration behavior.
     from qwed_new.core.attestation import AttestationResult, AttestationStatus
     from qwed_new.core.diagnostics import DiagnosticResult
-    monkeypatch.setattr(
-        "qwed_new.core.control_plane.create_verification_attestation",
-        lambda **kwargs: AttestationResult(
+    captured_attestation_kwargs: dict = {}
+    def _mock_create_attestation(**kwargs):
+        captured_attestation_kwargs.update(kwargs)
+        return AttestationResult(
             status=AttestationStatus.ISSUED,
             token="test-sentinel-token",
             error_code=None,
             error=None,
-        ),
+        )
+    monkeypatch.setattr(
+        "qwed_new.core.control_plane.create_verification_attestation",
+        _mock_create_attestation,
     )
 
     captured_enforce_kwargs: dict = {}
@@ -100,6 +104,10 @@ async def test_control_plane_marks_translated_math_as_verified(monkeypatch):
     # Assert enforce_trust_decision was called with mandatory attestation args
     assert captured_enforce_kwargs["require_attestation"] is True
     assert captured_enforce_kwargs["attestation_token"] == "test-sentinel-token"
+    # #279 regression: attestation and enforcement both bind to task.expression,
+    # not the natural-language query (semantic scope must match)
+    assert captured_attestation_kwargs["query"] == "0.15 * 200"
+    assert captured_enforce_kwargs["query"] == "0.15 * 200"
     assert captured["organization_id"] == 42
     assert captured["status"] == "VERIFIED"
     assert captured["provider"] == "openai_compat"

@@ -168,7 +168,7 @@ class ControlPlane:
                 if att_result.status is not AttestationStatus.ISSUED:
                     logger.warning(
                         "trust_boundary.attestation_failed query_hash=%s status=%s",
-                        hashlib.sha256(query.encode()).hexdigest()[:16] if query else "unknown",
+                        hashlib.sha256(task.expression.encode()).hexdigest()[:16] if task.expression else "unknown",
                         att_result.status.value,
                     )
                     dr = DiagnosticResult.blocked(
