@@ -710,17 +710,18 @@ _constructing_events: Dict[tuple, Event] = {}  # signals when construction compl
 _cache_factory_lock = Lock()
 
 
-def _get_or_create_local_cache(tenant_id: Optional[int]) -> VerificationCache:
+def _get_or_create_local_cache(tenant_id: Optional[Union[int, str]]) -> VerificationCache:
     """Get a tenant-scoped VerificationCache singleton.
 
-    Factory creates one VerificationCache per tenant_id. tenant_id=None marks
-    the global single-tenant shared cache — other tenant IDs get their own
-    keyspace from the factory pool (#274)."""
+    Accepts int or str tenant_id; normalizes to string key for consistency
+    (QWED #274 — cached_verify passes Optional[str], callers pass Optional[int]).
+    """
+    tenant_key = None if tenant_id is None else str(tenant_id)
     with _cache_factory_lock:
-        cache = _verification_caches.get(tenant_id)
+        cache = _verification_caches.get(tenant_key)
         if cache is None:
             cache = VerificationCache()
-            _verification_caches[tenant_id] = cache
+            _verification_caches[tenant_key] = cache
     return cache
 
 
@@ -766,7 +767,7 @@ def _record_redis_cache_construction_failure(cache_key: tuple) -> None:
 
 def get_cache(
     use_redis: bool = True,
-    tenant_id: Optional[int] = None,
+    tenant_id: Optional[Union[int, str]] = None,
     mode: CacheBackendMode = CacheBackendMode.STRICT_DISTRIBUTED,
 ) -> "Union[VerificationCache, RedisCache]":
     """
