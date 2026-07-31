@@ -67,9 +67,12 @@ class AgentStateGuard:
 
     @staticmethod
     def _proof_ref(evidence: Dict[str, Any]) -> str:
-        """sha256 proof_ref from structured evidence, handling Decimal
-        state values deterministically via default=str serialization (#268)."""
-        return compute_proof_ref(json.dumps(evidence, sort_keys=True, default=str))
+        """sha256 proof_ref bound to the exact deterministic form the state artifact
+        is committed to. Reuses _serialize_json_deterministically so the hash
+        matches the on-disk representation at atomically-committed state (#268)."""
+        return compute_proof_ref(
+            AgentStateGuard._serialize_json_deterministically(evidence)
+        )
 
     def verify_state_payload(self, proposed_state_json: str) -> Dict[str, Any]:
         """
