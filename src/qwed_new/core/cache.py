@@ -136,8 +136,11 @@ class VerificationCache:
         normalized = ' '.join(dsl_code.split())
         # Use a structured JSON object so "foo" + vars=[1] never collides with
         if tenant_id is not None:
+            # #274: hash material uses canonically-normalized tenant key — 42 and "42"
+            # produce the same sha256 digest, never two entries in the same tenant singleton.
+            tenant_key = _normalize_tenant_key(tenant_id)
             key_material = json.dumps(
-                {"tenant": tenant_id, "dsl": normalized, "vars": variables},
+                {"tenant": tenant_key, "dsl": normalized, "vars": variables},
                 sort_keys=True,
                 separators=(",", ":"),
             )
