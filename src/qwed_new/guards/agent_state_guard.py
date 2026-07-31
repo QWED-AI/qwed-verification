@@ -22,6 +22,9 @@ from types import MappingProxyType
 from typing import Any, Dict, Iterable
 
 
+from qwed_new.core.diagnostics import compute_proof_ref
+
+
 class AgentStateGuard:
     """
     Deterministically verifies proposed agent state payloads before any commit.
@@ -62,6 +65,12 @@ class AgentStateGuard:
             allowed_commit_roots or []
         )
 
+    @staticmethod
+    def _proof_ref(evidence: Dict[str, Any]) -> str:
+        """sha256 proof_ref from structured evidence, handling Decimal
+        state values deterministically via default=str serialization (#268)."""
+        return compute_proof_ref(json.dumps(evidence, sort_keys=True, default=str))
+
     def verify_state_payload(self, proposed_state_json: str) -> Dict[str, Any]:
         """
         Verify a proposed state payload against the configured strict schema.
@@ -96,8 +105,9 @@ class AgentStateGuard:
         return {
             "verified": True,
             "status": "VERIFIED",
-            "proof": "State payload matched the configured strict schema.",
-            "normalized_state": self._canonicalize(state_data),
+            "proof_ref": self._proof_ref({"normalized_state": state_data}),
+            "developer_fields": {"proof_reason": "State payload matched the configured strict schema."},
+            "normalized_state": state_data,
         }
 
     def verify_state_transition(
@@ -154,10 +164,12 @@ class AgentStateGuard:
         return {
             "verified": True,
             "status": "VERIFIED",
-            "proof": (
-                "State transition satisfied the configured structural and "
-                "semantic rules."
-            ),
+            "proof_ref": self._proof_ref({
+                "normalized_previous_state": current_result["normalized_state"],
+                "normalized_state": proposed_result["normalized_state"],
+            }),
+            # Static sentence relocated here — proof_ref carries the cryptographically-relevant verdict
+            "developer_fields": {"proof_reason": "State transition satisfied the configured structural and semantic rules."},
             "normalized_previous_state": current_result["normalized_state"],
             "normalized_state": proposed_result["normalized_state"],
         }
@@ -200,10 +212,9 @@ class AgentStateGuard:
         return {
             "verified": True,
             "status": "VERIFIED",
-            "proof": (
-                "State transition satisfied structural and semantic rules and was "
-                "atomically committed."
-            ),
+            "proof_ref": verification_result["proof_ref"],
+            # Proof reasoning lives in developer_fields, not top-level proof
+            "developer_fields": {"proof_reason": verification_result["developer_fields"]["proof_reason"]},
             "normalized_previous_state": verification_result["normalized_previous_state"],
             "normalized_state": verification_result["normalized_state"],
             "committed_path": str(commit_target),
