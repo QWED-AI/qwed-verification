@@ -233,7 +233,9 @@ class FactVerifier:
                     constraint_id="fact_verifier.tfidf_cosine_similarity",
                     details={
                         "deterministic_verdict": verdict,
-                        "confidence": round(confidence, 3),
+                        # Reuse deterministic_confidence computed once upstream —
+                        # never re-round in detail blocks (avoids binary float drift).
+                        "confidence": str(developer_fields["deterministic_confidence"]),
                         "reasoning": reasoning,
                         "citations": developer_fields["citations"],
                         "scores": developer_fields["scores"],
