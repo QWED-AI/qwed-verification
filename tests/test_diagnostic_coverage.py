@@ -194,9 +194,13 @@ def test_verify_fact_heuristic_supported_never_returns_verified(client):
 
     assert response.status_code == 200
     data = response.json()
+    # Assert #267 SUPPORTED heuristic branch was exercised (not insufficient-evidence / neutral fallthrough)
     assert data["status"] == "UNVERIFIABLE"
     assert data["proof_ref"] is None
     assert data["is_authoritative"] is False
+    assert data["deterministic_verdict"] == "SUPPORTED"  # reached the changed branch
+    assert data["constraint_id"] == "fact_verifier.heuristic_supported"
+    assert any(c["name"] == "heuristic_supported" for c in data["advisory_checks"])  # advisory present
     assert data["status"] != "VERIFIED"  # Never verified for heuristic work (#267)
 
 
