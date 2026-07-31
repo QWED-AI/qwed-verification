@@ -181,18 +181,20 @@ class TestAttestationCoverage(unittest.TestCase):
         self.assertIn("Invalid token format", error)
 
     def test_verify_untrusted_issuer(self):
-        """Test verification with an untrusted issuer."""
+        """Test verification with an untrusted issuer (#275 — enumeration-resistant)."""
         other = AttestationService(issuer_did="did:malicious:999", key_suffix="evil")
         result = VerificationResult(status="fake", verified=True, engine="fake")
         att = other.create_attestation(result, "query")
 
         is_valid, _, error = self.service.verify_attestation(att.jwt_token)
         self.assertFalse(is_valid)
-        self.assertIn("Untrusted issuer", error)
+        # #275: silent generic only — never leak issuer state
+        self.assertEqual(error, "Invalid token")
+        self.assertNotIn("malicious", error)
 
     def test_verify_external_issuer_not_implemented(self):
-        """Test verification with external issuer returns not-implemented error."""
-        # Build a valid-looking payload with a trusted but non-self issuer
+        """External trusted issuers rejected at silent boundary (#275)."""
+        # Build a valid-looking payload with a trusted but non-self issuer.
         payload = json.dumps({"iss": "did:external:xyz", "sub": "h", "iat": 0, "exp": 0, "jti": "x"})
         header = base64.urlsafe_b64encode(b'{"alg":"ES256"}').decode().rstrip("=")
         body = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
@@ -202,27 +204,33 @@ class TestAttestationCoverage(unittest.TestCase):
             token, trusted_issuers=["did:external:xyz"]
         )
         self.assertFalse(is_valid)
-        self.assertIn("External issuer key resolution not implemented", error)
+        # #275: silent generic — external issuers must not be distinguishable
+        self.assertEqual(error, "Invalid token")
+        self.assertNotIn("implemented", error)
 
     def test_verify_revoked_attestation(self):
-        """Test verification of a revoked attestation."""
+        """Revoked attestations rejected at silent boundary (#275)."""
         result = VerificationResult(status="ok", verified=True, engine="test")
         att = self.service.create_attestation(result, "query")
         self.service.revoke_attestation(att.claims.jti)
 
         is_valid, _, error = self.service.verify_attestation(att.jwt_token)
         self.assertFalse(is_valid)
-        self.assertIn("revoked", error)
+        # #275: silent generic — revocation must not be distinguishable
+        self.assertEqual(error, "Invalid token")
+        self.assertNotIn("revoked", error)
 
     def test_verify_expired_token(self):
-        """Test verification of expired token."""
+        """Expired attestations rejected at silent boundary (#275)."""
         self.service.validity_days = -1
         result = VerificationResult(status="ok", verified=True, engine="test")
         att = self.service.create_attestation(result, "query")
 
         is_valid, _, error = self.service.verify_attestation(att.jwt_token)
         self.assertFalse(is_valid)
-        self.assertIn("expired", error)
+        # #275: silent generic — expired must not be distinguishable
+        self.assertEqual(error, "Invalid token")
+        self.assertNotIn("expired", error)
         self.service.validity_days = 365
 
     def test_verify_tampered_signature(self):
