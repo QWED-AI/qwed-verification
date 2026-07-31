@@ -343,6 +343,7 @@ class TestGetCacheContract:
 # cached_verify() backward compat
 # ---------------------------------------------------------------------------
 
+
 class TestCachedVerifyBackwardCompat:
 
     def setup_method(self):
@@ -359,6 +360,45 @@ class TestCachedVerifyBackwardCompat:
 
         mock_get.assert_not_called()
         assert result["status"] == "SAT"
+
+    def test_cached_verify_tenant_isolation_prevents_cross_tenant_leak(self):
+        """#274: two tenants calling cached_verify with different tenant_id never
+        share cached results."""
+        cache_mod._verification_caches.clear()
+
+        set_count = 0
+        def compute():
+            nonlocal set_count
+            set_count += 1
+            return {"status": "SAT", "verified": True}
+
+        # tenant-a writes to cache
+        cached_verify("(= z 1)", verify_fn=compute, tenant_id="tenant-a")
+        assert set_count == 1
+
+        # tenant-b calls same query — fresh miss, NOT tenant-a's result
+        r2 = cached_verify("(= z 1)", verify_fn=compute, tenant_id="tenant-b")
+        assert set_count == 2  # compute called again for tenant-b
+        assert r2["_cached"] is False
+
+        # tenant-a calls again — cache hit from own cache
+        set_count_before_third_call = set_count
+        r3 = cached_verify("(= z 1)", verify_fn=compute, tenant_id="tenant-a")
+        assert set_count == set_count_before_third_call  # compute NOT called again
+        assert r3["_cached"] is True
+
+    def test_verification_cache_tenant_id_parameterized_keys(self):
+        """#274: tenant_id=None preserves pre-#274 hash; tenant_id=X distinct keyspace."""
+        cache = VerificationCache()
+        none_key = cache._generate_key("(= q 1)")
+        tenant_key = cache._generate_key("(= q 1)", tenant_id="org-42")
+
+        # #274 contract: tenant_id=None must produce the identical pre-#274 key
+        # from legacy canonical payload {"dsl":"(= q 1)","vars":null}
+        assert none_key == "67236b672611776bedbdf526a1c78c69"
+
+        assert tenant_key != none_key     # tenant_id=X changes keyspace
+        assert cache._generate_key("(= q 1)", tenant_id="org-42") == tenant_key  # deterministic
 
     def test_cached_verify_caches_on_second_call(self):
         """cached_verify() returns cached result on second call."""

@@ -105,6 +105,9 @@ class VerificationCache:
     - LRU eviction
     - TTL (time-to-live) support
     - Hit rate tracking
+
+    #274 tenant isolation: pass tenant_id to get/set/invalidate to isolate
+    cache keyspace per tenant. tenant_id=None preserves pre-#274 single-tenant hash.
     """
 
     def __init__(
@@ -124,21 +127,40 @@ class VerificationCache:
         self._hits = 0
         self._misses = 0
 
-    def _generate_key(self, dsl_code: str, variables: Optional[list] = None) -> str:
-        """Generate an unambiguous cache key from DSL code and optional variables."""
+    def _generate_key(self, dsl_code: str, variables: Optional[list] = None,
+                      tenant_id: Optional[str] = None) -> str:
+        """Generate an unambiguous cache key from DSL code and optional variables.
+
+        (#274) When tenant_id is None: uses the pre-#274 hash format ({"dsl":...,"vars":...}, no tenant marker) — same key as today. Explicit tenant_id adds "tenant" to the hash material, isolating keyspace per tenant.
+        """
         normalized = ' '.join(dsl_code.split())
         # Use a structured JSON object so "foo" + vars=[1] never collides with
-        # "foo[1]" + vars=None (plain string concatenation would cause that).
-        key_material = json.dumps(
-            {"dsl": normalized, "vars": variables},
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        if tenant_id is not None:
+            # #274: hash material uses canonically-normalized tenant key — 42 and "42"
+            # produce the same sha256 digest, never two entries in the same tenant singleton.
+            tenant_key = _normalize_tenant_key(tenant_id)
+            key_material = json.dumps(
+                {"tenant": tenant_key, "dsl": normalized, "vars": variables},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        else:
+            key_material = json.dumps(
+                {"dsl": normalized, "vars": variables},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
         return hashlib.sha256(key_material.encode()).hexdigest()[:32]
 
-    def get(self, dsl_code: str, variables: Optional[list] = None) -> Optional[Dict[str, Any]]:
+    def get(self, dsl_code: str, variables: Optional[list] = None,
+            tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Get cached result for DSL code.
+
+        Args:
+            dsl_code: QWED-DSL expression
+            variables: Variable declarations
+            tenant_id: Optional tenant identifier for multi-tenant key isolation (#274)
 
         Returns:
             Cached result dict or None if not found/expired
@@ -146,7 +168,7 @@ class VerificationCache:
         if not self.enabled:
             return None
 
-        key = self._generate_key(dsl_code, variables)
+        key = self._generate_key(dsl_code, variables, tenant_id)
 
         with self._lock:
             if key not in self._cache:
@@ -174,13 +196,21 @@ class VerificationCache:
         self,
         dsl_code: str,
         result: Dict[str, Any],
-        variables: Optional[list] = None
+        variables: Optional[list] = None,
+        tenant_id: Optional[str] = None,
     ) -> None:
-        """Cache a verification result."""
+        """Cache a verification result.
+
+        Args:
+            dsl_code: QWED-DSL expression
+            result: Verification result dict
+            variables: Variable declarations
+            tenant_id: Optional tenant identifier for multi-tenant key isolation (#274)
+        """
         if not self.enabled:
             return
 
-        key = self._generate_key(dsl_code, variables)
+        key = self._generate_key(dsl_code, variables, tenant_id)
 
         with self._lock:
             # If the key already exists, remove it first so the size
@@ -197,9 +227,10 @@ class VerificationCache:
                 created_at=time.time()
             )
 
-    def invalidate(self, dsl_code: str, variables: Optional[list] = None) -> bool:
+    def invalidate(self, dsl_code: str, variables: Optional[list] = None,
+                   tenant_id: Optional[str] = None) -> bool:
         """Remove a specific entry from cache."""
-        key = self._generate_key(dsl_code, variables)
+        key = self._generate_key(dsl_code, variables, tenant_id)
 
         with self._lock:
             if key in self._cache:
@@ -671,7 +702,7 @@ class RedisCache:
 # _verification_caches is a per-tenant mapping to prevent cross-tenant leakage
 # in LOCAL_ONLY / no-Redis paths: VerificationCache._generate_key has no tenant
 # context, so we maintain separate instances per tenant_id.
-_verification_caches: Dict[Optional[int], VerificationCache] = {}
+_verification_caches: Dict[Optional[str], VerificationCache] = {}
 # Per-(tenant_id, mode) RedisCache map — protected by _cache_factory_lock
 # to prevent concurrent callers racing and crossing tenant boundaries.
 _redis_caches: Dict[tuple, RedisCache] = {}
@@ -679,15 +710,33 @@ _redis_caches: Dict[tuple, RedisCache] = {}
 # lock while hammering a dead Redis connection on every call.
 _redis_cache_retry_after: Dict[tuple, float] = {}
 _constructing_events: Dict[tuple, Event] = {}  # signals when construction completes
+
+
+def _normalize_tenant_key(tenant_id: int | str | None) -> Optional[str]:
+    """Normalize tenant_id to canonical string form for cross-backend singleton identity.
+
+    ( #274 ) Both local (VerificationCache) and distributed (RedisCache) singleton
+    factories must use the same canonical key so tenant_id=42 (int) and tenant_id="42" (str)
+    land in the same tenant singleton (no accidental duplication by type)."""
+    if tenant_id is None:
+        return None
+    return str(tenant_id)
 _cache_factory_lock = Lock()
 
 
-def _get_or_create_local_cache(tenant_id: Optional[int]) -> VerificationCache:
+def _get_or_create_local_cache(tenant_id: Optional[int | str]) -> VerificationCache:
+    """Get a tenant-scoped VerificationCache singleton.
+
+    Accepts int or str tenant_id; normalizes to string key via _normalize_tenant_key
+    so tenant_id=42 (int) and tenant_id="org-42" (str) land in the same tenant
+    singleton (no duplicate LRU by cast inconsistency). #274
+    """
+    tenant_key = _normalize_tenant_key(tenant_id)
     with _cache_factory_lock:
-        cache = _verification_caches.get(tenant_id)
+        cache = _verification_caches.get(tenant_key)
         if cache is None:
             cache = VerificationCache()
-            _verification_caches[tenant_id] = cache
+            _verification_caches[tenant_key] = cache
     return cache
 
 
@@ -733,7 +782,7 @@ def _record_redis_cache_construction_failure(cache_key: tuple) -> None:
 
 def get_cache(
     use_redis: bool = True,
-    tenant_id: Optional[int] = None,
+    tenant_id: int | str | None = None,
     mode: CacheBackendMode = CacheBackendMode.STRICT_DISTRIBUTED,
 ) -> "Union[VerificationCache, RedisCache]":
     """
@@ -757,8 +806,10 @@ def get_cache(
     if not use_redis or mode == CacheBackendMode.LOCAL_ONLY:
         return _get_or_create_local_cache(tenant_id)
 
-    # Redis path — per-(tenant_id, mode) singleton, locked to prevent races
-    cache_key = (tenant_id, mode)
+    # Redis path — per-(tenant, mode) singleton, locked to prevent races
+    # #274: use canonicalized tenant_key so int/str tenant_id resolve to one singleton
+    tenant_key = _normalize_tenant_key(tenant_id)
+    cache_key = (tenant_key, mode)
 
     cache, event = _await_or_claim_redis_cache_construction(cache_key, mode)
     if cache is not None:
@@ -767,7 +818,7 @@ def get_cache(
     # Construct outside the lock -- RedisCache.__init__ calls
     # get_redis_client() which may block on a 5-second network timeout.
     try:
-        new_cache = RedisCache(tenant_id=tenant_id, mode=mode)
+        new_cache = RedisCache(tenant_id=tenant_key, mode=mode)
     except CacheBackendUnavailableError:
         _record_redis_cache_construction_failure(cache_key)
         event.set()  # Wake waiters after state is consistent
@@ -793,6 +844,7 @@ def cached_verify(
     dsl_code: str,
     variables: Optional[list] = None,
     verify_fn: Optional[Callable[[], Dict[str, Any]]] = None,
+    tenant_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Verify with caching (single-process convenience wrapper).
@@ -805,15 +857,19 @@ def cached_verify(
         dsl_code: The QWED-DSL expression
         variables: Variable declarations
         verify_fn: Function to call on cache miss (should return result dict)
+        tenant_id: Optional tenant identifier. When provided, cache keys are
+            isolated per tenant so different tenants cannot share results
+            (#274). Backward compat: absent tenant_id uses the old global key.
 
     Returns:
         Verification result (from cache or fresh)
     """
     # LOCAL_ONLY: deterministic, no distributed concerns
-    cache = get_cache(use_redis=False, mode=CacheBackendMode.LOCAL_ONLY)
+    # (#274) Pass tenant_id so factory returns a tenant-scoped singleton (LRU capacity, eviction, lifecycle stay per-tenant).
+    cache = get_cache(use_redis=False, tenant_id=tenant_id, mode=CacheBackendMode.LOCAL_ONLY)
 
     # Check cache first
-    cached_result = cache.get(dsl_code, variables)
+    cached_result = cache.get(dsl_code, variables, tenant_id=tenant_id)
     if cached_result is not None:
         cached_result['_cached'] = True
         return cached_result
@@ -827,7 +883,7 @@ def cached_verify(
 
     # Only cache successful results
     if result.get('status') in ['SAT', 'UNSAT', 'SUCCESS']:
-        cache.set(dsl_code, result, variables)
+        cache.set(dsl_code, result, variables, tenant_id=tenant_id)
 
     return result
 
