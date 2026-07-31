@@ -153,19 +153,22 @@ class ControlPlane:
                     evidence=evidence,
                     proof_data=str(evidence),
                 )
-                # Issue attestation for the VERIFIED result
+                # Issue attestation for the VERIFIED result.
+                # (#279) Attest the translated formula — not the natural-language
+                # query — so qwed.query_hash binds to task.expression (what the
+                # deterministic engine actually verified), not the user's prose.
                 att_result = create_verification_attestation(
                     status="VERIFIED",
                     verified=True,
                     engine="math",
-                    query=query,
+                    query=task.expression,
                     confidence=1.0,
                     proof_data=str(evidence),
                 )
                 if att_result.status is not AttestationStatus.ISSUED:
                     logger.warning(
                         "trust_boundary.attestation_failed query_hash=%s status=%s",
-                        hashlib.sha256(query.encode()).hexdigest()[:16] if query else "unknown",
+                        hashlib.sha256(task.expression.encode()).hexdigest()[:16] if task.expression else "unknown",
                         att_result.status.value,
                     )
                     dr = DiagnosticResult.blocked(
@@ -179,7 +182,7 @@ class ControlPlane:
                         dr,
                         require_attestation=True,
                         attestation_token=att_result.token,
-                        query=query,
+                        query=task.expression,  # #279 — must match qwed.query_hash in the attestation
                     )
             else:
                 # Non-VERIFIED path: convert legacy dict and enforce.
@@ -189,7 +192,7 @@ class ControlPlane:
                 enforced = enforce_trust_decision(
                     dr,
                     require_attestation=True,
-                    query=query,
+                    query=task.expression,  # #279 — consistent log-side hash attribution to expression
                 )
             trust_boundary["trust_enforced"] = enforced.status.value
             trust_boundary["attestation_policy"] = "mandatory"
