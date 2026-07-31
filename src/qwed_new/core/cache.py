@@ -699,7 +699,7 @@ class RedisCache:
 # _verification_caches is a per-tenant mapping to prevent cross-tenant leakage
 # in LOCAL_ONLY / no-Redis paths: VerificationCache._generate_key has no tenant
 # context, so we maintain separate instances per tenant_id.
-_verification_caches: Dict[Optional[int], VerificationCache] = {}
+_verification_caches: Dict[Optional[str], VerificationCache] = {}
 # Per-(tenant_id, mode) RedisCache map — protected by _cache_factory_lock
 # to prevent concurrent callers racing and crossing tenant boundaries.
 _redis_caches: Dict[tuple, RedisCache] = {}
@@ -707,16 +707,28 @@ _redis_caches: Dict[tuple, RedisCache] = {}
 # lock while hammering a dead Redis connection on every call.
 _redis_cache_retry_after: Dict[tuple, float] = {}
 _constructing_events: Dict[tuple, Event] = {}  # signals when construction completes
+
+
+def _normalize_tenant_key(tenant_id: int | str | None) -> Optional[str]:
+    """Normalize tenant_id to canonical string form for cross-backend singleton identity.
+
+    ( #274 ) Both local (VerificationCache) and distributed (RedisCache) singleton
+    factories must use the same canonical key so tenant_id=42 (int) and tenant_id="42" (str)
+    land in the same tenant singleton (no accidental duplication by type)."""
+    if tenant_id is None:
+        return None
+    return str(tenant_id)
 _cache_factory_lock = Lock()
 
 
-def _get_or_create_local_cache(tenant_id: Optional[Union[int, str]]) -> VerificationCache:
+def _get_or_create_local_cache(tenant_id: Optional[int | str]) -> VerificationCache:
     """Get a tenant-scoped VerificationCache singleton.
 
-    Accepts int or str tenant_id; normalizes to string key for consistency
-    (QWED #274 — cached_verify passes Optional[str], callers pass Optional[int]).
+    Accepts int or str tenant_id; normalizes to string key via _normalize_tenant_key
+    so tenant_id=42 (int) and tenant_id="org-42" (str) land in the same tenant
+    singleton (no duplicate LRU by cast inconsistency). #274
     """
-    tenant_key = None if tenant_id is None else str(tenant_id)
+    tenant_key = _normalize_tenant_key(tenant_id)
     with _cache_factory_lock:
         cache = _verification_caches.get(tenant_key)
         if cache is None:
@@ -767,7 +779,7 @@ def _record_redis_cache_construction_failure(cache_key: tuple) -> None:
 
 def get_cache(
     use_redis: bool = True,
-    tenant_id: Optional[Union[int, str]] = None,
+    tenant_id: int | str | None = None,
     mode: CacheBackendMode = CacheBackendMode.STRICT_DISTRIBUTED,
 ) -> "Union[VerificationCache, RedisCache]":
     """
@@ -791,8 +803,10 @@ def get_cache(
     if not use_redis or mode == CacheBackendMode.LOCAL_ONLY:
         return _get_or_create_local_cache(tenant_id)
 
-    # Redis path — per-(tenant_id, mode) singleton, locked to prevent races
-    cache_key = (tenant_id, mode)
+    # Redis path — per-(tenant, mode) singleton, locked to prevent races
+    # #274: use canonicalized tenant_key so int/str tenant_id resolve to one singleton
+    tenant_key = _normalize_tenant_key(tenant_id)
+    cache_key = (tenant_key, mode)
 
     cache, event = _await_or_claim_redis_cache_construction(cache_key, mode)
     if cache is not None:
@@ -801,7 +815,7 @@ def get_cache(
     # Construct outside the lock -- RedisCache.__init__ calls
     # get_redis_client() which may block on a 5-second network timeout.
     try:
-        new_cache = RedisCache(tenant_id=tenant_id, mode=mode)
+        new_cache = RedisCache(tenant_id=tenant_key, mode=mode)
     except CacheBackendUnavailableError:
         _record_redis_cache_construction_failure(cache_key)
         event.set()  # Wake waiters after state is consistent
