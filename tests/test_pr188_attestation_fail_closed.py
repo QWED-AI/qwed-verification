@@ -235,21 +235,24 @@ class TestVerifyRejectsNoCrypto(unittest.TestCase):
 
     def test_verify_rejects_oversized_token(self):
         """Oversized tokens rejected at silent boundary (#275)."""
-        _, _, error = self.service.verify_attestation("A" * 8193)
-        self.assertIsNotNone(error)
+        is_valid, claims, error = self.service.verify_attestation("A" * 8193)
+        self.assertFalse(is_valid)
+        self.assertIsNone(claims)
         self.assertEqual(error, "Invalid token")
 
     def test_verify_rejects_oversized_payload_segment(self):
         """Oversized payload segment rejected at silent boundary (#275)."""
         payload = base64.urlsafe_b64encode(b"A" * 4097).decode().rstrip("=")
-        _, _, error = self.service.verify_attestation(f"header.{payload}.sig")
-        self.assertIsNotNone(error)
+        is_valid, claims, error = self.service.verify_attestation(f"header.{payload}.sig")
+        self.assertFalse(is_valid)
+        self.assertIsNone(claims)
         self.assertEqual(error, "Invalid token")
 
     def test_verify_rejects_invalid_base64(self):
         """Malformed base64 rejected at silent boundary (#275)."""
-        _, _, error = self.service.verify_attestation("header.!!!invalid!!!.sig")
-        self.assertIsNotNone(error)
+        is_valid, claims, error = self.service.verify_attestation("header.!!!invalid!!!.sig")
+        self.assertFalse(is_valid)
+        self.assertIsNone(claims)
         self.assertEqual(error, "Invalid token")
 
 
