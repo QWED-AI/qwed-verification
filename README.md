@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/logo.svg" alt="QWED Logo - AI Verification Engine" width="80" height="80">
+  <img src="assets/logo.png" alt="QWED Logo - AI Verification Engine" width="80" height="80">
   <h1>QWED Protocol</h1>
   <h3>Model-Agnostic Trust Boundary for AI Systems</h3>
   
