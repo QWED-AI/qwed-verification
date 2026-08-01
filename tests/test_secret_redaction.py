@@ -95,20 +95,41 @@ class TestKeyFormatValidation:
 class TestSecretRedactionInExceptions:
     """Ensure exceptions from providers never contain API keys."""
 
-    def test_openai_direct_exception_no_key(self):
+    def test_openai_direct_exception_no_key(self, monkeypatch):
         """OpenAI provider ValueError must not contain the API key."""
         from qwed_new.providers.openai_direct import OpenAIDirectProvider
 
         fake_key = "sk-proj-" + "TOPSECRET" * 4
+        provider = OpenAIDirectProvider(api_key=fake_key, model="gpt-fake")
+
+        class _FakeCompletions:
+            def create(self, *args, **kwargs):
+                raise Exception("simulated upstream API failure")
+
+        class _FakeChat:
+            completions = _FakeCompletions()
+
+        # Replace the real SDK client so no network call is made; the test
+        # only verifies key redaction in the resulting exception.
+        monkeypatch.setattr(provider.client, "chat", _FakeChat())
+
         with pytest.raises(Exception) as exc_info:
-            provider = OpenAIDirectProvider(api_key=fake_key, model="gpt-fake")
             provider.translate("test query")
 
         error_msg = str(exc_info.value)
         assert "TOPSECRET" not in error_msg, f"API key leaked in exception: {error_msg}"
 
-    def test_connection_test_exception_no_key(self):
+    def test_connection_test_exception_no_key(self, monkeypatch):
         """Connection test errors must not contain API key."""
+        import httpx
+
+        def _raise_connect_error(*args, **kwargs):
+            raise httpx.ConnectError("simulated no network")
+
+        # key_validator imports httpx inside the handler; patch the shared
+        # module so the connection test fails deterministically without I/O.
+        monkeypatch.setattr(httpx, "get", _raise_connect_error)
+
         fake_key = "sk-proj-" + "SUPERSECRET" * 3
         success, msg = check_connection(
             provider_slug="openai",
