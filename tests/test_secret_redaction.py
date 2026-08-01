@@ -95,27 +95,64 @@ class TestKeyFormatValidation:
 class TestSecretRedactionInExceptions:
     """Ensure exceptions from providers never contain API keys."""
 
-    def test_openai_direct_exception_no_key(self):
+    def test_openai_direct_exception_no_key(self, monkeypatch):
         """OpenAI provider ValueError must not contain the API key."""
         from qwed_new.providers.openai_direct import OpenAIDirectProvider
 
         fake_key = "sk-proj-" + "TOPSECRET" * 4
-        with pytest.raises(Exception) as exc_info:
-            provider = OpenAIDirectProvider(api_key=fake_key, model="gpt-fake")
+        provider = OpenAIDirectProvider(api_key=fake_key, model="gpt-fake")
+
+        class _FakeCompletions:
+            def create(self, *args, **kwargs):
+                # Carry the credential so the redaction assertion is real:
+                # a regression that leaks the key here must fail the test.
+                raise Exception(f"simulated upstream API failure: {fake_key}")
+
+        class _FakeChat:
+            completions = _FakeCompletions()
+
+        # Replace the real SDK client so no network call is made; the test
+        # only verifies key redaction in the resulting exception.
+        monkeypatch.setattr(provider.client, "chat", _FakeChat())
+
+        with pytest.raises(ValueError) as exc_info:
             provider.translate("test query")
 
         error_msg = str(exc_info.value)
+        # The upstream exception carried the credential; the surfaced message
+        # must be the documented contract string with NO key and NO chained
+        # exception (from None), so a regression that leaks the raw upstream
+        # error into the surfaced message fails this test.
+        assert error_msg == "OpenAI translation failed."
         assert "TOPSECRET" not in error_msg, f"API key leaked in exception: {error_msg}"
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__suppress_context__ is True
 
-    def test_connection_test_exception_no_key(self):
+    def test_connection_test_exception_no_key(self, monkeypatch):
         """Connection test errors must not contain API key."""
+        import httpx
+
         fake_key = "sk-proj-" + "SUPERSECRET" * 3
+
+        def _raise_connect_error(*args, **kwargs):
+            # Carry the credential so the redaction assertion is real:
+            # a regression that leaks the key here must fail the test.
+            raise httpx.ConnectError(f"simulated no network: {fake_key}")
+
+        # key_validator imports httpx inside the handler; patch the shared
+        # module so the connection test fails deterministically without I/O.
+        monkeypatch.setattr(httpx, "get", _raise_connect_error)
+
         success, msg = check_connection(
             provider_slug="openai",
             api_key=fake_key,
             base_url=None,
         )
-        # Whether success or failure, message must not contain full key
+        assert not success, f"injected connection failure must not report success: {msg}"
+        # The upstream ConnectError carried the credential; the surfaced
+        # message must be the fixed contract string with NO key, so a
+        # regression that leaks the raw httpx error fails this test.
+        assert msg == "Cannot connect to endpoint. Check URL and network."
         assert "SUPERSECRET" not in msg
 
 
