@@ -895,6 +895,34 @@ class TestEnforceTrustDecision(unittest.TestCase):
         self.assertEqual(r.developer_fields["nested"]["evidence"]["result"], 42)
         self.assertNotIn("tampered", r.developer_fields)
 
+    def test_uncopyable_developer_field_fails_closed(self):
+        """A developer_fields value that raises during deepcopy must BLOCK, not raise."""
+        class Uncopyable:
+            def __deepcopy__(self, memo):
+                raise RuntimeError("cannot copy this object")
+
+        with self.assertLogs("src.qwed_new.core.diagnostics", level="WARNING") as logs:
+            r = enforce_trust_decision(
+                DiagnosticResult.verified(
+                    agent_message="Math check passed",
+                    developer_fields={"constraint_id": "math.identity", "bad": Uncopyable()},
+                    evidence={"result": 42},
+                )
+            )
+
+        self.assertTrue(r.is_fail_closed)
+        self.assertEqual(
+            r.developer_fields.get("constraint_id"),
+            "trust_gate.diagnostic_snapshot_failed",
+        )
+        self.assertIn("diagnostic snapshot failed", r.agent_message.lower())
+        # The audit log must record a generic reason — never the raw exception
+        # message or args (may embed caller data).
+        log_text = "\n".join(logs.output)
+        self.assertIn("reason=diagnostic_snapshot_failed", log_text)
+        self.assertIn("error_type=RuntimeError", log_text)
+        self.assertNotIn("cannot copy this object", log_text)
+
     # --- Edge cases ---
 
     def test_verified_verification_error_returns_blocked(self):

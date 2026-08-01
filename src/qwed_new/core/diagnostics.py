@@ -736,7 +736,25 @@ def enforce_trust_decision(
     # snapshot below is read during validation AND returned, so a concurrent
     # mutation of the caller's object can neither skew the decision nor leak
     # into the returned result.
-    result = replace(result, developer_fields=deepcopy(result.developer_fields))
+    try:
+        result = replace(result, developer_fields=deepcopy(result.developer_fields))
+    except Exception as exc:
+        # developer_fields is Dict[str, Any] — a value that rejects deep-copying
+        # (or a concurrent mutation mid-snapshot) must fail closed, not escape
+        # as an exception. Log only the exception type, never args/message, so
+        # no caller data leaks into the audit trail.
+        logger.warning(
+            "trust_gate.blocked reason=diagnostic_snapshot_failed policy=%s error_type=%s",
+            policy,
+            type(exc).__name__,
+        )
+        return DiagnosticResult.blocked(
+            agent_message="Verification blocked — diagnostic snapshot failed",
+            developer_fields={
+                "constraint_id": "trust_gate.diagnostic_snapshot_failed",
+                "policy": policy,
+            },
+        )
 
     if result.is_fail_closed:
         return result
