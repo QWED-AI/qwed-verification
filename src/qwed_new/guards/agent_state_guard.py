@@ -66,8 +66,15 @@ class AgentStateGuard:
         validated_transition_rules = self._validate_transition_rules_definition(
             transition_rules or {}
         )
-        self.required_schema = self._freeze_config(validated_schema)
-        self.transition_rules = self._freeze_config(validated_transition_rules)
+        # Canonicalize schema field names (property keys, required lists, enum
+        # values) and transition-rule paths to NFC so validation matches payload
+        # keys canonically regardless of precomposed/decomposed spelling.
+        self.required_schema = self._freeze_config(
+            self._canonicalize(validated_schema)
+        )
+        self.transition_rules = self._freeze_config(
+            self._canonicalize(validated_transition_rules)
+        )
         self._transition_rules_configured = self._has_effective_transition_rules(
             self.transition_rules
         )
@@ -106,9 +113,20 @@ class AgentStateGuard:
                 message=f"Blocked: invalid or non-deterministic JSON state payload. {exc}",
             )
 
+        try:
+            normalized_state = self._canonicalize(state_data)
+        except ValueError as exc:
+            return self._blocked(
+                error_code="QWED-AGENT-STATE-102",
+                message=(
+                    "Blocked: invalid or non-deterministic JSON state payload. "
+                    f"{exc}"
+                ),
+            )
+
         validation_error = self._validate_value(
             schema=self.required_schema,
-            value=state_data,
+            value=normalized_state,
             path="$",
         )
         if validation_error is not None:
@@ -117,7 +135,6 @@ class AgentStateGuard:
                 message=f"Blocked: {validation_error}",
             )
 
-        normalized_state = self._canonicalize(state_data)
         return {
             "verified": True,
             "status": "VERIFIED",
@@ -948,12 +965,24 @@ class AgentStateGuard:
         - lists keep their order and are processed recursively.
         - non-string scalars (int, float, Decimal, bool, None) are returned
           unchanged.
+
+        Raises:
+            ValueError: if two distinct keys normalize to the same NFC key
+            (e.g. ``"\u00C9"`` and ``"E\u0301"`` in the same object). Such
+            input is ambiguous and cannot be canonicalized without silent
+            data loss, so it is rejected deterministically.
         """
         if isinstance(value, dict):
-            return {
-                cls._canonicalize(key): cls._canonicalize(value[key])
-                for key in sorted(value, key=lambda k: unicodedata.normalize("NFC", k))
-            }
+            normalized: Dict[str, Any] = {}
+            for key in sorted(value, key=lambda k: unicodedata.normalize("NFC", k)):
+                normalized_key = cls._canonicalize(key)
+                if normalized_key in normalized:
+                    raise ValueError(
+                        f"Duplicate object key after Unicode NFC normalization: "
+                        f"{normalized_key!r}."
+                    )
+                normalized[normalized_key] = cls._canonicalize(value[key])
+            return normalized
         if isinstance(value, list):
             return [cls._canonicalize(item) for item in value]
         if isinstance(value, str):
