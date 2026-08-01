@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import unicodedata
 from decimal import Decimal
 from pathlib import Path
 from types import MappingProxyType
@@ -31,6 +32,15 @@ class AgentStateGuard:
 
     Phase 1 validates structure, Phase 2 adds bounded semantic transition
     proof, and Phase 3 adds governed atomic commit.
+
+    Contract:
+    - Verification is a pure function of the payload; no side effects occur
+      before verification completes.
+    - State is canonicalized with `_canonicalize`: dict keys are sorted and
+      all string keys/values are normalized to Unicode normalization form C
+      (NFC). Logically equivalent text (e.g. precomposed ``"\u00C9"`` vs
+      decomposed ``"E\u0301"``) therefore produces identical canonical output
+      and identical verification results and proof references.
     """
 
     _VALID_SCHEMA_TYPES = frozenset(
@@ -56,8 +66,21 @@ class AgentStateGuard:
         validated_transition_rules = self._validate_transition_rules_definition(
             transition_rules or {}
         )
-        self.required_schema = self._freeze_config(validated_schema)
-        self.transition_rules = self._freeze_config(validated_transition_rules)
+        # Canonicalize schema field names (property keys, required lists, enum
+        # values) and transition-rule paths to NFC so validation matches payload
+        # keys canonically regardless of precomposed/decomposed spelling.
+        try:
+            canonical_schema = self._canonicalize(validated_schema)
+            canonical_transition_rules = self._canonicalize(
+                validated_transition_rules
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid schema: {exc} Define property names, required lists, "
+                "and enum values in a consistent Unicode normalization form."
+            ) from exc
+        self.required_schema = self._freeze_config(canonical_schema)
+        self.transition_rules = self._freeze_config(canonical_transition_rules)
         self._transition_rules_configured = self._has_effective_transition_rules(
             self.transition_rules
         )
@@ -96,9 +119,20 @@ class AgentStateGuard:
                 message=f"Blocked: invalid or non-deterministic JSON state payload. {exc}",
             )
 
+        try:
+            normalized_state = self._canonicalize(state_data)
+        except ValueError as exc:
+            return self._blocked(
+                error_code="QWED-AGENT-STATE-102",
+                message=(
+                    "Blocked: invalid or non-deterministic JSON state payload. "
+                    f"{exc}"
+                ),
+            )
+
         validation_error = self._validate_value(
             schema=self.required_schema,
-            value=state_data,
+            value=normalized_state,
             path="$",
         )
         if validation_error is not None:
@@ -111,10 +145,10 @@ class AgentStateGuard:
             "verified": True,
             "status": "VERIFIED",
             "proof_ref": self._proof_ref(
-                self._serialize_json_deterministically({"normalized_state": state_data})
+                self._serialize_json_deterministically({"normalized_state": normalized_state})
             ),
             "developer_fields": {"proof_reason": "State payload matched the configured strict schema."},
-            "normalized_state": self._canonicalize(state_data),
+            "normalized_state": normalized_state,
         }
 
     def verify_state_transition(
@@ -925,13 +959,40 @@ class AgentStateGuard:
 
     @classmethod
     def _canonicalize(cls, value: Any) -> Any:
+        """Recursively normalize a parsed JSON value into canonical form.
+
+        Normalization policy:
+        - dict keys are sorted by their NFC-normalized form (Unicode
+          normalization form C) so precomposed and decomposed equivalents
+          sort identically.
+        - string keys and string values are normalized to NFC, so logically
+          equivalent text (e.g. ``"\u00C9"`` vs ``"E\u0301"``) canonicalizes
+          to the same output and produces identical verification results.
+        - lists keep their order and are processed recursively.
+        - non-string scalars (int, float, Decimal, bool, None) are returned
+          unchanged.
+
+        Raises:
+            ValueError: if two distinct keys normalize to the same NFC key
+            (e.g. ``"\u00C9"`` and ``"E\u0301"`` in the same object). Such
+            input is ambiguous and cannot be canonicalized without silent
+            data loss, so it is rejected deterministically.
+        """
         if isinstance(value, dict):
-            return {
-                key: cls._canonicalize(value[key])
-                for key in sorted(value)
-            }
+            normalized: Dict[str, Any] = {}
+            for key in sorted(value, key=lambda k: unicodedata.normalize("NFC", k)):
+                normalized_key = cls._canonicalize(key)
+                if normalized_key in normalized:
+                    raise ValueError(
+                        f"Duplicate object key after Unicode NFC normalization: "
+                        f"{normalized_key!r}."
+                    )
+                normalized[normalized_key] = cls._canonicalize(value[key])
+            return normalized
         if isinstance(value, list):
             return [cls._canonicalize(item) for item in value]
+        if isinstance(value, str):
+            return unicodedata.normalize("NFC", value)
         return value
 
 

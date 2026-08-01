@@ -1227,3 +1227,167 @@ def test_rejects_excessive_validation_depth():
     assert error.endswith(
         f"exceeds maximum validation depth ({AgentStateGuard.MAX_VALIDATION_DEPTH})."
     )
+
+
+def test_canonicalize_normalizes_unicode_values_to_nfc():
+    precomposed = AgentStateGuard._canonicalize({"label": "\u00C9"})
+    decomposed = AgentStateGuard._canonicalize({"label": "E\u0301"})
+
+    assert precomposed == {"label": "\u00C9"}
+    assert precomposed == decomposed
+
+
+def test_canonicalize_normalizes_unicode_keys_to_nfc():
+    precomposed = AgentStateGuard._canonicalize({"\u00C9": "value"})
+    decomposed = AgentStateGuard._canonicalize({"E\u0301": "value"})
+
+    assert precomposed == decomposed
+    assert list(precomposed.keys()) == ["\u00C9"]
+
+
+def test_constructor_rejects_schema_with_nfc_equivalent_property_names():
+    with pytest.raises(ValueError, match="Invalid schema"):
+        AgentStateGuard(
+            {
+                "type": "object",
+                "properties": {
+                    "\u00C9tat": {"type": "string"},
+                    "E\u0301tat": {"type": "string"},
+                },
+                "required": ["\u00C9tat"],
+                "additionalProperties": False,
+            }
+        )
+
+
+def test_canonicalize_normalizes_nested_unicode_structures():
+    precomposed = AgentStateGuard._canonicalize(
+        {
+            "items": [
+                {"name": "caf\u00E9"},
+                {"name": "cafe\u0301"},
+            ],
+            "\u00C9tat": {"\u00E9lan": "r\u00E9sum\u00E9"},
+        }
+    )
+    decomposed = AgentStateGuard._canonicalize(
+        {
+            "items": [
+                {"name": "cafe\u0301"},
+                {"name": "caf\u00E9"},
+            ],
+            "E\u0301tat": {"e\u0301lan": "re\u0301sume\u0301"},
+        }
+    )
+
+    assert precomposed == decomposed
+    assert precomposed == {
+        "\u00C9tat": {"\u00E9lan": "r\u00E9sum\u00E9"},
+        "items": [
+            {"name": "caf\u00E9"},
+            {"name": "caf\u00E9"},
+        ],
+    }
+
+
+def test_verify_state_payload_unicode_equivalence_consistent():
+    guard = AgentStateGuard(
+        {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string"},
+                "label": {"type": "string"},
+            },
+            "required": ["agent_id", "label"],
+            "additionalProperties": False,
+        }
+    )
+
+    precomposed = guard.verify_state_payload('{"agent_id": "a1", "label": "\\u00C9"}')
+    decomposed = guard.verify_state_payload('{"agent_id": "a1", "label": "E\\u0301"}')
+
+    assert precomposed["verified"] is True
+    assert precomposed["normalized_state"] == decomposed["normalized_state"]
+    assert precomposed["proof_ref"] == decomposed["proof_ref"]
+
+
+def test_canonicalize_leaves_non_string_scalars_unchanged():
+    assert AgentStateGuard._canonicalize(None) is None
+    assert AgentStateGuard._canonicalize(True) is True
+    assert AgentStateGuard._canonicalize(3) == 3
+    assert AgentStateGuard._canonicalize(Decimal("7.5")) == Decimal("7.5")
+
+
+def test_canonicalize_rejects_nfc_key_collision():
+    with pytest.raises(ValueError, match="Duplicate object key"):
+        AgentStateGuard._canonicalize({"\u00C9": 1, "E\u0301": 2})
+
+
+def test_verify_state_payload_blocks_nfc_key_collision():
+    guard = AgentStateGuard(
+        {
+            "type": "object",
+            "properties": {"agent_id": {"type": "string"}},
+            "required": ["agent_id"],
+            "additionalProperties": False,
+        }
+    )
+
+    result = guard.verify_state_payload('{"agent_id": "a1", "\\u00C9": 1, "E\\u0301": 2}')
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-102"
+    assert "Duplicate object key" in result["message"]
+
+
+def test_verify_state_payload_blocks_nfc_key_collision_reversed_order():
+    guard = AgentStateGuard(
+        {
+            "type": "object",
+            "properties": {"agent_id": {"type": "string"}},
+            "required": ["agent_id"],
+            "additionalProperties": False,
+        }
+    )
+
+    result = guard.verify_state_payload('{"E\\u0301": 2, "\\u00C9": 1, "agent_id": "a1"}')
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-102"
+    assert "Duplicate object key" in result["message"]
+
+
+def test_verify_state_payload_unicode_required_key_equivalence():
+    guard = AgentStateGuard(
+        {
+            "type": "object",
+            "properties": {"\u00C9tat": {"type": "string"}},
+            "required": ["\u00C9tat"],
+            "additionalProperties": False,
+        }
+    )
+
+    precomposed = guard.verify_state_payload('{"\\u00C9tat": "ok"}')
+    decomposed = guard.verify_state_payload('{"E\\u0301tat": "ok"}')
+
+    assert precomposed["verified"] is True
+    assert decomposed["verified"] is True
+    assert precomposed["normalized_state"] == decomposed["normalized_state"]
+    assert precomposed["proof_ref"] == decomposed["proof_ref"]
+
+
+def test_verify_state_payload_rejects_unicode_mismatch_when_required():
+    guard = AgentStateGuard(
+        {
+            "type": "object",
+            "properties": {"\u00C9tat": {"type": "string"}},
+            "required": ["\u00C9tat"],
+            "additionalProperties": False,
+        }
+    )
+
+    result = guard.verify_state_payload('{"wrong_key": "ok"}')
+
+    assert result["verified"] is False
+    assert result["error_code"] == "QWED-AGENT-STATE-103"
+    assert "missing required keys" in result["message"]
