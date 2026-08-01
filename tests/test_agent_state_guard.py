@@ -1227,3 +1227,81 @@ def test_rejects_excessive_validation_depth():
     assert error.endswith(
         f"exceeds maximum validation depth ({AgentStateGuard.MAX_VALIDATION_DEPTH})."
     )
+
+
+def test_canonicalize_normalizes_unicode_values_to_nfc():
+    guard = _build_guard()
+
+    precomposed = AgentStateGuard._canonicalize({"label": "\u00C9"})
+    decomposed = AgentStateGuard._canonicalize({"label": "E\u0301"})
+
+    assert precomposed == {"label": "\u00C9"}
+    assert precomposed == decomposed
+
+
+def test_canonicalize_normalizes_unicode_keys_to_nfc():
+    guard = _build_guard()
+
+    precomposed = AgentStateGuard._canonicalize({"\u00C9": "value"})
+    decomposed = AgentStateGuard._canonicalize({"E\u0301": "value"})
+
+    assert precomposed == decomposed
+    assert list(precomposed.keys()) == ["\u00C9"]
+
+
+def test_canonicalize_normalizes_nested_unicode_structures():
+    precomposed = AgentStateGuard._canonicalize(
+        {
+            "items": [
+                {"name": "caf\u00E9"},
+                {"name": "cafe\u0301"},
+            ],
+            "\u00C9tat": {"\u00E9lan": "r\u00E9sum\u00E9"},
+        }
+    )
+    decomposed = AgentStateGuard._canonicalize(
+        {
+            "items": [
+                {"name": "cafe\u0301"},
+                {"name": "caf\u00E9"},
+            ],
+            "E\u0301tat": {"e\u0301lan": "re\u0301sume\u0301"},
+        }
+    )
+
+    assert precomposed == decomposed
+    assert precomposed == {
+        "\u00C9tat": {"\u00E9lan": "r\u00E9sum\u00E9"},
+        "items": [
+            {"name": "caf\u00E9"},
+            {"name": "caf\u00E9"},
+        ],
+    }
+
+
+def test_verify_state_payload_unicode_equivalence_consistent():
+    guard = AgentStateGuard(
+        {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string"},
+                "label": {"type": "string"},
+            },
+            "required": ["agent_id", "label"],
+            "additionalProperties": False,
+        }
+    )
+
+    precomposed = guard.verify_state_payload('{"agent_id": "a1", "label": "\\u00C9"}')
+    decomposed = guard.verify_state_payload('{"agent_id": "a1", "label": "E\\u0301"}')
+
+    assert precomposed["verified"] is True
+    assert precomposed["normalized_state"] == decomposed["normalized_state"]
+    assert precomposed["proof_ref"] == decomposed["proof_ref"]
+
+
+def test_canonicalize_leaves_non_string_scalars_unchanged():
+    assert AgentStateGuard._canonicalize(None) is None
+    assert AgentStateGuard._canonicalize(True) is True
+    assert AgentStateGuard._canonicalize(3) == 3
+    assert AgentStateGuard._canonicalize(Decimal("7.5")) == Decimal("7.5")

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import unicodedata
 from decimal import Decimal
 from pathlib import Path
 from types import MappingProxyType
@@ -31,6 +32,15 @@ class AgentStateGuard:
 
     Phase 1 validates structure, Phase 2 adds bounded semantic transition
     proof, and Phase 3 adds governed atomic commit.
+
+    Contract:
+    - Verification is a pure function of the payload; no side effects occur
+      before verification completes.
+    - State is canonicalized with `_canonicalize`: dict keys are sorted and
+      all string keys/values are normalized to Unicode normalization form C
+      (NFC). Logically equivalent text (e.g. precomposed ``"\u00C9"`` vs
+      decomposed ``"E\u0301"``) therefore produces identical canonical output
+      and identical verification results and proof references.
     """
 
     _VALID_SCHEMA_TYPES = frozenset(
@@ -107,14 +117,15 @@ class AgentStateGuard:
                 message=f"Blocked: {validation_error}",
             )
 
+        normalized_state = self._canonicalize(state_data)
         return {
             "verified": True,
             "status": "VERIFIED",
             "proof_ref": self._proof_ref(
-                self._serialize_json_deterministically({"normalized_state": state_data})
+                self._serialize_json_deterministically({"normalized_state": normalized_state})
             ),
             "developer_fields": {"proof_reason": "State payload matched the configured strict schema."},
-            "normalized_state": self._canonicalize(state_data),
+            "normalized_state": normalized_state,
         }
 
     def verify_state_transition(
@@ -925,13 +936,28 @@ class AgentStateGuard:
 
     @classmethod
     def _canonicalize(cls, value: Any) -> Any:
+        """Recursively normalize a parsed JSON value into canonical form.
+
+        Normalization policy:
+        - dict keys are sorted by their NFC-normalized form (Unicode
+          normalization form C) so precomposed and decomposed equivalents
+          sort identically.
+        - string keys and string values are normalized to NFC, so logically
+          equivalent text (e.g. ``"\u00C9"`` vs ``"E\u0301"``) canonicalizes
+          to the same output and produces identical verification results.
+        - lists keep their order and are processed recursively.
+        - non-string scalars (int, float, Decimal, bool, None) are returned
+          unchanged.
+        """
         if isinstance(value, dict):
             return {
-                key: cls._canonicalize(value[key])
-                for key in sorted(value)
+                cls._canonicalize(key): cls._canonicalize(value[key])
+                for key in sorted(value, key=lambda k: unicodedata.normalize("NFC", k))
             }
         if isinstance(value, list):
             return [cls._canonicalize(item) for item in value]
+        if isinstance(value, str):
+            return unicodedata.normalize("NFC", value)
         return value
 
 
