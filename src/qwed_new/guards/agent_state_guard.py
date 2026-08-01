@@ -69,12 +69,18 @@ class AgentStateGuard:
         # Canonicalize schema field names (property keys, required lists, enum
         # values) and transition-rule paths to NFC so validation matches payload
         # keys canonically regardless of precomposed/decomposed spelling.
-        self.required_schema = self._freeze_config(
-            self._canonicalize(validated_schema)
-        )
-        self.transition_rules = self._freeze_config(
-            self._canonicalize(validated_transition_rules)
-        )
+        try:
+            canonical_schema = self._canonicalize(validated_schema)
+            canonical_transition_rules = self._canonicalize(
+                validated_transition_rules
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid schema: {exc} Define property names, required lists, "
+                "and enum values in a consistent Unicode normalization form."
+            ) from exc
+        self.required_schema = self._freeze_config(canonical_schema)
+        self.transition_rules = self._freeze_config(canonical_transition_rules)
         self._transition_rules_configured = self._has_effective_transition_rules(
             self.transition_rules
         )

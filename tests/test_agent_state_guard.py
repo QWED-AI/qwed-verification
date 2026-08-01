@@ -1245,6 +1245,21 @@ def test_canonicalize_normalizes_unicode_keys_to_nfc():
     assert list(precomposed.keys()) == ["\u00C9"]
 
 
+def test_constructor_rejects_schema_with_nfc_equivalent_property_names():
+    with pytest.raises(ValueError, match="Invalid schema"):
+        AgentStateGuard(
+            {
+                "type": "object",
+                "properties": {
+                    "\u00C9tat": {"type": "string"},
+                    "E\u0301tat": {"type": "string"},
+                },
+                "required": ["\u00C9tat"],
+                "additionalProperties": False,
+            }
+        )
+
+
 def test_canonicalize_normalizes_nested_unicode_structures():
     precomposed = AgentStateGuard._canonicalize(
         {
