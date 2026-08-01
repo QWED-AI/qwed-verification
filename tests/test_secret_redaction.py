@@ -104,7 +104,9 @@ class TestSecretRedactionInExceptions:
 
         class _FakeCompletions:
             def create(self, *args, **kwargs):
-                raise Exception("simulated upstream API failure")
+                # Carry the credential so the redaction assertion is real:
+                # a regression that leaks the key here must fail the test.
+                raise Exception(f"simulated upstream API failure: {fake_key}")
 
         class _FakeChat:
             completions = _FakeCompletions()
@@ -113,7 +115,7 @@ class TestSecretRedactionInExceptions:
         # only verifies key redaction in the resulting exception.
         monkeypatch.setattr(provider.client, "chat", _FakeChat())
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(ValueError) as exc_info:
             provider.translate("test query")
 
         error_msg = str(exc_info.value)
@@ -123,19 +125,23 @@ class TestSecretRedactionInExceptions:
         """Connection test errors must not contain API key."""
         import httpx
 
+        fake_key = "sk-proj-" + "SUPERSECRET" * 3
+
         def _raise_connect_error(*args, **kwargs):
-            raise httpx.ConnectError("simulated no network")
+            # Carry the credential so the redaction assertion is real:
+            # a regression that leaks the key here must fail the test.
+            raise httpx.ConnectError(f"simulated no network: {fake_key}")
 
         # key_validator imports httpx inside the handler; patch the shared
         # module so the connection test fails deterministically without I/O.
         monkeypatch.setattr(httpx, "get", _raise_connect_error)
 
-        fake_key = "sk-proj-" + "SUPERSECRET" * 3
         success, msg = check_connection(
             provider_slug="openai",
             api_key=fake_key,
             base_url=None,
         )
+        assert not success, f"injected connection failure must not report success: {msg}"
         # Whether success or failure, message must not contain full key
         assert "SUPERSECRET" not in msg
 
