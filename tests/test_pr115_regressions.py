@@ -11,6 +11,7 @@ from qwed_new.api.main import (
     _run_agent_security_checks,
 )
 from qwed_new.core.consensus_verifier import ConsensusVerifier, VerificationMode
+from qwed_new.core.diagnostics import DiagnosticResult
 from qwed_new.core.logic_verifier import LogicVerifier
 
 
@@ -58,6 +59,15 @@ def test_consensus_endpoint_checks_rate_limit(client):
         agreement_status="unanimous",
         verification_chain=[],
         total_latency_ms=5.0,
+    )
+    fake_result.to_diagnostic_result.return_value = DiagnosticResult.verified(
+        agent_message="Consensus verification: unanimous",
+        developer_fields={
+            "agreement_status": "unanimous",
+            "confidence": 0.99,
+            "engines_used": 1,
+        },
+        evidence={"result": 4},
     )
 
     with (

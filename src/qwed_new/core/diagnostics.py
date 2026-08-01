@@ -42,7 +42,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import dataclass, field
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -726,6 +727,16 @@ def enforce_trust_decision(
         fields: constraint_id, reason, policy, and error where applicable.
     """
     policy = "mandatory" if require_attestation else "optional"
+
+    # Issue #273 — TOCTOU: detach the caller's mutable developer_fields before
+    # any validation reads the result. DiagnosticResult is frozen=True, but
+    # developer_fields is a deeply mutable Dict[str, Any]; returning the
+    # caller's original reference would let out-of-band mutation after
+    # enforcement diverge the returned state from the validated state. The
+    # snapshot below is read during validation AND returned, so a concurrent
+    # mutation of the caller's object can neither skew the decision nor leak
+    # into the returned result.
+    result = replace(result, developer_fields=deepcopy(result.developer_fields))
 
     if result.is_fail_closed:
         return result

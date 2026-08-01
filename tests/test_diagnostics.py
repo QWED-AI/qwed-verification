@@ -855,6 +855,46 @@ class TestEnforceTrustDecision(unittest.TestCase):
         self.assertTrue(r.is_fail_closed)
         self.assertEqual(r.constraint_id, "math.inconclusive")
 
+    # --- Issue #273 — TOCTOU: returned result must be detached ---
+
+    def test_returned_result_does_not_share_developer_fields_with_input(self):
+        """Enforced result must not alias the caller's developer_fields dict.
+
+        frozen=True only blocks attribute reassignment; mutating
+        developer_fields["key"] = value must not leak into the returned result
+        after enforcement (TOCTOU window).
+        """
+        r = enforce_trust_decision(self.unverifiable)
+        self.assertIsNot(r.developer_fields, self.unverifiable.developer_fields)
+        self.unverifiable.developer_fields["injected"] = "post-enforcement mutation"
+        self.assertNotIn("injected", r.developer_fields)
+
+    def test_valid_token_passes_return_detached_developer_fields(self):
+        """The pass-through result must deep-copy nested mutable fields."""
+        nested = {"evidence": {"result": 42}}
+        verified = DiagnosticResult.verified(
+            agent_message="Math check passed",
+            developer_fields={"constraint_id": "math.identity", "nested": nested},
+            evidence={"result": 42},
+        )
+        with patch("src.qwed_new.core.attestation.get_attestation_service") as mock_get:
+            mock_svc = MagicMock()
+            mock_svc.verify_attestation.return_value = (True, self._verified_claims(), None)
+            mock_get.return_value = mock_svc
+
+            r = enforce_trust_decision(
+                verified,
+                attestation_token="QWED_TEST_VALID_TOKEN",
+            )
+
+        self.assertTrue(r.is_verified)
+        self.assertIsNot(r.developer_fields, verified.developer_fields)
+        # Deep mutation of the input's nested dict must not leak into the result
+        verified.developer_fields["nested"]["evidence"]["result"] = 999
+        verified.developer_fields["tampered"] = True
+        self.assertEqual(r.developer_fields["nested"]["evidence"]["result"], 42)
+        self.assertNotIn("tampered", r.developer_fields)
+
     # --- Edge cases ---
 
     def test_verified_verification_error_returns_blocked(self):
