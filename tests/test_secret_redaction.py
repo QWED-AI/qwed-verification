@@ -119,7 +119,14 @@ class TestSecretRedactionInExceptions:
             provider.translate("test query")
 
         error_msg = str(exc_info.value)
+        # The upstream exception carried the credential; the surfaced message
+        # must be the documented contract string with NO key and NO chained
+        # exception (from None), so a regression that leaks the raw upstream
+        # error into the surfaced message fails this test.
+        assert error_msg == "OpenAI translation failed."
         assert "TOPSECRET" not in error_msg, f"API key leaked in exception: {error_msg}"
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__suppress_context__ is True
 
     def test_connection_test_exception_no_key(self, monkeypatch):
         """Connection test errors must not contain API key."""
@@ -142,7 +149,10 @@ class TestSecretRedactionInExceptions:
             base_url=None,
         )
         assert not success, f"injected connection failure must not report success: {msg}"
-        # Whether success or failure, message must not contain full key
+        # The upstream ConnectError carried the credential; the surfaced
+        # message must be the fixed contract string with NO key, so a
+        # regression that leaks the raw httpx error fails this test.
+        assert msg == "Cannot connect to endpoint. Check URL and network."
         assert "SUPERSECRET" not in msg
 
 
