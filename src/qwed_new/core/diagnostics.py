@@ -42,7 +42,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -690,6 +690,43 @@ def _validate_attestation_claims(
     return None
 
 
+def _snapshot_developer_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Rebuild developer_fields as a fully detached, trusted snapshot.
+
+    deepcopy() is NOT sufficient here: a nested object may implement
+    __deepcopy__ to return itself, preserving an alias to caller data that
+    remains mutable after enforcement (TOCTOU). Instead, containers are
+    rebuilt from scratch and only immutable scalars, AdvisoryCheck, and
+    JSON-safe containers (dict / list / tuple) are admitted. Any other value
+    type is rejected so the caller's objects can never leak into the enforced
+    result.
+
+    Raises:
+        ValueError: if a value type is not admitted (fail closed by caller).
+    """
+    if isinstance(fields, dict):
+        return {
+            str(key): _snapshot_developer_fields(value)
+            for key, value in fields.items()
+        }
+    if isinstance(fields, list):
+        return [_snapshot_developer_fields(item) for item in fields]
+    if isinstance(fields, tuple):
+        return tuple(_snapshot_developer_fields(item) for item in fields)
+    if isinstance(fields, AdvisoryCheck):
+        return AdvisoryCheck(
+            name=fields.name,
+            advisory_only=fields.advisory_only,
+            constraint_id=fields.constraint_id,
+            details=_snapshot_developer_fields(fields.details),
+        )
+    if fields is None or isinstance(fields, (str, int, float, bool)):
+        return fields
+    raise ValueError(
+        f"developer_fields contains unsupported value type: {type(fields).__name__}"
+    )
+
+
 def enforce_trust_decision(
     result: DiagnosticResult,
     *,
@@ -726,6 +763,39 @@ def enforce_trust_decision(
         fields: constraint_id, reason, policy, and error where applicable.
     """
     policy = "mandatory" if require_attestation else "optional"
+
+    # Issue #273 — TOCTOU: detach the caller's mutable developer_fields before
+    # any validation reads the result. DiagnosticResult is frozen=True, but
+    # developer_fields is a deeply mutable Dict[str, Any]; returning the
+    # caller's original reference would let out-of-band mutation after
+    # enforcement diverge the returned state from the validated state. The
+    # snapshot below is read during validation AND returned, so a concurrent
+    # mutation of the caller's object can neither skew the decision nor leak
+    # into the returned result. The snapshot rebuilds containers recursively
+    # (never deepcopy) so a nested object whose __deepcopy__ returns itself
+    # cannot smuggle a mutable alias into the enforced result.
+    try:
+        result = replace(
+            result,
+            developer_fields=_snapshot_developer_fields(result.developer_fields),
+        )
+    except Exception as exc:
+        # developer_fields is Dict[str, Any] — a value that rejects snapshoting
+        # (or a concurrent mutation mid-snapshot) must fail closed, not escape
+        # as an exception. Log only the exception type, never args/message, so
+        # no caller data leaks into the audit trail.
+        logger.warning(
+            "trust_gate.blocked reason=diagnostic_snapshot_failed policy=%s error_type=%s",
+            policy,
+            type(exc).__name__,
+        )
+        return DiagnosticResult.blocked(
+            agent_message="Verification blocked — diagnostic snapshot failed",
+            developer_fields={
+                "constraint_id": "trust_gate.diagnostic_snapshot_failed",
+                "policy": policy,
+            },
+        )
 
     if result.is_fail_closed:
         return result
