@@ -255,6 +255,15 @@ class TestVerifyRejectsNoCrypto(unittest.TestCase):
         self.assertIsNone(claims)
         self.assertEqual(error, "Invalid token")
 
+    def test_verify_rejects_deeply_nested_payload(self):
+        """Deeply nested JSON below size limit fails closed (RecursionError)."""
+        payload = "[" * 1500 + "]" * 1500
+        token = f"header.{base64.urlsafe_b64encode(payload.encode()).decode().rstrip('=')}.sig"
+        is_valid, claims, error = self.service.verify_attestation(token)
+        self.assertFalse(is_valid)
+        self.assertIsNone(claims)
+        self.assertEqual(error, "Invalid token")
+
 
 # ---------------------------------------------------------------------------
 # Issue #191 — VERIFIED status requires proof artifact (issuance-side)

@@ -384,9 +384,9 @@ class AttestationService:
             trusted_issuers = [self.issuer_did]
 
         try:
-            # Decode without verification first to get issuer.
-            # Security: We manually decode the payload to get 'iss' and then
-            # perform FULL cryptographic verification with the correct key.
+            # Boundary checks before any cryptographic work. Attacker-controlled
+            # payload is validated structurally; no claim is trusted until the
+            # signature is verified below with the local key.
             try:
                 if len(jwt_token) > 8192:
                     return False, None, _GENERIC_REJECTION_MSG
@@ -397,19 +397,13 @@ class AttestationService:
                 unverified = json.loads(payload_data)
                 if not isinstance(unverified, dict):
                     return False, None, _GENERIC_REJECTION_MSG
-            except (IndexError, ValueError, TypeError):
+            except (IndexError, ValueError, TypeError, RecursionError):
                 return False, None, _GENERIC_REJECTION_MSG
 
-            issuer = unverified.get("iss")
-
-            if issuer == self.issuer_did:
-                key_pair = self._ensure_key_pair()
-                public_key = key_pair.public_key_pem
-            else:
-                # (#275) External issuer resolution not implemented — silent generic
-                # error. Never enumerate trusted issuers or expose external-issuer state.
-                logger.debug("Attestation issuer not supported (silent)")
-                return False, None, _GENERIC_REJECTION_MSG
+            # Always select the local key; issuer authorization is applied only
+            # AFTER signature verification (no branch on unverified claims).
+            key_pair = self._ensure_key_pair()
+            public_key = key_pair.public_key_pem
 
             # Verify signature and claims
             claims = jwt.decode(
@@ -419,7 +413,12 @@ class AttestationService:
                 options={"verify_signature": True, "verify_exp": True, "require": ["iss", "sub", "iat", "exp", "jti"]},
             )
 
-            # Now verified: apply trusted issuer authorization
+            # Now verified: apply issuer authorization. External issuers have no
+            # key resolution implemented (#275) — silent generic, never enumerate.
+            if claims.get("iss") != self.issuer_did:
+                logger.debug("Attestation issuer not supported (verified)")
+                return False, None, _GENERIC_REJECTION_MSG
+
             if claims.get("iss") not in trusted_issuers:
                 logger.debug("Untrusted issuer (verified)")
                 return False, None, _GENERIC_REJECTION_MSG
