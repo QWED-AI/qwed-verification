@@ -47,6 +47,7 @@ dependencies = [
     "bcrypt>=4.0.1",
     "passlib[bcrypt]>=1.7.4",
     "pyjwt>=2.8.0,!=2.12.1",
+    "cryptography>=41.0.0",
     "python-multipart>=0.0.6",
     "pandas>=2.0.0",
     "numpy>=1.24.0",

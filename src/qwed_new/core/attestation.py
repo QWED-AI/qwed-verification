@@ -197,6 +197,12 @@ class IssuerKeyPair:
         }
 
 
+# (#275) Single source of truth for the generic attestation rejection message.
+# Every caller-sensitive failure returns this exactly, so attackers cannot
+# enumerate trusted issuers, probe expirations, or read implementation state.
+_GENERIC_REJECTION_MSG = "Invalid token"
+
+
 class AttestationService:
     """
     Service for creating and verifying QWED attestations.
@@ -378,59 +384,59 @@ class AttestationService:
             trusted_issuers = [self.issuer_did]
 
         try:
-            # Decode without verification first to get issuer.
-            # Security: We manually decode the payload to get 'iss' and then
-            # perform FULL cryptographic verification with the correct key.
+            # Boundary checks before any cryptographic work. Attacker-controlled
+            # payload is validated structurally; no claim is trusted until the
+            # signature is verified below with the local key.
             try:
                 if len(jwt_token) > 8192:
-                    return False, None, "Token too large"
+                    return False, None, _GENERIC_REJECTION_MSG
                 _, payload_segment, _ = jwt_token.split('.', 2)
                 if len(payload_segment) > 4096:
-                    return False, None, "Payload segment too large"
-                padding = '=' * (-len(payload_segment) % 4)
-                # qwed-sec: base64 decode of untrusted JWT payload; content is
-                # validated structurally (JSON/dict check) and cryptographically
-                # (signature verification below) before any claim is trusted.
-                payload_data = base64.urlsafe_b64decode(payload_segment + padding)
+                    return False, None, _GENERIC_REJECTION_MSG
+                payload_data = base64.urlsafe_b64decode(payload_segment + '=' * (-len(payload_segment) % 4))
                 unverified = json.loads(payload_data)
                 if not isinstance(unverified, dict):
-                    return False, None, "Invalid token format"
-            except (IndexError, ValueError, TypeError):
-                return False, None, "Invalid token format"
+                    return False, None, _GENERIC_REJECTION_MSG
+            except (IndexError, ValueError, TypeError, RecursionError):
+                return False, None, _GENERIC_REJECTION_MSG
 
-            issuer = unverified.get("iss")
-
-            if issuer not in trusted_issuers:
-                safe_issuer = str(issuer)[:128].replace('\n', '').replace('\r', '')
-                return False, None, f"Untrusted issuer: {safe_issuer}"
-
-            # For self-issued attestations, use our key
-            if issuer == self.issuer_did:
-                key_pair = self._ensure_key_pair()
-                public_key = key_pair.public_key_pem
-            else:
-                # Would need to resolve DID and get public key
-                return False, None, "External issuer key resolution not implemented"
+            # Always select the local key; issuer authorization is applied only
+            # AFTER signature verification (no branch on unverified claims).
+            key_pair = self._ensure_key_pair()
+            public_key = key_pair.public_key_pem
 
             # Verify signature and claims
             claims = jwt.decode(
                 jwt_token,
                 public_key,
                 algorithms=["ES256"],
-                options={"require": ["iss", "sub", "iat", "exp", "jti"]},
+                options={"verify_signature": True, "verify_exp": True, "require": ["iss", "sub", "iat", "exp", "jti"]},
             )
+
+            # Now verified: apply issuer authorization. External issuers have no
+            # key resolution implemented (#275) — silent generic, never enumerate.
+            if claims.get("iss") != self.issuer_did:
+                logger.debug("Attestation issuer not supported (verified)")
+                return False, None, _GENERIC_REJECTION_MSG
+
+            if claims.get("iss") not in trusted_issuers:
+                logger.debug("Untrusted issuer (verified)")
+                return False, None, _GENERIC_REJECTION_MSG
 
             # Check revocation
             jti = claims.get("jti")
             if jti in self._revoked_attestations:
-                return False, None, "Attestation has been revoked"
+                logger.debug("Revoked attestation jti=%s rejected", jti)
+                return False, None, _GENERIC_REJECTION_MSG
 
             return True, claims, None
 
         except jwt.ExpiredSignatureError:
-            return False, None, "Attestation has expired"
+            logger.debug("Attestation expired (silent)")
+            return False, None, _GENERIC_REJECTION_MSG
         except jwt.InvalidTokenError as e:
-            return False, None, f"Invalid token: {str(e)}"
+            logger.debug(f"Attestation verification failed (silent): {type(e).__name__}")
+            return False, None, _GENERIC_REJECTION_MSG
 
     def revoke_attestation(self, attestation_id: str) -> bool:
         """Revoke an attestation by ID."""

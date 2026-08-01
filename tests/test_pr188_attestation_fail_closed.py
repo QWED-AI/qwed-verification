@@ -234,23 +234,35 @@ class TestVerifyRejectsNoCrypto(unittest.TestCase):
         self.service = AttestationService(issuer_did="QWED_TEST_ISS", key_suffix="V0")
 
     def test_verify_rejects_oversized_token(self):
-        """verify_attestation must reject total token > 8192 bytes."""
-        _, _, error = self.service.verify_attestation("A" * 8193)
-        self.assertIsNotNone(error)
-        self.assertIn("Token too large", error)
+        """Oversized tokens rejected at silent boundary (#275)."""
+        is_valid, claims, error = self.service.verify_attestation("A" * 8193)
+        self.assertFalse(is_valid)
+        self.assertIsNone(claims)
+        self.assertEqual(error, "Invalid token")
 
     def test_verify_rejects_oversized_payload_segment(self):
-        """verify_attestation must reject payload segment > 4096 bytes."""
-        payload = base64.urlsafe_b64encode(b"x" * 5000).decode().rstrip("=")
-        _, _, error = self.service.verify_attestation(f"header.{payload}.sig")
-        self.assertIsNotNone(error)
-        self.assertIn("Payload segment too large", error)
+        """Oversized payload segment rejected at silent boundary (#275)."""
+        payload = base64.urlsafe_b64encode(b"A" * 4097).decode().rstrip("=")
+        is_valid, claims, error = self.service.verify_attestation(f"header.{payload}.sig")
+        self.assertFalse(is_valid)
+        self.assertIsNone(claims)
+        self.assertEqual(error, "Invalid token")
 
     def test_verify_rejects_invalid_base64(self):
-        """verify_attestation must reject malformed base64 in payload."""
-        _, _, error = self.service.verify_attestation("header.!!!invalid!!!.sig")
-        self.assertIsNotNone(error)
-        self.assertIn("Invalid token format", error)
+        """Malformed base64 rejected at silent boundary (#275)."""
+        is_valid, claims, error = self.service.verify_attestation("header.!!!invalid!!!.sig")
+        self.assertFalse(is_valid)
+        self.assertIsNone(claims)
+        self.assertEqual(error, "Invalid token")
+
+    def test_verify_rejects_deeply_nested_payload(self):
+        """Deeply nested JSON below size limit fails closed (RecursionError)."""
+        payload = "[" * 1500 + "]" * 1500
+        token = f"header.{base64.urlsafe_b64encode(payload.encode()).decode().rstrip('=')}.sig"
+        is_valid, claims, error = self.service.verify_attestation(token)
+        self.assertFalse(is_valid)
+        self.assertIsNone(claims)
+        self.assertEqual(error, "Invalid token")
 
 
 # ---------------------------------------------------------------------------
