@@ -63,11 +63,11 @@
 
 ## Release Update: v6.0.0 — Trust Boundary Completion
 
-`v6.0.0` completes the **Trust Boundary Completion epic** — every verification pathway now routes through `DiagnosticResult` and `enforce_trust_decision` (12/12 sub-issues, #263).
+`v6.0.0` completes the **Trust Boundary Completion epic** — every verification API pathway now returns `DiagnosticResult` and routes through `enforce_trust_decision` (12/12 sub-issues, #263).
 
 - **All `/verify/*` endpoints return `DiagnosticResult`** — unified 3-layer response contract (status / `agent_message` / `developer_fields` / `proof_ref`) across every verification surface
 - **Mandatory attestation in the control plane** — `require_attestation=True`, attestations issued and verified at the admission boundary; enforcement result drives the response status
-- **VERIFIED is a protocol guarantee** — no engine emits VERIFIED without a deterministic `proof_ref`; heuristic/advisory analysis reports `UNVERIFIABLE` with structured `advisory_checks`
+- **VERIFIED is a protocol guarantee** — VERIFIED requires a non-empty `proof_ref` bound to the deterministic evidence; heuristic/advisory analysis reports `UNVERIFIABLE` with structured `advisory_checks`
 - **Architecture contract** — API = observation surface (honest witness), Control Plane = admission authority (judge); rules now codify this separation (#13-15)
 - **Security hardening** — TOCTOU closure in `enforce_trust_decision`, tenant-isolated verification cache, attestation signature-verified before claim decode, Unicode-normalized agent state
 
@@ -670,11 +670,11 @@ We are building the **Universal Verification Standard** for the agentic web.
 
 - **✔ DiagnosticResult model** — Unified 3-layer diagnostic contract, `proof_ref` authority bit, `AdvisoryCheck` pattern (v5.2.0)
 - **✔ SymbolicVerifier migration** — First fully `DiagnosticResult`-conformant engine; serves as reference implementation (v5.3.0)
-- **✔ Trust Boundary Completion** — All verification pathways route through `DiagnosticResult` + `enforce_trust_decision`; mandatory attestation at the admission boundary; VERIFIED requires deterministic proof_ref (v6.0.0)
+- **✔ Trust Boundary Completion** — All verification API pathways return `DiagnosticResult` + route through `enforce_trust_decision`; mandatory attestation at the admission boundary; VERIFIED requires a non-empty, evidence-bound proof_ref (v6.0.0)
 
 ### In Progress
 
-- **Remaining verification engines (#216)** — Migrating the remaining engines to the `DiagnosticResult` model
+- **Remaining verification engines (#216)** — Migrating the remaining engines to the `DiagnosticResult` model (API surfaces are conformant; engine-internal migration continues under META #216)
 
 ### Planned
 
@@ -967,14 +967,14 @@ If you use QWED in your research or project, please cite our archived paper:
   title = {QWED Protocol: Deterministic Verification for Large Language Models},
   year = {2025},
   publisher = {Zenodo},
-  version = {v6.0.0},
+  version = {v5.3.0},
   doi = {10.5281/zenodo.18111675},
   url = {https://doi.org/10.5281/zenodo.18111675}
 }
 ```
 
 **Plain text:**
-> Dass, R. (2025). QWED Protocol: Deterministic Verification for Large Language Models (Version v6.0.0). Zenodo. https://doi.org/10.5281/zenodo.18111675
+> Dass, R. (2025). QWED Protocol: Deterministic Verification for Large Language Models (Version v5.3.0). Zenodo. https://doi.org/10.5281/zenodo.18111675
 
 ---
 

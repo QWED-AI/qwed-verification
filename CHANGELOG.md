@@ -7,7 +7,7 @@ All notable changes to the QWED Protocol will be documented in this file.
 ## [6.0.0] - 2026-08-02
 ### Trust Boundary Completion (Epic #263)
 
-Completes the Trust Boundary Completion epic — all 12/12 sub-issues closed. Every verification pathway now produces `DiagnosticResult` and routes through `enforce_trust_decision`. The trust boundary is no longer advisory: the control plane requires and verifies attestation before admitting VERIFIED results, and VERIFIED is a protocol guarantee backed by deterministic `proof_ref`, never by execution, agreement, confidence, or provenance.
+Completes the Trust Boundary Completion epic — all 12/12 sub-issues closed. Every verification API pathway now returns `DiagnosticResult` and routes through `enforce_trust_decision`. The trust boundary is no longer advisory: the control plane requires and verifies attestation before admitting VERIFIED results, and VERIFIED is a protocol guarantee backed by a non-empty, deterministic `proof_ref`, never by execution, agreement, confidence, or provenance. Engine-level migrations to `DiagnosticResult` remain tracked under META #216.
 
 > **⚠️ Breaking change:** `/verify/*` API responses now use the unified `DiagnosticResult` schema (status / `agent_message` / `developer_fields` / `proof_ref`). Consumers of the previous ad-hoc dict responses must migrate.
 

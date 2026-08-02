@@ -102,17 +102,21 @@ boundary.
 ### 14. Verification Semantics
 
 VERIFIED is a protocol guarantee, not a confidence level. VERIFIED may only be
-emitted when the required deterministic evidence exists and protocol
-invariants are satisfied. Heuristic, probabilistic, or advisory analysis must
-never be promoted to VERIFIED — it must be reported as UNVERIFIABLE with
-structured advisory evidence.
+emitted when a non-empty `proof_ref` exists and is bound to the deterministic
+evidence that produced the verdict. Heuristic, probabilistic, or advisory
+analysis must never be promoted to VERIFIED — it must be reported as
+UNVERIFIABLE with structured advisory evidence.
 
 ### 15. Truth Before Policy
 
 Verification reports truth. Policy decides action. Evidence must never be
-modified to satisfy policy. Enforcement must consume the verified result as
-produced; it must not reinterpret, downgrade, or upgrade the verdict to fit a
-policy outcome.
+modified to satisfy policy. Admission is a separate decision produced by
+`enforce_trust_decision`, distinct from the `DiagnosticResult` the engine
+emitted: a policy denial is represented by that admission decision, and the
+original `DiagnosticResult` and its evidence remain unchanged. Enforcement must
+consume the verified result as produced; it must not reinterpret, downgrade, or
+upgrade the verdict to fit a policy outcome. The control plane consumes the
+admission decision and the preserved diagnostic separately.
 
 ## Forbidden Suggestions
 
