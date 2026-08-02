@@ -61,18 +61,19 @@
 
 ---
 
-## Release Update: v5.3.0 — SymbolicVerifier: DiagnosticResult Reference Implementation
+## Release Update: v6.0.0 — Trust Boundary Completion
 
-`v5.3.0` delivers the **first fully `DiagnosticResult`-conformant verification engine** — SymbolicVerifier is the reference implementation for all future engine migrations (META #216).
+`v6.0.0` completes the **Trust Boundary Completion epic** — every verification API pathway now returns `DiagnosticResult` and routes through `enforce_trust_decision` (12/12 sub-issues, #263).
 
-- **Reference implementation complete:** All 6 public methods (`verify_code`, `verify_function_contract`, `verify_safety_properties`, `verify_bounded`, `analyze_complexity`, `get_verification_budget`) return `DiagnosticResult`
-- **`AdvisoryCheck` in production:** Non-proof-bearing analysis paths (budget advisory, complexity analysis, safety property checks) use the `advisory_checks` pattern — see `analyze_complexity`, `verify_safety_properties` in SymbolicVerifier for reference
-- **`verification_mode` field:** Tracks bounded vs. unbounded analysis across every return path
-- **Math fail-closed bugs fixed:** All three budget-exhaustion safety issues resolved (#129-#131)
-- **Key rotation security:** Attestation key rotation with proof chain (#224)
-- **12 engines remaining** — ecosystem-wide conformance tracked under META issue #216
+- **All `/verify/*` endpoints return `DiagnosticResult`** — unified 3-layer response contract (status / `agent_message` / `developer_fields` / `proof_ref`) across every verification surface
+- **Mandatory attestation in the control plane** — `require_attestation=True`, attestations issued and verified at the admission boundary; enforcement result drives the response status
+- **VERIFIED is a protocol guarantee** — VERIFIED requires a non-empty `proof_ref` bound to the deterministic evidence; heuristic/advisory analysis reports `UNVERIFIABLE` with structured `advisory_checks`
+- **Architecture contract** — API = observation surface (honest witness), Control Plane = admission authority (judge); rules now codify this separation (#13-15)
+- **Security hardening** — TOCTOU closure in `enforce_trust_decision`, tenant-isolated verification cache, attestation signature-verified before claim decode, Unicode-normalized agent state
 
-If you're upgrading from `v5.2.x`, review the [changelog](CHANGELOG.md) for the full migration notes.
+> ⚠️ **Breaking change:** `/verify/*` responses now use the `DiagnosticResult` schema. Consumers parsing the previous ad-hoc dict format must migrate to the unified contract.
+
+If you're upgrading from `v5.3.x`, review the [changelog](CHANGELOG.md) for the full migration notes.
 
 ---
 
@@ -669,14 +670,15 @@ We are building the **Universal Verification Standard** for the agentic web.
 
 - **✔ DiagnosticResult model** — Unified 3-layer diagnostic contract, `proof_ref` authority bit, `AdvisoryCheck` pattern (v5.2.0)
 - **✔ SymbolicVerifier migration** — First fully `DiagnosticResult`-conformant engine; serves as reference implementation (v5.3.0)
+- **✔ Trust Boundary Completion** — All verification API pathways return `DiagnosticResult` + route through `enforce_trust_decision`; mandatory attestation at the admission boundary; VERIFIED requires a non-empty, evidence-bound proof_ref (v6.0.0)
 
 ### In Progress
 
-- **Remaining verification engines (#216)** — Migrating the 12 remaining engines to the `DiagnosticResult` model
+- **Remaining verification engines (#216)** — Migrating the remaining engines to the `DiagnosticResult` model (API surfaces are conformant; engine-internal migration continues under META #216)
 
 ### Planned
 
-- **v6.0:** QWED Client-Side (WebAssembly), Distributed Verification Network, cross-ecosystem proof exchange
+- **v6.1+:** QWED Client-Side (WebAssembly), Distributed Verification Network, cross-ecosystem proof exchange
 
 ---
 

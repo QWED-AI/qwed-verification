@@ -4,6 +4,72 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+## [6.0.0] - 2026-08-02
+### Trust Boundary Completion (Epic #263)
+
+Completes the Trust Boundary Completion epic — all 12/12 sub-issues closed. Every verification API pathway now returns `DiagnosticResult` and routes through `enforce_trust_decision`. The trust boundary is no longer advisory: the control plane requires and verifies attestation before admitting VERIFIED results, and VERIFIED is a protocol guarantee backed by a non-empty, deterministic `proof_ref`, never by execution, agreement, confidence, or provenance. Engine-level migrations to `DiagnosticResult` remain tracked under META #216.
+
+> **⚠️ Breaking change:** `/verify/*` API responses now use the unified `DiagnosticResult` schema (status / `agent_message` / `developer_fields` / `proof_ref`). Consumers of the previous ad-hoc dict responses must migrate.
+
+#### Architecture: Observation vs Admission (#264, #265)
+- **All `/verify/*` endpoints return `DiagnosticResult`** (PR #276)
+- **Control plane enforces mandatory attestation** — `require_attestation=True`, attestation issued + verified, enforced status drives HTTP response status (PR #278)
+- **Batch math** routes through `DiagnosticResult` + attestation + `enforce_trust_decision` (PR #282)
+- **Attestation scope alignment** — attest translated expression, not natural-language query, so `query_hash` binds to what was actually verified (#279, PR #285)
+
+#### VERIFIED is a protocol guarantee (#266, #267, #269, #270)
+- **ConsensusResult** uses `DiagnosticStatus` enum with `proof_ref` + `verified_evidence` (PR #280)
+- **FactVerifier** heuristic SUPPORTED verdict → UNVERIFIABLE with `advisory_checks` (PR #283)
+- **Consensus code execution** advisory-only, VERIFIED → UNVERIFIABLE (PR #281)
+- **Consensus stats computation** advisory-only, never VERIFIED (PR #277)
+- **LogicVerifier** migrated to `DiagnosticResult` (PR #262)
+- **AgentStateGuard** `proof_ref` = real sha256 of committed bytes, not a static sentence (#268, PR #284)
+
+#### Engineering & Security Hardening
+- **TOCTOU closure** in `enforce_trust_decision` — `developer_fields` snapshotted via recursive rebuild (no `deepcopy` alias window), fail-closed snapshot (#273, PR #290)
+- **Attestation signature verified before claim decode** — silent generic error for all failure modes (#275, PR #287)
+- **Tenant-isolated verification cache** — `VerificationCache` keys namespaced by normalized `tenant_id` (#274, PR #286)
+- **Unicode normalization** in AgentStateGuard canonicalization — NFC collisions rejected (#272, PR #288)
+- **Mandatory proof artifact** for VERIFIED attestations (issuance + consumption, PR #248)
+- **Credential / JWT / dockerignore security alerts** resolved (PR #249)
+- **Math whitelist injection bypass** removed (PR #251)
+- **Engine classification docs** — Proof / Policy Enforcement / Advisory (PR #247)
+
+#### Rules & Protocol Semantics
+- `QWED_RULES.md` codifies the trust-boundary contract: **#13 Separation of Responsibilities**, **#14 Verification Semantics**, **#15 Truth Before Policy**; rules #7/#8 updated to capture admission-boundary and deterministic-proof semantics
+
+#### Version Propagation
+- `qwed` (PyPI): `5.3.0` -> `6.0.0`
+- `qwed_sdk` (Python): `5.3.0` -> `6.0.0`
+- `@qwed-ai/sdk` (NPM): `5.3.0` -> `6.0.0`
+- `qwed` (crates.io/Rust): `5.3.0` -> `6.0.0`
+- API version marker: `5.3.0` -> `6.0.0`
+- Kubernetes deployment image: `5.3.0` -> `6.0.0`
+- Deployment docs + historical roadmap version references updated
+
+#### Included PRs
+- `#247` docs: engine classification — Proof / Policy Enforcement / Advisory
+- `#248` fix(#191): enforce mandatory proof artifact on VERIFIED attestations (issuance + consumption)
+- `#249` fix: resolve credential / JWT / dockerignore security alerts
+- `#251` fix(#227): remove math whitelist injection bypass
+- `#260` fix(#257): hybrid engine advisory-only — never VERIFIED without proof
+- `#261` fix(#259): FactVerifier advisory-only
+- `#262` feat(#252): LogicVerifier migrated to DiagnosticResult
+- `#276` fix(api): migrate all /verify/* endpoints to return DiagnosticResult (#264)
+- `#277` fix(#270): consensus stats advisory-only, never VERIFIED
+- `#278` fix(#265): control plane trust enforcement mandatory
+- `#280` fix(#266): ConsensusResult DiagnosticStatus enum + proof_ref + verified_evidence
+- `#281` fix(#269): consensus code execution advisory-only
+- `#282` fix(#271): batch math DiagnosticResult → proof_ref + attestation + enforce_trust_decision
+- `#283` fix(#267): FactVerifier SUPPORTED → UNVERIFIABLE with heuristic advisory_checks
+- `#284` fix(#268): AgentStateGuard proof_ref real sha256
+- `#285` fix(#279): attest translated expression, not natural language query
+- `#286` fix(#274): VerificationCache tenant isolation
+- `#287` fix(#275): attestation verify-before-decode + silent generic error
+- `#288` fix(#272): NFC-normalize AgentStateGuard canonicalization
+- `#289` fix: mock network in secret redaction tests (CI)
+- `#290` fix(#273): close TOCTOU in enforce_trust_decision
+
 ## [5.3.0] - 2026-07-25
 ### SymbolicVerifier: DiagnosticResult Reference Implementation
 
