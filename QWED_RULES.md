@@ -52,7 +52,10 @@ execution in a degraded mode. Silent degradation is a vulnerability in waiting.
 
 Security and verification boundaries are not optional features. They must be
 on by default, server-side, and not configurable or bypassable by user input.
-The user cannot opt out of enforcement.
+The user cannot opt out of enforcement. Admission boundaries must be
+server-side and mandatory. Observation surfaces (e.g., read-only verification
+endpoints) must never silently become admission authorities — the role of each
+surface is an explicit architectural decision.
 
 ### 8. Verify Claims, Not Sources
 
@@ -60,6 +63,8 @@ Claims must be verified by deterministic computation (SymPy, Z3, pgTAP,
 SQLGlot), not by the source of the claim. LLM outputs, confidence scores,
 reasoning chains, and metadata are inputs to the verification pipeline—they
 are not proof. Trust comes from deterministic verification, not from origin.
+Proof is established by deterministic evidence, not by successful execution,
+agreement, confidence, or provenance.
 
 ### 9. Ecosystem Neutrality
 
@@ -85,6 +90,29 @@ Introducing a new boundary or security layer must not reduce the severity of
 existing, unfixed security issues. All existing vulnerabilities retain their
 priority until resolved. New enforcement layers are additive, not
 substitutional.
+
+### 13. Separation of Responsibilities
+
+Verification and enforcement are distinct architectural responsibilities.
+Verification produces deterministic evidence (`DiagnosticResult`). Enforcement
+consumes verified evidence to make admission decisions. Components must not
+combine these responsibilities unless explicitly designed as an admission
+boundary.
+
+### 14. Verification Semantics
+
+VERIFIED is a protocol guarantee, not a confidence level. VERIFIED may only be
+emitted when the required deterministic evidence exists and protocol
+invariants are satisfied. Heuristic, probabilistic, or advisory analysis must
+never be promoted to VERIFIED — it must be reported as UNVERIFIABLE with
+structured advisory evidence.
+
+### 15. Truth Before Policy
+
+Verification reports truth. Policy decides action. Evidence must never be
+modified to satisfy policy. Enforcement must consume the verified result as
+produced; it must not reinterpret, downgrade, or upgrade the verdict to fit a
+policy outcome.
 
 ## Forbidden Suggestions
 

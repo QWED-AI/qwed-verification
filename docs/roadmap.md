@@ -1,6 +1,6 @@
 # QWED Roadmap — Historical Archive
 
-> ⚠️ **This document is a historical archive.** The QWED roadmap has moved to [docs.qwedai.com](https://docs.qwedai.com). The information below is preserved for reference only and may not reflect the current (v5.2.0+) ecosystem.
+> ⚠️ **This document is a historical archive.** The QWED roadmap has moved to [docs.qwedai.com](https://docs.qwedai.com). The information below is preserved for reference only and may not reflect the current (v6.0.0+) ecosystem.
 
 **Vision:** The First Open Source Neurosymbolic AI Guardrail
 

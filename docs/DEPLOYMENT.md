@@ -23,7 +23,7 @@ A `Dockerfile` is provided in the root directory. It builds the QWED core servic
 
 ```bash
 # Build the image manually
-docker build -t qweda/qwed-verification:5.3.0 .
+docker build -t qweda/qwed-verification:6.0.0 .
 ```
 
 ### Docker Compose
