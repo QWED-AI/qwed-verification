@@ -772,6 +772,9 @@ class TestReviewRegressions:
         assert result.status is DiagnosticStatus.VERIFIED
         assert result.developer_fields["is_valid"] is False
         assert result.proof_ref is not None
+        assert result.constraint_id == "schema_verifier.ucp_violation"
+        assert result.developer_fields["transaction_type"] == "UCP"
+        assert result.developer_fields["currency"] == "USD"
 
     def test_ucp_string_amount_fails_closed(self, verifier):
         """String amount fields must not raise TypeError."""
@@ -783,6 +786,9 @@ class TestReviewRegressions:
         result = verifier.verify_ucp_transaction(transaction)
         assert result.developer_fields["is_valid"] is False
         assert result.proof_ref is not None
+        assert result.constraint_id == "schema_verifier.ucp_violation"
+        assert result.developer_fields["transaction_type"] == "UCP"
+        assert result.developer_fields["currency"] == "USD"
 
     def test_ucp_none_amount_fails_closed(self, verifier):
         """None amount fields must not raise TypeError."""
@@ -810,6 +816,14 @@ class TestReviewRegressions:
 
 class TestSchemaShapeValidation:
     """Regression coverage for _validate_schema_shape malformed keyword shapes."""
+
+    def test_format_violation_is_advisory_warning(self, verifier):
+        """A bad email format produces a WARNING issue, not an ERROR."""
+        schema = {"type": "string", "format": "email"}
+        result = verifier.verify("not-an-email", schema)
+        assert result.developer_fields["is_valid"] is True
+        assert result.developer_fields["issues"][0]["type"] == "format_violation"
+        assert result.developer_fields["issues"][0]["severity"] == "WARNING"
 
     @pytest.mark.parametrize("schema", [
         {"type": "banana"},                              # unknown type string
@@ -994,6 +1008,57 @@ class TestEvidenceNormalization:
         cyclic["self"] = cyclic
         with pytest.raises(ValueError):
             _evidence_proof_data(cyclic)
+
+    def test_evidence_proof_data_json_serialization_error(self, verifier):
+        """json.dumps failures inside _evidence_proof_data become ValueError."""
+        from unittest.mock import patch
+        import qwed_new.core.schema_verifier as sv
+        with patch.object(sv.json, "dumps", side_effect=TypeError("boom")):
+            result = verifier.verify({"a": 1}, {"type": "object"})
+            assert result.status is DiagnosticStatus.BLOCKED
+            assert result.constraint_id == "schema_verifier.validation_error"
+            assert result.proof_ref is None
+
+    def test_ucp_blocked_base_result_passthrough(self, verifier):
+        """A BLOCKED base verify result is passed through unchanged."""
+        from unittest.mock import patch
+        from qwed_new.core.diagnostics import DiagnosticResult
+        blocked = DiagnosticResult.blocked(
+            "blocked", {"constraint_id": "schema_verifier.validation_error"}
+        )
+        with patch.object(verifier, "verify", return_value=blocked):
+            result = verifier.verify_ucp_transaction({"subtotal": 1, "total": 1})
+        assert result is blocked
+
+    def test_ucp_evidence_normalization_failed_returns_blocked(self, verifier):
+        """UCP evidence normalization failure returns BLOCKED with validation_error."""
+        from unittest.mock import patch
+        import qwed_new.core.schema_verifier as sv
+        with patch.object(sv, "_evidence_proof_data", side_effect=ValueError("boom")):
+            result = verifier.verify_ucp_transaction({"subtotal": 1, "total": 1})
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.validation_error"
+        assert result.proof_ref is None
+
+    def test_schema_shape_direct_non_dict(self, verifier):
+        """_validate_schema_shape returns the non-dict error message."""
+        errors = verifier._validate_schema_shape("not-a-schema")
+        assert errors and "must be a dict" in errors[0]
+
+
+    def test_huge_int_bounds_no_overflow(self, verifier):
+        """Huge Python ints are treated as finite — no OverflowError crash."""
+        result = verifier.verify(5, {"type": "number", "minimum": 10**1000})
+        assert result.status is DiagnosticStatus.VERIFIED
+        assert result.developer_fields["is_valid"] is False
+        assert result.proof_ref is not None
+
+    def test_huge_int_multipleOf_no_overflow(self, verifier):
+        """Huge Python ints for multipleOf must not crash the shape check."""
+        result = verifier.verify(5, {"type": "number", "multipleOf": 10**1000})
+        assert result.status is DiagnosticStatus.VERIFIED
+        assert result.developer_fields["is_valid"] is False
+        assert result.proof_ref is not None
 
 
 if __name__ == "__main__":
