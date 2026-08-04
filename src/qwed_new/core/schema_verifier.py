@@ -48,18 +48,63 @@ _CONSTRAINT_ID_UCP_VIOLATION = "schema_verifier.ucp_violation"
 def _json_safe(value: Any) -> Any:
     """Recursively normalize a value to JSON-serializable primitives.
 
-    Sets and other non-JSON types are converted deterministically so the
-    proof_ref evidence hash is stable and never raises.
+    Only JSON-safe containers and primitives are accepted. Sets are converted
+    to sorted lists. Unsupported values and cyclic containers raise
+    ValueError — proof-bearing evidence must never include process-dependent
+    representations (e.g. ``repr`` of arbitrary objects embeds memory
+    addresses, making proof_ref unstable across processes).
+
+    Raises:
+        ValueError: if the value contains a cycle or an unsupported type.
     """
-    if isinstance(value, dict):
-        return {str(key): _json_safe(v) for key, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(v) for v in value]
-    if isinstance(value, (set, frozenset)):
-        return [_json_safe(v) for v in sorted(value, key=repr)]
-    if isinstance(value, (str, int, float, bool)) or value is None:
+    return _normalize(value, set())
+
+
+def _normalize(value: Any, seen: set) -> Any:
+    """Return a JSON-safe copy of ``value``, failing closed on cycles/unsupported types.
+
+    ``seen`` tracks the container id path so shared references are allowed but
+    genuine cycles are rejected deterministically.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
         return value
-    return repr(value)
+    if isinstance(value, (list, tuple)):
+        oid = id(value)
+        if oid in seen:
+            raise ValueError("cyclic value cannot be serialized into proof evidence")
+        seen.add(oid)
+        try:
+            return [_normalize(item, seen) for item in value]
+        finally:
+            seen.discard(oid)
+    if isinstance(value, (set, frozenset)):
+        oid = id(value)
+        if oid in seen:
+            raise ValueError("cyclic value cannot be serialized into proof evidence")
+        seen.add(oid)
+        try:
+            normalized = [_normalize(item, seen) for item in value]
+        finally:
+            seen.discard(oid)
+        return sorted(normalized, key=repr)
+    if isinstance(value, dict):
+        oid = id(value)
+        if oid in seen:
+            raise ValueError("cyclic value cannot be serialized into proof evidence")
+        for key in value:
+            if not isinstance(key, str):
+                raise ValueError(
+                    "non-string key in evidence object: "
+                    f"expected str, got {type(key).__name__}"
+                )
+        seen.add(oid)
+        try:
+            return {key: _normalize(item, seen) for key, item in value.items()}
+        finally:
+            seen.discard(oid)
+    raise ValueError(
+        f"unsupported value type in proof evidence: {type(value).__name__}"
+    )
 
 
 class SchemaVerifier:
@@ -152,6 +197,16 @@ class SchemaVerifier:
                 },
             )
 
+        schema_errors = self._validate_schema_shape(schema)
+        if schema_errors:
+            return DiagnosticResult.blocked(
+                "Schema verification blocked: the schema could not be parsed",
+                {
+                    "constraint_id": _CONSTRAINT_ID_PARSE_ERROR,
+                    "errors": schema_errors,
+                },
+            )
+
         issues: List[SchemaIssue] = []
         stats = {"paths_checked": 0, "constraints_checked": 0}
 
@@ -196,14 +251,24 @@ class SchemaVerifier:
             },
         }
 
-        schema_evidence = {
-            "schema": _json_safe(schema),
-            "instance": _json_safe(data),
-            "verdict": "VALID" if is_valid else "INVALID",
-            "issues": serialized_issues,
-            "paths_checked": stats["paths_checked"],
-            "constraints_checked": stats["constraints_checked"],
-        }
+        try:
+            schema_evidence = {
+                "schema": _json_safe(schema),
+                "instance": _json_safe(data),
+                "verdict": "VALID" if is_valid else "INVALID",
+                "issues": serialized_issues,
+                "paths_checked": stats["paths_checked"],
+                "constraints_checked": stats["constraints_checked"],
+            }
+        except ValueError as exc:
+            return DiagnosticResult.blocked(
+                "Schema verification blocked: proof evidence could not be normalized",
+                {
+                    "constraint_id": _CONSTRAINT_ID_VALIDATION_ERROR,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
 
         if is_valid:
             agent_message = "Data conforms to the declared schema."
@@ -218,7 +283,101 @@ class SchemaVerifier:
             developer_fields=developer_fields,
             evidence=schema_evidence,
         )
-    
+
+    def _validate_schema_shape(self, schema: Any, path: str = "$") -> List[str]:
+        """Recursively meta-validate schema keyword shapes.
+
+        Malformed keyword values must be rejected as parse errors instead of
+        being silently treated as empty/omitted. Returns a list of error
+        messages; an empty list means the schema shape is well-formed.
+        """
+        if not isinstance(schema, dict):
+            return [f"{path}: schema must be a dict, got {type(schema).__name__}"]
+
+        errors: List[str] = []
+
+        type_kw = schema.get("type")
+        if type_kw is not None:
+            if isinstance(type_kw, str):
+                if type_kw not in self.TYPE_MAP:
+                    errors.append(f"{path}.type: unknown type {type_kw!r}")
+            elif isinstance(type_kw, list):
+                if not type_kw or not all(isinstance(t, str) and t in self.TYPE_MAP for t in type_kw):
+                    errors.append(f"{path}.type: must be a list of valid types")
+            else:
+                errors.append(f"{path}.type: must be a string or list of strings")
+
+        if "enum" in schema and not isinstance(schema["enum"], list):
+            errors.append(f"{path}.enum: must be a list")
+
+        if "properties" in schema:
+            props = schema["properties"]
+            if not isinstance(props, dict):
+                errors.append(f"{path}.properties: must be a dict")
+            else:
+                for prop_name, prop_schema in props.items():
+                    if not isinstance(prop_schema, dict):
+                        errors.append(f"{path}.properties.{prop_name}: must be a schema dict")
+                    else:
+                        errors.extend(self._validate_schema_shape(prop_schema, f"{path}.properties.{prop_name}"))
+
+        if "required" in schema:
+            req = schema["required"]
+            if not isinstance(req, list) or not all(isinstance(r, str) for r in req):
+                errors.append(f"{path}.required: must be a list of strings")
+
+        additional = schema.get("additionalProperties", True)
+        if not isinstance(additional, (bool, dict)):
+            errors.append(f"{path}.additionalProperties: must be a bool or schema dict")
+        elif isinstance(additional, dict):
+            errors.extend(self._validate_schema_shape(additional, f"{path}.additionalProperties"))
+
+        if "items" in schema:
+            items = schema["items"]
+            if isinstance(items, dict):
+                errors.extend(self._validate_schema_shape(items, f"{path}.items"))
+            else:
+                errors.append(f"{path}.items: must be a schema dict")
+
+        if "prefixItems" in schema:
+            prefix = schema["prefixItems"]
+            if not isinstance(prefix, list):
+                errors.append(f"{path}.prefixItems: must be a list of schemas")
+            else:
+                for i, item_schema in enumerate(prefix):
+                    if isinstance(item_schema, dict):
+                        errors.extend(self._validate_schema_shape(item_schema, f"{path}.prefixItems[{i}]"))
+                    else:
+                        errors.append(f"{path}.prefixItems[{i}]: must be a schema dict")
+
+        for kw in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"):
+            if kw in schema and (
+                not isinstance(schema[kw], (int, float)) or isinstance(schema[kw], bool)
+            ):
+                errors.append(f"{path}.{kw}: must be a number")
+
+        if "multipleOf" in schema and (
+            not isinstance(schema["multipleOf"], (int, float))
+            or isinstance(schema["multipleOf"], bool)
+            or schema["multipleOf"] <= 0
+        ):
+            errors.append(f"{path}.multipleOf: must be a positive number")
+
+        for kw in ("minLength", "maxLength", "minItems", "maxItems", "minProperties", "maxProperties"):
+            if kw in schema and (
+                not isinstance(schema[kw], int) or isinstance(schema[kw], bool)
+            ):
+                errors.append(f"{path}.{kw}: must be an integer")
+
+        for kw in ("pattern", "format"):
+            if kw in schema and not isinstance(schema[kw], str):
+                errors.append(f"{path}.{kw}: must be a string")
+
+        if "uniqueItems" in schema and not isinstance(schema["uniqueItems"], bool):
+            errors.append(f"{path}.uniqueItems: must be a bool")
+
+        return errors
+
     def _validate_node(
         self,
         data: Any,
@@ -677,7 +836,7 @@ class SchemaVerifier:
         For fields like 'total', 'tax', etc., verify against
         related fields using float comparison.
         """
-        if not isinstance(value, (int, float)):
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
             return
         
         # Example: total = subtotal + tax
@@ -685,9 +844,13 @@ class SchemaVerifier:
             subtotal = parent_data.get("subtotal")
             tax = parent_data.get("tax") or parent_data.get("tax_amount", 0)
             
-            if subtotal is not None:
+            if (
+                subtotal is not None
+                and isinstance(subtotal, (int, float)) and not isinstance(subtotal, bool)
+                and isinstance(tax, (int, float)) and not isinstance(tax, bool)
+            ):
                 stats["constraints_checked"] += 1
-                expected = subtotal + (tax or 0)
+                expected = subtotal + tax
                 
                 # Use decimal comparison for currency
                 if abs(value - expected) > 0.01:  # Allow 1 cent tolerance
@@ -704,7 +867,11 @@ class SchemaVerifier:
             subtotal = parent_data.get("subtotal")
             tax_rate = parent_data.get("tax_rate")
             
-            if subtotal is not None and tax_rate is not None:
+            if (
+                subtotal is not None and tax_rate is not None
+                and isinstance(subtotal, (int, float)) and not isinstance(subtotal, bool)
+                and isinstance(tax_rate, (int, float)) and not isinstance(tax_rate, bool)
+            ):
                 stats["constraints_checked"] += 1
                 expected = subtotal * tax_rate
                 
@@ -769,45 +936,59 @@ class SchemaVerifier:
         }
         
         result = self.verify(transaction, schema, strict=False)
-        if not result.is_verified:
+        # Fail closed: pass through BLOCKED, and short-circuit on any
+        # deterministic schema violation (e.g. non-dict transaction, or
+        # non-numeric amount fields). The base result already carries the
+        # structured violation; UCP-specific arithmetic would otherwise raise
+        # TypeError/AttributeError on unusable inputs.
+        if not result.is_verified or not result.developer_fields.get("is_valid", True):
             return result
         
         # Additional UCP-specific checks (issue dicts, JSON-safe).
         issues = list(result.developer_fields["issues"])
         
-        # Currency precision check
-        precision = self.CURRENCY_PRECISION.get(currency, 2)
-        for field in ["subtotal", "tax", "discount", "total"]:
-            if field in transaction:
-                value = transaction[field]
-                if isinstance(value, float):
-                    decimal_places = len(str(value).split(".")[-1]) if "." in str(value) else 0
-                    if decimal_places > precision:
-                        issues.append({
-                            "path": f"$.{field}",
-                            "type": "currency_precision",
-                            "expected": f"max {precision} decimal places for {currency}",
-                            "actual": f"{decimal_places} decimal places",
-                            "severity": "WARNING",
-                            "message": f"Currency precision exceeded for {currency}"
-                        })
-        
-        # Verify computed total
-        subtotal = transaction.get("subtotal", 0)
-        tax = transaction.get("tax", 0)
-        discount = transaction.get("discount", 0)
-        total = transaction.get("total", 0)
-        
-        expected_total = subtotal + tax - discount
-        if abs(total - expected_total) > 0.01:
-            issues.append({
-                "path": "$.total",
-                "type": "math_verification_failed",
-                "expected": f"{expected_total:.2f}",
-                "actual": f"{total:.2f}",
-                "severity": "ERROR",
-                "message": f"Total mismatch: {subtotal} + {tax} - {discount} = {expected_total:.2f}, got {total:.2f}"
-            })
+        try:
+            # Currency precision check
+            precision = self.CURRENCY_PRECISION.get(currency, 2) if isinstance(currency, str) else 2
+            for field in ["subtotal", "tax", "discount", "total"]:
+                if field in transaction:
+                    value = transaction[field]
+                    if isinstance(value, float):
+                        decimal_places = len(str(value).split(".")[-1]) if "." in str(value) else 0
+                        if decimal_places > precision:
+                            issues.append({
+                                "path": f"$.{field}",
+                                "type": "currency_precision",
+                                "expected": f"max {precision} decimal places for {currency}",
+                                "actual": f"{decimal_places} decimal places",
+                                "severity": "WARNING",
+                                "message": f"Currency precision exceeded for {currency}"
+                            })
+            
+            # Verify computed total
+            subtotal = transaction.get("subtotal", 0)
+            tax = transaction.get("tax", 0)
+            discount = transaction.get("discount", 0)
+            total = transaction.get("total", 0)
+            
+            expected_total = subtotal + tax - discount
+            if abs(total - expected_total) > 0.01:
+                issues.append({
+                    "path": "$.total",
+                    "type": "math_verification_failed",
+                    "expected": f"{expected_total:.2f}",
+                    "actual": f"{total:.2f}",
+                    "severity": "ERROR",
+                    "message": f"Total mismatch: {subtotal} + {tax} - {discount} = {expected_total:.2f}, got {total:.2f}"
+                })
+        except Exception as exc:
+            return DiagnosticResult.blocked(
+                "UCP transaction verification blocked: an unexpected validation error occurred",
+                {
+                    "constraint_id": _CONSTRAINT_ID_VALIDATION_ERROR,
+                    "error_type": type(exc).__name__,
+                },
+            )
         
         is_valid = len([i for i in issues if i.get("severity") == "ERROR"]) == 0
         
@@ -827,13 +1008,23 @@ class SchemaVerifier:
             },
         }
         
-        ucp_evidence = {
-            "schema": _json_safe(schema),
-            "instance": _json_safe(transaction),
-            "verdict": "VALID" if is_valid else "INVALID",
-            "issues": issues,
-            "currency": currency,
-        }
+        try:
+            ucp_evidence = {
+                "schema": _json_safe(schema),
+                "instance": _json_safe(transaction),
+                "verdict": "VALID" if is_valid else "INVALID",
+                "issues": issues,
+                "currency": currency if isinstance(currency, str) else str(currency),
+            }
+        except ValueError as exc:
+            return DiagnosticResult.blocked(
+                "UCP transaction verification blocked: proof evidence could not be normalized",
+                {
+                    "constraint_id": _CONSTRAINT_ID_VALIDATION_ERROR,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
         
         agent_message = (
             "UCP transaction conforms to the declared schema."

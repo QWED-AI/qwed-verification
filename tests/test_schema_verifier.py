@@ -657,5 +657,156 @@ class TestEdgeCases:
         assert result.developer_fields["is_valid"] is True
 
 
+class TestReviewRegressions:
+    """Regression tests for review findings (proof stability, malformed
+    schemas, UCP type safety)."""
+
+    def test_unsupported_value_fails_closed(self, verifier):
+        """Objects with unsupported (non-JSON) values must not produce
+        address-dependent proof_refs — fail closed with BLOCKED."""
+        class Unserializable:
+            pass
+        schema = {"type": "object", "properties": {}}
+        result = verifier.verify({"x": Unserializable()}, schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.proof_ref is None
+        assert result.constraint_id == "schema_verifier.validation_error"
+
+    def test_cyclic_value_fails_closed(self, verifier):
+        """Cyclic data must fail closed with BLOCKED, not recurse forever."""
+        schema = {"type": "object", "properties": {}}
+        data = {"x": []}
+        data["x"].append(data)
+        result = verifier.verify(data, schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.proof_ref is None
+        assert result.constraint_id == "schema_verifier.validation_error"
+
+    def test_shared_reference_allowed(self, verifier):
+        """A shared (non-cyclic) reference is not a cycle and stays VERIFIED."""
+        schema = {"type": "object", "properties": {}}
+        shared = {"name": "x"}
+        result = verifier.verify({"a": shared, "b": shared}, schema)
+        assert result.is_verified is True
+
+    def test_set_value_normalized_to_sorted_list(self, verifier):
+        """Set values are normalized deterministically into the evidence."""
+        schema = {"type": "object", "properties": {}}
+        result = verifier.verify({"tags": {"b", "a"}}, schema)
+        assert result.is_verified is True
+        assert result.proof_ref is not None
+
+    def test_proof_ref_is_cross_process_stable(self, verifier):
+        """The same logical input must produce the same proof_ref in a fresh
+        process (no memory-address dependent repr in evidence)."""
+        import subprocess
+        import sys
+        import os
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        code = (
+            "import json, sys\n"
+            "from qwed_new.core.schema_verifier import SchemaVerifier\n"
+            "schema = {'type': 'object', 'properties': {'name': {'type': 'string'}}}\n"
+            "r = SchemaVerifier().verify({'name': 'John'}, schema)\n"
+            "print(r.proof_ref)\n"
+        )
+        env = dict(os.environ)
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        src = os.path.join(root, "src")
+        env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
+
+        outputs = []
+        for _ in range(2):
+            proc = subprocess.run(
+                [sys.executable, "-c", code],
+                capture_output=True,
+                text=True,
+                cwd=root,
+                env=env,
+            )
+            assert proc.returncode == 0, proc.stderr
+            outputs.append(proc.stdout.strip())
+
+        assert len(outputs) == 2
+        assert outputs[0] == outputs[1]
+        assert outputs[0].startswith("sha256:")
+
+    def test_malformed_properties_fails_closed(self, verifier):
+        """Non-dict properties must be BLOCKED, not silently treated as empty."""
+        schema = {"type": "object", "properties": []}
+        result = verifier.verify({"role": "admin"}, schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.proof_ref is None
+        assert result.constraint_id == "schema_verifier.parse_error"
+
+    def test_malformed_required_fails_closed(self, verifier):
+        """Non-list-of-strings required must be BLOCKED."""
+        schema = {"type": "object", "required": ["a", 42]}
+        result = verifier.verify({"a": 1}, schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.parse_error"
+
+    def test_malformed_numeric_constraint_fails_closed(self, verifier):
+        """Non-numeric minimum must be BLOCKED."""
+        schema = {"type": "number", "minimum": "zero"}
+        result = verifier.verify(5, schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.parse_error"
+
+    def test_malformed_nested_properties_fails_closed(self, verifier):
+        """Malformed nested property schema must be BLOCKED."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "user": {"type": "object", "properties": "nope"}
+            }
+        }
+        result = verifier.verify({"user": {}}, schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.parse_error"
+
+    def test_ucp_non_dict_transaction_fails_closed(self, verifier):
+        """Non-dict UCP transaction must not raise AttributeError."""
+        result = verifier.verify_ucp_transaction("not-a-dict")
+        assert result.status is DiagnosticStatus.VERIFIED
+        assert result.developer_fields["is_valid"] is False
+        assert result.proof_ref is not None
+
+    def test_ucp_string_amount_fails_closed(self, verifier):
+        """String amount fields must not raise TypeError."""
+        transaction = {
+            "subtotal": "100.00",
+            "tax": 10.00,
+            "total": 110.00,
+        }
+        result = verifier.verify_ucp_transaction(transaction)
+        assert result.developer_fields["is_valid"] is False
+        assert result.proof_ref is not None
+
+    def test_ucp_none_amount_fails_closed(self, verifier):
+        """None amount fields must not raise TypeError."""
+        transaction = {
+            "subtotal": None,
+            "tax": 10.00,
+            "total": 110.00,
+        }
+        result = verifier.verify_ucp_transaction(transaction)
+        assert result.developer_fields["is_valid"] is False
+        assert result.proof_ref is not None
+
+    def test_ucp_discount_string_fails_closed(self, verifier):
+        """A bad discount type must not crash the computed-total arithmetic."""
+        transaction = {
+            "subtotal": 100.00,
+            "tax": 10.00,
+            "discount": "bad",
+            "total": 110.00,
+        }
+        result = verifier.verify_ucp_transaction(transaction)
+        assert result.developer_fields["is_valid"] is False
+        assert result.proof_ref is not None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
