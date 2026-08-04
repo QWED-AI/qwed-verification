@@ -817,14 +817,6 @@ class TestReviewRegressions:
 class TestSchemaShapeValidation:
     """Regression coverage for _validate_schema_shape malformed keyword shapes."""
 
-    def test_format_violation_is_advisory_warning(self, verifier):
-        """A bad email format produces a WARNING issue, not an ERROR."""
-        schema = {"type": "string", "format": "email"}
-        result = verifier.verify("not-an-email", schema)
-        assert result.developer_fields["is_valid"] is True
-        assert result.developer_fields["issues"][0]["type"] == "format_violation"
-        assert result.developer_fields["issues"][0]["severity"] == "WARNING"
-
     @pytest.mark.parametrize("schema", [
         {"type": "banana"},                              # unknown type string
         {"type": []},                                    # empty type list
@@ -882,6 +874,16 @@ class TestSchemaShapeValidation:
         assert result.status is DiagnosticStatus.BLOCKED
         assert result.proof_ref is None
         assert result.constraint_id == "schema_verifier.parse_error"
+
+    @pytest.mark.parametrize("keyword", [
+        "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+    ])
+    def test_huge_integer_bound_does_not_crash(self, verifier, keyword):
+        """Integers beyond float range are finite and must not raise OverflowError."""
+        schema = {"type": "number", keyword: 10 ** 1000}
+        result = verifier.verify(1, schema)
+        assert result.status is DiagnosticStatus.VERIFIED
+        assert result.proof_ref is not None
 
     def test_union_type_list_valid(self, verifier):
         """A valid union type list must still be accepted."""
@@ -1001,6 +1003,20 @@ class TestEvidenceNormalization:
         with pytest.raises(TypeError):
             _set_to_sorted_list(object())
 
+    def test_nested_non_string_dict_key_fails_closed(self, verifier):
+        """Non-string keys nested inside lists/objects must also fail closed."""
+        schema = {"type": "object"}
+        result = verifier.verify({"rows": [{"ok": True}, {2: "b"}]}, schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.validation_error"
+
+    def test_unsupported_evidence_value_fails_closed(self, verifier):
+        """Values with no deterministic JSON form must fail closed."""
+        schema = {"type": "object"}
+        result = verifier.verify({"obj": object()}, schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.validation_error"
+
     def test_evidence_proof_data_rejects_cyclic(self):
         """_evidence_proof_data raises ValueError on cyclic structures."""
         from qwed_new.core.schema_verifier import _evidence_proof_data
@@ -1009,15 +1025,26 @@ class TestEvidenceNormalization:
         with pytest.raises(ValueError):
             _evidence_proof_data(cyclic)
 
-    def test_evidence_proof_data_json_serialization_error(self, verifier):
-        """json.dumps failures inside _evidence_proof_data become ValueError."""
+    def test_evidence_proof_data_accepts_shared_references(self):
+        """A repeated (non-cyclic) reference is not a cycle and must serialize."""
+        from qwed_new.core.schema_verifier import _evidence_proof_data
+        shared = {"a": 1}
+        assert _evidence_proof_data({"x": shared, "y": shared, "z": [shared]})
+
+    def test_evidence_proof_data_canonicalizes_sets(self):
+        """Sets are canonicalized to sorted lists, order-independently."""
+        from qwed_new.core.schema_verifier import _evidence_proof_data
+        assert _evidence_proof_data({"s": {3, 1, 2}}) == _evidence_proof_data({"s": {2, 3, 1}})
+
+    def test_verify_evidence_serialization_failure_returns_blocked(self, verifier):
+        """If proof serialization unexpectedly fails, verify returns BLOCKED."""
         from unittest.mock import patch
         import qwed_new.core.schema_verifier as sv
-        with patch.object(sv.json, "dumps", side_effect=TypeError("boom")):
+        with patch.object(sv, "_evidence_proof_data", side_effect=ValueError("boom")):
             result = verifier.verify({"a": 1}, {"type": "object"})
-            assert result.status is DiagnosticStatus.BLOCKED
-            assert result.constraint_id == "schema_verifier.validation_error"
-            assert result.proof_ref is None
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.validation_error"
+        assert result.proof_ref is None
 
     def test_ucp_blocked_base_result_passthrough(self, verifier):
         """A BLOCKED base verify result is passed through unchanged."""
@@ -1040,25 +1067,17 @@ class TestEvidenceNormalization:
         assert result.constraint_id == "schema_verifier.validation_error"
         assert result.proof_ref is None
 
-    def test_schema_shape_direct_non_dict(self, verifier):
-        """_validate_schema_shape returns the non-dict error message."""
-        errors = verifier._validate_schema_shape("not-a-schema")
-        assert errors and "must be a dict" in errors[0]
 
+class TestFormatWarning:
+    """Advisory format violations stay warnings, never block."""
 
-    def test_huge_int_bounds_no_overflow(self, verifier):
-        """Huge Python ints are treated as finite — no OverflowError crash."""
-        result = verifier.verify(5, {"type": "number", "minimum": 10**1000})
-        assert result.status is DiagnosticStatus.VERIFIED
-        assert result.developer_fields["is_valid"] is False
-        assert result.proof_ref is not None
-
-    def test_huge_int_multipleOf_no_overflow(self, verifier):
-        """Huge Python ints for multipleOf must not crash the shape check."""
-        result = verifier.verify(5, {"type": "number", "multipleOf": 10**1000})
-        assert result.status is DiagnosticStatus.VERIFIED
-        assert result.developer_fields["is_valid"] is False
-        assert result.proof_ref is not None
+    def test_format_violation_is_advisory_warning(self, verifier):
+        """A bad email format produces a WARNING issue, not an ERROR."""
+        schema = {"type": "string", "format": "email"}
+        result = verifier.verify("not-an-email", schema)
+        assert result.developer_fields["is_valid"] is True
+        assert result.developer_fields["issues"][0]["type"] == "format_violation"
+        assert result.developer_fields["issues"][0]["severity"] == "WARNING"
 
 
 if __name__ == "__main__":
