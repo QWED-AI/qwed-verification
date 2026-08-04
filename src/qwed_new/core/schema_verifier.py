@@ -1,5 +1,5 @@
 """
-JSON Schema Verifier: Deterministic Schema Validation with Math Delegation.
+JSON Schema Verifier: Deterministic Schema Validation.
 
 100% Deterministic - No probability/ML involved.
 
@@ -8,19 +8,21 @@ Features:
 2. Constraint validation (minimum, maximum, pattern, enum, required)
 3. Nested object validation
 4. Array item validation
-5. Math delegation for numeric fields (price, tax, total)
+5. Inline math consistency checks for numeric fields (price, tax, total)
 6. UCP-specific validation rules
 
 Example:
     schema = {"type": "object", "properties": {"price": {"type": "number", "minimum": 0}}}
     data = {"price": 99.99}
-    result = verifier.verify(data, schema)  # True - deterministic!
+    result = verifier.verify(data, schema)  # VERIFIED - deterministic!
 """
 
 from typing import Dict, List, Any, Union
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import re
 import json
+
+from qwed_new.core.diagnostics import DiagnosticResult
 
 
 @dataclass
@@ -34,21 +36,37 @@ class SchemaIssue:
     message: str = ""
 
 
-@dataclass
-class SchemaResult:
-    """Result of schema verification."""
-    is_valid: bool
-    issues: List[SchemaIssue] = field(default_factory=list)
-    path_checked: int = 0
-    constraints_checked: int = 0
+# Constraint identifiers for DiagnosticResult developer_fields.
+_CONSTRAINT_ID_PARSE_ERROR = "schema_verifier.parse_error"
+_CONSTRAINT_ID_VALIDATION_ERROR = "schema_verifier.validation_error"
+_CONSTRAINT_ID_SCHEMA_VALID = "schema_verifier.schema_valid"
+_CONSTRAINT_ID_SCHEMA_VIOLATION = "schema_verifier.schema_violation"
+_CONSTRAINT_ID_UCP_VALID = "schema_verifier.ucp_valid"
+_CONSTRAINT_ID_UCP_VIOLATION = "schema_verifier.ucp_violation"
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursively normalize a value to JSON-serializable primitives.
+
+    Sets and other non-JSON types are converted deterministically so the
+    proof_ref evidence hash is stable and never raises.
+    """
+    if isinstance(value, dict):
+        return {str(key): _json_safe(v) for key, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, (set, frozenset)):
+        return [_json_safe(v) for v in sorted(value, key=repr)]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return repr(value)
 
 
 class SchemaVerifier:
     """
     Deterministic JSON Schema Verifier.
     
-    Validates JSON data against JSON Schema with optional
-    delegation to MathVerifier for numeric computations.
+    Validates JSON data against JSON Schema.
     
     All checks are 100% deterministic:
     - Type: Is value a string/number/boolean? YES or NO.
@@ -72,7 +90,7 @@ class SchemaVerifier:
         "null": type(None)
     }
     
-    # Fields that should use MathVerifier for computation
+    # Fields that get inline math consistency checks
     MATH_FIELDS = {
         "total", "subtotal", "tax", "tax_amount", "discount",
         "grand_total", "net_total", "gross_total", "balance",
@@ -91,29 +109,17 @@ class SchemaVerifier:
         Initialize Schema Verifier.
         
         Args:
-            enable_math_delegation: If True, delegate numeric field
-                                   verification to MathVerifier.
+            enable_math_delegation: If True, run inline math consistency
+                                    checks for computed numeric fields.
         """
         self.enable_math_delegation = enable_math_delegation
-        self._math_verifier = None
-    
-    @property
-    def math_verifier(self):
-        """Lazy load MathVerifier."""
-        if self._math_verifier is None and self.enable_math_delegation:
-            try:
-                from .symbolic_verifier import SymbolicVerifier
-                self._math_verifier = SymbolicVerifier()
-            except ImportError:
-                self._math_verifier = None
-        return self._math_verifier
     
     def verify(
         self, 
         data: Any, 
         schema: Dict[str, Any],
         strict: bool = True
-    ) -> Dict[str, Any]:
+    ) -> DiagnosticResult:
         """
         Verify data against a JSON Schema.
         
@@ -123,43 +129,95 @@ class SchemaVerifier:
             strict: If True, fail on additional properties not in schema.
             
         Returns:
-            Dict with verification results.
+            DiagnosticResult with:
+            - VERIFIED when schema validation completed deterministically,
+              with proof_ref binding the schema + instance evidence.
+            - BLOCKED (constraint_id schema_verifier.parse_error) when the
+              schema cannot be parsed as a schema object.
+            - BLOCKED (constraint_id schema_verifier.validation_error) when
+              an unexpected error occurs during validation.
             
         Example:
             >>> schema = {"type": "object", "properties": {"name": {"type": "string"}}}
             >>> result = verifier.verify({"name": "John"}, schema)
-            >>> print(result["is_valid"])
-            True
+            >>> print(result.status.value)
+            VERIFIED
         """
-        issues = []
-        stats = {"paths_checked": 0, "constraints_checked": 0}
-        
-        self._validate_node(data, schema, "$", issues, stats, strict)
-        
-        is_valid = len([i for i in issues if i.severity == "ERROR"]) == 0
-        
-        return {
-            "is_valid": is_valid,
-            "status": "VALID" if is_valid else "INVALID",
-            "issues": [
+        if not isinstance(schema, dict):
+            return DiagnosticResult.blocked(
+                "Schema verification blocked: the schema could not be parsed",
                 {
-                    "path": i.path,
-                    "type": i.issue_type,
-                    "expected": i.expected,
-                    "actual": i.actual,
-                    "severity": i.severity,
-                    "message": i.message
-                }
-                for i in issues
-            ],
+                    "constraint_id": _CONSTRAINT_ID_PARSE_ERROR,
+                    "error_type": f"expected dict, got {type(schema).__name__}",
+                },
+            )
+
+        issues: List[SchemaIssue] = []
+        stats = {"paths_checked": 0, "constraints_checked": 0}
+
+        try:
+            self._validate_node(data, schema, "$", issues, stats, strict)
+        except Exception as exc:
+            return DiagnosticResult.blocked(
+                "Schema verification blocked: an unexpected validation error occurred",
+                {
+                    "constraint_id": _CONSTRAINT_ID_VALIDATION_ERROR,
+                    "error_type": type(exc).__name__,
+                },
+            )
+
+        is_valid = len([i for i in issues if i.severity == "ERROR"]) == 0
+
+        serialized_issues = [
+            {
+                "path": i.path,
+                "type": i.issue_type,
+                "expected": i.expected,
+                "actual": i.actual,
+                "severity": i.severity,
+                "message": i.message,
+            }
+            for i in issues
+        ]
+
+        developer_fields = {
+            "constraint_id": (
+                _CONSTRAINT_ID_SCHEMA_VALID if is_valid
+                else _CONSTRAINT_ID_SCHEMA_VIOLATION
+            ),
+            "is_valid": is_valid,
+            "issues": serialized_issues,
             "summary": {
                 "total_issues": len(issues),
                 "errors": sum(1 for i in issues if i.severity == "ERROR"),
                 "warnings": sum(1 for i in issues if i.severity == "WARNING"),
                 "paths_checked": stats["paths_checked"],
-                "constraints_checked": stats["constraints_checked"]
-            }
+                "constraints_checked": stats["constraints_checked"],
+            },
         }
+
+        schema_evidence = {
+            "schema": _json_safe(schema),
+            "instance": _json_safe(data),
+            "verdict": "VALID" if is_valid else "INVALID",
+            "issues": serialized_issues,
+            "paths_checked": stats["paths_checked"],
+            "constraints_checked": stats["constraints_checked"],
+        }
+
+        if is_valid:
+            agent_message = "Data conforms to the declared schema."
+        else:
+            agent_message = (
+                "Data does not conform to the declared schema "
+                f"({developer_fields['summary']['errors']} violation(s) detected)."
+            )
+
+        return DiagnosticResult.verified(
+            agent_message=agent_message,
+            developer_fields=developer_fields,
+            evidence=schema_evidence,
+        )
     
     def _validate_node(
         self,
@@ -614,10 +672,10 @@ class SchemaVerifier:
         stats: Dict[str, int]
     ) -> None:
         """
-        Check computed fields using math verification.
+        Check computed fields using inline arithmetic consistency.
         
         For fields like 'total', 'tax', etc., verify against
-        related fields using MathVerifier.
+        related fields using float comparison.
         """
         if not isinstance(value, (int, float)):
             return
@@ -663,7 +721,7 @@ class SchemaVerifier:
         self,
         transaction: Dict[str, Any],
         currency: str = "USD"
-    ) -> Dict[str, Any]:
+    ) -> DiagnosticResult:
         """
         Verify a UCP (Unified Commerce Protocol) transaction.
         
@@ -678,7 +736,12 @@ class SchemaVerifier:
             currency: Currency code for precision checking.
             
         Returns:
-            Dict with verification results.
+            DiagnosticResult:
+            - VERIFIED when the transaction deterministically conforms to the
+              UCP schema and arithmetic rules, with proof_ref binding the
+              schema + instance evidence.
+            - Passed through BLOCKED when the schema itself cannot be parsed
+              or validation errors occur.
         """
         schema = {
             "type": "object",
@@ -706,9 +769,11 @@ class SchemaVerifier:
         }
         
         result = self.verify(transaction, schema, strict=False)
+        if not result.is_verified:
+            return result
         
-        # Additional UCP-specific checks
-        issues = list(result["issues"])
+        # Additional UCP-specific checks (issue dicts, JSON-safe).
+        issues = list(result.developer_fields["issues"])
         
         # Currency precision check
         precision = self.CURRENCY_PRECISION.get(currency, 2)
@@ -746,9 +811,12 @@ class SchemaVerifier:
         
         is_valid = len([i for i in issues if i.get("severity") == "ERROR"]) == 0
         
-        return {
+        developer_fields = {
+            "constraint_id": (
+                _CONSTRAINT_ID_UCP_VALID if is_valid
+                else _CONSTRAINT_ID_UCP_VIOLATION
+            ),
             "is_valid": is_valid,
-            "status": "VALID" if is_valid else "INVALID",
             "issues": issues,
             "transaction_type": "UCP",
             "currency": currency,
@@ -756,5 +824,26 @@ class SchemaVerifier:
                 "total_issues": len(issues),
                 "errors": sum(1 for i in issues if i.get("severity") == "ERROR"),
                 "warnings": sum(1 for i in issues if i.get("severity") == "WARNING")
-            }
+            },
         }
+        
+        ucp_evidence = {
+            "schema": _json_safe(schema),
+            "instance": _json_safe(transaction),
+            "verdict": "VALID" if is_valid else "INVALID",
+            "issues": issues,
+            "currency": currency,
+        }
+        
+        agent_message = (
+            "UCP transaction conforms to the declared schema."
+            if is_valid else
+            "UCP transaction does not conform to the declared schema "
+            f"({developer_fields['summary']['errors']} violation(s) detected)."
+        )
+        
+        return DiagnosticResult.verified(
+            agent_message=agent_message,
+            developer_fields=developer_fields,
+            evidence=ucp_evidence,
+        )

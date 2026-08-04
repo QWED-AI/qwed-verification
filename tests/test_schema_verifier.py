@@ -7,17 +7,36 @@ Tests cover:
 3. Nested object validation
 4. Array validation
 5. UCP transaction verification
-6. Math delegation for computed fields
+6. Inline math consistency for computed fields
+7. DiagnosticResult conformance (status, developer_fields, proof_ref)
 """
 
 import pytest
-from src.qwed_new.core.schema_verifier import SchemaVerifier
+from qwed_new.core.schema_verifier import SchemaVerifier
+from qwed_new.core.diagnostics import DiagnosticStatus
 
 
 @pytest.fixture
 def verifier():
     """Create a fresh verifier for each test."""
     return SchemaVerifier()
+
+
+def assert_verified(result):
+    """Assert a VERIFIED DiagnosticResult with proof_ref present."""
+    assert result.status is DiagnosticStatus.VERIFIED
+    assert result.is_verified is True
+    assert result.proof_ref is not None
+    assert result.proof_ref.startswith("sha256:")
+    assert result.agent_message
+
+
+def assert_invalid(result):
+    """Assert a VERIFIED result that deterministically detected violations."""
+    assert result.status is DiagnosticStatus.VERIFIED
+    assert result.is_verified is True
+    assert result.proof_ref is not None
+    assert result.developer_fields["is_valid"] is False
 
 
 class TestTypeValidation:
@@ -27,62 +46,70 @@ class TestTypeValidation:
         """String type should validate string values."""
         schema = {"type": "string"}
         result = verifier.verify("hello", schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
+        assert result.constraint_id == "schema_verifier.schema_valid"
     
     def test_string_type_invalid(self, verifier):
         """String type should reject non-strings."""
         schema = {"type": "string"}
         result = verifier.verify(123, schema)
-        assert result["is_valid"] == False
-        assert result["issues"][0]["type"] == "type_mismatch"
+        assert_invalid(result)
+        assert result.developer_fields["issues"][0]["type"] == "type_mismatch"
     
     def test_number_type_valid(self, verifier):
         """Number type should validate numeric values."""
         schema = {"type": "number"}
         result = verifier.verify(42.5, schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_number_type_accepts_int(self, verifier):
         """Number type should accept integers too."""
         schema = {"type": "number"}
         result = verifier.verify(42, schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_integer_type_rejects_float(self, verifier):
         """Integer type should reject floats."""
         schema = {"type": "integer"}
         result = verifier.verify(42.5, schema)
-        assert result["is_valid"] == False
+        assert_invalid(result)
     
     def test_boolean_type_valid(self, verifier):
         """Boolean type should validate booleans."""
         schema = {"type": "boolean"}
         result = verifier.verify(True, schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_boolean_type_invalid(self, verifier):
         """Boolean type should reject non-booleans."""
         schema = {"type": "boolean"}
         result = verifier.verify(1, schema)  # 1 is not True
-        assert result["is_valid"] == False
+        assert_invalid(result)
     
     def test_array_type_valid(self, verifier):
         """Array type should validate lists."""
         schema = {"type": "array"}
         result = verifier.verify([1, 2, 3], schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_object_type_valid(self, verifier):
         """Object type should validate dicts."""
         schema = {"type": "object"}
         result = verifier.verify({"key": "value"}, schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_null_type_valid(self, verifier):
         """Null type should validate None."""
         schema = {"type": "null"}
         result = verifier.verify(None, schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
 
 
 class TestStringConstraints:
@@ -92,43 +119,47 @@ class TestStringConstraints:
         """String with sufficient length passes."""
         schema = {"type": "string", "minLength": 3}
         result = verifier.verify("hello", schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_min_length_invalid(self, verifier):
         """String too short fails."""
         schema = {"type": "string", "minLength": 10}
         result = verifier.verify("hi", schema)
-        assert result["is_valid"] == False
+        assert_invalid(result)
     
     def test_max_length_valid(self, verifier):
         """String within max length passes."""
         schema = {"type": "string", "maxLength": 10}
         result = verifier.verify("hello", schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_max_length_invalid(self, verifier):
         """String too long fails."""
         schema = {"type": "string", "maxLength": 3}
         result = verifier.verify("hello", schema)
-        assert result["is_valid"] == False
+        assert_invalid(result)
     
     def test_pattern_valid(self, verifier):
         """String matching pattern passes."""
         schema = {"type": "string", "pattern": "^[a-z]+$"}
         result = verifier.verify("hello", schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_pattern_invalid(self, verifier):
         """String not matching pattern fails."""
         schema = {"type": "string", "pattern": "^[a-z]+$"}
         result = verifier.verify("Hello123", schema)
-        assert result["is_valid"] == False
+        assert_invalid(result)
     
     def test_email_format(self, verifier):
         """Email format validation."""
         schema = {"type": "string", "format": "email"}
         result = verifier.verify("test@example.com", schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
 
 
 class TestNumberConstraints:
@@ -138,43 +169,45 @@ class TestNumberConstraints:
         """Number at or above minimum passes."""
         schema = {"type": "number", "minimum": 0}
         result = verifier.verify(5, schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_minimum_invalid(self, verifier):
         """Number below minimum fails."""
         schema = {"type": "number", "minimum": 0}
         result = verifier.verify(-5, schema)
-        assert result["is_valid"] == False
+        assert_invalid(result)
     
     def test_maximum_valid(self, verifier):
         """Number at or below maximum passes."""
         schema = {"type": "number", "maximum": 100}
         result = verifier.verify(50, schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_maximum_invalid(self, verifier):
         """Number above maximum fails."""
         schema = {"type": "number", "maximum": 100}
         result = verifier.verify(150, schema)
-        assert result["is_valid"] == False
+        assert_invalid(result)
     
     def test_exclusive_minimum(self, verifier):
         """Exclusive minimum validation."""
         schema = {"type": "number", "exclusiveMinimum": 0}
-        assert verifier.verify(0.1, schema)["is_valid"] == True
-        assert verifier.verify(0, schema)["is_valid"] == False
+        assert verifier.verify(0.1, schema).developer_fields["is_valid"] is True
+        assert verifier.verify(0, schema).developer_fields["is_valid"] is False
     
     def test_exclusive_maximum(self, verifier):
         """Exclusive maximum validation."""
         schema = {"type": "number", "exclusiveMaximum": 100}
-        assert verifier.verify(99.9, schema)["is_valid"] == True
-        assert verifier.verify(100, schema)["is_valid"] == False
+        assert verifier.verify(99.9, schema).developer_fields["is_valid"] is True
+        assert verifier.verify(100, schema).developer_fields["is_valid"] is False
     
     def test_multiple_of(self, verifier):
         """MultipleOf validation."""
         schema = {"type": "number", "multipleOf": 5}
-        assert verifier.verify(10, schema)["is_valid"] == True
-        assert verifier.verify(7, schema)["is_valid"] == False
+        assert verifier.verify(10, schema).developer_fields["is_valid"] is True
+        assert verifier.verify(7, schema).developer_fields["is_valid"] is False
 
 
 class TestEnumValidation:
@@ -184,25 +217,27 @@ class TestEnumValidation:
         """Value in enum list passes."""
         schema = {"enum": ["red", "green", "blue"]}
         result = verifier.verify("green", schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_enum_invalid(self, verifier):
         """Value not in enum list fails."""
         schema = {"enum": ["red", "green", "blue"]}
         result = verifier.verify("yellow", schema)
-        assert result["is_valid"] == False
+        assert_invalid(result)
     
     def test_const_valid(self, verifier):
         """Const value matches."""
         schema = {"const": "fixed_value"}
         result = verifier.verify("fixed_value", schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_const_invalid(self, verifier):
         """Const value doesn't match."""
         schema = {"const": "fixed_value"}
         result = verifier.verify("other", schema)
-        assert result["is_valid"] == False
+        assert_invalid(result)
 
 
 class TestArrayValidation:
@@ -212,47 +247,49 @@ class TestArrayValidation:
         """Array with enough items passes."""
         schema = {"type": "array", "minItems": 2}
         result = verifier.verify([1, 2, 3], schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_min_items_invalid(self, verifier):
         """Array with too few items fails."""
         schema = {"type": "array", "minItems": 5}
         result = verifier.verify([1, 2], schema)
-        assert result["is_valid"] == False
+        assert_invalid(result)
     
     def test_max_items_valid(self, verifier):
         """Array within max items passes."""
         schema = {"type": "array", "maxItems": 5}
         result = verifier.verify([1, 2, 3], schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_max_items_invalid(self, verifier):
         """Array with too many items fails."""
         schema = {"type": "array", "maxItems": 2}
         result = verifier.verify([1, 2, 3, 4, 5], schema)
-        assert result["is_valid"] == False
+        assert_invalid(result)
     
     def test_unique_items_valid(self, verifier):
         """Array with unique items passes."""
         schema = {"type": "array", "uniqueItems": True}
         result = verifier.verify([1, 2, 3], schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_unique_items_invalid(self, verifier):
         """Array with duplicates fails."""
         schema = {"type": "array", "uniqueItems": True}
         result = verifier.verify([1, 2, 2, 3], schema)
-        assert not result["is_valid"]
+        assert_invalid(result)
 
     def test_unique_items_uncheckable_fails_closed(self, verifier):
         """If uniqueness cannot be proven, validation must fail closed."""
         schema = {"type": "array", "uniqueItems": True}
         result = verifier.verify([{"bad": {1, 2}}, {"bad": {3, 4}}], schema)
 
-        assert result["is_valid"] == False
-        assert result["status"] == "INVALID"
-        assert result["issues"][0]["type"] == "uniqueness_validation_error"
-        assert "uniqueItems could not be verified deterministically" in result["issues"][0]["message"]
+        assert_invalid(result)
+        assert result.developer_fields["issues"][0]["type"] == "uniqueness_validation_error"
+        assert "uniqueItems could not be verified deterministically" in result.developer_fields["issues"][0]["message"]
 
     def test_items_schema(self, verifier):
         """Array items validated against item schema."""
@@ -260,8 +297,8 @@ class TestArrayValidation:
             "type": "array",
             "items": {"type": "number", "minimum": 0}
         }
-        assert verifier.verify([1, 2, 3], schema)["is_valid"] == True
-        assert verifier.verify([1, -2, 3], schema)["is_valid"] == False
+        assert verifier.verify([1, 2, 3], schema).developer_fields["is_valid"] is True
+        assert verifier.verify([1, -2, 3], schema).developer_fields["is_valid"] is False
 
 
 class TestObjectValidation:
@@ -278,7 +315,8 @@ class TestObjectValidation:
             }
         }
         result = verifier.verify({"name": "John", "age": 30}, schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_required_properties_missing(self, verifier):
         """Object missing required property fails."""
@@ -291,8 +329,8 @@ class TestObjectValidation:
             }
         }
         result = verifier.verify({"name": "John"}, schema)
-        assert result["is_valid"] == False
-        assert any("missing_required" in i["type"] for i in result["issues"])
+        assert_invalid(result)
+        assert any("missing_required" in i["type"] for i in result.developer_fields["issues"])
     
     def test_property_type_validation(self, verifier):
         """Object property types are validated."""
@@ -302,8 +340,8 @@ class TestObjectValidation:
                 "price": {"type": "number"}
             }
         }
-        assert verifier.verify({"price": 99.99}, schema)["is_valid"] == True
-        assert verifier.verify({"price": "99.99"}, schema)["is_valid"] == False
+        assert verifier.verify({"price": 99.99}, schema).developer_fields["is_valid"] is True
+        assert verifier.verify({"price": "99.99"}, schema).developer_fields["is_valid"] is False
     
     def test_nested_object_validation(self, verifier):
         """Nested objects are validated recursively."""
@@ -319,8 +357,8 @@ class TestObjectValidation:
                 }
             }
         }
-        assert verifier.verify({"user": {"name": "John"}}, schema)["is_valid"] == True
-        assert verifier.verify({"user": {}}, schema)["is_valid"] == False
+        assert verifier.verify({"user": {"name": "John"}}, schema).developer_fields["is_valid"] is True
+        assert verifier.verify({"user": {}}, schema).developer_fields["is_valid"] is False
 
     def test_strict_additional_properties_false_rejects_extra_fields(self, verifier):
         """Strict mode must fail closed on undeclared object properties."""
@@ -335,11 +373,10 @@ class TestObjectValidation:
 
         result = verifier.verify({"name": "rahul", "role": "admin"}, schema, strict=True)
 
-        assert result["is_valid"] is False
-        assert result["status"] == "INVALID"
+        assert result.developer_fields["is_valid"] is False
         assert any(
             issue["type"] == "additional_property" and issue["severity"] == "ERROR"
-            for issue in result["issues"]
+            for issue in result.developer_fields["issues"]
         )
 
     def test_strict_additional_properties_false_accepts_declared_fields(self, verifier):
@@ -355,8 +392,7 @@ class TestObjectValidation:
 
         result = verifier.verify({"name": "rahul"}, schema, strict=True)
 
-        assert result["is_valid"] is True
-        assert result["status"] == "VALID"
+        assert result.developer_fields["is_valid"] is True
 
     def test_non_strict_mode_keeps_additional_properties_non_blocking(self, verifier):
         """Non-strict mode preserves permissive handling for extra properties."""
@@ -371,9 +407,8 @@ class TestObjectValidation:
 
         result = verifier.verify({"name": "rahul", "role": "admin"}, schema, strict=False)
 
-        assert result["is_valid"] is True
-        assert result["status"] == "VALID"
-        assert not any(issue["type"] == "additional_property" for issue in result["issues"])
+        assert result.developer_fields["is_valid"] is True
+        assert not any(issue["type"] == "additional_property" for issue in result.developer_fields["issues"])
 
     def test_nested_additional_properties_false_rejects_extra_nested_fields(self, verifier):
         """Nested objects must also fail closed on undeclared extra properties."""
@@ -398,18 +433,17 @@ class TestObjectValidation:
             strict=True
         )
 
-        assert result["is_valid"] is False
-        assert result["status"] == "INVALID"
+        assert result.developer_fields["is_valid"] is False
         assert any(
             issue["path"] == "$.user.role"
             and issue["type"] == "additional_property"
             and issue["severity"] == "ERROR"
-            for issue in result["issues"]
+            for issue in result.developer_fields["issues"]
         )
 
 
-class TestMathDelegation:
-    """Test computed field verification."""
+class TestMathConsistency:
+    """Test computed field verification (inline float comparison)."""
     
     def test_total_calculation_valid(self, verifier):
         """Correct total calculation passes."""
@@ -423,7 +457,8 @@ class TestMathDelegation:
         }
         data = {"subtotal": 100.00, "tax": 10.00, "total": 110.00}
         result = verifier.verify(data, schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_total_calculation_invalid(self, verifier):
         """Incorrect total calculation fails."""
@@ -438,7 +473,7 @@ class TestMathDelegation:
         data = {"subtotal": 100.00, "tax": 10.00, "total": 115.00}  # Wrong!
         result = verifier.verify(data, schema)
         # Should detect math discrepancy
-        assert any("math" in str(i).lower() for i in result["issues"])
+        assert any("math" in str(i).lower() for i in result.developer_fields["issues"])
 
 
 class TestUCPTransaction:
@@ -454,7 +489,9 @@ class TestUCPTransaction:
             "currency": "USD"
         }
         result = verifier.verify_ucp_transaction(transaction)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
+        assert result.constraint_id == "schema_verifier.ucp_valid"
     
     def test_ucp_transaction_total_mismatch(self, verifier):
         """UCP transaction with wrong total fails."""
@@ -465,8 +502,9 @@ class TestUCPTransaction:
             "total": 110.00  # Should be 105.00
         }
         result = verifier.verify_ucp_transaction(transaction)
-        assert result["is_valid"] == False
-        assert any("math" in str(i).lower() for i in result["issues"])
+        assert result.developer_fields["is_valid"] is False
+        assert result.constraint_id == "schema_verifier.ucp_violation"
+        assert any("math" in str(i).lower() for i in result.developer_fields["issues"])
     
     def test_ucp_negative_amount(self, verifier):
         """UCP transaction with negative amount fails."""
@@ -476,7 +514,7 @@ class TestUCPTransaction:
             "total": -90.00
         }
         result = verifier.verify_ucp_transaction(transaction)
-        assert result["is_valid"] == False
+        assert result.developer_fields["is_valid"] is False
     
     def test_ucp_with_items(self, verifier):
         """UCP transaction with line items."""
@@ -490,28 +528,49 @@ class TestUCPTransaction:
             ]
         }
         result = verifier.verify_ucp_transaction(transaction)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
 
 
-class TestResultStructure:
-    """Test verification result structure."""
+class TestDiagnosticConformance:
+    """Test DiagnosticResult structural conformance (Issue #204)."""
     
-    def test_result_has_required_fields(self, verifier):
-        """Result should have all required fields."""
+    def test_result_is_diagnostic_result(self, verifier):
+        """verify() returns a DiagnosticResult, not an ad-hoc dict."""
         schema = {"type": "string"}
         result = verifier.verify("test", schema)
-        
-        assert "is_valid" in result
-        assert "status" in result
-        assert "issues" in result
-        assert "summary" in result
+        assert result.status is DiagnosticStatus.VERIFIED
+        assert result.is_authoritative is True
+        assert result.agent_message
+
+    def test_verified_result_has_proof_ref(self, verifier):
+        """VERIFIED results must carry a deterministic proof_ref."""
+        schema = {"type": "string"}
+        result = verifier.verify("test", schema)
+        assert result.proof_ref is not None
+        assert result.proof_ref.startswith("sha256:")
+    
+    def test_proof_ref_is_deterministic(self, verifier):
+        """Same schema + instance produce the same proof_ref."""
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        r1 = verifier.verify({"name": "John"}, schema)
+        r2 = verifier.verify({"name": "John"}, schema)
+        assert r1.proof_ref == r2.proof_ref
+    
+    def test_invalid_result_is_verified_with_violation(self, verifier):
+        """Deterministic violations are VERIFIED with developer_fields."""
+        schema = {"type": "string"}
+        result = verifier.verify(123, schema)
+        assert result.status is DiagnosticStatus.VERIFIED
+        assert result.developer_fields["is_valid"] is False
+        assert result.constraint_id == "schema_verifier.schema_violation"
     
     def test_issue_structure(self, verifier):
         """Issue objects should have complete info."""
         schema = {"type": "number"}
         result = verifier.verify("not a number", schema)
         
-        issue = result["issues"][0]
+        issue = result.developer_fields["issues"][0]
         assert "path" in issue
         assert "type" in issue
         assert "expected" in issue
@@ -529,8 +588,23 @@ class TestResultStructure:
         }
         result = verifier.verify({}, schema)
         
-        assert result["summary"]["total_issues"] >= 2
-        assert result["summary"]["errors"] >= 2
+        assert result.developer_fields["summary"]["total_issues"] >= 2
+        assert result.developer_fields["summary"]["errors"] >= 2
+    
+    def test_agent_message_is_sanitized(self, verifier):
+        """agent_message must not leak verification internals."""
+        schema = {"type": "string"}
+        result = verifier.verify(123, schema)
+        assert result.agent_message
+        assert "type_mismatch" not in result.agent_message
+        assert "schema_verifier" not in result.agent_message
+    
+    def test_parse_error_blocked(self, verifier):
+        """Non-dict schema must be BLOCKED, not crash."""
+        result = verifier.verify({"a": 1}, "not a schema")
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.proof_ref is None
+        assert result.constraint_id == "schema_verifier.parse_error"
 
 
 class TestEdgeCases:
@@ -540,13 +614,15 @@ class TestEdgeCases:
         """Empty object against minimal schema."""
         schema = {"type": "object"}
         result = verifier.verify({}, schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_empty_array(self, verifier):
         """Empty array against minimal schema."""
         schema = {"type": "array"}
         result = verifier.verify([], schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
     
     def test_complex_nested_structure(self, verifier):
         """Complex nested structure validation."""
@@ -577,7 +653,8 @@ class TestEdgeCases:
             ]
         }
         result = verifier.verify(data, schema)
-        assert result["is_valid"] == True
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
 
 
 if __name__ == "__main__":

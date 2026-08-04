@@ -4,6 +4,15 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+### Engine Migration to DiagnosticResult (Meta #216)
+
+#### SchemaVerifier → DiagnosticResult (#255)
+- **`SchemaVerifier.verify()` and `verify_ucp_transaction()` now return `DiagnosticResult`** (status / `agent_message` / `developer_fields` / `proof_ref`) instead of ad-hoc dicts.
+- **Status mapping:** schema valid → `VERIFIED` with `proof_ref`; schema invalid → `VERIFIED` with `developer_fields` identifying the violation (`schema_verifier.schema_violation` / `schema_verifier.ucp_violation`); schema parse error → `BLOCKED` (`schema_verifier.parse_error`); unexpected validation error → `BLOCKED` (`schema_verifier.validation_error`).
+- **`proof_ref`** is computed deterministically from the schema + instance evidence on all `VERIFIED` results.
+- **`agent_message` sanitized** — no rule IDs, issue types, or schema internals leak into agent-facing output.
+- **Removed orphan `math_verifier` delegation** — the lazy `SymbolicVerifier` instantiation (never called) is gone; computed-field checks use inline float comparison only.
+
 ## [6.0.0] - 2026-08-02
 ### Trust Boundary Completion (Epic #263)
 
