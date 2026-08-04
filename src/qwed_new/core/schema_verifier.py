@@ -46,6 +46,20 @@ _CONSTRAINT_ID_UCP_VALID = "schema_verifier.ucp_valid"
 _CONSTRAINT_ID_UCP_VIOLATION = "schema_verifier.ucp_violation"
 
 
+def _set_to_sorted_list(o: Any) -> Any:
+    """json.dumps default: canonicalize sets to sorted lists; reject the rest."""
+    if isinstance(o, (set, frozenset)):
+        return sorted(o, key=repr)
+    raise TypeError(f"unsupported evidence type: {type(o).__name__}")
+
+
+# Reused across calls: constructing a JSONEncoder per proof is pure overhead.
+# Settings match json.dumps(..., sort_keys=True, default=_set_to_sorted_list),
+# so the serialized bytes — and therefore every proof_ref — are unchanged.
+# encode() keeps no state between calls (fresh cycle markers per invocation).
+_EVIDENCE_ENCODER = json.JSONEncoder(sort_keys=True, default=_set_to_sorted_list)
+
+
 def _evidence_proof_data(evidence: Dict[str, Any]) -> str:
     """Serialize proof evidence to a canonical JSON string for proof_ref.
 
@@ -55,72 +69,78 @@ def _evidence_proof_data(evidence: Dict[str, Any]) -> str:
     addresses, making proof_ref unstable across processes). Sets are
     canonicalized to sorted lists.
 
+    Cycles and unsupported types are detected by the encoder itself (it tracks
+    containers along the current path and routes unknown types through
+    ``_set_to_sorted_list``), so the fail-closed pre-pass reduces to the one
+    check the encoder does not make: non-string mapping keys.
+
     Raises:
         ValueError: if the evidence contains a cycle, a non-string key, or an
             unsupported type.
     """
-    seen: set = set()
-    _assert_evidence_safe(evidence, seen)
     try:
-        return json.dumps(evidence, sort_keys=True, default=_set_to_sorted_list)
+        proof_data = _EVIDENCE_ENCODER.encode(evidence)
+    except ValueError as exc:  # circular reference detected by the encoder
+        raise ValueError("cyclic value cannot be serialized into proof evidence") from exc
     except (TypeError, RecursionError) as exc:
         raise ValueError("proof evidence could not be serialized deterministically") from exc
+    _assert_string_keys(evidence)
+    return proof_data
 
 
-def _assert_evidence_safe(value: Any, seen: set) -> None:
-    """Validate that ``value`` is a JSON-safe, acyclic structure (no copy).
+def _assert_string_keys(evidence: Any) -> None:
+    """Reject non-string mapping keys anywhere in the proof evidence.
 
-    Strings, ints, floats, bools, and None are primitives and immediately
-    return. Lists, tuples, dicts, and sets are recursed into along their
-    parent path in ``seen`` so genuine cycles are detected while shared
-    (non-cyclic) references remain allowed.
+    ``json`` silently coerces int/float/bool/None keys to strings, so
+    ``{1: "a"}`` and ``{"1": "a"}`` would collapse onto the same proof_ref.
+    Called only after serialization succeeded, which guarantees the structure
+    is acyclic and JSON-safe — a flat stack walk over dicts/lists/tuples is
+    then sufficient (sets and frozensets cannot contain a dict, since dicts
+    are unhashable).
 
     Raises:
-        ValueError: on a cycle, a non-string dict key, or an unsupported type.
+        ValueError: on a non-string dict key.
     """
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return
-    oid = id(value)
-    if oid in seen:
-        raise ValueError("cyclic value cannot be serialized into proof evidence")
-    if isinstance(value, dict):
-        for key in value:
-            if not isinstance(key, str):
-                raise ValueError(
-                    "non-string key in evidence object: "
-                    f"expected str, got {type(key).__name__}"
-                )
-        seen.add(oid)
-        try:
-            for item in value.values():
-                _assert_evidence_safe(item, seen)
-        finally:
-            seen.discard(oid)
-    elif isinstance(value, (list, tuple)):
-        seen.add(oid)
-        try:
-            for item in value:
-                _assert_evidence_safe(item, seen)
-        finally:
-            seen.discard(oid)
-    elif isinstance(value, (set, frozenset)):
-        seen.add(oid)
-        try:
-            for item in value:
-                _assert_evidence_safe(item, seen)
-        finally:
-            seen.discard(oid)
-    else:
-        raise ValueError(
-            f"unsupported value type in proof evidence: {type(value).__name__}"
-        )
+    stack: List[Any] = [evidence]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if not isinstance(key, str):
+                    raise ValueError(
+                        "non-string key in evidence object: "
+                        f"expected str, got {type(key).__name__}"
+                    )
+                if isinstance(value, (dict, list, tuple)):
+                    stack.append(value)
+        else:
+            for value in node:
+                if isinstance(value, (dict, list, tuple)):
+                    stack.append(value)
 
 
-def _set_to_sorted_list(o: Any) -> Any:
-    """json.dumps default: canonicalize sets to sorted lists; reject the rest."""
-    if isinstance(o, (set, frozenset)):
-        return sorted(o, key=repr)
-    raise TypeError(f"unsupported evidence type: {type(o).__name__}")
+def _is_finite_number(value: Any) -> bool:
+    """True for finite, non-bool ``int``/``float`` schema values.
+
+    ``int`` is finite by construction; routing it through ``math.isfinite``
+    would raise OverflowError for values beyond float range (e.g. 10**1000).
+    """
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    return isinstance(value, float) and math.isfinite(value)
+
+
+# Schema keywords grouped by the shape check they share, so meta-validation
+# can dispatch on the keys the schema actually declares.
+_NUMERIC_BOUND_KEYWORDS = frozenset(
+    {"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"}
+)
+_SIZE_KEYWORDS = frozenset(
+    {"minLength", "maxLength", "minItems", "maxItems", "minProperties", "maxProperties"}
+)
+_STRING_KEYWORDS = frozenset({"pattern", "format"})
 
 
 class SchemaVerifier:
@@ -241,19 +261,26 @@ class SchemaVerifier:
                 },
             )
 
-        is_valid = len([i for i in issues if i.severity == "ERROR"]) == 0
-
-        serialized_issues = [
-            {
+        # Single pass: serialize the issues and tally severities together.
+        serialized_issues = []
+        error_count = 0
+        warning_count = 0
+        for i in issues:
+            severity = i.severity
+            if severity == "ERROR":
+                error_count += 1
+            elif severity == "WARNING":
+                warning_count += 1
+            serialized_issues.append({
                 "path": i.path,
                 "type": i.issue_type,
                 "expected": i.expected,
                 "actual": i.actual,
-                "severity": i.severity,
+                "severity": severity,
                 "message": i.message,
-            }
-            for i in issues
-        ]
+            })
+
+        is_valid = error_count == 0
 
         developer_fields = {
             "constraint_id": (
@@ -264,8 +291,8 @@ class SchemaVerifier:
             "issues": serialized_issues,
             "summary": {
                 "total_issues": len(issues),
-                "errors": sum(1 for i in issues if i.severity == "ERROR"),
-                "warnings": sum(1 for i in issues if i.severity == "WARNING"),
+                "errors": error_count,
+                "warnings": warning_count,
                 "paths_checked": stats["paths_checked"],
                 "constraints_checked": stats["constraints_checked"],
             },
@@ -311,100 +338,89 @@ class SchemaVerifier:
         Malformed keyword values must be rejected as parse errors instead of
         being silently treated as empty/omitted. Returns a list of error
         messages; an empty list means the schema shape is well-formed.
+
+        Dispatches on the keywords the schema actually declares (a single pass
+        over its keys) rather than probing for every known keyword, so the cost
+        scales with the schema instead of with the keyword vocabulary.
         """
         if not isinstance(schema, dict):
             return [f"{path}: schema must be a dict, got {type(schema).__name__}"]
 
         errors: List[str] = []
+        type_map = self.TYPE_MAP
 
-        type_kw = schema.get("type")
-        if type_kw is not None:
-            if isinstance(type_kw, str):
-                if type_kw not in self.TYPE_MAP:
-                    errors.append(f"{path}.type: unknown type {type_kw!r}")
-            elif isinstance(type_kw, list):
-                if not type_kw or not all(isinstance(t, str) and t in self.TYPE_MAP for t in type_kw):
-                    errors.append(f"{path}.type: must be a list of valid types")
-            else:
-                errors.append(f"{path}.type: must be a string or list of strings")
+        for keyword, value in schema.items():
+            if keyword == "type":
+                if value is None:
+                    continue
+                if isinstance(value, str):
+                    if value not in type_map:
+                        errors.append(f"{path}.type: unknown type {value!r}")
+                elif isinstance(value, list):
+                    if not value or not all(isinstance(t, str) and t in type_map for t in value):
+                        errors.append(f"{path}.type: must be a list of valid types")
+                else:
+                    errors.append(f"{path}.type: must be a string or list of strings")
 
-        if "enum" in schema and not isinstance(schema["enum"], list):
-            errors.append(f"{path}.enum: must be a list")
+            elif keyword == "properties":
+                if not isinstance(value, dict):
+                    errors.append(f"{path}.properties: must be a dict")
+                else:
+                    for prop_name, prop_schema in value.items():
+                        if not isinstance(prop_schema, dict):
+                            errors.append(f"{path}.properties.{prop_name}: must be a schema dict")
+                        else:
+                            errors.extend(self._validate_schema_shape(prop_schema, f"{path}.properties.{prop_name}"))
 
-        if "properties" in schema:
-            props = schema["properties"]
-            if not isinstance(props, dict):
-                errors.append(f"{path}.properties: must be a dict")
-            else:
-                for prop_name, prop_schema in props.items():
-                    if not isinstance(prop_schema, dict):
-                        errors.append(f"{path}.properties.{prop_name}: must be a schema dict")
-                    else:
-                        errors.extend(self._validate_schema_shape(prop_schema, f"{path}.properties.{prop_name}"))
+            elif keyword == "required":
+                if not isinstance(value, list) or not all(isinstance(r, str) for r in value):
+                    errors.append(f"{path}.required: must be a list of strings")
 
-        if "required" in schema:
-            req = schema["required"]
-            if not isinstance(req, list) or not all(isinstance(r, str) for r in req):
-                errors.append(f"{path}.required: must be a list of strings")
+            elif keyword == "items":
+                if isinstance(value, dict):
+                    errors.extend(self._validate_schema_shape(value, f"{path}.items"))
+                else:
+                    errors.append(f"{path}.items: must be a schema dict")
 
-        additional = schema.get("additionalProperties", True)
-        if not isinstance(additional, (bool, dict)):
-            errors.append(f"{path}.additionalProperties: must be a bool or schema dict")
-        elif isinstance(additional, dict):
-            errors.extend(self._validate_schema_shape(additional, f"{path}.additionalProperties"))
+            elif keyword == "additionalProperties":
+                if isinstance(value, dict):
+                    errors.extend(self._validate_schema_shape(value, f"{path}.additionalProperties"))
+                elif not isinstance(value, bool):
+                    errors.append(f"{path}.additionalProperties: must be a bool or schema dict")
 
-        if "items" in schema:
-            items = schema["items"]
-            if isinstance(items, dict):
-                errors.extend(self._validate_schema_shape(items, f"{path}.items"))
-            else:
-                errors.append(f"{path}.items: must be a schema dict")
+            elif keyword == "prefixItems":
+                if not isinstance(value, list):
+                    errors.append(f"{path}.prefixItems: must be a list of schemas")
+                else:
+                    for i, item_schema in enumerate(value):
+                        if isinstance(item_schema, dict):
+                            errors.extend(self._validate_schema_shape(item_schema, f"{path}.prefixItems[{i}]"))
+                        else:
+                            errors.append(f"{path}.prefixItems[{i}]: must be a schema dict")
 
-        if "prefixItems" in schema:
-            prefix = schema["prefixItems"]
-            if not isinstance(prefix, list):
-                errors.append(f"{path}.prefixItems: must be a list of schemas")
-            else:
-                for i, item_schema in enumerate(prefix):
-                    if isinstance(item_schema, dict):
-                        errors.extend(self._validate_schema_shape(item_schema, f"{path}.prefixItems[{i}]"))
-                    else:
-                        errors.append(f"{path}.prefixItems[{i}]: must be a schema dict")
+            elif keyword == "enum":
+                if not isinstance(value, list):
+                    errors.append(f"{path}.enum: must be a list")
 
-        for kw in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"):
-            if kw in schema:
-                kw_val = schema[kw]
-                if (
-                    not isinstance(kw_val, (int, float))
-                    or isinstance(kw_val, bool)
-                    or not math.isfinite(kw_val)
-                ):
-                    errors.append(f"{path}.{kw}: must be a finite number")
+            elif keyword in _NUMERIC_BOUND_KEYWORDS:
+                if not _is_finite_number(value):
+                    errors.append(f"{path}.{keyword}: must be a finite number")
 
-        if "multipleOf" in schema:
-            mo = schema["multipleOf"]
-            if (
-                not isinstance(mo, (int, float))
-                or isinstance(mo, bool)
-                or not math.isfinite(mo)
-                or mo <= 0
-            ):
-                errors.append(f"{path}.multipleOf: must be a finite positive number")
+            elif keyword == "multipleOf":
+                if not _is_finite_number(value) or value <= 0:
+                    errors.append(f"{path}.multipleOf: must be a finite positive number")
 
-        for kw in ("minLength", "maxLength", "minItems", "maxItems", "minProperties", "maxProperties"):
-            if kw in schema and (
-                not isinstance(schema[kw], int)
-                or isinstance(schema[kw], bool)
-                or schema[kw] < 0
-            ):
-                errors.append(f"{path}.{kw}: must be a non-negative integer")
+            elif keyword in _SIZE_KEYWORDS:
+                if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                    errors.append(f"{path}.{keyword}: must be a non-negative integer")
 
-        for kw in ("pattern", "format"):
-            if kw in schema and not isinstance(schema[kw], str):
-                errors.append(f"{path}.{kw}: must be a string")
+            elif keyword in _STRING_KEYWORDS:
+                if not isinstance(value, str):
+                    errors.append(f"{path}.{keyword}: must be a string")
 
-        if "uniqueItems" in schema and not isinstance(schema["uniqueItems"], bool):
-            errors.append(f"{path}.uniqueItems: must be a bool")
+            elif keyword == "uniqueItems":
+                if not isinstance(value, bool):
+                    errors.append(f"{path}.uniqueItems: must be a bool")
 
         return errors
 

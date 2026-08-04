@@ -869,6 +869,16 @@ class TestSchemaShapeValidation:
         assert result.proof_ref is None
         assert result.constraint_id == "schema_verifier.parse_error"
 
+    @pytest.mark.parametrize("keyword", [
+        "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+    ])
+    def test_huge_integer_bound_does_not_crash(self, verifier, keyword):
+        """Integers beyond float range are finite and must not raise OverflowError."""
+        schema = {"type": "number", keyword: 10 ** 1000}
+        result = verifier.verify(1, schema)
+        assert result.status is DiagnosticStatus.VERIFIED
+        assert result.proof_ref is not None
+
     def test_union_type_list_valid(self, verifier):
         """A valid union type list must still be accepted."""
         schema = {"type": ["string", "null"]}
@@ -987,6 +997,20 @@ class TestEvidenceNormalization:
         with pytest.raises(TypeError):
             _set_to_sorted_list(object())
 
+    def test_nested_non_string_dict_key_fails_closed(self, verifier):
+        """Non-string keys nested inside lists/objects must also fail closed."""
+        schema = {"type": "object"}
+        result = verifier.verify({"rows": [{"ok": True}, {2: "b"}]}, schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.validation_error"
+
+    def test_unsupported_evidence_value_fails_closed(self, verifier):
+        """Values with no deterministic JSON form must fail closed."""
+        schema = {"type": "object"}
+        result = verifier.verify({"obj": object()}, schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.validation_error"
+
     def test_evidence_proof_data_rejects_cyclic(self):
         """_evidence_proof_data raises ValueError on cyclic structures."""
         from qwed_new.core.schema_verifier import _evidence_proof_data
@@ -994,6 +1018,17 @@ class TestEvidenceNormalization:
         cyclic["self"] = cyclic
         with pytest.raises(ValueError):
             _evidence_proof_data(cyclic)
+
+    def test_evidence_proof_data_accepts_shared_references(self):
+        """A repeated (non-cyclic) reference is not a cycle and must serialize."""
+        from qwed_new.core.schema_verifier import _evidence_proof_data
+        shared = {"a": 1}
+        assert _evidence_proof_data({"x": shared, "y": shared, "z": [shared]})
+
+    def test_evidence_proof_data_canonicalizes_sets(self):
+        """Sets are canonicalized to sorted lists, order-independently."""
+        from qwed_new.core.schema_verifier import _evidence_proof_data
+        assert _evidence_proof_data({"s": {3, 1, 2}}) == _evidence_proof_data({"s": {2, 3, 1}})
 
 
 if __name__ == "__main__":
