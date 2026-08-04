@@ -808,5 +808,193 @@ class TestReviewRegressions:
         assert result.proof_ref is not None
 
 
+class TestSchemaShapeValidation:
+    """Regression coverage for _validate_schema_shape malformed keyword shapes."""
+
+    @pytest.mark.parametrize("schema", [
+        {"type": "banana"},                              # unknown type string
+        {"type": []},                                    # empty type list
+        {"type": ["string", "banana"]},                  # invalid type entry
+        {"type": {}},                                    # type is neither str nor list
+        {"type": 42},                                    # type wrong primitive kind
+        {"enum": "red"},                                 # enum not a list
+        {"type": "object", "properties": {"a": "str"}},  # property schema not dict
+        {"type": "object", "required": "name"},          # required not a list
+        {"type": "object", "required": ["a", 42]},       # required entry not string
+        {"type": "object", "additionalProperties": "no"},  # additionalProperties wrong kind
+        {"type": "object", "additionalProperties": {"minLength": "x"}},  # nested bad schema
+        {"type": "array", "items": []},                  # items not dict
+        {"type": "array", "prefixItems": {}},            # prefixItems not list
+        {"type": "array", "prefixItems": ["x"]},         # prefixItems entry not dict
+        {"type": "number", "minimum": "zero"},           # minimum not number
+        {"type": "number", "minimum": True},             # minimum bool (JSON gotcha)
+        {"type": "number", "maximum": 5, "exclusiveMaximum": "5"},  # bad exclusiveMaximum
+        {"type": "number", "multipleOf": 0},             # multipleOf not positive
+        {"type": "number", "multipleOf": False},         # multipleOf bool
+        {"type": "string", "minLength": 1.5},            # minLength not int
+        {"type": "array", "minItems": True},             # minItems bool
+        {"type": "object", "maxProperties": "3"},        # maxProperties not int
+        {"type": "string", "maxLength": False},          # maxLength bool
+        {"type": "string", "pattern": 123},              # pattern not string
+        {"type": "string", "format": 123},               # format not string
+        {"type": "array", "uniqueItems": "yes"},         # uniqueItems not bool
+        {"type": "string", "minLength": -1},             # negative minLength
+        {"type": "array", "minItems": -1},               # negative minItems
+        {"type": "object", "maxProperties": -2},         # negative maxProperties
+        {"type": "number", "minimum": float("nan")},     # NaN minimum
+        {"type": "number", "maximum": float("inf")},     # +inf maximum
+        {"type": "number", "exclusiveMinimum": float("-inf")},  # -inf exclusive bound
+        {"type": "number", "multipleOf": float("inf")},  # non-finite multipleOf
+    ])
+    def test_malformed_schema_shape_blocked(self, verifier, schema):
+        """Malformed schema keyword shapes must be BLOCKED with parse_error."""
+        result = verifier.verify({"a": 1}, schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.proof_ref is None
+        assert result.constraint_id == "schema_verifier.parse_error"
+
+    def test_malformed_schema_errors_reported(self, verifier):
+        """Blocked parse_error results surface the collected shape errors."""
+        schema = {"type": "banana", "properties": []}
+        result = verifier.verify({}, schema)
+        assert result.constraint_id == "schema_verifier.parse_error"
+        assert result.developer_fields["errors"]
+
+    def test_recursive_schema_blocked(self, verifier):
+        """A self-referential schema must fail closed, not RecursionError out."""
+        schema = {"type": "object"}
+        schema["properties"] = {"self_ref": schema}
+        result = verifier.verify({"self_ref": {"self_ref": {}}}, schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.proof_ref is None
+        assert result.constraint_id == "schema_verifier.parse_error"
+
+    def test_union_type_list_valid(self, verifier):
+        """A valid union type list must still be accepted."""
+        schema = {"type": ["string", "null"]}
+        assert verifier.verify("hello", schema).developer_fields["is_valid"] is True
+        assert verifier.verify(None, schema).developer_fields["is_valid"] is True
+
+    def test_prefix_items_valid(self, verifier):
+        """Valid prefixItems tuple validation continues to work."""
+        schema = {
+            "type": "array",
+            "prefixItems": [{"type": "string"}, {"type": "number"}]
+        }
+        assert verifier.verify(["a", 1], schema).developer_fields["is_valid"] is True
+
+    def test_additional_properties_schema_valid(self, verifier):
+        """additionalProperties as a schema must validate extras against it."""
+        schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "additionalProperties": {"type": "number"}
+        }
+        assert verifier.verify({"name": "a", "score": 5}, schema).developer_fields["is_valid"] is True
+
+    def test_exclusive_minimum_maximum_valid(self, verifier):
+        """Valid exclusive numeric bounds keep working with shape validation."""
+        schema = {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 10}
+        assert verifier.verify(5, schema).developer_fields["is_valid"] is True
+
+    def test_union_type_list_invalid(self, verifier):
+        """Union type mismatch is rejected deterministically."""
+        schema = {"type": ["string", "null"]}
+        result = verifier.verify(42, schema)
+        assert result.developer_fields["is_valid"] is False
+        assert result.developer_fields["issues"][0]["type"] == "type_mismatch"
+
+    def test_min_max_properties(self, verifier):
+        """minProperties/maxProperties constraints determine conformance."""
+        schema = {"type": "object", "minProperties": 2, "maxProperties": 2}
+        result = verifier.verify({"a": 1}, schema)
+        assert result.developer_fields["is_valid"] is False
+        assert verifier.verify({"a": 1, "b": 2}, schema).developer_fields["is_valid"] is True
+        result = verifier.verify({"a": 1, "b": 2, "c": 3}, schema)
+        assert result.developer_fields["is_valid"] is False
+
+    def test_tax_rate_math_mismatch(self, verifier):
+        """tax = subtotal * tax_rate mismatch is detected."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "subtotal": {"type": "number"},
+                "tax_rate": {"type": "number"},
+                "tax": {"type": "number"}
+            }
+        }
+        data = {"subtotal": 100.00, "tax_rate": 0.10, "tax": 15.00}  # Wrong!
+        result = verifier.verify(data, schema)
+        assert any("tax" in i["type"].lower() or "math" in i["type"].lower()
+                   for i in result.developer_fields["issues"])
+
+    def test_invalid_regex_pattern_blocked(self, verifier):
+        """A syntactically invalid regex in schema is an unexpected validation error."""
+        schema = {"type": "string", "pattern": "("}  # Invalid regex
+        result = verifier.verify("anything", schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.validation_error"
+
+    def test_ucp_currency_precision_violation(self, verifier):
+        """Currency precision warning is emitted without blocking validity."""
+        transaction = {
+            "subtotal": 100.123,  # 3 decimals > JPY's 0? no — uses USD (2)
+            "tax": 10.00,
+            "total": 110.123,
+            "currency": "USD",
+            "items": []
+        }
+        result = verifier.verify_ucp_transaction(transaction)
+        assert any(i["type"] == "currency_precision" and i["severity"] == "WARNING"
+                   for i in result.developer_fields["issues"])
+
+
+class TestEvidenceNormalization:
+    """Coverage for _evidence_proof_data / _assert_evidence_safe edge cases."""
+
+    def test_cyclic_list_fails_closed(self, verifier):
+        """A cyclic top-level list must fail closed."""
+        schema = {"type": "array"}
+        data = [1, 2]
+        data.append(data)
+        result = verifier.verify(data, schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.validation_error"
+
+    def test_non_string_dict_key_fails_closed(self, verifier):
+        """JSON objects keyed by non-strings must fail closed (no silent merge)."""
+        schema = {"type": "object"}
+        result = verifier.verify({1: "a"}, schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.validation_error"
+
+    def test_ucp_unexpected_error_fails_closed(self, verifier):
+        """Unexpected UCP-specific errors must return BLOCKED, not crash."""
+        from unittest.mock import MagicMock
+        bad_map = MagicMock()
+        bad_map.get.side_effect = RuntimeError("boom")
+        verifier.CURRENCY_PRECISION = bad_map
+        transaction = {"subtotal": 100.0, "tax": 10.0, "total": 110.0}
+        result = verifier.verify_ucp_transaction(transaction)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.proof_ref is None
+        assert result.constraint_id == "schema_verifier.validation_error"
+
+    def test_set_to_sorted_list_rejects_unsupported(self):
+        """_set_to_sorted_list raises TypeError for non-set values."""
+        from qwed_new.core.schema_verifier import _set_to_sorted_list
+        assert _set_to_sorted_list(frozenset({2, 1})) == [1, 2]
+        with pytest.raises(TypeError):
+            _set_to_sorted_list(object())
+
+    def test_evidence_proof_data_rejects_cyclic(self):
+        """_evidence_proof_data raises ValueError on cyclic structures."""
+        from qwed_new.core.schema_verifier import _evidence_proof_data
+        cyclic = {}
+        cyclic["self"] = cyclic
+        with pytest.raises(ValueError):
+            _evidence_proof_data(cyclic)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

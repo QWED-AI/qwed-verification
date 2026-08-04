@@ -19,6 +19,7 @@ Example:
 
 from typing import Dict, List, Any, Union
 from dataclasses import dataclass
+import math
 import re
 import json
 
@@ -45,52 +46,44 @@ _CONSTRAINT_ID_UCP_VALID = "schema_verifier.ucp_valid"
 _CONSTRAINT_ID_UCP_VIOLATION = "schema_verifier.ucp_violation"
 
 
-def _json_safe(value: Any) -> Any:
-    """Recursively normalize a value to JSON-serializable primitives.
+def _evidence_proof_data(evidence: Dict[str, Any]) -> str:
+    """Serialize proof evidence to a canonical JSON string for proof_ref.
 
-    Only JSON-safe containers and primitives are accepted. Sets are converted
-    to sorted lists. Unsupported values and cyclic containers raise
-    ValueError — proof-bearing evidence must never include process-dependent
+    Fails closed (raises ValueError) on unsupported values, non-string dict
+    keys, or cycles so proof-bearing evidence never contains process-dependent
     representations (e.g. ``repr`` of arbitrary objects embeds memory
-    addresses, making proof_ref unstable across processes).
+    addresses, making proof_ref unstable across processes). Sets are
+    canonicalized to sorted lists.
 
     Raises:
-        ValueError: if the value contains a cycle or an unsupported type.
+        ValueError: if the evidence contains a cycle, a non-string key, or an
+            unsupported type.
     """
-    return _normalize(value, set())
+    seen: set = set()
+    _assert_evidence_safe(evidence, seen)
+    try:
+        return json.dumps(evidence, sort_keys=True, default=_set_to_sorted_list)
+    except (TypeError, RecursionError) as exc:
+        raise ValueError("proof evidence could not be serialized deterministically") from exc
 
 
-def _normalize(value: Any, seen: set) -> Any:
-    """Return a JSON-safe copy of ``value``, failing closed on cycles/unsupported types.
+def _assert_evidence_safe(value: Any, seen: set) -> None:
+    """Validate that ``value`` is a JSON-safe, acyclic structure (no copy).
 
-    ``seen`` tracks the container id path so shared references are allowed but
-    genuine cycles are rejected deterministically.
+    Strings, ints, floats, bools, and None are primitives and immediately
+    return. Lists, tuples, dicts, and sets are recursed into along their
+    parent path in ``seen`` so genuine cycles are detected while shared
+    (non-cyclic) references remain allowed.
+
+    Raises:
+        ValueError: on a cycle, a non-string dict key, or an unsupported type.
     """
     if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, (list, tuple)):
-        oid = id(value)
-        if oid in seen:
-            raise ValueError("cyclic value cannot be serialized into proof evidence")
-        seen.add(oid)
-        try:
-            return [_normalize(item, seen) for item in value]
-        finally:
-            seen.discard(oid)
-    if isinstance(value, (set, frozenset)):
-        oid = id(value)
-        if oid in seen:
-            raise ValueError("cyclic value cannot be serialized into proof evidence")
-        seen.add(oid)
-        try:
-            normalized = [_normalize(item, seen) for item in value]
-        finally:
-            seen.discard(oid)
-        return sorted(normalized, key=repr)
+        return
+    oid = id(value)
+    if oid in seen:
+        raise ValueError("cyclic value cannot be serialized into proof evidence")
     if isinstance(value, dict):
-        oid = id(value)
-        if oid in seen:
-            raise ValueError("cyclic value cannot be serialized into proof evidence")
         for key in value:
             if not isinstance(key, str):
                 raise ValueError(
@@ -99,12 +92,35 @@ def _normalize(value: Any, seen: set) -> Any:
                 )
         seen.add(oid)
         try:
-            return {key: _normalize(item, seen) for key, item in value.items()}
+            for item in value.values():
+                _assert_evidence_safe(item, seen)
         finally:
             seen.discard(oid)
-    raise ValueError(
-        f"unsupported value type in proof evidence: {type(value).__name__}"
-    )
+    elif isinstance(value, (list, tuple)):
+        seen.add(oid)
+        try:
+            for item in value:
+                _assert_evidence_safe(item, seen)
+        finally:
+            seen.discard(oid)
+    elif isinstance(value, (set, frozenset)):
+        seen.add(oid)
+        try:
+            for item in value:
+                _assert_evidence_safe(item, seen)
+        finally:
+            seen.discard(oid)
+    else:
+        raise ValueError(
+            f"unsupported value type in proof evidence: {type(value).__name__}"
+        )
+
+
+def _set_to_sorted_list(o: Any) -> Any:
+    """json.dumps default: canonicalize sets to sorted lists; reject the rest."""
+    if isinstance(o, (set, frozenset)):
+        return sorted(o, key=repr)
+    raise TypeError(f"unsupported evidence type: {type(o).__name__}")
 
 
 class SchemaVerifier:
@@ -197,7 +213,11 @@ class SchemaVerifier:
                 },
             )
 
-        schema_errors = self._validate_schema_shape(schema)
+        try:
+            schema_errors = self._validate_schema_shape(schema)
+        except RecursionError:
+            schema_errors = ["$: recursive schema definition"]
+
         if schema_errors:
             return DiagnosticResult.blocked(
                 "Schema verification blocked: the schema could not be parsed",
@@ -253,20 +273,20 @@ class SchemaVerifier:
 
         try:
             schema_evidence = {
-                "schema": _json_safe(schema),
-                "instance": _json_safe(data),
+                "schema": schema,
+                "instance": data,
                 "verdict": "VALID" if is_valid else "INVALID",
                 "issues": serialized_issues,
                 "paths_checked": stats["paths_checked"],
                 "constraints_checked": stats["constraints_checked"],
             }
+            proof_data = _evidence_proof_data(schema_evidence)
         except ValueError as exc:
             return DiagnosticResult.blocked(
                 "Schema verification blocked: proof evidence could not be normalized",
                 {
                     "constraint_id": _CONSTRAINT_ID_VALIDATION_ERROR,
                     "error_type": type(exc).__name__,
-                    "error": str(exc),
                 },
             )
 
@@ -282,6 +302,7 @@ class SchemaVerifier:
             agent_message=agent_message,
             developer_fields=developer_fields,
             evidence=schema_evidence,
+            proof_data=proof_data,
         )
 
     def _validate_schema_shape(self, schema: Any, path: str = "$") -> List[str]:
@@ -351,23 +372,32 @@ class SchemaVerifier:
                         errors.append(f"{path}.prefixItems[{i}]: must be a schema dict")
 
         for kw in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"):
-            if kw in schema and (
-                not isinstance(schema[kw], (int, float)) or isinstance(schema[kw], bool)
-            ):
-                errors.append(f"{path}.{kw}: must be a number")
+            if kw in schema:
+                kw_val = schema[kw]
+                if (
+                    not isinstance(kw_val, (int, float))
+                    or isinstance(kw_val, bool)
+                    or not math.isfinite(kw_val)
+                ):
+                    errors.append(f"{path}.{kw}: must be a finite number")
 
-        if "multipleOf" in schema and (
-            not isinstance(schema["multipleOf"], (int, float))
-            or isinstance(schema["multipleOf"], bool)
-            or schema["multipleOf"] <= 0
-        ):
-            errors.append(f"{path}.multipleOf: must be a positive number")
+        if "multipleOf" in schema:
+            mo = schema["multipleOf"]
+            if (
+                not isinstance(mo, (int, float))
+                or isinstance(mo, bool)
+                or not math.isfinite(mo)
+                or mo <= 0
+            ):
+                errors.append(f"{path}.multipleOf: must be a finite positive number")
 
         for kw in ("minLength", "maxLength", "minItems", "maxItems", "minProperties", "maxProperties"):
             if kw in schema and (
-                not isinstance(schema[kw], int) or isinstance(schema[kw], bool)
+                not isinstance(schema[kw], int)
+                or isinstance(schema[kw], bool)
+                or schema[kw] < 0
             ):
-                errors.append(f"{path}.{kw}: must be an integer")
+                errors.append(f"{path}.{kw}: must be a non-negative integer")
 
         for kw in ("pattern", "format"):
             if kw in schema and not isinstance(schema[kw], str):
@@ -1010,19 +1040,19 @@ class SchemaVerifier:
         
         try:
             ucp_evidence = {
-                "schema": _json_safe(schema),
-                "instance": _json_safe(transaction),
+                "schema": schema,
+                "instance": transaction,
                 "verdict": "VALID" if is_valid else "INVALID",
                 "issues": issues,
-                "currency": currency if isinstance(currency, str) else str(currency),
+                "currency": currency,
             }
+            proof_data = _evidence_proof_data(ucp_evidence)
         except ValueError as exc:
             return DiagnosticResult.blocked(
                 "UCP transaction verification blocked: proof evidence could not be normalized",
                 {
                     "constraint_id": _CONSTRAINT_ID_VALIDATION_ERROR,
                     "error_type": type(exc).__name__,
-                    "error": str(exc),
                 },
             )
         
@@ -1037,4 +1067,5 @@ class SchemaVerifier:
             agent_message=agent_message,
             developer_fields=developer_fields,
             evidence=ucp_evidence,
+            proof_data=proof_data,
         )
