@@ -19,6 +19,7 @@ Example:
 
 from typing import Dict, List, Any, Union
 from dataclasses import dataclass
+from decimal import Decimal, ROUND_HALF_EVEN
 import math
 import re
 import json
@@ -47,9 +48,17 @@ _CONSTRAINT_ID_UCP_VIOLATION = "schema_verifier.ucp_violation"
 
 
 def _set_to_sorted_list(o: Any) -> Any:
-    """json.dumps default: canonicalize sets to sorted lists; reject the rest."""
+    """json.dumps default: canonicalize sets to sorted lists; reject the rest.
+
+    A member with a hostile ``__repr__`` (one that raises) must not let its
+    exception escape unconverted: it is wrapped as ``TypeError`` so the
+    evidence-normalization path returns the documented ``ValueError`` instead.
+    """
     if isinstance(o, (set, frozenset)):
-        return sorted(o, key=repr)
+        try:
+            return sorted(o, key=repr)
+        except Exception as exc:  # noqa: BLE001 - hostile __repr__ must not escape
+            raise TypeError("unsupported evidence value in set") from exc
     raise TypeError(f"unsupported evidence type: {type(o).__name__}")
 
 
@@ -57,7 +66,9 @@ def _set_to_sorted_list(o: Any) -> Any:
 # Settings match json.dumps(..., sort_keys=True, default=_set_to_sorted_list),
 # so the serialized bytes — and therefore every proof_ref — are unchanged.
 # encode() keeps no state between calls (fresh cycle markers per invocation).
-_EVIDENCE_ENCODER = json.JSONEncoder(sort_keys=True, default=_set_to_sorted_list)
+# allow_nan=False rejects NaN/±inf floats with ValueError, because NaN /
+# Infinity / -Infinity are not valid JSON tokens for proof evidence.
+_EVIDENCE_ENCODER = json.JSONEncoder(sort_keys=True, allow_nan=False, default=_set_to_sorted_list)
 
 
 def _evidence_proof_data(evidence: Dict[str, Any]) -> str:
@@ -75,13 +86,13 @@ def _evidence_proof_data(evidence: Dict[str, Any]) -> str:
     check the encoder does not make: non-string mapping keys.
 
     Raises:
-        ValueError: if the evidence contains a cycle, a non-string key, or an
-            unsupported type.
+        ValueError: if the evidence contains a cycle, a non-string key, a
+            non-finite float, or an unsupported type.
     """
     try:
         proof_data = _EVIDENCE_ENCODER.encode(evidence)
-    except ValueError as exc:  # circular reference detected by the encoder
-        raise ValueError("cyclic value cannot be serialized into proof evidence") from exc
+    except ValueError as exc:  # circular reference or NaN/±inf rejected by the encoder
+        raise ValueError("cyclic or non-finite value cannot be serialized into proof evidence") from exc
     except (TypeError, RecursionError) as exc:
         raise ValueError("proof evidence could not be serialized deterministically") from exc
     _assert_string_keys(evidence)
@@ -105,18 +116,28 @@ def _assert_string_keys(evidence: Any) -> None:
     while stack:
         node = stack.pop()
         if isinstance(node, dict):
-            for key, value in node.items():
-                if not isinstance(key, str):
-                    raise ValueError(
-                        "non-string key in evidence object: "
-                        f"expected str, got {type(key).__name__}"
-                    )
-                if isinstance(value, (dict, list, tuple)):
-                    stack.append(value)
-        else:
-            for value in node:
-                if isinstance(value, (dict, list, tuple)):
-                    stack.append(value)
+            _assert_key_strings(node, stack)
+        elif isinstance(node, (list, tuple)):
+            _extend_stack_containers(stack, node)
+
+
+def _assert_key_strings(node: Dict[str, Any], stack: List[Any]) -> None:
+    """Reject non-str dict keys, and queue each value for container traversal."""
+    for key, value in node.items():
+        if not isinstance(key, str):
+            raise ValueError(
+                "non-string key in evidence object: "
+                f"expected str, got {type(key).__name__}"
+            )
+        if isinstance(value, (dict, list, tuple)):
+            stack.append(value)
+
+
+def _extend_stack_containers(stack: List[Any], node: Any) -> None:
+    """Queue the dict/list/tuple children of a list/tuple for traversal."""
+    for value in node:
+        if isinstance(value, (dict, list, tuple)):
+            stack.append(value)
 
 
 def _is_finite_number(value: Any) -> bool:
@@ -177,6 +198,8 @@ class SchemaVerifier:
         "grand_total", "net_total", "gross_total", "balance",
         "sum", "average", "mean", "computed", "calculated"
     }
+    
+    _MONEY_QUANT = Decimal(1).scaleb(-2)  # 0.01 — default money comparison precision
     
     # Currency precision rules
     CURRENCY_PRECISION = {
@@ -332,6 +355,18 @@ class SchemaVerifier:
             proof_data=proof_data,
         )
 
+    _SHAPE_DISPATCH = {
+        "type": "_shape_type",
+        "properties": "_shape_properties",
+        "required": "_shape_required",
+        "items": "_shape_items",
+        "additionalProperties": "_shape_additional_properties",
+        "prefixItems": "_shape_prefix_items",
+        "enum": "_shape_enum",
+        "multipleOf": "_shape_multiple_of",
+        "uniqueItems": "_shape_unique_items",
+    }
+
     def _validate_schema_shape(self, schema: Any, path: str = "$") -> List[str]:
         """Recursively meta-validate schema keyword shapes.
 
@@ -339,90 +374,120 @@ class SchemaVerifier:
         being silently treated as empty/omitted. Returns a list of error
         messages; an empty list means the schema shape is well-formed.
 
-        Dispatches on the keywords the schema actually declares (a single pass
-        over its keys) rather than probing for every known keyword, so the cost
-        scales with the schema instead of with the keyword vocabulary.
+        Dispatch table keeps per-keyword checks as small validators so the
+        loop stays flat; recursion handles nested sub-schemas.
         """
         if not isinstance(schema, dict):
             return [f"{path}: schema must be a dict, got {type(schema).__name__}"]
 
         errors: List[str] = []
-        type_map = self.TYPE_MAP
-
         for keyword, value in schema.items():
-            if keyword == "type":
-                if value is None:
-                    continue
-                if isinstance(value, str):
-                    if value not in type_map:
-                        errors.append(f"{path}.type: unknown type {value!r}")
-                elif isinstance(value, list):
-                    if not value or not all(isinstance(t, str) and t in type_map for t in value):
-                        errors.append(f"{path}.type: must be a list of valid types")
-                else:
-                    errors.append(f"{path}.type: must be a string or list of strings")
-
-            elif keyword == "properties":
-                if not isinstance(value, dict):
-                    errors.append(f"{path}.properties: must be a dict")
-                else:
-                    for prop_name, prop_schema in value.items():
-                        if not isinstance(prop_schema, dict):
-                            errors.append(f"{path}.properties.{prop_name}: must be a schema dict")
-                        else:
-                            errors.extend(self._validate_schema_shape(prop_schema, f"{path}.properties.{prop_name}"))
-
-            elif keyword == "required":
-                if not isinstance(value, list) or not all(isinstance(r, str) for r in value):
-                    errors.append(f"{path}.required: must be a list of strings")
-
-            elif keyword == "items":
-                if isinstance(value, dict):
-                    errors.extend(self._validate_schema_shape(value, f"{path}.items"))
-                else:
-                    errors.append(f"{path}.items: must be a schema dict")
-
-            elif keyword == "additionalProperties":
-                if isinstance(value, dict):
-                    errors.extend(self._validate_schema_shape(value, f"{path}.additionalProperties"))
-                elif not isinstance(value, bool):
-                    errors.append(f"{path}.additionalProperties: must be a bool or schema dict")
-
-            elif keyword == "prefixItems":
-                if not isinstance(value, list):
-                    errors.append(f"{path}.prefixItems: must be a list of schemas")
-                else:
-                    for i, item_schema in enumerate(value):
-                        if isinstance(item_schema, dict):
-                            errors.extend(self._validate_schema_shape(item_schema, f"{path}.prefixItems[{i}]"))
-                        else:
-                            errors.append(f"{path}.prefixItems[{i}]: must be a schema dict")
-
-            elif keyword == "enum":
-                if not isinstance(value, list):
-                    errors.append(f"{path}.enum: must be a list")
-
-            elif keyword in _NUMERIC_BOUND_KEYWORDS:
-                if not _is_finite_number(value):
-                    errors.append(f"{path}.{keyword}: must be a finite number")
-
-            elif keyword == "multipleOf":
-                if not _is_finite_number(value) or value <= 0:
-                    errors.append(f"{path}.multipleOf: must be a finite positive number")
-
-            elif keyword in _SIZE_KEYWORDS:
-                if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-                    errors.append(f"{path}.{keyword}: must be a non-negative integer")
-
-            elif keyword in _STRING_KEYWORDS:
-                if not isinstance(value, str):
-                    errors.append(f"{path}.{keyword}: must be a string")
-
-            elif keyword == "uniqueItems":
-                if not isinstance(value, bool):
-                    errors.append(f"{path}.uniqueItems: must be a bool")
-
+            errors.extend(self._shape_check(keyword, value, path))
         return errors
+
+    def _shape_check(self, keyword: str, value: Any, path: str) -> List[str]:
+        """Dispatch a keyword to its shape validator, or a shared keyword group."""
+        checker_name = self._SHAPE_DISPATCH.get(keyword)
+        if checker_name is not None:
+            return getattr(self, checker_name)(value, path)
+        if keyword in _NUMERIC_BOUND_KEYWORDS:
+            return self._shape_numeric_bound(keyword, value, path)
+        if keyword in _SIZE_KEYWORDS:
+            return self._shape_size(keyword, value, path)
+        if keyword in _STRING_KEYWORDS:
+            return self._shape_string(keyword, value, path)
+        return []
+
+    def _shape_type(self, value: Any, path: str) -> List[str]:
+        """Validate the type keyword: a string or non-empty list of known types."""
+        if isinstance(value, str):
+            return [] if value in self.TYPE_MAP else [f"{path}.type: unknown type {value!r}"]
+        if isinstance(value, list):
+            if value and all(isinstance(t, str) and t in self.TYPE_MAP for t in value):
+                return []
+            return [f"{path}.type: must be a list of valid types"]
+        return [f"{path}.type: must be a string or list of strings"]
+
+    def _shape_properties(self, value: Any, path: str) -> List[str]:
+        """Validate properties: dict mapping names to schema dicts, recursing."""
+        if not isinstance(value, dict):
+            return [f"{path}.properties: must be a dict"]
+        errors: List[str] = []
+        for prop_name, prop_schema in value.items():
+            if isinstance(prop_schema, dict):
+                errors.extend(self._validate_schema_shape(prop_schema, f"{path}.properties.{prop_name}"))
+            else:
+                errors.append(f"{path}.properties.{prop_name}: must be a schema dict")
+        return errors
+
+    def _shape_required(self, value: Any, path: str) -> List[str]:
+        """Validate required: must be a list of strings."""
+        if isinstance(value, list) and all(isinstance(r, str) for r in value):
+            return []
+        return [f"{path}.required: must be a list of strings"]
+
+    def _shape_items(self, value: Any, path: str) -> List[str]:
+        """Validate items: must be a schema dict; recurses into it."""
+        if isinstance(value, dict):
+            return self._validate_schema_shape(value, f"{path}.items")
+        return [f"{path}.items: must be a schema dict"]
+
+    def _shape_additional_properties(self, value: Any, path: str) -> List[str]:
+        """Validate additionalProperties: bool or schema dict; recurses into dicts."""
+        if isinstance(value, dict):
+            return self._validate_schema_shape(value, f"{path}.additionalProperties")
+        if isinstance(value, bool):
+            return []
+        return [f"{path}.additionalProperties: must be a bool or schema dict"]
+
+    def _shape_prefix_items(self, value: Any, path: str) -> List[str]:
+        """Validate prefixItems: must be a list of schema dicts; recurses."""
+        if not isinstance(value, list):
+            return [f"{path}.prefixItems: must be a list of schemas"]
+        errors: List[str] = []
+        for i, item_schema in enumerate(value):
+            if isinstance(item_schema, dict):
+                errors.extend(self._validate_schema_shape(item_schema, f"{path}.prefixItems[{i}]"))
+            else:
+                errors.append(f"{path}.prefixItems[{i}]: must be a schema dict")
+        return errors
+
+    def _shape_enum(self, value: Any, path: str) -> List[str]:
+        """Validate enum: must be a list."""
+        return [] if isinstance(value, list) else [f"{path}.enum: must be a list"]
+
+    def _shape_numeric_bound(self, keyword: str, value: Any, path: str) -> List[str]:
+        """Validate numeric bounds (minimum/maximum/exclusive*): finite number."""
+        if _is_finite_number(value):
+            return []
+        return [f"{path}.{keyword}: must be a finite number"]
+
+    def _shape_multiple_of(self, value: Any, path: str) -> List[str]:
+        """Validate multipleOf: must be a finite positive number."""
+        if _is_finite_number(value) and value > 0:
+            return []
+        return [f"{path}.multipleOf: must be a finite positive number"]
+
+    def _shape_size(self, keyword: str, value: Any, path: str) -> List[str]:
+        """Validate size keywords (minLength/maxItems/etc.): non-negative int."""
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return []
+        return [f"{path}.{keyword}: must be a non-negative integer"]
+
+    def _shape_string(self, keyword: str, value: Any, path: str) -> List[str]:
+        """Validate string keywords (pattern/format); pattern must also compile."""
+        if not isinstance(value, str):
+            return [f"{path}.{keyword}: must be a string"]
+        if keyword == "pattern":
+            try:
+                re.compile(value)
+            except re.error:
+                return [f"{path}.pattern: must be a valid regular expression"]
+        return []
+
+    def _shape_unique_items(self, value: Any, path: str) -> List[str]:
+        """Validate uniqueItems: must be a bool."""
+        return [] if isinstance(value, bool) else [f"{path}.uniqueItems: must be a bool"]
 
     def _validate_node(
         self,
@@ -880,7 +945,7 @@ class SchemaVerifier:
         Check computed fields using inline arithmetic consistency.
         
         For fields like 'total', 'tax', etc., verify against
-        related fields using float comparison.
+        related fields using Decimal comparison (no float tolerance noise).
         """
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             return
@@ -888,7 +953,7 @@ class SchemaVerifier:
         # Example: total = subtotal + tax
         if field_name.lower() == "total":
             subtotal = parent_data.get("subtotal")
-            tax = parent_data.get("tax") or parent_data.get("tax_amount", 0)
+            tax = parent_data["tax"] if "tax" in parent_data else parent_data.get("tax_amount", 0)
             
             if (
                 subtotal is not None
@@ -896,10 +961,14 @@ class SchemaVerifier:
                 and isinstance(tax, (int, float)) and not isinstance(tax, bool)
             ):
                 stats["constraints_checked"] += 1
-                expected = subtotal + tax
+                expected = Decimal(str(subtotal)) + Decimal(str(tax))
+                actual = Decimal(str(value))
                 
-                # Use decimal comparison for currency
-                if abs(value - expected) > 0.01:  # Allow 1 cent tolerance
+                # Quantize both to money precision and compare exactly.
+                expected = expected.quantize(self._MONEY_QUANT, rounding=ROUND_HALF_EVEN)
+                actual = actual.quantize(self._MONEY_QUANT, rounding=ROUND_HALF_EVEN)
+                
+                if actual != expected:
                     issues.append(SchemaIssue(
                         path=path,
                         issue_type="math_verification_failed",
@@ -919,9 +988,13 @@ class SchemaVerifier:
                 and isinstance(tax_rate, (int, float)) and not isinstance(tax_rate, bool)
             ):
                 stats["constraints_checked"] += 1
-                expected = subtotal * tax_rate
+                expected = Decimal(str(subtotal)) * Decimal(str(tax_rate))
+                actual = Decimal(str(value))
                 
-                if abs(value - expected) > 0.01:
+                expected = expected.quantize(self._MONEY_QUANT, rounding=ROUND_HALF_EVEN)
+                actual = actual.quantize(self._MONEY_QUANT, rounding=ROUND_HALF_EVEN)
+                
+                if actual != expected:
                     issues.append(SchemaIssue(
                         path=path,
                         issue_type="math_verification_failed",
@@ -936,14 +1009,22 @@ class SchemaVerifier:
         currency: str,
         issues: List[Dict[str, Any]]
     ) -> None:
-        """Run UCP-specific consistency checks (currency precision, computed total).
+        """Run UCP-specific consistency checks (currency precision, computed total)."""
+        self._check_ucp_currency_precision(transaction, currency, issues)
+        self._check_ucp_computed_total(transaction, currency, issues)
 
-        Appends issue dicts (path/type/expected/actual/severity/message) to
-        ``issues`` for each violation found. The caller runs this only when
-        the base schema verdict remains valid, so amount fields are numeric.
-        """
-        # Currency precision check
-        precision = self.CURRENCY_PRECISION.get(currency, 2) if isinstance(currency, str) else 2
+    def _ucp_precision(self, currency: str) -> int:
+        """Resolve currency code to declared decimal precision."""
+        return self.CURRENCY_PRECISION.get(currency, 2) if isinstance(currency, str) else 2
+
+    def _check_ucp_currency_precision(
+        self,
+        transaction: Dict[str, Any],
+        currency: str,
+        issues: List[Dict[str, Any]]
+    ) -> None:
+        """Appends a WARNING issue when an amount exceeds the currency precision."""
+        precision = self._ucp_precision(currency)
         for field in ["subtotal", "tax", "discount", "total"]:
             if field in transaction:
                 value = transaction[field]
@@ -958,22 +1039,37 @@ class SchemaVerifier:
                             "severity": "WARNING",
                             "message": f"Currency precision exceeded for {currency}"
                         })
+
+    def _check_ucp_computed_total(
+        self,
+        transaction: Dict[str, Any],
+        currency: str,
+        issues: List[Dict[str, Any]]
+    ) -> None:
+        """Verify total = subtotal + tax - discount using exact Decimal arithmetic."""
+        precision = self._ucp_precision(currency)
+        quant = Decimal(1).scaleb(-precision)
         
-        # Verify computed total
         subtotal = transaction.get("subtotal", 0)
         tax = transaction.get("tax", 0)
         discount = transaction.get("discount", 0)
         total = transaction.get("total", 0)
         
-        expected_total = subtotal + tax - discount
-        if abs(total - expected_total) > 0.01:
+        expected_total = Decimal(str(subtotal)) + Decimal(str(tax)) - Decimal(str(discount))
+        expected_total = expected_total.quantize(quant, rounding=ROUND_HALF_EVEN)
+        actual = Decimal(str(total)).quantize(quant, rounding=ROUND_HALF_EVEN)
+        
+        if actual != expected_total:
             issues.append({
                 "path": "$.total",
                 "type": "math_verification_failed",
-                "expected": f"{expected_total:.2f}",
-                "actual": f"{total:.2f}",
+                "expected": f"{expected_total:.{precision}f}",
+                "actual": f"{total:.{precision}f}",
                 "severity": "ERROR",
-                "message": f"Total mismatch: {subtotal} + {tax} - {discount} = {expected_total:.2f}, got {total:.2f}"
+                "message": (
+                    f"Total mismatch: {subtotal} + {tax} - {discount} = "
+                    f"{expected_total:.{precision}f}, got {total:.{precision}f}"
+                )
             })
     
     def verify_ucp_transaction(
@@ -1047,7 +1143,7 @@ class SchemaVerifier:
         if base_valid and isinstance(transaction, dict):
             try:
                 self._check_ucp_business_rules(transaction, currency, issues)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - fail closed on any unexpected error
                 return DiagnosticResult.blocked(
                     "UCP transaction verification blocked: an unexpected validation error occurred",
                     {
