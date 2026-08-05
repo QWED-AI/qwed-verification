@@ -17,9 +17,9 @@ Example:
     result = verifier.verify(data, schema)  # VERIFIED - deterministic!
 """
 
-from typing import Any, ClassVar, Dict, List, Union
+from typing import Any, ClassVar, Dict, List, Optional, Union
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_HALF_EVEN
+from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 import math
 import re
 import json
@@ -163,6 +163,11 @@ _SIZE_KEYWORDS = frozenset(
 )
 _STRING_KEYWORDS = frozenset({"pattern", "format"})
 
+# Local decimal precision used when quantizing UCP total amounts. Generous so
+# schema-accepted amounts of any magnitude (e.g. 1e300) never raise
+# Decimal.InvalidOperation under the default 28-digit context.
+_UCP_TOTAL_PRECISION = 400
+
 
 class SchemaVerifier:
     """
@@ -273,7 +278,7 @@ class SchemaVerifier:
 
         try:
             self._validate_node(data, schema, "$", issues, stats, strict)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - fail closed on any unexpected error
             return DiagnosticResult.blocked(
                 "Schema verification blocked: an unexpected validation error occurred",
                 {
@@ -519,20 +524,35 @@ class SchemaVerifier:
         if "const" in schema:
             self._check_const(data, schema["const"], path, issues, stats)
         
-        # Type-specific validations
+        # Type-specific validations. For union types ("type": [..]), resolve
+        # the concrete type the runtime value matches and apply that type's
+        # constraints, so e.g. {"type": ["string", "null"], "minLength": 5}
+        # still enforces minLength on string values.
         schema_type = schema.get("type")
+        resolved_type = self._resolve_schema_type(schema_type, data)
         
-        if schema_type == "string" and isinstance(data, str):
+        if resolved_type == "string":
             self._validate_string(data, schema, path, issues, stats)
         
-        elif schema_type in ("number", "integer") and isinstance(data, (int, float)):
+        elif resolved_type in ("number", "integer"):
             self._validate_number(data, schema, path, issues, stats)
         
-        elif schema_type == "array" and isinstance(data, list):
+        elif resolved_type == "array":
             self._validate_array(data, schema, path, issues, stats, strict)
         
-        elif schema_type == "object" and isinstance(data, dict):
+        elif resolved_type == "object":
             self._validate_object(data, schema, path, issues, stats, strict)
+    
+    def _resolve_schema_type(self, schema_type: Any, data: Any) -> Optional[str]:
+        """Resolve which concrete JSON type a runtime value matches within a
+        single-type or union-type schema declaration (None if no match)."""
+        if schema_type is None:
+            return None
+        type_names = schema_type if isinstance(schema_type, list) else [schema_type]
+        for type_name in type_names:
+            if self._is_type(data, type_name):
+                return type_name
+        return None
     
     def _check_type(
         self,
@@ -671,7 +691,7 @@ class SchemaVerifier:
                     issue_type="pattern_violation",
                     expected=f"pattern /{schema['pattern']}/",
                     actual=data[:50] + "..." if len(data) > 50 else data,
-                    message=f"String does not match pattern"
+                    message="String does not match pattern"
                 ))
         
         # format (common formats)
@@ -844,16 +864,19 @@ class SchemaVerifier:
                     )
                 ))
 
-        # items (single schema for all items)
-        if "items" in schema and isinstance(schema["items"], dict):
-            for i, item in enumerate(data):
-                self._validate_node(item, schema["items"], f"{path}[{i}]", issues, stats, strict)
-        
-        # prefixItems (tuple validation)
-        elif "prefixItems" in schema:
-            for i, item_schema in enumerate(schema["prefixItems"]):
+        # prefixItems (tuple validation) - validates the leading elements.
+        prefix_len = 0
+        if "prefixItems" in schema:
+            prefix = schema["prefixItems"]
+            prefix_len = len(prefix)
+            for i, item_schema in enumerate(prefix):
                 if i < len(data):
                     self._validate_node(data[i], item_schema, f"{path}[{i}]", issues, stats, strict)
+
+        # items (single schema for the remaining elements after the prefix).
+        if "items" in schema and isinstance(schema["items"], dict):
+            for i, item in enumerate(data[prefix_len:], start=prefix_len):
+                self._validate_node(item, schema["items"], f"{path}[{i}]", issues, stats, strict)
     
     def _validate_object(
         self,
@@ -917,7 +940,7 @@ class SchemaVerifier:
                     issue_type="constraint_violation",
                     expected=f"minProperties {schema['minProperties']}",
                     actual=f"{len(data)} properties",
-                    message=f"Object has too few properties"
+                    message="Object has too few properties"
                 ))
         
         # maxProperties
@@ -929,7 +952,7 @@ class SchemaVerifier:
                     issue_type="constraint_violation",
                     expected=f"maxProperties {schema['maxProperties']}",
                     actual=f"{len(data)} properties",
-                    message=f"Object has too many properties"
+                    message="Object has too many properties"
                 ))
     
     def _check_math_field(
@@ -950,18 +973,22 @@ class SchemaVerifier:
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             return
         
-        # Example: total = subtotal + tax
+        # Example: total = subtotal + tax - discount
         if field_name.lower() == "total":
             subtotal = parent_data.get("subtotal")
             tax = parent_data["tax"] if "tax" in parent_data else parent_data.get("tax_amount", 0)
+            discount = parent_data.get("discount", 0)
             
             if (
                 subtotal is not None
                 and isinstance(subtotal, (int, float)) and not isinstance(subtotal, bool)
                 and isinstance(tax, (int, float)) and not isinstance(tax, bool)
+                and isinstance(discount, (int, float)) and not isinstance(discount, bool)
             ):
                 stats["constraints_checked"] += 1
-                expected = Decimal(str(subtotal)) + Decimal(str(tax))
+                expected = (
+                    Decimal(str(subtotal)) + Decimal(str(tax)) - Decimal(str(discount))
+                )
                 actual = Decimal(str(value))
                 
                 # Exact Decimal comparison; operand scales are preserved in messages.
@@ -1004,6 +1031,9 @@ class SchemaVerifier:
         issues: List[Dict[str, Any]]
     ) -> None:
         """Run UCP-specific consistency checks (currency precision, computed total)."""
+        declared = transaction.get("currency")
+        if isinstance(declared, str):
+            currency = declared
         self._check_ucp_currency_precision(transaction, currency, issues)
         self._check_ucp_computed_total(transaction, currency, issues)
 
@@ -1053,9 +1083,14 @@ class SchemaVerifier:
         discount = transaction.get("discount", 0)
         total = transaction.get("total", 0)
         
-        expected_total = Decimal(str(subtotal)) + Decimal(str(tax)) - Decimal(str(discount))
-        expected_total = expected_total.quantize(quant, rounding=ROUND_HALF_EVEN)
-        actual = Decimal(str(total)).quantize(quant, rounding=ROUND_HALF_EVEN)
+        # Quantize under a local context with a precision generous enough for
+        # schema-accepted amounts (e.g. 1e300), so quantize does not raise
+        # Decimal.InvalidOperation at the default 28-digit context.
+        with localcontext() as ctx:
+            ctx.prec = _UCP_TOTAL_PRECISION
+            expected_total = Decimal(str(subtotal)) + Decimal(str(tax)) - Decimal(str(discount))
+            expected_total = expected_total.quantize(quant, rounding=ROUND_HALF_EVEN)
+            actual = Decimal(str(total)).quantize(quant, rounding=ROUND_HALF_EVEN)
         
         if actual != expected_total:
             issues.append({

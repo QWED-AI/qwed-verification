@@ -443,7 +443,7 @@ class TestObjectValidation:
 
 
 class TestMathConsistency:
-    """Test computed field verification (inline float comparison)."""
+    """Test computed field verification (inline exact Decimal comparison)."""
     
     def test_total_calculation_valid(self, verifier):
         """Correct total calculation passes."""
@@ -461,19 +461,38 @@ class TestMathConsistency:
         assert result.developer_fields["is_valid"] is True
     
     def test_total_calculation_invalid(self, verifier):
-        """Incorrect total calculation fails."""
+        """Incorrect total calculation fails deterministically."""
         schema = {
             "type": "object",
             "properties": {
                 "subtotal": {"type": "number"},
                 "tax": {"type": "number"},
+                "discount": {"type": "number"},
                 "total": {"type": "number"}
             }
         }
-        data = {"subtotal": 100.00, "tax": 10.00, "total": 115.00}  # Wrong!
+        data = {"subtotal": 100.00, "tax": 10.00, "discount": 5.00, "total": 115.00}  # Wrong!
         result = verifier.verify(data, schema)
-        # Should detect math discrepancy
-        assert any("math" in str(i).lower() for i in result.developer_fields["issues"])
+        assert result.developer_fields["is_valid"] is False
+        assert any(
+            i["type"] == "math_verification_failed" and i["severity"] == "ERROR"
+            for i in result.developer_fields["issues"]
+        )
+
+    def test_total_calculation_with_discount_valid(self, verifier):
+        """total = subtotal + tax - discount passes the math check."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "subtotal": {"type": "number"},
+                "tax": {"type": "number"},
+                "discount": {"type": "number"},
+                "total": {"type": "number"}
+            }
+        }
+        data = {"subtotal": 100.00, "tax": 10.00, "discount": 5.00, "total": 105.00}
+        result = verifier.verify(data, schema)
+        assert result.developer_fields["is_valid"] is True
 
     def test_tax_rate_math_mismatch(self, verifier):
         """tax = subtotal * tax_rate mismatch is detected deterministically."""
@@ -509,7 +528,21 @@ class TestUCPTransaction:
         assert_verified(result)
         assert result.developer_fields["is_valid"] is True
         assert result.constraint_id == "schema_verifier.ucp_valid"
-    
+
+    def test_valid_ucp_transaction_with_discount(self, verifier):
+        """A valid discounted UCP transaction passes (total = subtotal + tax - discount)."""
+        transaction = {
+            "subtotal": 100.00,
+            "tax": 10.00,
+            "discount": 5.00,
+            "total": 105.00,
+            "currency": "USD"
+        }
+        result = verifier.verify_ucp_transaction(transaction)
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
+        assert result.constraint_id == "schema_verifier.ucp_valid"
+
     def test_ucp_transaction_total_mismatch(self, verifier):
         """UCP transaction with wrong total fails."""
         transaction = {
@@ -720,7 +753,6 @@ class TestReviewRegressions:
         import sys
         import os
 
-        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
         code = (
             "import json, sys\n"
             "from qwed_new.core.schema_verifier import SchemaVerifier\n"
@@ -741,6 +773,7 @@ class TestReviewRegressions:
                 text=True,
                 cwd=root,
                 env=env,
+                timeout=60,
             )
             assert proc.returncode == 0, proc.stderr
             outputs.append(proc.stdout.strip())
@@ -937,6 +970,49 @@ class TestSchemaShapeValidation:
         assert result.developer_fields["is_valid"] is False
         assert result.developer_fields["issues"][0]["type"] == "type_mismatch"
 
+    def test_union_type_still_applies_type_specific_constraints(self, verifier):
+        """Union schemas must still enforce type-specific constraints on the
+        matched runtime type (regression: constraints were skipped for unions)."""
+        schema = {"type": ["string", "null"], "minLength": 5}
+        # String value is type-valid but too short -> constraint violation.
+        result = verifier.verify("ab", schema)
+        assert result.developer_fields["is_valid"] is False
+        issues = [i["type"] for i in result.developer_fields["issues"]]
+        assert "constraint_violation" in issues
+        assert verifier.verify("abcdef", schema).developer_fields["is_valid"] is True
+        assert verifier.verify(None, schema).developer_fields["is_valid"] is True
+
+    def test_prefix_items_plus_items_valid(self, verifier):
+        """prefixItems AND items combine: prefix tuples validate the leading
+        elements, items validates the remaining (regression: elif skipped
+        tuple validation when both were present)."""
+        schema = {
+            "type": "array",
+            "prefixItems": [{"type": "string"}, {"type": "number"}],
+            "items": {"type": "boolean"}
+        }
+        assert verifier.verify(["a", 1, True, False], schema).developer_fields["is_valid"] is True
+
+    def test_prefix_items_plus_items_invalid_trailing(self, verifier):
+        """A trailing element violating items is rejected even with prefixItems."""
+        schema = {
+            "type": "array",
+            "prefixItems": [{"type": "string"}, {"type": "number"}],
+            "items": {"type": "boolean"}
+        }
+        result = verifier.verify(["a", 1, "not-a-bool"], schema)
+        assert result.developer_fields["is_valid"] is False
+
+    def test_prefix_items_plus_items_invalid_prefix(self, verifier):
+        """A leading element violating prefixItems is rejected."""
+        schema = {
+            "type": "array",
+            "prefixItems": [{"type": "string"}, {"type": "number"}],
+            "items": {"type": "boolean"}
+        }
+        result = verifier.verify([1, 2], schema)
+        assert result.developer_fields["is_valid"] is False
+
     def test_min_max_properties(self, verifier):
         """minProperties/maxProperties constraints determine conformance."""
         schema = {"type": "object", "minProperties": 2, "maxProperties": 2}
@@ -970,7 +1046,7 @@ class TestSchemaShapeValidation:
 
 
 class TestEvidenceNormalization:
-    """Coverage for _evidence_proof_data / _assert_evidence_safe edge cases."""
+    """Coverage for _evidence_proof_data / _assert_string_keys edge cases."""
 
     def test_cyclic_list_fails_closed(self, verifier):
         """A cyclic top-level list must fail closed."""
@@ -987,6 +1063,19 @@ class TestEvidenceNormalization:
         result = verifier.verify({1: "a"}, schema)
         assert result.status is DiagnosticStatus.BLOCKED
         assert result.constraint_id == "schema_verifier.validation_error"
+
+    def test_ucp_large_amount_validates_deterministically(self, verifier):
+        """Large representable amounts validate (no Decimal.InvalidOperation)."""
+        transaction = {
+            "subtotal": 1e300,
+            "tax": 0.0,
+            "discount": 0.0,
+            "total": 1e300,
+            "currency": "USD"
+        }
+        result = verifier.verify_ucp_transaction(transaction)
+        assert result.status is DiagnosticStatus.VERIFIED
+        assert result.proof_ref is not None
 
     def test_ucp_unexpected_error_fails_closed(self, verifier):
         """Unexpected UCP-specific errors must return BLOCKED, not crash."""
@@ -1043,8 +1132,7 @@ class TestEvidenceNormalization:
     def test_verify_evidence_serialization_failure_returns_blocked(self, verifier):
         """If proof serialization unexpectedly fails, verify returns BLOCKED."""
         from unittest.mock import patch
-        import qwed_new.core.schema_verifier as sv
-        with patch.object(sv, "_evidence_proof_data", side_effect=ValueError("boom")):
+        with patch("qwed_new.core.schema_verifier._evidence_proof_data", side_effect=ValueError("boom")):
             result = verifier.verify({"a": 1}, {"type": "object"})
         assert result.status is DiagnosticStatus.BLOCKED
         assert result.constraint_id == "schema_verifier.validation_error"
@@ -1064,8 +1152,8 @@ class TestEvidenceNormalization:
     def test_ucp_evidence_normalization_failed_returns_blocked(self, verifier):
         """UCP evidence normalization failure returns BLOCKED with validation_error."""
         from unittest.mock import patch
-        import qwed_new.core.schema_verifier as sv
-        real = sv._evidence_proof_data
+        from qwed_new.core.schema_verifier import _evidence_proof_data
+        real = _evidence_proof_data
         calls = []
 
         def fail_on_ucp_evidence(evidence):
@@ -1074,7 +1162,7 @@ class TestEvidenceNormalization:
                 return real(evidence)
             raise ValueError("boom")
 
-        with patch.object(sv, "_evidence_proof_data", side_effect=fail_on_ucp_evidence):
+        with patch("qwed_new.core.schema_verifier._evidence_proof_data", side_effect=fail_on_ucp_evidence):
             result = verifier.verify_ucp_transaction({"subtotal": 1, "total": 1})
         assert len(calls) == 2
         assert result.status is DiagnosticStatus.BLOCKED
@@ -1103,6 +1191,27 @@ class TestEvidenceNormalization:
         result = verifier.verify(float("inf"), {"type": "number"})
         assert result.status is DiagnosticStatus.BLOCKED
         assert result.constraint_id == "schema_verifier.validation_error"
+
+    def test_unexpected_validation_error_returns_blocked(self, verifier):
+        """An unexpected error inside node validation fails closed."""
+        from unittest.mock import patch
+        with patch.object(verifier, "_validate_node", side_effect=RuntimeError("boom")):
+            result = verifier.verify({"a": 1}, {"type": "object"})
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.validation_error"
+
+    def test_ref_schema_accepted_without_registry(self, verifier):
+        """$ref schemas parse without a registry and validate the rest."""
+        schema = {"$ref": "#/definitions/x", "type": "object"}
+        result = verifier.verify({"a": 1}, schema)
+        assert result.developer_fields["is_valid"] is True
+
+    def test_unknown_type_name_is_blocked(self, verifier):
+        """An unknown type name is rejected at schema-parse time (fail closed)."""
+        schema = {"type": ["not-a-real-type"]}
+        result = verifier.verify(1, schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.parse_error"
 
 
 class TestFormatWarning:
