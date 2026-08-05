@@ -1259,6 +1259,23 @@ class TestSchemaShapeValidation:
         assert result.status is DiagnosticStatus.BLOCKED
         assert result.constraint_id == "schema_verifier.parse_error"
 
+    def test_shape_validator_exception_returns_blocked(self, verifier, monkeypatch):
+        """An unexpected exception from a shape validator must fail closed.
+
+        Regression (Sentry MEDIUM): the call to _schema_shape_errors in
+        verify() sat outside the try/except wrapping _validate_node, so a
+        future shape-validator bug would propagate uncaught instead of
+        returning the documented BLOCKED validation_error result.
+        """
+        def boom(_schema):
+            raise RuntimeError("shape validator crashed")
+
+        monkeypatch.setattr(verifier, "_schema_shape_errors", boom)
+        result = verifier.verify({"a": 1}, {"type": "object"})
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.validation_error"
+        assert result.developer_fields["error_type"] == "RuntimeError"
+
     def test_ucp_currency_precision_violation(self, verifier):
         """Currency precision warning is emitted without blocking validity."""
         transaction = {

@@ -273,7 +273,16 @@ class SchemaVerifier:
                 },
             )
 
-        schema_errors = self._schema_shape_errors(schema)
+        try:
+            schema_errors = self._schema_shape_errors(schema)
+        except Exception as exc:  # noqa: BLE001 - fail closed on any unexpected error
+            return DiagnosticResult.blocked(
+                "Schema verification blocked: an unexpected validation error occurred",
+                {
+                    "constraint_id": _CONSTRAINT_ID_VALIDATION_ERROR,
+                    "error_type": type(exc).__name__,
+                },
+            )
         if schema_errors:
             return DiagnosticResult.blocked(
                 "Schema verification blocked: the schema could not be parsed",
