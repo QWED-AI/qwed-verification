@@ -475,6 +475,23 @@ class TestMathConsistency:
         # Should detect math discrepancy
         assert any("math" in str(i).lower() for i in result.developer_fields["issues"])
 
+    def test_tax_rate_math_mismatch(self, verifier):
+        """tax = subtotal * tax_rate mismatch is detected deterministically."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "subtotal": {"type": "number"},
+                "tax_rate": {"type": "number"},
+                "tax": {"type": "number"}
+            }
+        }
+        data = {"subtotal": 100.00, "tax_rate": 0.10, "tax": 15.00}  # Wrong!
+        result = verifier.verify(data, schema)
+        assert any(
+            i["type"] == "math_verification_failed" and i["severity"] == "ERROR"
+            for i in result.developer_fields["issues"]
+        )
+
 
 class TestUCPTransaction:
     """Test UCP-specific transaction verification."""
@@ -766,7 +783,7 @@ class TestReviewRegressions:
         assert result.status is DiagnosticStatus.BLOCKED
         assert result.constraint_id == "schema_verifier.parse_error"
 
-    def test_ucp_non_dict_transaction_fails_closed(self, verifier):
+    def test_ucp_non_dict_transaction_is_violation(self, verifier):
         """Non-dict UCP transaction must not raise AttributeError."""
         result = verifier.verify_ucp_transaction("not-a-dict")
         assert result.status is DiagnosticStatus.VERIFIED
@@ -776,7 +793,7 @@ class TestReviewRegressions:
         assert result.developer_fields["transaction_type"] == "UCP"
         assert result.developer_fields["currency"] == "USD"
 
-    def test_ucp_string_amount_fails_closed(self, verifier):
+    def test_ucp_string_amount_is_violation(self, verifier):
         """String amount fields must not raise TypeError."""
         transaction = {
             "subtotal": "100.00",
@@ -790,7 +807,7 @@ class TestReviewRegressions:
         assert result.developer_fields["transaction_type"] == "UCP"
         assert result.developer_fields["currency"] == "USD"
 
-    def test_ucp_none_amount_fails_closed(self, verifier):
+    def test_ucp_none_amount_is_violation(self, verifier):
         """None amount fields must not raise TypeError."""
         transaction = {
             "subtotal": None,
@@ -801,7 +818,7 @@ class TestReviewRegressions:
         assert result.developer_fields["is_valid"] is False
         assert result.proof_ref is not None
 
-    def test_ucp_discount_string_fails_closed(self, verifier):
+    def test_ucp_discount_string_is_violation(self, verifier):
         """A bad discount type must not crash the computed-total arithmetic."""
         transaction = {
             "subtotal": 100.00,
@@ -929,32 +946,17 @@ class TestSchemaShapeValidation:
         result = verifier.verify({"a": 1, "b": 2, "c": 3}, schema)
         assert result.developer_fields["is_valid"] is False
 
-    def test_tax_rate_math_mismatch(self, verifier):
-        """tax = subtotal * tax_rate mismatch is detected."""
-        schema = {
-            "type": "object",
-            "properties": {
-                "subtotal": {"type": "number"},
-                "tax_rate": {"type": "number"},
-                "tax": {"type": "number"}
-            }
-        }
-        data = {"subtotal": 100.00, "tax_rate": 0.10, "tax": 15.00}  # Wrong!
-        result = verifier.verify(data, schema)
-        assert any("tax" in i["type"].lower() or "math" in i["type"].lower()
-                   for i in result.developer_fields["issues"])
-
     def test_invalid_regex_pattern_blocked(self, verifier):
-        """A syntactically invalid regex in schema is an unexpected validation error."""
+        """A syntactically invalid regex in schema is a schema parse error."""
         schema = {"type": "string", "pattern": "("}  # Invalid regex
         result = verifier.verify("anything", schema)
         assert result.status is DiagnosticStatus.BLOCKED
-        assert result.constraint_id == "schema_verifier.validation_error"
+        assert result.constraint_id == "schema_verifier.parse_error"
 
     def test_ucp_currency_precision_violation(self, verifier):
         """Currency precision warning is emitted without blocking validity."""
         transaction = {
-            "subtotal": 100.123,  # 3 decimals > JPY's 0? no — uses USD (2)
+            "subtotal": 100.123,  # 3 decimals exceeds USD precision (2)
             "tax": 10.00,
             "total": 110.123,
             "currency": "USD",
@@ -963,6 +965,8 @@ class TestSchemaShapeValidation:
         result = verifier.verify_ucp_transaction(transaction)
         assert any(i["type"] == "currency_precision" and i["severity"] == "WARNING"
                    for i in result.developer_fields["issues"])
+        assert result.developer_fields["is_valid"] is True
+        assert result.constraint_id == "schema_verifier.ucp_valid"
 
 
 class TestEvidenceNormalization:
@@ -1061,11 +1065,44 @@ class TestEvidenceNormalization:
         """UCP evidence normalization failure returns BLOCKED with validation_error."""
         from unittest.mock import patch
         import qwed_new.core.schema_verifier as sv
-        with patch.object(sv, "_evidence_proof_data", side_effect=ValueError("boom")):
+        real = sv._evidence_proof_data
+        calls = []
+
+        def fail_on_ucp_evidence(evidence):
+            calls.append(evidence)
+            if len(calls) == 1:
+                return real(evidence)
+            raise ValueError("boom")
+
+        with patch.object(sv, "_evidence_proof_data", side_effect=fail_on_ucp_evidence):
             result = verifier.verify_ucp_transaction({"subtotal": 1, "total": 1})
+        assert len(calls) == 2
         assert result.status is DiagnosticStatus.BLOCKED
         assert result.constraint_id == "schema_verifier.validation_error"
         assert result.proof_ref is None
+
+    def test_hostile_repr_set_member_fails_closed(self, verifier):
+        """A set member with a hostile __repr__ must not let the exception escape."""
+        class Hostile:
+            def __repr__(self):
+                raise RuntimeError("boom")
+        schema = {"type": "object"}
+        result = verifier.verify({"bad": {Hostile()}}, schema)
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.validation_error"
+        assert result.proof_ref is None
+
+    def test_nan_evidence_fails_closed(self, verifier):
+        """NaN in evidence must not serialize into the proof evidence."""
+        result = verifier.verify(float("nan"), {"type": "number"})
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.validation_error"
+
+    def test_inf_evidence_fails_closed(self, verifier):
+        """Infinity in evidence must not serialize into the proof evidence."""
+        result = verifier.verify(float("inf"), {"type": "number"})
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.constraint_id == "schema_verifier.validation_error"
 
 
 class TestFormatWarning:
