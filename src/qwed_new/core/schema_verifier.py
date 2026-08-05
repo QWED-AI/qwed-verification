@@ -168,6 +168,9 @@ _STRING_KEYWORDS = frozenset({"pattern", "format"})
 # Decimal.InvalidOperation under the default 28-digit context.
 _UCP_TOTAL_PRECISION = 400
 
+# Max entries in the per-instance schema-shape cache before it is cleared.
+_SHAPE_CACHE_MAX = 128
+
 
 class SchemaVerifier:
     """
@@ -220,6 +223,11 @@ class SchemaVerifier:
                                     checks for computed numeric fields.
         """
         self.enable_math_delegation = enable_math_delegation
+        # Schemas are treated as immutable configuration, so their meta-shape
+        # validation result is cached by schema identity (strong ref pins the
+        # key so a GC'd id() cannot be reused). Same pattern as jsonschema
+        # compiling a schema once. Bounded: cleared when exceeding the budget.
+        self._shape_cache: Dict[int, tuple] = {}
     
     def verify(
         self, 
@@ -259,11 +267,7 @@ class SchemaVerifier:
                 },
             )
 
-        try:
-            schema_errors = self._validate_schema_shape(schema)
-        except RecursionError:
-            schema_errors = ["$: recursive schema definition"]
-
+        schema_errors = self._schema_shape_errors(schema)
         if schema_errors:
             return DiagnosticResult.blocked(
                 "Schema verification blocked: the schema could not be parsed",
@@ -374,6 +378,32 @@ class SchemaVerifier:
         errors: List[str] = []
         for keyword, value in schema.items():
             errors.extend(self._shape_check(keyword, value, path))
+        return errors
+
+    def _schema_shape_errors(self, schema: Any) -> List[str]:
+        """Return shape-validation errors for a schema, cached by identity.
+
+        Schemas are treated as immutable configuration, so the recursive
+        meta-validation result is cached per schema object (the same pattern
+        jsonschema uses to compile a schema once). The cache storage holds a
+        strong reference to the schema itself so the ``id()`` key cannot be
+        reused by a different object after the original is garbage-collected.
+        The cache is bounded: when it exceeds ``_SHAPE_CACHE_MAX`` entries it
+        is cleared and rebuilt lazily. ``verify_ucp_transaction`` builds a
+        fresh schema literal per call, so it always takes the uncached path
+        and stays correct.
+        """
+        schema_id = id(schema)
+        slot = self._shape_cache.get(schema_id)
+        if slot is not None and slot[0] is schema:
+            return slot[1]
+        try:
+            errors = self._validate_schema_shape(schema)
+        except RecursionError:
+            errors = ["$: recursive schema definition"]
+        self._shape_cache[schema_id] = (schema, errors)
+        if len(self._shape_cache) > _SHAPE_CACHE_MAX:
+            self._shape_cache.clear()
         return errors
 
     def _shape_check(self, keyword: str, value: Any, path: str) -> List[str]:
@@ -1097,11 +1127,11 @@ class SchemaVerifier:
                 "path": "$.total",
                 "type": "math_verification_failed",
                 "expected": f"{expected_total:.{precision}f}",
-                "actual": f"{total:.{precision}f}",
+                "actual": f"{actual:.{precision}f}",
                 "severity": "ERROR",
                 "message": (
                     f"Total mismatch: {subtotal} + {tax} - {discount} = "
-                    f"{expected_total:.{precision}f}, got {total:.{precision}f}"
+                    f"{expected_total:.{precision}f}, got {actual:.{precision}f}"
                 )
             })
     

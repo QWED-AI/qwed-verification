@@ -1132,8 +1132,18 @@ class TestEvidenceNormalization:
     def test_verify_evidence_serialization_failure_returns_blocked(self, verifier):
         """If proof serialization unexpectedly fails, verify returns BLOCKED."""
         from unittest.mock import patch
-        with patch("qwed_new.core.schema_verifier._evidence_proof_data", side_effect=ValueError("boom")):
+        seen = []
+
+        def boom_evidence(evidence):
+            seen.append(evidence)
+            raise ValueError("boom")
+
+        with patch("qwed_new.core.schema_verifier._evidence_proof_data", side_effect=boom_evidence):
             result = verifier.verify({"a": 1}, {"type": "object"})
+        # The mock must have been fed the generic schema_evidence (which is the
+        # only call site on the base-verify path): it carries paths_checked and
+        # is not the UCP-specific evidence (no "currency" key).
+        assert seen and "paths_checked" in seen[0] and "currency" not in seen[0]
         assert result.status is DiagnosticStatus.BLOCKED
         assert result.constraint_id == "schema_verifier.validation_error"
         assert result.proof_ref is None
@@ -1164,7 +1174,13 @@ class TestEvidenceNormalization:
 
         with patch("qwed_new.core.schema_verifier._evidence_proof_data", side_effect=fail_on_ucp_evidence):
             result = verifier.verify_ucp_transaction({"subtotal": 1, "total": 1})
+        # Two call sites: the base-verify schema evidence first, then the
+        # UCP-specific evidence. The failing (last) call must be the UCP one,
+        # which carries "currency" and omits paths_checked — proving the mock
+        # failed the UCP evidence-normalization branch, not the base one.
         assert len(calls) == 2
+        assert "paths_checked" in calls[0] and "currency" not in calls[0]
+        assert "currency" in calls[1] and "paths_checked" not in calls[1]
         assert result.status is DiagnosticStatus.BLOCKED
         assert result.constraint_id == "schema_verifier.validation_error"
         assert result.proof_ref is None
