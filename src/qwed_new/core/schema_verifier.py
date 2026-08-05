@@ -17,7 +17,7 @@ Example:
     result = verifier.verify(data, schema)  # VERIFIED - deterministic!
 """
 
-from typing import Dict, List, Any, Union
+from typing import Any, ClassVar, Dict, List, Union
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_EVEN
 import math
@@ -199,8 +199,6 @@ class SchemaVerifier:
         "sum", "average", "mean", "computed", "calculated"
     }
     
-    _MONEY_QUANT = Decimal(1).scaleb(-2)  # 0.01 — default money comparison precision
-    
     # Currency precision rules
     CURRENCY_PRECISION = {
         "USD": 2, "EUR": 2, "GBP": 2, "INR": 2,
@@ -355,18 +353,6 @@ class SchemaVerifier:
             proof_data=proof_data,
         )
 
-    _SHAPE_DISPATCH = {
-        "type": "_shape_type",
-        "properties": "_shape_properties",
-        "required": "_shape_required",
-        "items": "_shape_items",
-        "additionalProperties": "_shape_additional_properties",
-        "prefixItems": "_shape_prefix_items",
-        "enum": "_shape_enum",
-        "multipleOf": "_shape_multiple_of",
-        "uniqueItems": "_shape_unique_items",
-    }
-
     def _validate_schema_shape(self, schema: Any, path: str = "$") -> List[str]:
         """Recursively meta-validate schema keyword shapes.
 
@@ -387,9 +373,9 @@ class SchemaVerifier:
 
     def _shape_check(self, keyword: str, value: Any, path: str) -> List[str]:
         """Dispatch a keyword to its shape validator, or a shared keyword group."""
-        checker_name = self._SHAPE_DISPATCH.get(keyword)
-        if checker_name is not None:
-            return getattr(self, checker_name)(value, path)
+        checker = self._SHAPE_DISPATCH.get(keyword)
+        if checker is not None:
+            return checker(self, value, path)
         if keyword in _NUMERIC_BOUND_KEYWORDS:
             return self._shape_numeric_bound(keyword, value, path)
         if keyword in _SIZE_KEYWORDS:
@@ -488,6 +474,20 @@ class SchemaVerifier:
     def _shape_unique_items(self, value: Any, path: str) -> List[str]:
         """Validate uniqueItems: must be a bool."""
         return [] if isinstance(value, bool) else [f"{path}.uniqueItems: must be a bool"]
+
+    # Function-object dispatch for schema meta-validation; built once at class
+    # load time so the lookup is a plain dict get() — no runtime getattr.
+    _SHAPE_DISPATCH: ClassVar[Dict[str, Any]] = {
+        "type": _shape_type,
+        "properties": _shape_properties,
+        "required": _shape_required,
+        "items": _shape_items,
+        "additionalProperties": _shape_additional_properties,
+        "prefixItems": _shape_prefix_items,
+        "enum": _shape_enum,
+        "multipleOf": _shape_multiple_of,
+        "uniqueItems": _shape_unique_items,
+    }
 
     def _validate_node(
         self,
@@ -945,7 +945,7 @@ class SchemaVerifier:
         Check computed fields using inline arithmetic consistency.
         
         For fields like 'total', 'tax', etc., verify against
-        related fields using Decimal comparison (no float tolerance noise).
+        related fields using exact Decimal comparison (no float noise).
         """
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             return
@@ -964,17 +964,14 @@ class SchemaVerifier:
                 expected = Decimal(str(subtotal)) + Decimal(str(tax))
                 actual = Decimal(str(value))
                 
-                # Quantize both to money precision and compare exactly.
-                expected = expected.quantize(self._MONEY_QUANT, rounding=ROUND_HALF_EVEN)
-                actual = actual.quantize(self._MONEY_QUANT, rounding=ROUND_HALF_EVEN)
-                
+                # Exact Decimal comparison; operand scales are preserved in messages.
                 if actual != expected:
                     issues.append(SchemaIssue(
                         path=path,
                         issue_type="math_verification_failed",
-                        expected=f"{expected:.2f}",
-                        actual=f"{value:.2f}",
-                        message=f"Total mismatch: expected {expected:.2f}, got {value:.2f}"
+                        expected=str(expected),
+                        actual=str(actual),
+                        message=f"Total mismatch: expected {expected}, got {actual}"
                     ))
         
         # Example: tax = subtotal * tax_rate
@@ -991,16 +988,13 @@ class SchemaVerifier:
                 expected = Decimal(str(subtotal)) * Decimal(str(tax_rate))
                 actual = Decimal(str(value))
                 
-                expected = expected.quantize(self._MONEY_QUANT, rounding=ROUND_HALF_EVEN)
-                actual = actual.quantize(self._MONEY_QUANT, rounding=ROUND_HALF_EVEN)
-                
                 if actual != expected:
                     issues.append(SchemaIssue(
                         path=path,
                         issue_type="math_verification_failed",
-                        expected=f"{expected:.2f}",
-                        actual=f"{value:.2f}",
-                        message=f"Tax mismatch: expected {expected:.2f}, got {value:.2f}"
+                        expected=str(expected),
+                        actual=str(actual),
+                        message=f"Tax mismatch: expected {expected}, got {actual}"
                     ))
     
     def _check_ucp_business_rules(
@@ -1029,7 +1023,11 @@ class SchemaVerifier:
             if field in transaction:
                 value = transaction[field]
                 if isinstance(value, float):
-                    decimal_places = len(str(value).split(".")[-1]) if "." in str(value) else 0
+                    # Derive scale from Decimal exponent so scientific notation
+                    # (e.g. 1e-07) and large integral floats (e.g. 1e16) count
+                    # their true decimal places instead of parsing str().
+                    exponent = Decimal(str(value)).normalize().as_tuple().exponent
+                    decimal_places = -exponent if isinstance(exponent, int) and exponent < 0 else 0
                     if decimal_places > precision:
                         issues.append({
                             "path": f"$.{field}",
