@@ -223,11 +223,11 @@ class SchemaVerifier:
                                     checks for computed numeric fields.
         """
         self.enable_math_delegation = enable_math_delegation
-        # Schemas are treated as immutable configuration, so their meta-shape
-        # validation result is cached by schema identity (strong ref pins the
-        # key so a GC'd id() cannot be reused). Same pattern as jsonschema
-        # compiling a schema once. Bounded: cleared when exceeding the budget.
-        self._shape_cache: Dict[int, tuple] = {}
+        # Schema meta-shape validation results, keyed by the schema's canonical
+        # serialization. Content-keyed (not identity-keyed) so in-place schema
+        # mutation invalidates the entry and every verify applies the schema's
+        # current contents. Bounded: cleared when exceeding the budget.
+        self._shape_cache: Dict[str, List[str]] = {}
     
     def verify(
         self, 
@@ -381,29 +381,35 @@ class SchemaVerifier:
         return errors
 
     def _schema_shape_errors(self, schema: Any) -> List[str]:
-        """Return shape-validation errors for a schema, cached by identity.
+        """Return shape-validation errors for a schema, cached by content.
 
-        Schemas are treated as immutable configuration, so the recursive
-        meta-validation result is cached per schema object (the same pattern
-        jsonschema uses to compile a schema once). The cache storage holds a
-        strong reference to the schema itself so the ``id()`` key cannot be
-        reused by a different object after the original is garbage-collected.
+        Schemas are caller-owned and mutable, so an identity-keyed cache would
+        serve stale results after an in-place mutation (e.g. ``schema`` edited
+        between ``verify`` calls). The cache is keyed by the canonical
+        serialization of the schema instead: any mutation changes the key and
+        forces revalidation, while repeated identical schemas skip the
+        recursive meta-validation walk. Schemas that cannot be serialized
+        (cycles, non-finite values) are validated directly without caching.
         The cache is bounded: when it exceeds ``_SHAPE_CACHE_MAX`` entries it
-        is cleared and rebuilt lazily. ``verify_ucp_transaction`` builds a
-        fresh schema literal per call, so it always takes the uncached path
-        and stays correct.
+        is cleared and rebuilt lazily.
         """
-        schema_id = id(schema)
-        slot = self._shape_cache.get(schema_id)
-        if slot is not None and slot[0] is schema:
-            return slot[1]
+        try:
+            schema_key = _EVIDENCE_ENCODER.encode(schema)
+        except (TypeError, ValueError, RecursionError):
+            try:
+                return self._validate_schema_shape(schema)
+            except RecursionError:
+                return ["$: recursive schema definition"]
+        cached = self._shape_cache.get(schema_key)
+        if cached is not None:
+            return cached
         try:
             errors = self._validate_schema_shape(schema)
         except RecursionError:
             errors = ["$: recursive schema definition"]
         if len(self._shape_cache) >= _SHAPE_CACHE_MAX:
             self._shape_cache.clear()
-        self._shape_cache[schema_id] = (schema, errors)
+        self._shape_cache[schema_key] = errors
         return errors
 
     def _shape_check(self, keyword: str, value: Any, path: str) -> List[str]:

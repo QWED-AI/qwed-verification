@@ -982,6 +982,47 @@ class TestSchemaShapeValidation:
         assert verifier.verify("abcdef", schema).developer_fields["is_valid"] is True
         assert verifier.verify(None, schema).developer_fields["is_valid"] is True
 
+    def test_shape_cache_invalidated_on_schema_mutation(self, verifier):
+        """In-place schema mutation must be re-validated, not served stale.
+
+        Regression (Greptile P1): the schema-shape cache was keyed by object
+        identity, so mutating a caller-owned schema dict between verify() calls
+        returned a stale shape result. Render invalid->valid and valid->invalid
+        to prove every verify applies the schema's current contents.
+        """
+        schema = {"type": "object", "properties": {"a": {"type": "string"}}}
+        valid_result = verifier.verify({"a": "ok"}, schema)
+        assert valid_result.status is DiagnosticStatus.VERIFIED
+
+        # Mutate in place to a MALFORMED shape: must re-validate (parse_error),
+        # never serve the stale VERIFIED from the first call.
+        schema["properties"]["a"] = {"type": "banana"}
+        mutated = verifier.verify({"a": "ok"}, schema)
+        assert mutated.status is DiagnosticStatus.BLOCKED
+        assert mutated.constraint_id == "schema_verifier.parse_error"
+        assert mutated.proof_ref is None
+
+        # Repair in place: must re-validate again (no stale BLOCKED).
+        schema["properties"]["a"] = {"type": "string"}
+        repaired = verifier.verify({"a": "ok"}, schema)
+        assert repaired.status is DiagnosticStatus.VERIFIED
+
+    def test_shape_cache_healed_from_previous_error(self, verifier):
+        """Repairing a previously-malformed schema must not stay blocked.
+
+        Regression (Greptile P1): the content-keyed cache must evict the stale
+        error when a malformed dict is corrected between calls on the same
+        verifier instance.
+        """
+        schema = {"type": "number", "minimum": True}  # malformed (bool)
+        bad = verifier.verify(1, schema)
+        assert bad.status is DiagnosticStatus.BLOCKED
+        assert bad.constraint_id == "schema_verifier.parse_error"
+
+        schema["minimum"] = 0  # repaired in place
+        fixed = verifier.verify(1, schema)
+        assert fixed.status is DiagnosticStatus.VERIFIED
+
     def test_prefix_items_plus_items_valid(self, verifier):
         """prefixItems AND items combine: prefix tuples validate the leading
         elements, items validates the remaining (regression: elif skipped
@@ -1145,7 +1186,9 @@ class TestEvidenceNormalization:
         # The mock must have been fed the generic schema_evidence (which is the
         # only call site on the base-verify path): it carries paths_checked and
         # is not the UCP-specific evidence (no "currency" key).
-        assert seen and "paths_checked" in seen[0] and "currency" not in seen[0]
+        assert seen
+        assert "paths_checked" in seen[0]
+        assert "currency" not in seen[0]
         assert result.status is DiagnosticStatus.BLOCKED
         assert result.constraint_id == "schema_verifier.validation_error"
         assert result.proof_ref is None
@@ -1181,8 +1224,10 @@ class TestEvidenceNormalization:
         # which carries "currency" and omits paths_checked — proving the mock
         # failed the UCP evidence-normalization branch, not the base one.
         assert len(calls) == 2
-        assert "paths_checked" in calls[0] and "currency" not in calls[0]
-        assert "currency" in calls[1] and "paths_checked" not in calls[1]
+        assert "paths_checked" in calls[0]
+        assert "currency" not in calls[0]
+        assert "currency" in calls[1]
+        assert "paths_checked" not in calls[1]
         assert result.status is DiagnosticStatus.BLOCKED
         assert result.constraint_id == "schema_verifier.validation_error"
         assert result.proof_ref is None
