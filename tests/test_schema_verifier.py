@@ -582,7 +582,8 @@ class TestUCPTransaction:
             "currency": "JPY",
         }
         result = verifier.verify_ucp_transaction(transaction, currency="USD")
-        assert result.status is DiagnosticStatus.VERIFIED
+        assert_verified(result)
+        assert result.developer_fields["is_valid"] is True
         assert result.developer_fields["currency"] == "JPY"
 
         # If the proof had attested the (wrong) USD argument instead of the
@@ -643,8 +644,9 @@ class TestUCPTransaction:
             "currency": "XYZ",
         }
         result = verifier.verify_ucp_transaction(transaction)
-        assert result.status is DiagnosticStatus.VERIFIED
+        assert_verified(result)
         assert result.developer_fields["is_valid"] is True
+        assert result.constraint_id == "schema_verifier.ucp_valid"
 
     def test_ucp_currency_rounded_tax_not_rejected_by_base_check(self, verifier):
         """A currency-rounded tax must survive the generic tax check.
@@ -661,8 +663,9 @@ class TestUCPTransaction:
             "currency": "USD",
         }
         result = verifier.verify_ucp_transaction(transaction)
-        assert result.status is DiagnosticStatus.VERIFIED
+        assert_verified(result)
         assert result.developer_fields["is_valid"] is True
+        assert result.constraint_id == "schema_verifier.ucp_valid"
 
     
     def test_ucp_with_items(self, verifier):
@@ -1121,6 +1124,60 @@ class TestSchemaShapeValidation:
         schema["minimum"] = 0  # repaired in place
         fixed = verifier.verify(1, schema)
         assert fixed.status is DiagnosticStatus.VERIFIED
+
+    def test_all_of_requires_all_subschemas(self, verifier):
+        """allOf data must satisfy every subschema.
+
+        Regression (Greptile P1): composition keywords were silently ignored,
+        so ``verify(7, {"allOf": [{"type": "string"}]})`` returned valid.
+        """
+        schema = {"allOf": [{"type": "string"}, {"minLength": 3}]}
+        assert verifier.verify("ok", schema).developer_fields["is_valid"] is True
+        result = verifier.verify(7, {"allOf": [{"type": "string"}]})
+        assert result.developer_fields["is_valid"] is False
+        assert result.constraint_id == "schema_verifier.schema_violation"
+        assert any(i["type"] == "type_mismatch" for i in result.developer_fields["issues"])
+
+    def test_any_of_requires_one_match(self, verifier):
+        """anyOf data must satisfy at least one subschema."""
+        schema = {"anyOf": [{"type": "string"}, {"type": "boolean"}]}
+        assert verifier.verify("ok", schema).developer_fields["is_valid"] is True
+        assert verifier.verify(True, schema).developer_fields["is_valid"] is True
+        result = verifier.verify(7, schema)
+        assert result.developer_fields["is_valid"] is False
+        assert any(i["type"] == "anyOf_match_failed" for i in result.developer_fields["issues"])
+
+    def test_one_of_requires_exactly_one_match(self, verifier):
+        """oneOf data must satisfy exactly one subschema."""
+        schema = {"oneOf": [{"type": "number"}, {"type": "integer"}]}
+        # 7 matches both number AND integer -> more than one -> violation.
+        result = verifier.verify(7, schema)
+        assert result.developer_fields["is_valid"] is False
+        assert any(i["type"] == "oneOf_match_failed" for i in result.developer_fields["issues"])
+        # 7.5 matches only number -> valid.
+        assert verifier.verify(7.5, schema).developer_fields["is_valid"] is True
+
+    def test_not_rejects_matching_data(self, verifier):
+        """not data must fail the subschema."""
+        schema = {"not": {"type": "string"}}
+        result = verifier.verify("nope", schema)
+        assert result.developer_fields["is_valid"] is False
+        assert any(i["type"] == "not_violation" for i in result.developer_fields["issues"])
+        assert verifier.verify(7, schema).developer_fields["is_valid"] is True
+
+    def test_composition_schema_shape_errors_blocked(self, verifier):
+        """Malformed composition schemas are parse errors, not silently valid."""
+        blocked = verifier.verify(7, {"allOf": []})
+        assert blocked.status is DiagnosticStatus.BLOCKED
+        assert blocked.constraint_id == "schema_verifier.parse_error"
+
+        blocked = verifier.verify(7, {"oneOf": [{"type": "number"}, "not-a-schema"]})
+        assert blocked.status is DiagnosticStatus.BLOCKED
+        assert blocked.constraint_id == "schema_verifier.parse_error"
+
+        blocked = verifier.verify(7, {"not": "not-a-schema"})
+        assert blocked.status is DiagnosticStatus.BLOCKED
+        assert blocked.constraint_id == "schema_verifier.parse_error"
 
     def test_prefix_items_plus_items_valid(self, verifier):
         """prefixItems AND items combine: prefix tuples validate the leading

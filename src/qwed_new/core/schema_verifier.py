@@ -522,6 +522,24 @@ class SchemaVerifier:
         """Validate uniqueItems: must be a bool."""
         return [] if isinstance(value, bool) else [f"{path}.uniqueItems: must be a bool"]
 
+    def _shape_composition_list(self, value: Any, path: str) -> List[str]:
+        """Validate allOf/anyOf/oneOf: a non-empty list of schema dicts."""
+        if not isinstance(value, list) or not value:
+            return [f"{path}: must be a non-empty list of schemas"]
+        errors: List[str] = []
+        for i, sub in enumerate(value):
+            if isinstance(sub, dict):
+                errors.extend(self._validate_schema_shape(sub, f"{path}[{i}]"))
+            else:
+                errors.append(f"{path}[{i}]: must be a schema dict")
+        return errors
+
+    def _shape_not(self, value: Any, path: str) -> List[str]:
+        """Validate not: must be a schema dict."""
+        if isinstance(value, dict):
+            return self._validate_schema_shape(value, f"{path}.not")
+        return [f"{path}.not: must be a schema dict"]
+
     # Function-object dispatch for schema meta-validation; built once at class
     # load time so the lookup is a plain dict get() — no runtime getattr.
     _SHAPE_DISPATCH: ClassVar[Dict[str, Any]] = {
@@ -534,6 +552,10 @@ class SchemaVerifier:
         "enum": _shape_enum,
         "multipleOf": _shape_multiple_of,
         "uniqueItems": _shape_unique_items,
+        "allOf": _shape_composition_list,
+        "anyOf": _shape_composition_list,
+        "oneOf": _shape_composition_list,
+        "not": _shape_not,
     }
 
     def _validate_node(
@@ -593,6 +615,97 @@ class SchemaVerifier:
         
         elif resolved_type == "object":
             self._validate_object(data, schema, path, issues, stats, strict, currency)
+
+        # Composition keywords (allOf/anyOf/oneOf/not) apply independently of
+        # the concrete type and must be evaluated — they cannot be silently
+        # skipped (a schema that passed shape meta-validation may still carry
+        # composition constraints that the data violates).
+        self._check_composition(data, schema, path, issues, stats, strict, currency)
+
+    def _check_composition(
+        self,
+        data: Any,
+        schema: Dict[str, Any],
+        path: str,
+        issues: List[SchemaIssue],
+        stats: Dict[str, int],
+        strict: bool,
+        currency: Optional[str] = None
+    ) -> None:
+        """Evaluate JSON Schema composition keywords against the data.
+
+        ``allOf`` requires every subschema to pass; ``anyOf`` requires at
+        least one; ``oneOf`` requires exactly one; ``not`` requires the
+        subschema to fail. Each subschema is validated independently and its
+        errors are reported under the composition path. Validating against a
+        subschema lists data-driven ERROR severity, matching how validity is
+        determined elsewhere (warnings do not invalidate).
+        """
+        for keyword in ("allOf", "anyOf", "oneOf"):
+            subschemas = schema.get(keyword)
+            if not isinstance(subschemas, list) or not subschemas:
+                continue
+            stats["constraints_checked"] += 1
+
+            if keyword == "allOf":
+                for i, sub in enumerate(subschemas):
+                    if not isinstance(sub, dict):
+                        continue
+                    sub_issues: List[SchemaIssue] = []
+                    self._validate_node(
+                        data, sub, f"{path}.{keyword}[{i}]", sub_issues, stats, strict, currency
+                    )
+                    issues.extend(sub_issues)
+                continue
+
+            # anyOf / oneOf: count how many subschemas the data satisfies.
+            passed = 0
+            for i, sub in enumerate(subschemas):
+                if not isinstance(sub, dict):
+                    continue
+                sub_issues = []
+                self._validate_node(
+                    data, sub, f"{path}.{keyword}[{i}]", sub_issues, stats, strict, currency
+                )
+                if not any(iss.severity == "ERROR" for iss in sub_issues):
+                    passed += 1
+
+            if keyword == "anyOf" and passed == 0:
+                self._append_composition_issue(
+                    path, issues, "anyOf_match_failed", "at least one matching subschema", "none"
+                )
+            elif keyword == "oneOf" and passed != 1:
+                self._append_composition_issue(
+                    path, issues, "oneOf_match_failed",
+                    "exactly one matching subschema", f"{passed}",
+                )
+
+        not_schema = schema.get("not")
+        if isinstance(not_schema, dict):
+            stats["constraints_checked"] += 1
+            sub_issues = []
+            self._validate_node(data, not_schema, f"{path}.not", sub_issues, stats, strict, currency)
+            if not any(iss.severity == "ERROR" for iss in sub_issues):
+                self._append_composition_issue(
+                    path, issues, "not_violation", "not subschema to fail", "subschema passed"
+                )
+
+    def _append_composition_issue(
+        self,
+        path: str,
+        issues: List[SchemaIssue],
+        issue_type: str,
+        expected: str,
+        actual: str,
+    ) -> None:
+        """Append an ERROR composition violation (deterministic)."""
+        issues.append(SchemaIssue(
+            path=path,
+            issue_type=issue_type,
+            expected=expected,
+            actual=actual,
+            message=f"{path}: composition {issue_type} (expected {expected}, got {actual})",
+        ))
     
     def _resolve_schema_type(self, schema_type: Any, data: Any) -> Optional[str]:
         """Resolve which concrete JSON type a runtime value matches within a
