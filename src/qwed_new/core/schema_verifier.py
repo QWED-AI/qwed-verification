@@ -1050,16 +1050,11 @@ class SchemaVerifier:
                 )
                 actual = Decimal(str(value))
                 
-                # Currency-aware comparison: quantize both operands to the
-                # currency precision (half-even) so legitimately rounded totals
-                # match. Without a currency, fall back to exact comparison.
-                if isinstance(currency, str) and currency in self.CURRENCY_PRECISION:
-                    precision = self.CURRENCY_PRECISION[currency]
-                    quant = Decimal(1).scaleb(-precision)
-                    with localcontext() as ctx:
-                        ctx.prec = _UCP_TOTAL_PRECISION
-                        expected = expected.quantize(quant, rounding=ROUND_HALF_EVEN)
-                        actual = actual.quantize(quant, rounding=ROUND_HALF_EVEN)
+                # Currency-aware comparisons quantize both operands to the
+                # currency precision (half-even) before comparing. Without a
+                # currency we fall back to exact Decimal comparison.
+                actual = self._quantize_currency_amount(actual, currency)
+                expected = self._quantize_currency_amount(expected, currency)
                 
                 # Exact Decimal comparison; operand scales are preserved in messages.
                 if actual != expected:
@@ -1085,6 +1080,12 @@ class SchemaVerifier:
                 expected = Decimal(str(subtotal)) * Decimal(str(tax_rate))
                 actual = Decimal(str(value))
                 
+                # Apply the same currency-aware quantization as the total
+                # branch so a legitimately rounded tax (e.g. 7.00 from
+                # 7.00035) is not rejected for a currency payload.
+                actual = self._quantize_currency_amount(actual, currency)
+                expected = self._quantize_currency_amount(expected, currency)
+                
                 if actual != expected:
                     issues.append(SchemaIssue(
                         path=path,
@@ -1094,6 +1095,19 @@ class SchemaVerifier:
                         message=f"Tax mismatch: expected {expected}, got {actual}"
                     ))
     
+    def _quantize_currency_amount(self, amount: Decimal, currency: Optional[str]) -> Decimal:
+        """Quantize a Decimal amount to the currency's precision using
+        ROUND_HALF_EVEN, matching UCP. Uses ``_ucp_precision`` so unlisted
+        currencies fall back to two decimals exactly as UCP does — without a
+        currency, the amount is returned unchanged (exact comparison)."""
+        if not isinstance(currency, str):
+            return amount
+        precision = self._ucp_precision(currency)
+        quant = Decimal(1).scaleb(-precision)
+        with localcontext() as ctx:
+            ctx.prec = _UCP_TOTAL_PRECISION
+            return amount.quantize(quant, rounding=ROUND_HALF_EVEN)
+
     def _check_ucp_business_rules(
         self,
         transaction: Dict[str, Any],

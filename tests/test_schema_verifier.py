@@ -627,6 +627,43 @@ class TestUCPTransaction:
         assert result.developer_fields["is_valid"] is False
         assert result.constraint_id == "schema_verifier.ucp_violation"
 
+    def test_ucp_unlisted_currency_uses_precision_fallback(self, verifier):
+        """Unlisted currency must share UCP's two-decimal fallback.
+
+        Regression (Greptile P1): base total quantization only applied to
+        currencies in CURRENCY_PRECISION, so an unlisted currency (XYZ) with
+        subtotal=1.005, total=1.00 failed the unquantized base check — a base
+        error that prevented UCP validation from accepting the rounded total.
+        """
+        transaction = {
+            "subtotal": 1.005,
+            "tax": 0,
+            "discount": 0,
+            "total": 1.00,  # Legitimately rounded to two decimals
+            "currency": "XYZ",
+        }
+        result = verifier.verify_ucp_transaction(transaction)
+        assert result.status is DiagnosticStatus.VERIFIED
+        assert result.developer_fields["is_valid"] is True
+
+    def test_ucp_currency_rounded_tax_not_rejected_by_base_check(self, verifier):
+        """A currency-rounded tax must survive the generic tax check.
+
+        Regression (Sentry): the tax branch compared exactly while total was
+        quantized, so tax rounded from 7.00035 to 7.00 was rejected for a
+        currency payload.
+        """
+        transaction = {
+            "subtotal": 100.00,
+            "tax_rate": 0.07,
+            "tax": 7.00,  # 100 * 0.07 = 7.00035, rounded to cents
+            "total": 107.00,
+            "currency": "USD",
+        }
+        result = verifier.verify_ucp_transaction(transaction)
+        assert result.status is DiagnosticStatus.VERIFIED
+        assert result.developer_fields["is_valid"] is True
+
     
     def test_ucp_with_items(self, verifier):
         """UCP transaction with line items."""
