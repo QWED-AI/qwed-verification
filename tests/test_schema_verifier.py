@@ -585,6 +585,12 @@ class TestUCPTransaction:
         assert_verified(result)
         assert result.developer_fields["is_valid"] is True
         assert result.developer_fields["currency"] == "JPY"
+        # 100.5 exceeds JPY's zero-decimal precision: a verifier that reports
+        # "JPY" but applies USD precision would silently produce no warning.
+        assert any(
+            i["type"] == "currency_precision" and i["severity"] == "WARNING"
+            for i in result.developer_fields["issues"]
+        )
 
         # If the proof had attested the (wrong) USD argument instead of the
         # declared JPY, its proof_ref would equal the one for a USD-defaulted
@@ -1132,7 +1138,7 @@ class TestSchemaShapeValidation:
         so ``verify(7, {"allOf": [{"type": "string"}]})`` returned valid.
         """
         schema = {"allOf": [{"type": "string"}, {"minLength": 3}]}
-        assert verifier.verify("ok", schema).developer_fields["is_valid"] is True
+        assert verifier.verify("yes", schema).developer_fields["is_valid"] is True
         result = verifier.verify(7, {"allOf": [{"type": "string"}]})
         assert result.developer_fields["is_valid"] is False
         assert result.constraint_id == "schema_verifier.schema_violation"
@@ -1164,6 +1170,33 @@ class TestSchemaShapeValidation:
         assert result.developer_fields["is_valid"] is False
         assert any(i["type"] == "not_violation" for i in result.developer_fields["issues"])
         assert verifier.verify(7, schema).developer_fields["is_valid"] is True
+
+    def test_typeless_subschema_constraints_still_apply(self, verifier):
+        """Object/array keyword constraints apply even when type is omitted.
+
+        Regression (Greptile P1): a typeless ``{"required": ["y"]}`` subschema
+        never dispatched ``_validate_object``, so ``not``/``allOf`` children
+        with object/array-but-no-type keywords were silently skipped. The
+        data's runtime type must drive the relevant keyword validation.
+        """
+        # not {"required": ["y"]} on a dict lacking y -> not satisfied -> valid.
+        assert verifier.verify(
+            {"x": 1}, {"not": {"required": ["y"]}}
+        ).developer_fields["is_valid"] is True
+        # not {"required": ["y"]} on a dict that HAS y -> not violated -> invalid.
+        result = verifier.verify({"y": 1}, {"not": {"required": ["y"]}})
+        assert result.developer_fields["is_valid"] is False
+        assert any(i["type"] == "not_violation" for i in result.developer_fields["issues"])
+
+        # allOf [{"required": ["y"]}] on a dict lacking y -> required fails -> invalid.
+        result = verifier.verify({"x": 1}, {"allOf": [{"required": ["y"]}]})
+        assert result.developer_fields["is_valid"] is False
+        assert any(i["type"] == "missing_required" for i in result.developer_fields["issues"])
+
+        # anyOf [{"minItems": 2}] on a 1-element array -> no match -> invalid.
+        result = verifier.verify([1], {"anyOf": [{"minItems": 2}]})
+        assert result.developer_fields["is_valid"] is False
+        assert verifier.verify([1, 2], {"anyOf": [{"minItems": 2}]}).developer_fields["is_valid"] is True
 
     def test_composition_schema_shape_errors_blocked(self, verifier):
         """Malformed composition schemas are parse errors, not silently valid."""

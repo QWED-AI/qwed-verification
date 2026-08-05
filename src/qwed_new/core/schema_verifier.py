@@ -600,19 +600,30 @@ class SchemaVerifier:
         # Type-specific validations. For union types ("type": [..]), resolve
         # the concrete type the runtime value matches and apply that type's
         # constraints, so e.g. {"type": ["string", "null"], "minLength": 5}
-        # still enforces minLength on string values.
+        # still enforces minLength on string values. When the schema omits
+        # ``type`` altogether, JSON Schema still requires the applicable
+        # keyword constraints to run against data of the matching runtime
+        # type (a ``required``/``properties`` subschema inside ``not`` must
+        # still reject a dict missing the required keys). Dispatch therefore
+        # falls back to the data's runtime type — but only when no type was
+        # declared: when a type WAS declared and the data did not match it,
+        # the type_mismatch ERROR above already accounted for the violation
+        # and running the type's constraints on mismatched data would error
+        # or double-count.
         schema_type = schema.get("type")
         resolved_type = self._resolve_schema_type(schema_type, data)
-        
+        if resolved_type is None and schema_type is None:
+            resolved_type = self._runtime_type(data)
+
         if resolved_type == "string":
             self._validate_string(data, schema, path, issues, stats)
-        
+
         elif resolved_type in ("number", "integer"):
             self._validate_number(data, schema, path, issues, stats)
-        
+
         elif resolved_type == "array":
             self._validate_array(data, schema, path, issues, stats, strict, currency)
-        
+
         elif resolved_type == "object":
             self._validate_object(data, schema, path, issues, stats, strict, currency)
 
@@ -634,61 +645,109 @@ class SchemaVerifier:
     ) -> None:
         """Evaluate JSON Schema composition keywords against the data.
 
-        ``allOf`` requires every subschema to pass; ``anyOf`` requires at
-        least one; ``oneOf`` requires exactly one; ``not`` requires the
-        subschema to fail. Each subschema is validated independently and its
-        errors are reported under the composition path. Validating against a
-        subschema lists data-driven ERROR severity, matching how validity is
-        determined elsewhere (warnings do not invalidate).
+        Dispatches to per-keyword handlers. Shape meta-validation (which runs
+        before any ``_validate_node``) guarantees ``allOf``/``anyOf``/``oneOf``
+        are non-empty lists of schema dicts and ``not`` is a schema dict, so the
+        handlers rely on that invariant.
         """
-        for keyword in ("allOf", "anyOf", "oneOf"):
-            subschemas = schema.get(keyword)
-            if not isinstance(subschemas, list) or not subschemas:
-                continue
-            stats["constraints_checked"] += 1
+        all_of = schema.get("allOf")
+        if isinstance(all_of, list) and all_of:
+            self._check_all_of(data, all_of, path, issues, stats, strict, currency)
 
-            if keyword == "allOf":
-                for i, sub in enumerate(subschemas):
-                    if not isinstance(sub, dict):
-                        continue
-                    sub_issues: List[SchemaIssue] = []
-                    self._validate_node(
-                        data, sub, f"{path}.{keyword}[{i}]", sub_issues, stats, strict, currency
-                    )
-                    issues.extend(sub_issues)
-                continue
+        any_of = schema.get("anyOf")
+        if isinstance(any_of, list) and any_of:
+            self._check_any_of(data, any_of, path, issues, stats, strict, currency)
 
-            # anyOf / oneOf: count how many subschemas the data satisfies.
-            passed = 0
-            for i, sub in enumerate(subschemas):
-                if not isinstance(sub, dict):
-                    continue
-                sub_issues = []
-                self._validate_node(
-                    data, sub, f"{path}.{keyword}[{i}]", sub_issues, stats, strict, currency
-                )
-                if not any(iss.severity == "ERROR" for iss in sub_issues):
-                    passed += 1
-
-            if keyword == "anyOf" and passed == 0:
-                self._append_composition_issue(
-                    path, issues, "anyOf_match_failed", "at least one matching subschema", "none"
-                )
-            elif keyword == "oneOf" and passed != 1:
-                self._append_composition_issue(
-                    path, issues, "oneOf_match_failed",
-                    "exactly one matching subschema", f"{passed}",
-                )
+        one_of = schema.get("oneOf")
+        if isinstance(one_of, list) and one_of:
+            self._check_one_of(data, one_of, path, issues, stats, strict, currency)
 
         not_schema = schema.get("not")
         if isinstance(not_schema, dict):
-            stats["constraints_checked"] += 1
-            sub_issues = []
-            self._validate_node(data, not_schema, f"{path}.not", sub_issues, stats, strict, currency)
-            if not any(iss.severity == "ERROR" for iss in sub_issues):
-                self._append_composition_issue(
-                    path, issues, "not_violation", "not subschema to fail", "subschema passed"
-                )
+            self._check_not(data, not_schema, path, issues, stats, strict, currency)
+
+    def _validate_subschema(
+        self, data: Any, sub: Dict[str, Any], sub_path: str, stats: Dict[str, int],
+        strict: bool, currency: Optional[str]
+    ) -> List[SchemaIssue]:
+        """Validate ``data`` against one subschema, returning its issues."""
+        sub_issues: List[SchemaIssue] = []
+        self._validate_node(data, sub, sub_path, sub_issues, stats, strict, currency)
+        return sub_issues
+
+    def _subschema_passes(
+        self, data: Any, sub: Dict[str, Any], sub_path: str, stats: Dict[str, int],
+        strict: bool, currency: Optional[str]
+    ) -> bool:
+        """True if ``data`` satisfies ``sub`` (no ERROR-severity issues)."""
+        sub_issues = self._validate_subschema(data, sub, sub_path, stats, strict, currency)
+        return not any(iss.severity == "ERROR" for iss in sub_issues)
+
+    def _count_passes(
+        self, data: Any, subschemas: List[Dict[str, Any]], keyword: str, path: str,
+        stats: Dict[str, int], strict: bool, currency: Optional[str]
+    ) -> int:
+        """Count how many of ``subschemas`` the data satisfies."""
+        passed = 0
+        for i, sub in enumerate(subschemas):
+            if not isinstance(sub, dict):
+                continue
+            if self._subschema_passes(data, sub, f"{path}.{keyword}[{i}]", stats, strict, currency):
+                passed += 1
+        return passed
+
+    def _check_all_of(
+        self, data: Any, subschemas: List[Dict[str, Any]], path: str,
+        issues: List[SchemaIssue], stats: Dict[str, int], strict: bool,
+        currency: Optional[str]
+    ) -> None:
+        """allOf: every subschema must pass; collect each subschema's issues."""
+        stats["constraints_checked"] += 1
+        for i, sub in enumerate(subschemas):
+            if not isinstance(sub, dict):
+                continue
+            issues.extend(self._validate_subschema(
+                data, sub, f"{path}.allOf[{i}]", stats, strict, currency
+            ))
+
+    def _check_any_of(
+        self, data: Any, subschemas: List[Dict[str, Any]], path: str,
+        issues: List[SchemaIssue], stats: Dict[str, int], strict: bool,
+        currency: Optional[str]
+    ) -> None:
+        """anyOf: at least one subschema must pass."""
+        stats["constraints_checked"] += 1
+        passed = self._count_passes(data, subschemas, "anyOf", path, stats, strict, currency)
+        if passed == 0:
+            self._append_composition_issue(
+                path, issues, "anyOf_match_failed", "at least one matching subschema", "none"
+            )
+
+    def _check_one_of(
+        self, data: Any, subschemas: List[Dict[str, Any]], path: str,
+        issues: List[SchemaIssue], stats: Dict[str, int], strict: bool,
+        currency: Optional[str]
+    ) -> None:
+        """oneOf: exactly one subschema must pass."""
+        stats["constraints_checked"] += 1
+        passed = self._count_passes(data, subschemas, "oneOf", path, stats, strict, currency)
+        if passed != 1:
+            self._append_composition_issue(
+                path, issues, "oneOf_match_failed",
+                "exactly one matching subschema", f"{passed}",
+            )
+
+    def _check_not(
+        self, data: Any, not_schema: Dict[str, Any], path: str,
+        issues: List[SchemaIssue], stats: Dict[str, int], strict: bool,
+        currency: Optional[str]
+    ) -> None:
+        """not: the subschema must fail (data must not satisfy it)."""
+        stats["constraints_checked"] += 1
+        if self._subschema_passes(data, not_schema, f"{path}.not", stats, strict, currency):
+            self._append_composition_issue(
+                path, issues, "not_violation", "not subschema to fail", "subschema passed"
+            )
 
     def _append_composition_issue(
         self,
@@ -716,6 +775,29 @@ class SchemaVerifier:
         for type_name in type_names:
             if self._is_type(data, type_name):
                 return type_name
+        return None
+
+    def _runtime_type(self, data: Any) -> Optional[str]:
+        """Return the JSON type name matching a runtime value, or None.
+
+        Used to dispatch type-specific keyword constraints when a schema omits
+        ``type`` (so a typeless ``required`` subschema still validates a dict).
+        Mirrors ``_is_type`` precedence: bool is not recognized as number.
+        """
+        if isinstance(data, bool):
+            return "boolean"
+        if isinstance(data, str):
+            return "string"
+        if isinstance(data, int):
+            return "integer"
+        if isinstance(data, float):
+            return "number"
+        if isinstance(data, list):
+            return "array"
+        if isinstance(data, dict):
+            return "object"
+        if data is None:
+            return "null"
         return None
     
     def _check_type(
