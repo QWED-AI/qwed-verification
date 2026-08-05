@@ -328,15 +328,15 @@ class SchemaVerifier:
             },
         }
 
+        schema_evidence = {
+            "schema": schema,
+            "instance": data,
+            "verdict": "VALID" if is_valid else "INVALID",
+            "issues": serialized_issues,
+            "paths_checked": stats["paths_checked"],
+            "constraints_checked": stats["constraints_checked"],
+        }
         try:
-            schema_evidence = {
-                "schema": schema,
-                "instance": data,
-                "verdict": "VALID" if is_valid else "INVALID",
-                "issues": serialized_issues,
-                "paths_checked": stats["paths_checked"],
-                "constraints_checked": stats["constraints_checked"],
-            }
             proof_data = _evidence_proof_data(schema_evidence)
         except ValueError as exc:
             return DiagnosticResult.blocked(
@@ -401,9 +401,9 @@ class SchemaVerifier:
             errors = self._validate_schema_shape(schema)
         except RecursionError:
             errors = ["$: recursive schema definition"]
-        self._shape_cache[schema_id] = (schema, errors)
-        if len(self._shape_cache) > _SHAPE_CACHE_MAX:
+        if len(self._shape_cache) >= _SHAPE_CACHE_MAX:
             self._shape_cache.clear()
+        self._shape_cache[schema_id] = (schema, errors)
         return errors
 
     def _shape_check(self, keyword: str, value: Any, path: str) -> List[str]:
@@ -536,11 +536,19 @@ class SchemaVerifier:
         """Recursively validate a node against its schema."""
         stats["paths_checked"] += 1
         
-        # Handle schema references
+        # Handle schema references — fail closed on unresolved $ref.
+        # Without a schema registry, the referenced sub-schema cannot be
+        # validated, so the result would silently skip constraints.
         if "$ref" in schema:
-            # Basic $ref handling (same-document refs)
-            # Full $ref resolution would require schema registry
-            pass
+            issues.append(SchemaIssue(
+                path=path,
+                issue_type="unresolved_ref",
+                expected="resolvable $ref",
+                actual=str(schema["$ref"]),
+                severity="ERROR",
+                message=f"Unresolved $ref: {schema['$ref']} (no schema registry configured)"
+            ))
+            return  # Cannot validate further without the referenced schema
         
         # Type validation
         if "type" in schema:

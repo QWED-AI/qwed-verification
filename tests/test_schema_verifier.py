@@ -1076,6 +1076,8 @@ class TestEvidenceNormalization:
         result = verifier.verify_ucp_transaction(transaction)
         assert result.status is DiagnosticStatus.VERIFIED
         assert result.proof_ref is not None
+        assert result.developer_fields["is_valid"] is True
+        assert result.developer_fields["constraint_id"] == "schema_verifier.ucp_valid"
 
     def test_ucp_unexpected_error_fails_closed(self, verifier):
         """Unexpected UCP-specific errors must return BLOCKED, not crash."""
@@ -1216,11 +1218,16 @@ class TestEvidenceNormalization:
         assert result.status is DiagnosticStatus.BLOCKED
         assert result.constraint_id == "schema_verifier.validation_error"
 
-    def test_ref_schema_accepted_without_registry(self, verifier):
-        """$ref schemas parse without a registry and validate the rest."""
+    def test_ref_schema_blocked_without_registry(self, verifier):
+        """Unresolved $ref fails closed — cannot validate without registry."""
         schema = {"$ref": "#/definitions/x", "type": "object"}
         result = verifier.verify({"a": 1}, schema)
-        assert result.developer_fields["is_valid"] is True
+        assert result.developer_fields["is_valid"] is False
+        unresolved = [
+            i for i in result.developer_fields["issues"]
+            if i["type"] == "unresolved_ref"
+        ]
+        assert len(unresolved) == 1
 
     def test_unknown_type_name_is_blocked(self, verifier):
         """An unknown type name is rejected at schema-parse time (fail closed)."""
