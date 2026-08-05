@@ -565,6 +565,68 @@ class TestUCPTransaction:
         }
         result = verifier.verify_ucp_transaction(transaction)
         assert result.developer_fields["is_valid"] is False
+
+    def test_ucp_payload_currency_used_for_validation_and_metadata(self, verifier):
+        """The transaction's declared currency drives validation AND metadata.
+
+        Regression (CodeRabbit/Sentry/Greptile): when the payload declares a
+        currency that differs from the method argument, precision checks used
+        the declared currency but developer_fields["currency"] and proof
+        evidence reported the argument. JPY has 0 decimal places, so a
+        subtotal like 100.5 must be precision-checked (and reported) as JPY.
+        """
+        transaction = {
+            "subtotal": 100.5,
+            "tax": 0,
+            "total": 100.5,
+            "currency": "JPY",
+        }
+        result = verifier.verify_ucp_transaction(transaction, currency="USD")
+        assert result.status is DiagnosticStatus.VERIFIED
+        assert result.developer_fields["currency"] == "JPY"
+
+        # If the proof had attested the (wrong) USD argument instead of the
+        # declared JPY, its proof_ref would equal the one for a USD-defaulted
+        # transaction with identical amounts. They must differ.
+        usd_defaulted = verifier.verify_ucp_transaction(
+            {"subtotal": 100.5, "tax": 0, "total": 100.5}
+        )
+        assert result.proof_ref != usd_defaulted.proof_ref
+
+    def test_ucp_currency_rounded_total_not_rejected_by_base_check(self, verifier):
+        """A currency-rounded total must survive the generic inline total check.
+
+        Regression (CodeRabbit): USD subtotal=1.005, tax=0, discount=0 with
+        total=1.00 is a legitimately rounded amount — the currency-aware
+        half-even check accepts it. The generic base total check used exact
+        comparison and rejected it, making base_valid False and skipping the
+        UCP check entirely.
+        """
+        transaction = {
+            "subtotal": 1.005,
+            "tax": 0,
+            "discount": 0,
+            "total": 1.00,
+            "currency": "USD",
+        }
+        result = verifier.verify_ucp_transaction(transaction)
+        assert result.status is DiagnosticStatus.VERIFIED
+        assert result.developer_fields["is_valid"] is True
+        assert result.constraint_id == "schema_verifier.ucp_valid"
+
+    def test_ucp_currency_rounded_total_still_rejects_real_mismatch(self, verifier):
+        """Currency quantization must not mask a genuine total mismatch."""
+        transaction = {
+            "subtotal": 1.005,
+            "tax": 0,
+            "discount": 0,
+            "total": 2.50,  # Real mismatch, far beyond rounding
+            "currency": "USD",
+        }
+        result = verifier.verify_ucp_transaction(transaction)
+        assert result.developer_fields["is_valid"] is False
+        assert result.constraint_id == "schema_verifier.ucp_violation"
+
     
     def test_ucp_with_items(self, verifier):
         """UCP transaction with line items."""

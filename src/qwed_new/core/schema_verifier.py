@@ -233,7 +233,8 @@ class SchemaVerifier:
         self, 
         data: Any, 
         schema: Dict[str, Any],
-        strict: bool = True
+        strict: bool = True,
+        currency: Optional[str] = None
     ) -> DiagnosticResult:
         """
         Verify data against a JSON Schema.
@@ -242,6 +243,11 @@ class SchemaVerifier:
             data: The JSON data to verify.
             schema: JSON Schema definition.
             strict: If True, fail on additional properties not in schema.
+            currency: When set, inline computed-total math checks quantize
+                to the currency's declared precision (ROUND_HALF_EVEN) so a
+                legitimately currency-rounded total is not rejected. Used by
+                ``verify_ucp_transaction`` to keep the generic total check
+                consistent with the currency-aware UCP check.
             
         Returns:
             DiagnosticResult with:
@@ -281,7 +287,7 @@ class SchemaVerifier:
         stats = {"paths_checked": 0, "constraints_checked": 0}
 
         try:
-            self._validate_node(data, schema, "$", issues, stats, strict)
+            self._validate_node(data, schema, "$", issues, stats, strict, currency)
         except Exception as exc:  # noqa: BLE001 - fail closed on any unexpected error
             return DiagnosticResult.blocked(
                 "Schema verification blocked: an unexpected validation error occurred",
@@ -537,7 +543,8 @@ class SchemaVerifier:
         path: str,
         issues: List[SchemaIssue],
         stats: Dict[str, int],
-        strict: bool
+        strict: bool,
+        currency: Optional[str] = None
     ) -> None:
         """Recursively validate a node against its schema."""
         stats["paths_checked"] += 1
@@ -582,10 +589,10 @@ class SchemaVerifier:
             self._validate_number(data, schema, path, issues, stats)
         
         elif resolved_type == "array":
-            self._validate_array(data, schema, path, issues, stats, strict)
+            self._validate_array(data, schema, path, issues, stats, strict, currency)
         
         elif resolved_type == "object":
-            self._validate_object(data, schema, path, issues, stats, strict)
+            self._validate_object(data, schema, path, issues, stats, strict, currency)
     
     def _resolve_schema_type(self, schema_type: Any, data: Any) -> Optional[str]:
         """Resolve which concrete JSON type a runtime value matches within a
@@ -850,7 +857,8 @@ class SchemaVerifier:
         path: str,
         issues: List[SchemaIssue],
         stats: Dict[str, int],
-        strict: bool
+        strict: bool,
+        currency: Optional[str] = None
     ) -> None:
         """Validate array constraints."""
         
@@ -915,12 +923,12 @@ class SchemaVerifier:
             prefix_len = len(prefix)
             for i, item_schema in enumerate(prefix):
                 if i < len(data):
-                    self._validate_node(data[i], item_schema, f"{path}[{i}]", issues, stats, strict)
+                    self._validate_node(data[i], item_schema, f"{path}[{i}]", issues, stats, strict, currency)
 
         # items (single schema for the remaining elements after the prefix).
         if "items" in schema and isinstance(schema["items"], dict):
             for i, item in enumerate(data[prefix_len:], start=prefix_len):
-                self._validate_node(item, schema["items"], f"{path}[{i}]", issues, stats, strict)
+                self._validate_node(item, schema["items"], f"{path}[{i}]", issues, stats, strict, currency)
     
     def _validate_object(
         self,
@@ -929,7 +937,8 @@ class SchemaVerifier:
         path: str,
         issues: List[SchemaIssue],
         stats: Dict[str, int],
-        strict: bool
+        strict: bool,
+        currency: Optional[str] = None
     ) -> None:
         """Validate object constraints."""
         
@@ -954,11 +963,11 @@ class SchemaVerifier:
             prop_path = f"{path}.{key}"
             
             if key in properties:
-                self._validate_node(value, properties[key], prop_path, issues, stats, strict)
+                self._validate_node(value, properties[key], prop_path, issues, stats, strict, currency)
                 
                 # Check for math delegation
                 if self.enable_math_delegation and key.lower() in self.MATH_FIELDS:
-                    self._check_math_field(key, value, data, prop_path, issues, stats)
+                    self._check_math_field(key, value, data, prop_path, issues, stats, currency)
             
             elif strict and additional is False:
                 stats["constraints_checked"] += 1
@@ -973,7 +982,7 @@ class SchemaVerifier:
             
             elif isinstance(additional, dict):
                 # additionalProperties is a schema
-                self._validate_node(value, additional, prop_path, issues, stats, strict)
+                self._validate_node(value, additional, prop_path, issues, stats, strict, currency)
         
         # minProperties
         if "minProperties" in schema:
@@ -1006,13 +1015,19 @@ class SchemaVerifier:
         parent_data: Dict[str, Any],
         path: str,
         issues: List[SchemaIssue],
-        stats: Dict[str, int]
+        stats: Dict[str, int],
+        currency: Optional[str] = None
     ) -> None:
         """
         Check computed fields using inline arithmetic consistency.
         
         For fields like 'total', 'tax', etc., verify against
         related fields using exact Decimal comparison (no float noise).
+        When a currency is supplied, the total is compared at that
+        currency's declared precision with ROUND_HALF_EVEN — the same
+        quantization UCP uses — so a currency-rounded total (e.g. USD
+        subtotal=1.005 with total=1.00) is not rejected by the generic
+        check before the currency-aware one runs.
         """
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             return
@@ -1034,6 +1049,17 @@ class SchemaVerifier:
                     Decimal(str(subtotal)) + Decimal(str(tax)) - Decimal(str(discount))
                 )
                 actual = Decimal(str(value))
+                
+                # Currency-aware comparison: quantize both operands to the
+                # currency precision (half-even) so legitimately rounded totals
+                # match. Without a currency, fall back to exact comparison.
+                if isinstance(currency, str) and currency in self.CURRENCY_PRECISION:
+                    precision = self.CURRENCY_PRECISION[currency]
+                    quant = Decimal(1).scaleb(-precision)
+                    with localcontext() as ctx:
+                        ctx.prec = _UCP_TOTAL_PRECISION
+                        expected = expected.quantize(quant, rounding=ROUND_HALF_EVEN)
+                        actual = actual.quantize(quant, rounding=ROUND_HALF_EVEN)
                 
                 # Exact Decimal comparison; operand scales are preserved in messages.
                 if actual != expected:
@@ -1074,10 +1100,11 @@ class SchemaVerifier:
         currency: str,
         issues: List[Dict[str, Any]]
     ) -> None:
-        """Run UCP-specific consistency checks (currency precision, computed total)."""
-        declared = transaction.get("currency")
-        if isinstance(declared, str):
-            currency = declared
+        """Run UCP-specific consistency checks (currency precision, computed total).
+
+        ``currency`` is the effective currency — already resolved by the caller
+        from the transaction's declared ``currency`` field (or the argument).
+        """
         self._check_ucp_currency_precision(transaction, currency, issues)
         self._check_ucp_computed_total(transaction, currency, issues)
 
@@ -1200,7 +1227,19 @@ class SchemaVerifier:
             }
         }
         
-        result = self.verify(transaction, schema, strict=False)
+        # The transaction may declare its own currency (e.g. "JPY"). Resolve
+        # the effective currency ONCE so validation, developer fields, and
+        # proof evidence all report and use the same value — otherwise the
+        # reported currency would contradict the precision rules actually
+        # applied (CodeRabbit/Sentry/Greptile). Guard for non-dict payloads.
+        declared_currency = (
+            transaction.get("currency") if isinstance(transaction, dict) else None
+        )
+        effective_currency = (
+            declared_currency if isinstance(declared_currency, str) else currency
+        )
+
+        result = self.verify(transaction, schema, strict=False, currency=effective_currency)
         # Fail closed: pass through BLOCKED results as-is. Every other path
         # (whether the base verdict was valid or a deterministic violation)
         # must still produce UCP-shaped developer_fields (transaction_type,
@@ -1219,7 +1258,7 @@ class SchemaVerifier:
         # TypeError/AttributeError.
         if base_valid and isinstance(transaction, dict):
             try:
-                self._check_ucp_business_rules(transaction, currency, issues)
+                self._check_ucp_business_rules(transaction, effective_currency, issues)
             except Exception as exc:  # noqa: BLE001 - fail closed on any unexpected error
                 return DiagnosticResult.blocked(
                     "UCP transaction verification blocked: an unexpected validation error occurred",
@@ -1239,7 +1278,7 @@ class SchemaVerifier:
             "is_valid": is_valid,
             "issues": issues,
             "transaction_type": "UCP",
-            "currency": currency,
+            "currency": effective_currency,
             "summary": {
                 "total_issues": len(issues),
                 "errors": sum(1 for i in issues if i.get("severity") == "ERROR"),
@@ -1253,7 +1292,7 @@ class SchemaVerifier:
                 "instance": transaction,
                 "verdict": "VALID" if is_valid else "INVALID",
                 "issues": issues,
-                "currency": currency,
+                "currency": effective_currency,
             }
             proof_data = _evidence_proof_data(ucp_evidence)
         except ValueError as exc:
