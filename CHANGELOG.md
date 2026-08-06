@@ -4,6 +4,22 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+### Engine Migration to DiagnosticResult (Meta #216)
+
+#### SchemaVerifier → DiagnosticResult (#255)
+- **`SchemaVerifier.verify()` and `verify_ucp_transaction()` now return `DiagnosticResult`** (status / `agent_message` / `developer_fields` / `proof_ref`) instead of ad-hoc dicts.
+- **`proof_ref`** is computed deterministically from a canonical `json.dumps` of the schema + instance evidence on VERIFIED results; unsupported values and cyclic structures fail closed to `BLOCKED` (`schema_verifier.validation_error`).
+- **Recursive schema meta-validation** — malformed keyword shapes (non-dict properties, invalid required entries, invalid numeric constraints, non-finite/NaN/±∞ bounds, negative size constraints) return `BLOCKED` (`schema_verifier.parse_error`) instead of being silently treated as empty.
+- **UCP type safety** — string/None amount fields and non-dict transactions are handled deterministically instead of raising `TypeError`/`AttributeError`.
+- **UCP verdict fields are complete on every path** — `verify_ucp_transaction()` always produces `transaction_type`, `currency`, and `schema_verifier.ucp_*` constraint ids in `developer_fields` for both valid and violated verdicts (BLOCKED base results pass through unchanged).
+- **Money arithmetic uses `Decimal`, not float tolerance** — computed-total and tax checks quantize operands to the currency precision and compare exactly, removing 0.01-tolerance rounding noise so boundary transactions deterministically pass/fail.
+- **`tax` is selected by key presence, not truthiness** — a declared `tax: 0` is used instead of silently falling back to `tax_amount`.
+- **Non-finite floats (`NaN`, `±inf`) and hostile `__repr__` set members fail closed** — evidence serialization raises `ValueError` into the existing `BLOCKED` path instead of emitting non-JSON tokens or leaking `RuntimeError`.
+- **`agent_message` sanitized** — no rule IDs, issue types, or schema internals leak into agent-facing output.
+- **Removed orphan `math_verifier` delegation** — the lazy `SymbolicVerifier` instantiation (never called) is gone; computed-field checks use inline exact Decimal comparison.
+- **Hot path cost of the migration reduced (~20% fewer instructions)** — proof evidence is traversed once instead of twice (cycles and unsupported types are detected by the canonical encoder itself), the canonical JSON encoder is reused across calls, and schema meta-validation dispatches on the keywords a schema declares instead of probing the full keyword vocabulary. `proof_ref` values are unchanged.
+- **Oversized integer bounds no longer crash** — `minimum` / `maximum` / `exclusiveMinimum` / `exclusiveMaximum` / `multipleOf` values beyond float range (e.g. `10**1000`) are finite by construction and no longer raise `OverflowError` out of `verify()`.
+
 ## [6.0.0] - 2026-08-02
 ### Trust Boundary Completion (Epic #263)
 
