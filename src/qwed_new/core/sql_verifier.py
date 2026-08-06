@@ -9,6 +9,8 @@ Provides AST-based SQL analysis to prevent:
 5. Schema violations
 """
 
+import hashlib
+
 import sqlglot
 from sqlglot import exp, parse_one
 from typing import List, Dict, Any, Optional, Set
@@ -22,7 +24,20 @@ CONSTRAINT_EXECUTION_ERROR = "sql_verifier.execution_error"
 CONSTRAINT_CONNECTION_FAILURE = "sql_verifier.connection_failure"
 CONSTRAINT_SQL_VALID = "sql_verifier.sql_valid"
 CONSTRAINT_MALICIOUS = "sql_verifier.malicious"
+CONSTRAINT_COMPLEXITY_LIMIT_EXCEEDED = "sql_verifier.complexity_limit_exceeded"
 CONSTRAINT_BATCH_BLOCKED = "sql_verifier.batch_blocked"
+
+# Issue types that prove malice. Resource-limit violations (complexity_*) are CRITICAL
+# admission failures but are NOT evidence of malicious intent, so they must never set
+# developer_fields.malicious_classification (CodeRabbit).
+MALICIOUS_ISSUE_TYPES = frozenset({
+    "destructive_command",
+    "admin_command",
+    "sensitive_column_access",
+    "injection_tautology",
+    "injection_or_true",
+    "stacked_queries",
+})
 
 
 def _available_expression_types(*names: str) -> Set[type]:
@@ -226,10 +241,24 @@ class SQLVerifier:
 
         is_valid = critical_count == 0
 
+        # Malice proof requires true-malice issue types; a resource-limit violation
+        # is a CRITICAL admission failure but NOT evidence of malicious intent.
+        malicious = any(
+            i.severity == "CRITICAL" and i.issue_type in MALICIOUS_ISSUE_TYPES
+            for i in issues
+        )
+
+        if malicious:
+            constraint_id = CONSTRAINT_MALICIOUS
+        elif not is_valid:
+            constraint_id = CONSTRAINT_COMPLEXITY_LIMIT_EXCEEDED
+        else:
+            constraint_id = CONSTRAINT_SQL_VALID
+
         developer_fields: Dict[str, Any] = {
-            "constraint_id": CONSTRAINT_SQL_VALID if is_valid else CONSTRAINT_MALICIOUS,
+            "constraint_id": constraint_id,
             "is_valid": is_valid,
-            "malicious_classification": not is_valid,
+            "malicious_classification": malicious,
             "issues": [
                 {
                     "severity": i.severity,
@@ -657,7 +686,8 @@ class SQLVerifier:
         malicious = sum(
             1
             for item in items
-            if item["status"] == "VERIFIED" and item["developer_fields"].get("is_valid") is False
+            if item["status"] == "VERIFIED"
+            and item["developer_fields"].get("malicious_classification") is True
         )
         blocked = total - safe - malicious
 
@@ -683,11 +713,19 @@ class SQLVerifier:
             "dialect": dialect,
             "count": total,
             "queries": [item["query"] for item in items],
+            # Full-query digests bind the complete query text (the truncated
+            # ``queries`` field is display-only and not proof-bearing).
+            "query_digests": [
+                hashlib.sha256(query.encode("utf-8")).hexdigest() for query in queries
+            ],
+            "schema_ddl": schema_ddl if schema_ddl else None,
             "verdicts": [
                 {"status": item["status"], "is_valid": item["developer_fields"].get("is_valid")}
                 for item in items
             ],
             "allow_destructive": self.allow_destructive,
+            "blocked_columns": sorted(self.blocked_columns),
+            "limits": {key: self.limits[key] for key in sorted(self.limits)},
         }
 
         if is_valid_all:

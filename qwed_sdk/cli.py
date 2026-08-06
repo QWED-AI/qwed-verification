@@ -1480,6 +1480,48 @@ def _print_doctor_report(report: dict) -> None:
     click.echo(f"\nStatus: {status_line}")
 
 
+def _run_sql_engine_cases(sql_engine, run_case) -> None:
+    """SQL self-test cases for the CLI engine smoke suite."""
+    from qwed_new.core.diagnostics import DiagnosticStatus
+
+    def is_safe(payload):
+        return (
+            payload.status == DiagnosticStatus.VERIFIED
+            and payload.developer_fields.get("is_valid") is True
+        )
+
+    def is_verified_malicious(payload):
+        return (
+            payload.status == DiagnosticStatus.VERIFIED
+            and payload.developer_fields.get("is_valid") is False
+        )
+
+    run_case(
+        "SQL",
+        "Valid SELECT",
+        "SAFE",
+        lambda: sql_engine.verify_sql("SELECT id, name FROM users WHERE id = 123"),
+        is_safe,
+        lambda payload: f"status={payload.status.value}",
+    )
+    run_case(
+        "SQL",
+        "OR 1=1 injection",
+        "BLOCKED",
+        lambda: sql_engine.verify_sql("SELECT * FROM users WHERE id = 1 OR 1=1"),
+        is_verified_malicious,
+        lambda payload: f"status={payload.status.value}, critical={payload.developer_fields.get('critical_count')}",
+    )
+    run_case(
+        "SQL",
+        "DROP TABLE stacked",
+        "BLOCKED",
+        lambda: sql_engine.verify_sql("SELECT * FROM users; DROP TABLE users;"),
+        is_verified_malicious,
+        lambda payload: f"status={payload.status.value}, critical={payload.developer_fields.get('critical_count')}",
+    )
+
+
 def _run_full_engine_tests() -> List[dict]:
     results: List[dict] = []
 
@@ -1600,44 +1642,7 @@ def _run_full_engine_tests() -> List[dict]:
         add_engine_error_cases("SQL", ["Valid SELECT", "OR 1=1 injection", "DROP TABLE stacked"], exc)
 
     if sql_engine is not None:
-        from qwed_new.core.diagnostics import DiagnosticStatus
-
-        def _sql_is_safe(p):
-            return (
-                p.status == DiagnosticStatus.VERIFIED
-                and p.developer_fields.get("is_valid") is True
-            )
-
-        def _sql_is_unsafe(p):
-            return (
-                p.status == DiagnosticStatus.VERIFIED
-                and p.developer_fields.get("is_valid") is False
-            )
-
-        run_case(
-            "SQL",
-            "Valid SELECT",
-            "SAFE",
-            lambda: sql_engine.verify_sql("SELECT id, name FROM users WHERE id = 123"),
-            _sql_is_safe,
-            lambda payload: f"status={payload.status.value}",
-        )
-        run_case(
-            "SQL",
-            "OR 1=1 injection",
-            "BLOCKED",
-            lambda: sql_engine.verify_sql("SELECT * FROM users WHERE id = 1 OR 1=1"),
-            _sql_is_unsafe,
-            lambda payload: f"status={payload.status.value}, critical={payload.developer_fields.get('critical_count')}",
-        )
-        run_case(
-            "SQL",
-            "DROP TABLE stacked",
-            "BLOCKED",
-            lambda: sql_engine.verify_sql("SELECT * FROM users; DROP TABLE users;"),
-            _sql_is_unsafe,
-            lambda payload: f"status={payload.status.value}, critical={payload.developer_fields.get('critical_count')}",
-        )
+        _run_sql_engine_cases(sql_engine, run_case)
 
     try:
         from qwed_new.core.code_verifier import CodeVerifier

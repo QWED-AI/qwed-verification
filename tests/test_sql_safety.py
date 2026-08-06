@@ -258,3 +258,68 @@ def test_sql_verifier_execution_error_is_blocked(monkeypatch):
     assert result.proof_ref is None
     assert result.constraint_id == "sql_verifier.execution_error"
     assert "internal" in result.agent_message.lower()
+
+
+def test_sql_verifier_complexity_violation_is_not_malicious():
+    """A resource-limit (complexity) violation is CRITICAL but NOT malicious (CodeRabbit)."""
+    verifier = SQLVerifier(complexity_limits={"max_tables": 1})
+
+    result = verifier.verify_sql(
+        "SELECT u.id FROM users u JOIN orders o ON u.id = o.uid JOIN items i ON i.id = o.item_id"
+    )
+    assert result.status is DiagnosticStatus.VERIFIED
+    assert result.developer_fields.get("is_valid") is False
+    assert result.developer_fields.get("critical_count") == 1
+    assert result.developer_fields.get("malicious_classification") is False
+    assert result.developer_fields.get("constraint_id") == "sql_verifier.complexity_limit_exceeded"
+
+
+def test_sql_verifier_malicious_classification_requires_malice_proof():
+    """Injection/stacking prove malice; complexity alone never does."""
+    verifier = SQLVerifier(complexity_limits={"max_tables": 1})
+
+    injection = verifier.verify_sql("SELECT * FROM users WHERE id = 1 OR 1=1")
+    assert injection.developer_fields.get("malicious_classification") is True
+    assert injection.developer_fields.get("constraint_id") == "sql_verifier.malicious"
+
+    stacked = verifier.verify_sql("SELECT * FROM users; DROP TABLE users;")
+    assert stacked.developer_fields.get("malicious_classification") is True
+    assert stacked.developer_fields.get("constraint_id") == "sql_verifier.malicious"
+
+
+def test_sql_verifier_batch_counts_complexity_as_blocked_not_malicious():
+    """Batch summary: complexity-only items land in 'blocked', not 'malicious'."""
+    verifier = SQLVerifier(complexity_limits={"max_tables": 1})
+
+    result = verifier.verify_batch(
+        [
+            "SELECT id FROM users WHERE id = 1",
+            "SELECT u.id FROM users u JOIN orders o ON u.id = o.uid JOIN items i ON i.id = o.item_id",
+        ]
+    )
+    assert result.status is DiagnosticStatus.BLOCKED
+    assert result.developer_fields.get("malicious_classification") is False
+    assert result.developer_fields.get("constraint_id") == "sql_verifier.batch_blocked"
+    summary = result.developer_fields["summary"]
+    assert summary["total"] == 2
+    assert summary["safe"] == 1
+    assert summary["malicious"] == 0
+    assert summary["blocked"] == 1
+
+
+def test_sql_verifier_batch_evidence_binds_policy_and_schema():
+    """Batch proof_ref changes when limits, blocked columns, or schema change."""
+    queries = ["SELECT id FROM users WHERE id = 1"]
+
+    base = SQLVerifier().verify_batch(queries)
+    relimited = SQLVerifier(complexity_limits={"max_tables": 5}).verify_batch(queries)
+    reblocked = SQLVerifier(blocked_columns={"custom_secret_col"}).verify_batch(queries)
+    with_schema = SQLVerifier().verify_batch(
+        queries, schema_ddl="CREATE TABLE users (id INT, name TEXT);"
+    )
+
+    assert base.proof_ref is not None
+    assert base.proof_ref == SQLVerifier().verify_batch(queries).proof_ref
+    assert base.proof_ref != relimited.proof_ref
+    assert base.proof_ref != reblocked.proof_ref
+    assert base.proof_ref != with_schema.proof_ref
