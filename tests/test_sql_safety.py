@@ -102,7 +102,8 @@ def test_sql_verifier_schema_validation():
 
     # Table does NOT exist in schema - this generates WARNING not CRITICAL
     result = verifier.verify_sql("SELECT name FROM passwords", schema_ddl=schema)
-    assert result.developer_fields.get("warning_count", 0) > 0 or result.developer_fields.get("is_valid") is False
+    assert result.developer_fields.get("warning_count", 0) > 0
+    assert result.developer_fields.get("is_valid") is True
 
 
 def test_sql_verifier_parse_error_is_blocked():
@@ -139,17 +140,121 @@ def test_sql_verifier_malicious_proof_is_deterministic():
     assert a.proof_ref.startswith("sha256:")
 
 
-def test_sql_verifier_batch_returns_diagnostic_result():
+def test_sql_verifier_proof_is_bound_to_the_verdict():
+    """Opposite verdicts on one AST must not share a proof_ref."""
+    strict = SQLVerifier(allow_destructive=False)
+    permissive = SQLVerifier(allow_destructive=True)
+
+    blocked_verdict = strict.verify_sql("DROP TABLE users")
+    allowed_verdict = permissive.verify_sql("DROP TABLE users")
+
+    assert blocked_verdict.developer_fields.get("is_valid") is False
+    assert allowed_verdict.developer_fields.get("is_valid") is True
+    assert blocked_verdict.proof_ref != allowed_verdict.proof_ref
+
+
+def test_sql_verifier_batch_separates_blocked_from_malicious():
+    """Batch summary separates parse-blocked items from proven-malicious items."""
+    verifier = SQLVerifier()
+
+    result = verifier.verify_batch(
+        [
+            "SELECT id FROM users WHERE id = 1",
+            "DROP TABLE users; DROP TABLE orders;",
+            "SELEC FROM users WHERE",  # unparseable -> BLOCKED
+        ]
+    )
+    assert result.status is DiagnosticStatus.BLOCKED
+    summary = result.developer_fields["summary"]
+    assert summary["total"] == 3
+    assert summary["safe"] == 1
+    assert summary["malicious"] == 1
+    assert summary["unsafe"] == 1
+    assert summary["blocked"] == 1
+
+
+def test_sql_verifier_batch_all_safe_is_verified():
+    verifier = SQLVerifier()
+
+    result = verifier.verify_batch(
+        ["SELECT id FROM users WHERE id = 1", "SELECT name FROM users WHERE id = 2"]
+    )
+    assert result.status is DiagnosticStatus.VERIFIED
+    assert result.proof_ref is not None
+    assert result.developer_fields.get("is_valid") is True
+    summary = result.developer_fields["summary"]
+    assert summary["total"] == 2
+    assert summary["safe"] == 2
+    assert summary["unsafe"] == 0
+    assert summary["malicious"] == 0
+    assert summary["blocked"] == 0
+    assert "blocked" in summary  # documented summary field is present
+
+
+def test_sql_verifier_batch_with_malicious_is_blocked():
+    """A batch containing a malicious query is non-authoritative (BLOCKED)."""
     verifier = SQLVerifier()
 
     result = verifier.verify_batch(
         ["SELECT id FROM users WHERE id = 1", "DROP TABLE users; DROP TABLE orders;"]
     )
-    assert result.status is DiagnosticStatus.VERIFIED
-    assert result.proof_ref is not None
+    assert result.status is DiagnosticStatus.BLOCKED
+    assert result.proof_ref is None
     assert result.developer_fields.get("is_valid") is False
+    assert result.developer_fields.get("malicious_classification") is True
+    assert result.developer_fields.get("constraint_id") == "sql_verifier.malicious"
     summary = result.developer_fields["summary"]
     assert summary["total"] == 2
     assert summary["safe"] == 1
     assert summary["unsafe"] == 1
+    assert summary["malicious"] == 1
+    assert summary["blocked"] == 0
     assert len(result.developer_fields["results"]) == 2
+
+
+def test_sql_verifier_batch_with_parse_error_is_not_malicious():
+    """A parse-error batch must never be classified as malicious (Greptile P1)."""
+    verifier = SQLVerifier()
+
+    result = verifier.verify_batch(["SELECT id FROM users WHERE id = 1", "SELEC FROM users WHERE"])
+    assert result.status is DiagnosticStatus.BLOCKED
+    assert result.proof_ref is None
+    assert result.developer_fields.get("malicious_classification") is False
+    assert result.developer_fields.get("constraint_id") == "sql_verifier.batch_blocked"
+    summary = result.developer_fields["summary"]
+    assert summary["total"] == 2
+    assert summary["safe"] == 1
+    assert summary["unsafe"] == 0
+    assert summary["malicious"] == 0
+    assert summary["blocked"] == 1
+
+
+def test_sql_verifier_batch_with_execution_error_is_not_malicious(monkeypatch):
+    """A batch with an internal analysis failure is blocked, not malicious (Greptile P1)."""
+    verifier = SQLVerifier()
+
+    def _boom(self, parsed_query):
+        raise RuntimeError("internal analysis failure")
+
+    monkeypatch.setattr(SQLVerifier, "_check_column_access", _boom)
+    result = verifier.verify_batch(["SELECT id FROM users WHERE id = 1", "SELECT name FROM users"])
+    assert result.status is DiagnosticStatus.BLOCKED
+    assert result.developer_fields.get("malicious_classification") is False
+    summary = result.developer_fields["summary"]
+    assert summary["safe"] == 0
+    assert summary["malicious"] == 0
+    assert summary["blocked"] == 2
+
+
+def test_sql_verifier_execution_error_is_blocked(monkeypatch):
+    verifier = SQLVerifier()
+
+    def _boom(self, parsed_query):
+        raise RuntimeError("internal analysis failure")
+
+    monkeypatch.setattr(SQLVerifier, "_check_column_access", _boom)
+    result = verifier.verify_sql("SELECT id FROM users WHERE id = 1")
+    assert result.status is DiagnosticStatus.BLOCKED
+    assert result.proof_ref is None
+    assert result.constraint_id == "sql_verifier.execution_error"
+    assert "internal" in result.agent_message.lower()

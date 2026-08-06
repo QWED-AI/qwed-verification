@@ -1609,7 +1609,10 @@ def _run_full_engine_tests() -> List[dict]:
             )
 
         def _sql_is_unsafe(p):
-            return p.developer_fields.get("is_valid") is False
+            return (
+                p.status == DiagnosticStatus.VERIFIED
+                and p.developer_fields.get("is_valid") is False
+            )
 
         run_case(
             "SQL",

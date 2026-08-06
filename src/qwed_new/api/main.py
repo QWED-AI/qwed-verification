@@ -736,20 +736,11 @@ async def verify_sql(
 
         result = verifier.verify_sql(query, schema_ddl, dialect=dialect)
 
-        if result.is_fail_closed:
-            # Parse/execution/connection failure — engine already returned BLOCKED.
-            dr = result
-        elif bool(result.developer_fields.get("is_valid", False)):
-            # Safe query — engine returned VERIFIED with proof_ref bound to the AST.
-            dr = result
-        else:
-            # Proven malicious (VERIFIED-as-malicious). The stricter admission
-            # boundary downgrades this to BLOCKED so an unsafe query is never
-            # admissible for control flow (issue #253).
-            dr = DiagnosticResult.blocked(
-                result.agent_message,
-                developer_fields=result.developer_fields,
-            )
+        # The engine's verdict is authoritative and unchanged. A proven-malicious query
+        # is VERIFIED-as-malicious (developer_fields.is_valid False); admission policy
+        # gating on is_valid lives in the consumer, not here (issue #253). Only
+        # fail-closed BLOCKED/UNVERIFIABLE results surface as-is.
+        dr = result
         dr = _enforce_trust(dr, query=query)
 
         log = VerificationLog(

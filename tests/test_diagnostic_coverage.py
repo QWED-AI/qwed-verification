@@ -282,7 +282,11 @@ def test_verify_fact_unknown_result(client):
 
 
 def test_verify_sql_unverified(client):
-    """Engine is_valid=False (VERIFIED-as-malicious) -> endpoint downgrades to BLOCKED."""
+    """Engine is_valid=False (VERIFIED-as-malicious) -> endpoint returns verdict unchanged.
+
+    Asserts the malicious constraints (constraint_id + is_valid + proof_ref) so the test
+    fails if verify_sql raised and the generic error handler returned the same status.
+    """
     malicious = DiagnosticResult.verified(
         "The SQL query failed security verification and is not safe to execute.",
         {"constraint_id": "sql_verifier.malicious", "is_valid": False},
@@ -297,8 +301,51 @@ def test_verify_sql_unverified(client):
 
         assert response.status_code == 200
         data = response.json()
+        assert data["status"] == "VERIFIED"
+        assert data["proof_ref"] is not None
+        assert data["developer_fields"]["constraint_id"] == "sql_verifier.malicious"
+        assert data["developer_fields"]["is_valid"] is False
+
+
+def test_verify_sql_engine_blocked_passthrough(client):
+    """Engine returns BLOCKED (e.g. parse error) -> endpoint passes it through as BLOCKED."""
+    blocked = DiagnosticResult.blocked(
+        "SQL verification could not be completed because the query could not be parsed.",
+        {"constraint_id": "sql_verifier.parse_error", "is_valid": False},
+    )
+    with patch("qwed_new.core.sql_verifier.SQLVerifier.verify_sql", return_value=blocked), \
+         patch("qwed_new.api.main.check_rate_limit"):
+        response = client.post(
+            "/verify/sql",
+            json={"query": "SELECT *", "schema_ddl": "CREATE TABLE t (id int)", "type": "postgres"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
         assert data["status"] == "BLOCKED"
         assert data["proof_ref"] is None
+        assert data["developer_fields"]["constraint_id"] == "sql_verifier.parse_error"
+
+
+def test_verify_sql_safe_passthrough_verified(client):
+    """Engine returns VERIFIED-as-safe -> endpoint returns VERIFIED."""
+    safe = DiagnosticResult.verified(
+        "The SQL query passed verification and is safe to execute.",
+        {"constraint_id": "sql_verifier.sql_valid", "is_valid": True},
+        {"query": "SELECT *"},
+    )
+    with patch("qwed_new.core.sql_verifier.SQLVerifier.verify_sql", return_value=safe), \
+         patch("qwed_new.api.main.check_rate_limit"):
+        response = client.post(
+            "/verify/sql",
+            json={"query": "SELECT *", "schema_ddl": "CREATE TABLE t (id int)", "type": "postgres"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "VERIFIED"
+        assert data["proof_ref"] is not None
+        assert data["developer_fields"]["is_valid"] is True
 
 
 def test_verify_code_missing_code_returns_400(client):
