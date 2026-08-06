@@ -70,17 +70,32 @@ def test_run_full_engine_tests_returns_expected_shape(
     mock_sql.verify_sql.side_effect = [
         DiagnosticResult.verified(
             "The SQL query passed verification and is safe to execute.",
-            {"constraint_id": "sql_verifier.sql_valid", "is_valid": True, "critical_count": 0},
+            {
+                "constraint_id": "sql_verifier.sql_valid",
+                "is_valid": True,
+                "malicious_classification": False,
+                "critical_count": 0,
+            },
             {"query": "q"},
         ),
         DiagnosticResult.verified(
             "The SQL query failed security verification and is not safe to execute.",
-            {"constraint_id": "sql_verifier.malicious", "is_valid": False, "critical_count": 1},
+            {
+                "constraint_id": "sql_verifier.malicious",
+                "is_valid": False,
+                "malicious_classification": True,
+                "critical_count": 1,
+            },
             {"query": "q"},
         ),
         DiagnosticResult.verified(
             "The SQL query failed security verification and is not safe to execute.",
-            {"constraint_id": "sql_verifier.malicious", "is_valid": False, "critical_count": 1},
+            {
+                "constraint_id": "sql_verifier.malicious",
+                "is_valid": False,
+                "malicious_classification": True,
+                "critical_count": 1,
+            },
             {"query": "q"},
         ),
     ]

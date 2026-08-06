@@ -1488,12 +1488,15 @@ def _run_sql_engine_cases(sql_engine, run_case) -> None:
         return (
             payload.status == DiagnosticStatus.VERIFIED
             and payload.developer_fields.get("is_valid") is True
+            and bool(payload.proof_ref)
         )
 
     def is_verified_malicious(payload):
         return (
             payload.status == DiagnosticStatus.VERIFIED
             and payload.developer_fields.get("is_valid") is False
+            and payload.developer_fields.get("malicious_classification") is True
+            and bool(payload.proof_ref)
         )
 
     run_case(

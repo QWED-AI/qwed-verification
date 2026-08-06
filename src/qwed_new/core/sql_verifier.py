@@ -25,6 +25,8 @@ CONSTRAINT_CONNECTION_FAILURE = "sql_verifier.connection_failure"
 CONSTRAINT_SQL_VALID = "sql_verifier.sql_valid"
 CONSTRAINT_MALICIOUS = "sql_verifier.malicious"
 CONSTRAINT_COMPLEXITY_LIMIT_EXCEEDED = "sql_verifier.complexity_limit_exceeded"
+CONSTRAINT_SCHEMA_PARSE_ERROR = "sql_verifier.schema_parse_error"
+CONSTRAINT_EMPTY_BATCH = "sql_verifier.empty_batch"
 CONSTRAINT_BATCH_BLOCKED = "sql_verifier.batch_blocked"
 
 # Issue types that prove malice. Resource-limit violations (complexity_*) are CRITICAL
@@ -170,6 +172,9 @@ class SQLVerifier:
         - Malicious query → VERIFIED as-malicious (``is_valid`` False,
                           ``developer_fields.malicious_classification`` True). Proving a query
                           is malicious IS a successful proof, so it is not BLOCKED (issue #253).
+                          Malicious is the only unsafe case that retains a proof_ref.
+        - Complexity-limit violation → BLOCKED (``sql_verifier.complexity_limit_exceeded``)
+        - DDL schema parse failure → BLOCKED (``sql_verifier.schema_parse_error``)
         - Parse error     → BLOCKED (``sql_verifier.parse_error``)
         - Internal error  → BLOCKED (``sql_verifier.execution_error``)
 
@@ -247,9 +252,12 @@ class SQLVerifier:
             i.severity == "CRITICAL" and i.issue_type in MALICIOUS_ISSUE_TYPES
             for i in issues
         )
+        schema_parse_failed = any(i.issue_type == "schema_parse_error" for i in issues)
 
         if malicious:
             constraint_id = CONSTRAINT_MALICIOUS
+        elif schema_parse_failed:
+            constraint_id = CONSTRAINT_SCHEMA_PARSE_ERROR
         elif not is_valid:
             constraint_id = CONSTRAINT_COMPLEXITY_LIMIT_EXCEEDED
         else:
@@ -293,21 +301,24 @@ class SQLVerifier:
             check_complexity=check_complexity,
         )
 
-        if is_valid:
+        if is_valid or malicious:
             return DiagnosticResult.verified(
-                agent_message="The SQL query passed verification and is safe to execute.",
+                agent_message=(
+                    "The SQL query passed verification and is safe to execute."
+                    if is_valid
+                    else "The SQL query failed security verification and is not safe to execute."
+                ),
                 developer_fields=developer_fields,
                 evidence=evidence,
             )
 
-        # Proven malicious: still VERIFIED with proof_ref — the AST proves the verdict.
-        # Consumers gate on is_valid / malicious_classification, not status (issue #253).
-        return DiagnosticResult.verified(
-            agent_message=(
-                "The SQL query failed security verification and is not safe to execute."
-            ),
+        # Complexity-limit, schema-parse, and other non-malicious admission failures
+        # are BLOCKED (non-authoritative, no proof_ref): they are not proofs of malice
+        # and theorem-providing engines must not emit an authoritative VERIFIED for an
+        # incomplete analysis. Only proven-malicious results may carry a proof_ref.
+        return DiagnosticResult.blocked(
+            agent_message="The SQL query failed admission checks and is not safe to execute.",
             developer_fields=developer_fields,
-            evidence=evidence,
         )
 
     def _build_evidence(
@@ -615,9 +626,9 @@ class SQLVerifier:
                     tables_in_schema[table_name] = columns
         except Exception:
             issues.append(SQLIssue(
-                severity="WARNING",
+                severity="CRITICAL",
                 issue_type="schema_parse_error",
-                description="Could not parse DDL schema."
+                description="Could not parse DDL schema; schema verification is incomplete."
             ))
             return issues
         
@@ -676,6 +687,26 @@ class SQLVerifier:
             serialized = dr.to_dict()
             serialized["query"] = query[:100] + "..." if len(query) > 100 else query
             items.append(serialized)
+
+        if not queries:
+            return DiagnosticResult.blocked(
+                agent_message="Batch SQL verification requires at least one query.",
+                developer_fields={
+                    "constraint_id": CONSTRAINT_EMPTY_BATCH,
+                    "is_valid": False,
+                    "malicious_classification": False,
+                    "results": [],
+                    "summary": {
+                        "total": 0,
+                        "safe": 0,
+                        "unsafe": 0,
+                        "malicious": 0,
+                        "blocked": 0,
+                        "total_critical": 0,
+                        "total_warnings": 0,
+                    },
+                },
+            )
 
         total = len(queries)
         safe = sum(

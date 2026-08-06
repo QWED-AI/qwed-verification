@@ -267,11 +267,39 @@ def test_sql_verifier_complexity_violation_is_not_malicious():
     result = verifier.verify_sql(
         "SELECT u.id FROM users u JOIN orders o ON u.id = o.uid JOIN items i ON i.id = o.item_id"
     )
-    assert result.status is DiagnosticStatus.VERIFIED
+    assert result.status is DiagnosticStatus.BLOCKED
+    assert result.proof_ref is None
     assert result.developer_fields.get("is_valid") is False
     assert result.developer_fields.get("critical_count") == 1
     assert result.developer_fields.get("malicious_classification") is False
     assert result.developer_fields.get("constraint_id") == "sql_verifier.complexity_limit_exceeded"
+
+
+def test_sql_verifier_schema_parse_failure_is_blocked():
+    """Unparseable DDL blocks with a dedicated constraint, never a VERIFIED result."""
+    verifier = SQLVerifier()
+
+    result = verifier.verify_sql(
+        "SELECT name FROM users", schema_ddl="CREATE TABLE users (id INT, name TEXT"
+    )
+    assert result.status is DiagnosticStatus.BLOCKED
+    assert result.proof_ref is None
+    assert result.developer_fields.get("is_valid") is False
+    assert result.developer_fields.get("constraint_id") == "sql_verifier.schema_parse_error"
+    assert result.developer_fields.get("malicious_classification") is False
+
+
+def test_sql_verifier_empty_batch_is_not_authoritative():
+    """An empty batch must never produce an authoritative VERIFIED result."""
+    verifier = SQLVerifier()
+
+    result = verifier.verify_batch([])
+    assert result.status is DiagnosticStatus.BLOCKED
+    assert result.proof_ref is None
+    assert result.developer_fields.get("is_valid") is False
+    assert result.developer_fields.get("malicious_classification") is False
+    assert result.developer_fields.get("constraint_id") == "sql_verifier.empty_batch"
+    assert result.developer_fields["summary"]["total"] == 0
 
 
 def test_sql_verifier_malicious_classification_requires_malice_proof():
