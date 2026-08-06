@@ -299,7 +299,15 @@ def test_sql_verifier_empty_batch_is_not_authoritative():
     assert result.developer_fields.get("is_valid") is False
     assert result.developer_fields.get("malicious_classification") is False
     assert result.developer_fields.get("constraint_id") == "sql_verifier.empty_batch"
-    assert result.developer_fields["summary"]["total"] == 0
+    assert result.developer_fields["results"] == []
+    summary = result.developer_fields["summary"]
+    assert summary["total"] == 0
+    assert summary["safe"] == 0
+    assert summary["unsafe"] == 0
+    assert summary["malicious"] == 0
+    assert summary["blocked"] == 0
+    assert summary["total_critical"] == 0
+    assert summary["total_warnings"] == 0
 
 
 def test_sql_verifier_malicious_classification_requires_malice_proof():
