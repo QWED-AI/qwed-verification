@@ -431,7 +431,7 @@ class SchemaVerifier:
         """Dispatch a keyword to its shape validator, or a shared keyword group."""
         checker = self._SHAPE_DISPATCH.get(keyword)
         if checker is not None:
-            return checker(self, value, path)
+            return checker(self, keyword, value, path)
         if keyword in _NUMERIC_BOUND_KEYWORDS:
             return self._shape_numeric_bound(keyword, value, path)
         if keyword in _SIZE_KEYWORDS:
@@ -440,63 +440,63 @@ class SchemaVerifier:
             return self._shape_string(keyword, value, path)
         return []
 
-    def _shape_type(self, value: Any, path: str) -> List[str]:
+    def _shape_type(self, keyword: str, value: Any, path: str) -> List[str]:
         """Validate the type keyword: a string or non-empty list of known types."""
         if isinstance(value, str):
-            return [] if value in self.TYPE_MAP else [f"{path}.type: unknown type {value!r}"]
+            return [] if value in self.TYPE_MAP else [f"{path}.{keyword}: unknown type {value!r}"]
         if isinstance(value, list):
             if value and all(isinstance(t, str) and t in self.TYPE_MAP for t in value):
                 return []
-            return [f"{path}.type: must be a list of valid types"]
-        return [f"{path}.type: must be a string or list of strings"]
+            return [f"{path}.{keyword}: must be a list of valid types"]
+        return [f"{path}.{keyword}: must be a string or list of strings"]
 
-    def _shape_properties(self, value: Any, path: str) -> List[str]:
+    def _shape_properties(self, keyword: str, value: Any, path: str) -> List[str]:
         """Validate properties: dict mapping names to schema dicts, recursing."""
         if not isinstance(value, dict):
-            return [f"{path}.properties: must be a dict"]
+            return [f"{path}.{keyword}: must be a dict"]
         errors: List[str] = []
         for prop_name, prop_schema in value.items():
             if isinstance(prop_schema, dict):
-                errors.extend(self._validate_schema_shape(prop_schema, f"{path}.properties.{prop_name}"))
+                errors.extend(self._validate_schema_shape(prop_schema, f"{path}.{keyword}.{prop_name}"))
             else:
-                errors.append(f"{path}.properties.{prop_name}: must be a schema dict")
+                errors.append(f"{path}.{keyword}.{prop_name}: must be a schema dict")
         return errors
 
-    def _shape_required(self, value: Any, path: str) -> List[str]:
+    def _shape_required(self, keyword: str, value: Any, path: str) -> List[str]:
         """Validate required: must be a list of strings."""
         if isinstance(value, list) and all(isinstance(r, str) for r in value):
             return []
-        return [f"{path}.required: must be a list of strings"]
+        return [f"{path}.{keyword}: must be a list of strings"]
 
-    def _shape_items(self, value: Any, path: str) -> List[str]:
+    def _shape_items(self, keyword: str, value: Any, path: str) -> List[str]:
         """Validate items: must be a schema dict; recurses into it."""
         if isinstance(value, dict):
-            return self._validate_schema_shape(value, f"{path}.items")
-        return [f"{path}.items: must be a schema dict"]
+            return self._validate_schema_shape(value, f"{path}.{keyword}")
+        return [f"{path}.{keyword}: must be a schema dict"]
 
-    def _shape_additional_properties(self, value: Any, path: str) -> List[str]:
+    def _shape_additional_properties(self, keyword: str, value: Any, path: str) -> List[str]:
         """Validate additionalProperties: bool or schema dict; recurses into dicts."""
         if isinstance(value, dict):
-            return self._validate_schema_shape(value, f"{path}.additionalProperties")
+            return self._validate_schema_shape(value, f"{path}.{keyword}")
         if isinstance(value, bool):
             return []
-        return [f"{path}.additionalProperties: must be a bool or schema dict"]
+        return [f"{path}.{keyword}: must be a bool or schema dict"]
 
-    def _shape_prefix_items(self, value: Any, path: str) -> List[str]:
+    def _shape_prefix_items(self, keyword: str, value: Any, path: str) -> List[str]:
         """Validate prefixItems: must be a list of schema dicts; recurses."""
         if not isinstance(value, list):
-            return [f"{path}.prefixItems: must be a list of schemas"]
+            return [f"{path}.{keyword}: must be a list of schemas"]
         errors: List[str] = []
         for i, item_schema in enumerate(value):
             if isinstance(item_schema, dict):
-                errors.extend(self._validate_schema_shape(item_schema, f"{path}.prefixItems[{i}]"))
+                errors.extend(self._validate_schema_shape(item_schema, f"{path}.{keyword}[{i}]"))
             else:
-                errors.append(f"{path}.prefixItems[{i}]: must be a schema dict")
+                errors.append(f"{path}.{keyword}[{i}]: must be a schema dict")
         return errors
 
-    def _shape_enum(self, value: Any, path: str) -> List[str]:
+    def _shape_enum(self, keyword: str, value: Any, path: str) -> List[str]:
         """Validate enum: must be a list."""
-        return [] if isinstance(value, list) else [f"{path}.enum: must be a list"]
+        return [] if isinstance(value, list) else [f"{path}.{keyword}: must be a list"]
 
     def _shape_numeric_bound(self, keyword: str, value: Any, path: str) -> List[str]:
         """Validate numeric bounds (minimum/maximum/exclusive*): finite number."""
@@ -504,11 +504,11 @@ class SchemaVerifier:
             return []
         return [f"{path}.{keyword}: must be a finite number"]
 
-    def _shape_multiple_of(self, value: Any, path: str) -> List[str]:
+    def _shape_multiple_of(self, keyword: str, value: Any, path: str) -> List[str]:
         """Validate multipleOf: must be a finite positive number."""
         if _is_finite_number(value) and value > 0:
             return []
-        return [f"{path}.multipleOf: must be a finite positive number"]
+        return [f"{path}.{keyword}: must be a finite positive number"]
 
     def _shape_size(self, keyword: str, value: Any, path: str) -> List[str]:
         """Validate size keywords (minLength/maxItems/etc.): non-negative int."""
@@ -524,30 +524,31 @@ class SchemaVerifier:
             try:
                 re.compile(value)
             except re.error:
-                return [f"{path}.pattern: must be a valid regular expression"]
+                return [f"{path}.{keyword}: must be a valid regular expression"]
         return []
 
-    def _shape_unique_items(self, value: Any, path: str) -> List[str]:
+    def _shape_unique_items(self, keyword: str, value: Any, path: str) -> List[str]:
         """Validate uniqueItems: must be a bool."""
-        return [] if isinstance(value, bool) else [f"{path}.uniqueItems: must be a bool"]
+        return [] if isinstance(value, bool) else [f"{path}.{keyword}: must be a bool"]
 
-    def _shape_composition_list(self, value: Any, path: str) -> List[str]:
+    def _shape_composition_list(self, keyword: str, value: Any, path: str) -> List[str]:
         """Validate allOf/anyOf/oneOf: a non-empty list of schema dicts."""
+        sub_path = f"{path}.{keyword}"
         if not isinstance(value, list) or not value:
-            return [f"{path}: must be a non-empty list of schemas"]
+            return [f"{sub_path}: must be a non-empty list of schemas"]
         errors: List[str] = []
         for i, sub in enumerate(value):
             if isinstance(sub, dict):
-                errors.extend(self._validate_schema_shape(sub, f"{path}[{i}]"))
+                errors.extend(self._validate_schema_shape(sub, f"{sub_path}[{i}]"))
             else:
-                errors.append(f"{path}[{i}]: must be a schema dict")
+                errors.append(f"{sub_path}[{i}]: must be a schema dict")
         return errors
 
-    def _shape_not(self, value: Any, path: str) -> List[str]:
+    def _shape_not(self, keyword: str, value: Any, path: str) -> List[str]:
         """Validate not: must be a schema dict."""
         if isinstance(value, dict):
-            return self._validate_schema_shape(value, f"{path}.not")
-        return [f"{path}.not: must be a schema dict"]
+            return self._validate_schema_shape(value, f"{path}.{keyword}")
+        return [f"{path}.{keyword}: must be a schema dict"]
 
     # Function-object dispatch for schema meta-validation; built once at class
     # load time so the lookup is a plain dict get() — no runtime getattr.

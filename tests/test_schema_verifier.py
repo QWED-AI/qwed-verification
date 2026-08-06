@@ -1212,6 +1212,26 @@ class TestSchemaShapeValidation:
         assert blocked.status is DiagnosticStatus.BLOCKED
         assert blocked.constraint_id == "schema_verifier.parse_error"
 
+    def test_shapes_error_paths_name_the_keyword(self, verifier):
+        """Shape errors report the offending keyword in the path.
+
+        Regression (Sentry LOW): _shape_composition_list reported "$" for
+        malformed allOf/anyOf/oneOf because it did not know which keyword it
+        was validating; other shape validators also hardcoded their keyword.
+        Every dispatched checker now receives the keyword and reports e.g.
+        "$.allOf", not "$".
+        """
+        result = verifier.verify(7, {"allOf": "not-a-list"})
+        assert "errors" in result.developer_fields
+        errors = result.developer_fields["errors"]
+        assert any(err.startswith("$.allOf") for err in errors)
+
+        result = verifier.verify(7, {"oneOf": []})
+        assert any(err.startswith("$.oneOf") for err in result.developer_fields["errors"])
+
+        result = verifier.verify(7, {"type": "nope"})
+        assert any(err.startswith("$.type") for err in result.developer_fields["errors"])
+
     def test_prefix_items_plus_items_valid(self, verifier):
         """prefixItems AND items combine: prefix tuples validate the leading
         elements, items validates the remaining (regression: elif skipped
