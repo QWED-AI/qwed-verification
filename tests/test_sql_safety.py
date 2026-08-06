@@ -289,6 +289,23 @@ def test_sql_verifier_schema_parse_failure_is_blocked():
     assert result.developer_fields.get("malicious_classification") is False
 
 
+def test_sql_verifier_malicious_with_schema_parse_failure_is_blocked():
+    """Malice does not override an incomplete analysis: malicious + schema parse
+    failure is BLOCKED (schema_parse_error), never VERIFIED (Sentry HIGH)."""
+    verifier = SQLVerifier()
+
+    result = verifier.verify_sql(
+        "SELECT * FROM users; DROP TABLE users;",
+        schema_ddl="CREATE TABLE users (id INT, name TEXT",
+    )
+    assert result.status is DiagnosticStatus.BLOCKED
+    assert result.proof_ref is None
+    assert result.developer_fields.get("is_valid") is False
+    assert result.developer_fields.get("constraint_id") == "sql_verifier.schema_parse_error"
+    # The malicious finding is preserved as truth even though admission is blocked.
+    assert result.developer_fields.get("malicious_classification") is True
+
+
 def test_sql_verifier_empty_batch_is_not_authoritative():
     """An empty batch must never produce an authoritative VERIFIED result."""
     verifier = SQLVerifier()

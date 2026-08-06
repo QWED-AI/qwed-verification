@@ -1153,11 +1153,16 @@ class TestAdmissionDecision(unittest.TestCase):
         unverifiable = DiagnosticResult.unverifiable("unsure", {"is_valid": False})
         self.assertIs(admission_decision(unverifiable), AdmissionDecision.BLOCKED)
 
-    def test_verified_without_is_valid_defaults_admit(self):
-        # A bare authoritative VERIFIED (no is_valid flag) is admitted, matching
-        # engine behavior where is_valid is domain-specific.
+    def test_verified_without_is_valid_is_blocked(self):
+        # A VERIFIED result with no explicit is_valid=True must not be admitted:
+        # the proof proves the verdict, not that SQL is safe. Fail closed (CodeRabbit).
         dr = DiagnosticResult.verified("ok", {}, {"q": "SELECT *"})
-        self.assertIs(admission_decision(dr), AdmissionDecision.ADMIT)
+        self.assertIs(admission_decision(dr), AdmissionDecision.BLOCKED)
+
+    def test_verified_malformed_is_valid_is_blocked(self):
+        # A malformed (non-boolean) is_valid value is not admitted.
+        dr = DiagnosticResult.verified("ok", {"is_valid": "true"}, {"q": "SELECT *"})
+        self.assertIs(admission_decision(dr), AdmissionDecision.BLOCKED)
 
     def test_does_not_mutate_verification_result(self):
         fields = {"is_valid": False, "malicious_classification": True}

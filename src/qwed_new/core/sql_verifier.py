@@ -172,7 +172,9 @@ class SQLVerifier:
         - Malicious query → VERIFIED as-malicious (``is_valid`` False,
                           ``developer_fields.malicious_classification`` True). Proving a query
                           is malicious IS a successful proof, so it is not BLOCKED (issue #253).
-                          Malicious is the only unsafe case that retains a proof_ref.
+                          Malicious is the only unsafe case that retains a proof_ref — unless
+                          the DDL schema also fails to parse, in which case the incomplete
+                          analysis is BLOCKED (schema_parse_error takes precedence).
         - Complexity-limit violation → BLOCKED (``sql_verifier.complexity_limit_exceeded``)
         - DDL schema parse failure → BLOCKED (``sql_verifier.schema_parse_error``)
         - Parse error     → BLOCKED (``sql_verifier.parse_error``)
@@ -254,10 +256,13 @@ class SQLVerifier:
         )
         schema_parse_failed = any(i.issue_type == "schema_parse_error" for i in issues)
 
-        if malicious:
-            constraint_id = CONSTRAINT_MALICIOUS
-        elif schema_parse_failed:
+        # A DDL schema parse failure means the analysis is incomplete: an authoritative
+        # proof must never be generated from an incomplete analysis (fail-closed), so it
+        # takes precedence over malice detection below (Sentry HIGH).
+        if schema_parse_failed:
             constraint_id = CONSTRAINT_SCHEMA_PARSE_ERROR
+        elif malicious:
+            constraint_id = CONSTRAINT_MALICIOUS
         elif not is_valid:
             constraint_id = CONSTRAINT_COMPLEXITY_LIMIT_EXCEEDED
         else:
@@ -301,7 +306,12 @@ class SQLVerifier:
             check_complexity=check_complexity,
         )
 
-        if is_valid or malicious:
+        # Only fully-analysed results may be VERIFIED: sql_valid and proven-malicious.
+        # Schema-parse failures (incomplete analysis), complexity-limit violations, and
+        # other admission failures are BLOCKED (non-authoritative, no proof_ref). A
+        # malicious query whose schema also fails to parse is BLOCKED because the
+        # analysis is incomplete (constraint_id is schema_parse_error in that case).
+        if is_valid or constraint_id == CONSTRAINT_MALICIOUS:
             return DiagnosticResult.verified(
                 agent_message=(
                     "The SQL query passed verification and is safe to execute."
@@ -312,10 +322,6 @@ class SQLVerifier:
                 evidence=evidence,
             )
 
-        # Complexity-limit, schema-parse, and other non-malicious admission failures
-        # are BLOCKED (non-authoritative, no proof_ref): they are not proofs of malice
-        # and theorem-providing engines must not emit an authoritative VERIFIED for an
-        # incomplete analysis. Only proven-malicious results may carry a proof_ref.
         return DiagnosticResult.blocked(
             agent_message="The SQL query failed admission checks and is not safe to execute.",
             developer_fields=developer_fields,

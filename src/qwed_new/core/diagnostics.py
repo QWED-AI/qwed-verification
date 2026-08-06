@@ -862,9 +862,9 @@ def admission_decision(result: DiagnosticResult) -> AdmissionDecision:
     deterministic gate turns it into a fail-closed admission outcome:
 
     - fail-closed status (BLOCKED/UNVERIFIABLE)         -> BLOCKED
-    - ``developer_fields.is_valid is False`` (unsafe)   -> BLOCKED
-    - authoritative (VERIFIED) and valid                -> ADMIT
-    - anything else (non-authoritative)                 -> BLOCKED
+    - ``developer_fields.is_valid is not True``          -> BLOCKED (missing/malformed)
+    - authoritative (VERIFIED) and valid                 -> ADMIT
+    - anything else (non-authoritative)                  -> BLOCKED
 
     Returning ``BLOCKED`` for a VERIFIED-but-unsafe result is a policy decision
     at the boundary (QWED #7), not a reinterpretation of the verdict (QWED #15):
@@ -872,7 +872,7 @@ def admission_decision(result: DiagnosticResult) -> AdmissionDecision:
     """
     if result.is_fail_closed:
         return AdmissionDecision.BLOCKED
-    if result.developer_fields.get("is_valid") is False:
+    if result.developer_fields.get("is_valid") is not True:
         return AdmissionDecision.BLOCKED
     if result.is_authoritative:
         return AdmissionDecision.ADMIT
