@@ -17,7 +17,7 @@ Example:
     result = verifier.verify(data, schema)  # VERIFIED - deterministic!
 """
 
-from typing import Any, ClassVar, Dict, List, Optional, Union
+from typing import Any, ClassVar, Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 import math
@@ -676,35 +676,25 @@ class SchemaVerifier:
         if isinstance(not_schema, dict):
             self._check_not(data, not_schema, path, issues, stats, strict, currency)
 
-    def _validate_subschema(
-        self, data: Any, sub: Dict[str, Any], sub_path: str, stats: Dict[str, int],
+    def _probe_subschema(
+        self, data: Any, sub: Dict[str, Any], sub_path: str,
         strict: bool, currency: Optional[str]
-    ) -> List[SchemaIssue]:
-        """Validate ``data`` against one subschema, returning its issues."""
+    ) -> Tuple[List[SchemaIssue], Dict[str, int]]:
+        """Validate ``data`` against one subschema in isolation.
+
+        Probe validations (anyOf/oneOf/not) must not inflate the caller's
+        evidence metrics: only the subschema that actually contributes to the
+        final verdict has its stats merged back. Returns (issues, probe_stats).
+        """
+        probe_stats = {"paths_checked": 0, "constraints_checked": 0}
         sub_issues: List[SchemaIssue] = []
-        self._validate_node(data, sub, sub_path, sub_issues, stats, strict, currency)
-        return sub_issues
+        self._validate_node(data, sub, sub_path, sub_issues, probe_stats, strict, currency)
+        return sub_issues, probe_stats
 
-    def _subschema_passes(
-        self, data: Any, sub: Dict[str, Any], sub_path: str, stats: Dict[str, int],
-        strict: bool, currency: Optional[str]
-    ) -> bool:
-        """True if ``data`` satisfies ``sub`` (no ERROR-severity issues)."""
-        sub_issues = self._validate_subschema(data, sub, sub_path, stats, strict, currency)
-        return not any(iss.severity == "ERROR" for iss in sub_issues)
-
-    def _count_passes(
-        self, data: Any, subschemas: List[Dict[str, Any]], keyword: str, path: str,
-        stats: Dict[str, int], strict: bool, currency: Optional[str]
-    ) -> int:
-        """Count how many of ``subschemas`` the data satisfies."""
-        passed = 0
-        for i, sub in enumerate(subschemas):
-            if not isinstance(sub, dict):
-                continue
-            if self._subschema_passes(data, sub, f"{path}.{keyword}[{i}]", stats, strict, currency):
-                passed += 1
-        return passed
+    def _merge_stats(self, target: Dict[str, int], source: Dict[str, int]) -> None:
+        """Add ``source`` stats into ``target``."""
+        target["paths_checked"] += source["paths_checked"]
+        target["constraints_checked"] += source["constraints_checked"]
 
     def _check_all_of(
         self, data: Any, subschemas: List[Dict[str, Any]], path: str,
@@ -716,22 +706,31 @@ class SchemaVerifier:
         for i, sub in enumerate(subschemas):
             if not isinstance(sub, dict):
                 continue
-            issues.extend(self._validate_subschema(
-                data, sub, f"{path}.allOf[{i}]", stats, strict, currency
-            ))
+            sub_issues, probe_stats = self._probe_subschema(
+                data, sub, f"{path}.allOf[{i}]", strict, currency
+            )
+            self._merge_stats(stats, probe_stats)
+            issues.extend(sub_issues)
 
     def _check_any_of(
         self, data: Any, subschemas: List[Dict[str, Any]], path: str,
         issues: List[SchemaIssue], stats: Dict[str, int], strict: bool,
         currency: Optional[str]
     ) -> None:
-        """anyOf: at least one subschema must pass."""
+        """anyOf: at least one subschema must pass (first match wins)."""
         stats["constraints_checked"] += 1
-        passed = self._count_passes(data, subschemas, "anyOf", path, stats, strict, currency)
-        if passed == 0:
-            self._append_composition_issue(
-                path, issues, "anyOf_match_failed", "at least one matching subschema", "none"
+        for i, sub in enumerate(subschemas):
+            if not isinstance(sub, dict):
+                continue
+            sub_issues, probe_stats = self._probe_subschema(
+                data, sub, f"{path}.anyOf[{i}]", strict, currency
             )
+            if not any(iss.severity == "ERROR" for iss in sub_issues):
+                self._merge_stats(stats, probe_stats)
+                return
+        self._append_composition_issue(
+            path, issues, "anyOf_match_failed", "at least one matching subschema", "none"
+        )
 
     def _check_one_of(
         self, data: Any, subschemas: List[Dict[str, Any]], path: str,
@@ -740,8 +739,20 @@ class SchemaVerifier:
     ) -> None:
         """oneOf: exactly one subschema must pass."""
         stats["constraints_checked"] += 1
-        passed = self._count_passes(data, subschemas, "oneOf", path, stats, strict, currency)
-        if passed != 1:
+        passed = 0
+        winner_stats: Optional[Dict[str, int]] = None
+        for i, sub in enumerate(subschemas):
+            if not isinstance(sub, dict):
+                continue
+            sub_issues, probe_stats = self._probe_subschema(
+                data, sub, f"{path}.oneOf[{i}]", strict, currency
+            )
+            if not any(iss.severity == "ERROR" for iss in sub_issues):
+                passed += 1
+                winner_stats = probe_stats
+        if passed == 1 and winner_stats is not None:
+            self._merge_stats(stats, winner_stats)
+        elif passed != 1:
             self._append_composition_issue(
                 path, issues, "oneOf_match_failed",
                 "exactly one matching subschema", f"{passed}",
@@ -754,10 +765,17 @@ class SchemaVerifier:
     ) -> None:
         """not: the subschema must fail (data must not satisfy it)."""
         stats["constraints_checked"] += 1
-        if self._subschema_passes(data, not_schema, f"{path}.not", stats, strict, currency):
+        sub_issues, probe_stats = self._probe_subschema(
+            data, not_schema, f"{path}.not", strict, currency
+        )
+        if not any(iss.severity == "ERROR" for iss in sub_issues):
             self._append_composition_issue(
                 path, issues, "not_violation", "not subschema to fail", "subschema passed"
             )
+        else:
+            # The subschema failed as required — its validation is the path
+            # that satisfied ``not``, so its stats count.
+            self._merge_stats(stats, probe_stats)
 
     def _append_composition_issue(
         self,

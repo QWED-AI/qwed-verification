@@ -1232,6 +1232,33 @@ class TestSchemaShapeValidation:
         result = verifier.verify(7, {"type": "nope"})
         assert any(err.startswith("$.type") for err in result.developer_fields["errors"])
 
+    def test_composition_probes_do_not_inflate_stats(self, verifier):
+        """Probe validations (anyOf/oneOf/not) must not inflate evidence stats.
+
+        Regression (Sentry LOW): probes shared the caller's stats dict, so a
+        successful anyOf/oneOf counted paths_checked for every discarded probe
+        (e.g. oneOf with a 3rd-subschema match reported 4 paths instead of 2).
+        Probes now run with isolated stats and only the winning subschema's
+        stats are merged back.
+        """
+        result = verifier.verify(
+            7, {"anyOf": [{"type": "string"}, {"minLength": 1}]}
+        )
+        assert result.developer_fields["is_valid"] is True
+        # root + the single matching subschema; the discarded string probe
+        # must not add a path.
+        assert result.developer_fields["summary"]["paths_checked"] == 2
+
+        result = verifier.verify(
+            7, {"oneOf": [{"type": "string"}, {"type": "boolean"}, {"type": "integer"}]}
+        )
+        assert result.developer_fields["is_valid"] is True
+        assert result.developer_fields["summary"]["paths_checked"] == 2
+
+        result = verifier.verify(7, {"not": {"type": "string"}})
+        assert result.developer_fields["is_valid"] is True
+        assert result.developer_fields["summary"]["paths_checked"] == 2
+
     def test_prefix_items_plus_items_valid(self, verifier):
         """prefixItems AND items combine: prefix tuples validate the leading
         elements, items validates the remaining (regression: elif skipped
