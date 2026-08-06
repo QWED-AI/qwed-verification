@@ -282,8 +282,13 @@ def test_verify_fact_unknown_result(client):
 
 
 def test_verify_sql_unverified(client):
-    """Cover SQL endpoint is_valid=False -> BLOCKED."""
-    with patch("qwed_new.core.sql_verifier.SQLVerifier.verify_sql", return_value={"is_valid": False, "message": "Invalid syntax"}), \
+    """Engine is_valid=False (VERIFIED-as-malicious) -> endpoint downgrades to BLOCKED."""
+    malicious = DiagnosticResult.verified(
+        "The SQL query failed security verification and is not safe to execute.",
+        {"constraint_id": "sql_verifier.malicious", "is_valid": False},
+        {"query": "SELECT *"},
+    )
+    with patch("qwed_new.core.sql_verifier.SQLVerifier.verify_sql", return_value=malicious), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/sql",

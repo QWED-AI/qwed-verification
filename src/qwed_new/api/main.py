@@ -736,17 +736,19 @@ async def verify_sql(
 
         result = verifier.verify_sql(query, schema_ddl, dialect=dialect)
 
-        is_valid = result.get("is_valid", False)
-        if is_valid:
-            dr = DiagnosticResult.verified(
-                "SQL query is valid for the given schema",
-                developer_fields=result,
-                evidence={"query": query, "dialect": dialect, "analysis": result.get("analysis", "")},
-            )
+        if result.is_fail_closed:
+            # Parse/execution/connection failure — engine already returned BLOCKED.
+            dr = result
+        elif bool(result.developer_fields.get("is_valid", False)):
+            # Safe query — engine returned VERIFIED with proof_ref bound to the AST.
+            dr = result
         else:
+            # Proven malicious (VERIFIED-as-malicious). The stricter admission
+            # boundary downgrades this to BLOCKED so an unsafe query is never
+            # admissible for control flow (issue #253).
             dr = DiagnosticResult.blocked(
-                result.get("message", "SQL query is invalid or unsafe"),
-                developer_fields=result,
+                result.agent_message,
+                developer_fields=result.developer_fields,
             )
         dr = _enforce_trust(dr, query=query)
 

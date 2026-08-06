@@ -280,10 +280,14 @@ def _run_init_smoke_suite() -> list[dict]:
     )
 
     sql_bad = sql_engine.verify_sql("SELECT * FROM users WHERE 1=1 OR 1=1")
+    sql_bad_passed = (
+        sql_bad.status == DiagnosticStatus.VERIFIED
+        and sql_bad.developer_fields.get("is_valid") is False
+    )
     tests.append(
         {
             "label": "SELECT * WHERE 1=1",
-            "passed": sql_bad.get("status") == "BLOCKED",
+            "passed": sql_bad_passed,
             "result": "BLOCKED",
         }
     )
@@ -1596,29 +1600,40 @@ def _run_full_engine_tests() -> List[dict]:
         add_engine_error_cases("SQL", ["Valid SELECT", "OR 1=1 injection", "DROP TABLE stacked"], exc)
 
     if sql_engine is not None:
+        from qwed_new.core.diagnostics import DiagnosticStatus
+
+        def _sql_is_safe(p):
+            return (
+                p.status == DiagnosticStatus.VERIFIED
+                and p.developer_fields.get("is_valid") is True
+            )
+
+        def _sql_is_unsafe(p):
+            return p.developer_fields.get("is_valid") is False
+
         run_case(
             "SQL",
             "Valid SELECT",
             "SAFE",
             lambda: sql_engine.verify_sql("SELECT id, name FROM users WHERE id = 123"),
-            lambda payload: payload.get("status") == "SAFE",
-            lambda payload: f"status={payload.get('status')}",
+            _sql_is_safe,
+            lambda payload: f"status={payload.status.value}",
         )
         run_case(
             "SQL",
             "OR 1=1 injection",
             "BLOCKED",
             lambda: sql_engine.verify_sql("SELECT * FROM users WHERE id = 1 OR 1=1"),
-            lambda payload: payload.get("status") == "BLOCKED",
-            lambda payload: f"status={payload.get('status')}",
+            _sql_is_unsafe,
+            lambda payload: f"status={payload.status.value}, critical={payload.developer_fields.get('critical_count')}",
         )
         run_case(
             "SQL",
             "DROP TABLE stacked",
             "BLOCKED",
             lambda: sql_engine.verify_sql("SELECT * FROM users; DROP TABLE users;"),
-            lambda payload: payload.get("status") == "BLOCKED",
-            lambda payload: f"status={payload.get('status')}",
+            _sql_is_unsafe,
+            lambda payload: f"status={payload.status.value}, critical={payload.developer_fields.get('critical_count')}",
         )
 
     try:
