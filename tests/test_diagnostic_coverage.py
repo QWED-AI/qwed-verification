@@ -282,11 +282,8 @@ def test_verify_fact_unknown_result(client):
 
 
 def test_verify_sql_unverified(client):
-    """Engine is_valid=False (VERIFIED-as-malicious) -> endpoint returns verdict unchanged.
-
-    Asserts the malicious constraints (constraint_id + is_valid + proof_ref) so the test
-    fails if verify_sql raised and the generic error handler returned the same status.
-    """
+    """Engine is_valid=False (VERIFIED-as-malicious) -> endpoint returns verdict unchanged
+    but exposes an explicit BLOCKED admission decision (Greptile P1)."""
     malicious = DiagnosticResult.verified(
         "The SQL query failed security verification and is not safe to execute.",
         {"constraint_id": "sql_verifier.malicious", "is_valid": False},
@@ -301,10 +298,13 @@ def test_verify_sql_unverified(client):
 
         assert response.status_code == 200
         data = response.json()
+        # Verification truth preserved unchanged.
         assert data["status"] == "VERIFIED"
         assert data["proof_ref"] is not None
         assert data["developer_fields"]["constraint_id"] == "sql_verifier.malicious"
         assert data["developer_fields"]["is_valid"] is False
+        # Admission is a SEPARATE, fail-closed decision.
+        assert data["admission"] == "BLOCKED"
 
 
 def test_verify_sql_engine_blocked_passthrough(client):
@@ -325,10 +325,11 @@ def test_verify_sql_engine_blocked_passthrough(client):
         assert data["status"] == "BLOCKED"
         assert data["proof_ref"] is None
         assert data["developer_fields"]["constraint_id"] == "sql_verifier.parse_error"
+        assert data["admission"] == "BLOCKED"
 
 
 def test_verify_sql_safe_passthrough_verified(client):
-    """Engine returns VERIFIED-as-safe -> endpoint returns VERIFIED."""
+    """Engine returns VERIFIED-as-safe -> endpoint returns VERIFIED and ADMIT."""
     safe = DiagnosticResult.verified(
         "The SQL query passed verification and is safe to execute.",
         {"constraint_id": "sql_verifier.sql_valid", "is_valid": True},
@@ -346,6 +347,7 @@ def test_verify_sql_safe_passthrough_verified(client):
         assert data["status"] == "VERIFIED"
         assert data["proof_ref"] is not None
         assert data["developer_fields"]["is_valid"] is True
+        assert data["admission"] == "ADMIT"
 
 
 def test_verify_code_missing_code_returns_400(client):
