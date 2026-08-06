@@ -8,7 +8,12 @@ import logging
 from fractions import Fraction
 
 from qwed_new.core.security import redact_pii
-from qwed_new.core.diagnostics import DiagnosticResult, enforce_trust_decision, merge_diagnostic_result
+from qwed_new.core.diagnostics import (
+    DiagnosticResult,
+    admission_decision,
+    enforce_trust_decision,
+    merge_diagnostic_result,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -736,19 +741,14 @@ async def verify_sql(
 
         result = verifier.verify_sql(query, schema_ddl, dialect=dialect)
 
-        is_valid = result.get("is_valid", False)
-        if is_valid:
-            dr = DiagnosticResult.verified(
-                "SQL query is valid for the given schema",
-                developer_fields=result,
-                evidence={"query": query, "dialect": dialect, "analysis": result.get("analysis", "")},
-            )
-        else:
-            dr = DiagnosticResult.blocked(
-                result.get("message", "SQL query is invalid or unsafe"),
-                developer_fields=result,
-            )
+        # Verification truth is preserved unchanged: a proven-malicious query is
+        # VERIFIED-as-malicious (developer_fields.is_valid False, proof_ref bound).
+        # Admission is a SEPARATE decision at this boundary (QWED #7, #13, #15): unsafe
+        # SQL must never be admitted, so we expose an explicit AdmissionDecision rather
+        # than letting authority-only consumers treat proof_ref as "safe to execute".
+        dr = result
         dr = _enforce_trust(dr, query=query)
+        admission = admission_decision(dr)
 
         log = VerificationLog(
             organization_id=tenant.organization_id,
@@ -759,7 +759,9 @@ async def verify_sql(
         )
         _safe_commit_log(session, log)
 
-        return _merge_response(dr)
+        response = _merge_response(dr)
+        response["admission"] = admission.value
+        return response
 
     except HTTPException:
         raise
@@ -778,7 +780,9 @@ async def verify_sql(
             domain="SQL"
         )
         _safe_commit_log(session, log)
-        return _merge_response(dr)
+        response = _merge_response(dr)
+        response["admission"] = admission_decision(dr).value
+        return response
 
 
 @app.post("/verify/image")

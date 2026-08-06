@@ -9,10 +9,37 @@ Provides AST-based SQL analysis to prevent:
 5. Schema violations
 """
 
+import hashlib
+
 import sqlglot
 from sqlglot import exp, parse_one
 from typing import List, Dict, Any, Optional, Set
 from dataclasses import dataclass
+
+from .diagnostics import DiagnosticResult
+
+
+CONSTRAINT_PARSE_ERROR = "sql_verifier.parse_error"
+CONSTRAINT_EXECUTION_ERROR = "sql_verifier.execution_error"
+CONSTRAINT_CONNECTION_FAILURE = "sql_verifier.connection_failure"
+CONSTRAINT_SQL_VALID = "sql_verifier.sql_valid"
+CONSTRAINT_MALICIOUS = "sql_verifier.malicious"
+CONSTRAINT_COMPLEXITY_LIMIT_EXCEEDED = "sql_verifier.complexity_limit_exceeded"
+CONSTRAINT_SCHEMA_PARSE_ERROR = "sql_verifier.schema_parse_error"
+CONSTRAINT_EMPTY_BATCH = "sql_verifier.empty_batch"
+CONSTRAINT_BATCH_BLOCKED = "sql_verifier.batch_blocked"
+
+# Issue types that prove malice. Resource-limit violations (complexity_*) are CRITICAL
+# admission failures but are NOT evidence of malicious intent, so they must never set
+# developer_fields.malicious_classification (CodeRabbit).
+MALICIOUS_ISSUE_TYPES = frozenset({
+    "destructive_command",
+    "admin_command",
+    "sensitive_column_access",
+    "injection_tautology",
+    "injection_or_true",
+    "stacked_queries",
+})
 
 
 def _available_expression_types(*names: str) -> Set[type]:
@@ -135,73 +162,122 @@ class SQLVerifier:
         schema_ddl: Optional[str] = None, 
         dialect: str = "postgres",
         check_complexity: bool = True
-    ) -> Dict[str, Any]:
+    ) -> DiagnosticResult:
         """
         Verify a SQL query for safety.
-        
+
+        Returns a structured :class:`DiagnosticResult`:
+
+        - SAFE query      → VERIFIED (``developer_fields.is_valid`` True, proof_ref from AST)
+        - Malicious query → VERIFIED as-malicious (``is_valid`` False,
+                          ``developer_fields.malicious_classification`` True). Proving a query
+                          is malicious IS a successful proof, so it is not BLOCKED (issue #253).
+                          Malicious is the only unsafe case that retains a proof_ref — unless
+                          the DDL schema also fails to parse, in which case the incomplete
+                          analysis is BLOCKED (schema_parse_error takes precedence).
+        - Complexity-limit violation → BLOCKED (``sql_verifier.complexity_limit_exceeded``)
+        - DDL schema parse failure → BLOCKED (``sql_verifier.schema_parse_error``)
+        - Parse error     → BLOCKED (``sql_verifier.parse_error``)
+        - Internal error  → BLOCKED (``sql_verifier.execution_error``)
+
+        ``sql_verifier.connection_failure`` is reserved for consumers whose engines open a
+        database connection; this verifier performs static AST analysis only.
+
+        ``agent_message`` is agent-safe: it never leaks detection rules, rule IDs, or raw
+        SQLGlot output. Rule-level detail lives in ``developer_fields``.
+
         Args:
             query: The SQL query to verify.
             schema_ddl: Optional DDL for schema validation.
             dialect: SQL dialect (postgres, mysql, sqlite, etc.).
             check_complexity: Whether to check complexity limits.
-            
-        Returns:
-            Dict with verification results including safety status and issues list.
 
         Example:
             >>> result = verifier.verify_sql("SELECT * FROM users WHERE id = 1")
-            >>> print(result["is_safe"])
+            >>> print(result.developer_fields.get("is_valid"))
             True
         """
-        issues: List[SQLIssue] = []
-        
         # 1. Parse Query
         try:
             parsed_query = parse_one(query, read=dialect)
-        except Exception as e:
-            return {
-                "is_safe": False,
-                "status": "SYNTAX_ERROR",
-                "issues": [{"severity": "CRITICAL", "description": f"SQL Syntax Error: {str(e)}"}],
-                "complexity": None,
-                "engine": "SQLGlot-AST-Scanner"
-            }
+        except Exception as exc:  # noqa: BLE001 — fail-closed by design
+            return DiagnosticResult.blocked(
+                agent_message=(
+                    "SQL verification could not be completed because the query "
+                    "could not be parsed."
+                ),
+                developer_fields={
+                    "constraint_id": CONSTRAINT_PARSE_ERROR,
+                    "is_valid": False,
+                    "error_type": type(exc).__name__,
+                    "issues": [{"severity": "CRITICAL", "description": "SQL Syntax Error"}],
+                    "engine": "SQLGlot-AST-Scanner",
+                },
+            )
 
-        # 2. Command Type Check
-        issues.extend(self._check_command_type(parsed_query))
-        
-        # 3. Column Security Check
-        issues.extend(self._check_column_access(parsed_query))
-        
-        # 4. Injection Pattern Detection
-        issues.extend(self._check_injection_patterns(parsed_query, query))
-        
-        # 5. Complexity Analysis
-        complexity = self._analyze_complexity(parsed_query)
-        
-        # 6. Complexity Limit Checks
-        if check_complexity:
-            issues.extend(self._check_complexity_limits(complexity))
-        
-        # 7. Schema Validation
-        if schema_ddl:
-            issues.extend(self._validate_against_schema(parsed_query, schema_ddl, dialect))
+        # 2..7 Analysis — unexpected failures fail closed as execution errors.
+        try:
+            issues: List[SQLIssue] = []
+
+            issues.extend(self._check_command_type(parsed_query))
+            issues.extend(self._check_column_access(parsed_query))
+            issues.extend(self._check_injection_patterns(parsed_query, query))
+
+            complexity = self._analyze_complexity(parsed_query)
+
+            if check_complexity:
+                issues.extend(self._check_complexity_limits(complexity))
+
+            if schema_ddl:
+                issues.extend(self._validate_against_schema(parsed_query, schema_ddl, dialect))
+        except Exception as exc:  # noqa: BLE001 — fail-closed by design
+            return DiagnosticResult.blocked(
+                agent_message=(
+                    "SQL verification could not be completed due to an internal error."
+                ),
+                developer_fields={
+                    "constraint_id": CONSTRAINT_EXECUTION_ERROR,
+                    "is_valid": False,
+                    "error_type": type(exc).__name__,
+                },
+            )
 
         # Determine overall safety
         critical_count = sum(1 for i in issues if i.severity == "CRITICAL")
         warning_count = sum(1 for i in issues if i.severity == "WARNING")
-        
-        is_safe = critical_count == 0
-        
-        return {
-            "is_safe": is_safe,
-            "status": "SAFE" if is_safe else "BLOCKED",
+
+        is_valid = critical_count == 0
+
+        # Malice proof requires true-malice issue types; a resource-limit violation
+        # is a CRITICAL admission failure but NOT evidence of malicious intent.
+        malicious = any(
+            i.severity == "CRITICAL" and i.issue_type in MALICIOUS_ISSUE_TYPES
+            for i in issues
+        )
+        schema_parse_failed = any(i.issue_type == "schema_parse_error" for i in issues)
+
+        # A DDL schema parse failure means the analysis is incomplete: an authoritative
+        # proof must never be generated from an incomplete analysis (fail-closed), so it
+        # takes precedence over malice detection below (Sentry HIGH).
+        if schema_parse_failed:
+            constraint_id = CONSTRAINT_SCHEMA_PARSE_ERROR
+        elif malicious:
+            constraint_id = CONSTRAINT_MALICIOUS
+        elif not is_valid:
+            constraint_id = CONSTRAINT_COMPLEXITY_LIMIT_EXCEEDED
+        else:
+            constraint_id = CONSTRAINT_SQL_VALID
+
+        developer_fields: Dict[str, Any] = {
+            "constraint_id": constraint_id,
+            "is_valid": is_valid,
+            "malicious_classification": malicious,
             "issues": [
                 {
                     "severity": i.severity,
                     "type": i.issue_type,
                     "description": i.description,
-                    "recommendation": i.recommendation
+                    "recommendation": i.recommendation,
                 }
                 for i in issues
             ],
@@ -212,11 +288,76 @@ class SQLVerifier:
                 "column_count": complexity.column_count,
                 "condition_count": complexity.condition_count,
                 "aggregate_count": complexity.aggregate_count,
-                "estimated_cost": round(complexity.estimated_cost, 2)
+                "estimated_cost": round(complexity.estimated_cost, 2),
             },
             "critical_count": critical_count,
             "warning_count": warning_count,
-            "engine": "SQLGlot-AST-Scanner"
+            "engine": "SQLGlot-AST-Scanner",
+        }
+
+        evidence = self._build_evidence(
+            parsed_query,
+            query,
+            dialect,
+            schema_ddl,
+            is_valid=is_valid,
+            critical_count=critical_count,
+            issues=issues,
+            check_complexity=check_complexity,
+        )
+
+        # Only fully-analysed results may be VERIFIED: sql_valid and proven-malicious.
+        # Schema-parse failures (incomplete analysis), complexity-limit violations, and
+        # other admission failures are BLOCKED (non-authoritative, no proof_ref). A
+        # malicious query whose schema also fails to parse is BLOCKED because the
+        # analysis is incomplete (constraint_id is schema_parse_error in that case).
+        if is_valid or constraint_id == CONSTRAINT_MALICIOUS:
+            return DiagnosticResult.verified(
+                agent_message=(
+                    "The SQL query passed verification and is safe to execute."
+                    if is_valid
+                    else "The SQL query failed security verification and is not safe to execute."
+                ),
+                developer_fields=developer_fields,
+                evidence=evidence,
+            )
+
+        return DiagnosticResult.blocked(
+            agent_message="The SQL query failed admission checks and is not safe to execute.",
+            developer_fields=developer_fields,
+        )
+
+    def _build_evidence(
+        self,
+        parsed_query: exp.Expression,
+        query: str,
+        dialect: str,
+        schema_ddl: Optional[str],
+        *,
+        is_valid: bool,
+        critical_count: int,
+        issues: List[SQLIssue],
+        check_complexity: bool,
+    ) -> Dict[str, Any]:
+        """Build deterministic, JSON-serializable proof evidence bound to the verdict.
+
+        The proof_ref hashes the AST, the verdict, and the effective policy
+        (``allow_destructive``, ``blocked_columns``, ``limits``) so two configurations
+        that reach opposite verdicts on identical input can never share a proof_ref.
+        """
+        return {
+            "engine": "SQLAst-Scanner",
+            "query": query,
+            "dialect": dialect,
+            "schema_ddl": schema_ddl if schema_ddl else None,
+            "ast": parsed_query.dump(),
+            "is_valid": is_valid,
+            "critical_count": critical_count,
+            "issue_types": sorted({issue.issue_type for issue in issues}),
+            "check_complexity": check_complexity,
+            "allow_destructive": self.allow_destructive,
+            "blocked_columns": sorted(self.blocked_columns),
+            "limits": {key: self.limits[key] for key in sorted(self.limits)},
         }
     
     # =========================================================================
@@ -491,9 +632,9 @@ class SQLVerifier:
                     tables_in_schema[table_name] = columns
         except Exception:
             issues.append(SQLIssue(
-                severity="WARNING",
+                severity="CRITICAL",
                 issue_type="schema_parse_error",
-                description="Could not parse DDL schema."
+                description="Could not parse DDL schema; schema verification is incomplete."
             ))
             return issues
         
@@ -519,40 +660,146 @@ class SQLVerifier:
         queries: List[str], 
         schema_ddl: Optional[str] = None,
         dialect: str = "postgres"
-    ) -> Dict[str, Any]:
+    ) -> DiagnosticResult:
         """
         Verify multiple SQL queries.
+
+        Returns a single :class:`DiagnosticResult`. Per-query verdicts live in
+        ``developer_fields.results`` (each a serialized per-query DiagnosticResult) and
+        ``developer_fields.summary``.
+
+        The batch is authoritative (VERIFIED with ``proof_ref``) only when every query is
+        safe. A batch containing any malicious or blocked query returns BLOCKED (non-
+        authoritative, ``proof_ref`` None) so generic consumers that admit on
+        ``is_authoritative`` can never accept unsafe SQL (issue #253).
 
         Args:
             queries: List of SQL queries to verify.
             schema_ddl: Optional DDL schema.
             dialect: SQL dialect.
 
-        Returns:
-            Dict containing batch results and summary statistics.
-
         Example:
-            >>> result = verifier.verify_batch(["SELECT * FROM table1", "DROP TABLE table2"])
-            >>> print(result["summary"]["blocked"])
-            1
+            >>> result = verifier.verify_batch(["SELECT * FROM table1", "SELEC FROM t"])
+            >>> print(
+            ...     result.developer_fields["summary"]["safe"],
+            ...     result.developer_fields["summary"]["unsafe"],
+            ...     result.developer_fields["summary"]["blocked"],
+            ... )
+            1 0 1
         """
-        results = []
-        
+        items: List[Dict[str, Any]] = []
         for query in queries:
-            result = self.verify_sql(query, schema_ddl, dialect)
-            results.append({
-                "query": query[:100] + "..." if len(query) > 100 else query,
-                **result
-            })
-        
-        return {
-            "results": results,
-            "summary": {
-                "total": len(queries),
-                "safe": sum(1 for r in results if r["status"] == "SAFE"),
-                "blocked": sum(1 for r in results if r["status"] == "BLOCKED"),
-                "syntax_errors": sum(1 for r in results if r["status"] == "SYNTAX_ERROR"),
-                "total_critical": sum(r["critical_count"] for r in results if "critical_count" in r),
-                "total_warnings": sum(r["warning_count"] for r in results if "warning_count" in r)
-            }
+            dr = self.verify_sql(query, schema_ddl, dialect)
+            serialized = dr.to_dict()
+            serialized["query"] = query[:100] + "..." if len(query) > 100 else query
+            items.append(serialized)
+
+        if not queries:
+            return DiagnosticResult.blocked(
+                agent_message="Batch SQL verification requires at least one query.",
+                developer_fields={
+                    "constraint_id": CONSTRAINT_EMPTY_BATCH,
+                    "is_valid": False,
+                    "malicious_classification": False,
+                    "results": [],
+                    "summary": {
+                        "total": 0,
+                        "safe": 0,
+                        "unsafe": 0,
+                        "malicious": 0,
+                        "blocked": 0,
+                        "total_critical": 0,
+                        "total_warnings": 0,
+                    },
+                },
+            )
+
+        total = len(queries)
+        safe = sum(
+            1
+            for item in items
+            if item["status"] == "VERIFIED" and item["developer_fields"].get("is_valid") is True
+        )
+        malicious = sum(
+            1
+            for item in items
+            if item["status"] == "VERIFIED"
+            and item["developer_fields"].get("malicious_classification") is True
+        )
+        blocked = total - safe - malicious
+
+        is_valid_all = safe == total
+        has_proven_malicious = malicious > 0
+
+        summary = {
+            "total": total,
+            "safe": safe,
+            "unsafe": malicious,
+            "malicious": malicious,
+            "blocked": blocked,
+            "total_critical": sum(
+                item["developer_fields"].get("critical_count", 0) for item in items
+            ),
+            "total_warnings": sum(
+                item["developer_fields"].get("warning_count", 0) for item in items
+            ),
         }
+
+        evidence = {
+            "engine": "SQLAst-Scanner",
+            "dialect": dialect,
+            "count": total,
+            "queries": [item["query"] for item in items],
+            # Full-query digests bind the complete query text (the truncated
+            # ``queries`` field is display-only and not proof-bearing).
+            "query_digests": [
+                hashlib.sha256(query.encode("utf-8")).hexdigest() for query in queries
+            ],
+            "schema_ddl": schema_ddl if schema_ddl else None,
+            "verdicts": [
+                {"status": item["status"], "is_valid": item["developer_fields"].get("is_valid")}
+                for item in items
+            ],
+            "allow_destructive": self.allow_destructive,
+            "blocked_columns": sorted(self.blocked_columns),
+            "limits": {key: self.limits[key] for key in sorted(self.limits)},
+        }
+
+        if is_valid_all:
+            batch_constraint_id = CONSTRAINT_SQL_VALID
+            batch_malicious = False
+        else:
+            # A parse/execution failure is NOT a proven-malicious verdict (Greptile P1):
+            # only classify the batch as malicious when at least one item was proven so.
+            batch_constraint_id = (
+                CONSTRAINT_MALICIOUS if has_proven_malicious else CONSTRAINT_BATCH_BLOCKED
+            )
+            batch_malicious = has_proven_malicious
+
+        batch_fields: Dict[str, Any] = {
+            "constraint_id": batch_constraint_id,
+            "is_valid": is_valid_all,
+            "malicious_classification": batch_malicious,
+            "results": items,
+            "summary": summary,
+            "engine": "SQLGlot-AST-Scanner",
+        }
+
+        if is_valid_all:
+            return DiagnosticResult.verified(
+                agent_message=(
+                    "Batch SQL verification succeeded: all queries passed security checks."
+                ),
+                developer_fields=batch_fields,
+                evidence=evidence,
+            )
+
+        # Fail-closed: an unsafe or blocked query makes the whole batch non-authoritative
+        # (security policy violation per the BLOCKED status contract).
+        return DiagnosticResult.blocked(
+            agent_message=(
+                "Batch SQL verification flagged unsafe or blocked queries; "
+                "the batch is not admissible."
+            ),
+            developer_fields=batch_fields,
+        )

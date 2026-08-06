@@ -82,6 +82,25 @@ class DiagnosticStatus(str, Enum):
     BLOCKED = "BLOCKED"
 
 
+class AdmissionDecision(str, Enum):
+    """Admission outcome at an enforcement boundary.
+
+    Distinct from :class:`DiagnosticStatus` by design (QWED #13 Separation of
+    Responsibilities, #15 Truth Before Policy): a ``DiagnosticResult`` answers
+    *"is this claim provably true?"* while an ``AdmissionDecision`` answers
+    *"should this be allowed at this boundary?"* A provably-malicious query is
+    ``VERIFIED`` (truth) yet ``BLOCKED`` (admission), so generic consumers that
+    gate on the admission decision never accept unsafe input even when the
+    underlying verification was authoritative.
+
+    Values:
+        ADMIT:   The boundary may proceed with the verdict.
+        BLOCKED: The boundary must not admit. This is the fail-closed default.
+    """
+    ADMIT = "ADMIT"
+    BLOCKED = "BLOCKED"
+
+
 # ---------------------------------------------------------------------------
 # Advisory check — structured representation of non-proof-bearing analysis.
 # Used for: LLM fallback output, NLI entailment labels, VLM interpretation,
@@ -836,6 +855,30 @@ DIAGNOSTIC_RESPONSE_KEYS = frozenset({
 })
 
 
+def admission_decision(result: DiagnosticResult) -> AdmissionDecision:
+    """Map a verification result to an admission decision for a SQL boundary.
+
+    The engine's ``DiagnosticResult`` is the truth and is never modified. This
+    deterministic gate turns it into a fail-closed admission outcome:
+
+    - fail-closed status (BLOCKED/UNVERIFIABLE)         -> BLOCKED
+    - ``developer_fields.is_valid is not True``          -> BLOCKED (missing/malformed)
+    - authoritative (VERIFIED) and valid                 -> ADMIT
+    - anything else (non-authoritative)                  -> BLOCKED
+
+    Returning ``BLOCKED`` for a VERIFIED-but-unsafe result is a policy decision
+    at the boundary (QWED #7), not a reinterpretation of the verdict (QWED #15):
+    the original DiagnosticResult is preserved unchanged alongside it.
+    """
+    if result.is_fail_closed:
+        return AdmissionDecision.BLOCKED
+    if result.developer_fields.get("is_valid") is not True:
+        return AdmissionDecision.BLOCKED
+    if result.is_authoritative:
+        return AdmissionDecision.ADMIT
+    return AdmissionDecision.BLOCKED
+
+
 def merge_diagnostic_result(dr: DiagnosticResult) -> Dict[str, Any]:
     """Merge DiagnosticResult with developer fields, ensuring diagnostic keys win.
 
@@ -851,7 +894,9 @@ __all__ = [
     "DiagnosticStatus",
     "DiagnosticResult",
     "AdvisoryCheck",
+    "AdmissionDecision",
     "compute_proof_ref",
     "enforce_trust_decision",
+    "admission_decision",
     "merge_diagnostic_result",
 ]

@@ -249,7 +249,7 @@ class BatchVerificationService:
                 item.query,
                 item.params.get("schema_ddl", ""),
                 dialect=item.params.get("dialect", "sqlite")
-            )
+            ).to_dict()
         
         else:
             raise ValueError(f"Unknown verification type: {item.verification_type}")

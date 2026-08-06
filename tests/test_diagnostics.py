@@ -20,9 +20,11 @@ import hashlib
 import unittest
 from unittest.mock import MagicMock, patch
 from src.qwed_new.core.diagnostics import (
+    AdmissionDecision,
     DiagnosticStatus,
     DiagnosticResult,
     AdvisoryCheck,
+    admission_decision,
     compute_proof_ref,
     enforce_trust_decision,
 )
@@ -1125,6 +1127,54 @@ class TestEnforceTrustDecision(unittest.TestCase):
 
         self.assertTrue(r.is_fail_closed)
         self.assertEqual(r.developer_fields.get("constraint_id"), "trust_gate.claims_missing")
+
+
+class TestAdmissionDecision(unittest.TestCase):
+    """admission_decision maps verification truth to a fail-closed admission outcome."""
+
+    def test_safe_verified_is_admit(self):
+        dr = DiagnosticResult.verified(
+            "safe", {"is_valid": True}, {"q": "SELECT *"}
+        )
+        self.assertIs(admission_decision(dr), AdmissionDecision.ADMIT)
+
+    def test_verified_malicious_is_blocked(self):
+        dr = DiagnosticResult.verified(
+            "malicious",
+            {"is_valid": False, "malicious_classification": True},
+            {"q": "DROP TABLE users"},
+        )
+        self.assertIs(admission_decision(dr), AdmissionDecision.BLOCKED)
+
+    def test_fail_closed_is_blocked(self):
+        blocked = DiagnosticResult.blocked("parse error", {"is_valid": False})
+        self.assertIs(admission_decision(blocked), AdmissionDecision.BLOCKED)
+
+        unverifiable = DiagnosticResult.unverifiable("unsure", {"is_valid": False})
+        self.assertIs(admission_decision(unverifiable), AdmissionDecision.BLOCKED)
+
+    def test_verified_without_is_valid_is_blocked(self):
+        # A VERIFIED result with no explicit is_valid=True must not be admitted:
+        # the proof proves the verdict, not that SQL is safe. Fail closed (CodeRabbit).
+        dr = DiagnosticResult.verified("ok", {}, {"q": "SELECT *"})
+        self.assertIs(admission_decision(dr), AdmissionDecision.BLOCKED)
+
+    def test_verified_malformed_is_valid_is_blocked(self):
+        # A malformed (non-boolean) is_valid value is not admitted.
+        dr = DiagnosticResult.verified("ok", {"is_valid": "true"}, {"q": "SELECT *"})
+        self.assertIs(admission_decision(dr), AdmissionDecision.BLOCKED)
+
+    def test_does_not_mutate_verification_result(self):
+        fields = {"is_valid": False, "malicious_classification": True}
+        dr = DiagnosticResult.verified(
+            "malicious", fields, {"q": "DROP TABLE users"}
+        )
+        original_status = dr.status
+        original_proof = dr.proof_ref
+        admission_decision(dr)
+        self.assertEqual(dr.status, original_status)
+        self.assertEqual(dr.proof_ref, original_proof)
+        self.assertIs(dr.developer_fields.get("is_valid"), False)
 
 
 if __name__ == "__main__":

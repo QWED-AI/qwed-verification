@@ -60,7 +60,7 @@ def test_run_full_engine_tests_returns_expected_shape(
         {"status": "CORRECTION_NEEDED", "calculated_value": 4.0},
         {"status": "VERIFIED", "calculated_value": 994010994.0},
     ]
-    from qwed_new.core.diagnostics import DiagnosticStatus, DiagnosticResult
+    from qwed_new.core.diagnostics import DiagnosticResult
 
     mock_logic.verify_logic.side_effect = [
         DiagnosticResult.unverifiable("UNSAT", {"constraint_id": "test.mock"}),
@@ -68,9 +68,36 @@ def test_run_full_engine_tests_returns_expected_shape(
         DiagnosticResult.unverifiable("UNSAT", {"constraint_id": "test.mock"}),
     ]
     mock_sql.verify_sql.side_effect = [
-        {"status": "SAFE"},
-        {"status": "BLOCKED"},
-        {"status": "BLOCKED"},
+        DiagnosticResult.verified(
+            "The SQL query passed verification and is safe to execute.",
+            {
+                "constraint_id": "sql_verifier.sql_valid",
+                "is_valid": True,
+                "malicious_classification": False,
+                "critical_count": 0,
+            },
+            {"query": "q"},
+        ),
+        DiagnosticResult.verified(
+            "The SQL query failed security verification and is not safe to execute.",
+            {
+                "constraint_id": "sql_verifier.malicious",
+                "is_valid": False,
+                "malicious_classification": True,
+                "critical_count": 1,
+            },
+            {"query": "q"},
+        ),
+        DiagnosticResult.verified(
+            "The SQL query failed security verification and is not safe to execute.",
+            {
+                "constraint_id": "sql_verifier.malicious",
+                "is_valid": False,
+                "malicious_classification": True,
+                "critical_count": 1,
+            },
+            {"query": "q"},
+        ),
     ]
     mock_code.verify_code.side_effect = [
         {"status": "SAFE"},
