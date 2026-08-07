@@ -449,10 +449,10 @@ class StatsVerifier:
         
         # 1. Code verifier check
         cv_result = self.code_verifier.verify_code(code, language="python")
-        if cv_result["is_safe"]:
+        if cv_result.developer_fields.get("is_valid") is True:
             checks_passed.append("code_verifier")
         else:
-            for issue in cv_result.get("issues", []):
+            for issue in cv_result.developer_fields.get("issues", []):
                 if isinstance(issue, dict):
                     checks_failed.append(f"{issue.get('type', 'unknown')}: {issue.get('description', '')}")
                 else:
