@@ -9,6 +9,7 @@ Provides sandboxed execution of LLM-generated code with:
 - Pre-execution validation using AST analysis
 """
 
+import ast
 import docker
 import tempfile
 import json
@@ -31,6 +32,43 @@ DANGEROUS_KEYWORDS = [
     'socket', 'urllib', 'requests', 'http'
 ]
 
+_DANGEROUS_MODULE_ROOTS = {"os", "sys", "subprocess", "socket", "urllib", "requests", "http"}
+_DANGEROUS_BUILTINS = {"eval", "exec", "compile", "__import__", "open", "file", "input", "raw_input"}
+
+
+def _strip_python_comments(code: str) -> str:
+    """Blank comment text while preserving line structure for substring scan."""
+    out = []
+    i = 0
+    n = len(code)
+    in_string = False
+    quote = ''
+    while i < n:
+        ch = code[i]
+        if in_string:
+            out.append(' ')
+            if ch == '\\':
+                i += 2
+                continue
+            if ch == quote:
+                in_string = False
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            in_string = True
+            quote = ch
+            out.append(' ')
+            i += 1
+            continue
+        if ch == '#':
+            while i < n and code[i] != '\n':
+                out.append(' ')
+                i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
 
 def _find_dangerous_pattern(code: str) -> Optional[str]:
     """Return the first dangerous operation keyword present in *code*, or None.
@@ -38,8 +76,53 @@ def _find_dangerous_pattern(code: str) -> Optional[str]:
     This is the executor's own defense-in-depth gate (OWASP LLM06), independent
     of the verifier's proof verdict: certain operations are blocklisted for
     execution regardless of whether the code otherwise verifies.
+
+    The scan is AST-aware: it inspects **executable statements** (imports,
+    attribute access, and calls) rather than the raw source text, so dangerous
+    keywords that merely appear inside comments, docstrings, or string literals
+    (e.g. a URL in a docstring) are never treated as a real operation. When the
+    code cannot be parsed as Python, a conservative comment-and-string-stripped
+    scan is used so the gate still fails closed.
     """
-    code_lower = code.lower()
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return _find_dangerous_pattern_fallback(code)
+
+    for node in ast.walk(tree):
+        # Imports of executable-able modules are always refused (import os,
+        # import subprocess, import requests, etc.).
+        if isinstance(node, ast.Import) or isinstance(node, ast.ImportFrom):
+            names = [a.name for a in node.names] if isinstance(node, ast.Import) else (
+                [node.module] if node.module else []
+            )
+            for name in names:
+                root = name.split('.')[0]
+                if root in _DANGEROUS_MODULE_ROOTS:
+                    return name
+            continue
+
+        # Attribute access on dangerous modules (e.g. os.system, subprocess.run,
+        # urllib.request). Walking the tree catches os.<attr> and nested chains.
+        if isinstance(node, ast.Attribute):
+            value = node.value
+            while isinstance(value, ast.Attribute):
+                value = value.value
+            if isinstance(value, ast.Name) and value.id in _DANGEROUS_MODULE_ROOTS:
+                return f"{value.id}.{node.attr}"
+
+        # Direct calls to dangerous builtins/names (eval, exec, open, ...).
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in _DANGEROUS_BUILTINS:
+                return func.id
+
+    return None
+
+
+def _find_dangerous_pattern_fallback(code: str) -> Optional[str]:
+    """Fail-closed substring scan on comment/string-stripped Python source."""
+    code_lower = _strip_python_comments(code).lower()
     for keyword in DANGEROUS_KEYWORDS:
         if keyword in code_lower:
             return keyword

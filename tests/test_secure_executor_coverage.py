@@ -6,9 +6,62 @@ from src.qwed_new.core.secure_code_executor import (
     SECURE_RUNTIME_UNAVAILABLE,
     SecureCodeExecutor,
     ExecutionError,
+    _find_dangerous_pattern,
+    _find_dangerous_pattern_fallback,
 )
 
-class TestSecureExecutorCoverage(unittest.TestCase):
+class TestDangerousPatternScanner(unittest.TestCase):
+    """AST-aware dangerous-pattern scanner: only executable operations count."""
+
+    def test_blocks_real_dangerous_operations(self):
+        for code, expected in [
+            ("eval(x)", "eval"),
+            ("exec(c)", "exec"),
+            ("compile(x)", "compile"),
+            ("with open(1): pass", "open"),
+            ("import os\nos.system('ls')", "os"),
+            ("import subprocess\nsubprocess.run(x)", "subprocess"),
+            ("import requests\nrequests.get(u)", "requests"),
+            ("os.name", "os.name"),
+            ("import os.path\nprint(os.path.join('a', 'b'))", "os.path"),
+            ("from urllib.request import urlopen", "urllib.request"),
+        ]:
+            with self.subTest(code=code):
+                self.assertIsNotNone(_find_dangerous_pattern(code), code)
+                self.assertIn(expected, _find_dangerous_pattern(code) or "")
+
+    def test_allows_keywords_in_comments_docstrings_and_strings(self):
+        for code in [
+            "# naughty http here\nprint(1)",
+            'print("http://example.com")',
+            '"""Fetches over https and prints os.environ for debugging."""\nprint(1)',
+            "x = 'eval is not called'",
+            "# import os would be bad\nprint(1)",
+        ]:
+            with self.subTest(code=code):
+                self.assertIsNone(_find_dangerous_pattern(code), code)
+
+    def test_allows_safe_code(self):
+        for code in [
+            "x = 2 + 2",
+            "print(1)",
+            "result = data['numbers'][0]",
+            "def f(a, b):\n    return a + b",
+            "import pandas as pd\nresult = df['value'].sum()",
+        ]:
+            with self.subTest(code=code):
+                self.assertIsNone(_find_dangerous_pattern(code), code)
+
+    def test_fallback_scanner_strips_comments_and_strings(self):
+        # Comment/string mentions must not trigger; executable use still does.
+        self.assertIsNone(_find_dangerous_pattern_fallback("# http only in comment\nprint(1)"))
+        self.assertIsNone(_find_dangerous_pattern_fallback('print("http://x.com")'))
+        self.assertIsNotNone(_find_dangerous_pattern_fallback("import os\nos.name"))
+
+    def test_syntax_error_falls_back_closed(self):
+        # Unparseable code still scans executable tokens conservatively.
+        self.assertIsNotNone(_find_dangerous_pattern("os.system('ls' (broken"))
+        self.assertIsNone(_find_dangerous_pattern("# just a comment, no newline"))
     """Targeted tests to improve coverage of secure_code_executor.py"""
 
     def test_init_docker_failure(self):
