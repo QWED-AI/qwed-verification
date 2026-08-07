@@ -553,7 +553,7 @@ async def verify_code(
             organization_id=tenant.organization_id,
             query=code[:200],
             result=str(dr.to_dict()),
-            is_verified=dr.is_authoritative,
+            is_verified=dr.developer_fields.get("is_valid") is True,
             domain="CODE"
         )
         _safe_commit_log(session, log)

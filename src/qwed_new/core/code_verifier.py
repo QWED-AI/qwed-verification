@@ -684,7 +684,7 @@ class CodeVerifier:
             "pattern_warnings": pattern_result.developer_fields.get("warning_count", 0),
             # Taint analysis results
             "taint_vulnerabilities": taint_result["vulnerabilities"],
-            "tainted_variables": taint_result["tainted_variables"],
+            "tainted_variables": sorted(taint_result["tainted_variables"]),
             "data_flow_sources": taint_result["sources_found"],
             "data_flow_sinks": taint_result["sinks_found"],
             # Summary

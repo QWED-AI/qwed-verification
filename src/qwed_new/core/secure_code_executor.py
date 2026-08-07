@@ -24,7 +24,6 @@ SECURE_RUNTIME_UNAVAILABLE = "SECURE_RUNTIME_UNAVAILABLE"
 CONSTRAINT_VERIFIER_UNAVAILABLE = "secure_code_executor.verifier_unavailable"
 CONSTRAINT_BASIC_SAFETY_ADVISORY = "secure_code_executor.basic_safety_advisory"
 CONSTRAINT_DANGEROUS_PATTERN = "secure_code_executor.dangerous_pattern"
-CONSTRAINT_EXECUTION_ERROR = "secure_code_executor.execution_error"
 
 DANGEROUS_KEYWORDS = [
     'os.', 'sys.', 'subprocess', '__import__', 'eval', 'exec',
