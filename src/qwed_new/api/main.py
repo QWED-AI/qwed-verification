@@ -579,7 +579,9 @@ async def verify_code(
             domain="CODE"
         )
         _safe_commit_log(session, log)
-        return _merge_response(dr)
+        response = _merge_response(dr)
+        response["admission"] = admission_decision(dr).value
+        return response
 
 
 @app.post("/verify/math")

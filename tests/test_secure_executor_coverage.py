@@ -142,8 +142,8 @@ class TestSecureExecutorCoverage(unittest.TestCase):
             self.assertIsNone(result)
             executor.client.containers.run.assert_not_called()
 
-    def test_execute_import_error_returns_advisory_reason_without_authorizing(self):
-        """Heuristic fallback may inform the error but must never authorize execution."""
+    def test_execute_import_error_never_authorizes_execution(self):
+        """The heuristic fallback is advisory only and must never authorize execution."""
         with patch.dict("sys.modules", {"qwed_new.core.code_verifier": None}):
             executor = SecureCodeExecutor()
             executor.client = MagicMock()
@@ -155,6 +155,11 @@ class TestSecureExecutorCoverage(unittest.TestCase):
             self.assertIn("Code safety verification unavailable", error)
             self.assertIsNone(result)
             executor.client.containers.run.assert_not_called()
+
+            safety = executor._is_safe_code("import os; result = os.name")
+            advisory = safety.advisory_checks[0]
+            self.assertTrue(advisory.advisory_only)
+            self.assertFalse(advisory.details["is_safe"])
 
     def test_code_verifier_runtime_failure_fails_closed(self):
         """Runtime failures inside CodeVerifier must block execution deterministically."""

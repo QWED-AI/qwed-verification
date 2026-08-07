@@ -8,7 +8,11 @@ def test_subprocess_curl_pipe_bash_detected_as_critical():
 
     result = verifier.verify_code(code, language="python")
 
+    # Diagnostic envelope: proving a snippet unsafe IS a successful proof.
+    assert result.status.value == "VERIFIED"
+    assert result.proof_ref
     fields = result.developer_fields
+    assert fields["is_valid"] is False
     assert fields["critical_count"] >= 1
     assert any(issue["type"] == "remote_code_execution" for issue in fields["issues"])
 

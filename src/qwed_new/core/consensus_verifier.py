@@ -682,7 +682,7 @@ class ConsensusVerifier:
                     engine_name="Python", method="code_execution",
                     result=None, confidence=0.0,
                     latency_ms=(time.time() - start) * 1000, success=False,
-                    error=f"Unsafe code: {safety_result.developer_fields.get('issues', [])}",
+                    error=safety_result.agent_message,
                     status="BLOCKED",
                 )
 

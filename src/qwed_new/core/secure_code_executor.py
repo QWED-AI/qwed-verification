@@ -23,7 +23,28 @@ logger = logging.getLogger(__name__)
 SECURE_RUNTIME_UNAVAILABLE = "SECURE_RUNTIME_UNAVAILABLE"
 CONSTRAINT_VERIFIER_UNAVAILABLE = "secure_code_executor.verifier_unavailable"
 CONSTRAINT_BASIC_SAFETY_ADVISORY = "secure_code_executor.basic_safety_advisory"
+CONSTRAINT_DANGEROUS_PATTERN = "secure_code_executor.dangerous_pattern"
 CONSTRAINT_EXECUTION_ERROR = "secure_code_executor.execution_error"
+
+DANGEROUS_KEYWORDS = [
+    'os.', 'sys.', 'subprocess', '__import__', 'eval', 'exec',
+    'compile', 'open(', 'file(', 'input(', 'raw_input(',
+    'socket', 'urllib', 'requests', 'http'
+]
+
+
+def _find_dangerous_pattern(code: str) -> Optional[str]:
+    """Return the first dangerous operation keyword present in *code*, or None.
+
+    This is the executor's own defense-in-depth gate (OWASP LLM06), independent
+    of the verifier's proof verdict: certain operations are blocklisted for
+    execution regardless of whether the code otherwise verifies.
+    """
+    code_lower = code.lower()
+    for keyword in DANGEROUS_KEYWORDS:
+        if keyword in code_lower:
+            return keyword
+    return None
 
 def _sanitize_log_msg(msg: str) -> str:
     """Strip newline characters to prevent log injection."""
@@ -183,7 +204,7 @@ class SecureCodeExecutor:
             from qwed_new.core.code_verifier import CodeVerifier
 
             verifier = CodeVerifier()
-            return verifier.verify_code(code, language="python")
+            result = verifier.verify_code(code, language="python")
 
         except ImportError:
             logger.error("CodeVerifier not available; blocking execution")
@@ -194,6 +215,24 @@ class SecureCodeExecutor:
                 _sanitize_log_msg(str(e)),
             )
             return self._build_fail_closed_safety_denial(code)
+
+        # Defense-in-depth (OWASP LLM06): blocklist dangerous operations even
+        # when the verifier would otherwise pass them (import os, subprocess,
+        # open(), etc.). Proof the code is safe is independent of refusal to
+        # execute patterns the executor is configured to never run.
+        dangerous = _find_dangerous_pattern(code)
+        if dangerous is not None:
+            return DiagnosticResult.blocked(
+                agent_message=f"Code contains dangerous operation: '{dangerous}'",
+                developer_fields={
+                    "constraint_id": CONSTRAINT_DANGEROUS_PATTERN,
+                    "is_valid": False,
+                    "is_safe": False,
+                    "reason": f"Code contains dangerous operation: '{dangerous}'",
+                },
+            )
+
+        return result
 
     def _build_fail_closed_safety_denial(self, code: str) -> DiagnosticResult:
         """Return a deterministic fail-closed denial when CodeVerifier cannot be used.
@@ -216,19 +255,7 @@ class SecureCodeExecutor:
         The result is an advisory check: it never influences the verdict or
         proof_ref and is surfaced to developers/auditors for review only.
         """
-        dangerous_keywords = [
-            'os.', 'sys.', 'subprocess', '__import__', 'eval', 'exec',
-            'compile', 'open(', 'file(', 'input(', 'raw_input(',
-            'socket', 'urllib', 'requests', 'http'
-        ]
-
-        code_lower = code.lower()
-        reason = None
-        for keyword in dangerous_keywords:
-            if keyword in code_lower:
-                reason = f"Code contains dangerous operation: '{keyword}'"
-                break
-
+        reason = _find_dangerous_pattern(code)
         return AdvisoryCheck(
             name="basic_safety",
             advisory_only=True,

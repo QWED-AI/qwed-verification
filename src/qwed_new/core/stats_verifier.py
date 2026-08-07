@@ -449,7 +449,14 @@ class StatsVerifier:
         
         # 1. Code verifier check
         cv_result = self.code_verifier.verify_code(code, language="python")
-        if cv_result.developer_fields.get("is_valid") is True:
+        if not cv_result.is_verified:
+            # Verification did not complete (BLOCKED/UNVERIFIABLE, e.g.
+            # unsupported language or internal error). Never treat this as a
+            # pass — fail closed and preserve the constraint in the report.
+            checks_failed.append(
+                f"code_verifier_unavailable: {cv_result.developer_fields.get('constraint_id', 'unknown')}"
+            )
+        elif cv_result.developer_fields.get("is_valid") is True:
             checks_passed.append("code_verifier")
         else:
             for issue in cv_result.developer_fields.get("issues", []):
