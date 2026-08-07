@@ -539,23 +539,15 @@ async def verify_code(
 
         result = verifier.verify_code(code, language=language)
 
-        if result.get("status") == "SAFE":
-            dr = DiagnosticResult.verified(
-                "Code is safe",
-                developer_fields=result,
-                evidence={"language": language, "analysis": result.get("analysis", "")},
-            )
-        elif result.get("status") == "REVIEW":
-            dr = DiagnosticResult.unverifiable(
-                "Code requires manual review",
-                developer_fields=result,
-            )
-        else:
-            dr = DiagnosticResult.blocked(
-                result.get("message", "Code contains security vulnerabilities"),
-                developer_fields=result,
-            )
+        # Verification truth is preserved unchanged: a proven-unsafe snippet is
+        # VERIFIED-as-unsafe (developer_fields.is_valid False, proof_ref bound).
+        # Admission is a SEPARATE decision at this boundary (QWED #7, #13, #15):
+        # unsafe code must never be admitted, so we expose an explicit
+        # AdmissionDecision rather than letting authority-only consumers treat
+        # proof_ref as "safe to execute".
+        dr = result
         dr = _enforce_trust(dr, query=code)
+        admission = admission_decision(dr)
 
         log = VerificationLog(
             organization_id=tenant.organization_id,
@@ -566,7 +558,9 @@ async def verify_code(
         )
         _safe_commit_log(session, log)
 
-        return _merge_response(dr)
+        response = _merge_response(dr)
+        response["admission"] = admission.value
+        return response
 
     except HTTPException:
         raise

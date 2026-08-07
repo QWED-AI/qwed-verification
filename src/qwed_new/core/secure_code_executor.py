@@ -16,9 +16,14 @@ import os
 import logging
 from typing import Any, Dict, Tuple, Optional
 
+from .diagnostics import AdvisoryCheck, DiagnosticResult
+
 
 logger = logging.getLogger(__name__)
 SECURE_RUNTIME_UNAVAILABLE = "SECURE_RUNTIME_UNAVAILABLE"
+CONSTRAINT_VERIFIER_UNAVAILABLE = "secure_code_executor.verifier_unavailable"
+CONSTRAINT_BASIC_SAFETY_ADVISORY = "secure_code_executor.basic_safety_advisory"
+CONSTRAINT_EXECUTION_ERROR = "secure_code_executor.execution_error"
 
 def _sanitize_log_msg(msg: str) -> str:
     """Strip newline characters to prevent log injection."""
@@ -71,10 +76,10 @@ class SecureCodeExecutor:
             return False, SECURE_RUNTIME_UNAVAILABLE, None
         
         # 1. Pre-execution validation using AST
-        is_safe, safety_reason = self._is_safe_code(code)
-        if not is_safe:
-            logger.warning(f"Code failed safety check: {safety_reason}")
-            return False, f"Code safety validation failed: {safety_reason}", None
+        safety = self._is_safe_code(code)
+        if not safety.is_verified or safety.developer_fields.get("is_valid") is not True:
+            logger.warning("Code failed safety check: %s", safety.agent_message)
+            return False, f"Code safety validation failed: {safety.agent_message}", None
         
         self.execution_count += 1
         execution_id = f"exec_{self.execution_count}"
@@ -168,7 +173,7 @@ class SecureCodeExecutor:
                 logger.debug("Failed to kill container after timeout", exc_info=True)
             raise ExecutionError(f"Execution timed out after {self.timeout}s") from e
     
-    def _is_safe_code(self, code: str) -> Tuple[bool, Optional[str]]:
+    def _is_safe_code(self, code: str) -> DiagnosticResult:
         """
         Use AST analysis to validate code safety.
         Leverages existing CodeVerifier if available.
@@ -176,17 +181,10 @@ class SecureCodeExecutor:
         try:
             # Try to use existing CodeVerifier
             from qwed_new.core.code_verifier import CodeVerifier
-            
+
             verifier = CodeVerifier()
-            result = verifier.verify_code(code, language="python")
-            
-            issues = result.get("issues", [])
-            if issues:
-                issue_summary = "; ".join([f"{i['type']}: {i['description']}" for i in issues[:3]])
-                return False, f"Code contains security issues: {issue_summary}"
-            
-            return True, None
-            
+            return verifier.verify_code(code, language="python")
+
         except ImportError:
             logger.error("CodeVerifier not available; blocking execution")
             return self._build_fail_closed_safety_denial(code)
@@ -197,31 +195,46 @@ class SecureCodeExecutor:
             )
             return self._build_fail_closed_safety_denial(code)
 
-    def _build_fail_closed_safety_denial(self, code: str) -> Tuple[bool, str]:
-        """Return a deterministic fail-closed denial when CodeVerifier cannot be used."""
-        is_basic_safe, advisory_reason = self._basic_safety_check(code)
-        advisory_suffix = ""
-        if not is_basic_safe and advisory_reason:
-            advisory_suffix = f" Advisory-only fallback also flagged: {advisory_reason}"
-        return (
-            False,
-            f"CodeVerifier unavailable; cannot validate code safety.{advisory_suffix}",
+    def _build_fail_closed_safety_denial(self, code: str) -> DiagnosticResult:
+        """Return a deterministic fail-closed denial when CodeVerifier cannot be used.
+
+        Returns an UNVERIFIABLE DiagnosticResult with the basic safety scan
+        recorded as advisory / developer metadata (never as a verdict).
+        """
+        advisory_check = self._basic_safety_check(code)
+        return DiagnosticResult.unverifiable(
+            agent_message="Code safety verification unavailable",
+            developer_fields={
+                "constraint_id": CONSTRAINT_VERIFIER_UNAVAILABLE,
+                "advisory_checks": [advisory_check.to_dict()],
+            },
         )
-    
-    def _basic_safety_check(self, code: str) -> Tuple[bool, Optional[str]]:
-        """Basic safety check if CodeVerifier is not available."""
+
+    def _basic_safety_check(self, code: str) -> AdvisoryCheck:
+        """Basic safety check if CodeVerifier is not available (advisory only).
+
+        The result is an advisory check: it never influences the verdict or
+        proof_ref and is surfaced to developers/auditors for review only.
+        """
         dangerous_keywords = [
             'os.', 'sys.', 'subprocess', '__import__', 'eval', 'exec',
             'compile', 'open(', 'file(', 'input(', 'raw_input(',
             'socket', 'urllib', 'requests', 'http'
         ]
-        
+
         code_lower = code.lower()
+        reason = None
         for keyword in dangerous_keywords:
             if keyword in code_lower:
-                return False, f"Code contains dangerous operation: '{keyword}'"
-        
-        return True, None
+                reason = f"Code contains dangerous operation: '{keyword}'"
+                break
+
+        return AdvisoryCheck(
+            name="basic_safety",
+            advisory_only=True,
+            constraint_id=CONSTRAINT_BASIC_SAFETY_ADVISORY,
+            details={"is_safe": reason is None, "reason": reason},
+        )
     
     def _serialize_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """

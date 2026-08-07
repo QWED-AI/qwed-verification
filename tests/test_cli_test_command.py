@@ -99,10 +99,24 @@ def test_run_full_engine_tests_returns_expected_shape(
             {"query": "q"},
         ),
     ]
+    from qwed_new.core.diagnostics import DiagnosticResult
+
     mock_code.verify_code.side_effect = [
-        {"status": "SAFE"},
-        {"status": "BLOCKED"},
-        {"status": "BLOCKED"},
+        DiagnosticResult.verified(
+            "The code passed security verification and is safe to use.",
+            {"constraint_id": "code_verifier.code_safe", "is_valid": True, "is_safe": True, "critical_count": 0},
+            {"engine": "test"},
+        ),
+        DiagnosticResult.verified(
+            "The code failed security verification and is not safe to use.",
+            {"constraint_id": "code_verifier.code_unsafe", "is_valid": False, "is_safe": False, "critical_count": 1},
+            {"engine": "test"},
+        ),
+        DiagnosticResult.verified(
+            "The code failed security verification and is not safe to use.",
+            {"constraint_id": "code_verifier.code_unsafe", "is_valid": False, "is_safe": False, "critical_count": 1},
+            {"engine": "test"},
+        ),
     ]
 
     results = _run_full_engine_tests()

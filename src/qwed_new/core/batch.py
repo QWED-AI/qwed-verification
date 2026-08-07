@@ -231,7 +231,7 @@ class BatchVerificationService:
             return verifier.verify_code(
                 item.query,
                 language=item.params.get("language", "python")
-            )
+            ).to_dict()
         
         elif item.verification_type == VerificationType.FACT:
             from qwed_new.core.fact_verifier import FactVerifier

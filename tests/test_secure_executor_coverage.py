@@ -119,9 +119,13 @@ class TestSecureExecutorCoverage(unittest.TestCase):
         with patch.dict("sys.modules", {"qwed_new.core.code_verifier": None}):
             executor = SecureCodeExecutor()
 
-            is_safe, reason = executor._is_safe_code("print('hello')")
-            self.assertFalse(is_safe)
-            self.assertIn("CodeVerifier unavailable", reason)
+            safety = executor._is_safe_code("print('hello')")
+            self.assertTrue(safety.is_fail_closed)
+            self.assertEqual(
+                safety.developer_fields.get("constraint_id"),
+                "secure_code_executor.verifier_unavailable",
+            )
+            self.assertEqual(safety.status.value, "UNVERIFIABLE")
 
     def test_execute_fails_closed_when_code_verifier_missing(self):
         """Execution must not proceed when CodeVerifier cannot be imported."""
@@ -134,7 +138,7 @@ class TestSecureExecutorCoverage(unittest.TestCase):
 
             self.assertFalse(success)
             self.assertIn("Code safety validation failed", error)
-            self.assertIn("CodeVerifier unavailable", error)
+            self.assertIn("Code safety verification unavailable", error)
             self.assertIsNone(result)
             executor.client.containers.run.assert_not_called()
 
@@ -148,9 +152,7 @@ class TestSecureExecutorCoverage(unittest.TestCase):
             success, error, result = executor.execute("import os; result = os.name", {})
 
             self.assertFalse(success)
-            self.assertIn("CodeVerifier unavailable", error)
-            self.assertIn("Advisory-only fallback also flagged", error)
-            self.assertIn("dangerous operation", error)
+            self.assertIn("Code safety verification unavailable", error)
             self.assertIsNone(result)
             executor.client.containers.run.assert_not_called()
 
@@ -158,10 +160,10 @@ class TestSecureExecutorCoverage(unittest.TestCase):
         """Runtime failures inside CodeVerifier must block execution deterministically."""
         executor = SecureCodeExecutor()
         with patch("qwed_new.core.code_verifier.CodeVerifier.verify_code", side_effect=RuntimeError("engine down")):
-            is_safe, reason = executor._is_safe_code("print('hello')")
+            safety = executor._is_safe_code("print('hello')")
 
-        self.assertFalse(is_safe)
-        self.assertIn("CodeVerifier unavailable", reason)
+        self.assertTrue(safety.is_fail_closed)
+        self.assertIn("Code safety verification unavailable", safety.agent_message)
 
 if __name__ == '__main__':
     unittest.main()

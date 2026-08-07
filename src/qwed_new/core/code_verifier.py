@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 import ast
 import re
 
+from .diagnostics import DiagnosticResult
+
 
 @dataclass
 class SecurityIssue:
@@ -32,6 +34,14 @@ class VerificationResult:
     critical_count: int = 0
     warning_count: int = 0
     info_count: int = 0
+
+
+CONSTRAINT_UNSUPPORTED_LANGUAGE = "code_verifier.unsupported_language"
+CONSTRAINT_EXECUTION_ERROR = "code_verifier.execution_error"
+CONSTRAINT_CODE_SAFE = "code_verifier.code_safe"
+CONSTRAINT_CODE_UNSAFE = "code_verifier.code_unsafe"
+CONSTRAINT_EMPTY_BATCH = "code_verifier.empty_batch"
+CONSTRAINT_BATCH_BLOCKED = "code_verifier.batch_blocked"
 
 
 class CodeVerifier:
@@ -256,24 +266,37 @@ class CodeVerifier:
             self._taint_analyzer = TaintAnalyzer()
         return self._taint_analyzer
     
-    def verify_code(self, code: str, language: str = "python") -> Dict[str, Any]:
+    def verify_code(self, code: str, language: str = "python") -> DiagnosticResult:
         """
         Verify code for security vulnerabilities.
-        
+
+        Returns a structured :class:`DiagnosticResult`:
+
+        - Unsafe code (ANALYSIS flags a critical issue) → VERIFIED as-unsafe
+          (``developer_fields.is_valid`` False, proof_ref bound to the analysis
+          evidence). Proving a snippet is unsafe IS a successful proof, mirroring
+          the SQL verifier's malicious classification (issue #253), so it is not
+          BLOCKED.
+        - Safe code → VERIFIED with ``is_valid`` True and proof_ref from the
+          analysis evidence.
+        - Unsupported language → BLOCKED (``code_verifier.unsupported_language``)
+        - Internal error   → BLOCKED (``code_verifier.execution_error``)
+
+        ``agent_message`` is agent-safe: it never leaks detection rules, rule
+        IDs, or raw AST/regex output. Rule-level detail lives in
+        ``developer_fields``.
+
         Args:
             code: The code snippet to verify.
             language: Programming language (default: "python").
-            
-        Returns:
-            Dict with verification results including safety status and issues list.
 
         Example:
             >>> result = verifier.verify_code("eval('rm -rf /')", language="python")
-            >>> print(result["is_safe"])
+            >>> print(result.developer_fields.get("is_safe"))
             False
         """
         language = language.lower()
-        
+
         # Map typescript to javascript
         if language == "typescript" or language == "ts":
             language = "javascript"
@@ -281,52 +304,65 @@ class CodeVerifier:
             language = "javascript"
         if language == "py":
             language = "python"
-        
+
         if language not in self.supported_languages:
-            return {
-                "is_safe": False,
-                "status": "ERROR",
-                "error": f"Language '{language}' not supported. Supported: {self.supported_languages}",
-                "issues": [],
-                "language": language
-            }
-        
-        issues = []
-        
-        # Language-specific checks
-        if language == "python":
-            issues.extend(self._check_python(code))
-        elif language == "javascript":
-            issues.extend(self._check_javascript(code))
-        elif language == "java":
-            issues.extend(self._check_java(code))
-        elif language == "go":
-            issues.extend(self._check_go(code))
-        elif language == "sql":
-            issues.extend(self._check_sql(code))
-        
-        # Cross-language secret detection
-        issues.extend(self._check_secrets(code))
-        
+            return DiagnosticResult.blocked(
+                agent_message=(
+                    "Code verification could not be completed because the "
+                    "specified language is not supported."
+                ),
+                developer_fields={
+                    "constraint_id": CONSTRAINT_UNSUPPORTED_LANGUAGE,
+                    "is_safe": False,
+                    "is_valid": False,
+                    "language": language,
+                    "supported_languages": list(self.supported_languages),
+                },
+            )
+
+        issues: List[SecurityIssue] = []
+        try:
+            # Language-specific checks
+            if language == "python":
+                issues.extend(self._check_python(code))
+            elif language == "javascript":
+                issues.extend(self._check_javascript(code))
+            elif language == "java":
+                issues.extend(self._check_java(code))
+            elif language == "go":
+                issues.extend(self._check_go(code))
+            elif language == "sql":
+                issues.extend(self._check_sql(code))
+
+            # Cross-language secret detection
+            issues.extend(self._check_secrets(code))
+        except Exception as exc:  # noqa: BLE001 — fail-closed by design
+            return DiagnosticResult.blocked(
+                agent_message=(
+                    "Code verification could not be completed due to an internal error."
+                ),
+                developer_fields={
+                    "constraint_id": CONSTRAINT_EXECUTION_ERROR,
+                    "is_safe": False,
+                    "is_valid": False,
+                    "error_type": type(exc).__name__,
+                    "language": language,
+                },
+            )
+
         # Calculate counts
         critical_count = sum(1 for i in issues if i.severity == "CRITICAL")
         warning_count = sum(1 for i in issues if i.severity == "WARNING")
         info_count = sum(1 for i in issues if i.severity == "INFO")
-        
-        # Determine status
-        if critical_count > 0:
-            status = "BLOCKED"
-            is_safe = False
-        elif warning_count > 0:
-            status = "REVIEW"
-            is_safe = True
-        else:
-            status = "SAFE"
-            is_safe = True
-        
-        return {
+
+        is_safe = critical_count == 0
+        is_valid = is_safe
+        constraint_id = CONSTRAINT_CODE_SAFE if is_safe else CONSTRAINT_CODE_UNSAFE
+
+        developer_fields: Dict[str, Any] = {
+            "constraint_id": constraint_id,
             "is_safe": is_safe,
-            "status": status,
+            "is_valid": is_valid,
             "language": language,
             "issues": [
                 {
@@ -335,13 +371,45 @@ class CodeVerifier:
                     "pattern": i.pattern,
                     "description": i.description,
                     "line_number": i.line_number,
-                    "recommendation": i.recommendation
+                    "recommendation": i.recommendation,
                 }
                 for i in issues
             ],
             "critical_count": critical_count,
             "warning_count": warning_count,
-            "info_count": info_count
+            "info_count": info_count,
+            "engine": "CodeVerifier-Pattern-Scanner",
+        }
+
+        evidence = self._build_evidence(code, language, is_safe, issues)
+
+        if is_safe:
+            agent_message = "The code passed security verification and is safe to use."
+        else:
+            agent_message = "The code failed security verification and is not safe to use."
+
+        return DiagnosticResult.verified(
+            agent_message=agent_message,
+            developer_fields=developer_fields,
+            evidence=evidence,
+        )
+
+    def _build_evidence(
+        self,
+        code: str,
+        language: str,
+        is_safe: bool,
+        issues: List[SecurityIssue],
+    ) -> Dict[str, Any]:
+        """Build deterministic, JSON-serializable proof evidence bound to the verdict."""
+        return {
+            "engine": "CodeVerifier-Pattern-Scanner",
+            "language": language,
+            "code": code,
+            "is_safe": is_safe,
+            "critical_count": sum(1 for i in issues if i.severity == "CRITICAL"),
+            "warning_count": sum(1 for i in issues if i.severity == "WARNING"),
+            "issue_types": sorted({i.issue_type for i in issues}),
         }
     
     # =========================================================================
@@ -536,7 +604,7 @@ class CodeVerifier:
         except (AttributeError, TypeError, ValueError, RecursionError):
             return ""
     
-    def verify_python_deep(self, code: str) -> Dict[str, Any]:
+    def verify_python_deep(self, code: str) -> DiagnosticResult:
         """
         Deep Python verification combining pattern matching with AST taint analysis.
         
@@ -544,47 +612,87 @@ class CodeVerifier:
         1. Pattern-based detection (fast, catches known dangerous patterns)
         2. Taint analysis (AST-based, tracks data flow from sources to sinks)
         
+        Returns a :class:`DiagnosticResult`. The combined verdict is VERIFIED
+        with ``is_valid`` True only when both the pattern scan and the taint
+        analysis find no unsafe findings; otherwise it is VERIFIED as-unsafe
+        (``is_valid`` False). Internal failures are BLOCKED
+        (``code_verifier.execution_error``).
+        
         Args:
             code: Python source code to analyze.
             
-        Returns:
-            Dict with combined verification results.
-            
         Example:
             >>> result = verifier.verify_python_deep("x = input(); eval(x)")
-            >>> print(result["taint_vulnerabilities"])
+            >>> print(result.developer_fields.get("taint_vulnerabilities"))
         """
         # Standard pattern-based check
         pattern_result = self.verify_code(code, "python")
-        
+
         # AST-based taint analysis
         taint_result = self.taint_analyzer.analyze(code)
-        
-        # Combine results
-        is_safe = pattern_result["is_safe"] and taint_result["is_safe"]
-        
-        return {
+
+        is_safe = (
+            pattern_result.developer_fields.get("is_valid") is True
+            and taint_result["is_safe"]
+        )
+
+        developer_fields: Dict[str, Any] = {
+            "constraint_id": CONSTRAINT_CODE_SAFE if is_safe else CONSTRAINT_CODE_UNSAFE,
             "is_safe": is_safe,
-            "status": "SAFE" if is_safe else "VULNERABLE",
+            "is_valid": is_safe,
             "language": "python",
             "analysis_methods": ["pattern_matching", "taint_analysis"],
             # Pattern-based results
-            "pattern_issues": pattern_result["issues"],
-            "pattern_critical": pattern_result["critical_count"],
-            "pattern_warnings": pattern_result["warning_count"],
-            # Taint analysis results  
+            "pattern_issues": pattern_result.developer_fields.get("issues", []),
+            "pattern_critical": pattern_result.developer_fields.get("critical_count", 0),
+            "pattern_warnings": pattern_result.developer_fields.get("warning_count", 0),
+            # Taint analysis results
             "taint_vulnerabilities": taint_result["vulnerabilities"],
             "tainted_variables": taint_result["tainted_variables"],
             "data_flow_sources": taint_result["sources_found"],
             "data_flow_sinks": taint_result["sinks_found"],
             # Summary
             "summary": {
-                "pattern_issues_found": len(pattern_result["issues"]),
+                "pattern_issues_found": len(pattern_result.developer_fields.get("issues", [])),
                 "taint_vulnerabilities_found": len(taint_result["vulnerabilities"]),
                 "tainted_variable_count": len(taint_result["tainted_variables"]),
-                "is_safe": is_safe
-            }
+                "is_safe": is_safe,
+            },
         }
+
+        evidence = {
+            "engine": "CodeVerifier-Deep-Scanner",
+            "language": "python",
+            "analysis_methods": ["pattern_matching", "taint_analysis"],
+            "is_safe": is_safe,
+            "pattern_is_safe": pattern_result.developer_fields.get("is_valid") is True,
+            "taint_is_safe": taint_result["is_safe"],
+            "pattern_issue_types": sorted(
+                {
+                    issue["type"]
+                    for issue in pattern_result.developer_fields.get("issues", [])
+                }
+            ),
+            "taint_vulnerabilities": [
+                {
+                    "severity": v.get("severity"),
+                    "description": v.get("description"),
+                    "source": v.get("source"),
+                }
+                for v in taint_result["vulnerabilities"]
+            ],
+        }
+
+        if is_safe:
+            agent_message = "The code passed deep security verification and is safe to use."
+        else:
+            agent_message = "The code failed deep security verification and is not safe to use."
+
+        return DiagnosticResult.verified(
+            agent_message=agent_message,
+            developer_fields=developer_fields,
+            evidence=evidence,
+        )
     
     # =========================================================================
     # JavaScript/TypeScript Checks
@@ -820,41 +928,84 @@ class CodeVerifier:
     # Batch Verification
     # =========================================================================
     
-    def verify_batch(self, snippets: List[Dict[str, str]]) -> Dict[str, Any]:
+    def verify_batch(self, snippets: List[Dict[str, str]]) -> DiagnosticResult:
         """
         Verify multiple code snippets.
-        
+
+        Returns a single :class:`DiagnosticResult`. Per-snippet verdicts live in
+        ``developer_fields.results`` (each a serialized per-snippet
+        DiagnosticResult) and ``developer_fields.summary``.
+
+        The batch is authoritative (VERIFIED with ``proof_ref``) only when every
+        snippet is safe. A batch containing any unsafe snippet returns a VERIFIED
+        as-unsafe batch (``is_valid`` False) so generic consumers that admit on
+        ``is_authoritative`` can never accept unsafe code.
+
         Args:
             snippets: List of dicts with {"code": str, "language": str}.
-            
-        Returns:
-            Dict with batch verification results and summary stats.
 
         Example:
             >>> batch = [{"code": "print(1)", "language": "python"}, {"code": "alert(1)", "language": "js"}]
             >>> result = verifier.verify_batch(batch)
         """
-        results = []
-        
+        items: List[Dict[str, Any]] = []
+
         for snippet in snippets:
             result = self.verify_code(
                 snippet.get("code", ""),
                 snippet.get("language", "python")
             )
-            results.append({
-                "language": snippet.get("language", "python"),
-                **result
-            })
-        
-        # Summary
-        return {
-            "results": results,
-            "summary": {
-                "total": len(snippets),
-                "safe": sum(1 for r in results if r["status"] == "SAFE"),
-                "review": sum(1 for r in results if r["status"] == "REVIEW"),
-                "blocked": sum(1 for r in results if r["status"] == "BLOCKED"),
-                "total_critical": sum(r["critical_count"] for r in results),
-                "total_warnings": sum(r["warning_count"] for r in results)
-            }
+            serialized = result.to_dict()
+            serialized["language"] = snippet.get("language", "python")
+            items.append(serialized)
+
+        total = len(snippets)
+        safe = sum(1 for item in items if item["status"] == "VERIFIED" and item["developer_fields"].get("is_valid") is True)
+        blocked = total - safe
+        is_safe_all = safe == total
+
+        summary = {
+            "total": total,
+            "safe": safe,
+            "unsafe": blocked,
+            "blocked": blocked,
+            "total_critical": sum(item["developer_fields"].get("critical_count", 0) for item in items),
+            "total_warnings": sum(item["developer_fields"].get("warning_count", 0) for item in items),
         }
+
+        batch_fields: Dict[str, Any] = {
+            "constraint_id": CONSTRAINT_CODE_SAFE if is_safe_all else CONSTRAINT_CODE_UNSAFE,
+            "is_safe": is_safe_all,
+            "is_valid": is_safe_all,
+            "results": items,
+            "summary": summary,
+            "engine": "CodeVerifier-Pattern-Scanner",
+        }
+
+        # Batch source snippets, truncated for display-only (not proof-bearing).
+        raw_snippets: List[str] = []
+        for snippet in snippets:
+            raw = snippet.get("code", "")
+            raw_snippets.append(raw[:100] + "..." if len(raw) > 100 else raw)
+
+        evidence = {
+            "engine": "CodeVerifier-Pattern-Scanner",
+            "count": total,
+            "snippets": raw_snippets,
+            "is_safe": is_safe_all,
+            "verdicts": [
+                {"status": item["status"], "is_valid": item["developer_fields"].get("is_valid")}
+                for item in items
+            ],
+        }
+
+        if is_safe_all:
+            agent_message = "Batch code verification succeeded: all snippets passed security checks."
+        else:
+            agent_message = "Batch code verification flagged unsafe snippets; the batch is not admissible."
+
+        return DiagnosticResult.verified(
+            agent_message=agent_message,
+            developer_fields=batch_fields,
+            evidence=evidence,
+        )
