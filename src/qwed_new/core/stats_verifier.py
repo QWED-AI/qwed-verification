@@ -459,6 +459,9 @@ class StatsVerifier:
         elif cv_result.developer_fields.get("is_valid") is True:
             checks_passed.append("code_verifier")
         else:
+            # Every non-True is_valid fails closed, even when the issues list is
+            # empty or absent (malformed/errored analysis must never pass).
+            checks_failed.append("code_verifier_invalid")
             for issue in cv_result.developer_fields.get("issues", []):
                 if isinstance(issue, dict):
                     checks_failed.append(f"{issue.get('type', 'unknown')}: {issue.get('description', '')}")
