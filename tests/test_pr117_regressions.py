@@ -12,7 +12,6 @@ from qwed_new.core.consensus_verifier import (
 )
 from qwed_new.core.secure_code_executor import SECURE_RUNTIME_UNAVAILABLE
 from qwed_new.core.stats_verifier import (
-    INTERNAL_VERIFICATION_ERROR,
     SECURE_STATS_BLOCKED_CODE,
     SECURE_STATS_SANDBOX_REQUIRED,
     SECURE_STATS_RUNTIME_UNAVAILABLE,
@@ -84,8 +83,10 @@ def test_stats_verifier_blocks_without_secure_docker_runtime():
 
     result = verifier.verify_stats("What is the mean of value?", df)
 
-    assert result["status"] == "BLOCKED"
-    assert result["error"] == SECURE_STATS_BLOCKED_CODE
+    assert result.status.value == "BLOCKED"
+    assert result.developer_fields["error_code"] == SECURE_STATS_BLOCKED_CODE
+    assert result.constraint_id == "stats_verifier.runtime_unavailable"
+    assert result.is_fail_closed is True
 
 
 def test_stats_verifier_masks_translation_exceptions(caplog):
@@ -100,9 +101,10 @@ def test_stats_verifier_masks_translation_exceptions(caplog):
     with caplog.at_level("ERROR"):
         result = verifier.verify_stats("What is the mean of value?", df)
 
-    assert result["status"] == "ERROR"
-    assert result["error"] == INTERNAL_VERIFICATION_ERROR
-    assert "secret" not in result["error"]
+    assert result.status.value == "BLOCKED"
+    assert result.constraint_id == "stats_verifier.validation_error"
+    assert "secret" not in result.agent_message
+    assert "secret" not in str(result.developer_fields)
     assert "secret" not in caplog.text
     assert "/tmp/secret" not in caplog.text
     assert "sk-test-123" not in caplog.text
@@ -123,11 +125,14 @@ def test_stats_sandbox_info_reports_fail_closed_without_docker():
 
 
 def test_stats_api_masks_secure_runtime_unavailability(client):
-    with patch("qwed_new.core.stats_verifier.StatsVerifier.verify_stats") as mock_verify_stats:
-        mock_verify_stats.return_value = {
-            "status": "BLOCKED",
-            "error": SECURE_STATS_BLOCKED_CODE,
-        }
+    blocked_dr = DiagnosticResult.blocked(
+        "Service temporarily unavailable",
+        developer_fields={
+            "constraint_id": "stats_verifier.runtime_unavailable",
+            "error_code": SECURE_STATS_BLOCKED_CODE,
+        },
+    )
+    with patch("qwed_new.core.stats_verifier.StatsVerifier.verify_stats", return_value=blocked_dr):
         response = client.post(
             "/verify/stats",
             files={"file": ("data.csv", b"value\n1\n2\n", "text/csv")},
@@ -143,11 +148,14 @@ def test_stats_api_masks_secure_runtime_unavailability(client):
 
 
 def test_stats_api_preserves_security_policy_blocks(client):
-    with patch("qwed_new.core.stats_verifier.StatsVerifier.verify_stats") as mock_verify_stats:
-        mock_verify_stats.return_value = {
-            "status": "BLOCKED",
-            "error": "Code failed security validation",
-        }
+    blocked_dr = DiagnosticResult.blocked(
+        "blocked by security policy",
+        developer_fields={
+            "constraint_id": "stats_verifier.validation_error",
+            "is_valid": False,
+        },
+    )
+    with patch("qwed_new.core.stats_verifier.StatsVerifier.verify_stats", return_value=blocked_dr):
         response = client.post(
             "/verify/stats",
             files={"file": ("data.csv", b"value\n1\n2\n", "text/csv")},
@@ -158,7 +166,7 @@ def test_stats_api_preserves_security_policy_blocks(client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "BLOCKED"
-    assert data["agent_message"] == "Verification blocked by security policy"
+    assert data["agent_message"] == "blocked by security policy"
     assert data["proof_ref"] is None
 
 
@@ -264,8 +272,9 @@ def test_stats_verifier_blocks_if_docker_drops_after_selection():
 
     result = verifier.verify_stats("What is the mean of value?", df)
 
-    assert result["status"] == "BLOCKED"
-    assert result["error"] == SECURE_STATS_BLOCKED_CODE
+    assert result.status.value == "BLOCKED"
+    assert result.developer_fields["error_code"] == SECURE_STATS_BLOCKED_CODE
+    assert result.constraint_id == "stats_verifier.runtime_unavailable"
 
 
 def test_stats_execute_docker_marks_runtime_unavailable():

@@ -366,53 +366,17 @@ async def verify_stats(
         import pandas as pd
         df = pd.read_csv(file.file)
         
-        from qwed_new.core.stats_verifier import StatsVerifier, SECURE_STATS_BLOCKED_CODE
+        from qwed_new.core.stats_verifier import StatsVerifier
         verifier = StatsVerifier()
-        
-        result = verifier.verify_stats(query, df, provider=None)
 
-        if result.get("status") == "SUCCESS":
-            # SUCCESS means analysis executed — not that the claim was proven.
-            # Only return VERIFIED if the result explicitly confirms the claim.
-            claim_supported = result.get("claim_supported")
-            if claim_supported is True:
-                dr = DiagnosticResult.verified(
-                    "Statistical claim verified",
-                    developer_fields=result,
-                    evidence={"status": "SUCCESS", "claim_supported": True, "analysis": str(result.get("analysis", ""))},
-                )
-            else:
-                dr = DiagnosticResult.unverifiable(
-                    "Statistical analysis completed but claim not established",
-                    developer_fields=result,
-                )
-        elif result.get("status") == "BLOCKED" and result.get("error") == SECURE_STATS_BLOCKED_CODE:
-            dr = DiagnosticResult.blocked(
-                "Service temporarily unavailable",
-                developer_fields=result,
-            )
-        elif result.get("status") == "BLOCKED":
-            dr = DiagnosticResult.blocked(
-                "Verification blocked by security policy",
-                developer_fields=result,
-            )
-        elif result.get("status") in ("ERROR", "EXECUTION_FAILED"):
-            dr = DiagnosticResult.unverifiable(
-                result.get("message", "Statistical analysis failed"),
-                developer_fields=result,
-            )
-        else:
-            dr = DiagnosticResult.blocked(
-                "Statistical analysis failed",
-                developer_fields=result,
-            )
+        dr = verifier.verify_stats(query, df, provider=None)
         dr = _enforce_trust(dr, query=query)
 
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=query,
             result=str(dr.to_dict()),
-            is_verified=dr.is_authoritative,
+            is_verified=dr.developer_fields.get("is_valid") is True,
             domain="STATS"
         )
         _safe_commit_log(session, log)
