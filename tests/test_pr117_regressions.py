@@ -20,6 +20,23 @@ from qwed_new.core.stats_verifier import (
     StatsVerifier,
     WasmSandbox,
 )
+from qwed_new.core.diagnostics import DiagnosticResult
+
+
+def _safe_code_verifier_result():
+    """A real DiagnosticResult for a safe snippet (consensus/stats mock helper)."""
+    return DiagnosticResult.verified(
+        agent_message="The code passed security verification and is safe to use.",
+        developer_fields={
+            "constraint_id": "code_verifier.code_safe",
+            "is_valid": True,
+            "is_safe": True,
+            "critical_count": 0,
+            "warning_count": 0,
+            "issues": [],
+        },
+        evidence={"engine": "test", "language": "python", "code": "safe", "is_safe": True},
+    )
 
 
 @pytest.fixture
@@ -59,7 +76,7 @@ def test_stats_verifier_blocks_without_secure_docker_runtime():
     verifier._translator = MagicMock()
     verifier._translator.translate_stats.return_value = "result = df['value'].mean()"
     verifier._code_verifier = MagicMock()
-    verifier._code_verifier.verify_code.return_value = {"is_safe": True}
+    verifier._code_verifier.verify_code.return_value = _safe_code_verifier_result()
     verifier._docker_executor = MagicMock()
     verifier._docker_executor.is_available.return_value = False
 
@@ -148,7 +165,7 @@ def test_stats_api_preserves_security_policy_blocks(client):
 def test_consensus_code_engine_requires_secure_executor():
     verifier = ConsensusVerifier(enable_circuit_breaker=False)
     verifier._code_verifier = MagicMock()
-    verifier._code_verifier.verify_code.return_value = {"is_safe": True}
+    verifier._code_verifier.verify_code.return_value = _safe_code_verifier_result()
 
     with (
         patch.object(ConsensusVerifier, "_generate_verification_code", return_value="result = 4"),
@@ -170,7 +187,7 @@ def test_consensus_code_engine_requires_secure_executor():
 def test_consensus_code_engine_uses_secure_executor_output():
     verifier = ConsensusVerifier(enable_circuit_breaker=False)
     verifier._code_verifier = MagicMock()
-    verifier._code_verifier.verify_code.return_value = {"is_safe": True}
+    verifier._code_verifier.verify_code.return_value = _safe_code_verifier_result()
 
     with (
         patch.object(ConsensusVerifier, "_generate_verification_code", return_value="result = 4"),
@@ -238,7 +255,7 @@ def test_stats_verifier_blocks_if_docker_drops_after_selection():
     verifier._translator = MagicMock()
     verifier._translator.translate_stats.return_value = "result = df['value'].mean()"
     verifier._code_verifier = MagicMock()
-    verifier._code_verifier.verify_code.return_value = {"is_safe": True}
+    verifier._code_verifier.verify_code.return_value = _safe_code_verifier_result()
     verifier._docker_executor = MagicMock()
     verifier._docker_executor.is_available.return_value = True
     verifier._docker_executor.execute.return_value = (False, SECURE_RUNTIME_UNAVAILABLE, None)

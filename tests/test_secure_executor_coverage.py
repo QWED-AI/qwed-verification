@@ -6,9 +6,63 @@ from src.qwed_new.core.secure_code_executor import (
     SECURE_RUNTIME_UNAVAILABLE,
     SecureCodeExecutor,
     ExecutionError,
+    _find_dangerous_pattern,
+    _find_dangerous_pattern_fallback,
 )
 
-class TestSecureExecutorCoverage(unittest.TestCase):
+class TestDangerousPatternScanner(unittest.TestCase):
+    """AST-aware dangerous-pattern scanner: only executable operations count."""
+
+    def test_blocks_real_dangerous_operations(self):
+        for code, expected in [
+            ("eval(x)", "eval"),
+            ("exec(c)", "exec"),
+            ("compile(x)", "compile"),
+            ("with open(1): pass", "open"),
+            ("import os\nos.system('ls')", "os"),
+            ("import subprocess\nsubprocess.run(x)", "subprocess"),
+            ("import requests\nrequests.get(u)", "requests"),
+            ("builtins.__import__('os')", "__import__"),
+            ("os.name", "os.name"),
+            ("import os.path\nprint(os.path.join('a', 'b'))", "os.path"),
+            ("from urllib.request import urlopen", "urllib.request"),
+        ]:
+            with self.subTest(code=code):
+                self.assertIsNotNone(_find_dangerous_pattern(code), code)
+                self.assertIn(expected, _find_dangerous_pattern(code) or "")
+
+    def test_allows_keywords_in_comments_docstrings_and_strings(self):
+        for code in [
+            "# naughty http here\nprint(1)",
+            'print("http://example.com")',
+            '"""Fetches over https and prints os.environ for debugging."""\nprint(1)',
+            "x = 'eval is not called'",
+            "# import os would be bad\nprint(1)",
+        ]:
+            with self.subTest(code=code):
+                self.assertIsNone(_find_dangerous_pattern(code), code)
+
+    def test_allows_safe_code(self):
+        for code in [
+            "x = 2 + 2",
+            "print(1)",
+            "result = data['numbers'][0]",
+            "def f(a, b):\n    return a + b",
+            "import pandas as pd\nresult = df['value'].sum()",
+        ]:
+            with self.subTest(code=code):
+                self.assertIsNone(_find_dangerous_pattern(code), code)
+
+    def test_fallback_scanner_strips_comments_and_strings(self):
+        # Comment/string mentions must not trigger; executable use still does.
+        self.assertIsNone(_find_dangerous_pattern_fallback("# http only in comment\nprint(1)"))
+        self.assertIsNone(_find_dangerous_pattern_fallback('print("http://x.com")'))
+        self.assertIsNotNone(_find_dangerous_pattern_fallback("import os\nos.name"))
+
+    def test_syntax_error_falls_back_closed(self):
+        # Unparseable code still scans executable tokens conservatively.
+        self.assertIsNotNone(_find_dangerous_pattern("os.system('ls' (broken"))
+        self.assertIsNone(_find_dangerous_pattern("# just a comment, no newline"))
     """Targeted tests to improve coverage of secure_code_executor.py"""
 
     def test_init_docker_failure(self):
@@ -119,9 +173,13 @@ class TestSecureExecutorCoverage(unittest.TestCase):
         with patch.dict("sys.modules", {"qwed_new.core.code_verifier": None}):
             executor = SecureCodeExecutor()
 
-            is_safe, reason = executor._is_safe_code("print('hello')")
-            self.assertFalse(is_safe)
-            self.assertIn("CodeVerifier unavailable", reason)
+            safety = executor._is_safe_code("print('hello')")
+            self.assertTrue(safety.is_fail_closed)
+            self.assertEqual(
+                safety.developer_fields.get("constraint_id"),
+                "secure_code_executor.verifier_unavailable",
+            )
+            self.assertEqual(safety.status.value, "UNVERIFIABLE")
 
     def test_execute_fails_closed_when_code_verifier_missing(self):
         """Execution must not proceed when CodeVerifier cannot be imported."""
@@ -134,12 +192,12 @@ class TestSecureExecutorCoverage(unittest.TestCase):
 
             self.assertFalse(success)
             self.assertIn("Code safety validation failed", error)
-            self.assertIn("CodeVerifier unavailable", error)
+            self.assertIn("Code safety verification unavailable", error)
             self.assertIsNone(result)
             executor.client.containers.run.assert_not_called()
 
-    def test_execute_import_error_returns_advisory_reason_without_authorizing(self):
-        """Heuristic fallback may inform the error but must never authorize execution."""
+    def test_execute_import_error_never_authorizes_execution(self):
+        """The heuristic fallback is advisory only and must never authorize execution."""
         with patch.dict("sys.modules", {"qwed_new.core.code_verifier": None}):
             executor = SecureCodeExecutor()
             executor.client = MagicMock()
@@ -148,20 +206,23 @@ class TestSecureExecutorCoverage(unittest.TestCase):
             success, error, result = executor.execute("import os; result = os.name", {})
 
             self.assertFalse(success)
-            self.assertIn("CodeVerifier unavailable", error)
-            self.assertIn("Advisory-only fallback also flagged", error)
-            self.assertIn("dangerous operation", error)
+            self.assertIn("Code safety verification unavailable", error)
             self.assertIsNone(result)
             executor.client.containers.run.assert_not_called()
+
+            safety = executor._is_safe_code("import os; result = os.name")
+            advisory = safety.advisory_checks[0]
+            self.assertTrue(advisory.advisory_only)
+            self.assertFalse(advisory.details["is_safe"])
 
     def test_code_verifier_runtime_failure_fails_closed(self):
         """Runtime failures inside CodeVerifier must block execution deterministically."""
         executor = SecureCodeExecutor()
         with patch("qwed_new.core.code_verifier.CodeVerifier.verify_code", side_effect=RuntimeError("engine down")):
-            is_safe, reason = executor._is_safe_code("print('hello')")
+            safety = executor._is_safe_code("print('hello')")
 
-        self.assertFalse(is_safe)
-        self.assertIn("CodeVerifier unavailable", reason)
+        self.assertTrue(safety.is_fail_closed)
+        self.assertIn("Code safety verification unavailable", safety.agent_message)
 
 if __name__ == '__main__':
     unittest.main()

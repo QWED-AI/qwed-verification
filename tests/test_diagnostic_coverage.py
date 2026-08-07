@@ -363,8 +363,22 @@ def test_verify_code_missing_code_returns_400(client):
 
 
 def test_verify_code_review_status(client):
-    """Cover REVIEW status -> UNVERIFIABLE."""
-    with patch("qwed_new.core.code_verifier.CodeVerifier.verify_code", return_value={"status": "REVIEW", "is_safe": True, "message": "Minor warnings"}), \
+    """Cover warning-only (formerly REVIEW) code -> VERIFIED safe with warnings."""
+    from qwed_new.core.diagnostics import DiagnosticResult
+
+    fake = DiagnosticResult.verified(
+        "The code passed security verification and is safe to use.",
+        {
+            "constraint_id": "code_verifier.code_safe",
+            "is_valid": True,
+            "is_safe": True,
+            "critical_count": 0,
+            "warning_count": 1,
+            "issues": [],
+        },
+        {"engine": "test", "language": "python", "code": "x = 1", "is_safe": True},
+    )
+    with patch("qwed_new.core.code_verifier.CodeVerifier.verify_code", return_value=fake), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/code",
@@ -373,8 +387,9 @@ def test_verify_code_review_status(client):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "UNVERIFIABLE"
-    assert data["proof_ref"] is None
+    assert data["status"] == "VERIFIED"
+    assert data["proof_ref"] is not None
+    assert data["developer_fields"]["is_valid"] is True
 
 
 def test_verify_consensus_blocked_status(client):

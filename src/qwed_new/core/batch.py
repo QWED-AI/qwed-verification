@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
 
-from qwed_new.core.diagnostics import DiagnosticResult, enforce_trust_decision, merge_diagnostic_result
+from qwed_new.core.diagnostics import DiagnosticResult, admission_decision, enforce_trust_decision, merge_diagnostic_result
 from qwed_new.core.attestation import create_verification_attestation, AttestationStatus
 
 logger = logging.getLogger(__name__)
@@ -228,10 +228,15 @@ class BatchVerificationService:
         elif item.verification_type == VerificationType.CODE:
             from qwed_new.core.code_verifier import CodeVerifier
             verifier = CodeVerifier()
-            return verifier.verify_code(
+            result = verifier.verify_code(
                 item.query,
                 language=item.params.get("language", "python")
             )
+            serialized = result.to_dict()
+            # Gate on admission like /verify/code: VERIFIED-as-unsafe code must
+            # never be admitted by authority-only consumers (#254).
+            serialized["admission"] = admission_decision(result).value
+            return serialized
         
         elif item.verification_type == VerificationType.FACT:
             from qwed_new.core.fact_verifier import FactVerifier

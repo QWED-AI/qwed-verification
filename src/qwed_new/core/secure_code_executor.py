@@ -9,6 +9,7 @@ Provides sandboxed execution of LLM-generated code with:
 - Pre-execution validation using AST analysis
 """
 
+import ast
 import docker
 import tempfile
 import json
@@ -16,9 +17,141 @@ import os
 import logging
 from typing import Any, Dict, Tuple, Optional
 
+from .diagnostics import AdvisoryCheck, DiagnosticResult
+
 
 logger = logging.getLogger(__name__)
 SECURE_RUNTIME_UNAVAILABLE = "SECURE_RUNTIME_UNAVAILABLE"
+CONSTRAINT_VERIFIER_UNAVAILABLE = "secure_code_executor.verifier_unavailable"
+CONSTRAINT_BASIC_SAFETY_ADVISORY = "secure_code_executor.basic_safety_advisory"
+CONSTRAINT_DANGEROUS_PATTERN = "secure_code_executor.dangerous_pattern"
+
+DANGEROUS_KEYWORDS = [
+    'os.', 'sys.', 'subprocess', '__import__', 'eval', 'exec',
+    'compile', 'open(', 'file(', 'input(', 'raw_input(',
+    'socket', 'urllib', 'requests', 'http'
+]
+
+_DANGEROUS_MODULE_ROOTS = {"os", "sys", "subprocess", "socket", "urllib", "requests", "http"}
+_DANGEROUS_BUILTINS = {"eval", "exec", "compile", "__import__", "open", "file", "input", "raw_input"}
+
+
+def _strip_python_comments(code: str) -> str:
+    """Blank comment and string-literal text while preserving line structure."""
+    out = []
+    i = 0
+    n = len(code)
+    while i < n:
+        ch = code[i]
+        if ch in ('"', "'"):
+            i = _skip_string_literal(code, i, out)
+            continue
+        if ch == '#':
+            i = _skip_line_comment(code, i, out)
+            continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+
+def _skip_string_literal(code: str, start: int, out: list) -> int:
+    """Blank a string literal starting at *start*, returning the next index."""
+    n = len(code)
+    quote = code[start]
+    out.append(' ')
+    i = start + 1
+    while i < n:
+        out.append(' ')
+        if code[i] == '\\':
+            i += 2
+            continue
+        i += 1
+        if i - 1 != start and code[i - 1] == quote:
+            break
+    return i
+
+
+def _skip_line_comment(code: str, start: int, out: list) -> int:
+    """Blank a '#' comment up to (not including) the newline."""
+    n = len(code)
+    i = start
+    while i < n and code[i] != '\n':
+        out.append(' ')
+        i += 1
+    return i
+
+
+def _dangerous_import(node: ast.AST) -> Optional[str]:
+    """Return a dangerous module name imported by *node*, or None."""
+    if isinstance(node, ast.Import):
+        names = [a.name for a in node.names]
+    elif isinstance(node, ast.ImportFrom) and node.module:
+        names = [node.module]
+    else:
+        return None
+    for name in names:
+        if name.split('.')[0] in _DANGEROUS_MODULE_ROOTS:
+            return name
+    return None
+
+
+def _dangerous_attribute(node: ast.AST) -> Optional[str]:
+    """Return a dangerous attribute access (e.g. os.system) or None."""
+    if not isinstance(node, ast.Attribute):
+        return None
+    value = node.value
+    while isinstance(value, ast.Attribute):
+        value = value.value
+    if isinstance(value, ast.Name) and value.id in _DANGEROUS_MODULE_ROOTS:
+        return f"{value.id}.{node.attr}"
+    return None
+
+
+def _dangerous_call(node: ast.AST) -> Optional[str]:
+    """Return a dangerous call target (eval, exec, builtins.__import__, ...) or None."""
+    if not isinstance(node, ast.Call):
+        return None
+    func = node.func
+    if isinstance(func, ast.Name) and func.id in _DANGEROUS_BUILTINS:
+        return func.id
+    if isinstance(func, ast.Attribute) and func.attr in _DANGEROUS_BUILTINS:
+        return func.attr
+    return None
+
+
+def _find_dangerous_pattern(code: str) -> Optional[str]:
+    """Return the first dangerous operation keyword present in *code*, or None.
+
+    This is the executor's own defense-in-depth gate (OWASP LLM06), independent
+    of the verifier's proof verdict: certain operations are blocklisted for
+    execution regardless of whether the code otherwise verifies.
+
+    The scan is AST-aware: it inspects **executable statements** (imports,
+    attribute access, and calls) rather than the raw source text, so dangerous
+    keywords that merely appear inside comments, docstrings, or string literals
+    (e.g. a URL in a docstring) are never treated as a real operation. When the
+    code cannot be parsed as Python, a conservative comment-and-string-stripped
+    scan is used so the gate still fails closed.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return _find_dangerous_pattern_fallback(code)
+
+    for node in ast.walk(tree):
+        check = _dangerous_import(node) or _dangerous_attribute(node) or _dangerous_call(node)
+        if check:
+            return check
+    return None
+
+
+def _find_dangerous_pattern_fallback(code: str) -> Optional[str]:
+    """Fail-closed substring scan on comment/string-stripped Python source."""
+    code_lower = _strip_python_comments(code).lower()
+    for keyword in DANGEROUS_KEYWORDS:
+        if keyword in code_lower:
+            return keyword
+    return None
 
 def _sanitize_log_msg(msg: str) -> str:
     """Strip newline characters to prevent log injection."""
@@ -71,10 +204,10 @@ class SecureCodeExecutor:
             return False, SECURE_RUNTIME_UNAVAILABLE, None
         
         # 1. Pre-execution validation using AST
-        is_safe, safety_reason = self._is_safe_code(code)
-        if not is_safe:
-            logger.warning(f"Code failed safety check: {safety_reason}")
-            return False, f"Code safety validation failed: {safety_reason}", None
+        safety = self._is_safe_code(code)
+        if not safety.is_verified or safety.developer_fields.get("is_valid") is not True:
+            logger.warning("Code failed safety check: %s", safety.agent_message)
+            return False, f"Code safety validation failed: {safety.agent_message}", None
         
         self.execution_count += 1
         execution_id = f"exec_{self.execution_count}"
@@ -168,7 +301,7 @@ class SecureCodeExecutor:
                 logger.debug("Failed to kill container after timeout", exc_info=True)
             raise ExecutionError(f"Execution timed out after {self.timeout}s") from e
     
-    def _is_safe_code(self, code: str) -> Tuple[bool, Optional[str]]:
+    def _is_safe_code(self, code: str) -> DiagnosticResult:
         """
         Use AST analysis to validate code safety.
         Leverages existing CodeVerifier if available.
@@ -176,17 +309,10 @@ class SecureCodeExecutor:
         try:
             # Try to use existing CodeVerifier
             from qwed_new.core.code_verifier import CodeVerifier
-            
+
             verifier = CodeVerifier()
             result = verifier.verify_code(code, language="python")
-            
-            issues = result.get("issues", [])
-            if issues:
-                issue_summary = "; ".join([f"{i['type']}: {i['description']}" for i in issues[:3]])
-                return False, f"Code contains security issues: {issue_summary}"
-            
-            return True, None
-            
+
         except ImportError:
             logger.error("CodeVerifier not available; blocking execution")
             return self._build_fail_closed_safety_denial(code)
@@ -197,31 +323,52 @@ class SecureCodeExecutor:
             )
             return self._build_fail_closed_safety_denial(code)
 
-    def _build_fail_closed_safety_denial(self, code: str) -> Tuple[bool, str]:
-        """Return a deterministic fail-closed denial when CodeVerifier cannot be used."""
-        is_basic_safe, advisory_reason = self._basic_safety_check(code)
-        advisory_suffix = ""
-        if not is_basic_safe and advisory_reason:
-            advisory_suffix = f" Advisory-only fallback also flagged: {advisory_reason}"
-        return (
-            False,
-            f"CodeVerifier unavailable; cannot validate code safety.{advisory_suffix}",
+        # Defense-in-depth (OWASP LLM06): blocklist dangerous operations even
+        # when the verifier would otherwise pass them (import os, subprocess,
+        # open(), etc.). Proof the code is safe is independent of refusal to
+        # execute patterns the executor is configured to never run.
+        dangerous = _find_dangerous_pattern(code)
+        if dangerous is not None:
+            return DiagnosticResult.blocked(
+                agent_message=f"Code contains dangerous operation: '{dangerous}'",
+                developer_fields={
+                    "constraint_id": CONSTRAINT_DANGEROUS_PATTERN,
+                    "is_valid": False,
+                    "is_safe": False,
+                    "reason": f"Code contains dangerous operation: '{dangerous}'",
+                },
+            )
+
+        return result
+
+    def _build_fail_closed_safety_denial(self, code: str) -> DiagnosticResult:
+        """Return a deterministic fail-closed denial when CodeVerifier cannot be used.
+
+        Returns an UNVERIFIABLE DiagnosticResult with the basic safety scan
+        recorded as advisory / developer metadata (never as a verdict).
+        """
+        advisory_check = self._basic_safety_check(code)
+        return DiagnosticResult.unverifiable(
+            agent_message="Code safety verification unavailable",
+            developer_fields={
+                "constraint_id": CONSTRAINT_VERIFIER_UNAVAILABLE,
+                "advisory_checks": [advisory_check.to_dict()],
+            },
         )
-    
-    def _basic_safety_check(self, code: str) -> Tuple[bool, Optional[str]]:
-        """Basic safety check if CodeVerifier is not available."""
-        dangerous_keywords = [
-            'os.', 'sys.', 'subprocess', '__import__', 'eval', 'exec',
-            'compile', 'open(', 'file(', 'input(', 'raw_input(',
-            'socket', 'urllib', 'requests', 'http'
-        ]
-        
-        code_lower = code.lower()
-        for keyword in dangerous_keywords:
-            if keyword in code_lower:
-                return False, f"Code contains dangerous operation: '{keyword}'"
-        
-        return True, None
+
+    def _basic_safety_check(self, code: str) -> AdvisoryCheck:
+        """Basic safety check if CodeVerifier is not available (advisory only).
+
+        The result is an advisory check: it never influences the verdict or
+        proof_ref and is surfaced to developers/auditors for review only.
+        """
+        reason = _find_dangerous_pattern(code)
+        return AdvisoryCheck(
+            name="basic_safety",
+            advisory_only=True,
+            constraint_id=CONSTRAINT_BASIC_SAFETY_ADVISORY,
+            details={"is_safe": reason is None, "reason": reason},
+        )
     
     def _serialize_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """

@@ -677,12 +677,12 @@ class ConsensusVerifier:
             code = self._generate_verification_code(query)
 
             safety_result = self.code_verifier.verify_code(code)
-            if not safety_result["is_safe"]:
+            if not safety_result.is_verified or safety_result.developer_fields.get("is_valid") is not True:
                 return EngineResult(
                     engine_name="Python", method="code_execution",
                     result=None, confidence=0.0,
                     latency_ms=(time.time() - start) * 1000, success=False,
-                    error=f"Unsafe code: {safety_result['issues']}",
+                    error=safety_result.agent_message,
                     status="BLOCKED",
                 )
 
