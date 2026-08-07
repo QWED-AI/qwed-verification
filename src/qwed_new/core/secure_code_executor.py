@@ -37,37 +37,86 @@ _DANGEROUS_BUILTINS = {"eval", "exec", "compile", "__import__", "open", "file", 
 
 
 def _strip_python_comments(code: str) -> str:
-    """Blank comment text while preserving line structure for substring scan."""
+    """Blank comment and string-literal text while preserving line structure."""
     out = []
     i = 0
     n = len(code)
-    in_string = False
-    quote = ''
     while i < n:
         ch = code[i]
-        if in_string:
-            out.append(' ')
-            if ch == '\\':
-                i += 2
-                continue
-            if ch == quote:
-                in_string = False
-            i += 1
-            continue
         if ch in ('"', "'"):
-            in_string = True
-            quote = ch
-            out.append(' ')
-            i += 1
+            i = _skip_string_literal(code, i, out)
             continue
         if ch == '#':
-            while i < n and code[i] != '\n':
-                out.append(' ')
-                i += 1
+            i = _skip_line_comment(code, i, out)
             continue
         out.append(ch)
         i += 1
     return ''.join(out)
+
+
+def _skip_string_literal(code: str, start: int, out: list) -> int:
+    """Blank a string literal starting at *start*, returning the next index."""
+    n = len(code)
+    quote = code[start]
+    out.append(' ')
+    i = start + 1
+    while i < n:
+        out.append(' ')
+        if code[i] == '\\':
+            i += 2
+            continue
+        i += 1
+        if i - 1 != start and code[i - 1] == quote:
+            break
+    return i
+
+
+def _skip_line_comment(code: str, start: int, out: list) -> int:
+    """Blank a '#' comment up to (not including) the newline."""
+    n = len(code)
+    i = start
+    while i < n and code[i] != '\n':
+        out.append(' ')
+        i += 1
+    return i
+
+
+def _dangerous_import(node: ast.AST) -> Optional[str]:
+    """Return a dangerous module name imported by *node*, or None."""
+    if isinstance(node, ast.Import):
+        names = [a.name for a in node.names]
+    elif isinstance(node, ast.ImportFrom) and node.module:
+        names = [node.module]
+    else:
+        return None
+    for name in names:
+        if name.split('.')[0] in _DANGEROUS_MODULE_ROOTS:
+            return name
+    return None
+
+
+def _dangerous_attribute(node: ast.AST) -> Optional[str]:
+    """Return a dangerous attribute access (e.g. os.system) or None."""
+    if not isinstance(node, ast.Attribute):
+        return None
+    value = node.value
+    while isinstance(value, ast.Attribute):
+        value = value.value
+    if isinstance(value, ast.Name) and value.id in _DANGEROUS_MODULE_ROOTS:
+        return f"{value.id}.{node.attr}"
+    return None
+
+
+def _dangerous_call(node: ast.AST) -> Optional[str]:
+    """Return a dangerous call target (eval, exec, builtins.__import__, ...) or None."""
+    if not isinstance(node, ast.Call):
+        return None
+    func = node.func
+    if isinstance(func, ast.Name) and func.id in _DANGEROUS_BUILTINS:
+        return func.id
+    if isinstance(func, ast.Attribute) and func.attr in _DANGEROUS_BUILTINS:
+        return func.attr
+    return None
 
 
 def _find_dangerous_pattern(code: str) -> Optional[str]:
@@ -90,33 +139,9 @@ def _find_dangerous_pattern(code: str) -> Optional[str]:
         return _find_dangerous_pattern_fallback(code)
 
     for node in ast.walk(tree):
-        # Imports of executable-able modules are always refused (import os,
-        # import subprocess, import requests, etc.).
-        if isinstance(node, ast.Import) or isinstance(node, ast.ImportFrom):
-            names = [a.name for a in node.names] if isinstance(node, ast.Import) else (
-                [node.module] if node.module else []
-            )
-            for name in names:
-                root = name.split('.')[0]
-                if root in _DANGEROUS_MODULE_ROOTS:
-                    return name
-            continue
-
-        # Attribute access on dangerous modules (e.g. os.system, subprocess.run,
-        # urllib.request). Walking the tree catches os.<attr> and nested chains.
-        if isinstance(node, ast.Attribute):
-            value = node.value
-            while isinstance(value, ast.Attribute):
-                value = value.value
-            if isinstance(value, ast.Name) and value.id in _DANGEROUS_MODULE_ROOTS:
-                return f"{value.id}.{node.attr}"
-
-        # Direct calls to dangerous builtins/names (eval, exec, open, ...).
-        if isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Name) and func.id in _DANGEROUS_BUILTINS:
-                return func.id
-
+        check = _dangerous_import(node) or _dangerous_attribute(node) or _dangerous_call(node)
+        if check:
+            return check
     return None
 
 

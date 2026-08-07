@@ -22,6 +22,7 @@ class TestDangerousPatternScanner(unittest.TestCase):
             ("import os\nos.system('ls')", "os"),
             ("import subprocess\nsubprocess.run(x)", "subprocess"),
             ("import requests\nrequests.get(u)", "requests"),
+            ("builtins.__import__('os')", "__import__"),
             ("os.name", "os.name"),
             ("import os.path\nprint(os.path.join('a', 'b'))", "os.path"),
             ("from urllib.request import urlopen", "urllib.request"),
