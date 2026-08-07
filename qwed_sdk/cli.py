@@ -301,7 +301,7 @@ def _run_init_smoke_suite() -> list[dict]:
         {
             "label": "eval(user_input)",
             "passed": code_bad_passed,
-            "result": "BLOCKED",
+            "result": "VERIFIED (unsafe)",
         }
     )
     return tests
@@ -1547,6 +1547,7 @@ def _code_verifier_is_verified_unsafe(payload) -> bool:
     return (
         payload.status == DiagnosticStatus.VERIFIED
         and payload.developer_fields.get("is_valid") is False
+        and int(payload.developer_fields.get("critical_count") or 0) > 0
         and bool(payload.proof_ref)
     )
 
