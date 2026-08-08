@@ -670,14 +670,16 @@ We are building the **Universal Verification Standard** for the agentic web.
 - **✔ DiagnosticResult model** — Unified 3-layer diagnostic contract, `proof_ref` authority bit, `AdvisoryCheck` pattern (v5.2.0)
 - **✔ SymbolicVerifier migration** — First fully `DiagnosticResult`-conformant engine; serves as reference implementation (v5.3.0)
 - **✔ Trust Boundary Completion** — All verification API pathways return `DiagnosticResult` + route through `enforce_trust_decision`; mandatory attestation at the admission boundary; VERIFIED requires a non-empty, evidence-bound proof_ref (v6.0.0)
+- **✔ Full DiagnosticResult engine conformance** — All 13 verification engines return `DiagnosticResult`; execution is never conflated with verification; fail-closed batch verification (META #216, v7.0.0)
 
 ### In Progress
 
-- **Remaining verification engines (#216)** — Migrating the remaining engines to the `DiagnosticResult` model (API surfaces are conformant; engine-internal migration continues under META #216)
+- **Deterministic statistical claim evaluation (#298)** — the path for statistical claims to reach `VERIFIED` with a deterministic, evidence-bound proof
+- **DataFrame schema validation (#299)** — deterministic schema validation for the stats engine
 
 ### Planned
 
-- **v6.1+:** QWED Client-Side (WebAssembly), Distributed Verification Network, cross-ecosystem proof exchange
+- **v7.x+:** QWED Client-Side (WebAssembly), Distributed Verification Network, cross-ecosystem proof exchange
 
 ---
 
