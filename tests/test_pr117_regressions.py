@@ -375,6 +375,7 @@ def test_stats_verifier_blocks_on_security_validation():
     assert result.constraint_id == "stats_verifier.validation_error"
     assert result.developer_fields["is_valid"] is False
     assert result.is_fail_closed is True
+    verifier._docker_executor.execute.assert_not_called()
 
 
 def test_stats_verifier_blocks_security_exception():
@@ -383,6 +384,7 @@ def test_stats_verifier_blocks_security_exception():
     verifier._translator.translate_stats.return_value = "result = df['value'].mean()"
     verifier._code_verifier = MagicMock()
     verifier._code_verifier.verify_code.side_effect = RuntimeError("security engine crash")
+    verifier._docker_executor = MagicMock()
 
     df = pd.DataFrame({"value": [1, 2, 3]})
 
@@ -391,6 +393,7 @@ def test_stats_verifier_blocks_security_exception():
     assert result.status.value == "BLOCKED"
     assert result.constraint_id == "stats_verifier.validation_error"
     assert result.is_fail_closed is True
+    verifier._docker_executor.execute.assert_not_called()
 
 
 def test_stats_verifier_execution_failure_is_blocked():
