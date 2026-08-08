@@ -30,6 +30,19 @@ All notable changes to the QWED Protocol will be documented in this file.
 - **`ConsensusVerifier` and `StatsVerifier` code-stages adapt** — expected-status flags were updated to require `is_verified` **and** `developer_fields.is_valid is True`, and `stats_verifier._validate_security` fails closed on any non-true `is_valid`, so consensus results can no longer admit unsafe code.
 
 > **Breaking wire change:** `POST /verify/code` now returns **HTTP 200 with `status = "VERIFIED"`** for proven-unsafe code (previously `status = "BLOCKED"`). Admission is driven by the new `admission` field and `developer_fields.is_valid`. Consumers that branched on `status == "BLOCKED"` or `status == "VERIFIED"` for safety gating **must** switch to the `admission` / `is_valid` fields; `status == "VERIFIED"` alone must never be treated as "safe to execute".
+
+#### StatsVerifier → DiagnosticResult (#256)
+- **`StatsVerifier.verify_stats()` now returns `DiagnosticResult`** (status / `agent_message` / `developer_fields` / `proof_ref`) instead of an ad-hoc dict.
+- **Execution success is **never** `VERIFIED` (computation ≠ verification).** A run that executes cleanly in the Docker sandbox and returns an observed statistic is `UNVERIFIABLE` (`stats_verifier.claim_not_verified`) — the engine has no deterministic claim-proof, so it cannot attest the original natural-language claim. `VERIFIED` + `proof_ref` is reserved for a future deterministic claim evaluation; it is never emitted from execution success alone.
+- **`BLOCKED` is reserved for failure states** — translation/validation failure (`stats_verifier.validation_error`), execution failure (`stats_verifier.execution_failure`), and secure Docker sandbox unavailable (`stats_verifier.runtime_unavailable`). Blocked results carry **no** `proof_ref`.
+- **Execution evidence is preserved, not lost.** On `UNVERIFIABLE` the observed result, generated code, columns, sandbox type, timing, and security checks are retained in `developer_fields` for audit/review.
+- **`agent_message` is sanitized** — no raw subprocess output, sandbox identifiers, or error strings leak into the agent-facing layer.
+- **API boundary is now a thin pass-through** — `POST /verify/stats` forwards the engine's `DiagnosticResult` through `enforce_trust_decision()` unchanged instead of re-deriving status from dict fields.
+- **Logging is claim-aware** — the verification log records `is_verified` from `developer_fields.is_valid` (the claim-validity signal), not from the authority bit.
+- **`compute_statistics()` and `get_sandbox_info()` are deliberately unchanged** — they are utilities (safe direct computation / sandbox introspection), not claim-verification boundaries, so they stay on their existing dict return.
+
+> **Breaking wire change:** `POST /verify/stats` now returns the unified `DiagnosticResult` schema (`status` / `agent_message` / `developer_fields` / `proof_ref`) instead of the legacy `{"status": "SUCCESS" | "ERROR" | "BLOCKED", "result": ..., "code": ...}` shape. Successful execution now reports `status = "UNVERIFIABLE"` with the observed value in `developer_fields.observed_result` — execution success alone is never presented as a proven claim.
+
 ### Trust Boundary Completion (Epic #263)
 
 Completes the Trust Boundary Completion epic — all 12/12 sub-issues closed. Every verification API pathway now returns `DiagnosticResult` and routes through `enforce_trust_decision`. The trust boundary is no longer advisory: the control plane requires and verifies attestation before admitting VERIFIED results, and VERIFIED is a protocol guarantee backed by a non-empty, deterministic `proof_ref`, never by execution, agreement, confidence, or provenance. Engine-level migrations to `DiagnosticResult` remain tracked under META #216.
