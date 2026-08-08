@@ -4,6 +4,8 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-08-08
+
 ### Engine Migration to DiagnosticResult (Meta #216)
 
 #### SchemaVerifier → DiagnosticResult (#255)
@@ -45,6 +47,23 @@ All notable changes to the QWED Protocol will be documented in this file.
 - **Stats `observed_result` is JSON-safe** — a non-serializable sandbox result (e.g. a DataFrame) is coerced before entering `developer_fields`, so a legitimate `UNVERIFIABLE` verdict can no longer be silently downgraded to `BLOCKED` when the trust gate snapshots developer fields.
 
 > **Breaking wire change:** `POST /verify/stats` now returns the unified `DiagnosticResult` schema (`status` / `agent_message` / `developer_fields` / `proof_ref`) instead of the legacy `{"status": "SUCCESS" | "ERROR" | "BLOCKED", "result": ..., "code": ...}` shape. Successful execution now reports `status = "UNVERIFIABLE"` with the observed value in `developer_fields.observed_result` — execution success alone is never presented as a proven claim.
+
+#### Version Propagation
+- `qwed` (PyPI): `6.0.0` -> `7.0.0`
+- `qwed_sdk` (Python): `6.0.0` -> `7.0.0`
+- `@qwed-ai/sdk` (NPM): `6.0.0` -> `7.0.0`
+- `qwed` (crates.io/Rust): `6.0.0` -> `7.0.0`
+- API version marker: `6.0.0` -> `7.0.0`
+- Kubernetes deployment image: `6.0.0` -> `7.0.0`
+- Deployment docs version references updated
+
+#### Included PRs (merged after v6.0.0)
+- `#294` feat(core): migrate SchemaVerifier to DiagnosticResult (#255)
+- `#295` fix(sql): migrate SQLVerifier to DiagnosticResult (#253)
+- `#296` feat(core): migrate CodeVerifier and SecureCodeExecutor to DiagnosticResult (#254)
+- `#297` feat(stats): migrate StatsVerifier.verify_stats to DiagnosticResult (#256)
+
+## [6.0.0] - 2026-08-02
 
 ### Trust Boundary Completion (Epic #263)
 

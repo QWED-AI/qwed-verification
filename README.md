@@ -61,19 +61,18 @@
 
 ---
 
-## Release Update: v6.0.0 — Trust Boundary Completion
+## Release Update: v7.0.0 — Full DiagnosticResult Engine Conformance
 
-`v6.0.0` completes the **Trust Boundary Completion epic** — every verification API pathway now returns `DiagnosticResult` and routes through `enforce_trust_decision` (12/12 sub-issues, #263).
+`v7.0.0` completes **Meta #216** — every verification engine now returns the unified `DiagnosticResult`, and execution is never conflated with verification.
 
-- **All `/verify/*` endpoints return `DiagnosticResult`** — unified 3-layer response contract (status / `agent_message` / `developer_fields` / `proof_ref`) across every verification surface
-- **Mandatory attestation in the control plane** — `require_attestation=True`, attestations issued and verified at the admission boundary; enforcement result drives the response status
-- **VERIFIED is a protocol guarantee** — VERIFIED requires a non-empty `proof_ref` bound to the deterministic evidence; heuristic/advisory analysis reports `UNVERIFIABLE` with structured `advisory_checks`
-- **Architecture contract** — API = observation surface (honest witness), Control Plane = admission authority (judge); rules now codify this separation (#13-15)
-- **Security hardening** — TOCTOU closure in `enforce_trust_decision`, tenant-isolated verification cache, attestation signature-verified before claim decode, Unicode-normalized agent state
+- **All 13 engines conform to `DiagnosticResult`** — Schema, SQL, Code, and Stats join the previously-migrated Logic, Fact, Image, Reasoning, Consensus, Symbolic, and Math engines on the 3-layer contract (status / `agent_message` / `developer_fields` / `proof_ref`)
+- **Execution ≠ verification** — a successful computation reports `UNVERIFIABLE`, never `VERIFIED`; `VERIFIED` requires a deterministic, evidence-bound `proof_ref`
+- **Separation of truth and admission** — `POST /verify/code` reports proven-unsafe code as `VERIFIED`-as-unsafe with `admission = BLOCKED`; admission is driven by `admission` / `is_valid`, never by `status` alone
+- **Fail-closed batch verification** — fact / image / SQL / code batches are authoritative only when every item is proven; any refuted or blocked item fails the whole batch closed
 
-> ⚠️ **Breaking change:** `/verify/*` responses now use the `DiagnosticResult` schema. Consumers parsing the previous ad-hoc dict format must migrate to the unified contract.
+> ⚠️ **Breaking change:** `POST /verify/code` now returns `status = "VERIFIED"` for proven-unsafe code (previously `BLOCKED`), and `POST /verify/stats` reports execution success as `UNVERIFIABLE` (previously `VERIFIED`). Consumers branching on `status` for safety gating must use the `admission` / `is_valid` fields.
 
-If you're upgrading from `v5.3.x`, review the [changelog](CHANGELOG.md) for the full migration notes.
+If you're upgrading from `v6.0.x`, review the [changelog](CHANGELOG.md) for the full migration notes.
 
 ---
 
