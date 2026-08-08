@@ -15,12 +15,18 @@ from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 import re
 import math
+import hashlib
 import logging
 from collections import Counter
 
 from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck
 
 logger = logging.getLogger(__name__)
+
+CONSTRAINT_FACT_BATCH_VERIFIED = "fact_verifier.batch_verified"
+CONSTRAINT_FACT_BATCH_UNVERIFIABLE = "fact_verifier.batch_unverifiable"
+CONSTRAINT_FACT_BATCH_BLOCKED = "fact_verifier.batch_blocked"
+CONSTRAINT_FACT_EMPTY_BATCH = "fact_verifier.empty_batch"
 
 
 @dataclass
@@ -634,38 +640,114 @@ class BatchFactVerifier:
         claims: List[str], 
         context: str,
         provider: Optional[str] = None
-    ) -> Dict[str, Any]:
+    ) -> DiagnosticResult:
         """
         Verify multiple claims against the same context.
+
+        Returns a single :class:`DiagnosticResult`. Per-claim verdicts live in
+        ``developer_fields.results`` (each a serialized per-claim
+        DiagnosticResult) and ``developer_fields.summary``.
+
+        The batch is authoritative (VERIFIED with ``proof_ref``) only when every
+        claim is deterministically verified. A batch containing any refuted,
+        blocked, or inconclusive claim returns BLOCKED/UNVERIFIABLE (non-
+        authoritative, ``proof_ref`` None) so generic consumers that admit on
+        ``is_authoritative`` can never accept a partially-proven batch.
 
         Args:
             claims: List of claims to verify.
             context: The source context text.
             provider: Optional LLM provider.
 
-        Returns:
-            Dict containing batch results and summary statistics.
-
         Example:
             >>> batch = verifier.verify_batch(["Claim 1", "Claim 2"], "context")
-            >>> print(batch["summary"]["supported"])
+            >>> print(batch.developer_fields["summary"]["supported"])
         """
-        results = []
-        
+        items: List[Dict[str, Any]] = []
         for claim in claims:
             result = self.verifier.verify_fact(claim, context, provider)
-            d = result.to_dict()
-            d["claim"] = claim
-            results.append(d)
-        
-        statuses = [r["status"] for r in results]
-        
-        return {
-            "results": results,
-            "summary": {
-                "total": len(claims),
-                "verified": statuses.count("VERIFIED"),
-                "unverifiable": statuses.count("UNVERIFIABLE"),
-                "blocked": statuses.count("BLOCKED"),
-            }
+            serialized = result.to_dict()
+            serialized["claim"] = claim
+            items.append(serialized)
+
+        total = len(claims)
+
+        # Fail closed: an empty batch proves nothing and must not be admitted.
+        if total == 0:
+            return DiagnosticResult.blocked(
+                agent_message="Batch fact verification failed: no claims were provided.",
+                developer_fields={
+                    "constraint_id": CONSTRAINT_FACT_EMPTY_BATCH,
+                    "is_valid": False,
+                    "results": [],
+                    "summary": {"total": 0, "verified": 0, "unverifiable": 0, "blocked": 0},
+                    "engine": "FactVerifier",
+                },
+            )
+
+        verified = sum(1 for item in items if item["status"] == "VERIFIED")
+        blocked = sum(1 for item in items if item["status"] == "BLOCKED")
+        unverifiable = total - verified - blocked
+        is_verified_all = verified == total
+
+        summary = {
+            "total": total,
+            "verified": verified,
+            "unverifiable": unverifiable,
+            "blocked": blocked,
         }
+
+        batch_fields: Dict[str, Any] = {
+            "constraint_id": (
+                CONSTRAINT_FACT_BATCH_VERIFIED
+                if is_verified_all
+                else CONSTRAINT_FACT_BATCH_BLOCKED if blocked else CONSTRAINT_FACT_BATCH_UNVERIFIABLE
+            ),
+            "is_valid": is_verified_all,
+            "results": items,
+            "summary": summary,
+            "engine": "FactVerifier",
+        }
+
+        if blocked > 0:
+            # Fail closed: any refuted/error claim makes the whole batch non-admissible.
+            return DiagnosticResult.blocked(
+                agent_message=(
+                    "Batch fact verification flagged refuted or failed claims; "
+                    "the batch is not admissible."
+                ),
+                developer_fields=batch_fields,
+            )
+
+        if not is_verified_all:
+            return DiagnosticResult.unverifiable(
+                agent_message=(
+                    "Batch fact verification is inconclusive: some claims could "
+                    "not be deterministically verified."
+                ),
+                developer_fields=batch_fields,
+            )
+
+        # Fail closed: a batch is authoritative only when every claim has a proof.
+        # The batch proof binds the full claim texts (the truncated ``results``
+        # claim field is display-only and not proof-bearing).
+        evidence = {
+            "engine": "FactVerifier",
+            "count": total,
+            "claims": [
+                claim if len(claim) <= 100 else claim[:100] + "..." for claim in claims
+            ],
+            "claim_digests": [
+                hashlib.sha256(claim.encode("utf-8")).hexdigest() for claim in claims
+            ],
+            "verdicts": [
+                {"status": item["status"], "is_valid": item["developer_fields"].get("is_valid")}
+                for item in items
+            ],
+        }
+
+        return DiagnosticResult.verified(
+            agent_message="Batch fact verification succeeded: all claims were verified.",
+            developer_fields=batch_fields,
+            evidence=evidence,
+        )
