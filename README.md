@@ -65,7 +65,7 @@
 
 `v7.0.0` completes **Meta #216** — every verification engine now returns the unified `DiagnosticResult`, and execution is never conflated with verification.
 
-- **All 13 engines conform to `DiagnosticResult`** — Schema, SQL, Code, and Stats join the previously-migrated Logic, Fact, Image, Reasoning, Consensus, Symbolic, and Math engines on the 3-layer contract (status / `agent_message` / `developer_fields` / `proof_ref`)
+- **All 13 engines conform to `DiagnosticResult`** — Schema, SQL, Code, SecureCodeExecutor, and Stats join the previously-migrated Math, Logic, Symbolic, Fact, Image, Graph, Reasoning, and Consensus engines on the 3-layer contract (status / `agent_message` / `developer_fields` / `proof_ref`)
 - **Execution ≠ verification** — a successful computation reports `UNVERIFIABLE`, never `VERIFIED`; `VERIFIED` requires a deterministic, evidence-bound `proof_ref`
 - **Separation of truth and admission** — `POST /verify/code` reports proven-unsafe code as `VERIFIED`-as-unsafe with `admission = BLOCKED`; admission is driven by `admission` / `is_valid`, never by `status` alone
 - **Fail-closed batch verification** — fact / image / SQL / code batches are authoritative only when every item is proven; any refuted or blocked item fails the whole batch closed
@@ -670,7 +670,7 @@ We are building the **Universal Verification Standard** for the agentic web.
 - **✔ DiagnosticResult model** — Unified 3-layer diagnostic contract, `proof_ref` authority bit, `AdvisoryCheck` pattern (v5.2.0)
 - **✔ SymbolicVerifier migration** — First fully `DiagnosticResult`-conformant engine; serves as reference implementation (v5.3.0)
 - **✔ Trust Boundary Completion** — All verification API pathways return `DiagnosticResult` + route through `enforce_trust_decision`; mandatory attestation at the admission boundary; VERIFIED requires a non-empty, evidence-bound proof_ref (v6.0.0)
-- **✔ Full DiagnosticResult engine conformance** — All 13 verification engines return `DiagnosticResult`; execution is never conflated with verification; fail-closed batch verification (META #216, v7.0.0)
+- **✔ Full DiagnosticResult engine conformance** — All 13 engines return `DiagnosticResult`; execution is never conflated with verification; fail-closed batch verification (META #216, v7.0.0)
 
 ### In Progress
 
