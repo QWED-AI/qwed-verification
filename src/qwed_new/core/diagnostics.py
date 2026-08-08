@@ -890,6 +890,141 @@ def merge_diagnostic_result(dr: DiagnosticResult) -> Dict[str, Any]:
     return serialized | safe
 
 
+def aggregate_batch_diagnostic(
+    items: List[Dict[str, Any]],
+    claims: List[str],
+    *,
+    engine: str,
+    constraints: Dict[str, str],
+    messages: Dict[str, str],
+    extra_evidence: Optional[Dict[str, Any]] = None,
+) -> DiagnosticResult:
+    """Aggregate per-item verdicts into a single fail-closed batch DiagnosticResult.
+
+    Shared by the fact/image batch verifiers (and any future batch engine) so the
+    security-critical aggregation cannot drift between copies. Per-item verdicts
+    live in ``developer_fields.results`` and counts in ``developer_fields.summary``.
+
+    Fail-closed contract:
+        - empty batch                      -> BLOCKED (``constraints["empty"]``)
+        - any item BLOCKED                 -> BLOCKED (``constraints["blocked"]``)
+        - all items VERIFIED               -> VERIFIED + ``proof_ref``
+        - otherwise (some UNVERIFIABLE)    -> UNVERIFIABLE
+
+    The batch ``proof_ref`` binds the full claim texts via SHA-256 digests (the
+    truncated ``results`` claim field is display-only and not proof-bearing) plus
+    any caller-supplied ``extra_evidence`` (e.g. a shared image or context digest).
+
+    Args:
+        items: Serialized per-item DiagnosticResults (each carries a ``claim`` key).
+        claims: Original claim texts, aligned with ``items`` (for digests/display).
+        engine: Engine name recorded in developer_fields/evidence.
+        constraints: Mapping with keys ``verified``/``blocked``/``unverifiable``/``empty``.
+        messages: Mapping with keys ``empty``/``blocked``/``unverifiable``/``verified``.
+        extra_evidence: Optional extra proof-bearing fields merged into evidence.
+
+    Returns:
+        A single DiagnosticResult for the whole batch.
+    """
+    total = len(claims)
+
+    # Fail loudly: verdict counts are taken from ``items`` while the proof binds
+    # ``claims``. A length mismatch would bind digests to claims that were not
+    # the ones evaluated, so reject it rather than produce a misaligned proof.
+    if len(items) != total:
+        raise ValueError(
+            f"aggregate_batch_diagnostic: items/claims length mismatch for "
+            f"{engine!r} — {len(items)} items vs {total} claims. "
+            "Per-item verdicts must be aligned with the claim texts they prove."
+        )
+
+    # Fail closed: an empty batch proves nothing and must not be admitted.
+    if total == 0:
+        return DiagnosticResult.blocked(
+            agent_message=messages["empty"],
+            developer_fields={
+                "constraint_id": constraints["empty"],
+                "is_valid": False,
+                "results": [],
+                "summary": {"total": 0, "verified": 0, "unverifiable": 0, "blocked": 0},
+                "engine": engine,
+            },
+        )
+
+    verified = sum(1 for item in items if item["status"] == "VERIFIED")
+    blocked = sum(1 for item in items if item["status"] == "BLOCKED")
+    unverifiable = total - verified - blocked
+    is_verified_all = verified == total
+
+    summary = {
+        "total": total,
+        "verified": verified,
+        "unverifiable": unverifiable,
+        "blocked": blocked,
+    }
+
+    if is_verified_all:
+        constraint_id = constraints["verified"]
+    elif blocked:
+        constraint_id = constraints["blocked"]
+    else:
+        constraint_id = constraints["unverifiable"]
+
+    batch_fields: Dict[str, Any] = {
+        "constraint_id": constraint_id,
+        "is_valid": is_verified_all,
+        "results": items,
+        "summary": summary,
+        "engine": engine,
+    }
+
+    if blocked > 0:
+        # Fail closed: any refuted/error claim makes the whole batch non-admissible.
+        return DiagnosticResult.blocked(
+            agent_message=messages["blocked"],
+            developer_fields=batch_fields,
+        )
+
+    if not is_verified_all:
+        return DiagnosticResult.unverifiable(
+            agent_message=messages["unverifiable"],
+            developer_fields=batch_fields,
+        )
+
+    # Fail closed: a batch is authoritative only when every claim has a proof.
+    claim_digests = [
+        hashlib.sha256(claim.encode("utf-8")).hexdigest() for claim in claims
+    ]
+    evidence: Dict[str, Any] = {
+        "engine": engine,
+        "count": total,
+        "claims": [
+            claim if len(claim) <= 100 else claim[:100] + "..." for claim in claims
+        ],
+        "claim_digests": claim_digests,
+        "verdicts": [
+            {"status": item["status"], "is_valid": item["developer_fields"].get("is_valid")}
+            for item in items
+        ],
+    }
+    if extra_evidence:
+        # Never let caller-supplied evidence overwrite the proof-bearing fields
+        # assembled above; a collision would silently weaken the proof binding.
+        collisions = set(extra_evidence) & set(evidence)
+        if collisions:
+            raise ValueError(
+                f"aggregate_batch_diagnostic: extra_evidence for {engine!r} would "
+                f"overwrite proof-bearing fields {sorted(collisions)}."
+            )
+        evidence.update(extra_evidence)
+
+    return DiagnosticResult.verified(
+        agent_message=messages["verified"],
+        developer_fields=batch_fields,
+        evidence=evidence,
+    )
+
+
 __all__ = [
     "DiagnosticStatus",
     "DiagnosticResult",
@@ -899,4 +1034,5 @@ __all__ = [
     "enforce_trust_decision",
     "admission_decision",
     "merge_diagnostic_result",
+    "aggregate_batch_diagnostic",
 ]

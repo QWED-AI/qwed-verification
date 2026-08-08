@@ -16,10 +16,20 @@ from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 import re
 import struct
+import hashlib
 
-from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck
+from qwed_new.core.diagnostics import (
+    AdvisoryCheck,
+    DiagnosticResult,
+    aggregate_batch_diagnostic,
+)
 
 _INCONCLUSIVE_MSG = "Image verification inconclusive"
+
+_CONSTRAINT_IMAGE_BATCH_VERIFIED = "image_verifier.batch_verified"
+_CONSTRAINT_IMAGE_BATCH_UNVERIFIABLE = "image_verifier.batch_unverifiable"
+_CONSTRAINT_IMAGE_BATCH_BLOCKED = "image_verifier.batch_blocked"
+_CONSTRAINT_IMAGE_EMPTY_BATCH = "image_verifier.empty_batch"
 
 
 @dataclass
@@ -525,41 +535,66 @@ class ImageVerifier:
         self, 
         image_bytes: bytes, 
         claims: List[str]
-    ) -> Dict[str, Any]:
+    ) -> DiagnosticResult:
         """
         Verify multiple claims against the same image.
+
+        Returns a single :class:`DiagnosticResult`. Per-claim verdicts live in
+        ``developer_fields.results`` (each a serialized per-claim
+        DiagnosticResult) and ``developer_fields.summary``.
+
+        The batch is authoritative (VERIFIED with ``proof_ref``) only when every
+        claim is deterministically verified. A batch containing any refuted,
+        blocked, or inconclusive claim returns BLOCKED/UNVERIFIABLE (non-
+        authoritative, ``proof_ref`` None) so generic consumers that admit on
+        ``is_authoritative`` can never accept a partially-proven batch.
 
         Args:
             image_bytes: The image data.
             claims: List of claims to verify.
 
-        Returns:
-            Dict containing batch results and summary statistics.
-
         Example:
             >>> result = verifier.verify_batch(img_data, ["Claim 1", "Claim 2"])
-            >>> print(result["summary"]["verified"])
+            >>> print(result.developer_fields["summary"]["verified"])
         """
-        results = []
-
+        items: List[Dict[str, Any]] = []
         for claim in claims:
             result = self.verify_image(image_bytes, claim)
-            results.append({
-                "claim": claim,
-                **result.to_dict(),
-            })
+            serialized = result.to_dict()
+            serialized["claim"] = claim
+            items.append(serialized)
 
-        statuses = [r["status"] for r in results]
+        # Bind the shared image bytes into the batch proof so the verdict can be
+        # re-derived from the evidence (same claims against a different image must
+        # not share a proof).
+        extra_evidence: Dict[str, Any] = {}
+        if image_bytes:
+            extra_evidence["image_sha256"] = hashlib.sha256(image_bytes).hexdigest()
 
-        return {
-            "results": results,
-            "summary": {
-                "total": len(claims),
-                "verified": statuses.count("VERIFIED"),
-                "unverifiable": statuses.count("UNVERIFIABLE"),
-                "blocked": statuses.count("BLOCKED"),
-            }
-        }
+        return aggregate_batch_diagnostic(
+            items,
+            claims,
+            engine="ImageVerifier",
+            constraints={
+                "verified": _CONSTRAINT_IMAGE_BATCH_VERIFIED,
+                "blocked": _CONSTRAINT_IMAGE_BATCH_BLOCKED,
+                "unverifiable": _CONSTRAINT_IMAGE_BATCH_UNVERIFIABLE,
+                "empty": _CONSTRAINT_IMAGE_EMPTY_BATCH,
+            },
+            messages={
+                "empty": "Batch image verification failed: no claims were provided.",
+                "blocked": (
+                    "Batch image verification flagged refuted or failed claims; "
+                    "the batch is not admissible."
+                ),
+                "unverifiable": (
+                    "Batch image verification is inconclusive: some claims could "
+                    "not be deterministically verified."
+                ),
+                "verified": "Batch image verification succeeded: all claims were verified.",
+            },
+            extra_evidence=extra_evidence,
+        )
 
 
 # =============================================================================

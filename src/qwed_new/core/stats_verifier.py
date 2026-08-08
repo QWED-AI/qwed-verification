@@ -14,9 +14,13 @@ Enhanced Features:
 import pandas as pd
 import logging
 import time
+import json
+import hashlib
 from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass, field
 import ast
+
+from .diagnostics import DiagnosticResult
 
 logger = logging.getLogger(__name__)
 INTERNAL_VERIFICATION_ERROR = "Internal verification error"
@@ -27,6 +31,64 @@ SECURE_STATS_SANDBOX_REQUIRED = (
 )
 SECURE_STATS_BLOCKED_CODE = "SERVICE_UNAVAILABLE"
 SECURE_STATS_RUNTIME_UNAVAILABLE = "SECURE_RUNTIME_UNAVAILABLE"
+
+CONSTRAINT_STATS_VALID = "stats_verifier.verified"
+CONSTRAINT_VALIDATION_ERROR = "stats_verifier.validation_error"
+CONSTRAINT_EXECUTION_FAILURE = "stats_verifier.execution_failure"
+CONSTRAINT_RUNTIME_UNAVAILABLE = "stats_verifier.runtime_unavailable"
+CONSTRAINT_CLAIM_NOT_VERIFIED = "stats_verifier.claim_not_verified"
+CONSTRAINT_EVIDENCE_FAILURE = "stats_verifier.evidence_failure"
+
+
+class DatasetFingerprintError(Exception):
+    """Raised when the input dataset cannot be deterministically fingerprinted."""
+
+
+def _json_safe(value: Any) -> Any:
+    """Coerce an execution result to a JSON-serializable form.
+
+    The Docker sandbox returns whatever the generated code assigned to
+    ``result`` — scalars, lists, dicts, or arbitrary objects (e.g. a pandas
+    DataFrame). ``developer_fields`` must snapshot cleanly in
+    ``enforce_trust_decision``; a non-serializable value would otherwise raise
+    during ``_snapshot_developer_fields`` and silently downgrade an intended
+    UNVERIFIABLE verdict to BLOCKED (fail-closed, but with a misleading
+    constraint). Scalars pass through, containers are coerced recursively, and
+    anything else falls back to ``repr`` so the observed value is retained as
+    display text rather than crashing the trust gate.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        return repr(value)
+
+
+def _dataset_fingerprint(df: pd.DataFrame) -> str:
+    """Deterministic fingerprint of the input dataset.
+
+    Binds the verification outcome to the specific data that was analyzed so the
+    result can be replayed/audited against the same dataset. Uses pandas'
+    canonical per-row hasher (dtype/NaN aware) and hashes the digest bytes.
+
+    Raises:
+        DatasetFingerprintError: if the dataset cannot be fingerprinted. Callers
+            must fail closed (BLOCKED) rather than emit evidence with no dataset
+            binding — a missing binding is a failure state, not advisory.
+    """
+    try:
+        row_hashes = pd.util.hash_pandas_object(df, index=True)
+        return hashlib.sha256(row_hashes.values.tobytes()).hexdigest()
+    except Exception as exc:
+        raise DatasetFingerprintError(
+            f"dataset fingerprint failed: {type(exc).__name__}"
+        ) from exc
 
 
 @dataclass
@@ -336,27 +398,45 @@ class StatsVerifier:
         query: str,
         df: pd.DataFrame,
         provider: Optional[str] = None
-    ) -> Dict[str, Any]:
+    ) -> DiagnosticResult:
         """
         Verify a statistical claim about tabular data.
-        
+
+        Execution success is **not** verification. This method separates
+        "code ran in the sandbox and returned a value" from "the claim is
+        verified". A successful run without a deterministic claim-proof is
+        `UNVERIFIABLE` (fail closed); `VERIFIED` + `proof_ref` is reserved for
+        cases where the executed result deterministically confirms the claim.
+
         Args:
             query: The user's question or claim.
             df: The pandas DataFrame containing the data.
             provider: Optional LLM provider.
-            
+
         Returns:
-            dict with status, result, code, and security info.
+            DiagnosticResult:
+
+            - execution succeeded + claim verified   -> VERIFIED (proof_ref bound)
+            - execution succeeded + claim not proven -> UNVERIFIABLE
+            - execution failure                      -> BLOCKED (stats_verifier.execution_failure)
+            - security/validation failure            -> BLOCKED (stats_verifier.validation_error)
+            - secure sandbox unavailable             -> BLOCKED (stats_verifier.runtime_unavailable)
+
+            agent_message is agent-safe (no raw subprocess output or internal
+            identifiers leak); execution evidence is retained in developer_fields.
 
         Example:
             >>> df = pd.DataFrame({'a': [1, 2, 3]})
             >>> result = verifier.verify_stats("What is the mean of a?", df)
-            >>> print(result["result"])
-            2.0
+            >>> print(result.developer_fields.get("is_valid"))
+            False
         """
         start_time = time.time()
         columns = list(df.columns)
-        
+
+        def _elapsed() -> float:
+            return (time.time() - start_time) * 1000
+
         # 1. Generate code from query
         try:
             code = self.translator.translate_stats(query, columns, provider=provider)
@@ -366,81 +446,151 @@ class StatsVerifier:
                 type(e).__name__,
                 exc_info=False,
             )
-            return {
-                "status": "ERROR",
-                "error": INTERNAL_VERIFICATION_ERROR,
-                "columns": columns,
-                "execution_time_ms": (time.time() - start_time) * 1000
-            }
-        
+            return DiagnosticResult.blocked(
+                agent_message="Statistical verification could not be completed because the request could not be translated.",
+                developer_fields={
+                    "constraint_id": CONSTRAINT_VALIDATION_ERROR,
+                    "is_valid": False,
+                    "is_error": True,
+                    "columns": columns,
+                    "execution_time_ms": _elapsed(),
+                },
+            )
+
         # 2. Pre-execution security validation
-        security_report = self._validate_security(code)
-        
+        try:
+            security_report = self._validate_security(code)
+        except Exception as exc:
+            logger.error(
+                "Stats security validation failed (exception_type=%s)",
+                type(exc).__name__,
+                exc_info=False,
+            )
+            return DiagnosticResult.blocked(
+                agent_message="Statistical verification was blocked because the generated code could not be security validated.",
+                developer_fields={
+                    "constraint_id": CONSTRAINT_VALIDATION_ERROR,
+                    "is_valid": False,
+                    "is_error": True,
+                    "generated_code": code,
+                    "columns": columns,
+                    "execution_time_ms": _elapsed(),
+                },
+            )
+
         if not security_report.is_safe:
-            logger.warning(f"Code failed security validation: {security_report.checks_failed}")
-            return {
-                "status": "BLOCKED",
-                "error": "Code failed security validation",
-                "issues": security_report.checks_failed,
-                "risk_level": security_report.risk_level,
-                "code": code,
-                "columns": columns,
-                "execution_time_ms": (time.time() - start_time) * 1000
-            }
-        
+            logger.warning("Code failed security validation: %s", security_report.checks_failed)
+            return DiagnosticResult.blocked(
+                agent_message="Statistical verification was blocked because the generated code failed security validation.",
+                developer_fields={
+                    "constraint_id": CONSTRAINT_VALIDATION_ERROR,
+                    "is_valid": False,
+                    "issues": security_report.checks_failed,
+                    "risk_level": security_report.risk_level,
+                    "generated_code": code,
+                    "columns": columns,
+                    "execution_time_ms": _elapsed(),
+                },
+            )
+
         # 3. Select sandbox and execute
         sandbox_type, sandbox = self._select_sandbox()
         if sandbox_type != "docker" or sandbox is None:
             logger.warning("Blocked stats execution because secure Docker sandbox is unavailable")
-            return {
-                "status": "BLOCKED",
-                "error": SECURE_STATS_BLOCKED_CODE,
-                "code": code,
-                "columns": columns,
-                "execution_time_ms": (time.time() - start_time) * 1000
-            }
-        
-        context = {"df": df}
-        
-        exec_result = self._execute_docker(code, context)
-        
-        total_time = (time.time() - start_time) * 1000
-        
-        if exec_result.success:
-            return {
-                "status": "SUCCESS",
-                "result": exec_result.result,
-                "code": code,
-                "columns": columns,
-                "security_checks": {
-                    "ast_validation": "PASSED",
-                    "sandbox_type": sandbox_type,
-                    "checks_passed": security_report.checks_passed,
-                    "risk_level": security_report.risk_level
+            return DiagnosticResult.blocked(
+                agent_message="Statistical verification is temporarily unavailable because the secure execution runtime is unavailable.",
+                developer_fields={
+                    "constraint_id": CONSTRAINT_RUNTIME_UNAVAILABLE,
+                    "is_valid": False,
+                    "error_code": SECURE_STATS_BLOCKED_CODE,
+                    "generated_code": code,
+                    "columns": columns,
+                    "execution_time_ms": _elapsed(),
                 },
-                "execution_time_ms": exec_result.execution_time_ms,
-                "total_time_ms": total_time
-            }
-        if exec_result.error == SECURE_STATS_RUNTIME_UNAVAILABLE:
-            logger.warning("Blocked stats execution because secure Docker sandbox became unavailable")
-            return {
-                "status": "BLOCKED",
-                "error": SECURE_STATS_BLOCKED_CODE,
-                "code": code,
-                "columns": columns,
-                "execution_time_ms": exec_result.execution_time_ms,
-                "total_time_ms": total_time
-            }
-        else:
-            return {
-                "status": "EXECUTION_FAILED",
-                "error": exec_result.error,
-                "code": code,
-                "columns": columns,
+            )
+
+        # 4. Execute the generated code in the secured Docker sandbox.
+        context = {"df": df}
+        exec_result = self._execute_docker(code, context)
+        total_time = _elapsed()
+
+        if not exec_result.success:
+            if exec_result.error == SECURE_STATS_RUNTIME_UNAVAILABLE:
+                logger.warning("Blocked stats execution because secure Docker sandbox became unavailable")
+                return DiagnosticResult.blocked(
+                    agent_message="Statistical verification is temporarily unavailable because the secure execution environment is unavailable.",
+                    developer_fields={
+                        "constraint_id": CONSTRAINT_RUNTIME_UNAVAILABLE,
+                        "is_valid": False,
+                        "error_code": SECURE_STATS_BLOCKED_CODE,
+                        "generated_code": code,
+                        "columns": columns,
+                        "execution_time_ms": exec_result.execution_time_ms,
+                        "total_time_ms": total_time,
+                    },
+                )
+
+            return DiagnosticResult.blocked(
+                agent_message="Statistical analysis could not be completed because the generated code failed to execute.",
+                developer_fields={
+                    "constraint_id": CONSTRAINT_EXECUTION_FAILURE,
+                    "is_valid": False,
+                    "error": exec_result.error,
+                    "generated_code": code,
+                    "columns": columns,
+                    "sandbox_type": sandbox_type,
+                    "execution_time_ms": exec_result.execution_time_ms,
+                    "total_time_ms": total_time,
+                },
+            )
+
+        # 5. Execution succeeded — but execution != verification (QWED #7/#15).
+        # Without a deterministic claim-proof the result is UNVERIFIABLE and
+        # carries no proof_ref; evidence is retained for review.
+        #
+        # Bind the dataset deterministically. A fingerprint failure fails closed
+        # (BLOCKED) rather than emitting evidence with no dataset binding.
+        try:
+            dataset_sha256 = _dataset_fingerprint(df)
+        except DatasetFingerprintError:
+            logger.warning("Blocked stats verification because the dataset could not be fingerprinted")
+            return DiagnosticResult.blocked(
+                agent_message="Statistical verification could not be completed because the dataset could not be deterministically fingerprinted.",
+                developer_fields={
+                    "constraint_id": CONSTRAINT_EVIDENCE_FAILURE,
+                    "is_valid": False,
+                    "is_error": True,
+                    "generated_code": code,
+                    "columns": columns,
+                    "execution_time_ms": exec_result.execution_time_ms,
+                    "total_time_ms": total_time,
+                },
+            )
+
+        execution_evidence = {
+            "observed_result": _json_safe(exec_result.result),
+            "generated_code": code,
+            "columns": columns,
+            "dataset_sha256": dataset_sha256,
+            "sandbox_type": sandbox_type,
+            "execution_time_ms": exec_result.execution_time_ms,
+            "total_time_ms": total_time,
+            "security_checks": {
+                "ast_validation": "PASSED",
                 "sandbox_type": sandbox_type,
-                "execution_time_ms": exec_result.execution_time_ms,
-                "total_time_ms": total_time
-            }
+                "checks_passed": security_report.checks_passed,
+                "risk_level": security_report.risk_level,
+            },
+        }
+        return DiagnosticResult.unverifiable(
+            agent_message="Statistical analysis completed, but the claim could not be deterministically verified.",
+            developer_fields={
+                "constraint_id": CONSTRAINT_CLAIM_NOT_VERIFIED,
+                "is_valid": False,
+                "claim_supported": False,
+                **execution_evidence,
+            },
+        )
     
     def _validate_security(self, code: str) -> SecurityReport:
         """Perform comprehensive security validation."""

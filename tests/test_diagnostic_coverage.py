@@ -148,9 +148,18 @@ def test_verify_logic_unsat_path(client):
     assert data["proof_ref"] is None
 
 
-def test_verify_stats_success_verified(client):
-    """Cover stats SUCCESS + claim_supported -> VERIFIED."""
-    with patch("qwed_new.core.stats_verifier.StatsVerifier.verify_stats", return_value={"status": "SUCCESS", "claim_supported": True, "analysis": "mean=2.0"}), \
+def test_verify_stats_verified_pass_through(client):
+    """Cover stats endpoint pass-through of a VERIFIED DiagnosticResult."""
+    dr = DiagnosticResult.verified(
+        "Statistical claim verified",
+        developer_fields={
+            "constraint_id": "stats_verifier.verified",
+            "is_valid": True,
+            "claim_supported": True,
+        },
+        evidence={"engine": "stats", "claim": "mean", "result": 2.0},
+    )
+    with patch("qwed_new.core.stats_verifier.StatsVerifier.verify_stats", return_value=dr), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/stats",
@@ -163,11 +172,22 @@ def test_verify_stats_success_verified(client):
     assert data["status"] == "VERIFIED"
     assert data["is_authoritative"] is True
     assert data["proof_ref"]
+    assert data["constraint_id"] == "stats_verifier.verified"
+    assert data["is_valid"] is True
+    assert data["claim_supported"] is True
 
 
-def test_verify_stats_success_without_claim_supported_is_unverifiable(client):
-    """Cover stats SUCCESS without claim_supported -> UNVERIFIABLE (execution ≠ proof)."""
-    with patch("qwed_new.core.stats_verifier.StatsVerifier.verify_stats", return_value={"status": "SUCCESS", "analysis": "mean=2.0"}), \
+def test_verify_stats_unverifiable_pass_through(client):
+    """Cover stats endpoint pass-through of an UNVERIFIABLE DiagnosticResult (execution != proof)."""
+    dr = DiagnosticResult.unverifiable(
+        "Statistical analysis completed, but the claim could not be deterministically verified.",
+        developer_fields={
+            "constraint_id": "stats_verifier.claim_not_verified",
+            "is_valid": False,
+            "claim_supported": False,
+        },
+    )
+    with patch("qwed_new.core.stats_verifier.StatsVerifier.verify_stats", return_value=dr), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/stats",
@@ -178,6 +198,11 @@ def test_verify_stats_success_without_claim_supported_is_unverifiable(client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "UNVERIFIABLE"
+    assert data["proof_ref"] is None
+    assert data["is_authoritative"] is False
+    assert data["constraint_id"] == "stats_verifier.claim_not_verified"
+    assert data["is_valid"] is False
+    assert data["claim_supported"] is False
 
 
 def test_verify_fact_heuristic_supported_never_returns_verified(client):

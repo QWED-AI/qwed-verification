@@ -620,3 +620,102 @@ class TestFactVerifierLLMAdvisoryOnly:
         result = verifier.verify_fact("claim", "context")
         assert result.status.value == "BLOCKED"
         assert result.constraint_id == "fact_verifier.execution_error"
+
+
+# ========================================================================
+# BatchVerifier migrations — fact/image verify_batch now return DiagnosticResult
+# ========================================================================
+
+class TestFactBatchVerifierDiagnosticResult:
+
+    def setup_method(self):
+        from qwed_new.core.fact_verifier import BatchFactVerifier
+        self.verifier = BatchFactVerifier()
+
+    def test_empty_batch_fails_closed(self):
+        result = self.verifier.verify_batch([], "any context")
+        assert result.status.value == "BLOCKED"
+        assert result.constraint_id == "fact_verifier.empty_batch"
+        assert result.proof_ref is None
+        assert result.developer_fields["summary"]["total"] == 0
+        assert result.is_fail_closed is True
+
+    def test_all_unverifiable_batch_unverifiable(self):
+        result = self.verifier.verify_batch(
+            ["The sky is blue", "Quantum physics is complex"],
+            "The sky is blue today",
+        )
+        assert result.status.value == "UNVERIFIABLE"
+        assert result.proof_ref is None
+        assert result.developer_fields["summary"]["total"] == 2
+        assert result.developer_fields["summary"]["verified"] == 0
+        assert result.developer_fields["summary"]["unverifiable"] == 2
+        assert len(result.developer_fields["results"]) == 2
+
+    def test_any_refuted_batch_blocked(self):
+        """A refuted (negation conflict) claim makes the batch non-admissible."""
+        result = self.verifier.verify_batch(
+            ["The policy covers water damage"],
+            "The policy does not cover water damage",
+        )
+        assert result.status.value == "BLOCKED"
+        assert result.constraint_id == "fact_verifier.batch_blocked"
+        assert result.proof_ref is None
+        assert result.developer_fields["summary"]["blocked"] == 1
+
+
+class TestImageBatchVerifierDiagnosticResult:
+
+    def setup_method(self):
+        from qwed_new.core.image_verifier import ImageVerifier
+        self.verifier = ImageVerifier(use_vlm_fallback=False)
+
+    def test_empty_batch_fails_closed(self):
+        # Pass a valid image so the BLOCKED status is provably caused by the
+        # empty claims list alone, not by an empty/invalid image.
+        png_header = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x00IHDR"
+        img = png_header + (100).to_bytes(4, "big") + (200).to_bytes(4, "big") + b"A" * 100
+        result = self.verifier.verify_batch(img, [])
+        assert result.status.value == "BLOCKED"
+        assert result.constraint_id == "image_verifier.empty_batch"
+        assert result.proof_ref is None
+        assert result.is_fail_closed is True
+
+    def test_all_deterministic_verified_batch_verified(self):
+        """Deterministic size claims → batch VERIFIED with proof_ref."""
+        png_header = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x00IHDR"
+        img = png_header + (100).to_bytes(4, "big") + (200).to_bytes(4, "big") + b"A" * 100
+        result = self.verifier.verify_batch(img, ["100x200"])
+        assert result.status.value == "VERIFIED"
+        assert result.proof_ref is not None
+        assert result.developer_fields["summary"]["verified"] == 1
+
+    def test_batch_proof_binds_image_and_claims(self):
+        """The batch proof must change when the image bytes or claim text change."""
+        png_header = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x00IHDR"
+        dims = (100).to_bytes(4, "big") + (200).to_bytes(4, "big")
+        img_a = png_header + dims + b"A" * 100
+        img_b = png_header + dims + b"B" * 100
+
+        proof_a = self.verifier.verify_batch(img_a, ["100x200"]).proof_ref
+        proof_b = self.verifier.verify_batch(img_b, ["100x200"]).proof_ref
+        # Same claims, different image bytes must not share a proof.
+        assert proof_a != proof_b
+
+        proof_claim = self.verifier.verify_batch(img_a, ["the image is 100x200 pixels"]).proof_ref
+        # Same image, different claim text must not share a proof.
+        assert proof_a != proof_claim
+
+    def test_inconclusive_batch_unverifiable(self):
+        result = self.verifier.verify_batch(b"fake-png-bytes", ["Describe this image"])
+        assert result.status.value == "UNVERIFIABLE"
+        assert result.proof_ref is None
+        assert result.developer_fields["summary"]["unverifiable"] == 1
+
+    def test_result_items_carry_claim(self):
+        png_header = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x00IHDR"
+        img = png_header + (100).to_bytes(4, "big") + (200).to_bytes(4, "big") + b"A" * 100
+        result = self.verifier.verify_batch(img, ["100x200"])
+        items = result.developer_fields["results"]
+        assert items[0]["claim"] == "100x200"
+        assert items[0]["status"] == "VERIFIED"
