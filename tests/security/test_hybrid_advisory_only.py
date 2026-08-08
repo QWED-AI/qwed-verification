@@ -671,7 +671,11 @@ class TestImageBatchVerifierDiagnosticResult:
         self.verifier = ImageVerifier(use_vlm_fallback=False)
 
     def test_empty_batch_fails_closed(self):
-        result = self.verifier.verify_batch(b"", [])
+        # Pass a valid image so the BLOCKED status is provably caused by the
+        # empty claims list alone, not by an empty/invalid image.
+        png_header = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x00IHDR"
+        img = png_header + (100).to_bytes(4, "big") + (200).to_bytes(4, "big") + b"A" * 100
+        result = self.verifier.verify_batch(img, [])
         assert result.status.value == "BLOCKED"
         assert result.constraint_id == "image_verifier.empty_batch"
         assert result.proof_ref is None
@@ -685,6 +689,22 @@ class TestImageBatchVerifierDiagnosticResult:
         assert result.status.value == "VERIFIED"
         assert result.proof_ref is not None
         assert result.developer_fields["summary"]["verified"] == 1
+
+    def test_batch_proof_binds_image_and_claims(self):
+        """The batch proof must change when the image bytes or claim text change."""
+        png_header = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x00IHDR"
+        dims = (100).to_bytes(4, "big") + (200).to_bytes(4, "big")
+        img_a = png_header + dims + b"A" * 100
+        img_b = png_header + dims + b"B" * 100
+
+        proof_a = self.verifier.verify_batch(img_a, ["100x200"]).proof_ref
+        proof_b = self.verifier.verify_batch(img_b, ["100x200"]).proof_ref
+        # Same claims, different image bytes must not share a proof.
+        assert proof_a != proof_b
+
+        proof_claim = self.verifier.verify_batch(img_a, ["the image is 100x200 pixels"]).proof_ref
+        # Same image, different claim text must not share a proof.
+        assert proof_a != proof_claim
 
     def test_inconclusive_batch_unverifiable(self):
         result = self.verifier.verify_batch(b"fake-png-bytes", ["Describe this image"])

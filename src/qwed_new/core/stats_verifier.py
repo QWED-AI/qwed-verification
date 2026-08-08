@@ -14,6 +14,7 @@ Enhanced Features:
 import pandas as pd
 import logging
 import time
+import json
 from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass, field
 import ast
@@ -35,6 +36,32 @@ CONSTRAINT_VALIDATION_ERROR = "stats_verifier.validation_error"
 CONSTRAINT_EXECUTION_FAILURE = "stats_verifier.execution_failure"
 CONSTRAINT_RUNTIME_UNAVAILABLE = "stats_verifier.runtime_unavailable"
 CONSTRAINT_CLAIM_NOT_VERIFIED = "stats_verifier.claim_not_verified"
+
+
+def _json_safe(value: Any) -> Any:
+    """Coerce an execution result to a JSON-serializable form.
+
+    The Docker sandbox returns whatever the generated code assigned to
+    ``result`` — scalars, lists, dicts, or arbitrary objects (e.g. a pandas
+    DataFrame). ``developer_fields`` must snapshot cleanly in
+    ``enforce_trust_decision``; a non-serializable value would otherwise raise
+    during ``_snapshot_developer_fields`` and silently downgrade an intended
+    UNVERIFIABLE verdict to BLOCKED (fail-closed, but with a misleading
+    constraint). Scalars pass through, containers are coerced recursively, and
+    anything else falls back to ``repr`` so the observed value is retained as
+    display text rather than crashing the trust gate.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        return repr(value)
 
 
 @dataclass
@@ -494,7 +521,7 @@ class StatsVerifier:
         # Without a deterministic claim-proof the result is UNVERIFIABLE and
         # carries no proof_ref; evidence is retained for review.
         execution_evidence = {
-            "observed_result": exec_result.result,
+            "observed_result": _json_safe(exec_result.result),
             "generated_code": code,
             "columns": columns,
             "sandbox_type": sandbox_type,

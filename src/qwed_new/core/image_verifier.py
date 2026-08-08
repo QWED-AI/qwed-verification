@@ -18,7 +18,11 @@ import re
 import struct
 import hashlib
 
-from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck
+from qwed_new.core.diagnostics import (
+    AdvisoryCheck,
+    DiagnosticResult,
+    aggregate_batch_diagnostic,
+)
 
 _INCONCLUSIVE_MSG = "Image verification inconclusive"
 
@@ -560,89 +564,36 @@ class ImageVerifier:
             serialized["claim"] = claim
             items.append(serialized)
 
-        total = len(claims)
+        # Bind the shared image bytes into the batch proof so the verdict can be
+        # re-derived from the evidence (same claims against a different image must
+        # not share a proof).
+        extra_evidence: Dict[str, Any] = {}
+        if image_bytes:
+            extra_evidence["image_sha256"] = hashlib.sha256(image_bytes).hexdigest()
 
-        # Fail closed: an empty batch proves nothing and must not be admitted.
-        if total == 0:
-            return DiagnosticResult.blocked(
-                agent_message="Batch image verification failed: no claims were provided.",
-                developer_fields={
-                    "constraint_id": _CONSTRAINT_IMAGE_EMPTY_BATCH,
-                    "is_valid": False,
-                    "results": [],
-                    "summary": {"total": 0, "verified": 0, "unverifiable": 0, "blocked": 0},
-                    "engine": "ImageVerifier",
-                },
-            )
-
-        verified = sum(1 for item in items if item["status"] == "VERIFIED")
-        blocked = sum(1 for item in items if item["status"] == "BLOCKED")
-        unverifiable = total - verified - blocked
-        is_verified_all = verified == total
-
-        summary = {
-            "total": total,
-            "verified": verified,
-            "unverifiable": unverifiable,
-            "blocked": blocked,
-        }
-
-        batch_fields: Dict[str, Any] = {
-            "constraint_id": (
-                _CONSTRAINT_IMAGE_BATCH_VERIFIED
-                if is_verified_all
-                else _CONSTRAINT_IMAGE_BATCH_BLOCKED if blocked else _CONSTRAINT_IMAGE_BATCH_UNVERIFIABLE
-            ),
-            "is_valid": is_verified_all,
-            "results": items,
-            "summary": summary,
-            "engine": "ImageVerifier",
-        }
-
-        if blocked > 0:
-            # Fail closed: any refuted/error claim makes the whole batch non-admissible.
-            return DiagnosticResult.blocked(
-                agent_message=(
+        return aggregate_batch_diagnostic(
+            items,
+            claims,
+            engine="ImageVerifier",
+            constraints={
+                "verified": _CONSTRAINT_IMAGE_BATCH_VERIFIED,
+                "blocked": _CONSTRAINT_IMAGE_BATCH_BLOCKED,
+                "unverifiable": _CONSTRAINT_IMAGE_BATCH_UNVERIFIABLE,
+                "empty": _CONSTRAINT_IMAGE_EMPTY_BATCH,
+            },
+            messages={
+                "empty": "Batch image verification failed: no claims were provided.",
+                "blocked": (
                     "Batch image verification flagged refuted or failed claims; "
                     "the batch is not admissible."
                 ),
-                developer_fields=batch_fields,
-            )
-
-        if not is_verified_all:
-            return DiagnosticResult.unverifiable(
-                agent_message=(
+                "unverifiable": (
                     "Batch image verification is inconclusive: some claims could "
                     "not be deterministically verified."
                 ),
-                developer_fields=batch_fields,
-            )
-
-        # Fail closed: a batch is authoritative only when every claim has a proof.
-        # The batch proof binds the full claim texts (the truncated ``results``
-        # claim field is display-only and not proof-bearing). The image bytes are
-        # shared across claims and bound by a stable digest.
-        claim_digests = [
-            hashlib.sha256(claim.encode("utf-8")).hexdigest() for claim in claims
-        ]
-        evidence = {
-            "engine": "ImageVerifier",
-            "count": total,
-            "image_sha256": hashlib.sha256(image_bytes).hexdigest() if image_bytes else None,
-            "claims": [
-                claim if len(claim) <= 100 else claim[:100] + "..." for claim in claims
-            ],
-            "claim_digests": claim_digests,
-            "verdicts": [
-                {"status": item["status"], "is_valid": item["developer_fields"].get("is_valid")}
-                for item in items
-            ],
-        }
-
-        return DiagnosticResult.verified(
-            agent_message="Batch image verification succeeded: all claims were verified.",
-            developer_fields=batch_fields,
-            evidence=evidence,
+                "verified": "Batch image verification succeeded: all claims were verified.",
+            },
+            extra_evidence=extra_evidence,
         )
 
 

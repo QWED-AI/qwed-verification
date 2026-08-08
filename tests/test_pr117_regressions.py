@@ -353,6 +353,43 @@ def test_stats_verifier_success_if_no_claim_eval_is_unverifiable():
     assert result.is_fail_closed is True
 
 
+def test_stats_verifier_non_serializable_result_stays_unverifiable():
+    """A non-JSON-serializable execution result must not downgrade UNVERIFIABLE.
+
+    The Docker sandbox can return any object the generated code assigns to
+    ``result``. ``enforce_trust_decision`` snapshots developer_fields and fails
+    closed on non-serializable values; the engine must coerce observed_result so
+    a legitimate UNVERIFIABLE verdict survives the trust gate (Sentry MEDIUM).
+    """
+    from qwed_new.core.diagnostics import enforce_trust_decision
+
+    class Opaque:
+        def __repr__(self):
+            return "<opaque dataframe>"
+
+    verifier = StatsVerifier()
+    verifier._translator = MagicMock()
+    verifier._translator.translate_stats.return_value = "result = compute()"
+    verifier._code_verifier = MagicMock()
+    verifier._code_verifier.verify_code.return_value = _safe_code_verifier_result()
+    verifier._docker_executor = MagicMock()
+    verifier._docker_executor.is_available.return_value = True
+    verifier._docker_executor.execute.return_value = (True, None, Opaque())
+
+    df = pd.DataFrame({"value": [1, 2, 3]})
+
+    result = verifier.verify_stats("What is the mean of value?", df)
+
+    assert result.status.value == "UNVERIFIABLE"
+    # observed_result is coerced to a JSON-safe string, not the raw object.
+    assert result.developer_fields["observed_result"] == "<opaque dataframe>"
+
+    # The verdict must survive trust-boundary enforcement (no silent BLOCKED).
+    enforced = enforce_trust_decision(result, require_attestation=False)
+    assert enforced.status.value == "UNVERIFIABLE"
+    assert enforced.constraint_id == "stats_verifier.claim_not_verified"
+
+
 def test_stats_verifier_blocks_on_security_validation():
     verifier = StatsVerifier()
     verifier._translator = MagicMock()
