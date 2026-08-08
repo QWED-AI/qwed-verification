@@ -351,6 +351,26 @@ def test_stats_verifier_success_if_no_claim_eval_is_unverifiable():
     assert result.developer_fields["is_valid"] is False
     assert result.developer_fields["observed_result"] == 2.0
     assert result.is_fail_closed is True
+    # Execution evidence binds the specific dataset that was analyzed.
+    fingerprint = result.developer_fields["dataset_sha256"]
+    assert isinstance(fingerprint, str) and len(fingerprint) == 64
+
+
+def test_stats_verifier_dataset_fingerprint_binds_data():
+    """The dataset fingerprint must differ when the underlying data changes."""
+    from qwed_new.core.stats_verifier import _dataset_fingerprint
+
+    df_a = pd.DataFrame({"value": [1, 2, 3]})
+    df_b = pd.DataFrame({"value": [1, 2, 4]})
+
+    fp_a = _dataset_fingerprint(df_a)
+    fp_b = _dataset_fingerprint(df_b)
+
+    assert fp_a is not None and fp_b is not None
+    # Same data -> same fingerprint (deterministic).
+    assert fp_a == _dataset_fingerprint(pd.DataFrame({"value": [1, 2, 3]}))
+    # Different data -> different fingerprint.
+    assert fp_a != fp_b
 
 
 def test_stats_verifier_non_serializable_result_stays_unverifiable():

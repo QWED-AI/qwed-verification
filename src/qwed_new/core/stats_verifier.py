@@ -15,6 +15,7 @@ import pandas as pd
 import logging
 import time
 import json
+import hashlib
 from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass, field
 import ast
@@ -62,6 +63,22 @@ def _json_safe(value: Any) -> Any:
         return value
     except (TypeError, ValueError):
         return repr(value)
+
+
+def _dataset_fingerprint(df: pd.DataFrame) -> Optional[str]:
+    """Best-effort deterministic fingerprint of the input dataset.
+
+    Binds the verification outcome to the specific data that was analyzed so the
+    result can be replayed/audited against the same dataset. Uses pandas'
+    canonical per-row hasher (dtype/NaN aware) and hashes the digest bytes. This
+    is advisory evidence only — a hashing failure never changes the (already
+    fail-closed) verdict, so it degrades to ``None`` instead of raising.
+    """
+    try:
+        row_hashes = pd.util.hash_pandas_object(df, index=True)
+        return hashlib.sha256(row_hashes.values.tobytes()).hexdigest()
+    except Exception:
+        return None
 
 
 @dataclass
@@ -524,6 +541,7 @@ class StatsVerifier:
             "observed_result": _json_safe(exec_result.result),
             "generated_code": code,
             "columns": columns,
+            "dataset_sha256": _dataset_fingerprint(df),
             "sandbox_type": sandbox_type,
             "execution_time_ms": exec_result.execution_time_ms,
             "total_time_ms": total_time,
