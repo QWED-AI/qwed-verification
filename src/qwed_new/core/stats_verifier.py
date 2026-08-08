@@ -404,7 +404,25 @@ class StatsVerifier:
             )
 
         # 2. Pre-execution security validation
-        security_report = self._validate_security(code)
+        try:
+            security_report = self._validate_security(code)
+        except Exception as exc:
+            logger.error(
+                "Stats security validation failed (exception_type=%s)",
+                type(exc).__name__,
+                exc_info=False,
+            )
+            return DiagnosticResult.blocked(
+                agent_message="Statistical verification was blocked because the generated code could not be security validated.",
+                developer_fields={
+                    "constraint_id": CONSTRAINT_VALIDATION_ERROR,
+                    "is_valid": False,
+                    "is_error": True,
+                    "generated_code": code,
+                    "columns": columns,
+                    "execution_time_ms": _elapsed(),
+                },
+            )
 
         if not security_report.is_safe:
             logger.warning("Code failed security validation: %s", security_report.checks_failed)

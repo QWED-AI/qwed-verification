@@ -372,11 +372,18 @@ async def verify_stats(
         dr = verifier.verify_stats(query, df, provider=None)
         dr = _enforce_trust(dr, query=query)
 
+        # Fail-closed audit semantics (P1 #297): never log a BLOCKED / non-
+        # authoritative result as verified. is_authoritative is False for every
+        # fail-closed status (BLOCKED/UNVERIFIABLE proof_ref=None), so a result
+        # cannot be persisted as verified unless it is a proven claim AND its
+        # claim-validity signal is true. developer_fields.is_valid alone is
+        # mutable engine metadata and must not drive the audit bit.
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=query,
             result=str(dr.to_dict()),
-            is_verified=dr.developer_fields.get("is_valid") is True,
+            is_verified=dr.is_authoritative
+            and dr.developer_fields.get("is_valid") is True,
             domain="STATS"
         )
         _safe_commit_log(session, log)

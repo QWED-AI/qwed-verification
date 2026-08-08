@@ -172,6 +172,9 @@ def test_verify_stats_verified_pass_through(client):
     assert data["status"] == "VERIFIED"
     assert data["is_authoritative"] is True
     assert data["proof_ref"]
+    assert data["constraint_id"] == "stats_verifier.verified"
+    assert data["is_valid"] is True
+    assert data["claim_supported"] is True
 
 
 def test_verify_stats_unverifiable_pass_through(client):
@@ -197,6 +200,9 @@ def test_verify_stats_unverifiable_pass_through(client):
     assert data["status"] == "UNVERIFIABLE"
     assert data["proof_ref"] is None
     assert data["is_authoritative"] is False
+    assert data["constraint_id"] == "stats_verifier.claim_not_verified"
+    assert data["is_valid"] is False
+    assert data["claim_supported"] is False
 
 
 def test_verify_fact_heuristic_supported_never_returns_verified(client):

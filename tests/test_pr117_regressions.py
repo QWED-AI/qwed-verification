@@ -38,6 +38,21 @@ def _safe_code_verifier_result():
     )
 
 
+def _unsafe_code_verifier_result():
+    """A real DiagnosticResult for a dangerous snippet — no proof, must fail closed."""
+    return DiagnosticResult.blocked(
+        agent_message="The code failed security verification.",
+        developer_fields={
+            "constraint_id": "code_verifier.dangerous_pattern",
+            "is_valid": False,
+            "is_safe": False,
+            "critical_count": 1,
+            "warning_count": 0,
+            "issues": [{"type": "dangerous", "description": "blocked bypass"}],
+        },
+    )
+
+
 @pytest.fixture
 def client():
     previous_overrides = app.dependency_overrides.copy()
@@ -145,6 +160,8 @@ def test_stats_api_masks_secure_runtime_unavailability(client):
     assert data["status"] == "BLOCKED"
     assert data["agent_message"] == "Service temporarily unavailable"
     assert data["proof_ref"] is None
+    assert data["constraint_id"] == "stats_verifier.runtime_unavailable"
+    assert data["error_code"] == SECURE_STATS_BLOCKED_CODE
 
 
 def test_stats_api_preserves_security_policy_blocks(client):
@@ -168,6 +185,8 @@ def test_stats_api_preserves_security_policy_blocks(client):
     assert data["status"] == "BLOCKED"
     assert data["agent_message"] == "blocked by security policy"
     assert data["proof_ref"] is None
+    assert data["constraint_id"] == "stats_verifier.validation_error"
+    assert data["is_valid"] is False
 
 
 def test_consensus_code_engine_requires_secure_executor():
@@ -306,6 +325,92 @@ def test_compute_statistics_rejects_ambiguous_mode():
 
     assert result["status"] == "ERROR"
     assert "ambiguous" in result["error"]
+
+
+def test_stats_verifier_success_if_no_claim_eval_is_unverifiable():
+    """Cover the execution-success -> UNVERIFIABLE branch of verify_stats."""
+    verifier = StatsVerifier()
+    verifier._translator = MagicMock()
+    verifier._translator.translate_stats.return_value = "result = df['value'].mean()"
+    verifier._code_verifier = MagicMock()
+    verifier._code_verifier.verify_code.return_value = _safe_code_verifier_result()
+    verifier._docker_executor = MagicMock()
+    verifier._docker_executor.is_available.return_value = True
+    verifier._docker_executor.execute.return_value = (
+        True,
+        None,
+        2.0,
+    )
+
+    df = pd.DataFrame({"value": [1, 2, 3]})
+
+    result = verifier.verify_stats("What is the mean of value?", df)
+
+    assert result.status.value == "UNVERIFIABLE"
+    assert result.constraint_id == "stats_verifier.claim_not_verified"
+    assert result.developer_fields["is_valid"] is False
+    assert result.developer_fields["observed_result"] == 2.0
+    assert result.is_fail_closed is True
+
+
+def test_stats_verifier_blocks_on_security_validation():
+    verifier = StatsVerifier()
+    verifier._translator = MagicMock()
+    verifier._translator.translate_stats.return_value = "result = df['value'].mean()"
+    verifier._code_verifier = MagicMock()
+    verifier._code_verifier.verify_code.return_value = _unsafe_code_verifier_result()
+    verifier._docker_executor = MagicMock()
+    verifier._docker_executor.is_available.return_value = True
+    verifier._docker_executor.execute.return_value = (
+        True,
+        None,
+        2.0,
+    )
+
+    df = pd.DataFrame({"value": [1, 2, 3]})
+
+    result = verifier.verify_stats("What is the mean of value?", df)
+
+    assert result.status.value == "BLOCKED"
+    assert result.constraint_id == "stats_verifier.validation_error"
+    assert result.developer_fields["is_valid"] is False
+    assert result.is_fail_closed is True
+
+
+def test_stats_verifier_blocks_security_exception():
+    verifier = StatsVerifier()
+    verifier._translator = MagicMock()
+    verifier._translator.translate_stats.return_value = "result = df['value'].mean()"
+    verifier._code_verifier = MagicMock()
+    verifier._code_verifier.verify_code.side_effect = RuntimeError("security engine crash")
+
+    df = pd.DataFrame({"value": [1, 2, 3]})
+
+    result = verifier.verify_stats("What is the mean of value?", df)
+
+    assert result.status.value == "BLOCKED"
+    assert result.constraint_id == "stats_verifier.validation_error"
+    assert result.is_fail_closed is True
+
+
+def test_stats_verifier_execution_failure_is_blocked():
+    verifier = StatsVerifier()
+    verifier._translator = MagicMock()
+    verifier._translator.translate_stats.return_value = "result = df['value'].mean()"
+    verifier._code_verifier = MagicMock()
+    verifier._code_verifier.verify_code.return_value = _safe_code_verifier_result()
+    verifier._docker_executor = MagicMock()
+    verifier._docker_executor.is_available.return_value = True
+    verifier._docker_executor.execute.return_value = (False, "exec boom", None)
+
+    df = pd.DataFrame({"value": [1, 2, 3]})
+
+    result = verifier.verify_stats("What is the mean of value?", df)
+
+    assert result.status.value == "BLOCKED"
+    assert result.constraint_id == "stats_verifier.execution_failure"
+    assert result.developer_fields["error"] == "exec boom"
+    assert result.is_fail_closed is True
 
 
 def test_consensus_preserves_none_answer_value():
