@@ -54,7 +54,7 @@ All notable changes to the QWED Protocol will be documented in this file.
 - `@qwed-ai/sdk` (NPM): `6.0.0` -> `7.0.0`
 - `qwed` (crates.io/Rust): `6.0.0` -> `7.0.0`
 - API version marker: `6.0.0` -> `7.0.0`
-- Kubernetes deployment image: `6.0.0` -> `7.0.0`
+- Kubernetes deployment image: stays pinned to the published `6.0.0` here; bumped to `7.0.0` only after the release publishes the image (avoids `ImagePullBackOff`)
 - Deployment docs version references updated
 
 #### Included PRs (merged after v6.0.0)
@@ -62,6 +62,9 @@ All notable changes to the QWED Protocol will be documented in this file.
 - `#295` fix(sql): migrate SQLVerifier to DiagnosticResult (#253)
 - `#296` feat(core): migrate CodeVerifier and SecureCodeExecutor to DiagnosticResult (#254)
 - `#297` feat(stats): migrate StatsVerifier.verify_stats to DiagnosticResult (#256)
+
+#### GitHub Action
+- The **QWED Verification GitHub Action** is maintained in its own repository — [`QWED-AI/qwed-verification-action`](https://github.com/QWED-AI/qwed-verification-action). It wraps the `qwedai/qwed-verification` Docker image and is versioned independently of this release; it is **not** published from this repository, so no action release is part of v7.0.0.
 
 ## [6.0.0] - 2026-08-02
 
