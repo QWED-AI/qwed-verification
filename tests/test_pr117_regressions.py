@@ -353,7 +353,8 @@ def test_stats_verifier_success_if_no_claim_eval_is_unverifiable():
     assert result.is_fail_closed is True
     # Execution evidence binds the specific dataset that was analyzed.
     fingerprint = result.developer_fields["dataset_sha256"]
-    assert isinstance(fingerprint, str) and len(fingerprint) == 64
+    assert isinstance(fingerprint, str)
+    assert len(fingerprint) == 64
 
 
 def test_stats_verifier_dataset_fingerprint_binds_data():
@@ -366,11 +367,40 @@ def test_stats_verifier_dataset_fingerprint_binds_data():
     fp_a = _dataset_fingerprint(df_a)
     fp_b = _dataset_fingerprint(df_b)
 
-    assert fp_a is not None and fp_b is not None
+    assert fp_a is not None
+    assert fp_b is not None
     # Same data -> same fingerprint (deterministic).
     assert fp_a == _dataset_fingerprint(pd.DataFrame({"value": [1, 2, 3]}))
     # Different data -> different fingerprint.
     assert fp_a != fp_b
+
+
+def test_stats_verifier_fingerprint_failure_blocks(monkeypatch):
+    """A dataset-fingerprint failure must fail closed to BLOCKED, not degrade."""
+    from qwed_new.core import stats_verifier
+
+    def _boom(*args, **kwargs):
+        raise TypeError("unhashable dataset")
+
+    monkeypatch.setattr(stats_verifier.pd.util, "hash_pandas_object", _boom)
+
+    verifier = StatsVerifier()
+    verifier._translator = MagicMock()
+    verifier._translator.translate_stats.return_value = "result = df['value'].mean()"
+    verifier._code_verifier = MagicMock()
+    verifier._code_verifier.verify_code.return_value = _safe_code_verifier_result()
+    verifier._docker_executor = MagicMock()
+    verifier._docker_executor.is_available.return_value = True
+    verifier._docker_executor.execute.return_value = (True, None, 2.0)
+
+    df = pd.DataFrame({"value": [1, 2, 3]})
+
+    result = verifier.verify_stats("What is the mean of value?", df)
+
+    assert result.status.value == "BLOCKED"
+    assert result.constraint_id == "stats_verifier.evidence_failure"
+    assert result.proof_ref is None
+    assert result.is_fail_closed is True
 
 
 def test_stats_verifier_non_serializable_result_stays_unverifiable():

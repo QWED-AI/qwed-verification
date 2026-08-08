@@ -37,6 +37,11 @@ CONSTRAINT_VALIDATION_ERROR = "stats_verifier.validation_error"
 CONSTRAINT_EXECUTION_FAILURE = "stats_verifier.execution_failure"
 CONSTRAINT_RUNTIME_UNAVAILABLE = "stats_verifier.runtime_unavailable"
 CONSTRAINT_CLAIM_NOT_VERIFIED = "stats_verifier.claim_not_verified"
+CONSTRAINT_EVIDENCE_FAILURE = "stats_verifier.evidence_failure"
+
+
+class DatasetFingerprintError(Exception):
+    """Raised when the input dataset cannot be deterministically fingerprinted."""
 
 
 def _json_safe(value: Any) -> Any:
@@ -65,20 +70,25 @@ def _json_safe(value: Any) -> Any:
         return repr(value)
 
 
-def _dataset_fingerprint(df: pd.DataFrame) -> Optional[str]:
-    """Best-effort deterministic fingerprint of the input dataset.
+def _dataset_fingerprint(df: pd.DataFrame) -> str:
+    """Deterministic fingerprint of the input dataset.
 
     Binds the verification outcome to the specific data that was analyzed so the
     result can be replayed/audited against the same dataset. Uses pandas'
-    canonical per-row hasher (dtype/NaN aware) and hashes the digest bytes. This
-    is advisory evidence only — a hashing failure never changes the (already
-    fail-closed) verdict, so it degrades to ``None`` instead of raising.
+    canonical per-row hasher (dtype/NaN aware) and hashes the digest bytes.
+
+    Raises:
+        DatasetFingerprintError: if the dataset cannot be fingerprinted. Callers
+            must fail closed (BLOCKED) rather than emit evidence with no dataset
+            binding — a missing binding is a failure state, not advisory.
     """
     try:
         row_hashes = pd.util.hash_pandas_object(df, index=True)
         return hashlib.sha256(row_hashes.values.tobytes()).hexdigest()
-    except Exception:
-        return None
+    except Exception as exc:
+        raise DatasetFingerprintError(
+            f"dataset fingerprint failed: {type(exc).__name__}"
+        ) from exc
 
 
 @dataclass
@@ -537,11 +547,31 @@ class StatsVerifier:
         # 5. Execution succeeded — but execution != verification (QWED #7/#15).
         # Without a deterministic claim-proof the result is UNVERIFIABLE and
         # carries no proof_ref; evidence is retained for review.
+        #
+        # Bind the dataset deterministically. A fingerprint failure fails closed
+        # (BLOCKED) rather than emitting evidence with no dataset binding.
+        try:
+            dataset_sha256 = _dataset_fingerprint(df)
+        except DatasetFingerprintError:
+            logger.warning("Blocked stats verification because the dataset could not be fingerprinted")
+            return DiagnosticResult.blocked(
+                agent_message="Statistical verification could not be completed because the dataset could not be deterministically fingerprinted.",
+                developer_fields={
+                    "constraint_id": CONSTRAINT_EVIDENCE_FAILURE,
+                    "is_valid": False,
+                    "is_error": True,
+                    "generated_code": code,
+                    "columns": columns,
+                    "execution_time_ms": exec_result.execution_time_ms,
+                    "total_time_ms": total_time,
+                },
+            )
+
         execution_evidence = {
             "observed_result": _json_safe(exec_result.result),
             "generated_code": code,
             "columns": columns,
-            "dataset_sha256": _dataset_fingerprint(df),
+            "dataset_sha256": dataset_sha256,
             "sandbox_type": sandbox_type,
             "execution_time_ms": exec_result.execution_time_ms,
             "total_time_ms": total_time,

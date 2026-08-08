@@ -928,6 +928,16 @@ def aggregate_batch_diagnostic(
     """
     total = len(claims)
 
+    # Fail loudly: verdict counts are taken from ``items`` while the proof binds
+    # ``claims``. A length mismatch would bind digests to claims that were not
+    # the ones evaluated, so reject it rather than produce a misaligned proof.
+    if len(items) != total:
+        raise ValueError(
+            f"aggregate_batch_diagnostic: items/claims length mismatch for "
+            f"{engine!r} — {len(items)} items vs {total} claims. "
+            "Per-item verdicts must be aligned with the claim texts they prove."
+        )
+
     # Fail closed: an empty batch proves nothing and must not be admitted.
     if total == 0:
         return DiagnosticResult.blocked(
@@ -998,6 +1008,14 @@ def aggregate_batch_diagnostic(
         ],
     }
     if extra_evidence:
+        # Never let caller-supplied evidence overwrite the proof-bearing fields
+        # assembled above; a collision would silently weaken the proof binding.
+        collisions = set(extra_evidence) & set(evidence)
+        if collisions:
+            raise ValueError(
+                f"aggregate_batch_diagnostic: extra_evidence for {engine!r} would "
+                f"overwrite proof-bearing fields {sorted(collisions)}."
+            )
         evidence.update(extra_evidence)
 
     return DiagnosticResult.verified(
