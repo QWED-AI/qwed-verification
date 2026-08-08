@@ -460,22 +460,22 @@ class StatsVerifier:
         exec_result = self._execute_docker(code, context)
         total_time = _elapsed()
 
-        if exec_result.error == SECURE_STATS_RUNTIME_UNAVAILABLE:
-            logger.warning("Blocked stats execution because secure Docker sandbox became unavailable")
-            return DiagnosticResult.blocked(
-                agent_message="Statistical verification is temporarily unavailable because the secure execution environment is unavailable.",
-                developer_fields={
-                    "constraint_id": CONSTRAINT_RUNTIME_UNAVAILABLE,
-                    "is_valid": False,
-                    "error_code": SECURE_STATS_BLOCKED_CODE,
-                    "generated_code": code,
-                    "columns": columns,
-                    "execution_time_ms": exec_result.execution_time_ms,
-                    "total_time_ms": total_time,
-                },
-            )
-
         if not exec_result.success:
+            if exec_result.error == SECURE_STATS_RUNTIME_UNAVAILABLE:
+                logger.warning("Blocked stats execution because secure Docker sandbox became unavailable")
+                return DiagnosticResult.blocked(
+                    agent_message="Statistical verification is temporarily unavailable because the secure execution environment is unavailable.",
+                    developer_fields={
+                        "constraint_id": CONSTRAINT_RUNTIME_UNAVAILABLE,
+                        "is_valid": False,
+                        "error_code": SECURE_STATS_BLOCKED_CODE,
+                        "generated_code": code,
+                        "columns": columns,
+                        "execution_time_ms": exec_result.execution_time_ms,
+                        "total_time_ms": total_time,
+                    },
+                )
+
             return DiagnosticResult.blocked(
                 agent_message="Statistical analysis could not be completed because the generated code failed to execute.",
                 developer_fields={
