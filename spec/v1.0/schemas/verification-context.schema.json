@@ -152,18 +152,22 @@
       "properties": {
         "theory": {
           "type": "string",
+          "minLength": 1,
           "description": "The theory / axiom set the statement is interpreted under."
         },
         "logic": {
           "type": "string",
+          "minLength": 1,
           "description": "The logic the statement is expressed in."
         },
         "dialect": {
           "type": "string",
+          "minLength": 1,
           "description": "The dialect (e.g. SQL dialect) where applicable."
         },
         "algebra_domain": {
           "type": "string",
+          "minLength": 1,
           "description": "The algebra domain (e.g. real-closed field) where applicable."
         }
       }

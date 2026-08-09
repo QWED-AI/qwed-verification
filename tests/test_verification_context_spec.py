@@ -17,9 +17,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import jsonschema
 import pytest
-
-jsonschema = pytest.importorskip("jsonschema")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = REPO_ROOT / "spec" / "v1.0" / "schemas" / "verification-context.schema.json"
@@ -242,4 +241,11 @@ def test_blocked_with_admit_rejected(schema):
 def test_empty_interpretation_rejected(schema):
     doc = _verified_doc()
     doc["context"]["interpretation"] = {}
+    assert not _validated(schema, doc)
+
+
+def test_empty_string_interpretation_rejected(schema):
+    """An interpretation field present but empty must not satisfy the layer."""
+    doc = _verified_doc()
+    doc["context"]["interpretation"] = {"theory": ""}
     assert not _validated(schema, doc)

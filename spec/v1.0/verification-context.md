@@ -126,17 +126,36 @@ the commitment.
   cannot include itself: hashing a payload that contains the stored digest would
   require a SHA-256 fixed point, which is not a normal content-addressed hash.
   Producers and resolvers MUST both exclude `proof_ref` from the bound payload.
-- **Canonical encoding:** the bound payload is serialized with a deterministic,
-  canonical encoding (stable key ordering, no ambient/non-deterministic fields
-  such as wall-clock time or memory addresses).
-- **Commitment algorithm:** a cryptographic hash (SHA-256) of the canonical
-  encoding, expressed as `sha256:<64-hex>`.
+- **Canonical encoding (normative, v1.0):** the bound payload is serialized as
+  JSON with **all** of the following, so any two implementations derive identical
+  bytes:
+  - UTF-8 representation, **no** ASCII-escaping of non-ASCII characters
+    (`ensure_ascii=False`).
+  - Object keys sorted lexicographically by Unicode code point (`sort_keys=True`).
+  - Compact separators with no whitespace: `","` between items and `":"` between
+    key and value (`separators=(",", ":")`).
+  - Numbers per RFC 8259; producers MUST NOT emit `NaN`/`Infinity` (fail-closed
+    instead).
+  - No ambient/non-deterministic fields (wall-clock time, memory addresses,
+    randomness) in the bound payload.
+  Equivalent to `json.dumps(payload, sort_keys=True, separators=(",", ":"),
+  ensure_ascii=False)` over the bound payload.
+- **Commitment algorithm:** SHA-256 of the canonical encoding bytes, expressed as
+  `sha256:<64-lowercase-hex>`.
+
+This is the **single canonical commitment** for the Verification Context protocol:
+producers and resolvers MUST use this exact bound payload + encoding + algorithm.
+It is distinct from any engine-internal evidence hashing (e.g. a
+`compute_proof_ref` over evidence alone); a Verification Context `proof_ref`
+always commits to the whole bound payload defined above.
 
 **Resolution and failure semantics.**
 
 - A consumer **resolves** `proof_ref` by removing `context.evidence.proof_ref`,
   re-deriving the commitment from the supplied formal statement + remaining
-  Verification Context + evidence, and comparing it to the stored value.
+  Verification Context + evidence using the canonical encoding above, and comparing
+  it to the stored value.
+- A resolver MUST reject a mismatch **before** any `ADMIT` decision.
 - **Missing, malformed, or mismatched** evidence/commitment is treated as
   **unverified (fail-closed)** — never as verified. A `proof_ref` that cannot be
   resolved confers no authority.
