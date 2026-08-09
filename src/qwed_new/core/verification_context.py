@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass, replace
 from enum import Enum
 from functools import lru_cache
-from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from importlib import resources
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 SPEC_VERSION = "1.0"
-_PROOF_REF_PATTERN = re.compile(r"^sha256:[a-f0-9]{64}$")
+_PROOF_REF_PATTERN = re.compile(r"sha256:[a-f0-9]{64}")
 
 
 class VerificationContextValidationError(ValueError):
@@ -35,7 +38,7 @@ class Formalization:
     translation_confidence: Optional[float] = None
 
     def __post_init__(self) -> None:
-        if self.verified is not False:
+        if not isinstance(self.verified, bool) or self.verified is not False:
             raise VerificationContextValidationError(
                 "object.formalization.verified must be false"
             )
@@ -44,10 +47,16 @@ class Formalization:
                 raise VerificationContextValidationError(
                     "object.formalization.translation_confidence must be a number"
                 )
-            if not 0 <= self.translation_confidence <= 1:
+            if not isinstance(self.translation_confidence, (int, float)):
+                raise VerificationContextValidationError(
+                    "object.formalization.translation_confidence must be a number"
+                )
+            confidence = float(self.translation_confidence)
+            if not math.isfinite(confidence) or not 0 <= confidence <= 1:
                 raise VerificationContextValidationError(
                     "object.formalization.translation_confidence must be between 0 and 1"
                 )
+            object.__setattr__(self, "translation_confidence", confidence)
 
     def to_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {"verified": False}
@@ -66,7 +75,11 @@ class VerifiedObject:
     formalization: Optional[Formalization] = None
 
     def __post_init__(self) -> None:
-        if not self.formal_statement or not self.formal_statement.strip():
+        if not isinstance(self.formal_statement, str):
+            raise VerificationContextValidationError(
+                "object.formal_statement must be a string"
+            )
+        if not self.formal_statement.strip():
             raise VerificationContextValidationError(
                 "object.formal_statement must be non-empty"
             )
@@ -104,9 +117,9 @@ class Interpretation:
                 "context.interpretation requires at least one field"
             )
         for value in present:
-            if not value.strip():
+            if not isinstance(value, str) or not value.strip():
                 raise VerificationContextValidationError(
-                    "context.interpretation fields must be non-empty"
+                    "context.interpretation fields must be non-empty strings"
                 )
 
     def to_dict(self) -> Dict[str, str]:
@@ -134,28 +147,36 @@ class Proof:
     verifier_version: str
     configuration: Optional[Dict[str, Any]] = None
     theory_scope: Optional[str] = None
-    trusted_dependencies: Optional[List[str]] = None
+    trusted_dependencies: Optional[Tuple[str, ...]] = None
     outcome_treatment: Optional[str] = None
 
     def __post_init__(self) -> None:
-        if not self.verifier or not self.verifier.strip():
+        if not isinstance(self.verifier, str) or not self.verifier.strip():
             raise VerificationContextValidationError(
                 "context.proof.verifier must be non-empty"
             )
-        if not self.verifier_version or not self.verifier_version.strip():
+        if not isinstance(self.verifier_version, str) or not self.verifier_version.strip():
             raise VerificationContextValidationError(
                 "context.proof.verifier_version must be non-empty"
             )
-        if self.configuration is not None and not isinstance(self.configuration, dict):
-            raise VerificationContextValidationError(
-                "context.proof.configuration must be an object"
-            )
+        if self.configuration is not None:
+            if not isinstance(self.configuration, dict):
+                raise VerificationContextValidationError(
+                    "context.proof.configuration must be an object"
+                )
+            object.__setattr__(self, "configuration", copy.deepcopy(self.configuration))
         if self.trusted_dependencies is not None:
-            for dependency in self.trusted_dependencies:
+            if not isinstance(self.trusted_dependencies, (list, tuple)):
+                raise VerificationContextValidationError(
+                    "context.proof.trusted_dependencies must be an array"
+                )
+            dependencies = tuple(self.trusted_dependencies)
+            for dependency in dependencies:
                 if not isinstance(dependency, str) or not dependency.strip():
                     raise VerificationContextValidationError(
                         "context.proof.trusted_dependencies must contain non-empty strings"
                     )
+            object.__setattr__(self, "trusted_dependencies", dependencies)
 
     def to_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {
@@ -163,7 +184,7 @@ class Proof:
             "verifier_version": self.verifier_version,
         }
         if self.configuration is not None:
-            out["configuration"] = self.configuration
+            out["configuration"] = copy.deepcopy(self.configuration)
         if self.theory_scope is not None:
             out["theory_scope"] = self.theory_scope
         if self.trusted_dependencies is not None:
@@ -175,22 +196,23 @@ class Proof:
 
 @dataclass(frozen=True)
 class Evidence:
-    evidence: Dict[str, Any]
+    payload: Dict[str, Any]
     proof_ref: Optional[str] = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.evidence, dict):
+        if not isinstance(self.payload, dict):
             raise VerificationContextValidationError(
                 "context.evidence.evidence must be an object"
             )
-        if self.proof_ref is not None and not _PROOF_REF_PATTERN.match(self.proof_ref):
+        object.__setattr__(self, "payload", copy.deepcopy(self.payload))
+        if self.proof_ref is not None and not _PROOF_REF_PATTERN.fullmatch(self.proof_ref):
             raise VerificationContextValidationError(
                 "context.evidence.proof_ref must match ^sha256:[a-f0-9]{64}$"
             )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "evidence": self.evidence,
+            "evidence": copy.deepcopy(self.payload),
             "proof_ref": self.proof_ref,
         }
 
@@ -225,6 +247,117 @@ class VerificationContext:
         }
 
 
+def _reject_unpaired_surrogates(value: str) -> None:
+    for ch in value:
+        if 0xD800 <= ord(ch) <= 0xDFFF:
+            raise VerificationContextValidationError(
+                f"unpaired UTF-16 surrogate not allowed in proof_ref payload: {value!r}"
+            )
+
+
+def _es_number_to_string(value: float) -> str:
+    neg = value < 0
+    ax = abs(value)
+    r = repr(ax)
+    if "e" in r:
+        mant, exp_s = r.split("e")
+        e10 = int(exp_s)
+    else:
+        mant = r
+        e10 = 0
+    if "." in mant:
+        ip, fp = mant.split(".")
+        coeff = int(ip + fp) if (ip + fp).lstrip("0") else 0
+        e10 -= len(fp)
+    else:
+        coeff = int(mant)
+    while coeff > 0 and coeff % 10 == 0:
+        coeff //= 10
+        e10 += 1
+    if coeff == 0:
+        return "0"
+    s_digits = str(coeff)
+    k = len(s_digits)
+    n = e10 + k
+    if k <= n <= 21:
+        out = s_digits + "0" * (n - k)
+    elif 0 < n <= 21:
+        out = s_digits[:n] + "." + s_digits[n:]
+    elif -6 < n <= 0:
+        out = "0." + "0" * (-n) + s_digits
+    else:
+        exp = n - 1
+        sign = "+" if exp >= 0 else "-"
+        if k == 1:
+            out = s_digits + "e" + sign + str(abs(exp))
+        else:
+            out = s_digits[0] + "." + s_digits[1:] + "e" + sign + str(abs(exp))
+    return ("-" if neg else "") + out
+
+
+def _canonical_json(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        try:
+            as_float = float(value)
+        except OverflowError as exc:
+            raise VerificationContextValidationError(
+                f"integer not representable as IEEE-754 double: {value!r}"
+            ) from exc
+        if int(as_float) != value:
+            raise VerificationContextValidationError(
+                f"integer not representable as IEEE-754 double: {value!r}"
+            )
+        return _es_number_to_string(as_float)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise VerificationContextValidationError(
+                f"non-finite number not allowed in proof_ref payload: {value!r}"
+            )
+        return _es_number_to_string(value)
+    if isinstance(value, str):
+        _reject_unpaired_surrogates(value)
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, (list, tuple)):
+        return "[" + ",".join(_canonical_json(item) for item in value) + "]"
+    if isinstance(value, Mapping):
+        for key in value:
+            if not isinstance(key, str):
+                raise VerificationContextValidationError(
+                    f"non-string object key not allowed in proof_ref payload: {key!r}"
+                )
+            _reject_unpaired_surrogates(key)
+        items = sorted(value.items(), key=lambda kv: kv[0].encode("utf-16-be"))
+        return (
+            "{"
+            + ",".join(
+                json.dumps(k, ensure_ascii=False) + ":" + _canonical_json(v)
+                for k, v in items
+            )
+            + "}"
+        )
+    raise VerificationContextValidationError(
+        f"unsupported type in proof_ref payload: {type(value).__name__}"
+    )
+
+
+def compute_context_proof_ref(
+    formal_statement: str,
+    context: VerificationContext,
+) -> str:
+    context_dict = context.to_dict()
+    context_dict["evidence"].pop("proof_ref", None)
+    bound = {
+        "formal_statement": formal_statement,
+        "context": context_dict,
+    }
+    payload = _canonical_json(bound)
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True)
 class VerificationContextDocument:
     verified_object: VerifiedObject
@@ -247,6 +380,14 @@ class VerificationContextDocument:
                 raise VerificationContextValidationError(
                     "VERIFIED requires context.evidence.proof_ref"
                 )
+            expected = compute_context_proof_ref(
+                self.verified_object.formal_statement,
+                self.context,
+            )
+            if proof_ref != expected:
+                raise VerificationContextValidationError(
+                    "VERIFIED proof_ref does not resolve against the bound payload"
+                )
         else:
             if proof_ref is not None:
                 raise VerificationContextValidationError(
@@ -265,11 +406,11 @@ class VerificationContextDocument:
             "verdict": self.verdict.value,
         }
 
-    def validate(self, schema: Optional[Mapping[str, Any]] = None) -> None:
-        validate_document(self.to_dict(), schema=schema)
+    def validate(self) -> None:
+        validate_document(self.to_dict())
 
-    def is_valid(self, schema: Optional[Mapping[str, Any]] = None) -> bool:
-        return is_valid_document(self.to_dict(), schema=schema)
+    def is_valid(self) -> bool:
+        return is_valid_document(self.to_dict())
 
     @classmethod
     def verified(
@@ -277,10 +418,15 @@ class VerificationContextDocument:
         *,
         formal_statement: str,
         context: VerificationContext,
-        proof_ref: str,
         formalization: Optional[Formalization] = None,
+        proof_ref: Optional[str] = None,
     ) -> "VerificationContextDocument":
-        evidence = Evidence(evidence=context.evidence.evidence, proof_ref=proof_ref)
+        expected = compute_context_proof_ref(formal_statement, context)
+        if proof_ref is not None and proof_ref != expected:
+            raise VerificationContextValidationError(
+                "supplied proof_ref does not resolve against the bound payload"
+            )
+        evidence = Evidence(payload=context.evidence.payload, proof_ref=expected)
         context = replace(context, evidence=evidence)
         return cls(
             verified_object=VerifiedObject(
@@ -330,7 +476,7 @@ class VerificationContextDocument:
         context: VerificationContext,
         formalization: Optional[Formalization] = None,
     ) -> "VerificationContextDocument":
-        evidence = Evidence(evidence=context.evidence.evidence, proof_ref=None)
+        evidence = Evidence(payload=context.evidence.payload, proof_ref=None)
         decision = Decision(admission=Admission.DENY)
         context = replace(context, evidence=evidence, decision=decision)
         return cls(
@@ -343,44 +489,29 @@ class VerificationContextDocument:
         )
 
 
-def _default_schema_path() -> Path:
-    path = (
-        Path(__file__).resolve().parents[3]
-        / "spec"
-        / "v1.0"
-        / "schemas"
-        / "verification-context.schema.json"
-    )
-    if path.exists():
-        return path
-    return (
-        Path.cwd()
-        / "spec"
-        / "v1.0"
-        / "schemas"
-        / "verification-context.schema.json"
-    )
-
-
 @lru_cache(maxsize=1)
-def _load_schema_cached(path: str) -> Dict[str, Any]:
-    with open(path, encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def load_schema(schema_path: Optional[Path] = None) -> Dict[str, Any]:
-    path = schema_path or _default_schema_path()
-    if not path.exists():
-        raise VerificationContextValidationError(
-            f"Verification Context schema not found: {path}"
+def _schema_text() -> str:
+    try:
+        resource = resources.files("qwed_new.core").joinpath(
+            "data/verification-context.schema.json"
         )
-    return _load_schema_cached(str(path))
+        return resource.read_text(encoding="utf-8")
+    except Exception as exc:
+        raise VerificationContextValidationError(
+            "packaged Verification Context schema not found"
+        ) from exc
 
 
-def validate_document(
-    document: Mapping[str, Any],
-    schema: Optional[Mapping[str, Any]] = None,
-) -> None:
+def load_schema() -> Dict[str, Any]:
+    try:
+        return json.loads(_schema_text())
+    except json.JSONDecodeError as exc:
+        raise VerificationContextValidationError(
+            "packaged Verification Context schema is invalid JSON"
+        ) from exc
+
+
+def validate_document(document: Mapping[str, Any]) -> None:
     if not isinstance(document, Mapping):
         raise VerificationContextValidationError(
             "Verification Context document must be a JSON object"
@@ -392,8 +523,7 @@ def validate_document(
             "jsonschema is required for Verification Context validation"
         ) from exc
 
-    schema_obj = dict(schema) if schema is not None else load_schema()
-    validator = Draft202012Validator(schema_obj)
+    validator = Draft202012Validator(load_schema())
     errors = sorted(
         validator.iter_errors(document),
         key=lambda error: "/".join(str(part) for part in error.path),
@@ -404,12 +534,9 @@ def validate_document(
         raise VerificationContextValidationError(f"{path}: {first.message}")
 
 
-def is_valid_document(
-    document: Mapping[str, Any],
-    schema: Optional[Mapping[str, Any]] = None,
-) -> bool:
+def is_valid_document(document: Mapping[str, Any]) -> bool:
     try:
-        validate_document(document, schema=schema)
+        validate_document(document)
         return True
     except VerificationContextValidationError:
         return False
