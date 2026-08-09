@@ -134,23 +134,24 @@ the commitment.
   bytes:
   - UTF-8 representation, **no** ASCII-escaping of non-ASCII characters
     (`ensure_ascii=False`).
-  - Object keys sorted lexicographically by Unicode code point (`sort_keys=True`).
+  - Object keys MUST be strings; non-string keys are rejected. Keys are sorted
+    by their UTF-16 big-endian byte representation (UTF-16 code-unit order), not
+    by Unicode code-point order.
   - Compact separators with no whitespace: `","` between items and `":"` between
     key and value (`separators=(",", ":")`).
-  - **Canonical numbers (normative):** numbers are serialized by this exact,
-    language-independent algorithm:
+  - **Canonical numbers (normative):** every number is an IEEE-754 double and is
+    serialized per **RFC 8785 §3.2.2** (ECMAScript `Number::toString`): the
+    shortest decimal form that round-trips the double, with fixed-point notation
+    for exponents in `[-6, 21]` and exponential notation otherwise (e.g.
+    `1e-6` → `0.000001`, `1e-7` → `1e-7`, `1e21` → `1e+21`). This makes `1`
+    and `1.0` commit identically and normalizes negative zero (`-0.0`) to `0`.
     1. **Reject non-finite values.** `NaN`, `+Infinity`, and `-Infinity` are not
       permitted in the bound payload; producers MUST fail-closed rather than
       serialize them.
-    2. **Integer-valued numbers** (integers and integer-valued floats) are
-      serialized as base-10 JSON integers with no leading zeros and no decimal
-      point or exponent; large integers use arbitrary precision. This makes `1`
-      and `1.0` commit identically and normalizes negative zero (`-0.0`) to `0`.
-    3. **Non-integer finite numbers** are serialized per **RFC 8785 §3.2.2**
-      (ECMAScript `Number::toString`): the shortest decimal form that round-trips
-      the IEEE 754 double, with fixed-point notation for exponents in `[-6, 21]`
-      and exponential notation otherwise (e.g. `1e-6` → `0.000001`, `1e-7` →
-      `1e-7`). No rounding is applied beyond the value's own double precision.
+    2. **Reject integers that are not exactly representable as IEEE-754
+      doubles.** An integer value MUST be rejected if converting it to a double
+      and back changes its value; arbitrary-precision integer serialization is
+      not permitted.
     Producers MUST NOT emit `NaN`/`Infinity` (fail-closed instead). Note that
     Python's `json.dumps` does **not** implement this number form (it emits
     `1e-07` / `1e-06`); implementations MUST use an RFC 8785-compatible number
@@ -158,7 +159,7 @@ the commitment.
   - No ambient/non-deterministic fields (wall-clock time, memory addresses,
     randomness) in the bound payload.
   The canonical encoding is RFC 8785 (JSON Canonicalization Scheme): UTF-8,
-  lexicographically sorted object keys, no insignificant whitespace, and the
+  UTF-16 big-endian sorted object keys, no insignificant whitespace, and the
   number form above.
 - **Commitment algorithm:** SHA-256 of the canonical encoding bytes, expressed as
   `sha256:<64-lowercase-hex>`.

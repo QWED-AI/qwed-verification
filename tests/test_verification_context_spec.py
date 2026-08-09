@@ -40,40 +40,8 @@ def _validated(schema, doc):
         return False
 
 
-def _canonicalize_numbers(value):
-    """Normalize numbers so equivalent values commit identically.
-
-    JSON does not distinguish ``1`` and ``1.0`` semantically, but they serialize
-    to different bytes. Normalizing integer-valued floats to integers gives a
-    unique canonical form (spec section 3.3, canonical encoding). Non-finite
-    floats (NaN, +/-Infinity) are rejected (fail-closed) rather than serialized.
-    """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError(
-                f"non-finite number not allowed in proof_ref payload: {value!r}"
-            )
-        if value.is_integer():
-            return int(value)
-        return value
-    if isinstance(value, dict):
-        return {k: _canonicalize_numbers(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_canonicalize_numbers(v) for v in value]
-    return value
-
-
 def _es_number_to_string(value):
-    """Serialize a finite, non-zero, non-integer float per ECMAScript
-    Number::toString (the number form mandated by RFC 8785 section 3.2.2).
-
-    Python's ``json.dumps`` does NOT implement this form (e.g. it emits ``1e-07``
-    where ECMAScript emits ``1e-7``, and ``1e-06`` where ECMAScript emits
-    ``0.000001``). This reference implementation matches ECMAScript so producers
-    and resolvers in different languages derive identical bytes.
-    """
+    """Serialize a finite IEEE-754 double per ECMAScript Number::toString."""
     neg = value < 0
     ax = abs(value)
     r = repr(ax)  # shortest round-trip decimal for the double
@@ -115,36 +83,44 @@ def _es_number_to_string(value):
 
 
 def _canonical_json(value):
-    """Serialize a value to canonical JSON per RFC 8785 (JCS).
-
-    Numbers: integer-valued numbers as base-10 JSON integers; non-integer finite
-    floats per ECMAScript Number::toString; non-finite rejected. Objects have
-    sorted keys and no whitespace; strings are UTF-8 JSON strings.
-    """
+    """Serialize a value to canonical JSON per RFC 8785 (JCS)."""
     if value is None:
         return "null"
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
-        return str(value)
+        try:
+            as_float = float(value)
+        except OverflowError as exc:
+            raise ValueError(
+                f"integer not representable as IEEE-754 double: {value!r}"
+            ) from exc
+        if int(as_float) != value:
+            raise ValueError(
+                f"integer not representable as IEEE-754 double: {value!r}"
+            )
+        return _es_number_to_string(as_float)
     if isinstance(value, float):
         if not math.isfinite(value):
             raise ValueError(
                 f"non-finite number not allowed in proof_ref payload: {value!r}"
             )
-        if value.is_integer():
-            return str(int(value))
         return _es_number_to_string(value)
     if isinstance(value, str):
         return json.dumps(value, ensure_ascii=False)
     if isinstance(value, (list, tuple)):
         return "[" + ",".join(_canonical_json(v) for v in value) + "]"
     if isinstance(value, dict):
-        items = sorted(value.items(), key=lambda kv: str(kv[0]))
+        for key in value:
+            if not isinstance(key, str):
+                raise ValueError(
+                    f"non-string object key not allowed in proof_ref payload: {key!r}"
+                )
+        items = sorted(value.items(), key=lambda kv: kv[0].encode("utf-16-be"))
         return (
             "{"
             + ",".join(
-                json.dumps(str(k), ensure_ascii=False) + ":" + _canonical_json(v)
+                json.dumps(k, ensure_ascii=False) + ":" + _canonical_json(v)
                 for k, v in items
             )
             + "}"
@@ -387,7 +363,7 @@ def test_distinct_numbers_commit_differently():
 
 def test_negative_zero_canonicalizes_to_zero():
     """0 and -0 must commit identically (negative zero normalizes to 0)."""
-    assert _canonicalize_numbers(-0.0) == _canonicalize_numbers(0) == 0
+    assert _canonical_json(-0.0) == _canonical_json(0) == "0"
     doc_pos = _verified_doc()
     doc_pos["context"]["evidence"]["evidence"] = {"value": 0.0}
     doc_neg = _verified_doc()
@@ -396,8 +372,8 @@ def test_negative_zero_canonicalizes_to_zero():
 
 
 def test_large_integer_canonical_form():
-    """Integer-valued floats normalize to arbitrary-precision integers."""
-    assert _canonicalize_numbers(1e21) == _canonicalize_numbers(10**21) == 10**21
+    """Representable integer doubles serialize per ECMAScript Number::toString."""
+    assert _canonical_json(1e21) == _canonical_json(10**21) == "1e+21"
     doc_float = _verified_doc()
     doc_float["context"]["evidence"]["evidence"] = {"value": 1e21}
     doc_int = _verified_doc()
@@ -452,13 +428,13 @@ def test_canonical_json_exponent_golden_vectors():
 
 
 def test_canonical_json_integer_golden_vectors():
-    """Integer-valued numbers serialize as base-10 JSON integers."""
+    """Finite IEEE-754 numbers serialize per ECMAScript Number::toString."""
     assert _canonical_json(1) == "1"
     assert _canonical_json(1.0) == "1"
     assert _canonical_json(0) == "0"
     assert _canonical_json(-0.0) == "0"
-    assert _canonical_json(10**21) == "1000000000000000000000"
-    assert _canonical_json(1e21) == "1000000000000000000000"
+    assert _canonical_json(10**21) == "1e+21"
+    assert _canonical_json(1e21) == "1e+21"
 
 
 def test_canonical_json_equivalent_floats_commit_identically():
@@ -500,3 +476,32 @@ def test_undocumented_interpretation_field_rejected(schema):
     doc = _verified_doc()
     doc["context"]["interpretation"] = {"theory": "arithmetic", "bogus_field": "x"}
     assert not _validated(schema, doc)
+
+
+def test_canonical_json_rejects_non_roundtrip_integer():
+    with pytest.raises(ValueError):
+        _canonical_json(2**53 + 1)
+
+
+def test_canonical_json_rejects_overflowing_integer():
+    with pytest.raises(ValueError):
+        _canonical_json(10**400)
+
+
+def test_canonical_json_rejects_non_string_keys():
+    with pytest.raises(ValueError):
+        _canonical_json({1: 1})
+
+
+def test_canonical_json_key_order_utf16():
+    high = chr(0x10000)
+    low = chr(0xE000)
+    value = {low: 1, high: 2}
+    expected = (
+        "{"
+        + json.dumps(high, ensure_ascii=False)
+        + ":2,"
+        + json.dumps(low, ensure_ascii=False)
+        + ":1}"
+    )
+    assert _canonical_json(value) == expected
