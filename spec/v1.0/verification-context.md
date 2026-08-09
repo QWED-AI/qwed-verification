@@ -121,11 +121,14 @@ the commitment.
 
 **How it is computed.**
 
-- **Bound payload:** the formal statement + the complete Verification Context, with
-  `context.evidence.proof_ref` **removed** before serialization. The commitment
+- **Bound payload (normative):** the JSON object
+  `{"formal_statement": <object.formal_statement>, "context": <context>}`, with
+  `context.evidence.proof_ref` **removed** before serialization. Note
+  `object.formalization` is deliberately **not** part of the bound payload — the
+  commitment binds the formal statement, not how it was derived. The commitment
   cannot include itself: hashing a payload that contains the stored digest would
   require a SHA-256 fixed point, which is not a normal content-addressed hash.
-  Producers and resolvers MUST both exclude `proof_ref` from the bound payload.
+  Producers and resolvers MUST both use this exact payload definition.
 - **Canonical encoding (normative, v1.0):** the bound payload is serialized as
   JSON with **all** of the following, so any two implementations derive identical
   bytes:
@@ -134,12 +137,14 @@ the commitment.
   - Object keys sorted lexicographically by Unicode code point (`sort_keys=True`).
   - Compact separators with no whitespace: `","` between items and `":"` between
     key and value (`separators=(",", ":")`).
-  - Numbers per RFC 8259; producers MUST NOT emit `NaN`/`Infinity` (fail-closed
-    instead).
+  - **Canonical numbers:** integer-valued numbers are serialized as JSON integers
+    (no trailing `.0`), so equivalent values `1` and `1.0` commit identically.
+    Non-integer numbers use the shortest round-trip decimal form. Producers MUST
+    NOT emit `NaN`/`Infinity` (fail-closed instead).
   - No ambient/non-deterministic fields (wall-clock time, memory addresses,
     randomness) in the bound payload.
-  Equivalent to `json.dumps(payload, sort_keys=True, separators=(",", ":"),
-  ensure_ascii=False)` over the bound payload.
+  Equivalent to serializing the number-normalized bound payload with
+  `json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`.
 - **Commitment algorithm:** SHA-256 of the canonical encoding bytes, expressed as
   `sha256:<64-lowercase-hex>`.
 

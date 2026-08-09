@@ -39,20 +39,40 @@ def _validated(schema, doc):
         return False
 
 
+def _canonicalize_numbers(value):
+    """Normalize numbers so equivalent values commit identically.
+
+    JSON does not distinguish ``1`` and ``1.0`` semantically, but they serialize
+    to different bytes. Normalizing integer-valued floats to integers gives a
+    unique canonical form (spec section 3.3, canonical encoding).
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {k: _canonicalize_numbers(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonicalize_numbers(v) for v in value]
+    return value
+
+
 def _canonical_proof_ref(doc):
     """Compute proof_ref per the spec (verification-context.md, section 3.3).
 
-    The commitment is the SHA-256 of the canonical encoding of the bound payload
-    — the object + complete Verification Context — with
-    ``context.evidence.proof_ref`` itself EXCLUDED (the commitment cannot include
-    itself). Producers and resolvers must both apply this exclusion.
+    The bound payload is the formal statement + the complete Verification Context,
+    with ``context.evidence.proof_ref`` itself EXCLUDED (the commitment cannot
+    include itself). Note ``object.formalization`` is deliberately NOT part of the
+    bound payload — the commitment binds the formal statement, not how it was
+    derived. Producers and resolvers must both apply this payload definition.
     """
     bound = {
-        "object": doc["object"],
+        "formal_statement": doc["object"]["formal_statement"],
         "context": copy.deepcopy(doc["context"]),
     }
     bound["context"]["evidence"].pop("proof_ref", None)
-    payload = json.dumps(bound, sort_keys=True, separators=(",", ":"))
+    bound = _canonicalize_numbers(bound)
+    payload = json.dumps(bound, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -248,4 +268,55 @@ def test_empty_string_interpretation_rejected(schema):
     """An interpretation field present but empty must not satisfy the layer."""
     doc = _verified_doc()
     doc["context"]["interpretation"] = {"theory": ""}
+    assert not _validated(schema, doc)
+
+
+# --- canonical number representation -----------------------------------------
+
+def test_numeric_canonicalization_equal_values_commit_identically():
+    """Equivalent numbers (1 and 1.0) must commit identically (spec 3.3)."""
+    doc_int = _verified_doc()
+    doc_int["context"]["evidence"]["evidence"] = {"value": 1}
+    doc_float = _verified_doc()
+    doc_float["context"]["evidence"]["evidence"] = {"value": 1.0}
+    assert _canonical_proof_ref(doc_int) == _canonical_proof_ref(doc_float)
+
+
+def test_distinct_numbers_commit_differently():
+    doc_one = _verified_doc()
+    doc_one["context"]["evidence"]["evidence"] = {"value": 1}
+    doc_two = _verified_doc()
+    doc_two["context"]["evidence"]["evidence"] = {"value": 2}
+    assert _canonical_proof_ref(doc_one) != _canonical_proof_ref(doc_two)
+
+
+# --- commitment binds the formal statement, not the formalization ------------
+
+def test_formalization_excluded_from_commitment():
+    """Changing object.formalization must not change the commitment (spec 3.3)."""
+    doc_a = _verified_doc()
+    doc_b = _verified_doc()
+    doc_b["object"]["formalization"]["translator"] = "a-different-translator"
+    assert _canonical_proof_ref(doc_a) == _canonical_proof_ref(doc_b)
+
+
+# --- documented engine-specific interpretation fields ------------------------
+
+def test_code_interpretation_fields_accepted(schema):
+    """Code contexts use language + policy_version (spec 3.1)."""
+    doc = _verified_doc()
+    doc["context"]["interpretation"] = {"language": "python", "policy_version": "1.0"}
+    assert _validated(schema, doc)
+
+
+def test_sql_interpretation_fields_accepted(schema):
+    """SQL contexts use dialect + parser_version (spec 3.1)."""
+    doc = _verified_doc()
+    doc["context"]["interpretation"] = {"dialect": "postgres", "parser_version": "0.21"}
+    assert _validated(schema, doc)
+
+
+def test_undocumented_interpretation_field_rejected(schema):
+    doc = _verified_doc()
+    doc["context"]["interpretation"] = {"theory": "arithmetic", "bogus_field": "x"}
     assert not _validated(schema, doc)

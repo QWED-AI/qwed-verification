@@ -165,6 +165,21 @@
           "minLength": 1,
           "description": "The dialect (e.g. SQL dialect) where applicable."
         },
+        "parser_version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The parser version (e.g. SQL parser) where applicable."
+        },
+        "language": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The source language (e.g. for code verification) where applicable."
+        },
+        "policy_version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The policy version (e.g. code security policy) where applicable."
+        },
         "algebra_domain": {
           "type": "string",
           "minLength": 1,
