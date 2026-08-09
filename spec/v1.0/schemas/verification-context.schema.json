@@ -52,8 +52,14 @@
           "context": {
             "properties": {
               "evidence": {
+                "required": ["proof_ref"],
                 "properties": {
                   "proof_ref": { "type": "null" }
+                }
+              },
+              "decision": {
+                "properties": {
+                  "admission": { "const": "DENY" }
                 }
               }
             }
@@ -140,8 +146,9 @@
     },
     "Interpretation": {
       "type": "object",
+      "minProperties": 1,
       "additionalProperties": false,
-      "description": "The interpretation layer (ADR-001, ADR-002): required context that gives the object meaning. A statement is only a proposition relative to a theory.",
+      "description": "The interpretation layer (ADR-001, ADR-002): required context that gives the object meaning. A statement is only a proposition relative to a theory. At least one interpretation field must be present.",
       "properties": {
         "theory": {
           "type": "string",

@@ -115,11 +115,17 @@ is the **evidence commitment**.
 > mathematical proof.** *(ADR-002)*
 
 **What it binds.** `proof_ref` commits to the formal statement together with the
-complete Verification Context — interpretation, proof, and evidence. Changing any
-of these changes the commitment.
+complete Verification Context — interpretation, proof, and evidence — **with the
+`proof_ref` field itself excluded** (see below). Changing any bound field changes
+the commitment.
 
 **How it is computed.**
 
+- **Bound payload:** the formal statement + the complete Verification Context, with
+  `context.evidence.proof_ref` **removed** before serialization. The commitment
+  cannot include itself: hashing a payload that contains the stored digest would
+  require a SHA-256 fixed point, which is not a normal content-addressed hash.
+  Producers and resolvers MUST both exclude `proof_ref` from the bound payload.
 - **Canonical encoding:** the bound payload is serialized with a deterministic,
   canonical encoding (stable key ordering, no ambient/non-deterministic fields
   such as wall-clock time or memory addresses).
@@ -128,9 +134,9 @@ of these changes the commitment.
 
 **Resolution and failure semantics.**
 
-- A consumer **resolves** `proof_ref` by re-deriving the commitment from the
-  supplied formal statement + Verification Context + evidence and comparing it to
-  the stored value.
+- A consumer **resolves** `proof_ref` by removing `context.evidence.proof_ref`,
+  re-deriving the commitment from the supplied formal statement + remaining
+  Verification Context + evidence, and comparing it to the stored value.
 - **Missing, malformed, or mismatched** evidence/commitment is treated as
   **unverified (fail-closed)** — never as verified. A `proof_ref` that cannot be
   resolved confers no authority.

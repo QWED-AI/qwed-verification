@@ -13,6 +13,7 @@ is machine-checkable and that the load-bearing invariants hold:
 """
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -22,8 +23,6 @@ jsonschema = pytest.importorskip("jsonschema")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = REPO_ROOT / "spec" / "v1.0" / "schemas" / "verification-context.schema.json"
-
-PROOF = "sha256:" + "a" * 64
 
 
 @pytest.fixture(scope="module")
@@ -41,8 +40,25 @@ def _validated(schema, doc):
         return False
 
 
+def _canonical_proof_ref(doc):
+    """Compute proof_ref per the spec (verification-context.md, section 3.3).
+
+    The commitment is the SHA-256 of the canonical encoding of the bound payload
+    — the object + complete Verification Context — with
+    ``context.evidence.proof_ref`` itself EXCLUDED (the commitment cannot include
+    itself). Producers and resolvers must both apply this exclusion.
+    """
+    bound = {
+        "object": doc["object"],
+        "context": copy.deepcopy(doc["context"]),
+    }
+    bound["context"]["evidence"].pop("proof_ref", None)
+    payload = json.dumps(bound, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _verified_doc():
-    return {
+    doc = {
         "spec_version": "1.0",
         "object": {
             "formal_statement": "x**2 - 4 = 0",
@@ -65,12 +81,14 @@ def _verified_doc():
             },
             "evidence": {
                 "evidence": {"roots": [-2, 2]},
-                "proof_ref": PROOF,
             },
             "decision": {"admission": "ADMIT"},
         },
         "verdict": "VERIFIED",
     }
+    # Derive proof_ref from the canonical payload (content-bound), not a constant.
+    doc["context"]["evidence"]["proof_ref"] = _canonical_proof_ref(doc)
+    return doc
 
 
 def test_schema_is_valid_json_schema(schema):
@@ -162,4 +180,66 @@ def test_unknown_top_level_field_rejected(schema):
 def test_wrong_spec_version_rejected(schema):
     doc = _verified_doc()
     doc["spec_version"] = "2.0"
+    assert not _validated(schema, doc)
+
+
+# --- proof_ref is content-bound (spec section 3.3) ---------------------------
+
+def test_verified_proof_ref_is_content_bound(schema):
+    """The fixture's proof_ref must resolve against its own payload."""
+    doc = _verified_doc()
+    assert doc["context"]["evidence"]["proof_ref"] == _canonical_proof_ref(doc)
+    assert _validated(schema, doc)
+
+
+def test_verified_proof_ref_mismatch_detected(schema):
+    """Tampering with the bound payload must change the commitment (mismatch)."""
+    doc = _verified_doc()
+    stored = doc["context"]["evidence"]["proof_ref"]
+    # Tamper with a bound field after the commitment was made.
+    doc["object"]["formal_statement"] = "x**2 - 9 = 0"
+    assert _canonical_proof_ref(doc) != stored
+
+
+# --- fail-closed verdicts must carry an explicit null proof_ref --------------
+
+def test_unverifiable_missing_proof_ref_rejected(schema):
+    doc = _verified_doc()
+    doc["verdict"] = "UNVERIFIABLE"
+    doc["context"]["decision"]["admission"] = "DENY"
+    del doc["context"]["evidence"]["proof_ref"]
+    assert not _validated(schema, doc)
+
+
+def test_blocked_missing_proof_ref_rejected(schema):
+    doc = _verified_doc()
+    doc["verdict"] = "BLOCKED"
+    doc["context"]["decision"]["admission"] = "DENY"
+    del doc["context"]["evidence"]["proof_ref"]
+    assert not _validated(schema, doc)
+
+
+# --- fail-closed verdicts must DENY admission --------------------------------
+
+def test_unverifiable_with_admit_rejected(schema):
+    doc = _verified_doc()
+    doc["verdict"] = "UNVERIFIABLE"
+    doc["context"]["evidence"]["proof_ref"] = None
+    doc["context"]["decision"]["admission"] = "ADMIT"
+    assert not _validated(schema, doc)
+
+
+def test_blocked_with_admit_rejected(schema):
+    doc = _verified_doc()
+    doc["verdict"] = "BLOCKED"
+    doc["context"]["evidence"]["proof_ref"] = None
+    doc["context"]["decision"]["admission"] = "ADMIT"
+    assert not _validated(schema, doc)
+
+
+# --- interpretation must be non-empty ----------------------------------------
+
+def test_empty_interpretation_rejected(schema):
+    doc = _verified_doc()
+    doc["context"]["interpretation"] = {}
     assert not _validated(schema, doc)
