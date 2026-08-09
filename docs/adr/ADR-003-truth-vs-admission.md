@@ -34,7 +34,9 @@ A proven-unsafe artifact is **`VERIFIED`** (we *proved* it is unsafe) with
 - Admission: `DENIED` — do not execute/ship.
 
 Consumers that admit on `status == "VERIFIED"` alone would admit unsafe code; they
-must gate on the admission decision / `is_valid`, never on the verdict alone.
+must gate on `admission == "ADMIT"`. `is_valid` contributes to the admission
+decision but is **not** an alternative authorization gate — a valid statement can
+still be denied by policy, so execution and shipping gate exclusively on admission.
 
 ## Mapping
 

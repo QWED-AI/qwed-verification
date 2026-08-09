@@ -24,8 +24,12 @@ every downstream claim ("VERIFIED", "proof", "trust") is ambiguous.
 - **Context** → interpretation, proof mechanism, evidence, and decision (defined
   fully in [ADR-002](ADR-002-verification-context.md)).
 
-The object does **not** change because the prover changes (Lean vs Coq proves the
-same theorem). The context tells you *how* to interpret and reproduce the object.
+Changing the prover does not change the semantic proposition **when both provers
+encode the same proposition under equivalent theories and encodings** (e.g. Lean vs
+Coq proving the same theorem). Prover independence is **semantic, not textual** — a
+different logic, axiom set, or formal encoding can change the proposition, so the
+formal encoding and Verification Context remain necessary to interpret and
+reproduce the object.
 
 ## The theory is required interpretation context
 

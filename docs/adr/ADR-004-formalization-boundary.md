@@ -29,9 +29,9 @@ not verified**. A deterministic solver applied to a mistranslated statement yiel
   translation-confidence note) so a human can confirm *"this is what was proven —
   does it match my intent?"*
 
-```
+```text
 Natural language  →  Formalization  →  Formal statement  →  Deterministic proof  →  VERIFIED
-   (untrusted)        (unverified)        (the object)          (sound)
+   (untrusted)        (unverified)        (the object)        (sound, if definitive)
 ```
 
 QWED never claims *"we verified your intent."* It claims *"we verified THIS formal
@@ -43,6 +43,12 @@ QWED's determinism applies to the **discharge** (the solver). The end-to-end sys
 is only as sound as the formalization. Treating the translator as untrusted is
 *necessary but not sufficient*; the load-bearing guarantee is that the verdict is
 scoped to the formal statement and the formalization is surfaced for confirmation.
+
+**Scope of the soundness/determinism claim:** it holds only for **supported
+configurations** (declared theory, verifier, version, and options) and only for
+**definitive proof outcomes.** Solver results that are `unknown`, `timeout`, or
+`error` are not sound, deterministic proofs and are never `VERIFIED`; they resolve
+to `UNVERIFIABLE` or `BLOCKED` (fail-closed). Not every verifier result is a proof.
 
 ## Open problem
 
