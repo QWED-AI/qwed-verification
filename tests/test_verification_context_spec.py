@@ -82,6 +82,14 @@ def _es_number_to_string(value):
     return ("-" if neg else "") + out
 
 
+def _reject_unpaired_surrogates(value):
+    for ch in value:
+        if 0xD800 <= ord(ch) <= 0xDFFF:
+            raise ValueError(
+                f"unpaired UTF-16 surrogate not allowed in proof_ref payload: {value!r}"
+            )
+
+
 def _canonical_json(value):
     """Serialize a value to canonical JSON per RFC 8785 (JCS)."""
     if value is None:
@@ -107,6 +115,7 @@ def _canonical_json(value):
             )
         return _es_number_to_string(value)
     if isinstance(value, str):
+        _reject_unpaired_surrogates(value)
         return json.dumps(value, ensure_ascii=False)
     if isinstance(value, (list, tuple)):
         return "[" + ",".join(_canonical_json(v) for v in value) + "]"
@@ -116,6 +125,7 @@ def _canonical_json(value):
                 raise ValueError(
                     f"non-string object key not allowed in proof_ref payload: {key!r}"
                 )
+            _reject_unpaired_surrogates(key)
         items = sorted(value.items(), key=lambda kv: kv[0].encode("utf-16-be"))
         return (
             "{"
@@ -505,3 +515,49 @@ def test_canonical_json_key_order_utf16():
         + ":1}"
     )
     assert _canonical_json(value) == expected
+
+
+def test_verified_proof_ref_binds_admission():
+    doc = _verified_doc()
+    stored = doc["context"]["evidence"]["proof_ref"]
+    doc["context"]["decision"]["admission"] = "DENY"
+    assert _canonical_proof_ref(doc) != stored
+
+
+def test_canonical_json_rejects_unpaired_surrogate_string():
+    with pytest.raises(ValueError):
+        _canonical_json(chr(0xD800))
+
+
+def test_canonical_json_rejects_unpaired_surrogate_key():
+    with pytest.raises(ValueError):
+        _canonical_json({chr(0xD800): 1})
+
+
+def test_canonical_json_accepts_valid_supplementary_character():
+    ch = chr(0x1F600)
+    assert _canonical_json(ch) == json.dumps(ch, ensure_ascii=False)
+
+
+def test_evidence_with_non_roundtrip_integer_rejected(schema):
+    doc = _verified_doc()
+    doc["context"]["evidence"]["evidence"] = {"value": 2**53 + 1}
+    assert not _validated(schema, doc)
+
+
+def test_evidence_with_nested_non_roundtrip_integer_rejected(schema):
+    doc = _verified_doc()
+    doc["context"]["evidence"]["evidence"] = {"nested": {"value": 2**53 + 1}}
+    assert not _validated(schema, doc)
+
+
+def test_proof_configuration_with_non_roundtrip_integer_rejected(schema):
+    doc = _verified_doc()
+    doc["context"]["proof"]["configuration"] = {"value": 2**53 + 1}
+    assert not _validated(schema, doc)
+
+
+def test_evidence_with_representable_integer_accepted(schema):
+    doc = _verified_doc()
+    doc["context"]["evidence"]["evidence"] = {"value": 2**53}
+    assert _validated(schema, doc)

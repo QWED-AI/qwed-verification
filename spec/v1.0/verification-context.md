@@ -115,9 +115,9 @@ is the **evidence commitment**.
 > mathematical proof.** *(ADR-002)*
 
 **What it binds.** `proof_ref` commits to the formal statement together with the
-complete Verification Context — interpretation, proof, and evidence — **with the
-`proof_ref` field itself excluded** (see below). Changing any bound field changes
-the commitment.
+complete Verification Context — interpretation, proof, evidence, and decision —
+**with the `proof_ref` field itself excluded** (see below). Changing any bound
+field changes the commitment.
 
 **How it is computed.**
 
@@ -137,6 +137,8 @@ the commitment.
   - Object keys MUST be strings; non-string keys are rejected. Keys are sorted
     by their UTF-16 big-endian byte representation (UTF-16 code-unit order), not
     by Unicode code-point order.
+  - Strings MUST NOT contain unpaired UTF-16 surrogates (U+D800..U+DFFF); such
+    values cannot be encoded as UTF-8 and MUST be rejected.
   - Compact separators with no whitespace: `","` between items and `":"` between
     key and value (`separators=(",", ":")`).
   - **Canonical numbers (normative):** every number is an IEEE-754 double and is
@@ -177,6 +179,10 @@ always commits to the whole bound payload defined above.
   Verification Context + evidence using the canonical encoding above, and comparing
   it to the stored value.
 - A resolver MUST reject a mismatch **before** any `ADMIT` decision.
+- A resolver MUST treat any failure while deriving the canonical encoding
+  (unencodable number, unpaired surrogate, or non-string key) as failed
+  resolution. Schema validation alone is not sufficient to accept a `VERIFIED`
+  record; the stored `proof_ref` MUST resolve.
 - **Missing, malformed, or mismatched** evidence/commitment is treated as
   **unverified (fail-closed)** — never as verified. A `proof_ref` that cannot be
   resolved confers no authority.

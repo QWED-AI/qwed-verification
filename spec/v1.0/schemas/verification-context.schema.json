@@ -205,7 +205,10 @@
         },
         "configuration": {
           "type": "object",
-          "description": "Solver flags, timeouts, resource limits, and options that affect the outcome."
+          "description": "Solver flags, timeouts, resource limits, and options that affect the outcome. Values MUST be within the canonical encoding's JSON domain.",
+          "additionalProperties": {
+            "$ref": "#/$defs/EncodableValue"
+          }
         },
         "theory_scope": {
           "type": "string",
@@ -230,7 +233,10 @@
       "properties": {
         "evidence": {
           "type": "object",
-          "description": "The retained evidence the proof_ref commits to."
+          "description": "The retained evidence the proof_ref commits to. Values MUST be within the canonical encoding's JSON domain; integers MUST be exactly representable as IEEE-754 doubles.",
+          "additionalProperties": {
+            "$ref": "#/$defs/EncodableValue"
+          }
         },
         "proof_ref": {
           "oneOf": [
@@ -251,6 +257,37 @@
           "$ref": "#/$defs/Admission"
         }
       }
+    },
+    "EncodableNumber": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": -9007199254740992,
+          "maximum": 9007199254740992
+        },
+        {
+          "type": "number",
+          "not": { "type": "integer" }
+        }
+      ],
+      "description": "A JSON number within the canonical encoding's IEEE-754 domain. Integer values MUST be exactly representable as IEEE-754 doubles."
+    },
+    "EncodableValue": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "string" },
+        { "$ref": "#/$defs/EncodableNumber" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EncodableValue" }
+        },
+        {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/EncodableValue" }
+        }
+      ],
+      "description": "A JSON value that can be canonicalized and bound by proof_ref."
     }
   }
 }
