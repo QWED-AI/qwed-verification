@@ -65,6 +65,93 @@ def _canonicalize_numbers(value):
     return value
 
 
+def _es_number_to_string(value):
+    """Serialize a finite, non-zero, non-integer float per ECMAScript
+    Number::toString (the number form mandated by RFC 8785 section 3.2.2).
+
+    Python's ``json.dumps`` does NOT implement this form (e.g. it emits ``1e-07``
+    where ECMAScript emits ``1e-7``, and ``1e-06`` where ECMAScript emits
+    ``0.000001``). This reference implementation matches ECMAScript so producers
+    and resolvers in different languages derive identical bytes.
+    """
+    neg = value < 0
+    ax = abs(value)
+    r = repr(ax)  # shortest round-trip decimal for the double
+    if "e" in r:
+        mant, exp_s = r.split("e")
+        e10 = int(exp_s)
+    else:
+        mant = r
+        e10 = 0
+    if "." in mant:
+        ip, fp = mant.split(".")
+        coeff = int(ip + fp) if (ip + fp).lstrip("0") else 0
+        e10 -= len(fp)
+    else:
+        coeff = int(mant)
+    # Strip trailing zeros from the coefficient, adjusting the exponent.
+    while coeff > 0 and coeff % 10 == 0:
+        coeff //= 10
+        e10 += 1
+    if coeff == 0:
+        return "0"
+    s_digits = str(coeff)
+    k = len(s_digits)
+    n = e10 + k  # value == coeff * 10**(n - k)
+    if k <= n <= 21:
+        out = s_digits + "0" * (n - k)
+    elif 0 < n <= 21:
+        out = s_digits[:n] + "." + s_digits[n:]
+    elif -6 < n <= 0:
+        out = "0." + "0" * (-n) + s_digits
+    else:
+        exp = n - 1
+        sign = "+" if exp >= 0 else "-"
+        if k == 1:
+            out = s_digits + "e" + sign + str(abs(exp))
+        else:
+            out = s_digits[0] + "." + s_digits[1:] + "e" + sign + str(abs(exp))
+    return ("-" if neg else "") + out
+
+
+def _canonical_json(value):
+    """Serialize a value to canonical JSON per RFC 8785 (JCS).
+
+    Numbers: integer-valued numbers as base-10 JSON integers; non-integer finite
+    floats per ECMAScript Number::toString; non-finite rejected. Objects have
+    sorted keys and no whitespace; strings are UTF-8 JSON strings.
+    """
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(
+                f"non-finite number not allowed in proof_ref payload: {value!r}"
+            )
+        if value.is_integer():
+            return str(int(value))
+        return _es_number_to_string(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, (list, tuple)):
+        return "[" + ",".join(_canonical_json(v) for v in value) + "]"
+    if isinstance(value, dict):
+        items = sorted(value.items(), key=lambda kv: str(kv[0]))
+        return (
+            "{"
+            + ",".join(
+                json.dumps(str(k), ensure_ascii=False) + ":" + _canonical_json(v)
+                for k, v in items
+            )
+            + "}"
+        )
+    raise ValueError(f"unsupported type in proof_ref payload: {type(value).__name__}")
+
+
 def _canonical_proof_ref(doc):
     """Compute proof_ref per the spec (verification-context.md, section 3.3).
 
@@ -72,17 +159,15 @@ def _canonical_proof_ref(doc):
     with ``context.evidence.proof_ref`` itself EXCLUDED (the commitment cannot
     include itself). Note ``object.formalization`` is deliberately NOT part of the
     bound payload — the commitment binds the formal statement, not how it was
-    derived. Producers and resolvers must both apply this payload definition.
+    derived. Producers and resolvers must both apply this payload definition. The
+    payload is serialized with the RFC 8785 canonical encoding.
     """
     bound = {
         "formal_statement": doc["object"]["formal_statement"],
         "context": copy.deepcopy(doc["context"]),
     }
     bound["context"]["evidence"].pop("proof_ref", None)
-    bound = _canonicalize_numbers(bound)
-    payload = json.dumps(
-        bound, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
-    )
+    payload = _canonical_json(bound)
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -349,6 +434,40 @@ def test_canonical_proof_ref_rejects_negative_infinity():
     doc["context"]["evidence"]["evidence"] = {"value": float("-inf")}
     with pytest.raises(ValueError):
         _canonical_proof_ref(doc)
+
+
+# --- RFC 8785 / ECMAScript number encoding golden vectors --------------------
+
+def test_canonical_json_exponent_golden_vectors():
+    """Non-integer floats use ECMAScript Number::toString, not Python repr.
+
+    Python's json.dumps emits 1e-07 / 1e-06; RFC 8785 requires 1e-7 / 0.000001.
+    These byte-level vectors pin the cross-language canonical form.
+    """
+    assert _canonical_json(1e-7) == "1e-7"
+    assert _canonical_json(1e-6) == "0.000001"
+    assert _canonical_json(3.141592653589793) == "3.141592653589793"
+    assert _canonical_json(-1e-7) == "-1e-7"
+    assert _canonical_json(1.5e-7) == "1.5e-7"
+
+
+def test_canonical_json_integer_golden_vectors():
+    """Integer-valued numbers serialize as base-10 JSON integers."""
+    assert _canonical_json(1) == "1"
+    assert _canonical_json(1.0) == "1"
+    assert _canonical_json(0) == "0"
+    assert _canonical_json(-0.0) == "0"
+    assert _canonical_json(10**21) == "1000000000000000000000"
+    assert _canonical_json(1e21) == "1000000000000000000000"
+
+
+def test_canonical_json_equivalent_floats_commit_identically():
+    """1e-6 and 0.000001 (the same double) commit identically."""
+    doc_a = _verified_doc()
+    doc_a["context"]["evidence"]["evidence"] = {"value": 1e-6}
+    doc_b = _verified_doc()
+    doc_b["context"]["evidence"]["evidence"] = {"value": 0.000001}
+    assert _canonical_proof_ref(doc_a) == _canonical_proof_ref(doc_b)
 
 
 # --- commitment binds the formal statement, not the formalization ------------

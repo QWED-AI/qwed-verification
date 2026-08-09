@@ -142,21 +142,24 @@ the commitment.
     1. **Reject non-finite values.** `NaN`, `+Infinity`, and `-Infinity` are not
       permitted in the bound payload; producers MUST fail-closed rather than
       serialize them.
-    2. **Normalize integer-valued numbers to integers.** Any number whose value is
-      an integer is serialized as a base-10 JSON integer with no leading zeros and
-      no decimal point or exponent. This makes `1` and `1.0` commit identically,
-      and normalizes negative zero (`-0.0`) to `0`. Large integers use arbitrary
-      precision (no exponent notation).
-    3. **Non-integer finite numbers** are serialized in the shortest round-trip
-      decimal form that uniquely identifies the IEEE 754 double-precision value
-      (the RFC 8785 §3.2.2 / ECMAScript `Number::toString` form). No rounding is
-      applied beyond the value's own double-precision precision.
-    Producers MUST NOT emit `NaN`/`Infinity` (fail-closed instead).
+    2. **Integer-valued numbers** (integers and integer-valued floats) are
+      serialized as base-10 JSON integers with no leading zeros and no decimal
+      point or exponent; large integers use arbitrary precision. This makes `1`
+      and `1.0` commit identically and normalizes negative zero (`-0.0`) to `0`.
+    3. **Non-integer finite numbers** are serialized per **RFC 8785 §3.2.2**
+      (ECMAScript `Number::toString`): the shortest decimal form that round-trips
+      the IEEE 754 double, with fixed-point notation for exponents in `[-6, 21]`
+      and exponential notation otherwise (e.g. `1e-6` → `0.000001`, `1e-7` →
+      `1e-7`). No rounding is applied beyond the value's own double precision.
+    Producers MUST NOT emit `NaN`/`Infinity` (fail-closed instead). Note that
+    Python's `json.dumps` does **not** implement this number form (it emits
+    `1e-07` / `1e-06`); implementations MUST use an RFC 8785-compatible number
+    serializer.
   - No ambient/non-deterministic fields (wall-clock time, memory addresses,
     randomness) in the bound payload.
-  Equivalent to serializing the number-normalized bound payload with
-  `json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-  allow_nan=False)` over the number-normalized bound payload.
+  The canonical encoding is RFC 8785 (JSON Canonicalization Scheme): UTF-8,
+  lexicographically sorted object keys, no insignificant whitespace, and the
+  number form above.
 - **Commitment algorithm:** SHA-256 of the canonical encoding bytes, expressed as
   `sha256:<64-lowercase-hex>`.
 
