@@ -137,14 +137,26 @@ the commitment.
   - Object keys sorted lexicographically by Unicode code point (`sort_keys=True`).
   - Compact separators with no whitespace: `","` between items and `":"` between
     key and value (`separators=(",", ":")`).
-  - **Canonical numbers:** integer-valued numbers are serialized as JSON integers
-    (no trailing `.0`), so equivalent values `1` and `1.0` commit identically.
-    Non-integer numbers use the shortest round-trip decimal form. Producers MUST
-    NOT emit `NaN`/`Infinity` (fail-closed instead).
+  - **Canonical numbers (normative):** numbers are serialized by this exact,
+    language-independent algorithm:
+    1. **Reject non-finite values.** `NaN`, `+Infinity`, and `-Infinity` are not
+      permitted in the bound payload; producers MUST fail-closed rather than
+      serialize them.
+    2. **Normalize integer-valued numbers to integers.** Any number whose value is
+      an integer is serialized as a base-10 JSON integer with no leading zeros and
+      no decimal point or exponent. This makes `1` and `1.0` commit identically,
+      and normalizes negative zero (`-0.0`) to `0`. Large integers use arbitrary
+      precision (no exponent notation).
+    3. **Non-integer finite numbers** are serialized in the shortest round-trip
+      decimal form that uniquely identifies the IEEE 754 double-precision value
+      (the RFC 8785 §3.2.2 / ECMAScript `Number::toString` form). No rounding is
+      applied beyond the value's own double-precision precision.
+    Producers MUST NOT emit `NaN`/`Infinity` (fail-closed instead).
   - No ambient/non-deterministic fields (wall-clock time, memory addresses,
     randomness) in the bound payload.
   Equivalent to serializing the number-normalized bound payload with
-  `json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`.
+  `json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+  allow_nan=False)` over the number-normalized bound payload.
 - **Commitment algorithm:** SHA-256 of the canonical encoding bytes, expressed as
   `sha256:<64-lowercase-hex>`.
 

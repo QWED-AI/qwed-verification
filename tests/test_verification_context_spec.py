@@ -15,6 +15,7 @@ is machine-checkable and that the load-bearing invariants hold:
 import copy
 import hashlib
 import json
+import math
 from pathlib import Path
 
 import jsonschema
@@ -44,12 +45,19 @@ def _canonicalize_numbers(value):
 
     JSON does not distinguish ``1`` and ``1.0`` semantically, but they serialize
     to different bytes. Normalizing integer-valued floats to integers gives a
-    unique canonical form (spec section 3.3, canonical encoding).
+    unique canonical form (spec section 3.3, canonical encoding). Non-finite
+    floats (NaN, +/-Infinity) are rejected (fail-closed) rather than serialized.
     """
     if isinstance(value, bool):
         return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(
+                f"non-finite number not allowed in proof_ref payload: {value!r}"
+            )
+        if value.is_integer():
+            return int(value)
+        return value
     if isinstance(value, dict):
         return {k: _canonicalize_numbers(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -72,7 +80,9 @@ def _canonical_proof_ref(doc):
     }
     bound["context"]["evidence"].pop("proof_ref", None)
     bound = _canonicalize_numbers(bound)
-    payload = json.dumps(bound, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    payload = json.dumps(
+        bound, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -288,6 +298,57 @@ def test_distinct_numbers_commit_differently():
     doc_two = _verified_doc()
     doc_two["context"]["evidence"]["evidence"] = {"value": 2}
     assert _canonical_proof_ref(doc_one) != _canonical_proof_ref(doc_two)
+
+
+def test_negative_zero_canonicalizes_to_zero():
+    """0 and -0 must commit identically (negative zero normalizes to 0)."""
+    assert _canonicalize_numbers(-0.0) == _canonicalize_numbers(0) == 0
+    doc_pos = _verified_doc()
+    doc_pos["context"]["evidence"]["evidence"] = {"value": 0.0}
+    doc_neg = _verified_doc()
+    doc_neg["context"]["evidence"]["evidence"] = {"value": -0.0}
+    assert _canonical_proof_ref(doc_pos) == _canonical_proof_ref(doc_neg)
+
+
+def test_large_integer_canonical_form():
+    """Integer-valued floats normalize to arbitrary-precision integers."""
+    assert _canonicalize_numbers(1e21) == _canonicalize_numbers(10**21) == 10**21
+    doc_float = _verified_doc()
+    doc_float["context"]["evidence"]["evidence"] = {"value": 1e21}
+    doc_int = _verified_doc()
+    doc_int["context"]["evidence"]["evidence"] = {"value": 10**21}
+    assert _canonical_proof_ref(doc_float) == _canonical_proof_ref(doc_int)
+
+
+def test_precision_sensitive_decimal_deterministic():
+    """A non-integer float commits deterministically (golden vector)."""
+    doc = _verified_doc()
+    doc["context"]["evidence"]["evidence"] = {"value": 3.141592653589793}
+    first = _canonical_proof_ref(doc)
+    second = _canonical_proof_ref(doc)
+    assert first == second
+    assert first.startswith("sha256:")
+
+
+def test_canonical_proof_ref_rejects_nan():
+    doc = _verified_doc()
+    doc["context"]["evidence"]["evidence"] = {"value": float("nan")}
+    with pytest.raises(ValueError):
+        _canonical_proof_ref(doc)
+
+
+def test_canonical_proof_ref_rejects_infinity():
+    doc = _verified_doc()
+    doc["context"]["evidence"]["evidence"] = {"value": float("inf")}
+    with pytest.raises(ValueError):
+        _canonical_proof_ref(doc)
+
+
+def test_canonical_proof_ref_rejects_negative_infinity():
+    doc = _verified_doc()
+    doc["context"]["evidence"]["evidence"] = {"value": float("-inf")}
+    with pytest.raises(ValueError):
+        _canonical_proof_ref(doc)
 
 
 # --- commitment binds the formal statement, not the formalization ------------
