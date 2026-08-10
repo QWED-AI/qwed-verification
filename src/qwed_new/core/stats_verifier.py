@@ -18,9 +18,21 @@ import json
 import hashlib
 from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass, field
+from importlib.metadata import PackageNotFoundError, version
 import ast
 
-from .diagnostics import DiagnosticResult
+from .diagnostics import DiagnosticResult, DiagnosticStatus
+from .verification_context import (
+    Admission,
+    Decision,
+    Evidence,
+    Formalization,
+    Interpretation,
+    Proof,
+    VerificationContext,
+    VerificationContextDocument,
+    VerificationContextValidationError,
+)
 
 logger = logging.getLogger(__name__)
 INTERNAL_VERIFICATION_ERROR = "Internal verification error"
@@ -89,6 +101,13 @@ def _dataset_fingerprint(df: pd.DataFrame) -> str:
         raise DatasetFingerprintError(
             f"dataset fingerprint failed: {type(exc).__name__}"
         ) from exc
+
+
+def _qwed_package_version() -> str:
+    try:
+        return version("qwed")
+    except PackageNotFoundError:
+        return "unknown"
 
 
 @dataclass
@@ -592,6 +611,73 @@ class StatsVerifier:
             },
         )
     
+    def to_verification_context(
+        self,
+        result: DiagnosticResult,
+        query: str,
+    ) -> VerificationContextDocument:
+        interpretation = Interpretation(
+            theory="tabular statistics",
+            logic="deterministic sandbox execution",
+        )
+        proof = Proof(
+            verifier="StatsVerifier",
+            verifier_version=_qwed_package_version(),
+            configuration={
+                "preferred_sandbox": self.preferred_sandbox,
+                "timeout_seconds": self.timeout_seconds,
+                "memory_limit_mb": self.memory_limit_mb,
+            },
+            theory_scope="tabular statistical claims executed in a secure Docker sandbox",
+            trusted_dependencies=("pandas", "docker"),
+            outcome_treatment="unknown/timeout/error resolve to UNVERIFIABLE or BLOCKED",
+        )
+        formalization = Formalization(
+            source_query=query,
+            translator="StatsVerifier",
+        )
+        evidence_payload = result.to_dict()
+
+        if result.status is DiagnosticStatus.VERIFIED:
+            admission = (
+                Admission.ADMIT
+                if result.developer_fields.get("is_valid") is True
+                else Admission.DENY
+            )
+            context = VerificationContext(
+                interpretation=interpretation,
+                proof=proof,
+                evidence=Evidence(payload=evidence_payload, proof_ref=None),
+                decision=Decision(admission=admission),
+            )
+            return VerificationContextDocument.verified(
+                formal_statement=query,
+                context=context,
+                formalization=formalization,
+            )
+
+        context = VerificationContext(
+            interpretation=interpretation,
+            proof=proof,
+            evidence=Evidence(payload=evidence_payload, proof_ref=None),
+            decision=Decision(admission=Admission.DENY),
+        )
+        if result.status is DiagnosticStatus.UNVERIFIABLE:
+            return VerificationContextDocument.unverifiable(
+                formal_statement=query,
+                context=context,
+                formalization=formalization,
+            )
+        if result.status is DiagnosticStatus.BLOCKED:
+            return VerificationContextDocument.blocked(
+                formal_statement=query,
+                context=context,
+                formalization=formalization,
+            )
+        raise VerificationContextValidationError(
+            f"unsupported DiagnosticResult status: {result.status!r}"
+        )
+
     def _validate_security(self, code: str) -> SecurityReport:
         """Perform comprehensive security validation."""
         checks_passed = []
