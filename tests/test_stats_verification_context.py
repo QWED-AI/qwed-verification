@@ -231,11 +231,12 @@ def test_stats_context_fails_closed_on_non_finite_evidence():
         evidence={"value": float("nan")},
         proof_data=nan_proof_data,
     )
+    attestation_token = _attestation_token(proof_data=nan_proof_data)
     with pytest.raises(VerificationContextValidationError):
         verifier.to_verification_context(
             result,
             QUERY,
-            attestation_token=_attestation_token(proof_data=nan_proof_data),
+            attestation_token=attestation_token,
         )
 
 
