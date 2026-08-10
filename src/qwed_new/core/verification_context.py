@@ -625,12 +625,58 @@ def _expected_document_proof_ref(document: Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def compute_document_proof_ref(document: Mapping[str, Any]) -> str:
+    if not isinstance(document, Mapping):
+        raise VerificationContextValidationError(
+            "Verification Context document must be a JSON object"
+        )
+    try:
+        return _expected_document_proof_ref(document)
+    except VerificationContextValidationError:
+        raise
+    except Exception as exc:
+        raise VerificationContextValidationError(
+            "bound payload is missing required Verification Context fields"
+        ) from exc
+
+
+def resolve_document_proof_ref(document: Mapping[str, Any]) -> bool:
+    try:
+        if not isinstance(document, Mapping):
+            return False
+        if document.get("verdict") != Verdict.VERIFIED.value:
+            return False
+        expected = compute_document_proof_ref(document)
+        stored = document["context"]["evidence"]["proof_ref"]
+        return isinstance(stored, str) and stored == expected
+    except Exception:
+        return False
+
+
+def resolve_context_proof_ref(
+    formal_statement: str,
+    context: VerificationContext,
+    proof_ref: Optional[str],
+) -> bool:
+    if proof_ref is None:
+        return False
+    try:
+        return compute_context_proof_ref(formal_statement, context) == proof_ref
+    except VerificationContextValidationError:
+        return False
+
+
 def _validate_verified_commitment(document: Mapping[str, Any]) -> None:
     if document.get("verdict") != Verdict.VERIFIED.value:
         return
-    expected = _expected_document_proof_ref(document)
-    proof_ref = document["context"]["evidence"]["proof_ref"]
-    if proof_ref != expected:
+    expected = compute_document_proof_ref(document)
+    try:
+        proof_ref = document["context"]["evidence"]["proof_ref"]
+    except Exception as exc:
+        raise VerificationContextValidationError(
+            "context.evidence.proof_ref is required for VERIFIED"
+        ) from exc
+    if not isinstance(proof_ref, str) or proof_ref != expected:
         raise VerificationContextValidationError(
             "context.evidence.proof_ref does not resolve against the bound payload"
         )
