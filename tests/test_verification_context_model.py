@@ -18,8 +18,11 @@ from qwed_new.core.verification_context import (
     _canonical_json,
     _es_number_to_string,
     compute_context_proof_ref,
+    compute_document_proof_ref,
     is_valid_document,
     load_schema,
+    resolve_context_proof_ref,
+    resolve_document_proof_ref,
     validate_document,
 )
 
@@ -482,3 +485,169 @@ def test_configuration_is_immutable():
     )
     with pytest.raises(TypeError):
         doc.context.proof.configuration["timeout_ms"] = 1
+
+
+def test_document_proof_ref_producer_resolver_parity():
+    doc = VerificationContextDocument.verified(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(),
+    )
+    payload = doc.to_dict()
+    stored = payload["context"]["evidence"]["proof_ref"]
+    assert compute_document_proof_ref(payload) == stored
+    assert resolve_document_proof_ref(payload)
+
+
+def test_resolver_rejects_tampered_formal_statement():
+    doc = VerificationContextDocument.verified(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(),
+    )
+    payload = doc.to_dict()
+    payload["object"]["formal_statement"] = "x**2 - 9 = 0"
+    assert not resolve_document_proof_ref(payload)
+    with pytest.raises(VerificationContextValidationError):
+        validate_document(payload)
+
+
+def test_resolver_rejects_tampered_admission():
+    doc = VerificationContextDocument.verified(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(admission=Admission.ADMIT),
+    )
+    payload = doc.to_dict()
+    payload["context"]["decision"]["admission"] = "DENY"
+    assert not resolve_document_proof_ref(payload)
+    with pytest.raises(VerificationContextValidationError):
+        validate_document(payload)
+
+
+def test_resolver_rejects_tampered_evidence():
+    doc = VerificationContextDocument.verified(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(),
+    )
+    payload = doc.to_dict()
+    payload["context"]["evidence"]["evidence"]["roots"] = [-3, 3]
+    assert not resolve_document_proof_ref(payload)
+    with pytest.raises(VerificationContextValidationError):
+        validate_document(payload)
+
+
+def test_resolver_rejects_tampered_proof_layer():
+    doc = VerificationContextDocument.verified(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(),
+    )
+    payload = doc.to_dict()
+    payload["context"]["proof"]["verifier"] = "Z3"
+    assert not resolve_document_proof_ref(payload)
+    with pytest.raises(VerificationContextValidationError):
+        validate_document(payload)
+
+
+def test_document_proof_ref_fails_closed_on_non_roundtrip_integer():
+    doc = VerificationContextDocument.verified(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(),
+    )
+    payload = doc.to_dict()
+    payload["context"]["evidence"]["evidence"]["value"] = 2**53 + 1
+    with pytest.raises(VerificationContextValidationError):
+        compute_document_proof_ref(payload)
+    assert not resolve_document_proof_ref(payload)
+
+
+def test_document_proof_ref_fails_closed_on_non_string_key():
+    doc = VerificationContextDocument.verified(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(),
+    )
+    payload = doc.to_dict()
+    payload["context"]["evidence"]["evidence"] = {1: "x"}
+    with pytest.raises(VerificationContextValidationError):
+        compute_document_proof_ref(payload)
+    assert not resolve_document_proof_ref(payload)
+
+
+def test_document_proof_ref_fails_closed_on_unpaired_surrogate():
+    doc = VerificationContextDocument.verified(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(),
+    )
+    payload = doc.to_dict()
+    payload["context"]["evidence"]["evidence"] = {"value": chr(0xD800)}
+    with pytest.raises(VerificationContextValidationError):
+        compute_document_proof_ref(payload)
+    assert not resolve_document_proof_ref(payload)
+
+
+def test_document_proof_ref_fails_closed_on_missing_bound_fields():
+    doc = VerificationContextDocument.verified(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(),
+    )
+    payload = doc.to_dict()
+    del payload["context"]["evidence"]
+    with pytest.raises(VerificationContextValidationError):
+        compute_document_proof_ref(payload)
+    assert not resolve_document_proof_ref(payload)
+
+
+def test_resolver_returns_false_for_fail_closed_verdicts():
+    doc = VerificationContextDocument.unverifiable(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(),
+    )
+    assert not resolve_document_proof_ref(doc.to_dict())
+
+
+def test_resolver_returns_false_for_non_mapping():
+    assert not resolve_document_proof_ref([])
+
+
+def test_context_proof_ref_resolver():
+    context = _context()
+    expected = compute_context_proof_ref("x**2 - 4 = 0", context)
+    assert resolve_context_proof_ref("x**2 - 4 = 0", context, expected)
+    assert not resolve_context_proof_ref("x**2 - 4 = 0", context, DUMMY_PROOF_REF)
+    assert not resolve_context_proof_ref("x**2 - 4 = 0", context, None)
+
+
+def test_context_resolver_rejects_non_string_proof_ref():
+    class AlwaysEqual:
+        def __eq__(self, other):
+            return True
+
+    context = _context()
+    assert not resolve_context_proof_ref("x**2 - 4 = 0", context, AlwaysEqual())
+    assert not resolve_context_proof_ref("x**2 - 4 = 0", context, 123)
+    assert not resolve_context_proof_ref("x**2 - 4 = 0", context, [])
+
+
+def test_context_resolver_rejects_malformed_context():
+    assert not resolve_context_proof_ref("x", {}, DUMMY_PROOF_REF)
+
+
+def test_compute_document_proof_ref_rejects_non_mapping():
+    with pytest.raises(VerificationContextValidationError):
+        compute_document_proof_ref([])
+
+
+def test_resolver_rejects_schema_invalid_document_even_if_commitment_matches():
+    minimal = {
+        "spec_version": "1.0",
+        "object": {"formal_statement": "x"},
+        "context": {"evidence": {"evidence": {}, "proof_ref": None}},
+        "verdict": "VERIFIED",
+    }
+    minimal["context"]["evidence"]["proof_ref"] = compute_document_proof_ref(minimal)
+    assert not resolve_document_proof_ref(minimal)
+    with pytest.raises(VerificationContextValidationError):
+        validate_document(minimal)
+
+
+def test_context_resolver_rejects_non_string_formal_statement():
+    context = _context()
+    expected = compute_context_proof_ref("x**2 - 4 = 0", context)
+    assert not resolve_context_proof_ref(1, context, expected)

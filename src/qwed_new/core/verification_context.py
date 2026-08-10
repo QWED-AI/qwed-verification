@@ -20,6 +20,13 @@ class VerificationContextValidationError(ValueError):
     pass
 
 
+_MISSING_BOUND_FIELD_ERRORS = (KeyError, TypeError, AttributeError)
+_RESOLVER_ERRORS = (
+    VerificationContextValidationError,
+    *_MISSING_BOUND_FIELD_ERRORS,
+)
+
+
 class Verdict(str, Enum):
     VERIFIED = "VERIFIED"
     UNVERIFIABLE = "UNVERIFIABLE"
@@ -625,12 +632,61 @@ def _expected_document_proof_ref(document: Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def compute_document_proof_ref(document: Mapping[str, Any]) -> str:
+    if not isinstance(document, Mapping):
+        raise VerificationContextValidationError(
+            "Verification Context document must be a JSON object"
+        )
+    try:
+        return _expected_document_proof_ref(document)
+    except _MISSING_BOUND_FIELD_ERRORS as exc:
+        raise VerificationContextValidationError(
+            "bound payload is missing required Verification Context fields"
+        ) from exc
+
+
+def resolve_document_proof_ref(document: Mapping[str, Any]) -> bool:
+    try:
+        if not isinstance(document, Mapping):
+            return False
+        if document.get("verdict") != Verdict.VERIFIED.value:
+            return False
+        validate_document(document)
+        expected = compute_document_proof_ref(document)
+        stored = document["context"]["evidence"]["proof_ref"]
+        return isinstance(stored, str) and stored == expected
+    except _RESOLVER_ERRORS:
+        return False
+
+
+def resolve_context_proof_ref(
+    formal_statement: str,
+    context: VerificationContext,
+    proof_ref: Optional[str],
+) -> bool:
+    if not isinstance(formal_statement, str):
+        return False
+    if not isinstance(context, VerificationContext):
+        return False
+    if not isinstance(proof_ref, str):
+        return False
+    try:
+        return compute_context_proof_ref(formal_statement, context) == proof_ref
+    except _RESOLVER_ERRORS:
+        return False
+
+
 def _validate_verified_commitment(document: Mapping[str, Any]) -> None:
     if document.get("verdict") != Verdict.VERIFIED.value:
         return
-    expected = _expected_document_proof_ref(document)
-    proof_ref = document["context"]["evidence"]["proof_ref"]
-    if proof_ref != expected:
+    expected = compute_document_proof_ref(document)
+    try:
+        proof_ref = document["context"]["evidence"]["proof_ref"]
+    except Exception as exc:
+        raise VerificationContextValidationError(
+            "context.evidence.proof_ref is required for VERIFIED"
+        ) from exc
+    if not isinstance(proof_ref, str) or proof_ref != expected:
         raise VerificationContextValidationError(
             "context.evidence.proof_ref does not resolve against the bound payload"
         )

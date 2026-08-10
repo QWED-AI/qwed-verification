@@ -43,8 +43,11 @@ from .verification_context import (
     VerificationContextValidationError,
     VerifiedObject,
     compute_context_proof_ref,
+    compute_document_proof_ref,
     is_valid_document,
     load_schema,
+    resolve_context_proof_ref,
+    resolve_document_proof_ref,
     validate_document,
 )
 
@@ -81,8 +84,11 @@ __all__ = [
     "VerificationContextValidationError",
     "VerifiedObject",
     "compute_context_proof_ref",
+    "compute_document_proof_ref",
     "is_valid_document",
     "load_schema",
+    "resolve_context_proof_ref",
+    "resolve_document_proof_ref",
     "validate_document",
 ]
 
