@@ -2,18 +2,27 @@ import pytest
 from importlib.metadata import PackageNotFoundError
 
 from qwed_new.core.diagnostics import DiagnosticResult
-from qwed_new.core.stats_verifier import StatsVerifier
+from qwed_new.core.stats_verifier import (
+    CONSTRAINT_STATS_VALID,
+    StatsVerifier,
+)
 from qwed_new.core.verification_context import (
     VerificationContextValidationError,
     resolve_document_proof_ref,
 )
 
 
+DATASET_SHA256 = "a" * 64
+
+
 def _verified_result(is_valid=True):
     return DiagnosticResult.verified(
         agent_message="Statistical claim verified.",
         developer_fields={
+            "constraint_id": CONSTRAINT_STATS_VALID,
             "is_valid": is_valid,
+            "claim_supported": True,
+            "dataset_sha256": DATASET_SHA256,
             "observed_result": 2.0,
         },
         evidence={"observed_result": 2.0},
@@ -90,7 +99,13 @@ def test_stats_context_fails_closed_on_non_finite_evidence():
     verifier = StatsVerifier()
     result = DiagnosticResult.verified(
         agent_message="Statistical claim verified.",
-        developer_fields={"is_valid": True, "value": float("nan")},
+        developer_fields={
+            "constraint_id": CONSTRAINT_STATS_VALID,
+            "is_valid": True,
+            "claim_supported": True,
+            "dataset_sha256": DATASET_SHA256,
+            "value": float("nan"),
+        },
         evidence={"value": float("nan")},
     )
     with pytest.raises(VerificationContextValidationError):
@@ -119,5 +134,43 @@ def test_stats_context_fails_closed_when_package_version_unavailable(monkeypatch
     monkeypatch.setattr("qwed_new.core.stats_verifier.version", _raise_package_not_found)
     verifier = StatsVerifier()
     result = _verified_result()
-    with pytest.raises(VerificationContextValidationError):
+    with pytest.raises(
+        VerificationContextValidationError,
+        match="qwed package metadata is unavailable",
+    ):
         verifier.to_verification_context(result, "mean of a == 2")
+
+
+def test_stats_verified_unbound_result_fails_closed():
+    verifier = StatsVerifier()
+    result = DiagnosticResult.verified(
+        agent_message="Statistical claim verified.",
+        developer_fields={"is_valid": True, "observed_result": 2.0},
+        evidence={"observed_result": 2.0},
+    )
+    doc = verifier.to_verification_context(result, "mean of a == 2")
+    doc.validate()
+    payload = doc.to_dict()
+    assert payload["verdict"] == "UNVERIFIABLE"
+    assert payload["context"]["evidence"]["proof_ref"] is None
+    assert payload["context"]["decision"]["admission"] == "DENY"
+
+
+def test_stats_verified_missing_claim_support_fails_closed():
+    verifier = StatsVerifier()
+    result = DiagnosticResult.verified(
+        agent_message="Statistical claim verified.",
+        developer_fields={
+            "constraint_id": CONSTRAINT_STATS_VALID,
+            "is_valid": True,
+            "dataset_sha256": DATASET_SHA256,
+            "observed_result": 2.0,
+        },
+        evidence={"observed_result": 2.0},
+    )
+    doc = verifier.to_verification_context(result, "mean of a == 2")
+    doc.validate()
+    payload = doc.to_dict()
+    assert payload["verdict"] == "UNVERIFIABLE"
+    assert payload["context"]["evidence"]["proof_ref"] is None
+    assert payload["context"]["decision"]["admission"] == "DENY"

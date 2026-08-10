@@ -112,6 +112,16 @@ def _qwed_package_version() -> str:
         ) from exc
 
 
+def _has_stats_proof_binding(result: DiagnosticResult) -> bool:
+    fields = result.developer_fields
+    if fields.get("constraint_id") != CONSTRAINT_STATS_VALID:
+        return False
+    dataset_sha256 = fields.get("dataset_sha256")
+    if not isinstance(dataset_sha256, str) or not dataset_sha256.strip():
+        return False
+    return fields.get("claim_supported") is True
+
+
 @dataclass
 class ExecutionResult:
     """Result of code execution."""
@@ -641,7 +651,10 @@ class StatsVerifier:
         evidence_payload = result.to_dict()
 
         if result.status is DiagnosticStatus.VERIFIED:
-            if result.developer_fields.get("is_valid") is not True:
+            if (
+                result.developer_fields.get("is_valid") is not True
+                or not _has_stats_proof_binding(result)
+            ):
                 context = VerificationContext(
                     interpretation=interpretation,
                     proof=proof,
