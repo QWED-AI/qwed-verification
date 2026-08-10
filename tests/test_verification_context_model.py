@@ -15,6 +15,8 @@ from qwed_new.core.verification_context import (
     VerificationContextDocument,
     VerificationContextValidationError,
     VerifiedObject,
+    _canonical_json,
+    _es_number_to_string,
     compute_context_proof_ref,
     is_valid_document,
     load_schema,
@@ -457,3 +459,26 @@ def test_evidence_rejects_list_proof_ref():
 def test_evidence_rejects_dict_proof_ref():
     with pytest.raises(VerificationContextValidationError):
         Evidence(payload={}, proof_ref={})
+
+
+def test_canonical_number_1e21_uses_exponential_form():
+    assert _es_number_to_string(1e21) == "1e+21"
+    assert _canonical_json(10**21) == "1e+21"
+
+
+def test_evidence_payload_is_immutable():
+    doc = VerificationContextDocument.verified(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(),
+    )
+    with pytest.raises(TypeError):
+        doc.context.evidence.payload["roots"] = [3]
+
+
+def test_configuration_is_immutable():
+    doc = VerificationContextDocument.verified(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(),
+    )
+    with pytest.raises(TypeError):
+        doc.context.proof.configuration["timeout_ms"] = 1

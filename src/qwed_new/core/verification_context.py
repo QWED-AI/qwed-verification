@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from functools import lru_cache
 from importlib import resources
+from types import MappingProxyType
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 SPEC_VERSION = "1.0"
@@ -28,6 +29,24 @@ class Verdict(str, Enum):
 class Admission(str, Enum):
     ADMIT = "ADMIT"
     DENY = "DENY"
+
+
+def _freeze_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {key: _freeze_value(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_value(item) for item in value)
+    return value
+
+
+def _thaw_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_thaw_value(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True)
@@ -142,15 +161,15 @@ class Interpretation:
 
 
 def _validate_proof_configuration(
-    configuration: Optional[Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
+    configuration: Optional[Mapping[str, Any]],
+) -> Optional[Mapping[str, Any]]:
     if configuration is None:
         return None
-    if not isinstance(configuration, dict):
+    if not isinstance(configuration, Mapping):
         raise VerificationContextValidationError(
             "context.proof.configuration must be an object"
         )
-    return copy.deepcopy(configuration)
+    return _freeze_value(configuration)
 
 
 def _validate_trusted_dependencies(
@@ -175,7 +194,7 @@ def _validate_trusted_dependencies(
 class Proof:
     verifier: str
     verifier_version: str
-    configuration: Optional[Dict[str, Any]] = None
+    configuration: Optional[Mapping[str, Any]] = None
     theory_scope: Optional[str] = None
     trusted_dependencies: Optional[Tuple[str, ...]] = None
     outcome_treatment: Optional[str] = None
@@ -206,7 +225,7 @@ class Proof:
             "verifier_version": self.verifier_version,
         }
         if self.configuration is not None:
-            out["configuration"] = copy.deepcopy(self.configuration)
+            out["configuration"] = _thaw_value(self.configuration)
         if self.theory_scope is not None:
             out["theory_scope"] = self.theory_scope
         if self.trusted_dependencies is not None:
@@ -218,15 +237,15 @@ class Proof:
 
 @dataclass(frozen=True)
 class Evidence:
-    payload: Dict[str, Any]
+    payload: Mapping[str, Any]
     proof_ref: Optional[str] = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.payload, dict):
+        if not isinstance(self.payload, Mapping):
             raise VerificationContextValidationError(
                 "context.evidence.evidence must be an object"
             )
-        object.__setattr__(self, "payload", copy.deepcopy(self.payload))
+        object.__setattr__(self, "payload", _freeze_value(self.payload))
         if self.proof_ref is None:
             return
         if not isinstance(self.proof_ref, str):
@@ -240,7 +259,7 @@ class Evidence:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "evidence": copy.deepcopy(self.payload),
+            "evidence": _thaw_value(self.payload),
             "proof_ref": self.proof_ref,
         }
 
@@ -405,7 +424,11 @@ def compute_context_proof_ref(
     context: VerificationContext,
 ) -> str:
     context_dict = context.to_dict()
-    context_dict["evidence"].pop("proof_ref", None)
+    context_dict["evidence"] = {
+        key: value
+        for key, value in context_dict["evidence"].items()
+        if key != "proof_ref"
+    }
     bound = {
         "formal_statement": formal_statement,
         "context": context_dict,
@@ -548,8 +571,8 @@ class VerificationContextDocument:
 @lru_cache(maxsize=1)
 def _schema_text() -> str:
     try:
-        resource = resources.files("qwed_new.core").joinpath(
-            "data/verification-context.schema.json"
+        resource = resources.files("qwed_new.core.data").joinpath(
+            "verification-context.schema.json"
         )
         return resource.read_text(encoding="utf-8")
     except Exception as exc:
@@ -586,8 +609,14 @@ def _reject_non_finite_numbers(value: Any) -> None:
 
 
 def _expected_document_proof_ref(document: Mapping[str, Any]) -> str:
-    context_copy = copy.deepcopy(document["context"])
-    context_copy["evidence"].pop("proof_ref", None)
+    context_copy = {
+        key: copy.deepcopy(value) for key, value in document["context"].items()
+    }
+    context_copy["evidence"] = {
+        key: copy.deepcopy(value)
+        for key, value in document["context"]["evidence"].items()
+        if key != "proof_ref"
+    }
     bound = {
         "formal_statement": document["object"]["formal_statement"],
         "context": context_copy,
@@ -623,7 +652,11 @@ def validate_document(document: Mapping[str, Any]) -> None:
     validator = Draft202012Validator(load_schema())
     errors = sorted(
         validator.iter_errors(document),
-        key=lambda error: "/".join(str(part) for part in error.path),
+        key=lambda error: (
+            "/".join(str(part) for part in error.path),
+            str(error.validator),
+            error.message,
+        ),
     )
     if errors:
         first = errors[0]
