@@ -646,6 +646,7 @@ def resolve_document_proof_ref(document: Mapping[str, Any]) -> bool:
             return False
         if document.get("verdict") != Verdict.VERIFIED.value:
             return False
+        validate_document(document)
         expected = compute_document_proof_ref(document)
         stored = document["context"]["evidence"]["proof_ref"]
         return isinstance(stored, str) and stored == expected
@@ -658,11 +659,11 @@ def resolve_context_proof_ref(
     context: VerificationContext,
     proof_ref: Optional[str],
 ) -> bool:
-    if proof_ref is None:
+    if not isinstance(proof_ref, str):
         return False
     try:
         return compute_context_proof_ref(formal_statement, context) == proof_ref
-    except VerificationContextValidationError:
+    except Exception:
         return False
 
 

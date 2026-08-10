@@ -612,3 +612,36 @@ def test_context_proof_ref_resolver():
     assert resolve_context_proof_ref("x**2 - 4 = 0", context, expected)
     assert not resolve_context_proof_ref("x**2 - 4 = 0", context, DUMMY_PROOF_REF)
     assert not resolve_context_proof_ref("x**2 - 4 = 0", context, None)
+
+
+def test_context_resolver_rejects_non_string_proof_ref():
+    class AlwaysEqual:
+        def __eq__(self, other):
+            return True
+
+    context = _context()
+    assert not resolve_context_proof_ref("x**2 - 4 = 0", context, AlwaysEqual())
+    assert not resolve_context_proof_ref("x**2 - 4 = 0", context, 123)
+    assert not resolve_context_proof_ref("x**2 - 4 = 0", context, [])
+
+
+def test_context_resolver_rejects_malformed_context():
+    assert not resolve_context_proof_ref("x", {}, DUMMY_PROOF_REF)
+
+
+def test_compute_document_proof_ref_rejects_non_mapping():
+    with pytest.raises(VerificationContextValidationError):
+        compute_document_proof_ref([])
+
+
+def test_resolver_rejects_schema_invalid_document_even_if_commitment_matches():
+    minimal = {
+        "spec_version": "1.0",
+        "object": {"formal_statement": "x"},
+        "context": {"evidence": {"evidence": {}, "proof_ref": None}},
+        "verdict": "VERIFIED",
+    }
+    minimal["context"]["evidence"]["proof_ref"] = compute_document_proof_ref(minimal)
+    assert not resolve_document_proof_ref(minimal)
+    with pytest.raises(VerificationContextValidationError):
+        validate_document(minimal)
