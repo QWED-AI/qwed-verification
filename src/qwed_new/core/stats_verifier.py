@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 import ast
 
-from .diagnostics import DiagnosticResult, DiagnosticStatus
+from .diagnostics import DiagnosticResult, DiagnosticStatus, enforce_trust_decision
 from .verification_context import (
     Admission,
     Decision,
@@ -639,6 +639,8 @@ class StatsVerifier:
         self,
         result: DiagnosticResult,
         query: str,
+        *,
+        attestation_token: Optional[str] = None,
     ) -> VerificationContextDocument:
         interpretation = Interpretation(
             theory="tabular statistics",
@@ -660,6 +662,15 @@ class StatsVerifier:
             source_query=query,
             translator="StatsVerifier",
         )
+
+        if result.status is DiagnosticStatus.VERIFIED:
+            result = enforce_trust_decision(
+                result,
+                attestation_token=attestation_token,
+                require_attestation=True,
+                query=query,
+            )
+
         evidence_payload = result.to_dict()
 
         if result.status is DiagnosticStatus.VERIFIED:
