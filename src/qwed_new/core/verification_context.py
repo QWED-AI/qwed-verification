@@ -21,7 +21,10 @@ class VerificationContextValidationError(ValueError):
 
 
 _MISSING_BOUND_FIELD_ERRORS = (KeyError, TypeError, AttributeError)
-_RESOLVER_ERRORS = (VerificationContextValidationError,) + _MISSING_BOUND_FIELD_ERRORS
+_RESOLVER_ERRORS = (
+    VerificationContextValidationError,
+    *_MISSING_BOUND_FIELD_ERRORS,
+)
 
 
 class Verdict(str, Enum):
