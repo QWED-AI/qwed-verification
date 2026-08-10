@@ -106,8 +106,10 @@ def _dataset_fingerprint(df: pd.DataFrame) -> str:
 def _qwed_package_version() -> str:
     try:
         return version("qwed")
-    except PackageNotFoundError:
-        return "unknown"
+    except PackageNotFoundError as exc:
+        raise VerificationContextValidationError(
+            "qwed package metadata is unavailable"
+        ) from exc
 
 
 @dataclass
@@ -639,16 +641,23 @@ class StatsVerifier:
         evidence_payload = result.to_dict()
 
         if result.status is DiagnosticStatus.VERIFIED:
-            admission = (
-                Admission.ADMIT
-                if result.developer_fields.get("is_valid") is True
-                else Admission.DENY
-            )
+            if result.developer_fields.get("is_valid") is not True:
+                context = VerificationContext(
+                    interpretation=interpretation,
+                    proof=proof,
+                    evidence=Evidence(payload=evidence_payload, proof_ref=None),
+                    decision=Decision(admission=Admission.DENY),
+                )
+                return VerificationContextDocument.unverifiable(
+                    formal_statement=query,
+                    context=context,
+                    formalization=formalization,
+                )
             context = VerificationContext(
                 interpretation=interpretation,
                 proof=proof,
                 evidence=Evidence(payload=evidence_payload, proof_ref=None),
-                decision=Decision(admission=admission),
+                decision=Decision(admission=Admission.ADMIT),
             )
             return VerificationContextDocument.verified(
                 formal_statement=query,
