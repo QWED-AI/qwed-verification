@@ -141,6 +141,36 @@ class Interpretation:
         return out
 
 
+def _validate_proof_configuration(
+    configuration: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    if configuration is None:
+        return None
+    if not isinstance(configuration, dict):
+        raise VerificationContextValidationError(
+            "context.proof.configuration must be an object"
+        )
+    return copy.deepcopy(configuration)
+
+
+def _validate_trusted_dependencies(
+    dependencies: Optional[Tuple[str, ...]],
+) -> Optional[Tuple[str, ...]]:
+    if dependencies is None:
+        return None
+    if not isinstance(dependencies, (list, tuple)):
+        raise VerificationContextValidationError(
+            "context.proof.trusted_dependencies must be an array"
+        )
+    normalized = tuple(dependencies)
+    for dependency in normalized:
+        if not isinstance(dependency, str) or not dependency.strip():
+            raise VerificationContextValidationError(
+                "context.proof.trusted_dependencies must contain non-empty strings"
+            )
+    return normalized
+
+
 @dataclass(frozen=True)
 class Proof:
     verifier: str
@@ -159,24 +189,16 @@ class Proof:
             raise VerificationContextValidationError(
                 "context.proof.verifier_version must be non-empty"
             )
-        if self.configuration is not None:
-            if not isinstance(self.configuration, dict):
-                raise VerificationContextValidationError(
-                    "context.proof.configuration must be an object"
-                )
-            object.__setattr__(self, "configuration", copy.deepcopy(self.configuration))
-        if self.trusted_dependencies is not None:
-            if not isinstance(self.trusted_dependencies, (list, tuple)):
-                raise VerificationContextValidationError(
-                    "context.proof.trusted_dependencies must be an array"
-                )
-            dependencies = tuple(self.trusted_dependencies)
-            for dependency in dependencies:
-                if not isinstance(dependency, str) or not dependency.strip():
-                    raise VerificationContextValidationError(
-                        "context.proof.trusted_dependencies must contain non-empty strings"
-                    )
-            object.__setattr__(self, "trusted_dependencies", dependencies)
+        object.__setattr__(
+            self,
+            "configuration",
+            _validate_proof_configuration(self.configuration),
+        )
+        object.__setattr__(
+            self,
+            "trusted_dependencies",
+            _validate_trusted_dependencies(self.trusted_dependencies),
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {
@@ -205,7 +227,13 @@ class Evidence:
                 "context.evidence.evidence must be an object"
             )
         object.__setattr__(self, "payload", copy.deepcopy(self.payload))
-        if self.proof_ref is not None and not _PROOF_REF_PATTERN.fullmatch(self.proof_ref):
+        if self.proof_ref is None:
+            return
+        if not isinstance(self.proof_ref, str):
+            raise VerificationContextValidationError(
+                "context.evidence.proof_ref must be a string"
+            )
+        if not _PROOF_REF_PATTERN.fullmatch(self.proof_ref):
             raise VerificationContextValidationError(
                 "context.evidence.proof_ref must match ^sha256:[a-f0-9]{64}$"
             )
@@ -255,10 +283,8 @@ def _reject_unpaired_surrogates(value: str) -> None:
             )
 
 
-def _es_number_to_string(value: float) -> str:
-    neg = value < 0
-    ax = abs(value)
-    r = repr(ax)
+def _parse_es_decimal(value: float) -> Tuple[int, int]:
+    r = repr(abs(value))
     if "e" in r:
         mant, exp_s = r.split("e")
         e10 = int(exp_s)
@@ -274,25 +300,84 @@ def _es_number_to_string(value: float) -> str:
     while coeff > 0 and coeff % 10 == 0:
         coeff //= 10
         e10 += 1
+    return coeff, e10
+
+
+def _format_es_decimal(coeff: int, e10: int) -> str:
     if coeff == 0:
         return "0"
     s_digits = str(coeff)
     k = len(s_digits)
     n = e10 + k
     if k <= n <= 21:
-        out = s_digits + "0" * (n - k)
-    elif 0 < n <= 21:
-        out = s_digits[:n] + "." + s_digits[n:]
-    elif -6 < n <= 0:
-        out = "0." + "0" * (-n) + s_digits
-    else:
-        exp = n - 1
-        sign = "+" if exp >= 0 else "-"
-        if k == 1:
-            out = s_digits + "e" + sign + str(abs(exp))
-        else:
-            out = s_digits[0] + "." + s_digits[1:] + "e" + sign + str(abs(exp))
-    return ("-" if neg else "") + out
+        return s_digits + "0" * (n - k)
+    if 0 < n <= 21:
+        return s_digits[:n] + "." + s_digits[n:]
+    if -6 < n <= 0:
+        return "0." + "0" * (-n) + s_digits
+    exp = n - 1
+    sign = "+" if exp >= 0 else "-"
+    if k == 1:
+        return s_digits + "e" + sign + str(abs(exp))
+    return s_digits[0] + "." + s_digits[1:] + "e" + sign + str(abs(exp))
+
+
+def _es_number_to_string(value: float) -> str:
+    neg = value < 0
+    coeff, e10 = _parse_es_decimal(value)
+    out = _format_es_decimal(coeff, e10)
+    if neg and out != "0":
+        return "-" + out
+    return out
+
+
+def _canonical_json_int(value: int) -> str:
+    try:
+        as_float = float(value)
+    except OverflowError as exc:
+        raise VerificationContextValidationError(
+            f"integer not representable as IEEE-754 double: {value!r}"
+        ) from exc
+    if int(as_float) != value:
+        raise VerificationContextValidationError(
+            f"integer not representable as IEEE-754 double: {value!r}"
+        )
+    return _es_number_to_string(as_float)
+
+
+def _canonical_json_float(value: float) -> str:
+    if not math.isfinite(value):
+        raise VerificationContextValidationError(
+            f"non-finite number not allowed in proof_ref payload: {value!r}"
+        )
+    return _es_number_to_string(value)
+
+
+def _canonical_json_string(value: str) -> str:
+    _reject_unpaired_surrogates(value)
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _canonical_json_sequence(value: Any) -> str:
+    return "[" + ",".join(_canonical_json(item) for item in value) + "]"
+
+
+def _canonical_json_object(value: Mapping[Any, Any]) -> str:
+    for key in value:
+        if not isinstance(key, str):
+            raise VerificationContextValidationError(
+                f"non-string object key not allowed in proof_ref payload: {key!r}"
+            )
+        _reject_unpaired_surrogates(key)
+    items = sorted(value.items(), key=lambda kv: kv[0].encode("utf-16-be"))
+    return (
+        "{"
+        + ",".join(
+            json.dumps(k, ensure_ascii=False) + ":" + _canonical_json(v)
+            for k, v in items
+        )
+        + "}"
+    )
 
 
 def _canonical_json(value: Any) -> str:
@@ -301,44 +386,15 @@ def _canonical_json(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
-        try:
-            as_float = float(value)
-        except OverflowError as exc:
-            raise VerificationContextValidationError(
-                f"integer not representable as IEEE-754 double: {value!r}"
-            ) from exc
-        if int(as_float) != value:
-            raise VerificationContextValidationError(
-                f"integer not representable as IEEE-754 double: {value!r}"
-            )
-        return _es_number_to_string(as_float)
+        return _canonical_json_int(value)
     if isinstance(value, float):
-        if not math.isfinite(value):
-            raise VerificationContextValidationError(
-                f"non-finite number not allowed in proof_ref payload: {value!r}"
-            )
-        return _es_number_to_string(value)
+        return _canonical_json_float(value)
     if isinstance(value, str):
-        _reject_unpaired_surrogates(value)
-        return json.dumps(value, ensure_ascii=False)
+        return _canonical_json_string(value)
     if isinstance(value, (list, tuple)):
-        return "[" + ",".join(_canonical_json(item) for item in value) + "]"
+        return _canonical_json_sequence(value)
     if isinstance(value, Mapping):
-        for key in value:
-            if not isinstance(key, str):
-                raise VerificationContextValidationError(
-                    f"non-string object key not allowed in proof_ref payload: {key!r}"
-                )
-            _reject_unpaired_surrogates(key)
-        items = sorted(value.items(), key=lambda kv: kv[0].encode("utf-16-be"))
-        return (
-            "{"
-            + ",".join(
-                json.dumps(k, ensure_ascii=False) + ":" + _canonical_json(v)
-                for k, v in items
-            )
-            + "}"
-        )
+        return _canonical_json_object(value)
     raise VerificationContextValidationError(
         f"unsupported type in proof_ref payload: {type(value).__name__}"
     )
@@ -511,11 +567,52 @@ def load_schema() -> Dict[str, Any]:
         ) from exc
 
 
+def _reject_non_finite_numbers(value: Any) -> None:
+    if isinstance(value, bool):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise VerificationContextValidationError(
+                f"non-finite number not allowed in Verification Context: {value!r}"
+            )
+        return
+    if isinstance(value, Mapping):
+        for item in value.values():
+            _reject_non_finite_numbers(item)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _reject_non_finite_numbers(item)
+
+
+def _expected_document_proof_ref(document: Mapping[str, Any]) -> str:
+    context_copy = copy.deepcopy(document["context"])
+    context_copy["evidence"].pop("proof_ref", None)
+    bound = {
+        "formal_statement": document["object"]["formal_statement"],
+        "context": context_copy,
+    }
+    payload = _canonical_json(bound)
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _validate_verified_commitment(document: Mapping[str, Any]) -> None:
+    if document.get("verdict") != Verdict.VERIFIED.value:
+        return
+    expected = _expected_document_proof_ref(document)
+    proof_ref = document["context"]["evidence"]["proof_ref"]
+    if proof_ref != expected:
+        raise VerificationContextValidationError(
+            "context.evidence.proof_ref does not resolve against the bound payload"
+        )
+
+
 def validate_document(document: Mapping[str, Any]) -> None:
     if not isinstance(document, Mapping):
         raise VerificationContextValidationError(
             "Verification Context document must be a JSON object"
         )
+    _reject_non_finite_numbers(document)
     try:
         from jsonschema import Draft202012Validator
     except ImportError as exc:
@@ -532,6 +629,7 @@ def validate_document(document: Mapping[str, Any]) -> None:
         first = errors[0]
         path = ".".join(str(part) for part in first.path) or "<root>"
         raise VerificationContextValidationError(f"{path}: {first.message}")
+    _validate_verified_commitment(document)
 
 
 def is_valid_document(document: Mapping[str, Any]) -> bool:

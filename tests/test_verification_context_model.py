@@ -385,3 +385,75 @@ def test_packaged_schema_matches_spec():
     if not spec_path.exists():
         pytest.skip("spec schema not present")
     assert load_schema() == json.loads(spec_path.read_text(encoding="utf-8"))
+
+
+def test_validate_document_rejects_forged_proof_ref():
+    doc = VerificationContextDocument.verified(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(),
+    )
+    payload = doc.to_dict()
+    payload["context"]["evidence"]["proof_ref"] = DUMMY_PROOF_REF
+    with pytest.raises(VerificationContextValidationError):
+        validate_document(payload)
+    assert not is_valid_document(payload)
+
+
+def test_validate_document_rejects_nan_in_evidence():
+    doc = VerificationContextDocument.unverifiable(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(),
+    )
+    payload = doc.to_dict()
+    payload["context"]["evidence"]["evidence"]["value"] = float("nan")
+    with pytest.raises(VerificationContextValidationError):
+        validate_document(payload)
+
+
+def test_validate_document_rejects_positive_infinity_in_evidence():
+    doc = VerificationContextDocument.unverifiable(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(),
+    )
+    payload = doc.to_dict()
+    payload["context"]["evidence"]["evidence"]["value"] = float("inf")
+    with pytest.raises(VerificationContextValidationError):
+        validate_document(payload)
+
+
+def test_validate_document_rejects_negative_infinity_in_evidence():
+    doc = VerificationContextDocument.unverifiable(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(),
+    )
+    payload = doc.to_dict()
+    payload["context"]["evidence"]["evidence"]["value"] = float("-inf")
+    with pytest.raises(VerificationContextValidationError):
+        validate_document(payload)
+
+
+def test_validate_document_rejects_nan_translation_confidence():
+    doc = VerificationContextDocument.unverifiable(
+        formal_statement="x**2 - 4 = 0",
+        context=_context(),
+        formalization=_formalization(),
+    )
+    payload = doc.to_dict()
+    payload["object"]["formalization"]["translation_confidence"] = float("nan")
+    with pytest.raises(VerificationContextValidationError):
+        validate_document(payload)
+
+
+def test_evidence_rejects_integer_proof_ref():
+    with pytest.raises(VerificationContextValidationError):
+        Evidence(payload={}, proof_ref=1)
+
+
+def test_evidence_rejects_list_proof_ref():
+    with pytest.raises(VerificationContextValidationError):
+        Evidence(payload={}, proof_ref=[])
+
+
+def test_evidence_rejects_dict_proof_ref():
+    with pytest.raises(VerificationContextValidationError):
+        Evidence(payload={}, proof_ref={})
