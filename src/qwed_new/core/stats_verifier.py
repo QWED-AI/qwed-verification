@@ -16,6 +16,7 @@ import logging
 import time
 import json
 import hashlib
+import re
 from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
@@ -112,14 +113,25 @@ def _qwed_package_version() -> str:
         ) from exc
 
 
-def _has_stats_proof_binding(result: DiagnosticResult) -> bool:
+_SHA256_HEX_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
+
+
+def _is_sha256_hex(value: Any) -> bool:
+    return isinstance(value, str) and _SHA256_HEX_PATTERN.fullmatch(value) is not None
+
+
+def _has_stats_proof_binding(result: DiagnosticResult, query: str) -> bool:
     fields = result.developer_fields
     if fields.get("constraint_id") != CONSTRAINT_STATS_VALID:
         return False
-    dataset_sha256 = fields.get("dataset_sha256")
-    if not isinstance(dataset_sha256, str) or not dataset_sha256.strip():
+    if not _is_sha256_hex(fields.get("dataset_sha256")):
         return False
-    return fields.get("claim_supported") is True
+    if fields.get("claim_supported") is not True:
+        return False
+    claim_sha256 = fields.get("claim_sha256")
+    if not _is_sha256_hex(claim_sha256):
+        return False
+    return claim_sha256 == hashlib.sha256(query.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -653,7 +665,7 @@ class StatsVerifier:
         if result.status is DiagnosticStatus.VERIFIED:
             if (
                 result.developer_fields.get("is_valid") is not True
-                or not _has_stats_proof_binding(result)
+                or not _has_stats_proof_binding(result, query)
             ):
                 context = VerificationContext(
                     interpretation=interpretation,

@@ -1,3 +1,5 @@
+import hashlib
+
 import pytest
 from importlib.metadata import PackageNotFoundError
 
@@ -13,6 +15,8 @@ from qwed_new.core.verification_context import (
 
 
 DATASET_SHA256 = "a" * 64
+QUERY = "mean of a == 2"
+CLAIM_SHA256 = hashlib.sha256(QUERY.encode("utf-8")).hexdigest()
 
 
 def _verified_result(is_valid=True):
@@ -23,6 +27,7 @@ def _verified_result(is_valid=True):
             "is_valid": is_valid,
             "claim_supported": True,
             "dataset_sha256": DATASET_SHA256,
+            "claim_sha256": CLAIM_SHA256,
             "observed_result": 2.0,
         },
         evidence={"observed_result": 2.0},
@@ -104,12 +109,13 @@ def test_stats_context_fails_closed_on_non_finite_evidence():
             "is_valid": True,
             "claim_supported": True,
             "dataset_sha256": DATASET_SHA256,
+            "claim_sha256": CLAIM_SHA256,
             "value": float("nan"),
         },
         evidence={"value": float("nan")},
     )
     with pytest.raises(VerificationContextValidationError):
-        verifier.to_verification_context(result, "mean of a == nan")
+        verifier.to_verification_context(result, QUERY)
 
 
 def test_stats_verified_missing_is_valid_fails_closed():
@@ -169,6 +175,61 @@ def test_stats_verified_missing_claim_support_fails_closed():
         evidence={"observed_result": 2.0},
     )
     doc = verifier.to_verification_context(result, "mean of a == 2")
+    doc.validate()
+    payload = doc.to_dict()
+    assert payload["verdict"] == "UNVERIFIABLE"
+    assert payload["context"]["evidence"]["proof_ref"] is None
+    assert payload["context"]["decision"]["admission"] == "DENY"
+
+
+def test_stats_verified_mismatched_query_fails_closed():
+    verifier = StatsVerifier()
+    result = _verified_result()
+    doc = verifier.to_verification_context(result, "sum of revenue == 999999")
+    doc.validate()
+    payload = doc.to_dict()
+    assert payload["verdict"] == "UNVERIFIABLE"
+    assert payload["context"]["evidence"]["proof_ref"] is None
+    assert payload["context"]["decision"]["admission"] == "DENY"
+
+
+def test_stats_verified_malformed_dataset_digest_fails_closed():
+    verifier = StatsVerifier()
+    result = DiagnosticResult.verified(
+        agent_message="Statistical claim verified.",
+        developer_fields={
+            "constraint_id": CONSTRAINT_STATS_VALID,
+            "is_valid": True,
+            "claim_supported": True,
+            "dataset_sha256": "not-a-sha256",
+            "claim_sha256": CLAIM_SHA256,
+            "observed_result": 2.0,
+        },
+        evidence={"observed_result": 2.0},
+    )
+    doc = verifier.to_verification_context(result, QUERY)
+    doc.validate()
+    payload = doc.to_dict()
+    assert payload["verdict"] == "UNVERIFIABLE"
+    assert payload["context"]["evidence"]["proof_ref"] is None
+    assert payload["context"]["decision"]["admission"] == "DENY"
+
+
+def test_stats_verified_malformed_claim_digest_fails_closed():
+    verifier = StatsVerifier()
+    result = DiagnosticResult.verified(
+        agent_message="Statistical claim verified.",
+        developer_fields={
+            "constraint_id": CONSTRAINT_STATS_VALID,
+            "is_valid": True,
+            "claim_supported": True,
+            "dataset_sha256": DATASET_SHA256,
+            "claim_sha256": "not-a-sha256",
+            "observed_result": 2.0,
+        },
+        evidence={"observed_result": 2.0},
+    )
+    doc = verifier.to_verification_context(result, QUERY)
     doc.validate()
     payload = doc.to_dict()
     assert payload["verdict"] == "UNVERIFIABLE"
