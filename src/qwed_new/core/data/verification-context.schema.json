@@ -1,0 +1,293 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qwed.dev/schemas/verification-context/v1.0",
+  "title": "QWED Verification Context",
+  "description": "QWED Verification Context v1.0 — the object of verification plus the context required to interpret, reproduce, and trust the verification. Derived from ADR-001..005.",
+  "type": "object",
+  "required": ["spec_version", "object", "context", "verdict"],
+  "additionalProperties": false,
+  "properties": {
+    "spec_version": {
+      "const": "1.0",
+      "description": "The specification version this document conforms to."
+    },
+    "object": {
+      "$ref": "#/$defs/VerifiedObject"
+    },
+    "context": {
+      "$ref": "#/$defs/VerificationContext"
+    },
+    "verdict": {
+      "$ref": "#/$defs/Verdict"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "verdict": { "const": "VERIFIED" } },
+        "required": ["verdict"]
+      },
+      "then": {
+        "properties": {
+          "context": {
+            "properties": {
+              "evidence": {
+                "required": ["proof_ref"],
+                "properties": {
+                  "proof_ref": { "$ref": "#/$defs/ProofRef" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "verdict": { "enum": ["UNVERIFIABLE", "BLOCKED"] } },
+        "required": ["verdict"]
+      },
+      "then": {
+        "properties": {
+          "context": {
+            "properties": {
+              "evidence": {
+                "required": ["proof_ref"],
+                "properties": {
+                  "proof_ref": { "type": "null" }
+                }
+              },
+              "decision": {
+                "properties": {
+                  "admission": { "const": "DENY" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "Verdict": {
+      "enum": ["VERIFIED", "UNVERIFIABLE", "BLOCKED"],
+      "description": "The truth verdict (ADR-001, ADR-002). VERIFIED requires a proof_ref; UNVERIFIABLE and BLOCKED are fail-closed and carry no proof."
+    },
+    "Admission": {
+      "enum": ["ADMIT", "DENY"],
+      "description": "The safe-to-run decision (ADR-003). Separate from the truth verdict: truth != admission. Execution and shipping gate exclusively on admission == ADMIT."
+    },
+    "ProofRef": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "description": "An evidence commitment (ADR-002): sha256 of the canonical encoding of the bound payload. Provides evidence integrity and reproducibility. It is NOT itself the mathematical proof."
+    },
+    "VerifiedObject": {
+      "type": "object",
+      "required": ["formal_statement"],
+      "additionalProperties": false,
+      "description": "The object of verification (ADR-001): the formal statement being evaluated.",
+      "properties": {
+        "formal_statement": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The formal statement being verified — the object of verification."
+        },
+        "formalization": {
+          "$ref": "#/$defs/Formalization"
+        }
+      }
+    },
+    "Formalization": {
+      "type": "object",
+      "required": ["verified"],
+      "additionalProperties": false,
+      "description": "The NL -> formal mapping (ADR-004). Exposed for confirmation but NEVER itself verified.",
+      "properties": {
+        "source_query": {
+          "type": "string",
+          "description": "The original natural-language query."
+        },
+        "translator": {
+          "type": "string",
+          "description": "The translator that produced the formal statement (untrusted, outside the trust boundary)."
+        },
+        "translation_confidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Non-authoritative translation confidence note."
+        },
+        "verified": {
+          "const": false,
+          "description": "The formalization is never verified (ADR-004). Always false."
+        }
+      }
+    },
+    "VerificationContext": {
+      "type": "object",
+      "required": ["interpretation", "proof", "evidence", "decision"],
+      "additionalProperties": false,
+      "description": "The Verification Context (ADR-002): everything required to interpret, reproduce, and trust the verification, in four layers.",
+      "properties": {
+        "interpretation": {
+          "$ref": "#/$defs/Interpretation"
+        },
+        "proof": {
+          "$ref": "#/$defs/Proof"
+        },
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "decision": {
+          "$ref": "#/$defs/Decision"
+        }
+      }
+    },
+    "Interpretation": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "description": "The interpretation layer (ADR-001, ADR-002): required context that gives the object meaning. A statement is only a proposition relative to a theory. At least one interpretation field must be present.",
+      "properties": {
+        "theory": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The theory / axiom set the statement is interpreted under."
+        },
+        "logic": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The logic the statement is expressed in."
+        },
+        "dialect": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The dialect (e.g. SQL dialect) where applicable."
+        },
+        "parser_version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The parser version (e.g. SQL parser) where applicable."
+        },
+        "language": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The source language (e.g. for code verification) where applicable."
+        },
+        "policy_version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The policy version (e.g. code security policy) where applicable."
+        },
+        "algebra_domain": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The algebra domain (e.g. real-closed field) where applicable."
+        }
+      }
+    },
+    "Proof": {
+      "type": "object",
+      "required": ["verifier", "verifier_version"],
+      "additionalProperties": false,
+      "description": "The proof/discharge layer (ADR-002): the verifier is the trusted computing base. Declares how the object was discharged and how much to trust it.",
+      "properties": {
+        "verifier": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The verifier / discharging engine (the trusted computing base)."
+        },
+        "verifier_version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The exact verifier release."
+        },
+        "configuration": {
+          "type": "object",
+          "description": "Solver flags, timeouts, resource limits, and options that affect the outcome. Values MUST be within the canonical encoding's JSON domain.",
+          "additionalProperties": {
+            "$ref": "#/$defs/EncodableValue"
+          }
+        },
+        "theory_scope": {
+          "type": "string",
+          "description": "The logic / axiom set / theory the discharge is relative to."
+        },
+        "trusted_dependencies": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Libraries and sub-components inside the trusted computing base."
+        },
+        "outcome_treatment": {
+          "type": "string",
+          "description": "How unknown/timeout/error outcomes are treated. These are never VERIFIED; they resolve to UNVERIFIABLE or BLOCKED (fail-closed)."
+        }
+      }
+    },
+    "Evidence": {
+      "type": "object",
+      "required": ["evidence"],
+      "additionalProperties": false,
+      "description": "The evidence layer (ADR-002): what was checked, plus the evidence commitment.",
+      "properties": {
+        "evidence": {
+          "type": "object",
+          "description": "The retained evidence the proof_ref commits to. Values MUST be within the canonical encoding's JSON domain; integers MUST be exactly representable as IEEE-754 doubles.",
+          "additionalProperties": {
+            "$ref": "#/$defs/EncodableValue"
+          }
+        },
+        "proof_ref": {
+          "oneOf": [
+            { "$ref": "#/$defs/ProofRef" },
+            { "type": "null" }
+          ],
+          "description": "The evidence commitment. Non-null (sha256) iff verdict is VERIFIED; null for UNVERIFIABLE/BLOCKED."
+        }
+      }
+    },
+    "Decision": {
+      "type": "object",
+      "required": ["admission"],
+      "additionalProperties": false,
+      "description": "The decision layer (ADR-003): the safe-to-run outcome. Truth != admission.",
+      "properties": {
+        "admission": {
+          "$ref": "#/$defs/Admission"
+        }
+      }
+    },
+    "EncodableNumber": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": -9007199254740992,
+          "maximum": 9007199254740992
+        },
+        {
+          "type": "number",
+          "not": { "type": "integer" }
+        }
+      ],
+      "description": "A JSON number within the canonical encoding's IEEE-754 domain. Integer values MUST be exactly representable as IEEE-754 doubles."
+    },
+    "EncodableValue": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "string" },
+        { "$ref": "#/$defs/EncodableNumber" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EncodableValue" }
+        },
+        {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/EncodableValue" }
+        }
+      ],
+      "description": "A JSON value that can be canonicalized and bound by proof_ref."
+    }
+  }
+}
