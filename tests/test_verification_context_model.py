@@ -645,3 +645,9 @@ def test_resolver_rejects_schema_invalid_document_even_if_commitment_matches():
     assert not resolve_document_proof_ref(minimal)
     with pytest.raises(VerificationContextValidationError):
         validate_document(minimal)
+
+
+def test_context_resolver_rejects_non_string_formal_statement():
+    context = _context()
+    expected = compute_context_proof_ref("x**2 - 4 = 0", context)
+    assert not resolve_context_proof_ref(1, context, expected)

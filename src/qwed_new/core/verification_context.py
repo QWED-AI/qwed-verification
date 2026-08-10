@@ -20,6 +20,10 @@ class VerificationContextValidationError(ValueError):
     pass
 
 
+_MISSING_BOUND_FIELD_ERRORS = (KeyError, TypeError, AttributeError)
+_RESOLVER_ERRORS = (VerificationContextValidationError,) + _MISSING_BOUND_FIELD_ERRORS
+
+
 class Verdict(str, Enum):
     VERIFIED = "VERIFIED"
     UNVERIFIABLE = "UNVERIFIABLE"
@@ -632,9 +636,7 @@ def compute_document_proof_ref(document: Mapping[str, Any]) -> str:
         )
     try:
         return _expected_document_proof_ref(document)
-    except VerificationContextValidationError:
-        raise
-    except Exception as exc:
+    except _MISSING_BOUND_FIELD_ERRORS as exc:
         raise VerificationContextValidationError(
             "bound payload is missing required Verification Context fields"
         ) from exc
@@ -650,7 +652,7 @@ def resolve_document_proof_ref(document: Mapping[str, Any]) -> bool:
         expected = compute_document_proof_ref(document)
         stored = document["context"]["evidence"]["proof_ref"]
         return isinstance(stored, str) and stored == expected
-    except Exception:
+    except _RESOLVER_ERRORS:
         return False
 
 
@@ -659,11 +661,15 @@ def resolve_context_proof_ref(
     context: VerificationContext,
     proof_ref: Optional[str],
 ) -> bool:
+    if not isinstance(formal_statement, str):
+        return False
+    if not isinstance(context, VerificationContext):
+        return False
     if not isinstance(proof_ref, str):
         return False
     try:
         return compute_context_proof_ref(formal_statement, context) == proof_ref
-    except Exception:
+    except _RESOLVER_ERRORS:
         return False
 
 
