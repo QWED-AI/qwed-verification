@@ -1,8 +1,10 @@
+import secrets
+
 from qwed_sdk.client import QWEDClient
 
 
 def test_sdk_verification_context_methods_call_endpoints(monkeypatch):
-    api_key = "qwed-test-key"
+    api_key = f"qwed-test-{secrets.token_hex(8)}"
     client = QWEDClient(api_key=api_key)
     calls = []
 
@@ -20,6 +22,18 @@ def test_sdk_verification_context_methods_call_endpoints(monkeypatch):
     client.validate_verification_context({"spec_version": "1.0"})
     client.resolve_verification_context({"spec_version": "1.0"})
 
-    assert calls[0][1] == "/verification-context/from-diagnostic"
-    assert calls[1][1] == "/verification-context/validate"
-    assert calls[2][1] == "/verification-context/resolve"
+    assert calls == [
+        (
+            "POST",
+            "/verification-context/from-diagnostic",
+            {
+                "diagnostic": {"status": "UNVERIFIABLE"},
+                "query": "mean of a == 2",
+                "verifier": "TestVerifier",
+                "verifier_version": None,
+                "attestation_token": None,
+            },
+        ),
+        ("POST", "/verification-context/validate", {"document": {"spec_version": "1.0"}}),
+        ("POST", "/verification-context/resolve", {"document": {"spec_version": "1.0"}}),
+    ]

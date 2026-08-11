@@ -1,12 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlmodel import Session
+from sqlalchemy.exc import SQLAlchemyError
 from typing import Any, Dict, Optional
+import json
 
 from qwed_new.core.database import get_session
 from qwed_new.core.diagnostics import DiagnosticResult
 from qwed_new.core.models import VerificationLog
 from qwed_new.core.rate_limiter import check_rate_limit
+from qwed_new.core.security import redact_pii
 from qwed_new.core.tenant_context import TenantContext, get_current_tenant
 from qwed_new.core.verification_context import (
     VerificationContextValidationError,
@@ -16,7 +19,6 @@ from qwed_new.core.verification_context import (
 from qwed_new.core.verification_context_bridge import (
     verification_context_from_diagnostic_result,
 )
-import json
 
 router = APIRouter(prefix="/verification-context", tags=["VerificationContext"])
 
@@ -68,15 +70,19 @@ def _safe_commit_context_log(
             VerificationLog(
                 organization_id=tenant.organization_id,
                 user_id=getattr(tenant, "user_id", None),
-                query=query,
-                result=json.dumps(result),
+                query=redact_pii(query),
+                result=redact_pii(json.dumps(result)),
                 is_verified=is_verified,
                 domain="VERIFICATION_CONTEXT",
             )
         )
         session.commit()
-    except Exception:
+    except (TypeError, ValueError, SQLAlchemyError):
         session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="audit persistence failed",
+        ) from None
 
 
 @router.post(
@@ -111,7 +117,8 @@ def create_verification_context_from_diagnostic(
         tenant,
         payload.query,
         document_dict,
-        document_dict["verdict"] == "VERIFIED",
+        document_dict["verdict"] == "VERIFIED"
+        and document_dict["context"]["decision"]["admission"] == "ADMIT",
     )
     return document_dict
 
@@ -134,7 +141,7 @@ def validate_verification_context(
         tenant,
         "verification-context:validate",
         response,
-        response["valid"],
+        False,
     )
     return response
 
@@ -153,6 +160,6 @@ def resolve_verification_context(
         tenant,
         "verification-context:resolve",
         response,
-        response["resolved"],
+        False,
     )
     return response

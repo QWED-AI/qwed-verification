@@ -2158,23 +2158,23 @@ def context_from_diagnostic(
         raise SystemExit(1) from None
     if not isinstance(diagnostic, dict):
         result = DiagnosticResult.blocked(
-            agent_message="Diagnostic result is malformed",
-            developer_fields={"constraint_id": "verification_context.malformed_diagnostic"},
+            agent_message=_CONTEXT_MALFORMED_DIAGNOSTIC_MESSAGE,
+            developer_fields={"constraint_id": _CONTEXT_MALFORMED_DIAGNOSTIC_CONSTRAINT},
         )
     else:
         developer_fields = diagnostic.get("developer_fields", {})
         if not isinstance(developer_fields, dict):
             result = DiagnosticResult.blocked(
-                agent_message="Diagnostic result is malformed",
-                developer_fields={"constraint_id": "verification_context.malformed_diagnostic"},
+                agent_message=_CONTEXT_MALFORMED_DIAGNOSTIC_MESSAGE,
+                developer_fields={"constraint_id": _CONTEXT_MALFORMED_DIAGNOSTIC_CONSTRAINT},
             )
         else:
             try:
                 result = DiagnosticResult.from_dict(diagnostic)
             except (ValueError, TypeError, AttributeError):
                 result = DiagnosticResult.blocked(
-                    agent_message="Diagnostic result is malformed",
-                    developer_fields={"constraint_id": "verification_context.malformed_diagnostic"},
+                    agent_message=_CONTEXT_MALFORMED_DIAGNOSTIC_MESSAGE,
+                    developer_fields={"constraint_id": _CONTEXT_MALFORMED_DIAGNOSTIC_CONSTRAINT},
                 )
     try:
         document = verification_context_from_diagnostic_result(
@@ -2187,6 +2187,9 @@ def context_from_diagnostic(
         document.validate()
     except VerificationContextValidationError:
         click.echo(json.dumps({"valid": False, "error": "verification_context_rejected"}, indent=2))
+        raise SystemExit(1) from None
+    except Exception:
+        click.echo(json.dumps({"valid": False, "error": "internal_error"}, indent=2))
         raise SystemExit(1) from None
     click.echo(json.dumps(document.to_dict(), indent=2))
 
