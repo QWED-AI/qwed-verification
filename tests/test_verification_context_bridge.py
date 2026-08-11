@@ -3,7 +3,7 @@ import json
 import pytest
 
 from qwed_new.core.attestation import create_verification_attestation
-from qwed_new.core.diagnostics import DiagnosticResult
+from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
 from qwed_new.core.verification_context import (
     VerificationContextValidationError,
     resolve_document_proof_ref,
@@ -113,9 +113,29 @@ def test_blocked_result_fails_closed():
 
 
 def test_empty_formal_statement_rejected():
+    result = _verified_result()
     with pytest.raises(VerificationContextValidationError):
         verification_context_from_diagnostic_result(
-            _verified_result(),
+            result,
             formal_statement="",
             verifier="TestVerifier",
         )
+
+
+def test_malformed_developer_fields_fail_closed():
+    result = DiagnosticResult(
+        status=DiagnosticStatus.UNVERIFIABLE,
+        agent_message="Claim could not be verified.",
+        developer_fields=[],
+        proof_ref=None,
+    )
+    doc = verification_context_from_diagnostic_result(
+        result,
+        formal_statement=QUERY,
+        verifier="TestVerifier",
+    )
+    doc.validate()
+    payload = doc.to_dict()
+    assert payload["verdict"] == "BLOCKED"
+    assert payload["context"]["evidence"]["proof_ref"] is None
+    assert payload["context"]["decision"]["admission"] == "DENY"

@@ -30,10 +30,10 @@ def _resolved_verifier_version(verifier_version: Optional[str]) -> str:
         return verifier_version
     try:
         return version("qwed")
-    except PackageNotFoundError as exc:
-        raise VerificationContextValidationError(
-            "qwed package metadata is unavailable"
-        ) from exc
+    except PackageNotFoundError:
+        from qwed_new import __version__ as qwed_version
+
+        return qwed_version
 
 
 def verification_context_from_diagnostic_result(
@@ -43,7 +43,6 @@ def verification_context_from_diagnostic_result(
     verifier: str,
     verifier_version: Optional[str] = None,
     attestation_token: Optional[str] = None,
-    require_attestation: bool = True,
 ) -> VerificationContextDocument:
     if not isinstance(formal_statement, str) or not formal_statement.strip():
         raise VerificationContextValidationError(
@@ -54,11 +53,19 @@ def verification_context_from_diagnostic_result(
             "verifier must be a non-empty string"
         )
 
+    if not isinstance(result.developer_fields, dict):
+        result = DiagnosticResult.blocked(
+            agent_message="Diagnostic result is malformed",
+            developer_fields={
+                "constraint_id": "verification_context.malformed_developer_fields",
+            },
+        )
+
     if result.status is DiagnosticStatus.VERIFIED:
         result = enforce_trust_decision(
             result,
             attestation_token=attestation_token,
-            require_attestation=require_attestation,
+            require_attestation=True,
             query=formal_statement,
         )
 

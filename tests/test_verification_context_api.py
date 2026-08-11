@@ -50,3 +50,19 @@ def test_validate_and_resolve_fail_closed_for_invalid_document():
         VerificationContextDocumentRequest(document=document)
     )
     assert resolution == {"resolved": False}
+
+
+def test_from_diagnostic_non_dict_developer_fields_fails_closed():
+    payload = DiagnosticVerificationContextRequest(
+        query="mean of a == 2",
+        verifier="TestVerifier",
+        diagnostic={
+            "status": "UNVERIFIABLE",
+            "agent_message": "Claim could not be verified.",
+            "developer_fields": [],
+        },
+    )
+    document = create_verification_context_from_diagnostic(payload)
+    assert document["verdict"] == "BLOCKED"
+    assert document["context"]["evidence"]["proof_ref"] is None
+    assert document["context"]["decision"]["admission"] == "DENY"

@@ -2,7 +2,8 @@ from qwed_sdk.client import QWEDClient
 
 
 def test_sdk_verification_context_methods_call_endpoints(monkeypatch):
-    client = QWEDClient(api_key="qwed_test")
+    api_key = "qwed-test-key"
+    client = QWEDClient(api_key=api_key)
     calls = []
 
     def _fake_request(method, endpoint, **kwargs):

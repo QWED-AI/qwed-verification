@@ -76,3 +76,40 @@ def test_context_from_diagnostic(tmp_path):
     assert payload["verdict"] == "UNVERIFIABLE"
     assert payload["context"]["evidence"]["proof_ref"] is None
     assert payload["context"]["decision"]["admission"] == "DENY"
+
+
+def test_context_from_diagnostic_non_object_diagnostic_fails_closed(tmp_path):
+    diagnostic_path = tmp_path / "diagnostic.json"
+    diagnostic_path.write_text(json.dumps(["not", "object"]), encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "context",
+            "from-diagnostic",
+            "--diagnostic-file",
+            str(diagnostic_path),
+            "--query",
+            "mean of a == 2",
+            "--verifier",
+            "TestVerifier",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["verdict"] == "BLOCKED"
+    assert payload["context"]["evidence"]["proof_ref"] is None
+    assert payload["context"]["decision"]["admission"] == "DENY"
+
+
+def test_context_validate_invalid_json_file(tmp_path):
+    path = tmp_path / "invalid.json"
+    path.write_text("{", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["context", "validate", str(path)])
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["valid"] is False
+    assert payload["error"] == "invalid_document_file"
