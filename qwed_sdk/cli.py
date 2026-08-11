@@ -2082,6 +2082,10 @@ def import_provider(url: str):
         sys.exit(1)
 
 
+_CONTEXT_MALFORMED_DIAGNOSTIC_MESSAGE = "Diagnostic result is malformed"
+_CONTEXT_MALFORMED_DIAGNOSTIC_CONSTRAINT = "verification_context.malformed_diagnostic"
+
+
 @cli.group()
 def context():
     """Verification Context v1.0 utilities."""

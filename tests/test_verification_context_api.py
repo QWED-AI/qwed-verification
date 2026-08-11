@@ -13,12 +13,18 @@ def test_from_diagnostic_malformed_diagnostic_fails_closed():
         verifier="TestVerifier",
         diagnostic={"status": "VERIFIED"},
     )
-    document = create_verification_context_from_diagnostic(payload)
+    document = create_verification_context_from_diagnostic(
+        payload,
+        tenant=None,
+        session=None,
+    )
     assert document["verdict"] == "BLOCKED"
     assert document["context"]["evidence"]["proof_ref"] is None
     assert document["context"]["decision"]["admission"] == "DENY"
     assert validate_verification_context(
-        VerificationContextDocumentRequest(document=document)
+        VerificationContextDocumentRequest(document=document),
+        tenant=None,
+        session=None,
     ) == {"valid": True}
 
 
@@ -33,7 +39,11 @@ def test_from_diagnostic_verified_without_attestation_fails_closed():
             "proof_ref": "sha256:" + "a" * 64,
         },
     )
-    document = create_verification_context_from_diagnostic(payload)
+    document = create_verification_context_from_diagnostic(
+        payload,
+        tenant=None,
+        session=None,
+    )
     assert document["verdict"] == "BLOCKED"
     assert document["context"]["evidence"]["proof_ref"] is None
     assert document["context"]["decision"]["admission"] == "DENY"
@@ -42,12 +52,16 @@ def test_from_diagnostic_verified_without_attestation_fails_closed():
 def test_validate_and_resolve_fail_closed_for_invalid_document():
     document = {"spec_version": "1.0"}
     validation = validate_verification_context(
-        VerificationContextDocumentRequest(document=document)
+        VerificationContextDocumentRequest(document=document),
+        tenant=None,
+        session=None,
     )
     assert validation["valid"] is False
     assert "error" in validation
     resolution = resolve_verification_context(
-        VerificationContextDocumentRequest(document=document)
+        VerificationContextDocumentRequest(document=document),
+        tenant=None,
+        session=None,
     )
     assert resolution == {"resolved": False}
 
@@ -62,7 +76,11 @@ def test_from_diagnostic_non_dict_developer_fields_fails_closed():
             "developer_fields": [],
         },
     )
-    document = create_verification_context_from_diagnostic(payload)
+    document = create_verification_context_from_diagnostic(
+        payload,
+        tenant=None,
+        session=None,
+    )
     assert document["verdict"] == "BLOCKED"
     assert document["context"]["evidence"]["proof_ref"] is None
     assert document["context"]["decision"]["admission"] == "DENY"
