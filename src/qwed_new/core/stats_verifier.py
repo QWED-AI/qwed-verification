@@ -16,8 +16,6 @@ import logging
 import time
 import json
 import hashlib
-import re
-import uuid
 from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
@@ -114,27 +112,6 @@ def _qwed_package_version() -> str:
         ) from exc
 
 
-_SHA256_HEX_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
-_PROOF_REF_PATTERN = re.compile(r"sha256:[a-f0-9]{64}")
-
-
-def _is_sha256_hex(value: Any) -> bool:
-    return isinstance(value, str) and _SHA256_HEX_PATTERN.fullmatch(value) is not None
-
-
-def _has_stats_proof_binding(result: DiagnosticResult, query: str) -> bool:
-    fields = result.developer_fields
-    if fields.get("constraint_id") != CONSTRAINT_STATS_VALID:
-        return False
-    if not _is_sha256_hex(fields.get("dataset_sha256")):
-        return False
-    if fields.get("claim_supported") is not True:
-        return False
-    claim_sha256 = fields.get("claim_sha256")
-    if not _is_sha256_hex(claim_sha256):
-        return False
-    return claim_sha256 == hashlib.sha256(query.encode("utf-8")).hexdigest()
-
 
 @dataclass
 class ExecutionResult:
@@ -154,15 +131,6 @@ class SecurityReport:
     checks_passed: List[str] = field(default_factory=list)
     checks_failed: List[str] = field(default_factory=list)
     risk_level: str = "unknown"  # "low", "medium", "high", "critical"
-
-
-@dataclass
-class StatsExecutionReceipt:
-    receipt_id: str
-    query: str
-    dataset_sha256: str
-    claim_sha256: str
-    proof_ref: str
 
 
 class WasmSandbox:
@@ -398,7 +366,6 @@ class StatsVerifier:
         
         # Determine available sandboxes
         self._sandbox_availability = {}
-        self._execution_receipts: Dict[str, StatsExecutionReceipt] = {}
     
     @property
     def translator(self):
@@ -647,65 +614,10 @@ class StatsVerifier:
             },
         )
     
-    def _register_execution_receipt(
-        self,
-        query: str,
-        dataset_sha256: str,
-        claim_sha256: str,
-        proof_ref: str,
-    ) -> str:
-        if not query or not query.strip():
-            raise VerificationContextValidationError(
-                "execution receipt requires a non-empty query"
-            )
-        if not _is_sha256_hex(dataset_sha256):
-            raise VerificationContextValidationError(
-                "execution receipt requires a valid dataset_sha256"
-            )
-        if not _is_sha256_hex(claim_sha256):
-            raise VerificationContextValidationError(
-                "execution receipt requires a valid claim_sha256"
-            )
-        if not isinstance(proof_ref, str) or not _PROOF_REF_PATTERN.fullmatch(proof_ref):
-            raise VerificationContextValidationError(
-                "execution receipt requires a valid proof_ref"
-            )
-        receipt_id = f"stats_receipt_{uuid.uuid4().hex}"
-        self._execution_receipts[receipt_id] = StatsExecutionReceipt(
-            receipt_id=receipt_id,
-            query=query,
-            dataset_sha256=dataset_sha256,
-            claim_sha256=claim_sha256,
-            proof_ref=proof_ref,
-        )
-        return receipt_id
-
-    def _verify_execution_receipt(
-        self,
-        receipt_id: Optional[str],
-        query: str,
-        result: DiagnosticResult,
-    ) -> bool:
-        if not isinstance(receipt_id, str):
-            return False
-        receipt = self._execution_receipts.get(receipt_id)
-        if receipt is None:
-            return False
-        fields = result.developer_fields
-        return (
-            receipt.query == query
-            and receipt.proof_ref == result.proof_ref
-            and fields.get("dataset_sha256") == receipt.dataset_sha256
-            and fields.get("claim_sha256") == receipt.claim_sha256
-        )
-
     def to_verification_context(
         self,
         result: DiagnosticResult,
         query: str,
-        *,
-        attestation_token: Optional[str] = None,
-        execution_receipt_id: Optional[str] = None,
     ) -> VerificationContextDocument:
         interpretation = Interpretation(
             theory="tabular statistics",
@@ -731,48 +643,20 @@ class StatsVerifier:
         if result.status is DiagnosticStatus.VERIFIED:
             result = enforce_trust_decision(
                 result,
-                attestation_token=attestation_token,
-                require_attestation=True,
+                require_attestation=False,
                 query=query,
             )
 
         evidence_payload = result.to_dict()
 
         if result.status is DiagnosticStatus.VERIFIED:
-            if not self._verify_execution_receipt(execution_receipt_id, query, result):
-                context = VerificationContext(
-                    interpretation=interpretation,
-                    proof=proof,
-                    evidence=Evidence(payload=evidence_payload, proof_ref=None),
-                    decision=Decision(admission=Admission.DENY),
-                )
-                return VerificationContextDocument.blocked(
-                    formal_statement=query,
-                    context=context,
-                    formalization=formalization,
-                )
-            if (
-                result.developer_fields.get("is_valid") is not True
-                or not _has_stats_proof_binding(result, query)
-            ):
-                context = VerificationContext(
-                    interpretation=interpretation,
-                    proof=proof,
-                    evidence=Evidence(payload=evidence_payload, proof_ref=None),
-                    decision=Decision(admission=Admission.DENY),
-                )
-                return VerificationContextDocument.unverifiable(
-                    formal_statement=query,
-                    context=context,
-                    formalization=formalization,
-                )
             context = VerificationContext(
                 interpretation=interpretation,
                 proof=proof,
                 evidence=Evidence(payload=evidence_payload, proof_ref=None),
-                decision=Decision(admission=Admission.ADMIT),
+                decision=Decision(admission=Admission.DENY),
             )
-            return VerificationContextDocument.verified(
+            return VerificationContextDocument.blocked(
                 formal_statement=query,
                 context=context,
                 formalization=formalization,
