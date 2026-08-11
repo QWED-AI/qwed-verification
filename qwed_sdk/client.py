@@ -69,7 +69,44 @@ class QWEDClient:
     def health(self) -> Dict[str, Any]:
         """Check API health status."""
         return self._request("GET", "/health")
-    
+
+    def create_verification_context_from_diagnostic(
+        self,
+        diagnostic: Dict[str, Any],
+        query: str,
+        verifier: str,
+        verifier_version: Optional[str] = None,
+        attestation_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a schema-valid Verification Context from a DiagnosticResult."""
+        return self._request(
+            "POST",
+            "/verification-context/from-diagnostic",
+            json={
+                "diagnostic": diagnostic,
+                "query": query,
+                "verifier": verifier,
+                "verifier_version": verifier_version,
+                "attestation_token": attestation_token,
+            },
+        )
+
+    def validate_verification_context(self, document: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate a Verification Context document against the v1.0 schema."""
+        return self._request(
+            "POST",
+            "/verification-context/validate",
+            json={"document": document},
+        )
+
+    def resolve_verification_context(self, document: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve the proof_ref commitment for a Verification Context document."""
+        return self._request(
+            "POST",
+            "/verification-context/resolve",
+            json={"document": document},
+        )
+
     def verify(
         self,
         query: str,
@@ -423,7 +460,44 @@ class QWEDAsyncClient:
     async def health(self) -> Dict[str, Any]:
         """Check API health status."""
         return await self._request("GET", "/health")
-    
+
+    async def create_verification_context_from_diagnostic(
+        self,
+        diagnostic: Dict[str, Any],
+        query: str,
+        verifier: str,
+        verifier_version: Optional[str] = None,
+        attestation_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a schema-valid Verification Context from a DiagnosticResult."""
+        return await self._request(
+            "POST",
+            "/verification-context/from-diagnostic",
+            json={
+                "diagnostic": diagnostic,
+                "query": query,
+                "verifier": verifier,
+                "verifier_version": verifier_version,
+                "attestation_token": attestation_token,
+            },
+        )
+
+    async def validate_verification_context(self, document: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate a Verification Context document against the v1.0 schema."""
+        return await self._request(
+            "POST",
+            "/verification-context/validate",
+            json={"document": document},
+        )
+
+    async def resolve_verification_context(self, document: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve the proof_ref commitment for a Verification Context document."""
+        return await self._request(
+            "POST",
+            "/verification-context/resolve",
+            json={"document": document},
+        )
+
     async def verify(
         self,
         query: str,

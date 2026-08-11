@@ -14,6 +14,7 @@ from qwed_new.core.diagnostics import (
     enforce_trust_decision,
     merge_diagnostic_result,
 )
+from qwed_new.api.verification_context_routes import router as verification_context_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -64,6 +65,7 @@ app.add_middleware(
 # Include routers
 app.include_router(auth_router)
 app.include_router(audit_router)
+app.include_router(verification_context_router)
 
 STARTUP_ALLOWED_PTH_FILES = {
     "__editable__.qwed_a2a-0.1.0.pth",
