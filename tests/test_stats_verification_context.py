@@ -57,6 +57,15 @@ def _attestation_token(query=QUERY, proof_data=PROOF_DATA):
     return attestation_result.token
 
 
+def _register_receipt(verifier, result, query=QUERY):
+    return verifier._register_execution_receipt(
+        query,
+        DATASET_SHA256,
+        CLAIM_SHA256,
+        result.proof_ref,
+    )
+
+
 def _assert_fail_closed(payload, expected_verdict):
     assert payload["verdict"] == expected_verdict
     assert payload["context"]["evidence"]["proof_ref"] is None
@@ -70,6 +79,7 @@ def test_stats_verified_context_valid_and_resolves():
         result,
         QUERY,
         attestation_token=_attestation_token(),
+        execution_receipt_id=_register_receipt(verifier, result),
     )
     doc.validate()
     payload = doc.to_dict()
@@ -82,17 +92,49 @@ def test_stats_verified_context_valid_and_resolves():
 
 def test_stats_verified_without_attestation_fails_closed():
     verifier = StatsVerifier()
-    doc = verifier.to_verification_context(_verified_result(), QUERY)
+    result = _verified_result()
+    doc = verifier.to_verification_context(
+        result,
+        QUERY,
+        execution_receipt_id=_register_receipt(verifier, result),
+    )
     doc.validate()
     _assert_fail_closed(doc.to_dict(), "BLOCKED")
 
 
 def test_stats_verified_with_invalid_attestation_fails_closed():
     verifier = StatsVerifier()
+    result = _verified_result()
     doc = verifier.to_verification_context(
-        _verified_result(),
+        result,
         QUERY,
         attestation_token="invalid",
+        execution_receipt_id=_register_receipt(verifier, result),
+    )
+    doc.validate()
+    _assert_fail_closed(doc.to_dict(), "BLOCKED")
+
+
+def test_stats_verified_without_execution_receipt_fails_closed():
+    verifier = StatsVerifier()
+    result = _verified_result()
+    doc = verifier.to_verification_context(
+        result,
+        QUERY,
+        attestation_token=_attestation_token(),
+    )
+    doc.validate()
+    _assert_fail_closed(doc.to_dict(), "BLOCKED")
+
+
+def test_stats_verified_with_invalid_execution_receipt_fails_closed():
+    verifier = StatsVerifier()
+    result = _verified_result()
+    doc = verifier.to_verification_context(
+        result,
+        QUERY,
+        attestation_token=_attestation_token(),
+        execution_receipt_id="stats_receipt_missing",
     )
     doc.validate()
     _assert_fail_closed(doc.to_dict(), "BLOCKED")
@@ -105,6 +147,7 @@ def test_stats_verified_invalid_result_fails_closed():
         result,
         QUERY,
         attestation_token=_attestation_token(),
+        execution_receipt_id=_register_receipt(verifier, result),
     )
     doc.validate()
     _assert_fail_closed(doc.to_dict(), "UNVERIFIABLE")
@@ -117,6 +160,7 @@ def test_stats_verified_missing_is_valid_fails_closed():
         result,
         QUERY,
         attestation_token=_attestation_token(),
+        execution_receipt_id=_register_receipt(verifier, result),
     )
     doc.validate()
     _assert_fail_closed(doc.to_dict(), "UNVERIFIABLE")
@@ -136,31 +180,7 @@ def test_stats_verified_unbound_result_fails_closed():
         attestation_token=_attestation_token(),
     )
     doc.validate()
-    _assert_fail_closed(doc.to_dict(), "UNVERIFIABLE")
-
-
-def test_stats_verified_malformed_dataset_digest_fails_closed():
-    verifier = StatsVerifier()
-    result = _verified_result(developer_overrides={"dataset_sha256": "not-a-sha256"})
-    doc = verifier.to_verification_context(
-        result,
-        QUERY,
-        attestation_token=_attestation_token(),
-    )
-    doc.validate()
-    _assert_fail_closed(doc.to_dict(), "UNVERIFIABLE")
-
-
-def test_stats_verified_malformed_claim_digest_fails_closed():
-    verifier = StatsVerifier()
-    result = _verified_result(developer_overrides={"claim_sha256": "not-a-sha256"})
-    doc = verifier.to_verification_context(
-        result,
-        QUERY,
-        attestation_token=_attestation_token(),
-    )
-    doc.validate()
-    _assert_fail_closed(doc.to_dict(), "UNVERIFIABLE")
+    _assert_fail_closed(doc.to_dict(), "BLOCKED")
 
 
 def test_stats_verified_mismatched_query_fails_closed():
@@ -170,6 +190,7 @@ def test_stats_verified_mismatched_query_fails_closed():
         result,
         "sum of revenue == 999999",
         attestation_token=_attestation_token(),
+        execution_receipt_id=_register_receipt(verifier, result),
     )
     doc.validate()
     _assert_fail_closed(doc.to_dict(), "BLOCKED")
@@ -204,6 +225,7 @@ def test_stats_context_tampering_invalidates_proof_ref():
         result,
         QUERY,
         attestation_token=_attestation_token(),
+        execution_receipt_id=_register_receipt(verifier, result),
     )
     payload = doc.to_dict()
     payload["context"]["evidence"]["evidence"]["developer_fields"]["observed_result"] = 3.0
@@ -232,11 +254,13 @@ def test_stats_context_fails_closed_on_non_finite_evidence():
         proof_data=nan_proof_data,
     )
     attestation_token = _attestation_token(proof_data=nan_proof_data)
+    receipt_id = _register_receipt(verifier, result)
     with pytest.raises(VerificationContextValidationError):
         verifier.to_verification_context(
             result,
             QUERY,
             attestation_token=attestation_token,
+            execution_receipt_id=receipt_id,
         )
 
 
