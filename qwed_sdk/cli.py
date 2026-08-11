@@ -2104,7 +2104,7 @@ def context_validate(path: str):
     try:
         with open(path, encoding="utf-8") as handle:
             document = json.load(handle)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         click.echo(json.dumps({"valid": False, "error": "invalid_document_file"}, indent=2))
         raise SystemExit(1) from None
     try:
@@ -2124,7 +2124,7 @@ def context_resolve(path: str):
     try:
         with open(path, encoding="utf-8") as handle:
             document = json.load(handle)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         click.echo(json.dumps({"resolved": False, "error": "invalid_document_file"}, indent=2))
         raise SystemExit(1) from None
     click.echo(json.dumps({"resolved": resolve_document_proof_ref(document)}, indent=2))
@@ -2153,7 +2153,7 @@ def context_from_diagnostic(
     try:
         with open(diagnostic_file, encoding="utf-8") as handle:
             diagnostic = json.load(handle)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         click.echo(json.dumps({"valid": False, "error": "invalid_diagnostic_file"}, indent=2))
         raise SystemExit(1) from None
     if not isinstance(diagnostic, dict):

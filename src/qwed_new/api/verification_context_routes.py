@@ -58,12 +58,12 @@ def _diagnostic_result_from_payload(diagnostic: Any) -> DiagnosticResult:
 
 def _safe_commit_context_log(
     session: Optional[Session],
-    tenant: Optional[TenantContext],
+    tenant: TenantContext,
     query: str,
     result: Dict[str, Any],
     is_verified: bool,
 ) -> None:
-    if session is None or tenant is None:
+    if session is None:
         return
     try:
         session.add(
@@ -87,15 +87,17 @@ def _safe_commit_context_log(
 
 @router.post(
     "/from-diagnostic",
-    responses={422: {"description": "Verification Context rejected"}},
+    responses={
+        422: {"description": "Verification Context rejected"},
+        500: {"description": "Audit persistence failed"},
+    },
 )
 def create_verification_context_from_diagnostic(
     payload: DiagnosticVerificationContextRequest,
-    tenant: Optional[TenantContext] = Depends(get_current_tenant),
+    tenant: TenantContext = Depends(get_current_tenant),
     session: Optional[Session] = Depends(get_session),
 ) -> Dict[str, Any]:
-    if tenant is not None:
-        check_rate_limit(tenant.api_key)
+    check_rate_limit(tenant.api_key)
     result = _diagnostic_result_from_payload(payload.diagnostic)
     try:
         document = verification_context_from_diagnostic_result(
@@ -123,14 +125,16 @@ def create_verification_context_from_diagnostic(
     return document_dict
 
 
-@router.post("/validate")
+@router.post(
+    "/validate",
+    responses={500: {"description": "Audit persistence failed"}},
+)
 def validate_verification_context(
     payload: VerificationContextDocumentRequest,
-    tenant: Optional[TenantContext] = Depends(get_current_tenant),
+    tenant: TenantContext = Depends(get_current_tenant),
     session: Optional[Session] = Depends(get_session),
 ) -> Dict[str, Any]:
-    if tenant is not None:
-        check_rate_limit(tenant.api_key)
+    check_rate_limit(tenant.api_key)
     try:
         validate_document(payload.document)
         response = {"valid": True}
@@ -146,14 +150,16 @@ def validate_verification_context(
     return response
 
 
-@router.post("/resolve")
+@router.post(
+    "/resolve",
+    responses={500: {"description": "Audit persistence failed"}},
+)
 def resolve_verification_context(
     payload: VerificationContextDocumentRequest,
-    tenant: Optional[TenantContext] = Depends(get_current_tenant),
+    tenant: TenantContext = Depends(get_current_tenant),
     session: Optional[Session] = Depends(get_session),
 ) -> Dict[str, Any]:
-    if tenant is not None:
-        check_rate_limit(tenant.api_key)
+    check_rate_limit(tenant.api_key)
     response = {"resolved": resolve_document_proof_ref(payload.document)}
     _safe_commit_context_log(
         session,

@@ -5,6 +5,14 @@ from qwed_new.api.verification_context_routes import (
     resolve_verification_context,
     validate_verification_context,
 )
+from qwed_new.core.tenant_context import TenantContext
+
+_TENANT = TenantContext(
+    organization_id=1,
+    organization_name="test",
+    tier="free",
+    api_key="test",
+)
 
 
 def test_from_diagnostic_malformed_diagnostic_fails_closed():
@@ -15,7 +23,7 @@ def test_from_diagnostic_malformed_diagnostic_fails_closed():
     )
     document = create_verification_context_from_diagnostic(
         payload,
-        tenant=None,
+        tenant=_TENANT,
         session=None,
     )
     assert document["verdict"] == "BLOCKED"
@@ -23,7 +31,7 @@ def test_from_diagnostic_malformed_diagnostic_fails_closed():
     assert document["context"]["decision"]["admission"] == "DENY"
     assert validate_verification_context(
         VerificationContextDocumentRequest(document=document),
-        tenant=None,
+        tenant=_TENANT,
         session=None,
     ) == {"valid": True}
 
@@ -41,7 +49,7 @@ def test_from_diagnostic_verified_without_attestation_fails_closed():
     )
     document = create_verification_context_from_diagnostic(
         payload,
-        tenant=None,
+        tenant=_TENANT,
         session=None,
     )
     assert document["verdict"] == "BLOCKED"
@@ -53,14 +61,14 @@ def test_validate_and_resolve_fail_closed_for_invalid_document():
     document = {"spec_version": "1.0"}
     validation = validate_verification_context(
         VerificationContextDocumentRequest(document=document),
-        tenant=None,
+        tenant=_TENANT,
         session=None,
     )
     assert validation["valid"] is False
     assert "error" in validation
     resolution = resolve_verification_context(
         VerificationContextDocumentRequest(document=document),
-        tenant=None,
+        tenant=_TENANT,
         session=None,
     )
     assert resolution == {"resolved": False}
@@ -78,7 +86,7 @@ def test_from_diagnostic_non_dict_developer_fields_fails_closed():
     )
     document = create_verification_context_from_diagnostic(
         payload,
-        tenant=None,
+        tenant=_TENANT,
         session=None,
     )
     assert document["verdict"] == "BLOCKED"
