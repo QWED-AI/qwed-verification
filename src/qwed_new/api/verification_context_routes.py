@@ -20,7 +20,19 @@ from qwed_new.core.verification_context_bridge import (
     verification_context_from_diagnostic_result,
 )
 
-router = APIRouter(prefix="/verification-context", tags=["VerificationContext"])
+
+def _enforce_tenant_access(
+    tenant: TenantContext = Depends(get_current_tenant),
+) -> TenantContext:
+    check_rate_limit(tenant.api_key)
+    return tenant
+
+
+router = APIRouter(
+    prefix="/verification-context",
+    tags=["VerificationContext"],
+    dependencies=[Depends(_enforce_tenant_access)],
+)
 
 
 class DiagnosticVerificationContextRequest(BaseModel):
@@ -94,10 +106,9 @@ def _safe_commit_context_log(
 )
 def create_verification_context_from_diagnostic(
     payload: DiagnosticVerificationContextRequest,
-    tenant: TenantContext = Depends(get_current_tenant),
+    tenant: TenantContext = Depends(_enforce_tenant_access),
     session: Optional[Session] = Depends(get_session),
 ) -> Dict[str, Any]:
-    check_rate_limit(tenant.api_key)
     result = _diagnostic_result_from_payload(payload.diagnostic)
     try:
         document = verification_context_from_diagnostic_result(
@@ -131,10 +142,9 @@ def create_verification_context_from_diagnostic(
 )
 def validate_verification_context(
     payload: VerificationContextDocumentRequest,
-    tenant: TenantContext = Depends(get_current_tenant),
+    tenant: TenantContext = Depends(_enforce_tenant_access),
     session: Optional[Session] = Depends(get_session),
 ) -> Dict[str, Any]:
-    check_rate_limit(tenant.api_key)
     try:
         validate_document(payload.document)
         response = {"valid": True}
@@ -156,10 +166,9 @@ def validate_verification_context(
 )
 def resolve_verification_context(
     payload: VerificationContextDocumentRequest,
-    tenant: TenantContext = Depends(get_current_tenant),
+    tenant: TenantContext = Depends(_enforce_tenant_access),
     session: Optional[Session] = Depends(get_session),
 ) -> Dict[str, Any]:
-    check_rate_limit(tenant.api_key)
     response = {"resolved": resolve_document_proof_ref(payload.document)}
     _safe_commit_context_log(
         session,
