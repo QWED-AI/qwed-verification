@@ -2082,5 +2082,117 @@ def import_provider(url: str):
         sys.exit(1)
 
 
+_CONTEXT_MALFORMED_DIAGNOSTIC_MESSAGE = "Diagnostic result is malformed"
+_CONTEXT_MALFORMED_DIAGNOSTIC_CONSTRAINT = "verification_context.malformed_diagnostic"
+
+
+@cli.group()
+def context():
+    """Verification Context v1.0 utilities."""
+    pass
+
+
+@context.command(name="validate")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False))
+def context_validate(path: str):
+    """Validate a Verification Context document."""
+    from qwed_new.core.verification_context import (
+        VerificationContextValidationError,
+        validate_document,
+    )
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            document = json.load(handle)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        click.echo(json.dumps({"valid": False, "error": "invalid_document_file"}, indent=2))
+        raise SystemExit(1) from None
+    try:
+        validate_document(document)
+    except VerificationContextValidationError:
+        click.echo(json.dumps({"valid": False, "error": "validation_failed"}, indent=2))
+        raise SystemExit(1) from None
+    click.echo(json.dumps({"valid": True}, indent=2))
+
+
+@context.command(name="resolve")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False))
+def context_resolve(path: str):
+    """Resolve the proof_ref commitment for a Verification Context document."""
+    from qwed_new.core.verification_context import resolve_document_proof_ref
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            document = json.load(handle)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        click.echo(json.dumps({"resolved": False, "error": "invalid_document_file"}, indent=2))
+        raise SystemExit(1) from None
+    click.echo(json.dumps({"resolved": resolve_document_proof_ref(document)}, indent=2))
+
+
+@context.command(name="from-diagnostic")
+@click.option("--diagnostic-file", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--query", required=True)
+@click.option("--verifier", required=True)
+@click.option("--verifier-version", default=None)
+@click.option("--attestation-token", default=None)
+def context_from_diagnostic(
+    diagnostic_file: str,
+    query: str,
+    verifier: str,
+    verifier_version: Optional[str],
+    attestation_token: Optional[str],
+):
+    """Create a Verification Context from a DiagnosticResult."""
+    from qwed_new.core.diagnostics import DiagnosticResult
+    from qwed_new.core.verification_context import VerificationContextValidationError
+    from qwed_new.core.verification_context_bridge import (
+        verification_context_from_diagnostic_result,
+    )
+
+    try:
+        with open(diagnostic_file, encoding="utf-8") as handle:
+            diagnostic = json.load(handle)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        click.echo(json.dumps({"valid": False, "error": "invalid_diagnostic_file"}, indent=2))
+        raise SystemExit(1) from None
+    if not isinstance(diagnostic, dict):
+        result = DiagnosticResult.blocked(
+            agent_message=_CONTEXT_MALFORMED_DIAGNOSTIC_MESSAGE,
+            developer_fields={"constraint_id": _CONTEXT_MALFORMED_DIAGNOSTIC_CONSTRAINT},
+        )
+    else:
+        developer_fields = diagnostic.get("developer_fields", {})
+        if not isinstance(developer_fields, dict):
+            result = DiagnosticResult.blocked(
+                agent_message=_CONTEXT_MALFORMED_DIAGNOSTIC_MESSAGE,
+                developer_fields={"constraint_id": _CONTEXT_MALFORMED_DIAGNOSTIC_CONSTRAINT},
+            )
+        else:
+            try:
+                result = DiagnosticResult.from_dict(diagnostic)
+            except (ValueError, TypeError, AttributeError):
+                result = DiagnosticResult.blocked(
+                    agent_message=_CONTEXT_MALFORMED_DIAGNOSTIC_MESSAGE,
+                    developer_fields={"constraint_id": _CONTEXT_MALFORMED_DIAGNOSTIC_CONSTRAINT},
+                )
+    try:
+        document = verification_context_from_diagnostic_result(
+            result,
+            formal_statement=query,
+            verifier=verifier,
+            verifier_version=verifier_version,
+            attestation_token=attestation_token,
+        )
+        document.validate()
+    except VerificationContextValidationError:
+        click.echo(json.dumps({"valid": False, "error": "verification_context_rejected"}, indent=2))
+        raise SystemExit(1) from None
+    except Exception:
+        click.echo(json.dumps({"valid": False, "error": "internal_error"}, indent=2))
+        raise SystemExit(1) from None
+    click.echo(json.dumps(document.to_dict(), indent=2))
+
+
 if __name__ == '__main__':
     cli()
