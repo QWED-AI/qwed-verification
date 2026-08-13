@@ -23,6 +23,7 @@ sys.path.insert(0, "/app")
 from qwed_sdk.guards.system_guard import SystemGuard
 from qwed_sdk.guards.config_guard import ConfigGuard
 from qwed_new.guards.process_guard import ProcessVerifier
+from qwed_new.core.verification_context import _canonical_json
 
 
 def get_env(name: str, default: str = "") -> str:
@@ -510,6 +511,11 @@ def _build_verification_context(
     evidence: dict,
     scan_type: str,
 ) -> dict:
+    configuration: dict = {"action": get_env("ACTION", "verify")}
+    paths = get_env("PATHS", "")
+    if paths:
+        configuration["paths"] = paths
+
     return {
         "spec_version": "1.0",
         "object": {
@@ -523,10 +529,7 @@ def _build_verification_context(
             "proof": {
                 "verifier": "QWED Action",
                 "verifier_version": "3.1.0",
-                "configuration": {
-                    "action": get_env("ACTION", "verify"),
-                    "paths": get_env("PATHS", "."),
-                },
+                "configuration": configuration,
                 "theory_scope": f"QWED {scan_type} verification",
                 "trusted_dependencies": ("qwed-verification",),
                 "outcome_treatment": "unknown/timeout/error resolve to UNVERIFIABLE or BLOCKED",
@@ -553,8 +556,8 @@ def _compute_vc_proof_ref(formal_statement: str, context: dict) -> str:
         "formal_statement": formal_statement,
         "context": bound_context,
     }
-    canonical = json.dumps(bound, sort_keys=True, separators=(",", ":"))
-    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
+    canonical = _canonical_json(bound)
+    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
 def _set_vc_outputs(verdict: str, admission: str, evidence: dict, scan_type: str):
