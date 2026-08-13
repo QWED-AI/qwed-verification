@@ -99,18 +99,19 @@ def action_verify():
             print(f"❌ Unsupported engine: {engine}")
             sys.exit(1)
         
-        print(f"🔍 Verdict: {result.verified}")
-        print(f"📝 Explanation: {result.explanation}")
+        print(f"🔍 Verdict: {result.is_verified}")
+        explanation = result.result.get("explanation", "") if result.result else ""
+        print(f"📝 Explanation: {explanation}")
         
-        set_output("verified", str(result.verified).lower())
-        set_output("explanation", result.explanation)
-        set_output("badge_url", generate_badge_url(result.verified))
+        set_output("verified", str(result.is_verified).lower())
+        set_output("explanation", explanation)
+        set_output("badge_url", generate_badge_url(result.is_verified))
         
-        verdict = "VERIFIED" if result.verified else "UNVERIFIABLE"
-        admission = "ADMIT" if result.verified else "DENY"
-        _set_vc_outputs(verdict, admission, {"explanation": result.explanation}, engine)
+        verdict = "VERIFIED" if result.is_verified else "UNVERIFIABLE"
+        admission = "ADMIT" if result.is_verified else "DENY"
+        _set_vc_outputs(verdict, admission, {"explanation": explanation}, engine)
         
-        if not result.verified and get_env("FAIL_ON_FINDINGS", "true") == "true":
+        if not result.is_verified and get_env("FAIL_ON_FINDINGS", "true") == "true":
             sys.exit(1)
             
     except Exception as e:
