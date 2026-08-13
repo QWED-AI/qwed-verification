@@ -10,6 +10,7 @@ Supports:
 import os
 import sys
 import json
+import hashlib
 from pathlib import Path
 
 try:
@@ -104,6 +105,11 @@ def action_verify():
         set_output("explanation", result.explanation)
         set_output("badge_url", generate_badge_url(result.verified))
         
+        verdict = "VERIFIED" if result.verified else "UNVERIFIABLE"
+        admission = "ADMIT" if result.verified else "DENY"
+        proof_ref = f"sha256:{hashlib.sha256(result.explanation.encode()).hexdigest()}" if result.verified else ""
+        _set_vc_outputs(verdict, admission, proof_ref, {"explanation": result.explanation}, engine)
+        
         if not result.verified and get_env("FAIL_ON_FINDINGS", "true") == "true":
             sys.exit(1)
             
@@ -182,6 +188,11 @@ def action_scan_secrets():
     set_output("findings_count", str(len(findings)))
     set_output("badge_url", generate_badge_url(len(findings) == 0))
     
+    verdict = "VERIFIED" if len(findings) == 0 else "UNVERIFIABLE"
+    admission = "ADMIT" if len(findings) == 0 else "DENY"
+    proof_ref = f"sha256:{hashlib.sha256(str(len(findings)).encode()).hexdigest()}" if len(findings) == 0 else ""
+    _set_vc_outputs(verdict, admission, proof_ref, {"findings_count": len(findings)}, "secrets")
+    
     if findings and get_env("FAIL_ON_FINDINGS", "true") == "true":
         sys.exit(1)
 
@@ -254,6 +265,11 @@ def action_scan_code():
     set_output("findings_count", str(len(findings)))
     set_output("badge_url", generate_badge_url(len(findings) == 0))
     
+    verdict = "VERIFIED" if len(findings) == 0 else "UNVERIFIABLE"
+    admission = "ADMIT" if len(findings) == 0 else "DENY"
+    proof_ref = f"sha256:{hashlib.sha256(str(len(findings)).encode()).hexdigest()}" if len(findings) == 0 else ""
+    _set_vc_outputs(verdict, admission, proof_ref, {"findings_count": len(findings)}, "code")
+    
     if findings and get_env("FAIL_ON_FINDINGS", "true") == "true":
         sys.exit(1)
 
@@ -301,6 +317,11 @@ def action_verify_shell():
     set_output("verified", "true" if len(findings) == 0 else "false")
     set_output("findings_count", str(len(findings)))
     set_output("badge_url", generate_badge_url(len(findings) == 0))
+    
+    verdict = "VERIFIED" if len(findings) == 0 else "UNVERIFIABLE"
+    admission = "ADMIT" if len(findings) == 0 else "DENY"
+    proof_ref = f"sha256:{hashlib.sha256(str(len(findings)).encode()).hexdigest()}" if len(findings) == 0 else ""
+    _set_vc_outputs(verdict, admission, proof_ref, {"findings_count": len(findings)}, "shell")
     
     if findings and get_env("FAIL_ON_FINDINGS", "true") == "true":
         sys.exit(1)
@@ -371,6 +392,11 @@ def action_verify_process():
     set_output("irac_score", f"{irac_result['score']:.4f}")
     set_output("process_rate", f"{milestone_result['process_rate']:.4f}")
     set_output("findings", json.dumps(findings))
+    
+    verdict = "VERIFIED" if authorized else "UNVERIFIABLE"
+    admission = "ADMIT" if authorized else "DENY"
+    proof_ref = f"sha256:{hashlib.sha256(json.dumps(findings).encode()).hexdigest()}" if authorized else ""
+    _set_vc_outputs(verdict, admission, proof_ref, {"irac_score": irac_result["score"], "process_rate": milestone_result["process_rate"]}, "process")
     
     if not authorized and get_env("FAIL_ON_FINDINGS", "true") == "true":
         sys.exit(1)
@@ -470,6 +496,57 @@ def generate_badge_url(passed: bool) -> str:
         return "https://img.shields.io/badge/QWED-verified-brightgreen?logo=data:image/svg+xml;base64,..."
     else:
         return "https://img.shields.io/badge/QWED-failed-red?logo=data:image/svg+xml;base64,..."
+
+
+# ============== VERIFICATION CONTEXT v1.0 ==============
+def _build_verification_context(
+    verdict: str,
+    admission: str,
+    proof_ref: str,
+    evidence: dict,
+    scan_type: str,
+) -> dict:
+    return {
+        "spec_version": "1.0",
+        "object": {
+            "formal_statement": f"QWED {scan_type} scan passed with no security findings",
+        },
+        "context": {
+            "interpretation": {
+                "theory": f"QWED {scan_type} security scan",
+                "logic": "deterministic pattern matching",
+            },
+            "proof": {
+                "verifier": "QWED Action",
+                "verifier_version": "3.1.0",
+                "configuration": {
+                    "action": get_env("ACTION", "verify"),
+                    "paths": get_env("PATHS", "."),
+                },
+                "theory_scope": f"QWED {scan_type} security scan",
+                "trusted_dependencies": ("qwed-verification",),
+                "outcome_treatment": "unknown/timeout/error resolve to UNVERIFIABLE or BLOCKED",
+            },
+            "evidence": {
+                "evidence": evidence,
+                "proof_ref": proof_ref,
+            },
+            "decision": {
+                "admission": admission,
+            },
+        },
+        "verdict": verdict,
+    }
+
+
+def _set_vc_outputs(verdict: str, admission: str, proof_ref: str, evidence: dict, scan_type: str):
+    output_format = get_env("OUTPUT_FORMAT", "text")
+    set_output("verdict", verdict)
+    set_output("admission", admission)
+    set_output("proof_ref", proof_ref)
+    if output_format in ("verification-context", "json"):
+        vc = _build_verification_context(verdict, admission, proof_ref, evidence, scan_type)
+        set_output("verification_context", json.dumps(vc, separators=(",", ":")))
 
 
 # ============== MAIN ==============
