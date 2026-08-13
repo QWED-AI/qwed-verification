@@ -11,9 +11,10 @@
   <b>UNVERIFIABLE</b> — proof could not be established<br>
   <b>BLOCKED</b> — policy or rule rejected the action<br>
 
-  Admission: <b>ADMIT</b> | <b>DENY</b>
+  Admission: <b>ADMIT</b> | <b>BLOCKED</b>
 
-  Verification Context v1.0 provides the canonical evidence and proof model.
+  Verification Context v1.0 provides the canonical evidence and proof model
+  (admission: <b>ADMIT</b> | <b>DENY</b> at the protocol layer).
 
   <p><i>Don't fix the liar. Verify the lie.</i></p>
 
