@@ -3,13 +3,15 @@
 import importlib
 import sys
 
+import pytest
+
 
 def test_sdk_init_module_executes():
     """Force re-execution of qwed_sdk/__init__.py module-level code for coverage."""
     if "qwed_sdk" in sys.modules:
         importlib.reload(sys.modules["qwed_sdk"])
     else:
-        import qwed_sdk  # noqa: F401
+        from qwed_sdk import __version__ as _  # noqa: F401
     from qwed_sdk import __all__ as sdk_all, __version__ as sdk_version
     assert sdk_all is not None
     assert sdk_version == "7.0.0"
@@ -60,6 +62,7 @@ def test_sdk_init_exports_validation_error():
 
 def test_sdk_init_exports_proof_functions():
     from qwed_sdk import (
+        VerificationContextValidationError,
         compute_context_proof_ref,
         compute_document_proof_ref,
         resolve_document_proof_ref,
@@ -73,6 +76,8 @@ def test_sdk_init_exports_proof_functions():
     assert callable(resolve_context_proof_ref)
     assert callable(validate_document)
     assert callable(is_valid_document)
+    with pytest.raises(VerificationContextValidationError):
+        validate_document({})
 
 
 def test_sdk_init_all_list_complete():
@@ -149,8 +154,8 @@ def test_sdk_init_get_langchain_tools():
     try:
         tools = get_langchain_tools()
         assert "QWEDTool" in tools
-    except ImportError:
-        pass
+    except ImportError as exc:
+        pytest.skip(f"langchain is optional: {exc}")
 
 
 def test_sdk_init_get_llamaindex_tools():
@@ -158,8 +163,8 @@ def test_sdk_init_get_llamaindex_tools():
     try:
         tools = get_llamaindex_tools()
         assert "QWEDQueryEngine" in tools
-    except ImportError:
-        pass
+    except ImportError as exc:
+        pytest.skip(f"llamaindex is optional: {exc}")
 
 
 def test_sdk_init_get_crewai_tools():
@@ -167,5 +172,5 @@ def test_sdk_init_get_crewai_tools():
     try:
         tools = get_crewai_tools()
         assert "QWEDVerificationTool" in tools
-    except ImportError:
-        pass
+    except ImportError as exc:
+        pytest.skip(f"crewai is optional: {exc}")
