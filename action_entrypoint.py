@@ -107,8 +107,7 @@ def action_verify():
         
         verdict = "VERIFIED" if result.verified else "UNVERIFIABLE"
         admission = "ADMIT" if result.verified else "DENY"
-        proof_ref = f"sha256:{hashlib.sha256(result.explanation.encode()).hexdigest()}" if result.verified else ""
-        _set_vc_outputs(verdict, admission, proof_ref, {"explanation": result.explanation}, engine)
+        _set_vc_outputs(verdict, admission, {"explanation": result.explanation}, engine)
         
         if not result.verified and get_env("FAIL_ON_FINDINGS", "true") == "true":
             sys.exit(1)
@@ -190,8 +189,7 @@ def action_scan_secrets():
     
     verdict = "VERIFIED" if len(findings) == 0 else "UNVERIFIABLE"
     admission = "ADMIT" if len(findings) == 0 else "DENY"
-    proof_ref = f"sha256:{hashlib.sha256(str(len(findings)).encode()).hexdigest()}" if len(findings) == 0 else ""
-    _set_vc_outputs(verdict, admission, proof_ref, {"findings_count": len(findings)}, "secrets")
+    _set_vc_outputs(verdict, admission, {"findings_count": len(findings)}, "secrets")
     
     if findings and get_env("FAIL_ON_FINDINGS", "true") == "true":
         sys.exit(1)
@@ -267,8 +265,7 @@ def action_scan_code():
     
     verdict = "VERIFIED" if len(findings) == 0 else "UNVERIFIABLE"
     admission = "ADMIT" if len(findings) == 0 else "DENY"
-    proof_ref = f"sha256:{hashlib.sha256(str(len(findings)).encode()).hexdigest()}" if len(findings) == 0 else ""
-    _set_vc_outputs(verdict, admission, proof_ref, {"findings_count": len(findings)}, "code")
+    _set_vc_outputs(verdict, admission, {"findings_count": len(findings)}, "code")
     
     if findings and get_env("FAIL_ON_FINDINGS", "true") == "true":
         sys.exit(1)
@@ -320,8 +317,7 @@ def action_verify_shell():
     
     verdict = "VERIFIED" if len(findings) == 0 else "UNVERIFIABLE"
     admission = "ADMIT" if len(findings) == 0 else "DENY"
-    proof_ref = f"sha256:{hashlib.sha256(str(len(findings)).encode()).hexdigest()}" if len(findings) == 0 else ""
-    _set_vc_outputs(verdict, admission, proof_ref, {"findings_count": len(findings)}, "shell")
+    _set_vc_outputs(verdict, admission, {"findings_count": len(findings)}, "shell")
     
     if findings and get_env("FAIL_ON_FINDINGS", "true") == "true":
         sys.exit(1)
@@ -395,8 +391,7 @@ def action_verify_process():
     
     verdict = "VERIFIED" if authorized else "UNVERIFIABLE"
     admission = "ADMIT" if authorized else "DENY"
-    proof_ref = f"sha256:{hashlib.sha256(json.dumps(findings).encode()).hexdigest()}" if authorized else ""
-    _set_vc_outputs(verdict, admission, proof_ref, {"irac_score": irac_result["score"], "process_rate": milestone_result["process_rate"]}, "process")
+    _set_vc_outputs(verdict, admission, {"irac_score": irac_result["score"], "process_rate": milestone_result["process_rate"]}, "process")
     
     if not authorized and get_env("FAIL_ON_FINDINGS", "true") == "true":
         sys.exit(1)
@@ -499,21 +494,30 @@ def generate_badge_url(passed: bool) -> str:
 
 
 # ============== VERIFICATION CONTEXT v1.0 ==============
+def _formal_statement_for(scan_type: str, verdict: str) -> str:
+    if verdict == "VERIFIED":
+        return f"QWED {scan_type} verification passed with no findings"
+    elif verdict == "UNVERIFIABLE":
+        return f"QWED {scan_type} verification detected findings and was not admitted"
+    else:
+        return f"QWED {scan_type} verification was blocked"
+
+
 def _build_verification_context(
     verdict: str,
     admission: str,
-    proof_ref: str,
+    proof_ref,
     evidence: dict,
     scan_type: str,
 ) -> dict:
     return {
         "spec_version": "1.0",
         "object": {
-            "formal_statement": f"QWED {scan_type} scan passed with no security findings",
+            "formal_statement": _formal_statement_for(scan_type, verdict),
         },
         "context": {
             "interpretation": {
-                "theory": f"QWED {scan_type} security scan",
+                "theory": f"QWED {scan_type} verification",
                 "logic": "deterministic pattern matching",
             },
             "proof": {
@@ -523,7 +527,7 @@ def _build_verification_context(
                     "action": get_env("ACTION", "verify"),
                     "paths": get_env("PATHS", "."),
                 },
-                "theory_scope": f"QWED {scan_type} security scan",
+                "theory_scope": f"QWED {scan_type} verification",
                 "trusted_dependencies": ("qwed-verification",),
                 "outcome_treatment": "unknown/timeout/error resolve to UNVERIFIABLE or BLOCKED",
             },
@@ -539,11 +543,34 @@ def _build_verification_context(
     }
 
 
-def _set_vc_outputs(verdict: str, admission: str, proof_ref: str, evidence: dict, scan_type: str):
+def _compute_vc_proof_ref(formal_statement: str, context: dict) -> str:
+    bound_context: dict = {k: v for k, v in context.items() if k != "proof_ref"}
+    if "evidence" in bound_context:
+        bound_context["evidence"] = {
+            k: v for k, v in bound_context["evidence"].items() if k != "proof_ref"
+        }
+    bound = {
+        "formal_statement": formal_statement,
+        "context": bound_context,
+    }
+    canonical = json.dumps(bound, sort_keys=True, separators=(",", ":"))
+    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
+
+
+def _set_vc_outputs(verdict: str, admission: str, evidence: dict, scan_type: str):
     output_format = get_env("OUTPUT_FORMAT", "text")
+    formal_statement = _formal_statement_for(scan_type, verdict)
+
+    if verdict == "VERIFIED":
+        vc_for_hash = _build_verification_context(verdict, admission, None, evidence, scan_type)
+        proof_ref = _compute_vc_proof_ref(formal_statement, vc_for_hash["context"])
+    else:
+        proof_ref = None
+
     set_output("verdict", verdict)
     set_output("admission", admission)
-    set_output("proof_ref", proof_ref)
+    set_output("proof_ref", proof_ref if proof_ref is not None else "")
+
     if output_format in ("verification-context", "json"):
         vc = _build_verification_context(verdict, admission, proof_ref, evidence, scan_type)
         set_output("verification_context", json.dumps(vc, separators=(",", ":")))
