@@ -1,6 +1,18 @@
 """Coverage for qwed_sdk/__init__.py re-exports."""
 
-import pytest
+import importlib
+import sys
+
+
+def test_sdk_init_module_executes():
+    """Force re-execution of qwed_sdk/__init__.py module-level code for coverage."""
+    if "qwed_sdk" in sys.modules:
+        importlib.reload(sys.modules["qwed_sdk"])
+    else:
+        import qwed_sdk  # noqa: F401
+    from qwed_sdk import __all__ as sdk_all, __version__ as sdk_version
+    assert sdk_all is not None
+    assert sdk_version == "7.0.0"
 
 
 def test_sdk_init_exports_verdict_enum():
@@ -64,35 +76,60 @@ def test_sdk_init_exports_proof_functions():
 
 
 def test_sdk_init_all_list_complete():
-    import qwed_sdk
-    expected = [
-        "QWEDClient",
-        "QWEDAsyncClient",
-        "QWEDLocal",
-        "VerificationResult",
-        "BatchResult",
-        "VerificationType",
-        "Verdict",
-        "Admission",
-        "VerificationContext",
-        "VerificationContextDocument",
-        "VerificationContextValidationError",
-        "Formalization",
-        "VerifiedObject",
-        "Interpretation",
-        "Proof",
-        "Evidence",
-        "Decision",
-        "compute_context_proof_ref",
-        "compute_document_proof_ref",
-        "resolve_document_proof_ref",
-        "resolve_context_proof_ref",
-        "validate_document",
-        "is_valid_document",
-    ]
-    for name in expected:
-        assert name in qwed_sdk.__all__, f"{name} missing from __all__"
-        assert hasattr(qwed_sdk, name), f"{name} not accessible on qwed_sdk"
+    from qwed_sdk import __all__ as sdk_all
+    from qwed_sdk import (
+        QWEDClient,
+        QWEDAsyncClient,
+        QWEDLocal,
+        VerificationResult,
+        BatchResult,
+        VerificationType,
+        Verdict,
+        Admission,
+        VerificationContext,
+        VerificationContextDocument,
+        VerificationContextValidationError,
+        Formalization,
+        VerifiedObject,
+        Interpretation,
+        Proof,
+        Evidence,
+        Decision,
+        compute_context_proof_ref,
+        compute_document_proof_ref,
+        resolve_document_proof_ref,
+        resolve_context_proof_ref,
+        validate_document,
+        is_valid_document,
+    )
+    exported = {
+        "QWEDClient": QWEDClient,
+        "QWEDAsyncClient": QWEDAsyncClient,
+        "QWEDLocal": QWEDLocal,
+        "VerificationResult": VerificationResult,
+        "BatchResult": BatchResult,
+        "VerificationType": VerificationType,
+        "Verdict": Verdict,
+        "Admission": Admission,
+        "VerificationContext": VerificationContext,
+        "VerificationContextDocument": VerificationContextDocument,
+        "VerificationContextValidationError": VerificationContextValidationError,
+        "Formalization": Formalization,
+        "VerifiedObject": VerifiedObject,
+        "Interpretation": Interpretation,
+        "Proof": Proof,
+        "Evidence": Evidence,
+        "Decision": Decision,
+        "compute_context_proof_ref": compute_context_proof_ref,
+        "compute_document_proof_ref": compute_document_proof_ref,
+        "resolve_document_proof_ref": resolve_document_proof_ref,
+        "resolve_context_proof_ref": resolve_context_proof_ref,
+        "validate_document": validate_document,
+        "is_valid_document": is_valid_document,
+    }
+    for name, obj in exported.items():
+        assert name in sdk_all, f"{name} missing from __all__"
+        assert obj is not None, f"{name} is None"
 
 
 def test_sdk_init_is_valid_document_returns_false_for_invalid():
@@ -105,3 +142,30 @@ def test_sdk_init_resolve_document_proof_ref_returns_false_for_invalid():
     from qwed_sdk import resolve_document_proof_ref
     assert resolve_document_proof_ref({}) is False
     assert resolve_document_proof_ref({"verdict": "BLOCKED"}) is False
+
+
+def test_sdk_init_get_langchain_tools():
+    from qwed_sdk import get_langchain_tools
+    try:
+        tools = get_langchain_tools()
+        assert "QWEDTool" in tools
+    except ImportError:
+        pass
+
+
+def test_sdk_init_get_llamaindex_tools():
+    from qwed_sdk import get_llamaindex_tools
+    try:
+        tools = get_llamaindex_tools()
+        assert "QWEDQueryEngine" in tools
+    except ImportError:
+        pass
+
+
+def test_sdk_init_get_crewai_tools():
+    from qwed_sdk import get_crewai_tools
+    try:
+        tools = get_crewai_tools()
+        assert "QWEDVerificationTool" in tools
+    except ImportError:
+        pass
