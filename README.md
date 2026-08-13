@@ -1,62 +1,39 @@
 <div align="center">
   <img src="assets/logo.png" alt="QWED Logo - AI Verification Engine" width="80" height="80">
-  <h1>QWED Protocol</h1>
-  <h3>Model-Agnostic Trust Boundary for AI Systems</h3>
+  <h1>QWED Verification</h1>
+  <h3>Reference implementation of the QWED Verification protocol and Verification Context v1.0</h3>
   
-  > **QWED Verification** - Production-grade deterministic trust boundary for LLMs, AI agents, and tool-driven systems. Works with **ANY LLM** - OpenAI, Anthropic, Gemini, Llama (via Ollama), or any local model. Detect and prevent AI hallucinations through multiple verification engines • agentic security guards • process determinism. **Your LLM, Your Choice, Our Verification.**
-  
-  <p>
-    <b>Don't fix the liar. Verify the lie.</b><br>
-    <i>QWED verifies outputs, processes, and tool interactions before they enter production.</i><br>
-    <i>For supported proof domains, hallucinations cannot bypass deterministic verification.</i>
-  </p>
+  QWED applies deterministic verification to AI outputs before production execution.
 
-  <p>
-    <b>If critical AI output cannot be verified, QWED can block it before production.</b>
-  </p>
+  Every verification returns a <code>DiagnosticResult</code>:
 
-  <p>
-    <b>🌐 Model Agnostic:</b> Local ($0) • Budget ($5/mo) • Premium ($100/mo) - You choose!
-  </p>
+  <b>VERIFIED</b> — proof established, evidence attached<br>
+  <b>UNVERIFIABLE</b> — proof could not be established<br>
+  <b>BLOCKED</b> — policy or rule rejected the action<br>
+
+  Admission: <b>ADMIT</b> | <b>BLOCKED</b>
+
+  Verification Context v1.0 provides the canonical evidence and proof model
+  (admission: <b>ADMIT</b> | <b>DENY</b> at the protocol layer).
+
+  <p><i>Don't fix the liar. Verify the lie.</i></p>
 
   [![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://codspeed.io/QWED-AI/qwed-verification?utm_source=badge)
   [![PyPI version](https://img.shields.io/pypi/v/qwed.svg)](https://pypi.org/project/qwed/)
   [![Docker Verified](https://img.shields.io/badge/Docker-Verified_Publisher-blue.svg?logo=docker&logoColor=white)](https://hub.docker.com/r/qwedai/qwed-verification)
   [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
   [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/11903/badge)](https://www.bestpractices.dev/projects/11903)
-  [![Snyk Security](https://img.shields.io/badge/Snyk-Monitored-4C4A73?logo=snyk&logoColor=white)](https://app.snyk.io)
   [![QWED Security](https://img.shields.io/badge/GitHub_Marketplace-QWED_Security_%E2%9C%93-2ea44f?style=flat&logo=github&logoColor=white)](https://github.com/marketplace/qwed-security)
-  [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=QWED-AI_qwed-verification&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=QWED-AI_qwed-verification)
   [![DOI](https://zenodo.org/badge/1115581942.svg)](https://doi.org/10.5281/zenodo.18111675)
-  [![GitHub stars](https://img.shields.io/github/stars/QWED-AI/qwed-verification?style=social)](https://github.com/QWED-AI/qwed-verification)
-
-  [![Also on GitLab](https://img.shields.io/badge/Also%20on-GitLab%20(Enterprise)-FC6D26?logo=gitlab&logoColor=white)](https://gitlab.com/qwed-ai/qwed-verification)
-
-  <a href="https://www.nvidia.com/en-us/startups/"><img src="./assets/badges/nvidia-inception.png" alt="NVIDIA Inception Program" height="40"></a>
-  <a href="https://github.com/developer-program"><img src="https://img.shields.io/badge/GitHub_Developer_Program-Member-4183C4?style=for-the-badge&logo=github&logoColor=white" alt="GitHub Developer Program" height="40"></a>
 
   <br>
-
-  **💖 Support QWED Development:**
-  
-  <a href="https://github.com/sponsors/QWED-AI"><img src="https://img.shields.io/github/sponsors/QWED-AI?style=for-the-badge&logo=githubsponsors&label=Sponsor&color=EA4AAA" alt="Sponsor QWED on GitHub"></a>
-
-  <br>
-  
-  [![Twitter](https://img.shields.io/badge/Twitter-@rahuldass29-1DA1F2?style=flat&logo=twitter&logoColor=white)](https://x.com/rahuldass29)
-  [![LinkedIn](https://img.shields.io/badge/LinkedIn-Rahul%20Dass-0077B5?style=flat&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/rahul-dass-23b370b0/)
-  [![Blog](https://img.shields.io/badge/Blog-Unreadable%20Code%20Benchmark-FF5722?style=flat&logo=docusaurus&logoColor=white)](https://docs.qwedai.com/blog/unreadable-code-agi-benchmark)
-
-  <br>
-  <a href="#-quick-start-install--verify-in-30-seconds">Quick Start</a> · 
-  <a href="#-first-time-setup-qwed-init">🆕 qwed init</a> ·
-  <a href="#-the-llm-hallucination-problem-why-ai-cant-be-trusted">The Problem</a> · 
-  <a href="#verification-engines-and-agent-security-guards">The Engines & Guards</a> ·
-  <a href="docs/INTEGRATION.md">🔌 Integration</a> ·
-  <a href="docs/QWED_LOCAL.md">⚡ QWEDLocal</a> ·
-  <a href="docs/CLI.md">🖥️ CLI</a> ·
-  <a href="docs/OLLAMA_INTEGRATION.md">🆓 Ollama (FREE!)</a> ·
-  <a href="https://docs.qwedai.com">📖 Full Documentation</a>
+  <a href="#-installation--quick-start">Quick Start</a> · 
+  <a href="#-first-time-setup-qwed-init">qwed init</a> ·
+  <a href="#verification-engines-and-agent-security-guards">Engines & Guards</a> ·
+  <a href="docs/INTEGRATION.md">Integration</a> ·
+  <a href="docs/QWED_LOCAL.md">QWEDLocal</a> ·
+  <a href="docs/CLI.md">CLI</a> ·
+  <a href="https://docs.qwedai.com">Full Documentation</a>
 </div>
 
 ---
