@@ -25,14 +25,15 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-cov pytest-asyncio
+          pip install pytest pytest-cov pytest-asyncio coverage
           pip install PyYAML matplotlib docker cryptography jsonschema
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install -e .
           
       - name: Run Tests and Generate Coverage
         run: |
-          pytest --cov=src/qwed_new --cov=qwed_sdk --cov-report=xml tests/
+          coverage run --source=src/qwed_new,qwed_sdk -m pytest tests/
+          coverage xml -o coverage.xml
           
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6

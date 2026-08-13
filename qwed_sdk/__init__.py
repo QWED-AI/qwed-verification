@@ -36,6 +36,25 @@ from qwed_sdk.models import (
     BatchResult,
     VerificationType,
 )
+from qwed_new.core.verification_context import (
+    Verdict,
+    Admission,
+    VerificationContext,
+    VerificationContextDocument,
+    VerificationContextValidationError,
+    Formalization,
+    VerifiedObject,
+    Interpretation,
+    Proof,
+    Evidence,
+    Decision,
+    compute_context_proof_ref,
+    compute_document_proof_ref,
+    resolve_document_proof_ref,
+    resolve_context_proof_ref,
+    validate_document,
+    is_valid_document,
+)
 
 __version__ = "7.0.0"
 __all__ = [
@@ -45,6 +64,23 @@ __all__ = [
     "VerificationResult",
     "BatchResult",
     "VerificationType",
+    "Verdict",
+    "Admission",
+    "VerificationContext",
+    "VerificationContextDocument",
+    "VerificationContextValidationError",
+    "Formalization",
+    "VerifiedObject",
+    "Interpretation",
+    "Proof",
+    "Evidence",
+    "Decision",
+    "compute_context_proof_ref",
+    "compute_document_proof_ref",
+    "resolve_document_proof_ref",
+    "resolve_context_proof_ref",
+    "validate_document",
+    "is_valid_document",
 ]
 
 # Optional framework integrations (lazy imports)
