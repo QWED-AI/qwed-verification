@@ -25,12 +25,7 @@ from qwed_new.core.diagnostics import (
     aggregate_batch_diagnostic,
 )
 
-from .verification_context import (
-    Formalization,
-    Interpretation,
-    Proof,
-    VerificationContextDocument,
-)
+from .verification_context import VerificationContextDocument
 
 logger = logging.getLogger(__name__)
 
@@ -59,16 +54,6 @@ class FactVerificationResult:
     citations: List[Citation] = field(default_factory=list)
     methods_used: List[str] = field(default_factory=list)
     scores: Dict[str, float] = field(default_factory=dict)
-
-def to_verification_context(self, result: "DiagnosticResult", query: str) -> "VerificationContextDocument":
-        """Map a DiagnosticResult to a Verification Context v1.0 document."""
-        from .verification_context_bridge import verification_context_from_diagnostic_result
-        return verification_context_from_diagnostic_result(
-            result,
-            formal_statement=query,
-            verifier=self.__class__.__name__,
-        )
-
 
 
 class FactVerifier:
@@ -639,19 +624,20 @@ class FactVerifier:
         """Tokenize text into lowercase words."""
         return set(re.findall(r'\b[a-zA-Z]+\b', text.lower()))
 
-
-# =============================================================================
-# Batch Verification
-# =============================================================================
-
-def to_verification_context(self, result: "DiagnosticResult", query: str) -> "VerificationContextDocument":
+    def to_verification_context(self, result: "DiagnosticResult", query: str) -> "VerificationContextDocument":
         """Map a DiagnosticResult to a Verification Context v1.0 document."""
         from .verification_context_bridge import verification_context_from_diagnostic_result
         return verification_context_from_diagnostic_result(
             result,
             formal_statement=query,
-            verifier=self.__class__.__name__,
+            verifier="FactVerifier",
         )
+
+
+
+# =============================================================================
+# Batch Verification
+# =============================================================================
 
 
 class BatchFactVerifier:
@@ -740,4 +726,5 @@ class BatchFactVerifier:
             },
             extra_evidence=extra_evidence,
         )
+
 

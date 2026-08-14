@@ -13,12 +13,7 @@ import re
 
 from .diagnostics import DiagnosticResult
 
-from .verification_context import (
-    Formalization,
-    Interpretation,
-    Proof,
-    VerificationContextDocument,
-)
+from .verification_context import VerificationContextDocument
 
 
 @dataclass
@@ -1104,4 +1099,15 @@ class CodeVerifier:
             developer_fields=batch_fields,
             evidence=evidence,
         )
+
+    def to_verification_context(self, result: "DiagnosticResult", query: str) -> "VerificationContextDocument":
+        """Map a DiagnosticResult to a Verification Context v1.0 document."""
+        from .verification_context_bridge import verification_context_from_diagnostic_result
+        return verification_context_from_diagnostic_result(
+            result,
+            formal_statement=query,
+            verifier="CodeVerifier",
+        )
+
+
 

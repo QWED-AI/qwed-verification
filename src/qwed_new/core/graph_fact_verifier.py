@@ -31,12 +31,7 @@ import re
 
 from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck
 
-from .verification_context import (
-    Formalization,
-    Interpretation,
-    Proof,
-    VerificationContextDocument,
-)
+from .verification_context import VerificationContextDocument
 
 
 def _word_boundary_contained(a: str, b: str) -> bool:
@@ -598,4 +593,15 @@ class GraphFactVerifier:
                 "graph_result": graph_result.to_dict(),
             }
         )
+
+    def to_verification_context(self, result: "DiagnosticResult", query: str) -> "VerificationContextDocument":
+        """Map a DiagnosticResult to a Verification Context v1.0 document."""
+        from .verification_context_bridge import verification_context_from_diagnostic_result
+        return verification_context_from_diagnostic_result(
+            result,
+            formal_statement=query,
+            verifier="GraphFactVerifier",
+        )
+
+
 

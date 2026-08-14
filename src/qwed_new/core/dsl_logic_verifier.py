@@ -16,12 +16,8 @@ from z3 import Solver, sat, unsat
 from qwed_new.core.dsl import parse_and_validate, compile_to_z3
 from qwed_new.core.translator import TranslationLayer
 
-from .verification_context import (
-    Formalization,
-    Interpretation,
-    Proof,
-    VerificationContextDocument,
-)
+from .diagnostics import DiagnosticResult
+from .verification_context import VerificationContextDocument
 
 logger = logging.getLogger(__name__)
 
@@ -36,16 +32,6 @@ class DSLVerificationResult:
     error: Optional[str] = None
     rejection_reason: Optional[str] = None  # Human-readable explanation for UNSAT
     provider_used: Optional[str] = None
-
-def to_verification_context(self, result: "DiagnosticResult", query: str) -> "VerificationContextDocument":
-        """Map a DiagnosticResult to a Verification Context v1.0 document."""
-        from .verification_context_bridge import verification_context_from_diagnostic_result
-        return verification_context_from_diagnostic_result(
-            result,
-            formal_statement=query,
-            verifier=self.__class__.__name__,
-        )
-
 
 
 class DSLLogicVerifier:
@@ -565,6 +551,16 @@ class DSLLogicVerifier:
             verification_result.dsl_code = dsl_code
         return verification_result
 
+    def to_verification_context(self, result: "DiagnosticResult", query: str) -> "VerificationContextDocument":
+        """Map a DiagnosticResult to a Verification Context v1.0 document."""
+        from .verification_context_bridge import verification_context_from_diagnostic_result
+        return verification_context_from_diagnostic_result(
+            result,
+            formal_statement=query,
+            verifier="DSLLogicVerifier",
+        )
+
+
 
 # Singleton for convenience
 _dsl_verifier = None
@@ -624,4 +620,5 @@ if __name__ == "__main__":
     
     print("\n" + "=" * 60)
     print("Demo complete!")
+
 
