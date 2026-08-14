@@ -4,9 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import pytest
-
-from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
+from qwed_new.core.diagnostics import DiagnosticResult
 from qwed_new.core.verification_context import Verdict
 
 

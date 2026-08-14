@@ -87,14 +87,6 @@ class FactResult:
     matches: List[MatchResult]
     explanation: str
 
-def to_verification_context(self, result: "DiagnosticResult", query: str) -> "VerificationContextDocument":
-        """Map a DiagnosticResult to a Verification Context v1.0 document."""
-        from .verification_context_bridge import verification_context_from_diagnostic_result
-        return verification_context_from_diagnostic_result(
-            result,
-            formal_statement=query,
-            verifier=self.__class__.__name__,
-        )
 
 
 

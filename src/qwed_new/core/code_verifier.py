@@ -46,14 +46,6 @@ CONSTRAINT_CODE_UNSAFE = "code_verifier.code_unsafe"
 CONSTRAINT_EMPTY_BATCH = "code_verifier.empty_batch"
 CONSTRAINT_BATCH_BLOCKED = "code_verifier.batch_blocked"
 
-def to_verification_context(self, result: "DiagnosticResult", query: str) -> "VerificationContextDocument":
-        """Map a DiagnosticResult to a Verification Context v1.0 document."""
-        from .verification_context_bridge import verification_context_from_diagnostic_result
-        return verification_context_from_diagnostic_result(
-            result,
-            formal_statement=query,
-            verifier=self.__class__.__name__,
-        )
 
 
 
