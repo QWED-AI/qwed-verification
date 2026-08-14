@@ -25,6 +25,13 @@ from qwed_new.core.diagnostics import (
     aggregate_batch_diagnostic,
 )
 
+from .verification_context import (
+    Formalization,
+    Interpretation,
+    Proof,
+    VerificationContextDocument,
+)
+
 logger = logging.getLogger(__name__)
 
 CONSTRAINT_FACT_BATCH_VERIFIED = "fact_verifier.batch_verified"
@@ -52,6 +59,16 @@ class FactVerificationResult:
     citations: List[Citation] = field(default_factory=list)
     methods_used: List[str] = field(default_factory=list)
     scores: Dict[str, float] = field(default_factory=dict)
+
+def to_verification_context(self, result: "DiagnosticResult", query: str) -> "VerificationContextDocument":
+        """Map a DiagnosticResult to a Verification Context v1.0 document."""
+        from .verification_context_bridge import verification_context_from_diagnostic_result
+        return verification_context_from_diagnostic_result(
+            result,
+            formal_statement=query,
+            verifier=self.__class__.__name__,
+        )
+
 
 
 class FactVerifier:
@@ -627,6 +644,16 @@ class FactVerifier:
 # Batch Verification
 # =============================================================================
 
+def to_verification_context(self, result: "DiagnosticResult", query: str) -> "VerificationContextDocument":
+        """Map a DiagnosticResult to a Verification Context v1.0 document."""
+        from .verification_context_bridge import verification_context_from_diagnostic_result
+        return verification_context_from_diagnostic_result(
+            result,
+            formal_statement=query,
+            verifier=self.__class__.__name__,
+        )
+
+
 class BatchFactVerifier:
     """
     Batch verification for multiple claims against a single context.
@@ -713,3 +740,4 @@ class BatchFactVerifier:
             },
             extra_evidence=extra_evidence,
         )
+

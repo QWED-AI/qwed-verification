@@ -13,6 +13,13 @@ import re
 
 from .diagnostics import DiagnosticResult
 
+from .verification_context import (
+    Formalization,
+    Interpretation,
+    Proof,
+    VerificationContextDocument,
+)
+
 
 @dataclass
 class SecurityIssue:
@@ -43,6 +50,16 @@ CONSTRAINT_CODE_SAFE = "code_verifier.code_safe"
 CONSTRAINT_CODE_UNSAFE = "code_verifier.code_unsafe"
 CONSTRAINT_EMPTY_BATCH = "code_verifier.empty_batch"
 CONSTRAINT_BATCH_BLOCKED = "code_verifier.batch_blocked"
+
+def to_verification_context(self, result: "DiagnosticResult", query: str) -> "VerificationContextDocument":
+        """Map a DiagnosticResult to a Verification Context v1.0 document."""
+        from .verification_context_bridge import verification_context_from_diagnostic_result
+        return verification_context_from_diagnostic_result(
+            result,
+            formal_statement=query,
+            verifier=self.__class__.__name__,
+        )
+
 
 
 class CodeVerifier:
@@ -1087,3 +1104,4 @@ class CodeVerifier:
             developer_fields=batch_fields,
             evidence=evidence,
         )
+
