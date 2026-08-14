@@ -24,6 +24,8 @@ from qwed_new.core.diagnostics import (
     aggregate_batch_diagnostic,
 )
 
+from .verification_context import VerificationContextDocument
+
 _INCONCLUSIVE_MSG = "Image verification inconclusive"
 
 _CONSTRAINT_IMAGE_BATCH_VERIFIED = "image_verifier.batch_verified"
@@ -596,10 +598,22 @@ class ImageVerifier:
             extra_evidence=extra_evidence,
         )
 
+    def to_verification_context(self, result: "DiagnosticResult", query: str, attestation_token: Optional[str] = None) -> "VerificationContextDocument":
+        """Map a DiagnosticResult to a Verification Context v1.0 document."""
+        from .verification_context_bridge import verification_context_from_diagnostic_result
+        return verification_context_from_diagnostic_result(
+            result,
+            formal_statement=query,
+            attestation_token=attestation_token,
+            verifier="ImageVerifier",
+        )
+
+
 
 # =============================================================================
 # Multi-VLM Consensus Verifier
 # =============================================================================
+
 
 class MultiVLMVerifier:
     """
@@ -686,3 +700,15 @@ class MultiVLMVerifier:
                 "vlm_count": len(vlm_results),
             }
         )
+
+    def to_verification_context(self, result: "DiagnosticResult", query: str, attestation_token: Optional[str] = None) -> "VerificationContextDocument":
+        """Map a DiagnosticResult to a Verification Context v1.0 document."""
+        from .verification_context_bridge import verification_context_from_diagnostic_result
+        return verification_context_from_diagnostic_result(
+            result,
+            formal_statement=query,
+            attestation_token=attestation_token,
+            verifier="MultiVLMVerifier",
+        )
+
+

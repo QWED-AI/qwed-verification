@@ -15,7 +15,11 @@ import sys
 
 from .diagnostics import AdvisoryCheck, DiagnosticResult, DiagnosticStatus
 
+from .verification_context import VerificationContextDocument
+
 CONSTRAINT_SYNTAX_ERROR = "symbolic_verifier.syntax_error"
+
+
 
 
 class SymbolicVerifier:
@@ -922,8 +926,21 @@ class SymbolicVerifier:
             },
         )
 
+    def to_verification_context(self, result: "DiagnosticResult", query: str, attestation_token: Optional[str] = None) -> "VerificationContextDocument":
+        """Map a DiagnosticResult to a Verification Context v1.0 document."""
+        from .verification_context_bridge import verification_context_from_diagnostic_result
+        return verification_context_from_diagnostic_result(
+            result,
+            formal_statement=query,
+            attestation_token=attestation_token,
+            verifier="SymbolicVerifier",
+        )
+
+
 
 # Factory function for easy access
 def create_symbolic_verifier(**kwargs) -> SymbolicVerifier:
     """Create a SymbolicVerifier instance."""
     return SymbolicVerifier(**kwargs)
+
+

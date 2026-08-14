@@ -25,6 +25,8 @@ from qwed_new.core.diagnostics import (
     aggregate_batch_diagnostic,
 )
 
+from .verification_context import VerificationContextDocument
+
 logger = logging.getLogger(__name__)
 
 CONSTRAINT_FACT_BATCH_VERIFIED = "fact_verifier.batch_verified"
@@ -622,10 +624,22 @@ class FactVerifier:
         """Tokenize text into lowercase words."""
         return set(re.findall(r'\b[a-zA-Z]+\b', text.lower()))
 
+    def to_verification_context(self, result: "DiagnosticResult", query: str, attestation_token: Optional[str] = None) -> "VerificationContextDocument":
+        """Map a DiagnosticResult to a Verification Context v1.0 document."""
+        from .verification_context_bridge import verification_context_from_diagnostic_result
+        return verification_context_from_diagnostic_result(
+            result,
+            formal_statement=query,
+            attestation_token=attestation_token,
+            verifier="FactVerifier",
+        )
+
+
 
 # =============================================================================
 # Batch Verification
 # =============================================================================
+
 
 class BatchFactVerifier:
     """
@@ -713,3 +727,15 @@ class BatchFactVerifier:
             },
             extra_evidence=extra_evidence,
         )
+
+    def to_verification_context(self, result: "DiagnosticResult", query: str, attestation_token: Optional[str] = None) -> "VerificationContextDocument":
+        """Map a DiagnosticResult to a Verification Context v1.0 document."""
+        from .verification_context_bridge import verification_context_from_diagnostic_result
+        return verification_context_from_diagnostic_result(
+            result,
+            formal_statement=query,
+            attestation_token=attestation_token,
+            verifier="BatchFactVerifier",
+        )
+
+

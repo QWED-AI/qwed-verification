@@ -25,6 +25,8 @@ import time
 
 from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck
 
+from .verification_context import VerificationContextDocument
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,6 +60,8 @@ class ChainOfThoughtStep:
     input_values: List[Any] = field(default_factory=list)
     output_value: Optional[Any] = None
     confidence: float = 1.0
+
+
 
 
 class ReasoningVerifier:
@@ -749,3 +753,16 @@ Format as a numbered list."""
             "size": len(self._cache),
             "max_size": self._cache_max_size
         }
+
+    def to_verification_context(self, result: "DiagnosticResult", query: str, attestation_token: Optional[str] = None) -> "VerificationContextDocument":
+        """Map a DiagnosticResult to a Verification Context v1.0 document."""
+        from .verification_context_bridge import verification_context_from_diagnostic_result
+        return verification_context_from_diagnostic_result(
+            result,
+            formal_statement=query,
+            attestation_token=attestation_token,
+            verifier="ReasoningVerifier",
+        )
+
+
+

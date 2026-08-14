@@ -15,6 +15,8 @@ import logging
 
 from qwed_new.core.diagnostics import DiagnosticResult
 
+from .verification_context import VerificationContextDocument
+
 logger = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------
@@ -37,6 +39,8 @@ class QuantifiedFormula:
     quantifier: str  # "forall", "exists"
     bound_vars: List[Tuple[str, str]]  # [(name, type), ...]
     body: str  # The formula body
+
+
 
 
 class LogicVerifier:
@@ -951,3 +955,16 @@ class LogicVerifier:
                 _PIPELINE_ERROR_MSG,
                 {"constraint_id": _CONSTRAINT_ID_EXECUTION_ERROR, "error_type": type(exc).__name__},
             )
+
+    def to_verification_context(self, result: "DiagnosticResult", query: str, attestation_token: Optional[str] = None) -> "VerificationContextDocument":
+        """Map a DiagnosticResult to a Verification Context v1.0 document."""
+        from .verification_context_bridge import verification_context_from_diagnostic_result
+        return verification_context_from_diagnostic_result(
+            result,
+            formal_statement=query,
+            attestation_token=attestation_token,
+            verifier="LogicVerifier",
+        )
+
+
+
