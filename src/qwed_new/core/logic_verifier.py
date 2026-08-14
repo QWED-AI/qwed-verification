@@ -956,7 +956,7 @@ class LogicVerifier:
                 {"constraint_id": _CONSTRAINT_ID_EXECUTION_ERROR, "error_type": type(exc).__name__},
             )
 
-    def to_verification_context(self, result: "DiagnosticResult", query: str, attestation_token: str = None) -> "VerificationContextDocument":
+    def to_verification_context(self, result: "DiagnosticResult", query: str, attestation_token: Optional[str] = None) -> "VerificationContextDocument":
         """Map a DiagnosticResult to a Verification Context v1.0 document."""
         from .verification_context_bridge import verification_context_from_diagnostic_result
         return verification_context_from_diagnostic_result(
