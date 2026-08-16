@@ -38,6 +38,25 @@
 
 ---
 
+## Release Update: v7.1.0 — Verification Context v1.0 Rollout
+
+`v7.1.0` ships the **Verification Context (VC) v1.0** — the external, interoperable layer on top of `DiagnosticResult`. Verification methods continue to return `DiagnosticResult`; a schema-validated, canonically-encoded, tamper-evident verification document describing *what* was verified, against *what* evidence, under *which* interpretation, with *what* admission decision is produced on demand via the explicit `to_verification_context()` conversion.
+
+- **VC v1.0 spec + ontology (ADR-001..005, #301–#302)** — object of verification, verification context, truth-vs-admission separation, formalization boundary, and root of trust are formally defined
+- **`VerificationContext` model + JSON schema (#308)** — 4-layer document (interpretation / proof / evidence / decision) with RFC 8785 canonical JSON encoding, UTF-16 key ordering, and fail-closed schema validation
+- **Public `proof_ref` generation / resolution (#309)** — content-bound SHA-256 reference generation and resolver exposed as public API
+- **Bridge: `verification_context_from_diagnostic_result()` (#310)** — converts `DiagnosticResult` → VC document; StatsVerifier is the first mapped verifier
+- **SDK / API / CLI exposure (#311)** — VC surfaces across the API routes, CLI, and SDK
+- **Docker action VC outputs (#313)** — the containerized GitHub Action now emits `verdict`, `admission`, `proof_ref`, and `verification_context` outputs
+- **SDK re-exports (#315)** — all VC types re-exported from `qwed_sdk`
+- **`to_verification_context()` on all 13 verifiers (#316)** — full engine coverage; conversion is explicit and returns a `VerificationContextDocument` from a `DiagnosticResult`
+
+> This is an **additive** minor release — no breaking wire changes; existing wire contracts remain unchanged. If you're upgrading from `v7.0.0`, the new VC surface is available but nothing you relied on changed behavior.
+
+If you're upgrading from `v6.0.x`, review the [changelog](CHANGELOG.md) for the full migration notes.
+
+---
+
 ## Release Update: v7.0.0 — Full DiagnosticResult Engine Conformance
 
 `v7.0.0` completes **Meta #216** — every verification engine now returns the unified `DiagnosticResult`, and execution is never conflated with verification.
@@ -648,6 +667,7 @@ We are building the **Universal Verification Standard** for the agentic web.
 - **✔ SymbolicVerifier migration** — First fully `DiagnosticResult`-conformant engine; serves as reference implementation (v5.3.0)
 - **✔ Trust Boundary Completion** — All verification API pathways return `DiagnosticResult` + route through `enforce_trust_decision`; mandatory attestation at the admission boundary; VERIFIED requires a non-empty, evidence-bound proof_ref (v6.0.0)
 - **✔ Full DiagnosticResult engine conformance** — All 13 engines return `DiagnosticResult`; execution is never conflated with verification; fail-closed batch verification (META #216, v7.0.0)
+- **✔ Verification Context v1.0 rollout** — All 13 engines expose `to_verification_context()`; schema-validated, canonically-encoded, tamper-evident VC documents across SDK / API / CLI / Docker action (v7.1.0)
 
 ### In Progress
 
