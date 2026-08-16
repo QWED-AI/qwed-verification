@@ -4,6 +4,34 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+## [7.1.0] - 2026-08-16
+
+### Verification Context v1.0 Rollout
+
+#### Ontology & Spec (#301, #302)
+
+- **ADR-001..005 — verification ontology** — formally define the object of verification, the verification context document, the truth-vs-admission separation, the formalization boundary, and the root of trust.
+- **Verification Context v1.0 spec freeze** — the 4-layer JSON document contract (interpretation / proof / evidence / decision) with canonical RFC 8785 JSON encoding, UTF-16 key ordering, fail-closed schema validation, and content-bound `proof_ref`.
+
+#### Core Model (#308, #309)
+
+- **`VerificationContext` model + JSON schema** — `VerificationContext`, `VerificationContextDocument`, `Verdict`, `Admission`, and nested `Interpretation` / `Proof` / `Evidence` / `Decision` types with fail-closed validation.
+- **Public proof_ref generation / resolution** — `compute_document_proof_ref()` and `resolve_document_proof_ref()` exposed as public API; references are content-bound SHA-256 hashes over the canonical document.
+
+#### Bridge & Verifier Mappings (#310, #316)
+
+- **`verification_context_from_diagnostic_result()`** — converts `DiagnosticResult` → VC document; VERIFIED without attestation demotes to UNVERIFIABLE (fail-closed, consistent with the core contract).
+- **`to_verification_context()` on all 13 verifiers** — complete engine coverage with optional `attestation_token` support: Math, Logic, Symbolic, SQL, Code, Schema, Fact, Image, Graph, Reasoning, Stats, Consensus, and SecureCodeExecutor.
+
+#### Surface Exposure (#311, #313, #314, #315)
+
+- **SDK / API / CLI exposure** — Verification Context surfaced across the API routes, CLI, and SDK.
+- **Docker action VC outputs** — the containerized GitHub Action emits `verdict`, `admission`, `proof_ref`, and `verification_context` outputs.
+- **Metadata & README alignment** — repository metadata aligned with the v7.0 architecture.
+- **SDK re-exports** — all Verification Context v1.0 types re-exported from `qwed_sdk`.
+
+> **Semver:** minor release — additive public API (VC model, mappings, resolver, routes, outputs). No breaking wire changes.
+
 ## [7.0.0] - 2026-08-08
 
 ### Engine Migration to DiagnosticResult (Meta #216)
