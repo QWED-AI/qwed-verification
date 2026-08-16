@@ -40,7 +40,7 @@
 
 ## Release Update: v7.1.0 — Verification Context v1.0 Rollout
 
-`v7.1.0` ships the **Verification Context (VC) v1.0** — the external, interoperable layer on top of `DiagnosticResult`. Every engine now emits a schema-validated, canonically-encoded, tamper-evident verification document describing *what* was verified, against *what* evidence, under *which* interpretation, with *what* admission decision.
+`v7.1.0` ships the **Verification Context (VC) v1.0** — the external, interoperable layer on top of `DiagnosticResult`. Verification methods continue to return `DiagnosticResult`; a schema-validated, canonically-encoded, tamper-evident verification document describing *what* was verified, against *what* evidence, under *which* interpretation, with *what* admission decision is produced on demand via the explicit `to_verification_context()` conversion.
 
 - **VC v1.0 spec + ontology (ADR-001..005, #301–#302)** — object of verification, verification context, truth-vs-admission separation, formalization boundary, and root of trust are formally defined
 - **`VerificationContext` model + JSON schema (#308)** — 4-layer document (interpretation / proof / evidence / decision) with RFC 8785 canonical JSON encoding, UTF-16 key ordering, and fail-closed schema validation
@@ -49,9 +49,9 @@
 - **SDK / API / CLI exposure (#311)** — VC surfaces across the API routes, CLI, and SDK
 - **Docker action VC outputs (#313)** — the containerized GitHub Action now emits `verdict`, `admission`, `proof_ref`, and `verification_context` outputs
 - **SDK re-exports (#315)** — all VC types re-exported from `qwed_sdk`
-- **`to_verification_context()` on all 13 verifiers (#316)** — full engine coverage with optional `attestation_token` support
+- **`to_verification_context()` on all 13 verifiers (#316)** — full engine coverage; conversion is explicit and returns a `VerificationContextDocument` from a `DiagnosticResult`
 
-> This is an **additive** minor release — no breaking wire changes. If you're upgrading from `v7.0.0`, the new VC surface is available but nothing you relied on changed behavior.
+> This is an **additive** minor release — no breaking wire changes; existing wire contracts remain unchanged. If you're upgrading from `v7.0.0`, the new VC surface is available but nothing you relied on changed behavior.
 
 If you're upgrading from `v6.0.x`, review the [changelog](CHANGELOG.md) for the full migration notes.
 

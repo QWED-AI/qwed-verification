@@ -21,7 +21,7 @@ All notable changes to the QWED Protocol will be documented in this file.
 #### Bridge & Verifier Mappings (#310, #316)
 
 - **`verification_context_from_diagnostic_result()`** — converts `DiagnosticResult` → VC document; VERIFIED without attestation demotes to UNVERIFIABLE (fail-closed, consistent with the core contract).
-- **`to_verification_context()` on all 13 verifiers** — complete engine coverage with optional `attestation_token` support: Math, Logic, Symbolic, SQL, Code, Schema, Fact, Image, Graph, Reasoning, Stats, Consensus, and SecureCodeExecutor.
+- **`to_verification_context()` on all 13 verifiers** — complete engine coverage: Math, Logic, Symbolic, SQL, Code, Schema, Fact, Image, Graph, Reasoning, Stats, Consensus, and SecureCodeExecutor.
 
 #### Surface Exposure (#311, #313, #314, #315)
 
