@@ -169,7 +169,7 @@ class CircuitBreaker:
         self.success_threshold = success_threshold
         
         self._engines: Dict[str, EngineHealth] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
     
     def get_health(self, engine_name: str) -> EngineHealth:
         """
@@ -262,16 +262,17 @@ class CircuitBreaker:
         Returns:
             Dict mapping engine names to health statistics.
         """
-        return {
-            name: {
-                "state": health.state.value,
-                "failures": health.total_failures,
-                "calls": health.total_calls,
-                "avg_latency_ms": round(health.avg_latency_ms, 2),
-                "failure_rate": round(health.total_failures / max(health.total_calls, 1), 3)
+        with self._lock:
+            return {
+                name: {
+                    "state": health.state.value,
+                    "failures": health.total_failures,
+                    "calls": health.total_calls,
+                    "avg_latency_ms": round(health.avg_latency_ms, 2),
+                    "failure_rate": round(health.total_failures / max(health.total_calls, 1), 3)
+                }
+                for name, health in self._engines.items()
             }
-            for name, health in self._engines.items()
-        }
 
 
 
