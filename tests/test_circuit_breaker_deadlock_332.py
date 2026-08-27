@@ -1,14 +1,35 @@
 """Regression test for Issue #332: CircuitBreaker self-deadlock fix."""
 import threading
+from typing import Callable
 
 from qwed_new.core.consensus_verifier import CircuitBreaker, ConsensusVerifier, EngineState
+
+
+def _run_with_timeout(func: Callable[[], None], timeout: float = 2.0) -> None:
+    """Execute a callable in a daemon thread with bounded timeout to catch deadlocks cleanly."""
+    errors = []
+
+    def target():
+        try:
+            func()
+        except Exception as e:
+            errors.append(e)
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout)
+
+    assert not thread.is_alive(), f"Deadlock detected: thread did not complete within {timeout}s timeout"
+    if errors:
+        raise errors[0]
 
 
 def test_circuit_breaker_record_success_no_deadlock():
     """record_success acquires lock and calls get_health() which re-enters lock."""
     cb = CircuitBreaker()
+
     # Prior to fix with non-reentrant Lock, this deadlocks on the first call
-    cb.record_success("SymPy", latency_ms=12.5)
+    _run_with_timeout(lambda: cb.record_success("SymPy", latency_ms=12.5))
 
     health = cb.get_health("SymPy")
     assert health.total_calls == 1
@@ -25,38 +46,38 @@ def test_circuit_breaker_record_failure_no_deadlock(monkeypatch):
     )
     cb = CircuitBreaker(failure_threshold=3, recovery_time_seconds=1.0)
 
-    # 1st failure
-    cb.record_failure("Z3")
+    # 1st failure: executed in bounded worker
+    _run_with_timeout(lambda: cb.record_failure("Z3"))
     assert cb.get_health("Z3").consecutive_failures == 1
     assert cb.is_available("Z3") is True
 
-    # 2nd failure
-    cb.record_failure("Z3")
+    # 2nd failure: executed in bounded worker
+    _run_with_timeout(lambda: cb.record_failure("Z3"))
     assert cb.get_health("Z3").consecutive_failures == 2
     assert cb.is_available("Z3") is True
 
-    # 3rd failure -> trips OPEN
-    cb.record_failure("Z3")
+    # 3rd failure -> trips OPEN: executed in bounded worker
+    _run_with_timeout(lambda: cb.record_failure("Z3"))
     assert cb.get_health("Z3").state == EngineState.OPEN
     assert cb.is_available("Z3") is False
 
-    # Advance clock past recovery threshold deterministically without time.sleep
+    # Advance clock past recovery threshold deterministically
     clock[0] = 102.0
 
     # is_available transitions to DEGRADED
     assert cb.is_available("Z3") is True
     assert cb.get_health("Z3").state == EngineState.DEGRADED
 
-    # Success resets to HEALTHY
-    cb.record_success("Z3", latency_ms=5.0)
+    # Success resets to HEALTHY: executed in bounded worker
+    _run_with_timeout(lambda: cb.record_success("Z3", latency_ms=5.0))
     assert cb.get_health("Z3").state == EngineState.HEALTHY
 
 
 def test_circuit_breaker_get_all_health_thread_safe():
     """get_all_health returns complete statistics without raising under concurrency."""
     cb = CircuitBreaker()
-    cb.record_success("SymPy", 10.0)
-    cb.record_failure("Python")
+    _run_with_timeout(lambda: cb.record_success("SymPy", 10.0))
+    _run_with_timeout(lambda: cb.record_failure("Python"))
 
     stats = cb.get_all_health()
     assert "SymPy" in stats
@@ -68,16 +89,16 @@ def test_circuit_breaker_get_all_health_thread_safe():
 def test_circuit_breaker_reset_thread_safe():
     """reset() clears engine statistics under lock."""
     cb = CircuitBreaker()
-    cb.record_success("SymPy", 10.0)
+    _run_with_timeout(lambda: cb.record_success("SymPy", 10.0))
     assert len(cb.get_all_health()) == 1
 
-    cb.reset()
+    _run_with_timeout(lambda: cb.reset())
     assert len(cb.get_all_health()) == 0
 
     verifier = ConsensusVerifier(enable_circuit_breaker=True)
-    verifier.circuit_breaker.record_success("Z3", 5.0)
+    _run_with_timeout(lambda: verifier.circuit_breaker.record_success("Z3", 5.0))
     assert len(verifier.get_engine_health()) == 1
-    verifier.reset_circuit_breakers()
+    _run_with_timeout(lambda: verifier.reset_circuit_breakers())
     assert len(verifier.get_engine_health()) == 0
 
 
@@ -99,7 +120,7 @@ def test_circuit_breaker_concurrent_access():
             errors.append(e)
 
     threads = [
-        threading.Thread(target=worker, args=(f"Engine-{i % 3}",))
+        threading.Thread(target=worker, args=(f"Engine-{i % 3}",), daemon=True)
         for i in range(10)
     ]
 
