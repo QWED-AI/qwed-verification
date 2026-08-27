@@ -169,7 +169,7 @@ class CircuitBreaker:
         self.success_threshold = success_threshold
         
         self._engines: Dict[str, EngineHealth] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
     
     def get_health(self, engine_name: str) -> EngineHealth:
         """
@@ -196,22 +196,22 @@ class CircuitBreaker:
         Returns:
             bool: True if engine can accept requests.
         """
-        health = self.get_health(engine_name)
-        
-        if health.state == EngineState.HEALTHY:
-            return True
-        
-        if health.state == EngineState.OPEN:
-            # Check if recovery time has passed
-            if health.circuit_open_until and time.time() > health.circuit_open_until:
-                # Transition to half-open (allow test request)
-                with self._lock:
-                    health.state = EngineState.DEGRADED
+        with self._lock:
+            health = self.get_health(engine_name)
+            
+            if health.state == EngineState.HEALTHY:
                 return True
-            return False
-        
-        # DEGRADED state - allow requests
-        return True
+            
+            if health.state == EngineState.OPEN:
+                # Check if recovery time has passed
+                if health.circuit_open_until and time.time() > health.circuit_open_until:
+                    # Transition to half-open (allow test request)
+                    health.state = EngineState.DEGRADED
+                    return True
+                return False
+            
+            # DEGRADED state - allow requests
+            return True
     
     def record_success(self, engine_name: str, latency_ms: float):
         """
@@ -262,16 +262,22 @@ class CircuitBreaker:
         Returns:
             Dict mapping engine names to health statistics.
         """
-        return {
-            name: {
-                "state": health.state.value,
-                "failures": health.total_failures,
-                "calls": health.total_calls,
-                "avg_latency_ms": round(health.avg_latency_ms, 2),
-                "failure_rate": round(health.total_failures / max(health.total_calls, 1), 3)
+        with self._lock:
+            return {
+                name: {
+                    "state": health.state.value,
+                    "failures": health.total_failures,
+                    "calls": health.total_calls,
+                    "avg_latency_ms": round(health.avg_latency_ms, 2),
+                    "failure_rate": round(health.total_failures / max(health.total_calls, 1), 3)
+                }
+                for name, health in self._engines.items()
             }
-            for name, health in self._engines.items()
-        }
+
+    def reset(self):
+        """Reset all tracked engine health states in a thread-safe manner."""
+        with self._lock:
+            self._engines.clear()
 
 
 
@@ -962,7 +968,7 @@ class ConsensusVerifier:
             >>> verifier.reset_circuit_breakers()
         """
         if self.circuit_breaker:
-            self.circuit_breaker._engines.clear()
+            self.circuit_breaker.reset()
 
     def to_verification_context(self, result: "DiagnosticResult", query: str, attestation_token: Optional[str] = None) -> "VerificationContextDocument":
         """Map a DiagnosticResult to a Verification Context v1.0 document."""
