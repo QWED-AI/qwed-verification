@@ -72,6 +72,30 @@ def generate_api_key(prefix: str = "qwed_live") -> tuple[str, str]:
     return plaintext_key, key_hash
 
 
+def _api_key_lookup_secret() -> bytes:
+    """
+    Keying material for the API-key lookup MAC.
+
+    Prefers QWED_API_KEY_LOOKUP_SECRET so rotating QWED_JWT_SECRET_KEY
+    (which invalidates every JWT at once, by design) does NOT silently
+    break API-key authentication (CodeRabbit on PR #345). Falls back to
+    the JWT secret with a loud warning for deployments that have not set
+    the dedicated value yet — the fallback keeps current digests valid.
+    """
+    dedicated = os.getenv("QWED_API_KEY_LOOKUP_SECRET")
+    if dedicated:
+        return dedicated.encode()
+    import logging
+
+    logging.getLogger(__name__).warning(
+        "QWED_API_KEY_LOOKUP_SECRET is not set — deriving API-key lookup "
+        "digests from QWED_JWT_SECRET_KEY. Rotating the JWT secret will "
+        "invalidate all API-key lookups until keys are re-issued. Set the "
+        "dedicated secret to decouple the two."
+    )
+    return SECRET_KEY.encode()
+
+
 def hash_api_key(api_key: str) -> str:
     """
     Derive a deterministic lookup digest for an API key.
@@ -83,6 +107,12 @@ def hash_api_key(api_key: str) -> str:
     The cost bought no brute-force resistance: API keys are 258-bit random
     tokens, so equality lookup is unbreakable at any digest speed.
 
+    Keying material: QWED_API_KEY_LOOKUP_SECRET when set (stable across
+    JWT-secret rotations); otherwise QWED_JWT_SECRET_KEY with a loud
+    warning. Set the dedicated secret BEFORE issuing v7.2 keys — digests
+    are derived from whichever secret was active at issue time, and
+    switching later requires a one-time re-issue.
+
     NOTE: not compatible with pre-v7.2 PBKDF2 key_hash rows. Existing keys
     must be re-issued once — via the portal (email/password JWT login ->
     POST /auth/api-keys, which needs no API key) or by key ID through
@@ -90,11 +120,10 @@ def hash_api_key(api_key: str) -> str:
     never required. Do NOT add a PBKDF2 fallback for legacy rows — that
     re-introduces #333.
     """
-    # SECRET_KEY is guaranteed to be a non-empty string: module import
-    # raises RuntimeError above when QWED_JWT_SECRET_KEY is unset.
-    # Single expression so the CodeQL weak-hash suppression comment below
-    # covers the whole sink.
-    mac = hmac.digest(SECRET_KEY.encode() + b":qwed_api_key_lookup", api_key.encode("utf-8"), "sha256")  # codeql[py/weak-sensitive-data-hashing] — keyed MAC over a 258-bit random token for equality lookup, not password storage; a KDF here is the DoS bug (#333)
+    # codeql[py/weak-sensitive-data-hashing] — keyed MAC over a 258-bit
+    # random token for equality lookup, not password storage; a KDF here
+    # is the DoS bug (#333).
+    mac = hmac.digest(_api_key_lookup_secret() + b":qwed_api_key_lookup", api_key.encode("utf-8"), "sha256")
     return mac.hex()
 
 def mask_api_key(api_key: str) -> str:

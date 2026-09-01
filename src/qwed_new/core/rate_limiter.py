@@ -121,6 +121,21 @@ class RateLimiter:
         Returns:
             True if request is allowed, False if rate limit exceeded
         """
+        allowed, _ = self.check_ip_limit_with_reset(client_ip)
+        return allowed
+
+    def check_ip_limit_with_reset(self, client_ip: str) -> tuple:
+        """
+        Atomic limit check + reset-time lookup under one lock acquisition.
+
+        Splitting these into two locked calls (as check_auth_rate_limit
+        did) lets concurrent cleanup observe an emptied window in between,
+        which callers could surface as a misleading Retry-After (Sentry on
+        PR #345).
+
+        Returns:
+            (allowed, reset_after_seconds) — reset_after is 0 when allowed.
+        """
         with self._lock:
             if len(self.ip_requests) > self.MAX_TRACKED_IPS:
                 cutoff = self._clock() - self.PER_IP_WINDOW
@@ -153,10 +168,17 @@ class RateLimiter:
             )
 
             if len(self.ip_requests[client_ip]) >= self.PER_IP_LIMIT:
-                return False
+                # Bucket was just cleaned, so min() is the oldest live stamp
+                # and the reset is always >= 1 here (ceil of a positive).
+                reset_after = math.ceil(
+                    min(self.ip_requests[client_ip])
+                    + self.PER_IP_WINDOW
+                    - self._clock()
+                )
+                return False, max(0, reset_after)
 
             self.ip_requests[client_ip].append(self._clock())
-            return True
+            return True, 0
 
     def get_ip_reset_time(self, client_ip: str) -> int:
         """Seconds until this IP's auth-route window resets (rounded up)."""
@@ -302,8 +324,8 @@ def check_auth_rate_limit(request):
     password-guessing oracle (issues #226, #334).
     """
     ip = client_ip_of(request)
-    if not rate_limiter.check_ip_limit(ip):
-        reset_after = rate_limiter.get_ip_reset_time(ip)
+    allowed, reset_after = rate_limiter.check_ip_limit_with_reset(ip)
+    if not allowed:
         raise HTTPException(
             status_code=429,
             detail=f"Too many authentication attempts. Try again in {reset_after} seconds.",

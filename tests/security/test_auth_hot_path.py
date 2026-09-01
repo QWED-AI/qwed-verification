@@ -22,14 +22,14 @@ class TestApiKeyLookupDigest(unittest.TestCase):
     def test_deterministic_and_correct_length(self):
         sample = "abc123"
         h1, h2 = hash_api_key(sample), hash_api_key(sample)
-        self.assertEqual(hash_api_key(sample), h1)
+        self.assertEqual(h1, hash_api_key(sample))
         self.assertEqual(h1, h2)
         self.assertEqual(64, len(h1))  # sha256 hex
         int(h1, 16)  # valid hex
 
     def test_generate_api_key_roundtrip(self):
         raw, hashed = generate_api_key()
-        self.assertEqual(hash_api_key(raw), hashed)
+        self.assertEqual(hashed, hash_api_key(raw))
 
     def test_lookup_cost_is_not_a_kdf(self):
         """1000 lookups must be far faster than even a single PBKDF2-100k
@@ -102,7 +102,6 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         """Rounded-up reset (CodeRabbit clock injection): a window with a
         fractional second remaining must report >= 1, never 0."""
         now = [1000.0]
-        limiter = RateLimiter(clock=lambda: now[0])
         with patch.dict("os.environ", {"QWED_RATE_LIMIT_PER_IP": "2"}):
             limiter = RateLimiter(clock=lambda: now[0])
         limiter.ip_requests["1.2.3.4"] = [1000.0 - 59.5, 1000.0 - 59.2]
@@ -112,6 +111,19 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         self.assertEqual(1, limiter.get_ip_reset_time("1.2.3.4"))  # ceil(0.1)
         now[0] += 0.6
         self.assertEqual(0, limiter.get_ip_reset_time("1.2.3.4"))  # expired
+
+    def test_atomic_check_and_reset(self):
+        """Blocked check returns the reset time in the same locked call
+        (Sentry TOCTOU on PR #345) — and it is never 0 while blocked."""
+        limiter = self._limiter(limit=2)
+        allowed, reset = limiter.check_ip_limit_with_reset("1.2.3.4")
+        self.assertTrue(allowed)
+        self.assertEqual(0, reset)
+        limiter.check_ip_limit("1.2.3.4")
+        allowed, reset = limiter.check_ip_limit_with_reset("1.2.3.4")
+        self.assertFalse(allowed)
+        self.assertGreaterEqual(reset, 1)
+        self.assertLessEqual(reset, 60)
 
     def test_check_auth_rate_limit_raises_429(self):
         from fastapi import HTTPException
@@ -166,6 +178,25 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
             {"sub": "u1"}, expires_delta=timedelta(minutes=-5)
         )
         assert decode_access_token(token) is None
+
+
+class TestApiKeyLookupSecret(unittest.TestCase):
+    """CodeRabbit on PR #345: the lookup MAC is decoupled from the JWT
+    secret when QWED_API_KEY_LOOKUP_SECRET is set."""
+
+    def test_dedicated_secret_changes_digest(self):
+        sample = "abc123"
+        baseline = hash_api_key(sample)
+        with patch.dict("os.environ", {"QWED_API_KEY_LOOKUP_SECRET": "dedicated-secret"}):
+            with_dedicated = hash_api_key(sample)
+        self.assertNotEqual(baseline, with_dedicated)
+        # Stable while the dedicated secret is set
+        with patch.dict("os.environ", {"QWED_API_KEY_LOOKUP_SECRET": "dedicated-secret"}):
+            self.assertEqual(with_dedicated, hash_api_key(sample))
+
+    def test_fallback_keeps_digest_stable(self):
+        sample = "abc123"
+        self.assertEqual(hash_api_key(sample), hash_api_key(sample))
 
 
 class TestSigninTimingEqualizer(unittest.TestCase):

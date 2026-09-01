@@ -149,14 +149,15 @@ class TestSignup:
         # Flood the bucket for TestClient's fixed source IP ("testclient"),
         # against the limiter's frozen clock (CodeRabbit on PR #345).
         frozen = time.time()
-        with patch.object(rate_limiter, "_clock", lambda: frozen):
+        with patch.object(rate_limiter, "_clock", return_value=frozen):
             rate_limiter.ip_requests["testclient"] = [frozen] * rate_limiter.PER_IP_LIMIT
-        response = client.post("/auth/signup", json={
-            "email": "owner@example.com",
-            "password": "correct horse battery staple",
-            "organization_name": "Acme",
-        })
-        assert response.status_code == 429
+            response = client.post("/auth/signup", json={
+                "email": "owner@example.com",
+                "password": "correct horse battery staple",
+                "organization_name": "Acme",
+            })
+            assert response.status_code == 429
+            assert "Retry-After" in response.headers
         assert "Retry-After" in response.headers
 
 
@@ -224,10 +225,10 @@ class TestSignin:
 
     def test_signin_rate_limited_per_ip(self, client):
         frozen = time.time()
-        with patch.object(rate_limiter, "_clock", lambda: frozen):
+        with patch.object(rate_limiter, "_clock", return_value=frozen):
             rate_limiter.ip_requests["testclient"] = [frozen] * rate_limiter.PER_IP_LIMIT
-        response = client.post("/auth/signin", json={
-            "email": "owner@example.com", "password": "whatever",
-        })
-        assert response.status_code == 429
-        assert "Retry-After" in response.headers
+            response = client.post("/auth/signin", json={
+                "email": "owner@example.com", "password": "whatever",
+            })
+            assert response.status_code == 429
+            assert "Retry-After" in response.headers
