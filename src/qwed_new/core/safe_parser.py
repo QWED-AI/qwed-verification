@@ -78,7 +78,9 @@ _CHARSET_PATTERN = re.compile(r"^[A-Za-z0-9_+\-*/().,^%\s]+$", re.ASCII)
 # A '.' is only legal as a decimal point with a digit on BOTH sides.
 # This rejects every attribute access (``x.__class__``, ``2 .real``)
 # and bare decimal forms like ``.5`` (write ``0.5`` instead).
-_BAD_DECIMAL_DOT = re.compile(r"(?<![0-9])\.|\.(?![0-9])")
+# re.ASCII pins \d to [0-9] so NFKC-surviving unicode digits cannot
+# satisfy the lookarounds.
+_BAD_DECIMAL_DOT = re.compile(r"(?<!\d)\.|\.(?!\d)", re.ASCII)
 
 # AST node-type allowlist for input that parses as Python. Implicit
 # multiplication expressions (``2x``, ``sin x``) fail ast.parse and are
@@ -226,8 +228,8 @@ def _build_safe_local_dict(
                 )
             # Raw-key ASCII identifier check: no normalization, so a
             # fullwidth key can never NFKC-alias a built-in name at compile
-            # time (PEP 3131).
-            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            # time (PEP 3131). re.ASCII pins \w to [A-Za-z0-9_].
+            if not re.match(r"^[A-Za-z_]\w*$", key, re.ASCII):
                 raise SafeParserError(
                     f"extra_symbols key {key!r} is not a plain ASCII identifier"
                 )

@@ -216,9 +216,11 @@ class TestASTAllowlist:
 
     @pytest.mark.parametrize("payload", [
         # Original #329 PoC (139 chars, denylist-clean).
-        "x.equals.__func__.__getattribute__('__gl'+'obals__')"
-        "['__buil'+'tins__']['__im'+'port__']('su'+'bprocess')"
-        ".run(['to'+'uch','/tmp/qwed_pwn'])",
+        (
+            "x.equals.__func__.__getattribute__('__gl'+'obals__')"
+            + "['__buil'+'tins__']['__im'+'port__']('su'+'bprocess')"
+            + ".run(['to'+'uch','/tmp/qwed_pwn'])"
+        ),
         # Unlisted dunders the old denylist never matched.
         "x.__class__",
         "x.__getattribute__('foo')",
@@ -268,8 +270,10 @@ class TestNFKCNormalization:
     @pytest.mark.parametrize("payload", [
         # Bold mathematical alphanumeric codepoints (U+1D4xx).
         "E.__\U0001D4D0\U0001D4D1\U0001D4D2\U0001D4D3\U0001D4D4__",
-        "x.__\U0001D4D0\U0001D4D1\U0001D4D2\U0001D4D3\U0001D4D4\U0001D4D5"
-        "\U0001D4D6\U0001D4D7\U0001D4D8\U0001D4D9\U0001D4DB\U0001D4D4__",
+        (
+            "x.__\U0001D4D0\U0001D4D1\U0001D4D2\U0001D4D3\U0001D4D4\U0001D4D5"
+            + "\U0001D4D6\U0001D4D7\U0001D4D8\U0001D4D9\U0001D4DB\U0001D4D4__"
+        ),
         # Fullwidth forms.
         "\uFF4F\uFF53.\uFF53\uFF59\uFF53\uFF54\uFF45\uFF4D('id')",
         "\uFF45\uFF56\uFF41\uFF4C('1')",
@@ -338,11 +342,13 @@ class TestExtraSymbolsHardening:
 
     def test_extra_symbol_key_rejects_non_identifier(self):
         from sympy import Symbol
+        bad_key = {"a b": Symbol("a")}
         with pytest.raises(SafeParserError, match="plain ASCII identifier"):
-            safe_parse_expr("x + 1", extra_symbols={"a b": Symbol("a")})
+            safe_parse_expr("x + 1", extra_symbols=bad_key)
 
     def test_extra_symbol_key_rejects_unicode_alias(self):
         from sympy import Symbol
         # Fullwidth 'x' would NFKC-alias the built-in 'x' at compile time.
+        unicode_key = {"\uFF58": Symbol("x")}
         with pytest.raises(SafeParserError, match="plain ASCII identifier"):
-            safe_parse_expr("x + 1", extra_symbols={"\uFF58": Symbol("x")})
+            safe_parse_expr("x + 1", extra_symbols=unicode_key)
