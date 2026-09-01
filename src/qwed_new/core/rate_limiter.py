@@ -137,30 +137,17 @@ class RateLimiter:
             (allowed, reset_after_seconds) — reset_after is 0 when allowed.
         """
         with self._lock:
-            if len(self.ip_requests) > self.MAX_TRACKED_IPS:
-                cutoff = self._clock() - self.PER_IP_WINDOW
-                self.ip_requests = defaultdict(
-                    list,
-                    {
-                        ip: stamps
-                        for ip, stamps in self.ip_requests.items()
-                        if stamps and stamps[-1] > cutoff
-                    },
-                )
-
-            # Hard cap: a flood of always-fresh IPs must not grow the table
-            # past the cap even when every bucket is inside its window.
-            # Evict the least-recently-active bucket — it is the closest to
-            # expiry and the least likely to be an active client.
+            # Hard cap with O(1) eviction (Greptile P1 on PR #345: a table-
+            # wide min()/prune inside the lock let a full table stall every
+            # limiter call). Evict the first-inserted bucket (dicts preserve
+            # insertion order): it is the stalest admission, and evicting a
+            # mid-window client at worst grants one fresh budget — the same
+            # outcome as waiting for expiry. No table-wide scans anywhere.
             if (
                 client_ip not in self.ip_requests
                 and len(self.ip_requests) >= self.MAX_TRACKED_IPS
             ):
-                oldest_ip = min(
-                    self.ip_requests,
-                    key=lambda ip: self.ip_requests[ip][-1] if self.ip_requests[ip] else 0,
-                )
-                del self.ip_requests[oldest_ip]
+                del self.ip_requests[next(iter(self.ip_requests))]
 
             self.ip_requests[client_ip] = self._clean_old_requests(
                 self.ip_requests[client_ip],
@@ -256,7 +243,7 @@ def check_rate_limit(api_key: Optional[str] = None):
 # sanitize) X-Forwarded-For. Default is empty: the direct peer address is
 # used and the header is ignored, so a client cannot mint fresh bucket keys
 # by rotating spoofed header values (CodeRabbit/CodeAnt on PR #345).
-# On Cloud Run / behind a known LB, set e.g. QWED_AUTH_TRUSTED_PROXIES=10.0.0.0/8.
+# On Cloud Run / behind a known LB, set e.g. QWED_AUTH_TRUSTED_PROXIES=172.16.0.0/12.
 _TRUSTED_PROXIES: List = [
     ipaddress.ip_network(entry.strip(), strict=False)
     for entry in os.environ.get("QWED_AUTH_TRUSTED_PROXIES", "").split(",")
@@ -277,7 +264,13 @@ def _normalize_ip(value: str) -> str:
     except ValueError:
         pass
     if value.startswith("["):
-        candidate = value[1:value.find("]")]
+        end = value.find("]")
+        if end == -1:
+            # Unterminated bracket: slicing with -1 would truncate the last
+            # group into a DIFFERENT valid address ([2001:db8::1 ->
+            # 2001:db8::) and mis-bucket the client. Keep the raw value.
+            return value
+        candidate = value[1:end]
     else:
         candidate = value.rsplit(":", 1)[0]
     try:

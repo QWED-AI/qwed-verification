@@ -120,10 +120,8 @@ def hash_api_key(api_key: str) -> str:
     never required. Do NOT add a PBKDF2 fallback for legacy rows — that
     re-introduces #333.
     """
-    # codeql[py/weak-sensitive-data-hashing] — keyed MAC over a 258-bit
-    # random token for equality lookup, not password storage; a KDF here
-    # is the DoS bug (#333).
-    mac = hmac.digest(_api_key_lookup_secret() + b":qwed_api_key_lookup", api_key.encode("utf-8"), "sha256")
+    # codeql[py/weak-sensitive-data-hashing] — keyed MAC over a 258-bit random token for equality lookup, not password storage; a KDF here is the DoS bug (#333)
+    mac = hmac.digest(_api_key_lookup_secret() + b":qwed_api_key_lookup", api_key.encode("utf-8"), "sha256")  # codeql[py/weak-sensitive-data-hashing]
     return mac.hex()
 
 def mask_api_key(api_key: str) -> str:

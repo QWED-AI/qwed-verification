@@ -89,13 +89,13 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         limiter = self._limiter()
         limiter.MAX_TRACKED_IPS = 3
         for i in range(3):
-            limiter.check_ip_limit(f"10.0.0.{i}")
-        # Make 10.0.0.0 the least-recently-active
-        stamps = limiter.ip_requests["10.0.0.0"]
+            limiter.check_ip_limit(f"10.0.1.{i}")
+        # Make the first IP the least-recently-active
+        stamps = limiter.ip_requests["10.0.1.0"]
         stamps[-1] -= 10
         limiter.check_ip_limit("10.9.9.9")  # brand-new IP at full cap
         self.assertEqual(3, len(limiter.ip_requests))
-        self.assertNotIn("10.0.0.0", limiter.ip_requests)
+        self.assertNotIn("10.0.1.0", limiter.ip_requests)
         self.assertIn("10.9.9.9", limiter.ip_requests)
 
     def test_retry_after_never_zero_while_blocked(self):
@@ -150,19 +150,24 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         import ipaddress
         from qwed_new.core import rate_limiter as rl
 
-        trusted = [ipaddress.ip_network("10.0.0.0/8")]
+        trusted = [ipaddress.ip_network("172.16.0.0/12")]
         with patch.object(rl, "_TRUSTED_PROXIES", trusted):
-            req = _StubRequest(client_host="10.1.2.3", forwarded="1.2.3.4, 5.6.7.8")
+            req = _StubRequest(client_host="172.16.1.2", forwarded="1.2.3.4, 5.6.7.8")
             self.assertEqual("5.6.7.8", client_ip_of(req))
             # Untrusted peer even WITH header -> direct peer
             req2 = _StubRequest(client_host="1.2.3.4", forwarded="5.6.7.8")
             self.assertEqual("1.2.3.4", client_ip_of(req2))
             # Port-suffixed hops normalize to the bare IP (Sentry on PR #345):
             # port rotation must not mint fresh bucket keys
-            req3 = _StubRequest(client_host="10.1.2.3", forwarded="1.2.3.4:8080, 5.6.7.8:9091")
+            req3 = _StubRequest(client_host="172.16.1.2", forwarded="1.2.3.4:8080, 5.6.7.8:9091")
             self.assertEqual("5.6.7.8", client_ip_of(req3))
-            req4 = _StubRequest(client_host="10.1.2.3", forwarded="[2001:db8::1]:8080")
+            req4 = _StubRequest(client_host="172.16.1.2", forwarded="[2001:db8::1]:8080")
             self.assertEqual("2001:db8::1", client_ip_of(req4))
+            # Malformed unterminated bracket must NOT truncate into a
+            # different valid address (Sentry on PR #345): [2001:db8::1
+            # would slice to 2001:db8:: (a real, different IP)
+            req5 = _StubRequest(client_host="172.16.1.2", forwarded="[2001:db8::1")
+            self.assertEqual("[2001:db8::1", client_ip_of(req5))
 
 
     def test_get_ip_reset_time_unknown_ip_is_zero(self):
@@ -187,16 +192,25 @@ class TestApiKeyLookupSecret(unittest.TestCase):
     def test_dedicated_secret_changes_digest(self):
         sample = "abc123"
         baseline = hash_api_key(sample)
-        with patch.dict("os.environ", {"QWED_API_KEY_LOOKUP_SECRET": "dedicated-secret"}):
+        with patch.dict("os.environ", {"QWED_API_KEY_LOOKUP_SECRET": "test-dedi-42"}):
             with_dedicated = hash_api_key(sample)
         self.assertNotEqual(baseline, with_dedicated)
         # Stable while the dedicated secret is set
-        with patch.dict("os.environ", {"QWED_API_KEY_LOOKUP_SECRET": "dedicated-secret"}):
+        with patch.dict("os.environ", {"QWED_API_KEY_LOOKUP_SECRET": "test-dedi-42"}):
             self.assertEqual(with_dedicated, hash_api_key(sample))
 
-    def test_fallback_keeps_digest_stable(self):
+    def test_fallback_ignores_leftover_state(self):
+        """No dedicated secret set: the digest matches the pre-dedication
+        baseline (the fallback path is not polluted by an earlier
+        dedicated-secret value) and differs from the dedicated digest."""
         sample = "abc123"
-        self.assertEqual(hash_api_key(sample), hash_api_key(sample))
+        baseline = hash_api_key(sample)
+        with patch.dict("os.environ", {"QWED_API_KEY_LOOKUP_SECRET": "test-dedi-42"}):
+            dedicated = hash_api_key(sample)
+        # patch.dict restored the environment — the fallback path is active
+        fallback = hash_api_key(sample)
+        self.assertNotEqual(dedicated, fallback)
+        self.assertEqual(baseline, fallback)
 
 
 class TestSigninTimingEqualizer(unittest.TestCase):
