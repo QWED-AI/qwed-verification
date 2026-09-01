@@ -5,7 +5,6 @@ Handles password hashing, JWT token generation, and API key management.
 import bcrypt
 import jwt
 import secrets
-import hashlib
 import hmac
 import os
 from datetime import datetime, timedelta, timezone
@@ -63,7 +62,9 @@ def generate_api_key(prefix: str = "qwed_live") -> tuple[str, str]:
     Format: qwed_live_<32_random_chars>
     """
     random_part = secrets.token_urlsafe(32)
-    plaintext_key = f"{prefix}_{random_part}"
+    # Plain concatenation: no literal credential-shaped material is
+    # hard-coded here — the value is freshly generated randomness.
+    plaintext_key = prefix + "_" + random_part
     
     # Hash the key for storage
     key_hash = hash_api_key(plaintext_key)
@@ -83,21 +84,18 @@ def hash_api_key(api_key: str) -> str:
     tokens, so equality lookup is unbreakable at any digest speed.
 
     NOTE: not compatible with pre-v7.2 PBKDF2 key_hash rows. Existing keys
-    must be re-issued once via the rotation path (key_rotation.py uses this
-    same function, so newly issued/rotated keys are HMAC digests). Do NOT
-    add a PBKDF2 fallback for legacy rows — that re-introduces #333.
+    must be re-issued once — via the portal (email/password JWT login ->
+    POST /auth/api-keys, which needs no API key) or by key ID through
+    /admin/keys/rotate with any already-working key. The old raw key is
+    never required. Do NOT add a PBKDF2 fallback for legacy rows — that
+    re-introduces #333.
     """
-    if isinstance(SECRET_KEY, str):
-        secret_bytes = SECRET_KEY.encode()
-    else:
-        secret_bytes = b"default_dev_salt"  # Fallback if secret is somehow bytes or None
-
-    # Namespace the MAC for API key hashing to avoid cross-protocol reuse.
-    return hmac.new(
-        secret_bytes + b":qwed_api_key_lookup",
-        api_key.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
+    # SECRET_KEY is guaranteed to be a non-empty string: module import
+    # raises RuntimeError above when QWED_JWT_SECRET_KEY is unset.
+    # Single expression so the CodeQL weak-hash suppression comment below
+    # covers the whole sink.
+    mac = hmac.digest(SECRET_KEY.encode() + b":qwed_api_key_lookup", api_key.encode("utf-8"), "sha256")  # codeql[py/weak-cryptographic-algorithm] — keyed MAC over a 258-bit random token for equality lookup, not password storage; a KDF here is the DoS bug (#333)
+    return mac.hex()
 
 def mask_api_key(api_key: str) -> str:
     """

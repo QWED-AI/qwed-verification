@@ -7,12 +7,15 @@ Implements:
 - Returns 429 Too Many Requests when exceeded
 """
 
-from typing import Dict, Optional
-from collections import defaultdict
-from fastapi import HTTPException
-import time
+import ipaddress
+import math
 import os
 import threading
+import time
+from collections import defaultdict
+from typing import Dict, List, Optional
+
+from fastapi import HTTPException
 
 class RateLimiter:
     """
@@ -125,6 +128,20 @@ class RateLimiter:
                     },
                 )
 
+            # Hard cap: a flood of always-fresh IPs must not grow the table
+            # past the cap even when every bucket is inside its window.
+            # Evict the least-recently-active bucket — it is the closest to
+            # expiry and the least likely to be an active client.
+            if (
+                client_ip not in self.ip_requests
+                and len(self.ip_requests) >= self.MAX_TRACKED_IPS
+            ):
+                oldest_ip = min(
+                    self.ip_requests,
+                    key=lambda ip: self.ip_requests[ip][-1] if self.ip_requests[ip] else 0,
+                )
+                del self.ip_requests[oldest_ip]
+
             self.ip_requests[client_ip] = self._clean_old_requests(
                 self.ip_requests[client_ip],
                 self.PER_IP_WINDOW,
@@ -137,13 +154,15 @@ class RateLimiter:
             return True
 
     def get_ip_reset_time(self, client_ip: str) -> int:
-        """Seconds until this IP's auth-route window resets."""
+        """Seconds until this IP's auth-route window resets (rounded up)."""
         with self._lock:
             requests = list(self.ip_requests.get(client_ip, []))
             if not requests:
                 return 0
             oldest = min(requests)
-            return max(0, int(oldest + self.PER_IP_WINDOW - time.time()))
+            # Round up: truncation could report Retry-After: 0 while the IP
+            # is still inside its window, inviting immediate retry loops.
+            return max(0, math.ceil(oldest + self.PER_IP_WINDOW - time.time()))
 
     def get_reset_time(self, api_key: Optional[str] = None) -> int:
         """
@@ -206,20 +225,45 @@ def check_rate_limit(api_key: Optional[str] = None):
             )
 
 
+# Comma-separated IPs/CIDRs of reverse proxies that are trusted to set (and
+# sanitize) X-Forwarded-For. Default is empty: the direct peer address is
+# used and the header is ignored, so a client cannot mint fresh bucket keys
+# by rotating spoofed header values (CodeRabbit/CodeAnt on PR #345).
+# On Cloud Run / behind a known LB, set e.g. QWED_AUTH_TRUSTED_PROXIES=10.0.0.0/8.
+_TRUSTED_PROXIES: List = [
+    ipaddress.ip_network(entry.strip(), strict=False)
+    for entry in os.environ.get("QWED_AUTH_TRUSTED_PROXIES", "").split(",")
+    if entry.strip()
+]
+
+
+def _is_trusted_proxy(peer: Optional[str]) -> bool:
+    if not peer or not _TRUSTED_PROXIES:
+        return False
+    try:
+        addr = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    return any(addr in network for network in _TRUSTED_PROXIES)
+
+
 def client_ip_of(request) -> str:
     """
-    Best-effort client IP for anonymous-route rate limiting.
+    Resolve the rate-limit key for anonymous-route throttling.
 
-    Prefers the first X-Forwarded-For hop (set by the ingress/replica proxy);
-    falls back to the direct peer address. X-Forwarded-For is client-spoofable
-    where no trusted proxy strips it — this is a DoS-mitigation bucket, not an
-    identity boundary, and false attribution only widens or narrows one bucket.
+    The direct peer address is always the fallback and the default: a client
+    must not be able to choose its bucket key. X-Forwarded-For is honored
+    only when the direct peer is a configured trusted proxy — and then the
+    RIGHTMOST hop is used, because our proxy appends the real client address
+    after any client-supplied entries; a client sending its own header value
+    therefore cannot select the key.
     """
-    forwarded = request.headers.get("x-forwarded-for", "")
-    first_hop = forwarded.split(",")[0].strip() if forwarded else ""
-    if first_hop:
-        return first_hop
-    return request.client.host if request.client else "unknown"
+    peer = request.client.host if request.client else None
+    if _is_trusted_proxy(peer):
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",")[-1].strip()
+    return peer or "unknown"
 
 
 def check_auth_rate_limit(request):

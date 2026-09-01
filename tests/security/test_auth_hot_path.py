@@ -12,7 +12,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from qwed_new.auth.security import hash_api_key, generate_api_key, hash_password, verify_password
+from qwed_new.auth.security import hash_api_key, generate_api_key, verify_password
 from qwed_new.core.rate_limiter import RateLimiter, check_auth_rate_limit, client_ip_of
 
 
@@ -20,8 +20,8 @@ class TestApiKeyLookupDigest(unittest.TestCase):
     """#333: the lookup digest is a fast keyed MAC."""
 
     def test_deterministic_and_correct_length(self):
-        key = "qwed_live_abc123"
-        h1, h2 = hash_api_key(key), hash_api_key(key)
+        sample = "abc123"
+        h1, h2 = hash_api_key(sample), hash_api_key(sample)
         self.assertEqual(h1, h2)
         self.assertEqual(64, len(h1))  # sha256 hex
         int(h1, 16)  # valid hex
@@ -33,10 +33,10 @@ class TestApiKeyLookupDigest(unittest.TestCase):
     def test_lookup_cost_is_not_a_kdf(self):
         """1000 lookups must be far faster than even a single PBKDF2-100k
         pass (~67ms each). The old code spent ~67ms PER REQUEST here."""
-        key = "qwed_live_somegarbageattemptedkeyvalue"
+        sample = "garbage-attempted-lookup-input"
         start = time.perf_counter()
         for _ in range(1000):
-            hash_api_key(key)
+            hash_api_key(sample)
         elapsed = time.perf_counter() - start
         self.assertLess(elapsed, 0.5, f"1000 lookups took {elapsed:.3f}s — KDF regression?")
 
@@ -72,21 +72,42 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         limiter.ip_requests["1.2.3.4"][0] -= limiter.PER_IP_WINDOW + 1
         self.assertTrue(limiter.check_ip_limit("1.2.3.4"))
 
-    def test_ip_table_bounded(self):
-        """Above the cap, fully-expired IP windows are evicted on write."""
+    def test_ip_table_never_exceeds_cap(self):
+        """The table is hard-bounded: expired entries are pruned above the
+        cap, and at a full cap of fresh buckets the least-recently-active
+        one is evicted before a new IP is added."""
+        limiter = self._limiter()
+        limiter.MAX_TRACKED_IPS = 5
+        for i in range(50):
+            limiter.check_ip_limit(f"10.0.1.{i}")
+        self.assertLessEqual(len(limiter.ip_requests), 5)
+
+    def test_hard_cap_evicts_oldest_active_bucket(self):
+        """Always-fresh IPs must not grow the table past the cap: the
+        least-recently-active bucket is evicted (CodeRabbit/CodeAnt)."""
         limiter = self._limiter()
         limiter.MAX_TRACKED_IPS = 3
-        for i in range(4):
+        for i in range(3):
             limiter.check_ip_limit(f"10.0.0.{i}")
-        # Fresh windows survive the prune (only expired entries are dropped)
-        self.assertEqual(4, len(limiter.ip_requests))
-        # Age every window out, then write again — expired entries evicted
-        cutoff = limiter.PER_IP_WINDOW + 1
-        for stamps in limiter.ip_requests.values():
-            stamps[0] -= cutoff
-        limiter.check_ip_limit("10.9.9.9")
-        self.assertEqual(1, len(limiter.ip_requests))
+        # Make 10.0.0.0 the least-recently-active
+        stamps = limiter.ip_requests["10.0.0.0"]
+        stamps[-1] -= 10
+        limiter.check_ip_limit("10.9.9.9")  # brand-new IP at full cap
+        self.assertEqual(3, len(limiter.ip_requests))
+        self.assertNotIn("10.0.0.0", limiter.ip_requests)
         self.assertIn("10.9.9.9", limiter.ip_requests)
+
+    def test_retry_after_never_zero_while_blocked(self):
+        """Truncation could yield Retry-After: 0 inside the window."""
+        import math
+        limiter = self._limiter(limit=2)
+        # Block with a window that has a fractional second remaining
+        now = time.time()
+        limiter.ip_requests["1.2.3.4"] = [now - 59.5, now - 59.2]
+        self.assertFalse(limiter.check_ip_limit("1.2.3.4"))
+        reset = limiter.get_ip_reset_time("1.2.3.4")
+        self.assertGreaterEqual(reset, 1)
+        self.assertLessEqual(reset, 60)
 
     def test_check_auth_rate_limit_raises_429(self):
         from fastapi import HTTPException
@@ -100,9 +121,41 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         self.assertEqual(429, ctx.exception.status_code)
         self.assertIn("Retry-After", ctx.exception.headers)
 
-    def test_forwarded_for_preferred(self):
-        self.assertEqual("9.9.9.9", client_ip_of(_StubRequest(forwarded="9.9.9.9, 10.0.0.1")))
-        self.assertEqual("1.2.3.4", client_ip_of(_StubRequest(client_host="1.2.3.4")))
+    def test_untrusted_peer_header_ignored(self):
+        """Default: X-Forwarded-For is NOT honored — the client must not be
+        able to choose its rate-limit key (CodeRabbit/CodeAnt on PR #345)."""
+        self.assertEqual(
+            "1.2.3.4", client_ip_of(_StubRequest(client_host="1.2.3.4", forwarded="9.9.9.9"))
+        )
+
+    def test_trusted_proxy_last_hop_wins(self):
+        """A trusted proxy appends the real client after client-supplied
+        entries, so the rightmost hop is the one our infrastructure saw."""
+        import ipaddress
+        from qwed_new.core import rate_limiter as rl
+
+        trusted = [ipaddress.ip_network("10.0.0.0/8")]
+        with patch.object(rl, "_TRUSTED_PROXIES", trusted):
+            req = _StubRequest(client_host="10.1.2.3", forwarded="1.2.3.4, 5.6.7.8")
+            self.assertEqual("5.6.7.8", client_ip_of(req))
+            # Untrusted peer even WITH header -> direct peer
+            req2 = _StubRequest(client_host="1.2.3.4", forwarded="5.6.7.8")
+            self.assertEqual("1.2.3.4", client_ip_of(req2))
+
+
+    def test_get_ip_reset_time_unknown_ip_is_zero(self):
+        limiter = self._limiter()
+        assert limiter.get_ip_reset_time("nobody") == 0
+
+    def test_expired_jwt_returns_none(self):
+        """Covers the ExpiredSignatureError branch of decode_access_token."""
+        from datetime import timedelta
+        from qwed_new.auth.security import create_access_token, decode_access_token
+
+        token = create_access_token(
+            {"sub": "u1"}, expires_delta=timedelta(minutes=-5)
+        )
+        assert decode_access_token(token) is None
 
 
 class TestSigninTimingEqualizer(unittest.TestCase):

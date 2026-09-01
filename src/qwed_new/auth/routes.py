@@ -23,7 +23,10 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 
 # bcrypt cost-12 verify burns ~270 ms on an unknown email and returns in the
 # same time for a known one, equalizing the email-enumeration timing oracle
-# (issue #334). Initialized lazily so module import stays cheap.
+# (issue #334). Initialized lazily so module import stays cheap. The lazy
+# memo is not lock-guarded: a concurrent first wave re-hashes a few dummies —
+# bounded by the per-IP throttle and strictly one-time — which is cheaper
+# than serializing every unknown-email signin on a lock.
 _dummy_password_hash: Optional[str] = None
 
 
@@ -36,7 +39,15 @@ async def _burn_one_bcrypt(password: str) -> None:
         )
     await asyncio.to_thread(verify_password, password, _dummy_password_hash)
 
-@router.post("/signup", response_model=TokenResponse)
+@router.post(
+    "/signup",
+    response_model=TokenResponse,
+    responses={
+        400: {"description": "Email already registered or organization name taken"},
+        429: {"description": "Per-IP authentication rate limit exceeded"},
+        500: {"description": "User creation failed"},
+    },
+)
 async def signup(
     request: SignUpRequest,
     req: Request,
@@ -69,15 +80,17 @@ async def signup(
     # cannot strand an orphaned Organization row.
     password_hash = await asyncio.to_thread(hash_password, request.password)
 
+    # Create organization + user in ONE transaction (Sentry on PR #345):
+    # flush() assigns the org PK without committing, so a user-creation
+    # failure rolls the org back instead of stranding an orphaned row.
     org = Organization(
         name=request.organization_name,
         display_name=request.organization_name,
         tier="free"
     )
     session.add(org)
-    session.commit()
-    session.refresh(org)
-    
+    session.flush()
+
     # Create user (first user is owner)
     try:
         print(f"DEBUG: Creating user with email={request.email}, org_id={org.id}")
@@ -90,13 +103,15 @@ async def signup(
         print(f"DEBUG: User object created: {user}")
         session.add(user)
         session.commit()
+        session.refresh(org)
         session.refresh(user)
         print("DEBUG: User committed successfully")
     except Exception as e:
+        session.rollback()
         print(f"DEBUG: Error creating user: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="User creation failed")
     
     # Generate JWT token
     access_token = create_access_token(data={"sub": str(user.id), "org_id": str(org.id)})
@@ -112,7 +127,15 @@ async def signup(
         }
     }
 
-@router.post("/signin", response_model=TokenResponse)
+@router.post(
+    "/signin",
+    response_model=TokenResponse,
+    responses={
+        401: {"description": "Invalid email or password"},
+        403: {"description": "Account is deactivated"},
+        429: {"description": "Per-IP authentication rate limit exceeded"},
+    },
+)
 async def signin(
     request: SignInRequest,
     req: Request,

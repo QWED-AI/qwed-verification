@@ -44,7 +44,7 @@ class KeyManager:
         # Generate secure random key
         raw_key = f"qwed_live_{secrets.token_urlsafe(32)}"
         
-        # Hash for storage (fast keyed-MAC lookup digest per auth/security.py)
+        # Hash for storage (using PBKDF2 to match auth/security.py)
         key_hash = hash_api_key(raw_key)
         key_preview = f"{raw_key[:10]}...{raw_key[-4:]}"
         
