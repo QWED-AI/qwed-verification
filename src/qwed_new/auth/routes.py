@@ -1,13 +1,15 @@
 """
 Authentication routes for QWED Enterprise Portal.
 """
-from fastapi import APIRouter, HTTPException, Depends, Header
+import asyncio
+from fastapi import APIRouter, HTTPException, Depends, Header, Request
 from typing import Optional, List
 from datetime import datetime
 from sqlmodel import Session, select
 
 from qwed_new.core.database import get_session
 from qwed_new.core.models import User, Organization, ApiKey
+from qwed_new.core.rate_limiter import check_auth_rate_limit
 from .models import (
     SignUpRequest, SignInRequest, TokenResponse,
     APIKeyCreateRequest, APIKeyResponse, APIKeyListItem
@@ -19,15 +21,35 @@ from .security import (
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
+# bcrypt cost-12 verify burns ~270 ms on an unknown email and returns in the
+# same time for a known one, equalizing the email-enumeration timing oracle
+# (issue #334). Initialized lazily so module import stays cheap.
+_dummy_password_hash: Optional[str] = None
+
+
+async def _burn_one_bcrypt(password: str) -> None:
+    """Run one bcrypt verify against a throwaway hash (timing equalizer)."""
+    global _dummy_password_hash
+    if _dummy_password_hash is None:
+        _dummy_password_hash = await asyncio.to_thread(
+            hash_password, "qwed-timing-equalizer"
+        )
+    await asyncio.to_thread(verify_password, password, _dummy_password_hash)
+
 @router.post("/signup", response_model=TokenResponse)
 async def signup(
     request: SignUpRequest,
+    req: Request,
     session: Session = Depends(get_session)
 ):
     """
     Sign up a new user and create their organization.
     Returns JWT token for immediate login.
     """
+    # Anonymous route: per-IP throttle before any DB or bcrypt work
+    # (bcrypt is ~269 ms of CPU; issues #226/#334).
+    check_auth_rate_limit(req)
+
     # Check if email already exists
     statement = select(User).where(User.email == request.email)
     existing_user = session.exec(statement).first()
@@ -42,6 +64,11 @@ async def signup(
         # For now, let's fail
         raise HTTPException(status_code=400, detail="Organization name already taken")
 
+    # Hash in the threadpool — bcrypt must never run on the event loop
+    # (issue #334). Also BEFORE any row is written so a hash failure
+    # cannot strand an orphaned Organization row.
+    password_hash = await asyncio.to_thread(hash_password, request.password)
+
     org = Organization(
         name=request.organization_name,
         display_name=request.organization_name,
@@ -52,7 +79,6 @@ async def signup(
     session.refresh(org)
     
     # Create user (first user is owner)
-    password_hash = hash_password(request.password)
     try:
         print(f"DEBUG: Creating user with email={request.email}, org_id={org.id}")
         user = User(
@@ -89,13 +115,24 @@ async def signup(
 @router.post("/signin", response_model=TokenResponse)
 async def signin(
     request: SignInRequest,
+    req: Request,
     session: Session = Depends(get_session)
 ):
     """Sign in an existing user."""
+    # Anonymous route: per-IP throttle — unthrottled signin is a password-
+    # guessing oracle and a ~4 req/s whole-service DoS (issues #226/#334).
+    check_auth_rate_limit(req)
+
     statement = select(User).where(User.email == request.email)
     user = session.exec(statement).first()
-    
-    if not user or not verify_password(request.password, user.password_hash):
+
+    # bcrypt in the threadpool (issue #334); when the email is unknown,
+    # burn one bcrypt anyway so response timing does not enumerate emails.
+    if user is None:
+        await _burn_one_bcrypt(request.password)
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if not await asyncio.to_thread(verify_password, request.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
     if not user.is_active:

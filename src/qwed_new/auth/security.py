@@ -6,6 +6,7 @@ import bcrypt
 import jwt
 import secrets
 import hashlib
+import hmac
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -72,29 +73,31 @@ def generate_api_key(prefix: str = "qwed_live") -> tuple[str, str]:
 
 def hash_api_key(api_key: str) -> str:
     """
-    Derive a hash for an API key using PBKDF2-HMAC-SHA256.
+    Derive a deterministic lookup digest for an API key.
 
-    This is intentionally computationally expensive to make brute-force attacks
-    against stored API key hashes more difficult, while remaining deterministic
-    for lookup purposes.
+    This is a fast keyed MAC (HMAC-SHA256, microsecond cost), NOT a KDF.
+    The previous PBKDF2-HMAC-SHA256 with 100,000 iterations sat on the
+    unauthenticated request path (hash-then-lookup) and let ~15 req/s of
+    garbage x-api-key values saturate the whole service (issue #333).
+    The cost bought no brute-force resistance: API keys are 258-bit random
+    tokens, so equality lookup is unbreakable at any digest speed.
+
+    NOTE: not compatible with pre-v7.2 PBKDF2 key_hash rows. Existing keys
+    must be re-issued once via the rotation path (key_rotation.py uses this
+    same function, so newly issued/rotated keys are HMAC digests). Do NOT
+    add a PBKDF2 fallback for legacy rows — that re-introduces #333.
     """
-    # Derive a salt from SECRET_KEY; fall back to a constant development salt.
     if isinstance(SECRET_KEY, str):
         secret_bytes = SECRET_KEY.encode()
     else:
-        secret_bytes = b"default_dev_salt" # Fallback if secret is somehow bytes or None
+        secret_bytes = b"default_dev_salt"  # Fallback if secret is somehow bytes or None
 
-    # Namespace the salt for API key hashing to avoid cross-protocol reuse.
-    salt = secret_bytes + b":qwed_api_key"
-
-    # Use PBKDF2-HMAC-SHA256 with a reasonable iteration count.
-    dk = hashlib.pbkdf2_hmac(
-        "sha256",
+    # Namespace the MAC for API key hashing to avoid cross-protocol reuse.
+    return hmac.new(
+        secret_bytes + b":qwed_api_key_lookup",
         api_key.encode("utf-8"),
-        salt,
-        100_000,
-    )
-    return dk.hex()
+        hashlib.sha256,
+    ).hexdigest()
 
 def mask_api_key(api_key: str) -> str:
     """
