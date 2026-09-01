@@ -94,7 +94,7 @@ def hash_api_key(api_key: str) -> str:
     # raises RuntimeError above when QWED_JWT_SECRET_KEY is unset.
     # Single expression so the CodeQL weak-hash suppression comment below
     # covers the whole sink.
-    mac = hmac.digest(SECRET_KEY.encode() + b":qwed_api_key_lookup", api_key.encode("utf-8"), "sha256")  # codeql[py/weak-cryptographic-algorithm] — keyed MAC over a 258-bit random token for equality lookup, not password storage; a KDF here is the DoS bug (#333)
+    mac = hmac.digest(SECRET_KEY.encode() + b":qwed_api_key_lookup", api_key.encode("utf-8"), "sha256")  # codeql[py/weak-sensitive-data-hashing] — keyed MAC over a 258-bit random token for equality lookup, not password storage; a KDF here is the DoS bug (#333)
     return mac.hex()
 
 def mask_api_key(api_key: str) -> str:

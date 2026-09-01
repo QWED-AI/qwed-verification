@@ -22,13 +22,14 @@ class TestApiKeyLookupDigest(unittest.TestCase):
     def test_deterministic_and_correct_length(self):
         sample = "abc123"
         h1, h2 = hash_api_key(sample), hash_api_key(sample)
+        self.assertEqual(hash_api_key(sample), h1)
         self.assertEqual(h1, h2)
         self.assertEqual(64, len(h1))  # sha256 hex
         int(h1, 16)  # valid hex
 
     def test_generate_api_key_roundtrip(self):
         raw, hashed = generate_api_key()
-        self.assertEqual(hashed, hash_api_key(raw))
+        self.assertEqual(hash_api_key(raw), hashed)
 
     def test_lookup_cost_is_not_a_kdf(self):
         """1000 lookups must be far faster than even a single PBKDF2-100k
@@ -98,16 +99,19 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         self.assertIn("10.9.9.9", limiter.ip_requests)
 
     def test_retry_after_never_zero_while_blocked(self):
-        """Truncation could yield Retry-After: 0 inside the window."""
-        import math
-        limiter = self._limiter(limit=2)
-        # Block with a window that has a fractional second remaining
-        now = time.time()
-        limiter.ip_requests["1.2.3.4"] = [now - 59.5, now - 59.2]
+        """Rounded-up reset (CodeRabbit clock injection): a window with a
+        fractional second remaining must report >= 1, never 0."""
+        now = [1000.0]
+        limiter = RateLimiter(clock=lambda: now[0])
+        with patch.dict("os.environ", {"QWED_RATE_LIMIT_PER_IP": "2"}):
+            limiter = RateLimiter(clock=lambda: now[0])
+        limiter.ip_requests["1.2.3.4"] = [1000.0 - 59.5, 1000.0 - 59.2]
         self.assertFalse(limiter.check_ip_limit("1.2.3.4"))
-        reset = limiter.get_ip_reset_time("1.2.3.4")
-        self.assertGreaterEqual(reset, 1)
-        self.assertLessEqual(reset, 60)
+        self.assertEqual(1, limiter.get_ip_reset_time("1.2.3.4"))  # ceil(0.5)
+        now[0] += 0.4
+        self.assertEqual(1, limiter.get_ip_reset_time("1.2.3.4"))  # ceil(0.1)
+        now[0] += 0.6
+        self.assertEqual(0, limiter.get_ip_reset_time("1.2.3.4"))  # expired
 
     def test_check_auth_rate_limit_raises_429(self):
         from fastapi import HTTPException
@@ -141,6 +145,12 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
             # Untrusted peer even WITH header -> direct peer
             req2 = _StubRequest(client_host="1.2.3.4", forwarded="5.6.7.8")
             self.assertEqual("1.2.3.4", client_ip_of(req2))
+            # Port-suffixed hops normalize to the bare IP (Sentry on PR #345):
+            # port rotation must not mint fresh bucket keys
+            req3 = _StubRequest(client_host="10.1.2.3", forwarded="1.2.3.4:8080, 5.6.7.8:9091")
+            self.assertEqual("5.6.7.8", client_ip_of(req3))
+            req4 = _StubRequest(client_host="10.1.2.3", forwarded="[2001:db8::1]:8080")
+            self.assertEqual("2001:db8::1", client_ip_of(req4))
 
 
     def test_get_ip_reset_time_unknown_ip_is_zero(self):

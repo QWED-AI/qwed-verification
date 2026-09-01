@@ -32,7 +32,12 @@ class RateLimiter:
             an unthrottled bcrypt/DoS surface (issues #226, #334).
     """
 
-    def __init__(self):
+    def __init__(self, clock=None):
+        # Injectable monotonic-ish clock (CodeRabbit on PR #345): rate-limit
+        # tests can freeze/advance time deterministically instead of
+        # manipulating wall-clock-derived stamps. Defaults to time.time,
+        # matching the pre-existing per-key/global buckets.
+        self._clock = clock if clock is not None else time.time
         self._lock = threading.Lock()
 
         # Per-API-key request timestamps: {api_key: [timestamp1, timestamp2, ...]}
@@ -61,8 +66,8 @@ class RateLimiter:
         self.MAX_TRACKED_IPS = 50_000
     
     def _clean_old_requests(self, requests: list, window_seconds: int) -> list:
-        """Remove timestamps older than the window."""
-        cutoff = time.time() - window_seconds
+        """Remove timestamps older than the window (injected clock)."""
+        cutoff = self._clock() - window_seconds
         return [ts for ts in requests if ts > cutoff]
     
     def check_api_key_limit(self, api_key: str) -> bool:
@@ -84,7 +89,7 @@ class RateLimiter:
                 return False
             
             # Record this request
-            self.api_key_requests[api_key].append(time.time())
+            self.api_key_requests[api_key].append(self._clock())
             return True
     
     def check_global_limit(self) -> bool:
@@ -106,7 +111,7 @@ class RateLimiter:
                 return False
             
             # Record this request
-            self.global_requests.append(time.time())
+            self.global_requests.append(self._clock())
             return True
     
     def check_ip_limit(self, client_ip: str) -> bool:
@@ -118,7 +123,7 @@ class RateLimiter:
         """
         with self._lock:
             if len(self.ip_requests) > self.MAX_TRACKED_IPS:
-                cutoff = time.time() - self.PER_IP_WINDOW
+                cutoff = self._clock() - self.PER_IP_WINDOW
                 self.ip_requests = defaultdict(
                     list,
                     {
@@ -150,7 +155,7 @@ class RateLimiter:
             if len(self.ip_requests[client_ip]) >= self.PER_IP_LIMIT:
                 return False
 
-            self.ip_requests[client_ip].append(time.time())
+            self.ip_requests[client_ip].append(self._clock())
             return True
 
     def get_ip_reset_time(self, client_ip: str) -> int:
@@ -162,7 +167,7 @@ class RateLimiter:
             oldest = min(requests)
             # Round up: truncation could report Retry-After: 0 while the IP
             # is still inside its window, inviting immediate retry loops.
-            return max(0, math.ceil(oldest + self.PER_IP_WINDOW - time.time()))
+            return max(0, math.ceil(oldest + self.PER_IP_WINDOW - self._clock()))
 
     def get_reset_time(self, api_key: Optional[str] = None) -> int:
         """
@@ -188,7 +193,7 @@ class RateLimiter:
             
             oldest = min(requests)
             reset_time = oldest + window
-            return max(0, int(reset_time - time.time()))
+            return max(0, int(reset_time - self._clock()))
 
 
 # Global rate limiter instance
@@ -237,6 +242,28 @@ _TRUSTED_PROXIES: List = [
 ]
 
 
+def _normalize_ip(value: str) -> str:
+    """
+    Strip a port / bracket suffix from an XFF hop ("1.2.3.4:8080",
+    "[2001:db8::1]:8080") so port rotation cannot mint fresh bucket keys
+    (Sentry on PR #345). Unparseable values pass through unchanged — a
+    malformed hop then shares one bucket instead of escaping throttling.
+    """
+    value = value.strip()
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        pass
+    if value.startswith("["):
+        candidate = value[1:value.find("]")]
+    else:
+        candidate = value.rsplit(":", 1)[0]
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return value
+
+
 def _is_trusted_proxy(peer: Optional[str]) -> bool:
     if not peer or not _TRUSTED_PROXIES:
         return False
@@ -262,7 +289,7 @@ def client_ip_of(request) -> str:
     if _is_trusted_proxy(peer):
         forwarded = request.headers.get("x-forwarded-for", "")
         if forwarded:
-            return forwarded.split(",")[-1].strip()
+            return _normalize_ip(forwarded.split(",")[-1])
     return peer or "unknown"
 
 
