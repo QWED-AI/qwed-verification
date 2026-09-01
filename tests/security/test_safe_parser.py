@@ -38,7 +38,9 @@ class TestDenylist:
         'vars()',
     ])
     def test_injection_blocked(self, payload):
-        with pytest.raises(SafeParserError, match="disallowed construct"):
+        # Payloads carrying quotes/brackets/dots are caught by the charset
+        # gate before the denylist runs; both raise a "disallowed..." error.
+        with pytest.raises(SafeParserError, match="disallowed"):
             safe_parse_expr(payload)
 
 
@@ -59,6 +61,8 @@ class TestLegitimateExpressions:
         ("pi", "pi"),
         ("E", "E"),
         ("Abs(-5)", "5"),
+        ("x ^ 2", "x**2"),
+        ("2 ^ 3", "8"),
     ])
     def test_valid_expression(self, expr, expected_str):
         result = safe_parse_expr(expr)
@@ -205,3 +209,148 @@ class TestExtraSymbols:
     def test_extra_symbol_rejects_non_sympy(self):
         with pytest.raises(SafeParserError, match="must be a SymPy"):
             safe_parse_expr("x + 1", extra_symbols={"bad": lambda: None})
+
+
+class TestASTAllowlist:
+    """Issue #329 — denylist bypass via unlisted dunders + string-literal
+    splitting. The structural fix is an AST node-type allowlist: input that
+    parses as Python may only contain arithmetic expression nodes."""
+
+    @pytest.mark.parametrize("payload", [
+        # Original #329 PoC (139 chars, denylist-clean).
+        (
+            "x.equals.__func__.__getattribute__('__gl'+'obals__')"
+            + "['__buil'+'tins__']['__im'+'port__']('su'+'bprocess')"
+            + ".run(['to'+'uch','/tmp/qwed_pwn'])"
+        ),
+        # Unlisted dunders the old denylist never matched.
+        "x.__class__",
+        "x.__getattribute__('foo')",
+        "x.__func__",
+        "x.__self__",
+        "x.__dict__",
+        "x.__base__",
+        "x.__init__",
+        # String-literal splitting of denylisted names.
+        "'__gl'+'obals__'",
+        '"__im" + "port__"',
+        # Stealth wrapper from the PoC.
+        "[__import__('os'), x][1]",
+        # Other non-arithmetic syntax the allowlist rejects.
+        "lambda: 1",
+        "x if x else 1",
+        "[1, 2, 3]",
+        "{1: 2}",
+        "(1, 2)",
+        "x < y",
+        "x == y",
+        "not x",
+        "x and y",
+        "f'{x}'",
+        "x[0]",
+        "x.real",
+        "Symbol('x').real",
+        "2 .__class__",
+    ])
+    def test_non_arithmetic_syntax_blocked(self, payload):
+        with pytest.raises(SafeParserError):
+            safe_parse_expr(payload)
+
+    def test_string_constants_rejected_but_numbers_ok(self):
+        with pytest.raises(SafeParserError, match="disallowed"):
+            safe_parse_expr("'a'")
+        with pytest.raises(SafeParserError, match="disallowed"):
+            safe_parse_expr("True")
+        assert safe_parse_expr("1 + 2.5") is not None
+
+
+class TestNFKCNormalization:
+    """Issue #330 — PEP 3131 normalizes identifiers at compile time, so
+    NFKC-equivalent codepoints bypassed the ASCII denylist. The parser now
+    normalizes before every filter and restricts the charset to ASCII."""
+
+    @pytest.mark.parametrize("payload", [
+        # Bold mathematical alphanumeric codepoints (U+1D4xx).
+        "E.__\U0001D4D0\U0001D4D1\U0001D4D2\U0001D4D3\U0001D4D4__",
+        (
+            "x.__\U0001D4D0\U0001D4D1\U0001D4D2\U0001D4D3\U0001D4D4\U0001D4D5"
+            + "\U0001D4D6\U0001D4D7\U0001D4D8\U0001D4D9\U0001D4DB\U0001D4D4__"
+        ),
+        # Fullwidth forms.
+        "\uFF4F\uFF53.\uFF53\uFF59\uFF53\uFF54\uFF45\uFF4D('id')",
+        "\uFF45\uFF56\uFF41\uFF4C('1')",
+        # Greek capital alpha NFKC-normalizes to an identifier start.
+        "\u0391.__class__",
+        # Residual non-ASCII after normalization is rejected outright.
+        "\u03C0 + 1",
+    ])
+    def test_nfkc_bypass_blocked(self, payload):
+        with pytest.raises(SafeParserError, match="disallowed"):
+            safe_parse_expr(payload)
+
+    def test_ascii_names_unchanged_after_normalization(self):
+        assert str(safe_parse_expr("alpha + 1")) == "alpha + 1"
+
+
+class TestStrictDecimalDot:
+    """A '.' is only legal as a decimal point with a digit on both sides,
+    which makes attribute access structurally impossible in input that
+    does not parse as Python (implicit multiplication path)."""
+
+    @pytest.mark.parametrize("expr", [
+        "x.__class__",
+        "x.y",
+        "2.x",
+        ".5",
+        "5.",
+    ])
+    def test_non_decimal_dot_rejected(self, expr):
+        with pytest.raises(SafeParserError, match="decimal point"):
+            safe_parse_expr(expr)
+
+    @pytest.mark.parametrize("expr", ["3.14", "3.14 * 2", "0.5 + 1"])
+    def test_decimal_still_works(self, expr):
+        assert safe_parse_expr(expr) is not None
+
+
+class TestCharsetGate:
+    """Quotes, brackets, braces, and statement separators cannot appear at
+    all, covering the implicit-multiplication path where no AST runs."""
+
+    @pytest.mark.parametrize("payload", [
+        "'a'",
+        '"a"',
+        "x[0]",
+        "{1: 2}",
+        "x; y",
+        "import os",
+        "x = 1",
+        "x@y",
+        "x`y`",
+        "x\\y",
+    ])
+    def test_disallowed_characters_rejected(self, payload):
+        # Some payloads are caught by the denylist instead (e.g. bare
+        # keywords like `import os` are charset-valid); both raise
+        # a "disallowed..." error.
+        with pytest.raises(SafeParserError, match="disallowed"):
+            safe_parse_expr(payload)
+
+    def test_implicit_multiplication_still_works(self):
+        assert str(safe_parse_expr("2x + 3x")) == "5*x"
+
+
+class TestExtraSymbolsHardening:
+
+    def test_extra_symbol_key_rejects_non_identifier(self):
+        from sympy import Symbol
+        bad_key = {"a b": Symbol("a")}
+        with pytest.raises(SafeParserError, match="plain ASCII identifier"):
+            safe_parse_expr("x + 1", extra_symbols=bad_key)
+
+    def test_extra_symbol_key_rejects_unicode_alias(self):
+        from sympy import Symbol
+        # Fullwidth 'x' would NFKC-alias the built-in 'x' at compile time.
+        unicode_key = {"\uFF58": Symbol("x")}
+        with pytest.raises(SafeParserError, match="plain ASCII identifier"):
+            safe_parse_expr("x + 1", extra_symbols=unicode_key)

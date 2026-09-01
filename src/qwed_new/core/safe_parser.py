@@ -6,17 +6,36 @@ a denylist for dangerous constructs, and a restricted evaluation
 namespace.  This module is the ONLY approved entry point for parsing
 user-supplied math expressions in production code.
 
-Security boundary:
-    1. Reject known-dangerous Python/OS constructs (denylist).
-    2. Remove __builtins__ from the eval global dict.
-    3. Allow-list only expected math symbols, constants, and functions.
-    4. Enforce basic input validation (type, length, empty check).
+Security boundary (structural, in order):
+    1. NFKC-normalize the input so the filters see exactly what the
+       compiler will see (PEP 3131 normalizes identifiers at compile
+       time; without this, compatibility-equivalent codepoints bypass
+       every string filter — see issue #330).
+    2. Charset allowlist: only arithmetic operators, decimal digits,
+       names, and whitespace. A '.' is only legal as a decimal point
+       between two digits, so attribute access is structurally
+       impossible in input that does not parse as Python (implicit
+       multiplication path, where no AST check can run).
+    3. Denylist for known-dangerous constructs (defense in depth).
+    4. AST node-type allowlist: input that parses as Python may only
+       contain arithmetic expression nodes — Attribute, Subscript,
+       string constants, lambdas, comprehensions, comparisons, etc.
+       are rejected before parse_expr's eval can run (see issue #329).
+    5. __builtins__ removed from the eval global dict; allowlisted
+       math symbols, constants, and functions only.
+    6. Enforce basic input validation (type, length, empty check).
 
-CWE-95 mitigation -- see PR #200 for full security analysis.
+The denylist alone can never defend an eval sink — layers 2 and 4 are
+the structural guarantee; layer 3 catches residual non-expression
+names early with a clearer error.
+
+CWE-95 mitigation -- see PR #200 for the original security analysis
+and issues #329/#330 for the bypasses this structure closes.
 """
 
 import ast
 import re
+import unicodedata
 from typing import Any, Dict, Optional, Tuple
 
 import sympy
@@ -24,6 +43,7 @@ from sympy import (
     E, I, Integer, Float, Rational, Symbol, oo, pi,
 )
 from sympy.parsing.sympy_parser import (
+    convert_xor,
     parse_expr,
     standard_transformations,
     implicit_multiplication_application,
@@ -50,14 +70,58 @@ _DENYLIST_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Charset allowlist applied after NFKC normalization. Quotes, brackets,
+# braces, semicolons, backslashes, comparison/boolean operators and '='
+# cannot appear at all: without them, string concatenation, subscripts,
+# and statement injection are structurally impossible.
+_CHARSET_PATTERN = re.compile(r"^[A-Za-z0-9_+\-*/().,^%\s]+$", re.ASCII)
+
+# A '.' is only legal as a decimal point with a digit on BOTH sides.
+# This rejects every attribute access (``x.__class__``, ``2 .real``)
+# and bare decimal forms like ``.5`` (write ``0.5`` instead).
+# re.ASCII pins \d to [0-9] so NFKC-surviving unicode digits cannot
+# satisfy the lookarounds.
+_BAD_DECIMAL_DOT = re.compile(r"(?<!\d)\.|\.(?!\d)", re.ASCII)
+
+# AST node-type allowlist for input that parses as Python. Implicit
+# multiplication expressions (``2x``, ``sin x``) fail ast.parse and are
+# covered by the charset gate instead.
+_ALLOWED_AST_NODES = frozenset(
+    {
+        ast.Expression,
+        ast.BinOp,
+        ast.UnaryOp,
+        ast.Call,
+        ast.Name,
+        ast.Load,
+        ast.Constant,
+        ast.keyword,
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.Div,
+        ast.FloorDiv,
+        ast.Mod,
+        ast.Pow,
+        ast.USub,
+        ast.UAdd,
+        # ``^`` is converted to ``**`` by sympy's convert_xor, which the
+        # default pipeline below includes — caret exponentiation parses
+        # instead of failing with a TypeError at eval time.
+        ast.BitXor,
+    }
+)
+
 _SAFE_GLOBAL_DICT_TEMPLATE: Dict[str, Any] = {"__builtins__": {}}
 
 
-def _check_ast_depth(expression: str) -> None:
-    """Reject Python-parseable expressions exceeding max AST depth (DoS defence).
+def _check_ast_safety(expression: str) -> None:
+    """Reject Python-parseable expressions that use non-arithmetic syntax
+    or exceed max AST depth (issues #329/#330).
 
-    Expressions using implicit multiplication (e.g. 2x, sin x) fail ast.parse
-    and skip this check — they are caught by the post-parse sympy depth check.
+    Expressions using implicit multiplication (e.g. 2x, sin x) fail
+    ast.parse and skip this check — they are caught by the charset gate
+    and the post-parse sympy depth check.
     """
     try:
         tree = ast.parse(expression, mode="eval")
@@ -68,6 +132,19 @@ def _check_ast_depth(expression: str) -> None:
         raise SafeParserError(
             f"Expression AST depth {depth} exceeds limit of {_AST_MAX_DEPTH}"
         )
+    for node in ast.walk(tree):
+        if type(node) not in _ALLOWED_AST_NODES:
+            raise SafeParserError(
+                f"Expression contains disallowed syntax: {type(node).__name__}. "
+                "Only arithmetic expressions are supported."
+            )
+        if isinstance(node, ast.Constant):
+            value = node.value
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise SafeParserError(
+                    f"Expression contains disallowed constant of type "
+                    f"{type(value).__name__}; only numeric literals are supported."
+                )
 
 
 def _ast_node_depth(node: ast.AST, current: int = 0) -> int:
@@ -142,8 +219,8 @@ def _build_safe_local_dict(
         "Integer": Integer, "Float": Float, "Rational": Rational,
         # Symbol is required because SymPy standard_transformations may emit
         # Symbol('name') during evaluation. This allows users to create symbols
-        # with arbitrary names — the denylist and stripped builtins mitigate
-        # downstream attribute-access risks on resulting objects.
+        # with arbitrary names — the charset/AST gates and stripped builtins
+        # mitigate downstream attribute-access risks on resulting objects.
         "Symbol": Symbol,
     }
     if extra_symbols:
@@ -151,6 +228,13 @@ def _build_safe_local_dict(
             if not isinstance(key, str):
                 raise SafeParserError(
                     f"extra_symbols keys must be strings, got {type(key).__name__}"
+                )
+            # Raw-key ASCII identifier check: no normalization, so a
+            # fullwidth key can never NFKC-alias a built-in name at compile
+            # time (PEP 3131). re.ASCII pins \w to [A-Za-z0-9_].
+            if not re.match(r"^[A-Za-z_]\w*$", key, re.ASCII):
+                raise SafeParserError(
+                    f"extra_symbols key {key!r} is not a plain ASCII identifier"
                 )
             if _DENYLIST_PATTERN.search(key):
                 raise SafeParserError(
@@ -179,22 +263,36 @@ def safe_parse_expr(
         raise SafeParserError(
             f"Expression must be a string, got {type(expression).__name__}"
         )
-    stripped = expression.strip()
+    # NFKC before every filter: PEP 3131 normalizes identifiers at compile
+    # time, so the filters must operate on what the compiler will see
+    # (issue #330 — fullwidth/bold codepoints bypassed the ASCII denylist).
+    stripped = unicodedata.normalize("NFKC", expression.strip())
     if not stripped:
         raise SafeParserError("Expression is empty")
     if len(stripped) > MAX_EXPRESSION_LENGTH:
         raise SafeParserError(
             f"Expression exceeds maximum length of {MAX_EXPRESSION_LENGTH} characters"
         )
+    if not _CHARSET_PATTERN.match(stripped):
+        raise SafeParserError(
+            "Expression contains disallowed characters. Only arithmetic "
+            "operators, decimal numbers, identifiers, and whitespace are supported."
+        )
+    if _BAD_DECIMAL_DOT.search(stripped):
+        raise SafeParserError(
+            "Expression contains disallowed use of '.': it may only appear "
+            "as a decimal point between digits (attribute access is not supported)."
+        )
     match = _DENYLIST_PATTERN.search(stripped)
     if match:
         raise SafeParserError(
             f"Expression contains disallowed construct: {match.group()!r}"
         )
-    _check_ast_depth(stripped)
+    _check_ast_safety(stripped)
     local_dict = _build_safe_local_dict(extra_symbols)
     if transformations is None:
         transformations = standard_transformations + (
+            convert_xor,
             implicit_multiplication_application,
         )
     global_dict = dict(_SAFE_GLOBAL_DICT_TEMPLATE)
@@ -218,7 +316,7 @@ def validate_variable_name(variable: str) -> str:
         raise SafeParserError(
             f"Variable name must be a string, got {type(variable).__name__}"
         )
-    stripped = variable.strip()
+    stripped = unicodedata.normalize("NFKC", variable.strip())
     if not stripped:
         raise SafeParserError("Variable name is empty")
     if len(stripped) > 50:
