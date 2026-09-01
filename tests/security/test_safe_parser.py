@@ -61,6 +61,8 @@ class TestLegitimateExpressions:
         ("pi", "pi"),
         ("E", "E"),
         ("Abs(-5)", "5"),
+        ("x ^ 2", "x**2"),
+        ("2 ^ 3", "8"),
     ])
     def test_valid_expression(self, expr, expected_str):
         result = safe_parse_expr(expr)

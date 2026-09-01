@@ -43,6 +43,7 @@ from sympy import (
     E, I, Integer, Float, Rational, Symbol, oo, pi,
 )
 from sympy.parsing.sympy_parser import (
+    convert_xor,
     parse_expr,
     standard_transformations,
     implicit_multiplication_application,
@@ -104,7 +105,9 @@ _ALLOWED_AST_NODES = frozenset(
         ast.Pow,
         ast.USub,
         ast.UAdd,
-        # ``^`` is converted to ``**`` by sympy's convert_xor before eval.
+        # ``^`` is converted to ``**`` by sympy's convert_xor, which the
+        # default pipeline below includes — caret exponentiation parses
+        # instead of failing with a TypeError at eval time.
         ast.BitXor,
     }
 )
@@ -289,6 +292,7 @@ def safe_parse_expr(
     local_dict = _build_safe_local_dict(extra_symbols)
     if transformations is None:
         transformations = standard_transformations + (
+            convert_xor,
             implicit_multiplication_application,
         )
     global_dict = dict(_SAFE_GLOBAL_DICT_TEMPLATE)
