@@ -8,13 +8,17 @@ Tests for the unauthenticated hot path hardening (issues #333, #334).
       timing equalizer.
 """
 
-import heapq
 import time
 import unittest
 from unittest.mock import patch
 
 from qwed_new.auth.security import hash_api_key, generate_api_key, verify_password
-from qwed_new.core.rate_limiter import RateLimiter, check_auth_rate_limit, client_ip_of
+from qwed_new.core.rate_limiter import (
+    RateLimiter,
+    _IndexedExpiryQueue,
+    check_auth_rate_limit,
+    client_ip_of,
+)
 
 
 class TestApiKeyLookupDigest(unittest.TestCase):
@@ -194,149 +198,129 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertEqual(reset, 1)
 
-    def test_capacity_admission_repairs_bounded_stale_records(self):
-        """Greptile P1 round 4: drifted heap records are repaired with a
-        bounded per-call budget; when the budget is spent, admission still
-        succeeds via the O(1) front-bucket fallback — never an unbounded
-        under-lock traversal."""
+    def test_records_reposition_eagerly_on_refresh(self):
+        """Greptile P1 round 10: a refreshed bucket's expiry record is
+        repositioned to its NEW true deadline at admission time — no
+        stale lower-bound records accumulate at the queue head, so no
+        repair pass (and no repair budget) is ever needed."""
         limiter = self._limiter()
         limiter.MAX_TRACKED_IPS = 40
-        limiter._MAX_HEAP_REPAIRS = 4
         for i in range(40):
             limiter.check_ip_limit(f"10.0.1.{i}")        # t=0 → records (60, ip)
+        self.assertEqual(limiter._expiries.peek(), (60, "10.0.1.0"))
         limiter.test_clock.advance(10)
         for i in range(40):
-            # Refresh buckets WITHOUT the limiter (no hygiene runs) so all
-            # 40 drifted records stay queued at the heap head.
-            limiter.ip_requests[f"10.0.1.{i}"].append(10)
-        limiter.test_clock.advance(61)           # t=71: every bucket expired
-        allowed, _ = limiter.check_ip_limit_with_reset("10.9.9.9")
-        self.assertTrue(allowed)
-        self.assertEqual(len(limiter.ip_requests), 40)
-        self.assertIn("10.9.9.9", limiter.ip_requests)
-        # The fallback freed the expired FRONT bucket; the rest survived.
-        self.assertNotIn("10.0.1.0", limiter.ip_requests)
-        for i in range(1, 40):
-            self.assertIn(f"10.0.1.{i}", limiter.ip_requests)
+            limiter.check_ip_limit(f"10.0.1.{i}")        # refresh → records (70, ip)
+        # The head moved with the refresh: no stale (60, ip) records remain.
+        self.assertEqual(len(limiter._expiries), 40)
+        self.assertEqual(limiter._expiries.peek(), (70, "10.0.1.0"))
 
-    def test_repair_budget_exhaustion_rejects_live_front(self):
-        """Greptile P1 round 4: with the repair budget spent and the front
-        bucket still live, the request is rejected with a bounded
-        Retry-After — no live bucket is ever evicted to make room."""
+    def test_full_table_refreshed_buckets_still_reclaim_expired(self):
+        """Greptile P1 round 10 (regression): a full table of refreshed
+        live buckets must not strand a later EXPIRED bucket behind stale
+        heap records — the new anonymous client is admitted by reclaiming
+        the expired slot. The lazy-record design returned (False, 1) here
+        once its bounded repair budget (64) was exhausted by 65 refreshed
+        heads; eager repositioning makes the verdict exact instead."""
         limiter = self._limiter()
-        limiter.MAX_TRACKED_IPS = 5
-        limiter._MAX_HEAP_REPAIRS = 0
-        for i in range(5):
-            limiter.check_ip_limit(f"10.0.1.{i}")        # t=0 → records (60, ip)
-        limiter.test_clock.advance(10)
-        for i in range(5):
-            limiter.ip_requests[f"10.0.1.{i}"].append(10)  # drift, no hygiene
+        limiter.MAX_TRACKED_IPS = 66
+        for i in range(65):
+            limiter.check_ip_limit(f"10.0.0.{i}")     # t=i → records 60+i
+        limiter.check_ip_limit("10.9.9.1")            # t=65 → record 125
+        limiter.test_clock.advance(1935)              # t=2000
+        for i in range(65):
+            limiter.check_ip_limit(f"10.0.0.{i}")     # refresh → records 2060
+        limiter.test_clock.advance(59)                # t=2059: live 2060 vs expired 125
         allowed, reset = limiter.check_ip_limit_with_reset("10.9.9.9")
-        self.assertFalse(allowed)
-        self.assertGreaterEqual(reset, 1)
-        for i in range(5):
-            self.assertIn(f"10.0.1.{i}", limiter.ip_requests)
-        self.assertNotIn("10.9.9.9", limiter.ip_requests)
+        self.assertTrue(allowed)
+        self.assertEqual(reset, 0)
+        # The expired later bucket was reclaimed to admit the new client
+        self.assertNotIn("10.9.9.1", limiter.ip_requests)
+        self.assertIn("10.9.9.9", limiter.ip_requests)
+        self.assertEqual(len(limiter.ip_requests), 66)
+        self.assertEqual(len(limiter._expiries), 66)
+        # Every refreshed bucket survived with its budget intact
+        for i in range(65):
+            self.assertIn(f"10.0.0.{i}", limiter.ip_requests)
 
     def test_one_expiry_record_per_ip_deduped(self):
-        """Greptile P1 rounds 6-7: the expiry index holds ONE
-        authoritative record per IP — repeated requests from the same
-        client never grow the heap, so it is structurally bounded by
-        MAX_TRACKED_IPS with no record cap needed."""
+        """Greptile P1 rounds 6-10: the expiry queue holds ONE record per
+        IP — repeated requests from the same client REPOSITION that
+        record instead of growing the queue, so queue memory is
+        structurally bounded by MAX_TRACKED_IPS and the record stays
+        current with the bucket's true deadline."""
         limiter = self._limiter(limit=25)
         for _ in range(20):
             self.assertTrue(limiter.check_ip_limit("10.0.2.7"))
-        self.assertEqual(len(limiter._expiry_heap), 1)
-        self.assertEqual(len(limiter._indexed_deadline), 1)
+        self.assertEqual(len(limiter._expiries), 1)
         self.assertEqual(len(limiter.ip_requests), 1)
+        self.assertEqual(
+            limiter._expiries.peek(),
+            (limiter.test_clock.t + limiter.PER_IP_WINDOW, "10.0.2.7"),
+        )
 
     def test_refreshed_bucket_stays_indexed_for_reclaim(self):
-        """Greptile P1 round 6: a refreshed bucket's stale record is
-        re-indexed to its true deadline (never dropped), so its expiry
-        stays visible and a refreshed-but-stale-indexed bucket neither
-        hides an expired peer nor gets evicted while live — all without
-        any table scan (round 7)."""
+        """Greptile P1 rounds 6/10: a refreshed live bucket keeps its
+        expiry visible — eagerly repositioned to the true deadline, never
+        dropped — so it neither hides an expired peer nor gets evicted
+        while live, and expired peers stay reclaimable afterwards."""
         limiter = self._limiter()
         limiter.MAX_TRACKED_IPS = 3
         for ip in ("10.0.1.0", "10.0.1.1", "10.0.1.2"):
             limiter.check_ip_limit(ip)               # all stamped t=0
         limiter.test_clock.advance(59)               # t=59
-        limiter.check_ip_limit("10.0.1.0")           # refresh → true deadline 119
+        limiter.check_ip_limit("10.0.1.0")           # refresh → record 119
         limiter.test_clock.advance(2)                # t=61: ip1/ip2 expired
         allowed, _ = limiter.check_ip_limit_with_reset("10.9.9.9")
         self.assertTrue(allowed)                     # expired capacity reclaimed
-        self.assertIn("10.0.1.0", limiter.ip_requests)  # live + re-indexed
+        self.assertIn("10.0.1.0", limiter.ip_requests)  # live bucket survived
         self.assertNotIn("10.0.1.1", limiter.ip_requests)
         self.assertEqual(len(limiter.ip_requests), 3)
-        # ip0's index entry was repaired to its true deadline, so its
-        # expiry remains visible for future reclaims.
-        self.assertEqual(
-            limiter._indexed_deadline.get("10.0.1.0"), 119
-        )
-
-    def test_ghost_buckets_reclaimed_by_hygiene(self):
-        """Sentry round 9 (HIGH): an emptied indexed bucket is a GHOST --
-        it consumed a capacity slot with no heap record, impossible to
-        reclaim. Hygiene purge now drops the empty bucket from
-        ip_requests too, so garbage cleanup frees capacity slots and a
-        new client is admitted without any special-casing."""
-        limiter = self._limiter()
-        limiter.MAX_TRACKED_IPS = 5
-        for i in range(5):
-            limiter.check_ip_limit(f"10.0.1.{i}")     # 5 indexed records
-        for i in range(5):
-            limiter.ip_requests[f"10.0.1.{i}"].clear()  # 5 ghosts
-        limiter._MAX_HEAP_REPAIRS = 2
-        allowed, reset = limiter.check_ip_limit_with_reset("10.9.9.9")
-        self.assertTrue(allowed)      # hygiene freed 2 slots (budget 2)
-        self.assertEqual(reset, 0)
-        self.assertEqual(len(limiter.ip_requests), 4)  # 3 ghosts + new IP
-        self.assertNotIn("10.0.1.0", limiter.ip_requests)  # ghosts purged
-        self.assertNotIn("10.0.1.1", limiter.ip_requests)
-        self.assertIn("10.9.9.9", limiter.ip_requests)
-
-    def test_zero_budget_means_zero_hygiene_pops(self):
-        """Greptile round 9: hygiene pops are budgeted like repair pops --
-        a zero budget performs ZERO heap pops on the capacity path; the
-        verdict falls back to the conservative bounded reject instead of
-        bypassing the envelope."""
-        limiter = self._limiter()
-        limiter.MAX_TRACKED_IPS = 5
-        for i in range(5):
-            limiter.check_ip_limit(f"10.0.1.{i}")     # 5 indexed records
-        for i in range(5):
-            limiter.ip_requests[f"10.0.1.{i}"].clear()  # all garbage heads
-        limiter._MAX_HEAP_REPAIRS = 0
-        with patch(
-            "qwed_new.core.rate_limiter.heapq.heappop",
-            wraps=heapq.heappop,
-        ) as pop_spy:
-            allowed, reset = limiter.check_ip_limit_with_reset("10.9.9.9")
-        self.assertEqual(pop_spy.call_count, 0)       # budget enforced
-        self.assertFalse(allowed)                     # conservative reject
-        self.assertGreaterEqual(reset, 1)
-
-    def test_repair_exhaustion_still_reclaims_exposed_expired_head(self):
-        """Greptile P1 round 8: when the repair budget is spent exactly at
-        the boundary, the FINAL peek still reclaims an immediately exposed
-        expired head — refresh traffic cannot make legitimate anonymous
-        signups 429 despite reclaimable capacity. No table scan either
-        way."""
-        limiter = self._limiter()
-        limiter.MAX_TRACKED_IPS = 3
-        limiter._MAX_HEAP_REPAIRS = 2  # exactly the drifted heads
-        for ip in ("10.0.1.0", "10.0.1.1", "10.0.1.2"):
-            limiter.check_ip_limit(ip)                # t=0, indexed 60
-        limiter.test_clock.advance(59)
-        limiter.check_ip_limit("10.0.1.0")            # refresh → true 119
-        limiter.check_ip_limit("10.0.1.1")            # refresh → true 119
-        limiter.test_clock.advance(2)                 # t=61: ip2 expired
-        allowed, _ = limiter.check_ip_limit_with_reset("10.9.9.9")
-        self.assertTrue(allowed)                      # exposed head reclaimed
+        # ip0's record was repositioned to its true deadline (119), so the
+        # head is the remaining expired bucket, still reclaimable.
+        self.assertEqual(limiter._expiries.peek(), (60, "10.0.1.2"))
+        allowed2, _ = limiter.check_ip_limit_with_reset("10.9.9.10")
+        self.assertTrue(allowed2)
         self.assertNotIn("10.0.1.2", limiter.ip_requests)
-        self.assertIn("10.0.1.0", limiter.ip_requests)  # refreshed, live
-        self.assertIn("10.9.9.9", limiter.ip_requests)
-        self.assertEqual(len(limiter.ip_requests), 3)
+
+    def test_past_due_slots_reclaim_one_per_admission(self):
+        """Supersedes the round-9 ghost purge: there is no garbage class
+        and no hygiene pass. A past-due record surfaces at the queue head
+        and reclaims exactly ONE slot per capacity admission, so a burst
+        of new clients drains expired buckets admission by admission."""
+        limiter = self._limiter()
+        limiter.MAX_TRACKED_IPS = 5
+        for i in range(5):
+            limiter.check_ip_limit(f"10.0.1.{i}")     # t=0 → records 60
+        limiter.test_clock.advance(61)                # t=61: all past-due
+        allowed, reset = limiter.check_ip_limit_with_reset("10.9.9.9")
+        self.assertTrue(allowed)
+        self.assertEqual(reset, 0)
+        self.assertNotIn("10.0.1.0", limiter.ip_requests)
+        self.assertEqual(len(limiter.ip_requests), 5)
+        # Remaining past-due slots stay queued for the next admissions.
+        self.assertEqual(limiter._expiries.peek(), (60, "10.0.1.1"))
+        self.assertTrue(limiter.check_ip_limit("10.9.9.10"))
+        self.assertNotIn("10.0.1.1", limiter.ip_requests)
+        self.assertEqual(len(limiter.ip_requests), 5)
+
+    def test_capacity_reject_is_read_only(self):
+        """Greptile rounds 9-10: the capacity reject performs ZERO queue
+        mutations — the head verdict is authoritative, so no garbage
+        collection, repair passes or budget accounting run on the hot
+        path's rejection route."""
+        limiter = self._limiter()
+        limiter.MAX_TRACKED_IPS = 5
+        for i in range(5):
+            limiter.check_ip_limit(f"10.0.1.{i}")     # t=0
+        limiter.test_clock.advance(10)                # all live
+        before = (len(limiter._expiries), limiter._expiries.peek())
+        allowed, reset = limiter.check_ip_limit_with_reset("10.9.9.9")
+        self.assertFalse(allowed)
+        self.assertGreaterEqual(reset, 1)
+        self.assertEqual(
+            (len(limiter._expiries), limiter._expiries.peek()), before
+        )
 
     def test_nonpositive_per_ip_limit_fails_construction(self):
         """A 0/negative QWED_RATE_LIMIT_PER_IP must fail at construction,
@@ -522,6 +506,89 @@ class TestSigninTimingEqualizer(unittest.TestCase):
         asyncio.run(routes._burn_one_bcrypt("x"))
         self.assertTrue(verify_password("qwed-timing-equalizer", routes._dummy_password_hash))
         self.assertFalse(verify_password("wrong", routes._dummy_password_hash))
+
+
+class TestIndexedExpiryQueue(unittest.TestCase):
+    """Unit coverage for the eager-repositioning expiry queue (Greptile
+    P1 round 10): one record per IP, O(log n) repositioning, no drift."""
+
+    def _q(self):
+        return _IndexedExpiryQueue()
+
+    def test_insert_peek_pop_min(self):
+        q = self._q()
+        self.assertIsNone(q.peek())
+        self.assertIsNone(q.pop_min())
+        q.set_deadline("b", 20)
+        q.set_deadline("a", 10)
+        q.set_deadline("c", 30)
+        self.assertEqual(len(q), 3)
+        self.assertEqual(q.peek(), (10, "a"))
+        self.assertEqual(q.pop_min(), (10, "a"))
+        self.assertEqual(q.pop_min(), (20, "b"))
+        self.assertEqual(q.pop_min(), (30, "c"))
+        self.assertIsNone(q.peek())
+        self.assertEqual(len(q), 0)
+
+    def test_reposition_shallower_and_deeper(self):
+        q = self._q()
+        for ip, deadline in (("a", 10), ("b", 20), ("c", 30), ("d", 40)):
+            q.set_deadline(ip, deadline)
+        q.set_deadline("d", 5)      # towards the head (sift up)
+        self.assertEqual(q.peek(), (5, "d"))
+        q.set_deadline("d", 35)     # back towards the tail (sift down)
+        self.assertEqual(q.peek(), (10, "a"))
+        self.assertEqual(
+            [q.pop_min() for _ in range(4)],
+            [(10, "a"), (20, "b"), (30, "c"), (35, "d")],
+        )
+
+    def test_reposition_same_deadline_is_noop(self):
+        q = self._q()
+        q.set_deadline("a", 10)
+        q.set_deadline("a", 10)
+        self.assertEqual(len(q), 1)
+        self.assertEqual(q.peek(), (10, "a"))
+
+    def test_remove_middle_keeps_heap_valid(self):
+        q = self._q()
+        for i in range(10):
+            q.set_deadline(f"ip{i}", i)
+        q.remove("ip0")
+        q.remove("ip5")
+        q.remove("missing")         # absent: no-op
+        self.assertEqual(len(q), 8)
+        self.assertEqual(
+            [q.pop_min() for _ in range(8)],
+            [(i, f"ip{i}") for i in range(10) if i not in (0, 5)],
+        )
+
+    def test_random_ops_keep_heap_and_index_consistent(self):
+        """Deterministic stress: after every operation the array is a
+        valid min-heap and _pos maps every entry to its exact slot."""
+        import random
+
+        rng = random.Random(345)
+        q = self._q()
+        live = {}
+        for _ in range(500):
+            ip = f"ip{rng.randrange(12)}"
+            if rng.random() < 0.3 and ip in live:
+                q.remove(ip)
+                del live[ip]
+            else:
+                deadline = rng.randrange(1000)
+                q.set_deadline(ip, deadline)
+                live[ip] = deadline
+            heap = q._heap
+            for parent in range(len(heap)):
+                left, right = 2 * parent + 1, 2 * parent + 2
+                if left < len(heap):
+                    self.assertLessEqual(heap[parent], heap[left])
+                if right < len(heap):
+                    self.assertLessEqual(heap[parent], heap[right])
+            self.assertEqual(q._pos, {e_ip: i for i, (_, e_ip) in enumerate(heap)})
+            self.assertEqual({e_ip: d for d, e_ip in heap}, live)
 
 
 if __name__ == "__main__":

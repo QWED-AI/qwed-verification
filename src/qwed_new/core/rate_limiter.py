@@ -7,7 +7,6 @@ Implements:
 - Returns 429 Too Many Requests when exceeded
 """
 
-import heapq
 import ipaddress
 import math
 import os
@@ -17,6 +16,112 @@ from collections import defaultdict
 from typing import Dict, List, Optional
 
 from fastapi import HTTPException
+
+class _IndexedExpiryQueue:
+    """Min-heap of (deadline, ip) with O(log n) IN-PLACE key updates.
+
+    ONE authoritative record per IP: `set_deadline` repositions the
+    existing entry instead of leaving stale lower-bound records behind.
+    The head is therefore always the bucket's TRUE earliest expiry —
+    capacity decisions need no garbage collection, no drift repair, and
+    no repair budget (Greptile P1 rounds 4-10: with lazy lower-bound
+    records, bounded repair, no-hidden-expired-capacity and no-table-scan
+    were mutually exclusive; eager repositioning delivers all three)."""
+
+    __slots__ = ("_heap", "_pos")
+
+    def __init__(self):
+        self._heap: list = []
+        self._pos: Dict[str, int] = {}
+
+    def __len__(self) -> int:
+        return len(self._heap)
+
+    def set_deadline(self, ip: str, deadline: float) -> None:
+        """Insert or reposition the IP's record (O(log n))."""
+        idx = self._pos.get(ip)
+        if idx is None:
+            self._heap.append((deadline, ip))
+            idx = len(self._heap) - 1
+            self._pos[ip] = idx
+            self._sift_up(idx)
+            return
+        old_deadline = self._heap[idx][0]
+        self._heap[idx] = (deadline, ip)
+        if deadline < old_deadline:
+            self._sift_up(idx)
+        elif deadline > old_deadline:
+            self._sift_down(idx)
+
+    def peek(self):
+        """(deadline, ip) of the earliest expiry, or None."""
+        return self._heap[0] if self._heap else None
+
+    def pop_min(self):
+        """Remove and return the earliest (deadline, ip), or None."""
+        if not self._heap:
+            return None
+        head = self._heap[0]
+        self._remove_at(0)
+        return head
+
+    def remove(self, ip: str) -> None:
+        """Drop the IP's record if present (O(log n))."""
+        idx = self._pos.get(ip)
+        if idx is not None:
+            self._remove_at(idx)
+
+    def _remove_at(self, idx: int) -> None:
+        heap = self._heap
+        last = len(heap) - 1
+        removed_ip = heap[idx][1]
+        if idx == last:
+            heap.pop()
+        else:
+            heap[idx] = heap[last]
+            heap.pop()
+            self._pos[heap[idx][1]] = idx
+            self._sift_down(idx)
+            self._sift_up(idx)
+        del self._pos[removed_ip]
+
+    def _sift_up(self, idx: int) -> None:
+        heap = self._heap
+        entry = heap[idx]
+        while idx > 0:
+            parent = (idx - 1) // 2
+            if heap[parent] <= entry:
+                break
+            heap[idx] = heap[parent]
+            self._pos[heap[idx][1]] = idx
+            idx = parent
+        heap[idx] = entry
+        self._pos[entry[1]] = idx
+
+    def _sift_down(self, idx: int) -> None:
+        heap = self._heap
+        n = len(heap)
+        entry = heap[idx]
+        while True:
+            left, right = 2 * idx + 1, 2 * idx + 2
+            # Track the running minimum against the CARRIED entry, never
+            # heap[idx]: once the entry has been displaced past a child
+            # position, that slot still holds a moved-up value, and
+            # comparing against it would end the sift early and leave a
+            # parent above a smaller child.
+            smallest, smallest_val = idx, entry
+            if left < n and heap[left] < smallest_val:
+                smallest, smallest_val = left, heap[left]
+            if right < n and heap[right] < smallest_val:
+                smallest = right
+            if smallest == idx:
+                break
+            heap[idx] = heap[smallest]
+            self._pos[heap[idx][1]] = idx
+            idx = smallest
+        heap[idx] = entry
+        self._pos[entry[1]] = idx
+
 
 class RateLimiter:
     """
@@ -85,27 +190,15 @@ class RateLimiter:
         # have fully expired.
         self.MAX_TRACKED_IPS = 50_000
 
-        # Min-heap of (expiry_deadline, ip) indexing each tracked bucket's
-        # earliest possible expiry, so capacity-time decisions never need a
-        # table-wide scan. Push policy is DEDUPED (Greptile P1 round 6): a
-        # bucket is (re)indexed only when its previous index entry has
-        # already expired — at most one push per IP per window — so heap
-        # memory is structurally bounded by the IP table instead of growing
-        # with per-request records.
-        #
-        # The index is AUTHORITATIVE for the all-live verdict (Greptile P1
-        # round 7): a record's deadline is a LOWER BOUND on its bucket's
-        # true deadline (buckets only grow between re-indexes), so when the
-        # earliest indexed deadline is live, EVERY bucket is live — no
-        # table reconciliation required.
-        self._expiry_heap: list = []
-        self._indexed_deadline: Dict[str, float] = {}
-        # Bounded under-lock work (Greptile P1 rounds 4-5): at most this
-        # many heap pops — garbage purge, re-index, or reclaim — during ONE
-        # capacity admission. When the budget is spent, the verdict is a
-        # bounded conservative reject derived from the heap head, never a
-        # table scan (round 7).
-        self._MAX_HEAP_REPAIRS = 64
+        # Indexed expiry queue: ONE authoritative record per tracked
+        # bucket, eagerly repositioned on every admission, so the heap
+        # head is always the TRUE earliest expiry. Capacity decisions are
+        # then O(1): expired head -> reclaim that slot; live head ->
+        # every bucket is live. No lazy lower-bound records means no
+        # garbage, no drift, no repair budget, no conservative fallback —
+        # the trio Greptile showed to be impossible with a lazy-deletion
+        # heap (P1 rounds 4-10).
+        self._expiries = _IndexedExpiryQueue()
     
     def _clean_old_requests(self, requests: list, window_seconds: int, now=None) -> list:
         """Remove timestamps older than the window (injected clock).
@@ -173,132 +266,6 @@ class RateLimiter:
         allowed, _ = self.check_ip_limit_with_reset(client_ip)
         return allowed
 
-    def _trim_stale_heap_heads(self, rounds: int = 4) -> None:
-        """Amortized O(1) heap hygiene: drop a few garbage head entries
-        (records whose bucket is gone or whose index entry moved on) so
-        the heap tracks the live set even when the table never reaches
-        capacity. Bounded to a constant per call — no scans.
-
-        Garbage heads are removed via _purge_head so an EMPTY bucket is
-        dropped from ip_requests too (Sentry round 9: popping only the
-        record + index left a permanent "ghost" — a capacity slot with
-        no heap record, impossible to ever reclaim). Hygiene pops count
-        against the same bounded-work envelope as repair: at most
-        _MAX_HEAP_REPAIRS pops here, so a zero budget means zero pops
-        (Greptile round 9: the budget must not be bypassable)."""
-        rounds = min(rounds, max(0, self._MAX_HEAP_REPAIRS))
-        for _ in range(rounds):
-            if not self._expiry_heap:
-                return
-            head_deadline, head_ip = self._expiry_heap[0]
-            head_bucket = self.ip_requests.get(head_ip)
-            if (
-                head_bucket
-                and self._indexed_deadline.get(head_ip) == head_deadline
-            ):
-                # Valid, current record at the head: the heap is clean.
-                return
-            self._purge_head(head_deadline, head_ip)
-
-    def _head_record_state(self, now: float) -> tuple:
-        """Classify the current heap head without mutating anything.
-
-        Returns ("garbage", deadline, ip), ("expired", deadline, ip) or
-        ("live", deadline, ip): garbage = bucket gone or the record is
-        superseded by a newer index entry; expired = the bucket's window
-        has fully elapsed at `now`; live = current, unexpired record."""
-        deadline, evict_ip = self._expiry_heap[0]
-        bucket = self.ip_requests.get(evict_ip)
-        if not bucket or self._indexed_deadline.get(evict_ip) != deadline:
-            return "garbage", deadline, evict_ip
-        if max(bucket) + self.PER_IP_WINDOW <= now:
-            return "expired", deadline, evict_ip
-        return "live", deadline, evict_ip
-
-    def _purge_head(self, deadline: float, evict_ip: str) -> None:
-        """Drop one garbage head record; reclaim the table slot too when
-        the bucket itself is gone or emptied."""
-        heapq.heappop(self._expiry_heap)
-        if self._indexed_deadline.get(evict_ip) == deadline:
-            self._indexed_deadline.pop(evict_ip, None)
-        if not self.ip_requests.get(evict_ip):
-            self.ip_requests.pop(evict_ip, None)
-
-    def _reindex_head(self, evict_ip: str, true_deadline: float) -> None:
-        """Re-index a drifted record to its bucket's current true deadline
-        (one repair per client per window) so its expiry stays visible
-        without any table scan."""
-        heapq.heappop(self._expiry_heap)
-        heapq.heappush(self._expiry_heap, (true_deadline, evict_ip))
-        self._indexed_deadline[evict_ip] = true_deadline
-
-    def _reclaim_expired_slot(self, now: float) -> bool:
-        """Reclaim one expired table slot via the expiry index.
-
-        Pops garbage heads and re-indexes drifted ones until a genuinely
-        expired bucket is reclaimed (True) or the earliest authoritative
-        deadline is live (False — every tracked bucket is then live: a
-        record's deadline is a LOWER BOUND on its bucket's true deadline,
-        so a live head proves a live table, no reconciliation needed).
-
-        Bounded under-lock work (Greptile P1 rounds 4-7): EVERY heap pop
-        — garbage, re-index, or reclaim — consumes one unit of the
-        _MAX_HEAP_REPAIRS budget. With one authoritative record per IP
-        (`_indexed_deadline`) the repair rate is at most one per client
-        per window, so no single client can exhaust the budget."""
-        repairs = 0
-        while self._expiry_heap and repairs < self._MAX_HEAP_REPAIRS:
-            state, deadline, evict_ip = self._head_record_state(now)
-            if state == "garbage":
-                self._purge_head(deadline, evict_ip)
-                repairs += 1
-            elif state == "expired":
-                # Genuinely expired: reclaim the slot and admit.
-                heapq.heappop(self._expiry_heap)
-                self._indexed_deadline.pop(evict_ip, None)
-                del self.ip_requests[evict_ip]
-                return True
-            else:
-                true_deadline = (
-                    max(self.ip_requests[evict_ip]) + self.PER_IP_WINDOW
-                )
-                if true_deadline == deadline:
-                    # Earliest authoritative deadline is live and
-                    # current: every tracked bucket is live.
-                    return False
-                self._reindex_head(evict_ip, true_deadline)
-                repairs += 1
-        # Budget spent: ONE final bounded peek, no scan (Greptile P1
-        # round 8). The last repair can expose an expired head — reclaim
-        # it rather than rejecting available capacity. A live head here
-        # may still be drifted (index not yet current), so it cannot
-        # settle the verdict authoritatively; a garbage head would need
-        # more pops. Either way the call falls through to the caller's
-        # conservative reject, keeping under-lock work bounded.
-        if self._expiry_heap:
-            state, _deadline, evict_ip = self._head_record_state(now)
-            if state == "expired":
-                heapq.heappop(self._expiry_heap)
-                self._indexed_deadline.pop(evict_ip, None)
-                del self.ip_requests[evict_ip]
-                return True
-        return False
-
-    def _conservative_reject(self, now: float) -> tuple:
-        """Bounded O(1) capacity rejection when the heap could not settle
-        the decision (repair budget exhausted under an injected or
-        pathological state). The earliest indexed deadline is a lower
-        bound on when some slot frees up, so retry then; with an empty
-        heap, one full window. NEVER a table scan (Greptile P1 round 7:
-        a full-table traversal under the shared limiter lock is an
-        attacker-controlled stall)."""
-        if self._expiry_heap:
-            head_deadline = self._expiry_heap[0][0]
-            reset_after = max(1, math.ceil(head_deadline - now))
-        else:
-            reset_after = self.PER_IP_WINDOW
-        return (False, reset_after)
-
     def check_ip_limit_with_reset(self, client_ip: str) -> tuple:
         """
         Atomic limit check + reset-time lookup under one lock acquisition.
@@ -312,8 +279,6 @@ class RateLimiter:
             (allowed, reset_after_seconds) — reset_after is 0 when allowed.
         """
         with self._lock:
-            self._trim_stale_heap_heads()
-
             # ONE clock reading for the whole decision (Sentry on PR
             # #345): the capacity deadline check, the window cleanup, the
             # over-limit reset computation and the recorded timestamp all
@@ -325,20 +290,42 @@ class RateLimiter:
             # table must not stall every limiter call — Greptile P1, PR
             # #345) and WITHOUT evicting a live bucket (that would hand
             # the evicted client a fresh budget before its window ended —
-            # Greptile P1 round 2). Each IP holds ONE authoritative expiry
-            # record in the min-heap; at capacity the earliest indexed
-            # deadline decides: expired → that slot is reclaimed; live →
-            # EVERY bucket is live (an indexed deadline is a lower bound
-            # on its bucket's true deadline), so the verdict is final with
-            # zero reconciliation — no scan, no fallback traversal
-            # (Greptile P1 round 7). Budget exhaustion rejects
-            # conservatively instead of scanning.
+            # Greptile P1 round 2). Every tracked bucket holds exactly ONE
+            # expiry record, eagerly repositioned on every admitted
+            # request, so a non-empty bucket's record EQUALS its true
+            # deadline. The head is therefore the table's true earliest
+            # expiry and the capacity verdict is exact in O(1): past-due
+            # head → reclaim that one slot; live head → EVERY bucket is
+            # live. No lazy lower-bound records means no drift, no
+            # garbage, no repair budget and no conservative fallback —
+            # with lazy records, budget exhaustion could strand an
+            # expired slot behind refreshed buckets and 429 a new client
+            # while capacity was free (Greptile P1 round 10); eager
+            # repositioning removes the failure mode instead of widening
+            # the budget.
             if (
                 client_ip not in self.ip_requests
                 and len(self.ip_requests) >= self.MAX_TRACKED_IPS
             ):
-                if not self._reclaim_expired_slot(now):
-                    return self._conservative_reject(now)
+                head = self._expiries.peek()
+                if head is None:
+                    # Fail closed: unreachable while every tracked bucket
+                    # has exactly one record (a full table implies at
+                    # least one), but a capacity decision must never
+                    # dereference None or admit unboundedly.
+                    return False, self.PER_IP_WINDOW
+                if head[0] <= now:
+                    # Exactly one expired slot is reclaimed per admission.
+                    # The record equals the bucket's true deadline, so
+                    # this is genuinely expired — never a live eviction.
+                    _, evict_ip = self._expiries.pop_min()
+                    del self.ip_requests[evict_ip]
+                else:
+                    # The earliest true expiry is in the future: every
+                    # bucket is live. Retry-After derives from the exact
+                    # head deadline; max(1, ...) keeps it non-zero at the
+                    # boundary.
+                    return False, max(1, math.ceil(head[0] - now))
 
             bucket = self._clean_old_requests(
                 self.ip_requests[client_ip],
@@ -357,16 +344,13 @@ class RateLimiter:
                 return False, reset_after
 
             self.ip_requests[client_ip].append(now)
-            # Deduped indexing (Greptile P1 round 6): (re)index the bucket
-            # only while it has no live index entry — at most one record
-            # per IP per window, so heap memory is structurally bounded by
-            # the IP table (no record cap needed) and refreshed buckets
-            # stay indexed (their stale record is re-indexed to the true
-            # deadline at reclaim time).
-            if client_ip not in self._indexed_deadline:
-                deadline = now + self.PER_IP_WINDOW
-                self._indexed_deadline[client_ip] = deadline
-                heapq.heappush(self._expiry_heap, (deadline, client_ip))
+            # Eager repositioning (Greptile P1 rounds 4-10): the bucket's
+            # single expiry record is moved to its new true deadline on
+            # EVERY admitted request, so no stale lower-bound record can
+            # accumulate between admissions and the capacity verdict
+            # above stays exact. Queue memory remains bounded 1:1 by the
+            # IP table.
+            self._expiries.set_deadline(client_ip, now + self.PER_IP_WINDOW)
             return True, 0
 
     def get_ip_reset_time(self, client_ip: str) -> int:
