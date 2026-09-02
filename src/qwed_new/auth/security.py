@@ -22,22 +22,30 @@ if not SECRET_KEY:
 # QWED_JWT_SECRET_KEY rotations, and the earlier JWT-secret fallback both
 # made a rotation silently break every API-key lookup and logged a warning
 # on every call (Sentry log-spam on PR #345).
-if not os.getenv("QWED_API_KEY_LOOKUP_SECRET"):
-    raise RuntimeError(
-        "QWED_API_KEY_LOOKUP_SECRET must be set — API-key lookup digests "
-        "are keyed with it and must stay stable across QWED_JWT_SECRET_KEY "
-        "rotations. Set the dedicated secret BEFORE issuing v7.2 keys."
-    )
+def _validate_secret_config() -> None:
+    """Fail closed on insecure secret configuration (run at import).
 
-if os.getenv("QWED_API_KEY_LOOKUP_SECRET") == SECRET_KEY:
-    # One rotated deployment secret in both variables re-couples API-key
-    # digests to JWT rotations — the exact failure the dedicated secret
-    # exists to prevent (CodeRabbit on PR #345 round 3). Refuse to boot.
-    raise RuntimeError(
-        "QWED_API_KEY_LOOKUP_SECRET must differ from QWED_JWT_SECRET_KEY — "
-        "equal values re-couple API-key lookup digests to JWT-secret "
-        "rotations."
-    )
+    Kept as a plain function so verification tests can exercise the exact
+    startup checks in-process (QWED Security on PR #345 round 4: a
+    subprocess-based test trips the TEST_CODE scanner)."""
+    if not os.getenv("QWED_API_KEY_LOOKUP_SECRET"):
+        raise RuntimeError(
+            "QWED_API_KEY_LOOKUP_SECRET must be set — API-key lookup digests "
+            "are keyed with it and must stay stable across QWED_JWT_SECRET_KEY "
+            "rotations. Set the dedicated secret BEFORE issuing v7.2 keys."
+        )
+    if os.getenv("QWED_API_KEY_LOOKUP_SECRET") == SECRET_KEY:
+        # One rotated deployment secret in both variables re-couples API-key
+        # digests to JWT rotations — the exact failure the dedicated secret
+        # exists to prevent (CodeRabbit on PR #345 round 3). Refuse to boot.
+        raise RuntimeError(
+            "QWED_API_KEY_LOOKUP_SECRET must differ from QWED_JWT_SECRET_KEY — "
+            "equal values re-couple API-key lookup digests to JWT-secret "
+            "rotations."
+        )
+
+
+_validate_secret_config()
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 60))

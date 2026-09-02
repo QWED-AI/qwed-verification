@@ -182,6 +182,73 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertGreaterEqual(reset, 1)
 
+    def test_over_limit_reset_uses_single_clock_read(self):
+        """Sentry round 4: the over-limit path cleans the bucket and
+        computes Retry-After from ONE pinned clock reading — a deadline
+        crossed between two reads can no longer yield Retry-After: 0."""
+        limiter = self._limiter(limit=1)
+        limiter.check_ip_limit("10.0.1.0")       # stamp t=0, deadline 60
+        limiter.test_clock.advance(59)
+        limiter.test_clock.t += 0.5              # t=59.5: bucket still live
+        allowed, reset = limiter.check_ip_limit_with_reset("10.0.1.0")
+        self.assertFalse(allowed)
+        self.assertEqual(reset, 1)
+
+    def test_capacity_admission_repairs_bounded_stale_records(self):
+        """Greptile P1 round 4: drifted heap records are repaired with a
+        bounded per-call budget; when the budget is spent, admission still
+        succeeds via the O(1) front-bucket fallback — never an unbounded
+        under-lock traversal."""
+        limiter = self._limiter()
+        limiter.MAX_TRACKED_IPS = 40
+        limiter._MAX_HEAP_REPAIRS = 4
+        for i in range(40):
+            limiter.check_ip_limit(f"10.0.1.{i}")        # t=0 → records (60, ip)
+        limiter.test_clock.advance(10)
+        for i in range(40):
+            # Refresh buckets WITHOUT the limiter (no hygiene runs) so all
+            # 40 drifted records stay queued at the heap head.
+            limiter.ip_requests[f"10.0.1.{i}"].append(10)
+        limiter.test_clock.advance(61)           # t=71: every bucket expired
+        allowed, _ = limiter.check_ip_limit_with_reset("10.9.9.9")
+        self.assertTrue(allowed)
+        self.assertEqual(len(limiter.ip_requests), 40)
+        self.assertIn("10.9.9.9", limiter.ip_requests)
+        # The fallback freed the expired FRONT bucket; the rest survived.
+        self.assertNotIn("10.0.1.0", limiter.ip_requests)
+        for i in range(1, 40):
+            self.assertIn(f"10.0.1.{i}", limiter.ip_requests)
+
+    def test_repair_budget_exhaustion_rejects_live_front(self):
+        """Greptile P1 round 4: with the repair budget spent and the front
+        bucket still live, the request is rejected with a bounded
+        Retry-After — no live bucket is ever evicted to make room."""
+        limiter = self._limiter()
+        limiter.MAX_TRACKED_IPS = 5
+        limiter._MAX_HEAP_REPAIRS = 0
+        for i in range(5):
+            limiter.check_ip_limit(f"10.0.1.{i}")        # t=0 → records (60, ip)
+        limiter.test_clock.advance(10)
+        for i in range(5):
+            limiter.ip_requests[f"10.0.1.{i}"].append(10)  # drift, no hygiene
+        allowed, reset = limiter.check_ip_limit_with_reset("10.9.9.9")
+        self.assertFalse(allowed)
+        self.assertGreaterEqual(reset, 1)
+        for i in range(5):
+            self.assertIn(f"10.0.1.{i}", limiter.ip_requests)
+        self.assertNotIn("10.9.9.9", limiter.ip_requests)
+
+    def test_heap_records_hard_capped(self):
+        """Greptile P1 round 4: heap record count is bounded — beyond the
+        cap, admissions stop pushing records but keep working."""
+        limiter = self._limiter()
+        limiter.MAX_TRACKED_IPS = 500
+        limiter._MAX_HEAP_RECORDS = 3
+        for i in range(10):
+            self.assertTrue(limiter.check_ip_limit(f"10.0.2.{i}"))
+        self.assertEqual(len(limiter._expiry_heap), 3)
+        self.assertEqual(len(limiter.ip_requests), 10)
+
     def test_nonpositive_per_ip_limit_fails_construction(self):
         """A 0/negative QWED_RATE_LIMIT_PER_IP must fail at construction,
         not 500 every anonymous /auth/* request via min()-of-empty-bucket
@@ -318,30 +385,24 @@ class TestApiKeyLookupSecret(unittest.TestCase):
     def test_lookup_secret_equal_to_jwt_secret_fails_startup(self):
         """CodeRabbit round 3: one rotated deployment secret pasted into
         both variables re-couples API-key digests to JWT rotations —
-        startup must refuse to boot. Import-time check, so exercised in a
-        fresh subprocess."""
-        import subprocess
-        import sys
-        from pathlib import Path
-
+        startup must refuse to boot. Exercised by calling the import-time
+        validator directly (in-process, no subprocess — QWED Security
+        round 4)."""
         from qwed_new.auth import security as _sec
 
-        src_dir = str(Path(_sec.__file__).resolve().parents[2])
-        code = (
-            "import os; "
-            "os.environ['QWED_JWT_SECRET_KEY']='same-value'; "
-            "os.environ['QWED_API_KEY_LOOKUP_SECRET']='same-value'; "
-            "import qwed_new.auth.security"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            cwd=src_dir,
-            env={**os.environ, "PYTHONPATH": src_dir},
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("must differ", result.stderr)
+        # At real import time SECRET_KEY is read from the JWT env var;
+        # simulate that binding exactly by patching the module constant
+        # alongside the environment.
+        with patch.dict(
+            "os.environ",
+            {
+                "QWED_JWT_SECRET_KEY": "same-value",
+                "QWED_API_KEY_LOOKUP_SECRET": "same-value",
+            },
+        ), patch.object(_sec, "SECRET_KEY", "same-value"):
+            with self.assertRaises(RuntimeError) as ctx:
+                _sec._validate_secret_config()
+        self.assertIn("must differ", str(ctx.exception))
 
 
 class TestSigninTimingEqualizer(unittest.TestCase):
