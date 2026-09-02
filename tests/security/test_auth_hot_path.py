@@ -318,9 +318,8 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         allowed, reset = limiter.check_ip_limit_with_reset("10.9.9.9")
         self.assertFalse(allowed)
         self.assertGreaterEqual(reset, 1)
-        self.assertEqual(
-            (len(limiter._expiries), limiter._expiries.peek()), before
-        )
+        after = (len(limiter._expiries), limiter._expiries.peek())
+        self.assertEqual(after, before)
 
     def test_nonpositive_per_ip_limit_fails_construction(self):
         """A 0/negative QWED_RATE_LIMIT_PER_IP must fail at construction,
