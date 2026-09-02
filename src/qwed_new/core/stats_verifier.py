@@ -22,7 +22,7 @@ from importlib.metadata import PackageNotFoundError, version
 import ast
 
 from .diagnostics import DiagnosticResult, DiagnosticStatus, enforce_trust_decision
-from .secure_code_executor import _DANGEROUS_MODULE_ROOTS
+from .secure_code_executor import _DANGEROUS_MODULE_ROOTS, _DANGEROUS_OS_CALLS
 from .verification_context import (
     Admission,
     Decision,
@@ -254,12 +254,23 @@ class RestrictedExecutor:
     }
 
     # Module aliases pre-imported into the sandbox namespace. Chains rooted
-    # at an alias that name a dangerous module in ANY segment are traversing
-    # package internals toward re-exported dangerous modules
+    # at an alias that name a dangerous module in ANY segment AFTER the root
+    # are traversing package internals toward re-exported dangerous modules
     # (pd.io.common.os.system, np.lib.npyio.os.getenv — #336). Legitimate
     # nested public APIs (np.linalg.norm, np.random.seed, pd.Timestamp.now)
-    # name no dangerous module and pass — see _alias_internals_issue.
+    # and plain sys metadata (sys.version, sys.maxsize) name no dangerous
+    # module after the root and pass — see _alias_internals_issue.
     _SANDBOX_MODULE_ALIASES = {"pd", "np", "json", "sys"}
+
+    # Reflective / process-controlling sys members — flagged explicitly
+    # (Greptile P1 on #346 round 2): plain sys metadata is read-only and
+    # allowed, but sys.modules hands out every module object, and exit /
+    # the trace-profile hooks / path-argv streams are not part of generated
+    # stats code's legitimate surface.
+    _BLOCKED_SYS_MEMBERS = {
+        "modules", "exit", "settrace", "gettrace", "setprofile", "getprofile",
+        "setrecursionlimit", "argv", "path", "stdout", "stderr", "stdin",
+    }
     
     def __init__(self, timeout_seconds: float = 30.0):
         """
@@ -274,28 +285,32 @@ class RestrictedExecutor:
         """Blocked call name for *node*, or None.
 
         Covers bare names AND attribute targets — an Attribute-func call
-        like `x.eval(...)` slipped the original Name-only check (#336)."""
+        like `x.eval(...)` slipped the original Name-only check (#336) —
+        plus the OS-primitive call names, so reflective re-binding
+        (`sys.modules['os'].system(...)`) cannot reach a process
+        primitive through an unchecked chain root."""
         if not isinstance(node, ast.Call):
             return None
-        if isinstance(node.func, ast.Name) and node.func.id in self.BLOCKED_FUNCTIONS:
+        targets = self.BLOCKED_FUNCTIONS | _DANGEROUS_OS_CALLS
+        if isinstance(node.func, ast.Name) and node.func.id in targets:
             return node.func.id
-        if isinstance(node.func, ast.Attribute) and node.func.attr in self.BLOCKED_FUNCTIONS:
+        if isinstance(node.func, ast.Attribute) and node.func.attr in targets:
             return node.func.attr
         return None
 
     @staticmethod
     def _alias_internals_issue(node: ast.AST) -> Optional[str]:
         """Issue for an attribute chain rooted at a sandbox module alias
-        that names a dangerous module in ANY segment (#336), or None.
+        (#336), or None.
 
-        To call os primitives through package internals the chain must
-        NAME them (pd.io.common.os.system, np.lib.npyio.os.getenv), so a
-        per-segment check is precise: legit nested public APIs
-        (np.linalg.norm, np.random.seed, pd.Timestamp.now) name no
-        dangerous module and pass, while gadget internals are caught
-        wherever they sit in the chain. Data-rooted chains
-        (df['x'].mean, df.col.mean) are unaffected — df is not an
-        alias."""
+        The alias ROOT name is not itself a violation — sys.version is
+        read-only metadata and np.linalg.norm is a public API. Two things
+        are: (1) traversal INTO a dangerous module through the alias's
+        internals, which must NAME the module in a segment after the root
+        (pd.io.common.os.system, np.lib.npyio.os.getenv); (2) reflective
+        or process-controlling sys members (sys.modules, sys.exit, ...).
+        Data-rooted chains (df['x'].mean, df.col.mean) are unaffected —
+        df is not an alias."""
         if not isinstance(node, ast.Attribute):
             return None
         segments = []
@@ -303,13 +318,12 @@ class RestrictedExecutor:
         while isinstance(value, ast.Attribute):
             segments.append(value.attr)
             value = value.value
-        if (
-            isinstance(value, ast.Name)
-            and value.id in RestrictedExecutor._SANDBOX_MODULE_ALIASES
-        ):
-            segments.append(value.id)
-            if any(seg in _DANGEROUS_MODULE_ROOTS for seg in segments):
-                return f"Attribute chain reaches a dangerous module through sandbox internals: {value.id}.*"
+        if not (isinstance(value, ast.Name) and value.id in RestrictedExecutor._SANDBOX_MODULE_ALIASES):
+            return None
+        if value.id == "sys" and segments and segments[0] in RestrictedExecutor._BLOCKED_SYS_MEMBERS:
+            return f"Reflective or process-controlling sys member blocked: sys.{segments[0]}"
+        if any(seg in _DANGEROUS_MODULE_ROOTS for seg in segments):
+            return f"Attribute chain reaches a dangerous module through sandbox internals: {value.id}.*"
         return None
 
     def is_code_safe(self, code: str) -> Tuple[bool, List[str]]:

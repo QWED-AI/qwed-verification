@@ -160,6 +160,25 @@ class TestStatsRestrictedExecutor:
         self._safe("np.random.seed(42)\nresult = np.random.normal()")
         self._safe("result = pd.Timestamp.now().isoformat()")
 
+    def test_readonly_sys_metadata_allowed(self):
+        """Greptile P1 round 2 + Sentry LOW: plain sys metadata is read-only
+        — the alias check flags traversal into dangerous modules, not the
+        alias root itself."""
+        self._safe("result = sys.maxsize")
+        self._safe("result = sys.float_info.dig")
+        self._safe("result = sys.version.split()[0]")
+
+    def test_reflective_and_controlling_sys_members_blocked(self):
+        self._unsafe("result = sys.modules['os'].getcwd()")
+        self._unsafe("sys.exit(1)")
+        self._unsafe("sys.setrecursionlimit(10)")
+
+    def test_reflective_sys_to_process_primitive_blocked(self):
+        # sys.modules is blocked directly AND the OS-primitive call name is
+        # blocked even through an unchecked chain root (subscript), so the
+        # reflection escape cannot rebind and call around the gate.
+        self._unsafe("result = sys.modules['os'].system('id')")
+
     def test_data_rooted_chains_unaffected(self):
         self._safe("result = df.groupby('k')['v'].mean()")
         self._safe("result = df.col.sum()")
