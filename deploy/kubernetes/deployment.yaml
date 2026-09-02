@@ -6,6 +6,11 @@ metadata:
   labels:
     app: qwed-core
 spec:
+  # NOTE (Greptile on PR #345 round 9): the in-memory rate limiter's state
+  # is PROCESS-LOCAL, so with replicas > 1 the per-IP / per-key budgets are
+  # effectively multiplied by the replica count (each pod admits its own
+  # budget to the same client). Keep this at 1 for exact limits, or move
+  # the limiter to a shared store (Redis) before scaling out.
   replicas: 2
   selector:
     matchLabels:

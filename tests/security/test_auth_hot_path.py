@@ -274,31 +274,47 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
             limiter._indexed_deadline.get("10.0.1.0"), 119
         )
 
-    def test_empty_head_pops_respect_repair_budget(self):
-        """Greptile P1 rounds 5+7: EVERY under-lock pop — hygiene trim,
-        garbage purge, or re-index — is budgeted. With trim(4) +
-        budget(2), at most 6 pops happen no matter how many stale records
-        accumulate; if the budget cannot settle the verdict the call
-        rejects CONSERVATIVELY (bounded Retry-After) instead of
-        scanning the table."""
+    def test_ghost_buckets_reclaimed_by_hygiene(self):
+        """Sentry round 9 (HIGH): an emptied indexed bucket is a GHOST --
+        it consumed a capacity slot with no heap record, impossible to
+        reclaim. Hygiene purge now drops the empty bucket from
+        ip_requests too, so garbage cleanup frees capacity slots and a
+        new client is admitted without any special-casing."""
         limiter = self._limiter()
         limiter.MAX_TRACKED_IPS = 5
         for i in range(5):
             limiter.check_ip_limit(f"10.0.1.{i}")     # 5 indexed records
-        for _ in range(5):
-            # Extra stale duplicates: 10 garbage heads, budget far smaller.
-            limiter._expiry_heap.append((60, "10.0.1.0"))
         for i in range(5):
-            limiter.ip_requests[f"10.0.1.{i}"].clear()  # all heads stale
+            limiter.ip_requests[f"10.0.1.{i}"].clear()  # 5 ghosts
         limiter._MAX_HEAP_REPAIRS = 2
+        allowed, reset = limiter.check_ip_limit_with_reset("10.9.9.9")
+        self.assertTrue(allowed)      # hygiene freed 2 slots (budget 2)
+        self.assertEqual(reset, 0)
+        self.assertEqual(len(limiter.ip_requests), 4)  # 3 ghosts + new IP
+        self.assertNotIn("10.0.1.0", limiter.ip_requests)  # ghosts purged
+        self.assertNotIn("10.0.1.1", limiter.ip_requests)
+        self.assertIn("10.9.9.9", limiter.ip_requests)
+
+    def test_zero_budget_means_zero_hygiene_pops(self):
+        """Greptile round 9: hygiene pops are budgeted like repair pops --
+        a zero budget performs ZERO heap pops on the capacity path; the
+        verdict falls back to the conservative bounded reject instead of
+        bypassing the envelope."""
+        limiter = self._limiter()
+        limiter.MAX_TRACKED_IPS = 5
+        for i in range(5):
+            limiter.check_ip_limit(f"10.0.1.{i}")     # 5 indexed records
+        for i in range(5):
+            limiter.ip_requests[f"10.0.1.{i}"].clear()  # all garbage heads
+        limiter._MAX_HEAP_REPAIRS = 0
         with patch(
             "qwed_new.core.rate_limiter.heapq.heappop",
             wraps=heapq.heappop,
         ) as pop_spy:
             allowed, reset = limiter.check_ip_limit_with_reset("10.9.9.9")
-        self.assertFalse(allowed)  # budget exhausted → conservative reject
+        self.assertEqual(pop_spy.call_count, 0)       # budget enforced
+        self.assertFalse(allowed)                     # conservative reject
         self.assertGreaterEqual(reset, 1)
-        self.assertEqual(pop_spy.call_count, 6)  # trim(4) + reclaim(budget 2)
 
     def test_repair_exhaustion_still_reclaims_exposed_expired_head(self):
         """Greptile P1 round 8: when the repair budget is spent exactly at

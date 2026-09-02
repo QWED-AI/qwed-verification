@@ -177,7 +177,16 @@ class RateLimiter:
         """Amortized O(1) heap hygiene: drop a few garbage head entries
         (records whose bucket is gone or whose index entry moved on) so
         the heap tracks the live set even when the table never reaches
-        capacity. Bounded to a constant per call — no scans."""
+        capacity. Bounded to a constant per call — no scans.
+
+        Garbage heads are removed via _purge_head so an EMPTY bucket is
+        dropped from ip_requests too (Sentry round 9: popping only the
+        record + index left a permanent "ghost" — a capacity slot with
+        no heap record, impossible to ever reclaim). Hygiene pops count
+        against the same bounded-work envelope as repair: at most
+        _MAX_HEAP_REPAIRS pops here, so a zero budget means zero pops
+        (Greptile round 9: the budget must not be bypassable)."""
+        rounds = min(rounds, max(0, self._MAX_HEAP_REPAIRS))
         for _ in range(rounds):
             if not self._expiry_heap:
                 return
@@ -189,9 +198,7 @@ class RateLimiter:
             ):
                 # Valid, current record at the head: the heap is clean.
                 return
-            heapq.heappop(self._expiry_heap)
-            if self._indexed_deadline.get(head_ip) == head_deadline:
-                self._indexed_deadline.pop(head_ip, None)
+            self._purge_head(head_deadline, head_ip)
 
     def _head_record_state(self, now: float) -> tuple:
         """Classify the current heap head without mutating anything.
