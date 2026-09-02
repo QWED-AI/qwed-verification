@@ -39,10 +39,17 @@ DANGEROUS_KEYWORDS = [
 _DANGEROUS_MODULE_ROOTS = {"os", "sys", "subprocess", "socket", "urllib", "requests", "http", "posix", "nt", "importlib", "ctypes", "builtins"}
 _DANGEROUS_BUILTINS = {"eval", "exec", "compile", "__import__", "open", "file", "input", "raw_input"}
 # OS primitives reachable through module indirection (#336): `system` /
-# `popen` via package-internal re-exports (pd.io.common.os), `import_module`
-# via importlib, the exec/spawn family and fork via posix/nt. Matched on
+# `popen` via package-internal re-exports, `import_module` via importlib, the
+# full exec/spawn family (v and l variants) and fork via posix/nt. Matched on
 # bare names and attribute call targets alike.
-_DANGEROUS_OS_CALLS = {"system", "popen", "import_module", "execv", "execve", "execvp", "execvpe", "spawnv", "spawnve", "fork", "forkpty"}
+_DANGEROUS_OS_CALLS = {
+    "system", "popen", "import_module",
+    "execv", "execve", "execvp", "execvpe",
+    "execl", "execle", "execlp", "execlpe",
+    "spawnv", "spawnve", "spawnvp", "spawnvpe",
+    "spawnl", "spawnle", "spawnlp", "spawnlpe",
+    "fork", "forkpty",
+}
 _DANGEROUS_CALL_TARGETS = frozenset(_DANGEROUS_BUILTINS | _DANGEROUS_OS_CALLS)
 
 
@@ -98,11 +105,14 @@ def _dangerous_import(node: ast.AST) -> Optional[str]:
     `import importlib`, `import posix`, `import ctypes` through because
     their dangerousness IS the first segment the old set simply omitted,
     and future `dangerous.submodule` shapes would slip past a root-only
-    match."""
+    match. ImportFrom MEMBER names are checked too (#346 review): the
+    gadget `from pandas.io.common import os as safe` binds the real OS
+    module under an innocuous alias while the module path itself is
+    clean."""
     if isinstance(node, ast.Import):
         names = [a.name for a in node.names]
     elif isinstance(node, ast.ImportFrom) and node.module:
-        names = [node.module]
+        names = [node.module] + [a.name for a in node.names]
     else:
         return None
     for name in names:
@@ -118,7 +128,12 @@ def _dangerous_attribute(node: ast.AST) -> Optional[str]:
     through package-internal re-exports bound to innocuous aliases — the
     pandas and numpy internals each re-export the OS module — where the
     innermost base is `pd`/`np`, not a dangerous root. A dangerous module
-    name anywhere in the chain flags the whole access."""
+    name anywhere in the chain flags the whole access.
+
+    Known trade-off: a DATA attribute named like a dangerous module (e.g.
+    a column accessed as `df.os`) is rejected as well — per-name static
+    resolution cannot distinguish it from a gadget, and fail-closed beats
+    misclassifying one; use subscript access (`df['os']`) instead."""
     if not isinstance(node, ast.Attribute):
         return None
     parts = []

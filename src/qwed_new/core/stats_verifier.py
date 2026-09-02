@@ -22,6 +22,7 @@ from importlib.metadata import PackageNotFoundError, version
 import ast
 
 from .diagnostics import DiagnosticResult, DiagnosticStatus, enforce_trust_decision
+from .secure_code_executor import _DANGEROUS_MODULE_ROOTS
 from .verification_context import (
     Admission,
     Decision,
@@ -252,12 +253,12 @@ class RestrictedExecutor:
         'vars', 'dir', 'type', 'object', 'super',
     }
 
-    # Module aliases pre-imported into the sandbox namespace. Generated
-    # stats code legitimately touches their public surface at ONE attribute
-    # level (pd.read_csv, np.mean); chains rooted at an alias that reach
-    # TWO or more levels are traversing package internals toward
-    # re-exported dangerous modules (pd.io.common.os.system,
-    # np.lib.npyio.os.getenv — #336).
+    # Module aliases pre-imported into the sandbox namespace. Chains rooted
+    # at an alias that name a dangerous module in ANY segment are traversing
+    # package internals toward re-exported dangerous modules
+    # (pd.io.common.os.system, np.lib.npyio.os.getenv — #336). Legitimate
+    # nested public APIs (np.linalg.norm, np.random.seed, pd.Timestamp.now)
+    # name no dangerous module and pass — see _alias_internals_issue.
     _SANDBOX_MODULE_ALIASES = {"pd", "np", "json", "sys"}
     
     def __init__(self, timeout_seconds: float = 30.0):
@@ -269,6 +270,48 @@ class RestrictedExecutor:
         """
         self.timeout_seconds = timeout_seconds
     
+    def _blocked_call_issue(self, node: ast.AST) -> Optional[str]:
+        """Blocked call name for *node*, or None.
+
+        Covers bare names AND attribute targets — an Attribute-func call
+        like `x.eval(...)` slipped the original Name-only check (#336)."""
+        if not isinstance(node, ast.Call):
+            return None
+        if isinstance(node.func, ast.Name) and node.func.id in self.BLOCKED_FUNCTIONS:
+            return node.func.id
+        if isinstance(node.func, ast.Attribute) and node.func.attr in self.BLOCKED_FUNCTIONS:
+            return node.func.attr
+        return None
+
+    @staticmethod
+    def _alias_internals_issue(node: ast.AST) -> Optional[str]:
+        """Issue for an attribute chain rooted at a sandbox module alias
+        that names a dangerous module in ANY segment (#336), or None.
+
+        To call os primitives through package internals the chain must
+        NAME them (pd.io.common.os.system, np.lib.npyio.os.getenv), so a
+        per-segment check is precise: legit nested public APIs
+        (np.linalg.norm, np.random.seed, pd.Timestamp.now) name no
+        dangerous module and pass, while gadget internals are caught
+        wherever they sit in the chain. Data-rooted chains
+        (df['x'].mean, df.col.mean) are unaffected — df is not an
+        alias."""
+        if not isinstance(node, ast.Attribute):
+            return None
+        segments = []
+        value = node
+        while isinstance(value, ast.Attribute):
+            segments.append(value.attr)
+            value = value.value
+        if (
+            isinstance(value, ast.Name)
+            and value.id in RestrictedExecutor._SANDBOX_MODULE_ALIASES
+        ):
+            segments.append(value.id)
+            if any(seg in _DANGEROUS_MODULE_ROOTS for seg in segments):
+                return f"Attribute chain reaches a dangerous module through sandbox internals: {value.id}.*"
+        return None
+
     def is_code_safe(self, code: str) -> Tuple[bool, List[str]]:
         """
         Check if code is safe to execute.
@@ -285,50 +328,25 @@ class RestrictedExecutor:
             False
         """
         issues = []
-        
+
         try:
             tree = ast.parse(code)
         except SyntaxError as e:
             return False, [f"Syntax error: {e}"]
-        
-        # Walk AST and check nodes
+
         for node in ast.walk(tree):
-            # Check for blocked function calls — bare names AND attribute
-            # targets (an Attribute-func call like `x.eval(...)` previously
-            # slipped the Name-only check, #336).
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name) and node.func.id in self.BLOCKED_FUNCTIONS:
-                    issues.append(f"Blocked function: {node.func.id}")
-                elif isinstance(node.func, ast.Attribute) and node.func.attr in self.BLOCKED_FUNCTIONS:
-                    issues.append(f"Blocked function: {node.func.attr}")
+            blocked = self._blocked_call_issue(node)
+            if blocked:
+                issues.append(f"Blocked function: {blocked}")
 
-            # Deep attribute chains rooted at a sandbox module alias reach
-            # package internals (pd.io.common.os.system — #336). Legitimate
-            # generated stats code needs at most one attribute level on a
-            # module alias (pd.read_csv, np.mean); data-rooted chains
-            # (df['x'].mean, df.col.mean) are unaffected — df is not an
-            # alias. ast.walk visits every Attribute node in a chain, so a
-            # match at any depth flags once and the issues list dedupes
-            # naturally via the fail verdict.
-            if isinstance(node, ast.Attribute):
-                depth = 0
-                value = node
-                while isinstance(value, ast.Attribute):
-                    depth += 1
-                    value = value.value
-                if (
-                    depth >= 2
-                    and isinstance(value, ast.Name)
-                    and value.id in self._SANDBOX_MODULE_ALIASES
-                ):
-                    issues.append(
-                        f"Attribute chain reaches sandbox module internals: {value.id}.*"
-                    )
+            deep = self._alias_internals_issue(node)
+            if deep:
+                issues.append(deep)
 
-            # Check for import statements
+            # Import statements are never allowed in generated stats code.
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 issues.append("Import statements not allowed")
-        
+
         # ast.walk visits every Attribute node of a chain, so one deep
         # chain can append the same issue several times — dedupe, order
         # preserved (#336 fix).

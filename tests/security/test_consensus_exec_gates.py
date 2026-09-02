@@ -32,8 +32,10 @@ class TestTranslatorStructuralGate:
     def test_poc_multistatement_smuggle_rejected(self):
         # The #335 PoC: charset-valid, denylist-clean, executes module code.
         poc = "1\nimport pandas.io.common as pc\npc.os.system(chr(105) + chr(100))"
+        validator = TranslationLayer()
+        task = _task(poc)
         with pytest.raises(SecurityError):
-            TranslationLayer()._validate_math_output(_task(poc))
+            validator._validate_math_output(task)
 
     @pytest.mark.parametrize(
         "expression",
@@ -46,8 +48,10 @@ class TestTranslatorStructuralGate:
         ],
     )
     def test_statement_forms_rejected(self, expression):
+        validator = TranslationLayer()
+        task = _task(expression)
         with pytest.raises(SecurityError):
-            TranslationLayer()._validate_math_output(_task(expression))
+            validator._validate_math_output(task)
 
     @pytest.mark.parametrize(
         "expression",
@@ -61,6 +65,16 @@ class TestTranslatorStructuralGate:
     )
     def test_single_expression_forms_accepted(self, expression):
         TranslationLayer()._validate_math_output(_task(expression))
+
+    def test_oversized_expression_rejected_before_parse(self):
+        """CodeRabbit on #346: the length bound fires before the AST gate —
+        oversized input is rejected without ever reaching the parser."""
+        oversized = "1+" * 260 + "1"  # 521 chars, single expression shape
+        assert len(oversized) > 500
+        validator = TranslationLayer()
+        task = _task(oversized)
+        with pytest.raises(SecurityError):
+            validator._validate_math_output(task)
 
 
 class TestExecutorAstGate:
@@ -76,6 +90,10 @@ class TestExecutorAstGate:
             "import numpy.lib.npyio as npy\nnpy.os.getenv('HOME')",
             "from os import system\nsystem('id')",
             "from pandas.io.common import os\nos.system('id')",
+            # Aliased-member gadget (#346 review, CodeRabbit): the real OS
+            # module bound under an innocuous name via a clean module path.
+            "from pandas.io.common import os as safe\nsafe.execl('/bin/id', 'id')",
+            "from pandas.io.common import os as safe\nsafe.spawnl('/bin/id', 'id')",
             "import ctypes\nctypes.CDLL('libc.so.6')",
         ],
     )
@@ -126,10 +144,31 @@ class TestStatsRestrictedExecutor:
     def test_attribute_func_blocked_call(self):
         self._unsafe("result = obj.eval('1+1')")
 
+    def test_bare_blocked_call(self):
+        issues = self._unsafe("result = eval('1 + 1')")
+        assert any("Blocked function: eval" in i for i in issues)
+
     def test_public_surface_one_level_allowed(self):
         self._safe("result = pd.read_csv('f.csv')")
         self._safe("result = np.mean([1, 2, 3])")
 
+    def test_legitimate_nested_public_apis_allowed(self):
+        """Greptile P1 on #346: the alias-internals check must not reject
+        legitimate nested public namespaces — only chains that NAME a
+        dangerous module are gadget traversals."""
+        self._safe("result = np.linalg.norm([3.0, 4.0])")
+        self._safe("np.random.seed(42)\nresult = np.random.normal()")
+        self._safe("result = pd.Timestamp.now().isoformat()")
+
     def test_data_rooted_chains_unaffected(self):
         self._safe("result = df.groupby('k')['v'].mean()")
         self._safe("result = df.col.sum()")
+
+    def test_import_statements_rejected(self):
+        issues = self._unsafe("import pandas as pd\nresult = pd.read_csv('f.csv')")
+        assert any("Import statements not allowed" in i for i in issues)
+
+    def test_unparseable_code_fails_closed(self):
+        ok, issues = self.executor.is_code_safe("this is not python (")
+        assert not ok
+        assert any(i.startswith("Syntax error") for i in issues)

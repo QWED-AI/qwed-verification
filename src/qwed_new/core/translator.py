@@ -102,7 +102,14 @@ class TranslationLayer:
         if not re.match(safe_pattern, task.expression.replace(' ', ''), re.IGNORECASE):
             raise SecurityError(SAFETY_VALIDATOR_REJECTION)
 
-        # 3. Structural gate (closes #335): the expression is interpolated
+        # 3. Check for excessive length (possible DoS) BEFORE parsing — the
+        #    bound keeps the AST gate's parse cost constant and keeps deeply
+        #    nested adversarial input away from the parser entirely
+        #    (CodeRabbit on PR #346).
+        if len(task.expression) > 500:
+            raise SecurityError(SAFETY_VALIDATOR_REJECTION)
+
+        # 4. Structural gate (closes #335): the expression is interpolated
         #    verbatim into `result = {expression}` by
         #    consensus_verifier._generate_verification_code, so it must be
         #    exactly ONE Python expression. mode="eval" rejects every
@@ -114,11 +121,9 @@ class TranslationLayer:
         #    denylist checks above remain as defense in depth.
         try:
             ast.parse(task.expression, mode="eval")
-        except SyntaxError:
-            raise SecurityError(SAFETY_VALIDATOR_REJECTION)
-
-        # 4. Check for excessive length (possible DoS)
-        if len(task.expression) > 500:
+        except (SyntaxError, ValueError, RecursionError):
+            # ValueError: parse rejects NULs/invalid mode; RecursionError:
+            # deeply nested input must fail closed, never bubble as a 500.
             raise SecurityError(SAFETY_VALIDATOR_REJECTION)
 
         # 5. Validate confidence is in valid range
