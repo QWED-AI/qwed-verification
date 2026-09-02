@@ -24,7 +24,7 @@ class TestApiKeyLookupDigest(unittest.TestCase):
         h1, h2 = hash_api_key(sample), hash_api_key(sample)
         self.assertEqual(h1, hash_api_key(sample))
         self.assertEqual(h1, h2)
-        self.assertEqual(64, len(h1))  # sha256 hex
+        self.assertEqual(len(h1), 64)  # sha256 hex
         int(h1, 16)  # valid hex
 
     def test_generate_api_key_roundtrip(self):
@@ -74,29 +74,54 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         self.assertTrue(limiter.check_ip_limit("1.2.3.4"))
 
     def test_ip_table_never_exceeds_cap(self):
-        """The table is hard-bounded: expired entries are pruned above the
-        cap, and at a full cap of fresh buckets the least-recently-active
-        one is evicted before a new IP is added."""
+        """The table is hard-bounded: at the cap, a new address is admitted
+        only by evicting an EXPIRED first-inserted bucket — never by
+        evicting a live one (Greptile P1 round 2, PR #345)."""
         limiter = self._limiter()
         limiter.MAX_TRACKED_IPS = 5
         for i in range(50):
             limiter.check_ip_limit(f"10.0.1.{i}")
         self.assertLessEqual(len(limiter.ip_requests), 5)
 
-    def test_hard_cap_evicts_oldest_active_bucket(self):
-        """Always-fresh IPs must not grow the table past the cap: the
-        least-recently-active bucket is evicted (CodeRabbit/CodeAnt)."""
+    def test_hard_cap_rejects_new_ip_while_front_bucket_live(self):
+        """At a full table of live buckets a new address is rejected instead
+        of evicting a live bucket — eviction would reset the evicted
+        client's budget before its window expires (Greptile P1, PR #345)."""
         limiter = self._limiter()
         limiter.MAX_TRACKED_IPS = 3
         for i in range(3):
             limiter.check_ip_limit(f"10.0.1.{i}")
-        # Make the first IP the least-recently-active
-        stamps = limiter.ip_requests["10.0.1.0"]
-        stamps[-1] -= 10
-        limiter.check_ip_limit("10.9.9.9")  # brand-new IP at full cap
-        self.assertEqual(3, len(limiter.ip_requests))
+        allowed, reset = limiter.check_ip_limit_with_reset("10.9.9.9")
+        self.assertFalse(allowed)
+        self.assertGreaterEqual(reset, 1)
+        self.assertLessEqual(reset, limiter.PER_IP_WINDOW)
+        # The live bucket survives with its budget intact
+        self.assertIn("10.0.1.0", limiter.ip_requests)
+        self.assertNotIn("10.9.9.9", limiter.ip_requests)
+
+    def test_hard_cap_evicts_expired_front_bucket(self):
+        """An expired first-inserted bucket is evicted in O(1) to admit a
+        new address once its window has fully expired."""
+        limiter = self._limiter()
+        limiter.MAX_TRACKED_IPS = 3
+        for i in range(3):
+            limiter.check_ip_limit(f"10.0.1.{i}")
+        limiter.ip_requests["10.0.1.0"] = [
+            limiter._clock() - limiter.PER_IP_WINDOW - 1
+        ]
+        self.assertTrue(limiter.check_ip_limit("10.9.9.9"))
+        self.assertEqual(len(limiter.ip_requests), 3)
         self.assertNotIn("10.0.1.0", limiter.ip_requests)
         self.assertIn("10.9.9.9", limiter.ip_requests)
+
+    def test_nonpositive_per_ip_limit_fails_construction(self):
+        """A 0/negative QWED_RATE_LIMIT_PER_IP must fail at construction,
+        not 500 every anonymous /auth/* request via min()-of-empty-bucket
+        (CodeRabbit on PR #345)."""
+        for bad in ("0", "-3"):
+            with patch.dict("os.environ", {"QWED_RATE_LIMIT_PER_IP": bad}):
+                with self.assertRaises(ValueError):
+                    RateLimiter()
 
     def test_retry_after_never_zero_while_blocked(self):
         """Rounded-up reset (CodeRabbit clock injection): a window with a
@@ -106,11 +131,11 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
             limiter = RateLimiter(clock=lambda: now[0])
         limiter.ip_requests["1.2.3.4"] = [1000.0 - 59.5, 1000.0 - 59.2]
         self.assertFalse(limiter.check_ip_limit("1.2.3.4"))
-        self.assertEqual(1, limiter.get_ip_reset_time("1.2.3.4"))  # ceil(0.5)
+        self.assertEqual(limiter.get_ip_reset_time("1.2.3.4"), 1)  # ceil(0.5)
         now[0] += 0.4
-        self.assertEqual(1, limiter.get_ip_reset_time("1.2.3.4"))  # ceil(0.1)
+        self.assertEqual(limiter.get_ip_reset_time("1.2.3.4"), 1)  # ceil(0.1)
         now[0] += 0.6
-        self.assertEqual(0, limiter.get_ip_reset_time("1.2.3.4"))  # expired
+        self.assertEqual(limiter.get_ip_reset_time("1.2.3.4"), 0)  # expired
 
     def test_atomic_check_and_reset(self):
         """Blocked check returns the reset time in the same locked call
@@ -118,7 +143,7 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         limiter = self._limiter(limit=2)
         allowed, reset = limiter.check_ip_limit_with_reset("1.2.3.4")
         self.assertTrue(allowed)
-        self.assertEqual(0, reset)
+        self.assertEqual(reset, 0)
         limiter.check_ip_limit("1.2.3.4")
         allowed, reset = limiter.check_ip_limit_with_reset("1.2.3.4")
         self.assertFalse(allowed)
@@ -134,14 +159,14 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
             check_auth_rate_limit(req)  # first passes
             with self.assertRaises(HTTPException) as ctx:
                 check_auth_rate_limit(req)
-        self.assertEqual(429, ctx.exception.status_code)
+        self.assertEqual(ctx.exception.status_code, 429)
         self.assertIn("Retry-After", ctx.exception.headers)
 
     def test_untrusted_peer_header_ignored(self):
         """Default: X-Forwarded-For is NOT honored — the client must not be
         able to choose its rate-limit key (CodeRabbit/CodeAnt on PR #345)."""
         self.assertEqual(
-            "1.2.3.4", client_ip_of(_StubRequest(client_host="1.2.3.4", forwarded="9.9.9.9"))
+            client_ip_of(_StubRequest(client_host="1.2.3.4", forwarded="9.9.9.9")), "1.2.3.4"
         )
 
     def test_trusted_proxy_last_hop_wins(self):
@@ -153,21 +178,21 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         trusted = [ipaddress.ip_network("172.16.0.0/12")]
         with patch.object(rl, "_TRUSTED_PROXIES", trusted):
             req = _StubRequest(client_host="172.16.1.2", forwarded="1.2.3.4, 5.6.7.8")
-            self.assertEqual("5.6.7.8", client_ip_of(req))
+            self.assertEqual(client_ip_of(req), "5.6.7.8")
             # Untrusted peer even WITH header -> direct peer
             req2 = _StubRequest(client_host="1.2.3.4", forwarded="5.6.7.8")
-            self.assertEqual("1.2.3.4", client_ip_of(req2))
+            self.assertEqual(client_ip_of(req2), "1.2.3.4")
             # Port-suffixed hops normalize to the bare IP (Sentry on PR #345):
             # port rotation must not mint fresh bucket keys
             req3 = _StubRequest(client_host="172.16.1.2", forwarded="1.2.3.4:8080, 5.6.7.8:9091")
-            self.assertEqual("5.6.7.8", client_ip_of(req3))
+            self.assertEqual(client_ip_of(req3), "5.6.7.8")
             req4 = _StubRequest(client_host="172.16.1.2", forwarded="[2001:db8::1]:8080")
-            self.assertEqual("2001:db8::1", client_ip_of(req4))
+            self.assertEqual(client_ip_of(req4), "2001:db8::1")
             # Malformed unterminated bracket must NOT truncate into a
             # different valid address (Sentry on PR #345): [2001:db8::1
             # would slice to 2001:db8:: (a real, different IP)
             req5 = _StubRequest(client_host="172.16.1.2", forwarded="[2001:db8::1")
-            self.assertEqual("[2001:db8::1", client_ip_of(req5))
+            self.assertEqual(client_ip_of(req5), "[2001:db8::1")
 
 
     def test_get_ip_reset_time_unknown_ip_is_zero(self):
@@ -187,30 +212,35 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
 
 class TestApiKeyLookupSecret(unittest.TestCase):
     """CodeRabbit on PR #345: the lookup MAC is decoupled from the JWT
-    secret when QWED_API_KEY_LOOKUP_SECRET is set."""
+    secret. QWED_API_KEY_LOOKUP_SECRET is REQUIRED (fail closed) — conftest
+    wires deterministic test material, and each test pins the exact env it
+    needs so assertions never depend on the ambient process environment."""
 
     def test_dedicated_secret_changes_digest(self):
         sample = "abc123"
         baseline = hash_api_key(sample)
         with patch.dict("os.environ", {"QWED_API_KEY_LOOKUP_SECRET": "test-dedi-42"}):
             with_dedicated = hash_api_key(sample)
-        self.assertNotEqual(baseline, with_dedicated)
-        # Stable while the dedicated secret is set
-        with patch.dict("os.environ", {"QWED_API_KEY_LOOKUP_SECRET": "test-dedi-42"}):
+            # Stable while the same dedicated secret is set
             self.assertEqual(with_dedicated, hash_api_key(sample))
+        self.assertNotEqual(baseline, with_dedicated)
 
-    def test_fallback_ignores_leftover_state(self):
-        """No dedicated secret set: the digest matches the pre-dedication
-        baseline (the fallback path is not polluted by an earlier
-        dedicated-secret value) and differs from the dedicated digest."""
+    def test_changing_the_dedicated_secret_changes_digest(self):
+        """Digests must depend on the dedicated secret only — a one-time
+        re-issue is expected whenever it changes."""
         sample = "abc123"
-        baseline = hash_api_key(sample)
         with patch.dict("os.environ", {"QWED_API_KEY_LOOKUP_SECRET": "test-dedi-42"}):
-            dedicated = hash_api_key(sample)
-        # patch.dict restored the environment — the fallback path is active
-        fallback = hash_api_key(sample)
-        self.assertNotEqual(dedicated, fallback)
-        self.assertEqual(baseline, fallback)
+            first = hash_api_key(sample)
+        with patch.dict("os.environ", {"QWED_API_KEY_LOOKUP_SECRET": "test-dedi-99"}):
+            self.assertNotEqual(first, hash_api_key(sample))
+
+    def test_missing_lookup_secret_fails_closed(self):
+        """No fallback: an unset dedicated secret must raise, never silently
+        key digests with the JWT secret (CodeRabbit, PR #345 round 2) —
+        that fallback also logged a warning on every call (Sentry)."""
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(RuntimeError):
+                hash_api_key("abc123")
 
 
 class TestSigninTimingEqualizer(unittest.TestCase):
@@ -229,8 +259,8 @@ class TestSigninTimingEqualizer(unittest.TestCase):
         with patch.object(routes, "verify_password", side_effect=fake_verify):
             asyncio.run(routes._burn_one_bcrypt("guessed-password"))
 
-        self.assertEqual(1, len(calls))
-        self.assertEqual("guessed-password", calls[0][0])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "guessed-password")
         # The dummy hash is a real bcrypt hash of the equalizer secret
         self.assertTrue(calls[0][1].startswith("$2"))
 

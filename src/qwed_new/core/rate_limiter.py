@@ -58,6 +58,17 @@ class RateLimiter:
         self.GLOBAL_WINDOW = 60  # seconds
 
         self.PER_IP_LIMIT = int(os.environ.get("QWED_RATE_LIMIT_PER_IP", "10"))
+        # Fail at construction (module import wires the singleton), never
+        # per request: with a limit < 1 a fresh bucket is immediately "over
+        # limit", the reset computation takes min() of an empty bucket, and
+        # every anonymous /auth/* request would 500 instead of 429
+        # (CodeRabbit on PR #345).
+        if self.PER_IP_LIMIT < 1:
+            raise ValueError(
+                "QWED_RATE_LIMIT_PER_IP must be at least 1 (got "
+                f"{self.PER_IP_LIMIT}) — a non-positive limit would turn "
+                "every anonymous auth request into an HTTP 500."
+            )
         self.PER_IP_WINDOW = 60  # seconds
 
         # Bound the per-IP table: floods from spoofed/varied IPs must not
@@ -137,17 +148,35 @@ class RateLimiter:
             (allowed, reset_after_seconds) — reset_after is 0 when allowed.
         """
         with self._lock:
-            # Hard cap with O(1) eviction (Greptile P1 on PR #345: a table-
-            # wide min()/prune inside the lock let a full table stall every
-            # limiter call). Evict the first-inserted bucket (dicts preserve
-            # insertion order): it is the stalest admission, and evicting a
-            # mid-window client at worst grants one fresh budget — the same
-            # outcome as waiting for expiry. No table-wide scans anywhere.
+            # Hard cap with O(1) admission (no table-wide scans inside the
+            # lock — a full table must not stall every limiter call, the
+            # original Greptile P1 on PR #345). A new address is admitted
+            # only by evicting the FIRST-inserted bucket, and only when that
+            # bucket's window has fully expired: evicting a live bucket
+            # would hand that client a fresh budget on its next request
+            # before its original window ended (Greptile P1, round 2). When
+            # the front bucket is still live the new address is rejected
+            # until a slot frees — explicit and bounded: under a
+            # 50k-distinct-IP flood, fresh addresses wait out at most the
+            # front bucket's remaining window.
             if (
                 client_ip not in self.ip_requests
                 and len(self.ip_requests) >= self.MAX_TRACKED_IPS
             ):
-                del self.ip_requests[next(iter(self.ip_requests))]
+                oldest_ip = next(iter(self.ip_requests))
+                oldest_bucket = self.ip_requests[oldest_ip]
+                if oldest_bucket and (
+                    max(oldest_bucket) + self.PER_IP_WINDOW > self._clock()
+                ):
+                    # Front bucket live: reject with the time until the
+                    # earliest slot can free up.
+                    reset_after = math.ceil(
+                        max(oldest_bucket)
+                        + self.PER_IP_WINDOW
+                        - self._clock()
+                    )
+                    return False, max(0, reset_after)
+                del self.ip_requests[oldest_ip]
 
             self.ip_requests[client_ip] = self._clean_old_requests(
                 self.ip_requests[client_ip],
