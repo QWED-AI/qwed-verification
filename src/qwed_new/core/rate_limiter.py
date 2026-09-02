@@ -9,6 +9,7 @@ Implements:
 
 import heapq
 import ipaddress
+import itertools
 import math
 import os
 import threading
@@ -23,7 +24,15 @@ class RateLimiter:
     Simple in-memory rate limiter using sliding window algorithm.
     
     For production with multiple servers, consider using Redis instead.
-    
+
+    NOTE (Greptile round 5): all state here is PROCESS-LOCAL. With
+    multiple uvicorn/gunicorn workers, each worker keeps its own buckets,
+    so per-IP and per-key budgets are effectively multiplied by the
+    worker count — every worker independently admits its own budget to
+    the same client. Single-worker deployments get exact limits;
+    multi-worker deployments need a shared store (Redis) for exact
+    limits.
+
     Environment Variables:
         QWED_RATE_LIMIT_PER_KEY: Requests per minute per API key (default: 100)
         QWED_RATE_LIMIT_GLOBAL: Requests per minute globally (default: 1000)
@@ -87,9 +96,13 @@ class RateLimiter:
         # critical section can never grow with accumulated stale records.
         self._MAX_HEAP_REPAIRS = 32
         # Hard memory bound on heap records: beyond this, new admissions
-        # stop pushing records (the O(1) front-bucket fallback keeps
-        # eviction decisions correct even with a lossy heap).
+        # stop pushing records (the bounded insertion-order fallback scan
+        # keeps capacity decisions correct even with a lossy heap).
         self._MAX_HEAP_RECORDS = 4 * self.MAX_TRACKED_IPS
+        # Bounded capacity-fallback scan: when the heap cannot prove that
+        # every bucket is live, at most this many oldest-admission buckets
+        # are examined for expiry under the lock (Greptile P1 round 5).
+        self._FALLBACK_SCAN_LIMIT = 64
     
     def _clean_old_requests(self, requests: list, window_seconds: int, now=None) -> list:
         """Remove timestamps older than the window (injected clock).
@@ -176,31 +189,33 @@ class RateLimiter:
 
     def _reclaim_expired_slot(self, now: float) -> bool:
         """Pop expired / stale head entries until a genuinely expired
-        bucket is reclaimed (True) or the earliest deadline is live
-        (False — every bucket is then live).
+        bucket is reclaimed (True) or the earliest indexed deadline is
+        live (False — the caller's bounded fallback then decides).
 
-        Bounded under-lock work (Greptile P1 round 4): at most
-        _MAX_HEAP_REPAIRS stale-record repairs per call; on exhaustion the
-        caller falls back to the O(1) front-bucket decision instead of
-        repairing unboundedly while holding the shared lock."""
+        Bounded under-lock work (Greptile P1 round 4): EVERY heap pop —
+        empty, drifted, or expired — consumes one unit of the
+        _MAX_HEAP_REPAIRS budget (round 5: empty heads previously bypassed
+        the cap, so accumulated stale records could force unbounded pops
+        while the shared lock is held). Drifted records are dropped, not
+        re-pushed: each admission pushes a fresh record with the true
+        deadline, so a drifted head is by definition superseded."""
         window = self.PER_IP_WINDOW
         repairs = 0
         while self._expiry_heap:
+            if repairs >= self._MAX_HEAP_REPAIRS:
+                return False
             deadline, evict_ip = self._expiry_heap[0]
             bucket = self.ip_requests.get(evict_ip)
             if not bucket:
                 # Empty or already evicted: reclaim both.
                 heapq.heappop(self._expiry_heap)
                 self.ip_requests.pop(evict_ip, None)
+                repairs += 1
                 continue
-            true_deadline = max(bucket) + window
-            if true_deadline != deadline:
-                if repairs >= self._MAX_HEAP_REPAIRS:
-                    return False
-                # Entry drifted (bucket refreshed or mutated since push):
-                # repair to the dict's current deadline.
+            if max(bucket) + window != deadline:
+                # Superseded record (bucket refreshed since push): the
+                # ip's latest admission already pushed the true deadline.
                 heapq.heappop(self._expiry_heap)
-                heapq.heappush(self._expiry_heap, (true_deadline, evict_ip))
                 repairs += 1
                 continue
             if deadline <= now:
@@ -208,25 +223,34 @@ class RateLimiter:
                 heapq.heappop(self._expiry_heap)
                 del self.ip_requests[evict_ip]
                 return True
-            # Earliest deadline is live, so EVERY bucket is live.
+            # Earliest indexed deadline is live.
             return False
         return False
 
     def _fallback_admit_or_reject(self, now: float):
-        """Heap exhausted (or repair budget spent) while the table is
-        full: O(1) decision on the insertion-order front bucket — evict
-        it only if expired, otherwise reject explicitly.
+        """Heap exhausted, repair budget spent, or index incomplete while
+        the table is full: bounded insertion-order scan (oldest admissions
+        first) for an EXPIRED bucket to reclaim — including buckets the
+        record cap left unindexed (Greptile P1 round 5: a lossy heap must
+        not reject available capacity). No live bucket is ever evicted,
+        and the scan is bounded to _FALLBACK_SCAN_LIMIT entries under the
+        lock.
 
         Returns None when a slot was freed, else the (False, reset_after)
         rejection verdict."""
-        front_ip = next(iter(self.ip_requests))
-        front_bucket = self.ip_requests[front_ip]
-        if not front_bucket or max(front_bucket) + self.PER_IP_WINDOW <= now:
-            del self.ip_requests[front_ip]
-            return None
+        window = self.PER_IP_WINDOW
+        sample = list(itertools.islice(self.ip_requests, self._FALLBACK_SCAN_LIMIT))
+        for ip in sample:
+            bucket = self.ip_requests[ip]
+            if not bucket or max(bucket) + window <= now:
+                del self.ip_requests[ip]
+                return None
+        # Every sampled bucket is live; the front bucket is the stalest
+        # admission, so its deadline is the soonest any slot can free up.
+        front_bucket = self.ip_requests[sample[0]]
         return (
             False,
-            max(1, math.ceil(max(front_bucket) + self.PER_IP_WINDOW - now)),
+            max(1, math.ceil(max(front_bucket) + window - now)),
         )
 
     def check_ip_limit_with_reset(self, client_ip: str) -> tuple:

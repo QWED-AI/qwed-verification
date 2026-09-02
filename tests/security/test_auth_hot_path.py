@@ -8,7 +8,7 @@ Tests for the unauthenticated hot path hardening (issues #333, #334).
       timing equalizer.
 """
 
-import os
+import heapq
 import time
 import unittest
 from unittest.mock import patch
@@ -154,8 +154,8 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         self.assertEqual(len(limiter.ip_requests), 3)
         # Exactly one expired later bucket was reclaimed
         self.assertEqual(
-            1,
             sum(1 for ip in ("10.0.1.1", "10.0.1.2") if ip not in limiter.ip_requests),
+            1,
         )
 
     def test_capacity_rejection_at_exact_deadline_admits(self):
@@ -248,6 +248,49 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
             self.assertTrue(limiter.check_ip_limit(f"10.0.2.{i}"))
         self.assertEqual(len(limiter._expiry_heap), 3)
         self.assertEqual(len(limiter.ip_requests), 10)
+
+    def test_capped_heap_still_reclaims_expired_unindexed_buckets(self):
+        """Greptile P1 round 5: once the record cap makes the heap lossy,
+        unindexed EXPIRED buckets must still be reclaimed — the bounded
+        insertion-order fallback scan covers them, so available capacity
+        is never withheld behind a live front bucket."""
+        limiter = self._limiter()
+        limiter.MAX_TRACKED_IPS = 4
+        limiter._MAX_HEAP_RECORDS = 1  # force a lossy heap
+        limiter.check_ip_limit("10.0.1.0")            # record kept
+        for i in (1, 2, 3):
+            limiter.check_ip_limit(f"10.0.1.{i}")     # records dropped (cap)
+        self.assertEqual(len(limiter._expiry_heap), 1)
+        limiter.test_clock.advance(61)                # t=61: buckets 1-3 expired
+        limiter.check_ip_limit("10.0.1.0")            # front refresh: live, unindexed
+        allowed, _ = limiter.check_ip_limit_with_reset("10.9.9.9")
+        self.assertTrue(allowed)                      # expired capacity reclaimed
+        self.assertIn("10.9.9.9", limiter.ip_requests)
+        self.assertIn("10.0.1.0", limiter.ip_requests)  # live bucket untouched
+        self.assertEqual(len(limiter.ip_requests), 4)
+
+    def test_empty_head_pops_respect_repair_budget(self):
+        """Greptile P1 round 5: empty/stale head pops during capacity
+        reclaim consume the repair budget — accumulated stale records
+        cannot force unbounded under-lock work. With trim(4) + budget(2),
+        exactly 6 pops happen no matter how many stale records exist."""
+        limiter = self._limiter()
+        limiter.MAX_TRACKED_IPS = 5
+        for i in range(5):
+            limiter.check_ip_limit(f"10.0.1.{i}")     # 5 records
+        for _ in range(5):
+            # Extra stale duplicates: 10 stale heads, budget far smaller.
+            limiter._expiry_heap.append((60, "10.0.1.0"))
+        for i in range(5):
+            limiter.ip_requests[f"10.0.1.{i}"].clear()  # all heads stale
+        limiter._MAX_HEAP_REPAIRS = 2
+        with patch(
+            "qwed_new.core.rate_limiter.heapq.heappop",
+            wraps=heapq.heappop,
+        ) as pop_spy:
+            allowed, _ = limiter.check_ip_limit_with_reset("10.9.9.9")
+        self.assertTrue(allowed)
+        self.assertEqual(pop_spy.call_count, 6)  # trim(4) + reclaim(budget 2)
 
     def test_nonpositive_per_ip_limit_fails_construction(self):
         """A 0/negative QWED_RATE_LIMIT_PER_IP must fail at construction,
