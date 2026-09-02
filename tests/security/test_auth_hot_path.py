@@ -8,6 +8,7 @@ Tests for the unauthenticated hot path hardening (issues #333, #334).
       timing equalizer.
 """
 
+import os
 import time
 import unittest
 from unittest.mock import patch
@@ -42,6 +43,21 @@ class TestApiKeyLookupDigest(unittest.TestCase):
         self.assertLess(elapsed, 0.5, f"1000 lookups took {elapsed:.3f}s — KDF regression?")
 
 
+class _TickClock:
+    """Deterministic integer-tick clock for rate-limit tests (CodeRabbit on
+    PR #345 round 3: no ambient time.time, exact boundary arithmetic via
+    explicit clock advancement)."""
+
+    def __init__(self, start: int = 0):
+        self.t = start
+
+    def __call__(self) -> int:
+        return self.t
+
+    def advance(self, seconds: int) -> None:
+        self.t += seconds
+
+
 class _StubRequest:
     """Minimal stand-in for fastapi Request in limiter tests."""
 
@@ -54,8 +70,11 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
     """#334: anonymous /auth/* routes get a per-IP bucket."""
 
     def _limiter(self, limit=3):
+        clock = _TickClock()
         with patch.dict("os.environ", {"QWED_RATE_LIMIT_PER_IP": str(limit)}):
-            return RateLimiter()
+            limiter = RateLimiter(clock=clock)
+        limiter.test_clock = clock  # tests advance time explicitly
+        return limiter
 
     def test_blocks_after_limit(self):
         limiter = self._limiter(limit=3)
@@ -69,14 +88,14 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         limiter = self._limiter(limit=1)
         self.assertTrue(limiter.check_ip_limit("1.2.3.4"))
         self.assertFalse(limiter.check_ip_limit("1.2.3.4"))
-        # Age the recorded request out of the window
-        limiter.ip_requests["1.2.3.4"][0] -= limiter.PER_IP_WINDOW + 1
+        # Age the recorded request out of the window via the injected clock
+        limiter.test_clock.advance(limiter.PER_IP_WINDOW + 1)
         self.assertTrue(limiter.check_ip_limit("1.2.3.4"))
 
     def test_ip_table_never_exceeds_cap(self):
         """The table is hard-bounded: at the cap, a new address is admitted
-        only by evicting an EXPIRED first-inserted bucket — never by
-        evicting a live one (Greptile P1 round 2, PR #345)."""
+        only by evicting an EXPIRED bucket — never a live one (Greptile P1
+        round 2, PR #345)."""
         limiter = self._limiter()
         limiter.MAX_TRACKED_IPS = 5
         for i in range(50):
@@ -100,19 +119,68 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         self.assertNotIn("10.9.9.9", limiter.ip_requests)
 
     def test_hard_cap_evicts_expired_front_bucket(self):
-        """An expired first-inserted bucket is evicted in O(1) to admit a
-        new address once its window has fully expired."""
+        """An expired bucket is reclaimed to admit a new address once its
+        window has fully expired — while later buckets stay live."""
         limiter = self._limiter()
         limiter.MAX_TRACKED_IPS = 3
-        for i in range(3):
-            limiter.check_ip_limit(f"10.0.1.{i}")
-        limiter.ip_requests["10.0.1.0"] = [
-            limiter._clock() - limiter.PER_IP_WINDOW - 1
-        ]
+        limiter.check_ip_limit("10.0.1.0")      # t=0, deadline 60
+        limiter.test_clock.advance(20)
+        limiter.check_ip_limit("10.0.1.1")      # t=20, deadline 80
+        limiter.test_clock.advance(20)
+        limiter.check_ip_limit("10.0.1.2")      # t=40, deadline 100
+        limiter.test_clock.advance(21)          # t=61: only ip0 expired
         self.assertTrue(limiter.check_ip_limit("10.9.9.9"))
         self.assertEqual(len(limiter.ip_requests), 3)
         self.assertNotIn("10.0.1.0", limiter.ip_requests)
         self.assertIn("10.9.9.9", limiter.ip_requests)
+
+    def test_hard_cap_reclaims_expired_later_bucket(self):
+        """Greptile P1 round 3: insertion order is not expiry order. A live
+        FRONT bucket must not block reclaiming an EXPIRED later bucket —
+        otherwise the first-seen client's traffic keeps anonymous
+        signup/signin 429 for every untracked address."""
+        limiter = self._limiter()
+        limiter.MAX_TRACKED_IPS = 3
+        for ip in ("10.0.1.0", "10.0.1.1", "10.0.1.2"):
+            limiter.check_ip_limit(ip)           # all stamped t=0
+        limiter.test_clock.advance(50)           # t=50
+        limiter.check_ip_limit("10.0.1.0")       # FRONT client refreshes: deadline 110
+        limiter.test_clock.advance(11)           # t=61: later buckets (60) expired
+        allowed = limiter.check_ip_limit("10.9.9.9")
+        self.assertTrue(allowed)
+        # The live front bucket survives untouched with its budget intact
+        self.assertIn("10.0.1.0", limiter.ip_requests)
+        self.assertIn("10.9.9.9", limiter.ip_requests)
+        self.assertEqual(len(limiter.ip_requests), 3)
+        # Exactly one expired later bucket was reclaimed
+        self.assertEqual(
+            1,
+            sum(1 for ip in ("10.0.1.1", "10.0.1.2") if ip not in limiter.ip_requests),
+        )
+
+    def test_capacity_rejection_at_exact_deadline_admits(self):
+        """Single-clock-read regression (CodeRabbit round 3): the live
+        check and the reset computation use ONE clock reading, so a
+        deadline that expires exactly at the check is treated as expired —
+        it can never slip through the straddle as (False, Retry-After: 0)."""
+        limiter = self._limiter()
+        limiter.MAX_TRACKED_IPS = 2
+        limiter.check_ip_limit("10.0.1.0")       # deadline t+60
+        limiter.check_ip_limit("10.0.1.1")
+        limiter.test_clock.advance(60)           # t == front deadline exactly
+        allowed, reset = limiter.check_ip_limit_with_reset("10.9.9.9")
+        self.assertTrue(allowed)
+        self.assertEqual(reset, 0)
+
+    def test_capacity_rejection_retry_after_never_zero(self):
+        """A rejected request at a full table always reports >= 1 second —
+        one clock reading backs both the decision and the Retry-After."""
+        limiter = self._limiter()
+        limiter.MAX_TRACKED_IPS = 1
+        limiter.check_ip_limit("10.0.1.0")
+        allowed, reset = limiter.check_ip_limit_with_reset("10.9.9.9")
+        self.assertFalse(allowed)
+        self.assertGreaterEqual(reset, 1)
 
     def test_nonpositive_per_ip_limit_fails_construction(self):
         """A 0/negative QWED_RATE_LIMIT_PER_IP must fail at construction,
@@ -125,16 +193,19 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
 
     def test_retry_after_never_zero_while_blocked(self):
         """Rounded-up reset (CodeRabbit clock injection): a window with a
-        fractional second remaining must report >= 1, never 0."""
-        now = [1000.0]
+        fractional second remaining must report >= 1, never 0. Decimal
+        clock keeps the boundary arithmetic exact — no binary-float drift."""
+        from decimal import Decimal
+
+        now = [Decimal("1000.0")]
         with patch.dict("os.environ", {"QWED_RATE_LIMIT_PER_IP": "2"}):
             limiter = RateLimiter(clock=lambda: now[0])
-        limiter.ip_requests["1.2.3.4"] = [1000.0 - 59.5, 1000.0 - 59.2]
+        limiter.ip_requests["1.2.3.4"] = [Decimal("940.5"), Decimal("940.8")]
         self.assertFalse(limiter.check_ip_limit("1.2.3.4"))
         self.assertEqual(limiter.get_ip_reset_time("1.2.3.4"), 1)  # ceil(0.5)
-        now[0] += 0.4
+        now[0] += Decimal("0.4")
         self.assertEqual(limiter.get_ip_reset_time("1.2.3.4"), 1)  # ceil(0.1)
-        now[0] += 0.6
+        now[0] += Decimal("0.6")
         self.assertEqual(limiter.get_ip_reset_time("1.2.3.4"), 0)  # expired
 
     def test_atomic_check_and_reset(self):
@@ -161,6 +232,8 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
                 check_auth_rate_limit(req)
         self.assertEqual(ctx.exception.status_code, 429)
         self.assertIn("Retry-After", ctx.exception.headers)
+        # A rejected request must never advertise an immediate retry
+        self.assertGreaterEqual(int(ctx.exception.headers["Retry-After"]), 1)
 
     def test_untrusted_peer_header_ignored(self):
         """Default: X-Forwarded-For is NOT honored — the client must not be
@@ -241,6 +314,34 @@ class TestApiKeyLookupSecret(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=True):
             with self.assertRaises(RuntimeError):
                 hash_api_key("abc123")
+
+    def test_lookup_secret_equal_to_jwt_secret_fails_startup(self):
+        """CodeRabbit round 3: one rotated deployment secret pasted into
+        both variables re-couples API-key digests to JWT rotations —
+        startup must refuse to boot. Import-time check, so exercised in a
+        fresh subprocess."""
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        from qwed_new.auth import security as _sec
+
+        src_dir = str(Path(_sec.__file__).resolve().parents[2])
+        code = (
+            "import os; "
+            "os.environ['QWED_JWT_SECRET_KEY']='same-value'; "
+            "os.environ['QWED_API_KEY_LOOKUP_SECRET']='same-value'; "
+            "import qwed_new.auth.security"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            cwd=src_dir,
+            env={**os.environ, "PYTHONPATH": src_dir},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must differ", result.stderr)
 
 
 class TestSigninTimingEqualizer(unittest.TestCase):

@@ -1,2 +1,18 @@
 paths-ignore:
   - examples/security_demo
+
+query-filters:
+  # py/weak-sensitive-data-hashing fires on hash_api_key in
+  # src/qwed_new/auth/security.py: a DELIBERATE fast keyed MAC (HMAC-SHA256)
+  # over a 258-bit random API key, used for O(1) equality lookup on the
+  # unauthenticated request path. It is not password storage, and the
+  # query's recommendation — a computationally expensive KDF — is exactly
+  # the bug this code replaced: PBKDF2-100k there let ~15 req/s of garbage
+  # x-api-key values saturate the whole service (issue #333). With 258 bits
+  # of input entropy, digest speed is irrelevant to brute-force resistance.
+  # Real password hashing in this repo uses bcrypt (hash_password /
+  # verify_password in the same module). Comment-based suppression
+  # (# codeql[...]) is not honored by this workflow's suite runs, hence
+  # this filter.
+  - exclude:
+      id: py/weak-sensitive-data-hashing

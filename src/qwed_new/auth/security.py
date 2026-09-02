@@ -29,6 +29,16 @@ if not os.getenv("QWED_API_KEY_LOOKUP_SECRET"):
         "rotations. Set the dedicated secret BEFORE issuing v7.2 keys."
     )
 
+if os.getenv("QWED_API_KEY_LOOKUP_SECRET") == SECRET_KEY:
+    # One rotated deployment secret in both variables re-couples API-key
+    # digests to JWT rotations — the exact failure the dedicated secret
+    # exists to prevent (CodeRabbit on PR #345 round 3). Refuse to boot.
+    raise RuntimeError(
+        "QWED_API_KEY_LOOKUP_SECRET must differ from QWED_JWT_SECRET_KEY — "
+        "equal values re-couple API-key lookup digests to JWT-secret "
+        "rotations."
+    )
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 60))
 

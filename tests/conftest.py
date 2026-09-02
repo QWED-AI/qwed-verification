@@ -10,7 +10,10 @@ def _test_secret_material(prefix: str) -> str:
 
 TEST_JWT_MATERIAL = _test_secret_material("unit-test-jwt")
 TEST_API_KEY_MATERIAL = _test_secret_material("unit-test-api")
-TEST_LOOKUP_MATERIAL = _test_secret_material("unit-test-lookup")
+# Fixed, not uuid-derived, so verification runs are byte-for-byte
+# reproducible (CodeRabbit on PR #345 round 3). Deliberately distinct from
+# TEST_JWT_MATERIAL: security.py refuses to boot when the two are equal.
+TEST_LOOKUP_MATERIAL = "unit-test-lookup-material"
 
 # Inject test secrets before any module imports happen
 os.environ["QWED_JWT_SECRET_KEY"] = TEST_JWT_MATERIAL

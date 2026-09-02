@@ -7,6 +7,7 @@ Implements:
 - Returns 429 Too Many Requests when exceeded
 """
 
+import heapq
 import ipaddress
 import math
 import os
@@ -75,6 +76,11 @@ class RateLimiter:
         # grow memory unboundedly. Above the cap, drop IPs whose windows
         # have fully expired.
         self.MAX_TRACKED_IPS = 50_000
+
+        # Min-heap of (expiry_deadline, ip) for capacity-time eviction.
+        # Entries are pushed on every admitted request and cleaned lazily,
+        # so the heap tracks the live set without any table-wide scan.
+        self._expiry_heap: list = []
     
     def _clean_old_requests(self, requests: list, window_seconds: int) -> list:
         """Remove timestamps older than the window (injected clock)."""
@@ -148,35 +154,79 @@ class RateLimiter:
             (allowed, reset_after_seconds) — reset_after is 0 when allowed.
         """
         with self._lock:
-            # Hard cap with O(1) admission (no table-wide scans inside the
-            # lock — a full table must not stall every limiter call, the
-            # original Greptile P1 on PR #345). A new address is admitted
-            # only by evicting the FIRST-inserted bucket, and only when that
-            # bucket's window has fully expired: evicting a live bucket
-            # would hand that client a fresh budget on its next request
-            # before its original window ended (Greptile P1, round 2). When
-            # the front bucket is still live the new address is rejected
-            # until a slot frees — explicit and bounded: under a
-            # 50k-distinct-IP flood, fresh addresses wait out at most the
-            # front bucket's remaining window.
+            # Amortized O(1) heap hygiene: drop a few stale head entries so
+            # the heap tracks the live set even when the table never
+            # reaches capacity. Bounded to a constant per call — no scans.
+            for _ in range(4):
+                if not self._expiry_heap:
+                    break
+                head_deadline, head_ip = self._expiry_heap[0]
+                head_bucket = self.ip_requests.get(head_ip)
+                if (
+                    not head_bucket
+                    or max(head_bucket) + self.PER_IP_WINDOW != head_deadline
+                ):
+                    heapq.heappop(self._expiry_heap)
+                    continue
+                break
+
+            # Hard cap WITHOUT table-wide scans inside the lock (a full
+            # table must not stall every limiter call — Greptile P1, PR
+            # #345) and WITHOUT evicting a live bucket (that would hand
+            # the evicted client a fresh budget before its window ended —
+            # Greptile P1 round 2). Buckets record their expiry deadline
+            # in a min-heap; at capacity the earliest deadline is
+            # reclaimed if expired. A live FRONT bucket no longer blocks
+            # reclaiming EXPIRED later buckets (Greptile P1 round 3:
+            # insertion order is not expiry order — otherwise one
+            # first-seen client's traffic keeps anonymous signup/signin
+            # 429 for every untracked address).
             if (
                 client_ip not in self.ip_requests
                 and len(self.ip_requests) >= self.MAX_TRACKED_IPS
             ):
-                oldest_ip = next(iter(self.ip_requests))
-                oldest_bucket = self.ip_requests[oldest_ip]
-                if oldest_bucket and (
-                    max(oldest_bucket) + self.PER_IP_WINDOW > self._clock()
-                ):
-                    # Front bucket live: reject with the time until the
-                    # earliest slot can free up.
-                    reset_after = math.ceil(
-                        max(oldest_bucket)
-                        + self.PER_IP_WINDOW
-                        - self._clock()
-                    )
-                    return False, max(0, reset_after)
-                del self.ip_requests[oldest_ip]
+                # ONE clock reading for both the live check and the reset
+                # computation: two reads could straddle the deadline and
+                # return (False, 0) — a rejected request must never get
+                # Retry-After: 0 (CodeRabbit on PR #345).
+                now = self._clock()
+                window = self.PER_IP_WINDOW
+                while self._expiry_heap:
+                    deadline, evict_ip = self._expiry_heap[0]
+                    bucket = self.ip_requests.get(evict_ip)
+                    if not bucket:
+                        # Empty or already evicted: reclaim both.
+                        heapq.heappop(self._expiry_heap)
+                        self.ip_requests.pop(evict_ip, None)
+                        continue
+                    true_deadline = max(bucket) + window
+                    if true_deadline != deadline:
+                        # Entry drifted (bucket refreshed or mutated since
+                        # push): repair to the dict's current deadline.
+                        heapq.heappop(self._expiry_heap)
+                        heapq.heappush(self._expiry_heap, (true_deadline, evict_ip))
+                        continue
+                    if deadline <= now:
+                        # Genuinely expired: reclaim the slot and admit.
+                        heapq.heappop(self._expiry_heap)
+                        del self.ip_requests[evict_ip]
+                        break
+                    # Earliest deadline is live, so EVERY bucket is live.
+                    reset_after = max(1, math.ceil(deadline - now))
+                    return False, reset_after
+                else:
+                    # Heap exhausted while the table is full (buckets
+                    # injected directly by tooling/tests): O(1) fallback —
+                    # evict the insertion-order front bucket only if it is
+                    # not live, otherwise reject explicitly.
+                    front_ip = next(iter(self.ip_requests))
+                    front_bucket = self.ip_requests[front_ip]
+                    if not front_bucket or max(front_bucket) + window <= now:
+                        del self.ip_requests[front_ip]
+                    else:
+                        return False, max(
+                            1, math.ceil(max(front_bucket) + window - now)
+                        )
 
             self.ip_requests[client_ip] = self._clean_old_requests(
                 self.ip_requests[client_ip],
@@ -194,6 +244,10 @@ class RateLimiter:
                 return False, max(0, reset_after)
 
             self.ip_requests[client_ip].append(self._clock())
+            heapq.heappush(
+                self._expiry_heap,
+                (max(self.ip_requests[client_ip]) + self.PER_IP_WINDOW, client_ip),
+            )
             return True, 0
 
     def get_ip_reset_time(self, client_ip: str) -> int:
