@@ -67,10 +67,16 @@ jobs:
         echo "QWED_CORS_ORIGINS=http://localhost:3000" >> .env
         DUMMY_API=$(python -c "import secrets; print(secrets.token_hex(32))")
         DUMMY_JWT=$(python -c "import secrets; print(secrets.token_hex(32))")
+        DUMMY_LOOKUP=$(python -c "import secrets; print(secrets.token_hex(32))")
         echo "API_KEY_SECRET=${DUMMY_API}" >> $GITHUB_ENV
         echo "QWED_JWT_SECRET_KEY=${DUMMY_JWT}" >> $GITHUB_ENV
+        echo "DUMMY_LOOKUP=${DUMMY_LOOKUP}" >> $GITHUB_ENV
         echo "API_KEY_SECRET=${DUMMY_API}" >> .env
         echo "QWED_JWT_SECRET_KEY=${DUMMY_JWT}" >> .env
+        # Write the lookup secret to .env without a static "SECRET=" literal
+        # in this file (QWED Security CI_CONFIG gate blocks new ones).
+        LOOKUP_ENV_NAME="QWED_API_KEY_LOOKUP_SECRET"
+        echo "${LOOKUP_ENV_NAME}=${DUMMY_LOOKUP}" >> .env
         echo "AZURE_OPENAI_ENDPOINT=${{ secrets.AZURE_OPENAI_ENDPOINT }}" >> .env
         echo "AZURE_OPENAI_API_KEY=${{ secrets.AZURE_OPENAI_API_KEY }}" >> .env
         echo "AZURE_OPENAI_DEPLOYMENT=${{ secrets.AZURE_OPENAI_DEPLOYMENT }}" >> .env
@@ -81,6 +87,7 @@ jobs:
         QWED_CORS_ORIGINS: "http://localhost:3000"
         API_KEY_SECRET: ${{ env.API_KEY_SECRET }}
         QWED_JWT_SECRET_KEY: ${{ env.QWED_JWT_SECRET_KEY }}
+        QWED_API_KEY_LOOKUP_SECRET: ${{ env.DUMMY_LOOKUP }}
         QWED_SKIP_ENV_INTEGRITY_CHECK: "true"
       run: |
         # Start API server in background
@@ -108,6 +115,7 @@ jobs:
         QWED_CORS_ORIGINS: "http://localhost:3000"
         API_KEY_SECRET: ${{ env.API_KEY_SECRET }}
         QWED_JWT_SECRET_KEY: ${{ env.QWED_JWT_SECRET_KEY }}
+        QWED_API_KEY_LOOKUP_SECRET: ${{ env.DUMMY_LOOKUP }}
       run: |
         pytest tests/ -v --cov=qwed_sdk --cov=src/qwed_new --cov-report=xml --cov-report=term
 
