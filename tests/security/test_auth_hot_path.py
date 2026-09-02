@@ -300,6 +300,28 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
         self.assertGreaterEqual(reset, 1)
         self.assertEqual(pop_spy.call_count, 6)  # trim(4) + reclaim(budget 2)
 
+    def test_repair_exhaustion_still_reclaims_exposed_expired_head(self):
+        """Greptile P1 round 8: when the repair budget is spent exactly at
+        the boundary, the FINAL peek still reclaims an immediately exposed
+        expired head — refresh traffic cannot make legitimate anonymous
+        signups 429 despite reclaimable capacity. No table scan either
+        way."""
+        limiter = self._limiter()
+        limiter.MAX_TRACKED_IPS = 3
+        limiter._MAX_HEAP_REPAIRS = 2  # exactly the drifted heads
+        for ip in ("10.0.1.0", "10.0.1.1", "10.0.1.2"):
+            limiter.check_ip_limit(ip)                # t=0, indexed 60
+        limiter.test_clock.advance(59)
+        limiter.check_ip_limit("10.0.1.0")            # refresh → true 119
+        limiter.check_ip_limit("10.0.1.1")            # refresh → true 119
+        limiter.test_clock.advance(2)                 # t=61: ip2 expired
+        allowed, _ = limiter.check_ip_limit_with_reset("10.9.9.9")
+        self.assertTrue(allowed)                      # exposed head reclaimed
+        self.assertNotIn("10.0.1.2", limiter.ip_requests)
+        self.assertIn("10.0.1.0", limiter.ip_requests)  # refreshed, live
+        self.assertIn("10.9.9.9", limiter.ip_requests)
+        self.assertEqual(len(limiter.ip_requests), 3)
+
     def test_nonpositive_per_ip_limit_fails_construction(self):
         """A 0/negative QWED_RATE_LIMIT_PER_IP must fail at construction,
         not 500 every anonymous /auth/* request via min()-of-empty-bucket

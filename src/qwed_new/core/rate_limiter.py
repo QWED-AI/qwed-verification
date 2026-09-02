@@ -261,6 +261,20 @@ class RateLimiter:
                     return False
                 self._reindex_head(evict_ip, true_deadline)
                 repairs += 1
+        # Budget spent: ONE final bounded peek, no scan (Greptile P1
+        # round 8). The last repair can expose an expired head — reclaim
+        # it rather than rejecting available capacity. A live head here
+        # may still be drifted (index not yet current), so it cannot
+        # settle the verdict authoritatively; a garbage head would need
+        # more pops. Either way the call falls through to the caller's
+        # conservative reject, keeping under-lock work bounded.
+        if self._expiry_heap:
+            state, _deadline, evict_ip = self._head_record_state(now)
+            if state == "expired":
+                heapq.heappop(self._expiry_heap)
+                self._indexed_deadline.pop(evict_ip, None)
+                del self.ip_requests[evict_ip]
+                return True
         return False
 
     def _conservative_reject(self, now: float) -> tuple:
