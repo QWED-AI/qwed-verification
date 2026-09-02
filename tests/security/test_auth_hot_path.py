@@ -238,48 +238,55 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
             self.assertIn(f"10.0.1.{i}", limiter.ip_requests)
         self.assertNotIn("10.9.9.9", limiter.ip_requests)
 
-    def test_heap_records_hard_capped(self):
-        """Greptile P1 round 4: heap record count is bounded — beyond the
-        cap, admissions stop pushing records but keep working."""
-        limiter = self._limiter()
-        limiter.MAX_TRACKED_IPS = 500
-        limiter._MAX_HEAP_RECORDS = 3
-        for i in range(10):
-            self.assertTrue(limiter.check_ip_limit(f"10.0.2.{i}"))
-        self.assertEqual(len(limiter._expiry_heap), 3)
-        self.assertEqual(len(limiter.ip_requests), 10)
-
-    def test_capped_heap_still_reclaims_expired_unindexed_buckets(self):
-        """Greptile P1 round 5: once the record cap makes the heap lossy,
-        unindexed EXPIRED buckets must still be reclaimed — the bounded
-        insertion-order fallback scan covers them, so available capacity
-        is never withheld behind a live front bucket."""
-        limiter = self._limiter()
-        limiter.MAX_TRACKED_IPS = 4
-        limiter._MAX_HEAP_RECORDS = 1  # force a lossy heap
-        limiter.check_ip_limit("10.0.1.0")            # record kept
-        for i in (1, 2, 3):
-            limiter.check_ip_limit(f"10.0.1.{i}")     # records dropped (cap)
+    def test_one_expiry_record_per_ip_deduped(self):
+        """Greptile P1 rounds 6-7: the expiry index holds ONE
+        authoritative record per IP — repeated requests from the same
+        client never grow the heap, so it is structurally bounded by
+        MAX_TRACKED_IPS with no record cap needed."""
+        limiter = self._limiter(limit=25)
+        for _ in range(20):
+            self.assertTrue(limiter.check_ip_limit("10.0.2.7"))
         self.assertEqual(len(limiter._expiry_heap), 1)
-        limiter.test_clock.advance(61)                # t=61: buckets 1-3 expired
-        limiter.check_ip_limit("10.0.1.0")            # front refresh: live, unindexed
+        self.assertEqual(len(limiter._indexed_deadline), 1)
+        self.assertEqual(len(limiter.ip_requests), 1)
+
+    def test_refreshed_bucket_stays_indexed_for_reclaim(self):
+        """Greptile P1 round 6: a refreshed bucket's stale record is
+        re-indexed to its true deadline (never dropped), so its expiry
+        stays visible and a refreshed-but-stale-indexed bucket neither
+        hides an expired peer nor gets evicted while live — all without
+        any table scan (round 7)."""
+        limiter = self._limiter()
+        limiter.MAX_TRACKED_IPS = 3
+        for ip in ("10.0.1.0", "10.0.1.1", "10.0.1.2"):
+            limiter.check_ip_limit(ip)               # all stamped t=0
+        limiter.test_clock.advance(59)               # t=59
+        limiter.check_ip_limit("10.0.1.0")           # refresh → true deadline 119
+        limiter.test_clock.advance(2)                # t=61: ip1/ip2 expired
         allowed, _ = limiter.check_ip_limit_with_reset("10.9.9.9")
-        self.assertTrue(allowed)                      # expired capacity reclaimed
-        self.assertIn("10.9.9.9", limiter.ip_requests)
-        self.assertIn("10.0.1.0", limiter.ip_requests)  # live bucket untouched
-        self.assertEqual(len(limiter.ip_requests), 4)
+        self.assertTrue(allowed)                     # expired capacity reclaimed
+        self.assertIn("10.0.1.0", limiter.ip_requests)  # live + re-indexed
+        self.assertNotIn("10.0.1.1", limiter.ip_requests)
+        self.assertEqual(len(limiter.ip_requests), 3)
+        # ip0's index entry was repaired to its true deadline, so its
+        # expiry remains visible for future reclaims.
+        self.assertEqual(
+            limiter._indexed_deadline.get("10.0.1.0"), 119
+        )
 
     def test_empty_head_pops_respect_repair_budget(self):
-        """Greptile P1 round 5: empty/stale head pops during capacity
-        reclaim consume the repair budget — accumulated stale records
-        cannot force unbounded under-lock work. With trim(4) + budget(2),
-        exactly 6 pops happen no matter how many stale records exist."""
+        """Greptile P1 rounds 5+7: EVERY under-lock pop — hygiene trim,
+        garbage purge, or re-index — is budgeted. With trim(4) +
+        budget(2), at most 6 pops happen no matter how many stale records
+        accumulate; if the budget cannot settle the verdict the call
+        rejects CONSERVATIVELY (bounded Retry-After) instead of
+        scanning the table."""
         limiter = self._limiter()
         limiter.MAX_TRACKED_IPS = 5
         for i in range(5):
-            limiter.check_ip_limit(f"10.0.1.{i}")     # 5 records
+            limiter.check_ip_limit(f"10.0.1.{i}")     # 5 indexed records
         for _ in range(5):
-            # Extra stale duplicates: 10 stale heads, budget far smaller.
+            # Extra stale duplicates: 10 garbage heads, budget far smaller.
             limiter._expiry_heap.append((60, "10.0.1.0"))
         for i in range(5):
             limiter.ip_requests[f"10.0.1.{i}"].clear()  # all heads stale
@@ -288,8 +295,9 @@ class TestPerIpAuthRateLimit(unittest.TestCase):
             "qwed_new.core.rate_limiter.heapq.heappop",
             wraps=heapq.heappop,
         ) as pop_spy:
-            allowed, _ = limiter.check_ip_limit_with_reset("10.9.9.9")
-        self.assertTrue(allowed)
+            allowed, reset = limiter.check_ip_limit_with_reset("10.9.9.9")
+        self.assertFalse(allowed)  # budget exhausted → conservative reject
+        self.assertGreaterEqual(reset, 1)
         self.assertEqual(pop_spy.call_count, 6)  # trim(4) + reclaim(budget 2)
 
     def test_nonpositive_per_ip_limit_fails_construction(self):
