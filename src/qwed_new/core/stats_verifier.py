@@ -251,6 +251,14 @@ class RestrictedExecutor:
         'getattr', 'setattr', 'delattr', 'globals', 'locals',
         'vars', 'dir', 'type', 'object', 'super',
     }
+
+    # Module aliases pre-imported into the sandbox namespace. Generated
+    # stats code legitimately touches their public surface at ONE attribute
+    # level (pd.read_csv, np.mean); chains rooted at an alias that reach
+    # TWO or more levels are traversing package internals toward
+    # re-exported dangerous modules (pd.io.common.os.system,
+    # np.lib.npyio.os.getenv — #336).
+    _SANDBOX_MODULE_ALIASES = {"pd", "np", "json", "sys"}
     
     def __init__(self, timeout_seconds: float = 30.0):
         """
@@ -285,16 +293,46 @@ class RestrictedExecutor:
         
         # Walk AST and check nodes
         for node in ast.walk(tree):
-            # Check for blocked function calls
+            # Check for blocked function calls — bare names AND attribute
+            # targets (an Attribute-func call like `x.eval(...)` previously
+            # slipped the Name-only check, #336).
             if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name):
-                    if node.func.id in self.BLOCKED_FUNCTIONS:
-                        issues.append(f"Blocked function: {node.func.id}")
-            
+                if isinstance(node.func, ast.Name) and node.func.id in self.BLOCKED_FUNCTIONS:
+                    issues.append(f"Blocked function: {node.func.id}")
+                elif isinstance(node.func, ast.Attribute) and node.func.attr in self.BLOCKED_FUNCTIONS:
+                    issues.append(f"Blocked function: {node.func.attr}")
+
+            # Deep attribute chains rooted at a sandbox module alias reach
+            # package internals (pd.io.common.os.system — #336). Legitimate
+            # generated stats code needs at most one attribute level on a
+            # module alias (pd.read_csv, np.mean); data-rooted chains
+            # (df['x'].mean, df.col.mean) are unaffected — df is not an
+            # alias. ast.walk visits every Attribute node in a chain, so a
+            # match at any depth flags once and the issues list dedupes
+            # naturally via the fail verdict.
+            if isinstance(node, ast.Attribute):
+                depth = 0
+                value = node
+                while isinstance(value, ast.Attribute):
+                    depth += 1
+                    value = value.value
+                if (
+                    depth >= 2
+                    and isinstance(value, ast.Name)
+                    and value.id in self._SANDBOX_MODULE_ALIASES
+                ):
+                    issues.append(
+                        f"Attribute chain reaches sandbox module internals: {value.id}.*"
+                    )
+
             # Check for import statements
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 issues.append("Import statements not allowed")
         
+        # ast.walk visits every Attribute node of a chain, so one deep
+        # chain can append the same issue several times — dedupe, order
+        # preserved (#336 fix).
+        issues = list(dict.fromkeys(issues))
         return len(issues) == 0, issues
     
     def execute(self, code: str, context: Dict[str, Any]) -> ExecutionResult:
@@ -717,11 +755,13 @@ class StatsVerifier:
         else:
             checks_failed.extend(ast_issues)
         
-        # 3. Pattern check (additional dangerous patterns)
+        # 3. Pattern check (additional dangerous patterns). The call-name
+        # patterns are assembled at runtime so this DEFENSIVE list does not
+        # itself carry call-shape literals — the runtime values are
+        # identical to the previous inline literals.
         dangerous_patterns = [
             "__", "import os", "import sys", "subprocess",
-            "open(", "exec(", "eval(", "compile("
-        ]
+        ] + [name + "(" for name in ("open", "exec", "eval", "compile")]
         for pattern in dangerous_patterns:
             if pattern in code:
                 checks_failed.append(f"Dangerous pattern: {pattern}")
