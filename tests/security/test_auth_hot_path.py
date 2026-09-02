@@ -27,14 +27,14 @@ class TestApiKeyLookupDigest(unittest.TestCase):
     def test_deterministic_and_correct_length(self):
         sample = "abc123"
         h1, h2 = hash_api_key(sample), hash_api_key(sample)
-        self.assertEqual(h1, hash_api_key(sample))
+        self.assertEqual(hash_api_key(sample), h1)
         self.assertEqual(h1, h2)
         self.assertEqual(len(h1), 64)  # sha256 hex
         int(h1, 16)  # valid hex
 
     def test_generate_api_key_roundtrip(self):
         raw, hashed = generate_api_key()
-        self.assertEqual(hashed, hash_api_key(raw))
+        self.assertEqual(hash_api_key(raw), hashed)
 
     def test_lookup_cost_is_not_a_kdf(self):
         """1000 lookups must be far faster than even a single PBKDF2-100k
@@ -435,7 +435,7 @@ class TestApiKeyLookupSecret(unittest.TestCase):
         with patch.dict("os.environ", {"QWED_API_KEY_LOOKUP_SECRET": "test-dedi-42"}):
             with_dedicated = hash_api_key(sample)
             # Stable while the same dedicated secret is set
-            self.assertEqual(with_dedicated, hash_api_key(sample))
+            self.assertEqual(hash_api_key(sample), with_dedicated)
         self.assertNotEqual(baseline, with_dedicated)
 
     def test_changing_the_dedicated_secret_changes_digest(self):
@@ -445,7 +445,7 @@ class TestApiKeyLookupSecret(unittest.TestCase):
         with patch.dict("os.environ", {"QWED_API_KEY_LOOKUP_SECRET": "test-dedi-42"}):
             first = hash_api_key(sample)
         with patch.dict("os.environ", {"QWED_API_KEY_LOOKUP_SECRET": "test-dedi-99"}):
-            self.assertNotEqual(first, hash_api_key(sample))
+            self.assertNotEqual(hash_api_key(sample), first)
 
     def test_missing_lookup_secret_fails_closed(self):
         """No fallback: an unset dedicated secret must raise, never silently
