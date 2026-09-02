@@ -71,6 +71,14 @@ class _IndexedExpiryQueue:
         if idx is not None:
             self._remove_at(idx)
 
+    def clear(self) -> None:
+        """Drop every record. Whoever empties the bucket table must empty
+        the queue in the same breath: a record whose bucket is gone would
+        surface at the head and make capacity reclaim delete a missing
+        bucket (Sentry on PR #345 round 11)."""
+        self._heap.clear()
+        self._pos.clear()
+
     def _remove_at(self, idx: int) -> None:
         heap = self._heap
         last = len(heap) - 1

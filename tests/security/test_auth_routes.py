@@ -88,9 +88,15 @@ def _with_session(session):
 
 @pytest.fixture(autouse=True)
 def _clean_ip_buckets():
+    # The bucket table and the expiry queue must be reset TOGETHER: a
+    # queue record whose bucket is gone surfaces at the head and makes
+    # capacity reclaim delete a missing bucket (KeyError — Sentry on
+    # PR #345 round 11, reproduced).
     rate_limiter.ip_requests.clear()
+    rate_limiter._expiries.clear()
     yield
     rate_limiter.ip_requests.clear()
+    rate_limiter._expiries.clear()
 
 
 class TestSignup:

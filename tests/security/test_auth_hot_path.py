@@ -562,6 +562,20 @@ class TestIndexedExpiryQueue(unittest.TestCase):
             [(i, f"ip{i}") for i in range(10) if i not in (0, 5)],
         )
 
+    def test_clear_drops_all_records_and_is_reusable(self):
+        """Sentry round 11: tests that reset the shared limiter's bucket
+        table must be able to reset the queue with it — clear() leaves no
+        records and the queue stays fully usable afterwards."""
+        q = self._q()
+        for i in range(5):
+            q.set_deadline(f"ip{i}", i)
+        q.clear()
+        self.assertEqual(len(q), 0)
+        self.assertIsNone(q.peek())
+        self.assertIsNone(q.pop_min())
+        q.set_deadline("a", 10)
+        self.assertEqual(q.peek(), (10, "a"))
+
     def test_random_ops_keep_heap_and_index_consistent(self):
         """Deterministic stress: after every operation the array is a
         valid min-heap and _pos maps every entry to its exact slot."""
