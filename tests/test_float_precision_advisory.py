@@ -35,6 +35,49 @@ class TestFloatPrecisionAdvisoryHelper:
     def test_scientific_notation_flagged(self):
         assert AdvisoryCheck.float_precision("1e9 * 2") is not None
 
+    def test_equality_expression_sides_flagged(self):
+        # CodeAnt on #348: `0.1 + 0.2 = 0.3` is not one eval-mode
+        # expression — the two sides are parsed separately and both
+        # surfaces' float constants are reported.
+        advisory = AdvisoryCheck.float_precision("0.1 + 0.2 = 0.3")
+        assert advisory is not None
+        constants = advisory.details["constants"]
+        assert any("0.1" in c for c in constants)
+        assert any("0.3" in c for c in constants)
+
+    def test_equality_with_clean_side_still_flags_float_side(self):
+        advisory = AdvisoryCheck.float_precision("0.5 = x")
+        assert advisory is not None
+        assert advisory.details["constants"] == ["0.5"]
+
+    def test_explicit_multiplication_equality_flagged(self):
+        # Greptile on #348: 0.5*x = 0.5*x
+        advisory = AdvisoryCheck.float_precision("0.5*x = 0.5*x")
+        assert advisory is not None
+        assert advisory.details["constants"] == ["0.5"]
+
+    def test_implicit_multiplication_equality_flagged(self):
+        # Greptile on #348: 0.5x = 0.5x
+        advisory = AdvisoryCheck.float_precision("0.5x = 0.5x")
+        assert advisory is not None
+        assert advisory.details["constants"] == ["0.5"]
+
+    def test_equality_literal_flagged(self):
+        # CodeRabbit on #348: 0.1 = 0.1
+        advisory = AdvisoryCheck.float_precision("0.1 = 0.1")
+        assert advisory is not None
+        assert advisory.details["constants"] == ["0.1"]
+
+    def test_complex_literals_flagged(self):
+        # CodeAnt nitpick: 1.0j is an AST complex constant, not float.
+        advisory = AdvisoryCheck.float_precision("1.0j * 2")
+        assert advisory is not None
+        assert any("j" in c for c in advisory.details["constants"])
+
+    def test_malformed_equality_returns_none(self):
+        # Neither side parses: no advisory, no exception.
+        assert AdvisoryCheck.float_precision("!! = ??") is None
+
     def test_unparsable_source_returns_none(self):
         # Parse failures are the security gates' business, not this
         # advisory's.
@@ -55,7 +98,7 @@ class TestFloatPrecisionAdvisoryHelper:
 
 
 class TestVerifyMathEndpointAdvisory:
-    @pytest.fixture()
+    @pytest.fixture
     def client(self):
         from qwed_new.api.main import app, get_session
         from qwed_new.core.tenant_context import TenantContext, get_current_tenant
@@ -84,6 +127,42 @@ class TestVerifyMathEndpointAdvisory:
 
     def test_exact_expression_carries_no_float_advisory(self, client):
         resp = client.post("/verify/math", json={"expression": "2 + 3"})
+        assert resp.status_code == 200, resp.text
+        checks = resp.json().get("developer_fields", {}).get("advisory_checks", [])
+        assert not any(c.get("constraint_id") == "precision.float-constants" for c in checks)
+
+    def test_equation_expression_carries_float_advisory(self, client):
+        # Greptile / CodeRabbit / Sentry on #348: equations like
+        # 0.5*x = 0.5*x and 0.5x = 0.5x must carry precision advisory.
+        resp = client.post("/verify/math", json={"expression": "0.5*x = 0.5*x"})
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data.get("status") == "VERIFIED"
+        checks = data.get("developer_fields", {}).get("advisory_checks", [])
+        adv = next((c for c in checks if c.get("constraint_id") == "precision.float-constants"), None)
+        assert adv is not None
+        assert "0.5" in adv["details"]["constants"]
+
+    def test_implicit_multiplication_equation_carries_float_advisory(self, client):
+        # Greptile on #348: 0.5x = 0.5x
+        resp = client.post("/verify/math", json={"expression": "0.5x = 0.5x"})
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data.get("status") == "VERIFIED"
+        checks = data.get("developer_fields", {}).get("advisory_checks", [])
+        adv = next((c for c in checks if c.get("constraint_id") == "precision.float-constants"), None)
+        assert adv is not None
+        assert "0.5" in adv["details"]["constants"]
+
+    def test_literal_equation_carries_float_advisory(self, client):
+        # CodeRabbit on #348: 0.1 = 0.1
+        resp = client.post("/verify/math", json={"expression": "0.1 = 0.1"})
+        assert resp.status_code == 200, resp.text
+        checks = resp.json().get("developer_fields", {}).get("advisory_checks", [])
+        assert any(c.get("constraint_id") == "precision.float-constants" for c in checks)
+
+    def test_exact_equation_carries_no_float_advisory(self, client):
+        resp = client.post("/verify/math", json={"expression": "x = x"})
         assert resp.status_code == 200, resp.text
         checks = resp.json().get("developer_fields", {}).get("advisory_checks", [])
         assert not any(c.get("constraint_id") == "precision.float-constants" for c in checks)

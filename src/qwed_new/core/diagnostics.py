@@ -152,16 +152,38 @@ class AdvisoryCheck:
         not what is exact, and documented inputs like
         `1000 * (1 + 0.05)**2` legitimately contain floats (#347).
 
-        Returns None when the source parses clean of float constants or
-        cannot be parsed at all (parse failures are the security gates'
-        business, not this advisory's)."""
+        Equality input (`0.1 + 0.2 = 0.3`) is not one eval-mode expression,
+        so in expression mode the two sides of a bare `=` are parsed
+        separately (CodeAnt on #348). Complex constants count too:
+        `1.0j` is binary-float-based arithmetic the same way `0.1` is.
+
+        Returns None when the source parses clean of float/complex
+        constants or cannot be parsed at all (parse failures are the
+        security gates' business, not this advisory's)."""
+        trees = []
         try:
-            tree = ast.parse(source, mode="eval" if expression_mode else "exec")
+            trees.append(ast.parse(source, mode="eval" if expression_mode else "exec"))
         except (SyntaxError, ValueError, RecursionError):
+            if expression_mode:
+                left, sep, right = source.partition("=")
+                if sep and "=" not in left and "=" not in right:
+                    import re
+                    for side in (left.strip(), right.strip()):
+                        try:
+                            trees.append(ast.parse(side, mode="eval"))
+                        except (SyntaxError, ValueError, RecursionError):
+                            # Try normalizing implicit multiplication (e.g. 0.5x -> 0.5*x)
+                            norm = re.sub(r'(\d+([.]\d*)?|\.\d+)([a-zA-Z_])', r'\1*\3', side)
+                            try:
+                                trees.append(ast.parse(norm, mode="eval"))
+                            except (SyntaxError, ValueError, RecursionError):
+                                pass
+        if not trees:
             return None
         constants = sorted(
-            {repr(node.value) for node in ast.walk(tree)
-             if isinstance(node, ast.Constant) and isinstance(node.value, float)}
+            {repr(node.value) for tree in trees for node in ast.walk(tree)
+             if isinstance(node, ast.Constant)
+             and isinstance(node.value, (float, complex))}
         )
         if not constants:
             return None
