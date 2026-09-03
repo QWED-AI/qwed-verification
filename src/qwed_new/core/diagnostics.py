@@ -39,6 +39,7 @@ Dict[str, Any] returns to DiagnosticResult) is tracked in blocked issues:
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import logging
@@ -140,6 +141,45 @@ class AdvisoryCheck:
             "constraint_id": self.constraint_id,
             "details": self.details,
         }
+
+    @classmethod
+    def float_precision(cls, source: str, expression_mode: bool = True) -> Optional["AdvisoryCheck"]:
+        """Advisory: *source* contains binary floating-point constants.
+
+        QWED_RULES.md: floating-point math is flagged and decimal.Decimal /
+        SymPy exact rationals are suggested. This is a PRECISION advisory,
+        never a rejection — execution-safety gates decide what may run,
+        not what is exact, and documented inputs like
+        `1000 * (1 + 0.05)**2` legitimately contain floats (#347).
+
+        Returns None when the source parses clean of float constants or
+        cannot be parsed at all (parse failures are the security gates'
+        business, not this advisory's)."""
+        try:
+            tree = ast.parse(source, mode="eval" if expression_mode else "exec")
+        except (SyntaxError, ValueError, RecursionError):
+            return None
+        constants = sorted(
+            {repr(node.value) for node in ast.walk(tree)
+             if isinstance(node, ast.Constant) and isinstance(node.value, float)}
+        )
+        if not constants:
+            return None
+        return cls(
+            name="floating-point-constants",
+            constraint_id="precision.float-constants",
+            details={
+                "constants": constants,
+                "note": (
+                    "Binary floating-point values can be inexact; results "
+                    "may differ from exact decimal arithmetic."
+                ),
+                "suggestion": (
+                    "Use decimal.Decimal or SymPy exact rationals "
+                    "(sympy.Rational) where exact arithmetic matters."
+                ),
+            },
+        )
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AdvisoryCheck":
