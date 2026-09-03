@@ -62,6 +62,40 @@ class TestFloatPrecisionAdvisoryHelper:
         assert advisory is not None
         assert advisory.details["constants"] == ["0.5"]
 
+    def test_whitespace_implicit_multiplication_flagged(self):
+        # Greptile P1 on #348: `0.5 x = 0.5 x` verifies as an identity,
+        # so the advisory must surface its float constants too.
+        advisory = AdvisoryCheck.float_precision("0.5 x = 0.5 x")
+        assert advisory is not None
+        assert advisory.details["constants"] == ["0.5"]
+
+    def test_implicit_function_application_flagged(self):
+        # Greptile P1 on #348: `sin 0.5 = sin 0.5` verifies; the advisory
+        # must still surface the float constant.
+        advisory = AdvisoryCheck.float_precision("sin 0.5 = sin 0.5")
+        assert advisory is not None
+        assert advisory.details["constants"] == ["0.5"]
+
+    def test_implicit_mul_with_paren_flagged(self):
+        # Same implicit-multiplication class, paren form: `0.5(x+1)`.
+        advisory = AdvisoryCheck.float_precision("0.5(x+1) = 0.5(x+1)")
+        assert advisory is not None
+        assert advisory.details["constants"] == ["0.5"]
+
+    def test_keywords_are_never_implicit_mul_operands(self):
+        # `0.5 in [0.5, 1]` parses today; rewriting `in` as an operand
+        # would break the parse and lose the advisory.
+        advisory = AdvisoryCheck.float_precision("0.5 in [0.5, 1]")
+        assert advisory is not None
+        assert advisory.details["constants"] == ["0.5"]
+        # No floats anywhere: still None, and no crash.
+        assert AdvisoryCheck.float_precision("3 in x = 3 in x") is None
+
+    def test_oversized_side_skips_advisory(self):
+        # Advisory-only path: oversized sides skip normalization rather
+        # than burn CPU — absence of an advisory is always safe.
+        assert AdvisoryCheck.float_precision("0 " * 5000 + "= 1") is None
+
     def test_symbolic_simplification_preserves_lexical_floats(self):
         # Greptile on #348: 0.0*x = 0.0*x and 0.5**0 = 1 collapse symbolically
         # to 0 = 0 and 1 = 1, but must retain their lexical float advisories.

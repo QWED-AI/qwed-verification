@@ -40,9 +40,9 @@ Dict[str, Any] returns to DiagnosticResult) is tracked in blocked issues:
 from __future__ import annotations
 
 import ast
-import re
 import hashlib
 import json
+import keyword
 import logging
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -111,7 +111,132 @@ class AdmissionDecision(str, Enum):
 # developer_fields.advisory_checks for audit/developer review only.
 # ---------------------------------------------------------------------------
 
-_IMPLICIT_MUL_RE = re.compile(r"(?<![\w.])((\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?)([a-zA-Z_])")
+_MAX_EQUATION_SIDE_CHARS = 4000
+
+
+def _is_ident_start(ch: str) -> bool:
+    return ch == "_" or "a" <= ch <= "z" or "A" <= ch <= "Z"
+
+
+def _is_ident_char(ch: str) -> bool:
+    return _is_ident_start(ch) or "0" <= ch <= "9"
+
+
+def _is_word_or_dot(ch: str) -> bool:
+    return _is_ident_char(ch) or ch == "."
+
+
+def _scan_number(text: str, i: int) -> int:
+    """End index (exclusive) of the numeric literal starting at *i*.
+
+    Shape mirrors the old implicit-mul number pattern —
+    ``digits[.digits][e[+-]digits]`` or ``.digits`` — scanned forward with
+    no backtracking. Callers guarantee ``text[i]`` starts a number (an
+    ASCII digit, or ``.`` followed by a digit)."""
+    n = len(text)
+    while i < n and "0" <= text[i] <= "9":
+        i += 1
+    if i < n and text[i] == ".":
+        i += 1
+        while i < n and "0" <= text[i] <= "9":
+            i += 1
+    if i < n and text[i] in "eE":
+        j = i + 1
+        if j < n and text[j] in "+-":
+            j += 1
+        k = j
+        while k < n and "0" <= text[k] <= "9":
+            k += 1
+        if k > j:
+            i = k
+    return i
+
+
+def _scan_ident(text: str, i: int) -> int:
+    """End index (exclusive) of the identifier starting at *i*."""
+    n = len(text)
+    while i < n and _is_ident_char(text[i]):
+        i += 1
+    return i
+
+
+def _skip_ws(text: str, i: int) -> int:
+    n = len(text)
+    while i < n and text[i] in " \t":
+        i += 1
+    return i
+
+
+def _normalize_implicit_mul(side: str) -> str:
+    """Insert explicit ``*`` / call parens for implicit multiplication.
+
+    Single left-to-right pass — O(len(side)), no backtracking by
+    construction (every iteration advances ``i`` by at least one char).
+    Handles ``2x``, ``2 x``, ``2(``, and ``sin 0.5``-style application so
+    the advisory parser sees the constants SymPy accepts.
+
+    Python keywords are never treated as operands: ``0.5 in [0.5, 1]``
+    and ``2 if x else 3`` parse fine today, and rewriting them would
+    break the parse and lose the advisory. Likewise, an identifier
+    directly glued to a number (``x0.5``) is left alone — only genuine
+    whitespace-separated application is parenthesized.
+
+    Advisory-only: the result feeds float-constant extraction, never a
+    verdict."""
+    n = len(side)
+    out: List[str] = []
+    i = 0
+    while i < n:
+        ch = side[i]
+        prev_ok = i == 0 or not _is_word_or_dot(side[i - 1])
+        if (
+            ("0" <= ch <= "9" or (ch == "." and i + 1 < n and "0" <= side[i + 1] <= "9"))
+            and prev_ok
+        ):
+            end = _scan_number(side, i)
+            j = _skip_ws(side, end)
+            if j < n and _is_ident_start(side[j]):
+                m = _scan_ident(side, j)
+                if keyword.iskeyword(side[j:m]):
+                    out.append(side[i:end])
+                    i = end
+                else:
+                    out.append(side[i:end])
+                    out.append("*")
+                    i = j
+            elif j < n and side[j] == "(":
+                out.append(side[i:end])
+                out.append("*")
+                i = j
+            else:
+                out.append(side[i:end])
+                i = end
+        elif _is_ident_start(ch) and prev_ok:
+            end = _scan_ident(side, i)
+            ident = side[i:end]
+            j = _skip_ws(side, end)
+            if (
+                j > end
+                and j < n
+                and (
+                    "0" <= side[j] <= "9"
+                    or (side[j] == "." and j + 1 < n and "0" <= side[j + 1] <= "9")
+                )
+                and not keyword.iskeyword(ident)
+            ):
+                num_end = _scan_number(side, j)
+                out.append(ident)
+                out.append("(")
+                out.append(side[j:num_end])
+                out.append(")")
+                i = num_end
+            else:
+                out.append(ident)
+                i = end
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
 
 
 def _parse_expression_side(side: str) -> Optional[ast.AST]:
@@ -119,7 +244,13 @@ def _parse_expression_side(side: str) -> Optional[ast.AST]:
         return ast.parse(side, mode="eval")
     except (SyntaxError, ValueError, RecursionError):
         pass
-    norm = _IMPLICIT_MUL_RE.sub(r"\1*\3", side)
+    if len(side) > _MAX_EQUATION_SIDE_CHARS:
+        # Advisory-only path: oversized sides skip normalization rather
+        # than burn CPU — absence of an advisory is always safe.
+        return None
+    norm = _normalize_implicit_mul(side)
+    if norm == side:
+        return None
     try:
         return ast.parse(norm, mode="eval")
     except (SyntaxError, ValueError, RecursionError):
@@ -130,7 +261,7 @@ def _parse_expression_side(side: str) -> Optional[ast.AST]:
 def _parse_equation_trees(source: str) -> List[ast.AST]:
     if "=" not in source:
         return []
-    left, sep, right = source.partition("=")
+    left, _, right = source.partition("=")
     if "=" in left or "=" in right:
         return []
     left_tree = _parse_expression_side(left.strip())
