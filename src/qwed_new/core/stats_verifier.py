@@ -262,14 +262,19 @@ class RestrictedExecutor:
     # module after the root and pass — see _alias_internals_issue.
     _SANDBOX_MODULE_ALIASES = {"pd", "np", "json", "sys"}
 
-    # Reflective / process-controlling sys members — flagged explicitly
-    # (Greptile P1 on #346 round 2): plain sys metadata is read-only and
-    # allowed, but sys.modules hands out every module object, and exit /
-    # the trace-profile hooks / path-argv streams are not part of generated
-    # stats code's legitimate surface.
-    _BLOCKED_SYS_MEMBERS = {
-        "modules", "exit", "settrace", "gettrace", "setprofile", "getprofile",
-        "setrecursionlimit", "argv", "path", "stdout", "stderr", "stdin",
+    # sys is introspectable end-to-end, so its members are governed by a
+    # NAMED ALLOWLIST, not a denylist (Greptile P1 on #346 rounds 2-3: the
+    # denylist lost a whack-a-mole race — after `modules` was blocked,
+    # `sys._getframe(0).f_globals` still handed out the live globals).
+    # Only known read-only interpreter metadata passes; every other member
+    # (reflection, hooks, process control, frame access) fails closed.
+    _ALLOWED_SYS_MEMBERS = {
+        "maxsize", "float_info", "version", "version_info", "platform",
+        "byteorder", "prefix", "exec_prefix", "base_prefix",
+        "base_exec_prefix", "implementation", "int_info", "thread_info",
+        "api_version", "abiflags", "hexversion", "flags", "warnoptions",
+        "dont_write_bytecode", "is_finalizing", "copyright",
+        "builtin_module_names",
     }
     
     def __init__(self, timeout_seconds: float = 30.0):
@@ -303,12 +308,15 @@ class RestrictedExecutor:
         """Issue for an attribute chain rooted at a sandbox module alias
         (#336), or None.
 
-        The alias ROOT name is not itself a violation — sys.version is
-        read-only metadata and np.linalg.norm is a public API. Two things
+        The alias ROOT name is not itself a violation — np.linalg.norm is
+        a public API and sys.version is read-only metadata. Two things
         are: (1) traversal INTO a dangerous module through the alias's
         internals, which must NAME the module in a segment after the root
-        (pd.io.common.os.system, np.lib.npyio.os.getenv); (2) reflective
-        or process-controlling sys members (sys.modules, sys.exit, ...).
+        (pd.io.common.os.system, np.lib.npyio.os.getenv); (2) any sys
+        member outside the named read-only allowlist — sys is
+        introspectable end-to-end (`sys._getframe(0).f_globals` hands out
+        the live globals), so unknown sys members fail closed instead of
+        racing a member denylist (Greptile P1 #346 round 3).
         Data-rooted chains (df['x'].mean, df.col.mean) are unaffected —
         df is not an alias."""
         if not isinstance(node, ast.Attribute):
@@ -320,8 +328,11 @@ class RestrictedExecutor:
             value = value.value
         if not (isinstance(value, ast.Name) and value.id in RestrictedExecutor._SANDBOX_MODULE_ALIASES):
             return None
-        if value.id == "sys" and segments and segments[0] in RestrictedExecutor._BLOCKED_SYS_MEMBERS:
-            return f"Reflective or process-controlling sys member blocked: sys.{segments[0]}"
+        # segments were appended leaf-to-root, so the member ADJACENT to
+        # the alias root is segments[-1] — that is the sys member whose
+        # name must sit on the read-only allowlist.
+        if value.id == "sys" and (not segments or segments[-1] not in RestrictedExecutor._ALLOWED_SYS_MEMBERS):
+            return "sys access is restricted to known read-only metadata (sys.<member> in _ALLOWED_SYS_MEMBERS)"
         if any(seg in _DANGEROUS_MODULE_ROOTS for seg in segments):
             return f"Attribute chain reaches a dangerous module through sandbox internals: {value.id}.*"
         return None

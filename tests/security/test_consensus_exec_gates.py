@@ -163,9 +163,11 @@ class TestStatsRestrictedExecutor:
     def test_readonly_sys_metadata_allowed(self):
         """Greptile P1 round 2 + Sentry LOW: plain sys metadata is read-only
         — the alias check flags traversal into dangerous modules, not the
-        alias root itself."""
+        alias root itself. Pure methods on allowed immutable members
+        (str.split on sys.version) are harmless by construction."""
         self._safe("result = sys.maxsize")
         self._safe("result = sys.float_info.dig")
+        self._safe("result = sys.byteorder")
         self._safe("result = sys.version.split()[0]")
 
     def test_reflective_and_controlling_sys_members_blocked(self):
@@ -178,6 +180,20 @@ class TestStatsRestrictedExecutor:
         # blocked even through an unchecked chain root (subscript), so the
         # reflection escape cannot rebind and call around the gate.
         self._unsafe("result = sys.modules['os'].system('id')")
+
+    def test_frame_introspection_blocked(self):
+        """Greptile P1 round 3: sys is introspectable end-to-end, so sys
+        members outside the named read-only allowlist fail closed —
+        _getframe handed out the live globals after the member denylist
+        had blocked modules."""
+        self._unsafe("result = sys._getframe(0).f_globals")
+        self._unsafe("result = sys._current_frames()")
+        self._unsafe("result = sys.exc_info()")
+        self._unsafe("result = sys.call_tracing")
+
+    def test_sys_allowlisted_metadata_nested_access_allowed(self):
+        self._safe("result = sys.implementation.name")
+        self._safe("result = sys.version_info[:2]")
 
     def test_data_rooted_chains_unaffected(self):
         self._safe("result = df.groupby('k')['v'].mean()")
