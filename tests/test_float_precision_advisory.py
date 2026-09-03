@@ -149,6 +149,13 @@ class TestFloatPrecisionAdvisoryHelper:
         assert check["advisory_only"] is True
         assert check["constraint_id"] == "precision.float-constants"
 
+    def test_from_dict_normalizes_missing_constraint_id(self):
+        # CodeRabbit nitpick on #348: to_dict must emit a string per the
+        # field contract even when the payload omits constraint_id.
+        check = AdvisoryCheck.from_dict({"name": "x", "advisory_only": True})
+        assert check.constraint_id == ""
+        assert check.to_dict()["constraint_id"] == ""
+
 
 class TestVerifyMathEndpointAdvisory:
     @pytest.fixture

@@ -126,6 +126,31 @@ def _is_word_or_dot(ch: str) -> bool:
     return _is_ident_char(ch) or ch == "."
 
 
+def _scan_digits(text: str, i: int) -> int:
+    """Advance past ASCII digits starting at *i*; single bounded loop."""
+    n = len(text)
+    while i < n and "0" <= text[i] <= "9":
+        i += 1
+    return i
+
+
+def _scan_exponent_tail(text: str, i: int) -> int:
+    """Consume an ``e[+-]digits`` exponent at *i*, else return *i* unchanged.
+
+    A bare ``e`` (``2ex``) is not an exponent — the caller treats it as an
+    identifier start, matching the old pattern's optional exponent group."""
+    n = len(text)
+    if i >= n or text[i] not in "eE":
+        return i
+    j = i + 1
+    if j < n and text[j] in "+-":
+        j += 1
+    k = _scan_digits(text, j)
+    if k == j:
+        return i
+    return k
+
+
 def _scan_number(text: str, i: int) -> int:
     """End index (exclusive) of the numeric literal starting at *i*.
 
@@ -133,23 +158,10 @@ def _scan_number(text: str, i: int) -> int:
     ``digits[.digits][e[+-]digits]`` or ``.digits`` — scanned forward with
     no backtracking. Callers guarantee ``text[i]`` starts a number (an
     ASCII digit, or ``.`` followed by a digit)."""
-    n = len(text)
-    while i < n and "0" <= text[i] <= "9":
-        i += 1
-    if i < n and text[i] == ".":
-        i += 1
-        while i < n and "0" <= text[i] <= "9":
-            i += 1
-    if i < n and text[i] in "eE":
-        j = i + 1
-        if j < n and text[j] in "+-":
-            j += 1
-        k = j
-        while k < n and "0" <= text[k] <= "9":
-            k += 1
-        if k > j:
-            i = k
-    return i
+    i = _scan_digits(text, i)
+    if i < len(text) and text[i] == ".":
+        i = _scan_digits(text, i + 1)
+    return _scan_exponent_tail(text, i)
 
 
 def _scan_ident(text: str, i: int) -> int:
@@ -165,6 +177,62 @@ def _skip_ws(text: str, i: int) -> int:
     while i < n and text[i] in " \t":
         i += 1
     return i
+
+
+def _starts_number(side: str, i: int) -> bool:
+    """True when a numeric literal starts at *i* (digit, or ``.`` + digit)."""
+    ch = side[i]
+    if "0" <= ch <= "9":
+        return True
+    return ch == "." and i + 1 < len(side) and "0" <= side[i + 1] <= "9"
+
+
+def _emit_number_operand(side: str, i: int, out: List[str]) -> int:
+    """Emit the number at *i* plus any implicit-mul ``*``; return next index."""
+    end = _scan_number(side, i)
+    j = _skip_ws(side, end)
+    n = len(side)
+    if j < n and _is_ident_start(side[j]):
+        m = _scan_ident(side, j)
+        if keyword.iskeyword(side[j:m]):
+            out.append(side[i:end])
+            return end
+        out.append(side[i:end])
+        out.append("*")
+        return j
+    if j < n and side[j] == "(":
+        out.append(side[i:end])
+        out.append("*")
+        return j
+    out.append(side[i:end])
+    return end
+
+
+def _is_implicit_application(side: str, ident: str, end: int, j: int) -> bool:
+    """True for ``sin 0.5``: whitespace-separated identifier applied to a number.
+
+    Keywords are excluded (``not 0.5`` must keep parsing), and the number
+    must genuinely follow whitespace — ``x0.5`` stays untouched."""
+    n = len(side)
+    if j <= end or j >= n or keyword.iskeyword(ident):
+        return False
+    return _starts_number(side, j)
+
+
+def _emit_ident_operand(side: str, i: int, out: List[str]) -> int:
+    """Emit the identifier at *i*, parenthesizing ``f 0.5`` application."""
+    end = _scan_ident(side, i)
+    ident = side[i:end]
+    j = _skip_ws(side, end)
+    if not _is_implicit_application(side, ident, end, j):
+        out.append(ident)
+        return end
+    num_end = _scan_number(side, j)
+    out.append(ident)
+    out.append("(")
+    out.append(side[j:num_end])
+    out.append(")")
+    return num_end
 
 
 def _normalize_implicit_mul(side: str) -> str:
@@ -189,50 +257,10 @@ def _normalize_implicit_mul(side: str) -> str:
     while i < n:
         ch = side[i]
         prev_ok = i == 0 or not _is_word_or_dot(side[i - 1])
-        if (
-            ("0" <= ch <= "9" or (ch == "." and i + 1 < n and "0" <= side[i + 1] <= "9"))
-            and prev_ok
-        ):
-            end = _scan_number(side, i)
-            j = _skip_ws(side, end)
-            if j < n and _is_ident_start(side[j]):
-                m = _scan_ident(side, j)
-                if keyword.iskeyword(side[j:m]):
-                    out.append(side[i:end])
-                    i = end
-                else:
-                    out.append(side[i:end])
-                    out.append("*")
-                    i = j
-            elif j < n and side[j] == "(":
-                out.append(side[i:end])
-                out.append("*")
-                i = j
-            else:
-                out.append(side[i:end])
-                i = end
+        if _starts_number(side, i) and prev_ok:
+            i = _emit_number_operand(side, i, out)
         elif _is_ident_start(ch) and prev_ok:
-            end = _scan_ident(side, i)
-            ident = side[i:end]
-            j = _skip_ws(side, end)
-            if (
-                j > end
-                and j < n
-                and (
-                    "0" <= side[j] <= "9"
-                    or (side[j] == "." and j + 1 < n and "0" <= side[j + 1] <= "9")
-                )
-                and not keyword.iskeyword(ident)
-            ):
-                num_end = _scan_number(side, j)
-                out.append(ident)
-                out.append("(")
-                out.append(side[j:num_end])
-                out.append(")")
-                i = num_end
-            else:
-                out.append(ident)
-                i = end
+            i = _emit_ident_operand(side, i, out)
         else:
             out.append(ch)
             i += 1
@@ -377,7 +405,7 @@ class AdvisoryCheck:
         return cls(
             name=data.get("name", ""),
             advisory_only=advisory_only,
-            constraint_id=data.get("constraint_id"),
+            constraint_id=data.get("constraint_id") or "",
             details=data.get("details", {}),
         )
 
