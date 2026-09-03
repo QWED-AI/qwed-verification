@@ -9,6 +9,7 @@ from fractions import Fraction
 
 from qwed_new.core.security import redact_pii
 from qwed_new.core.diagnostics import (
+    AdvisoryCheck,
     DiagnosticResult,
     admission_decision,
     enforce_trust_decision,
@@ -651,6 +652,16 @@ async def verify_math(
                             "Expression is not numeric",
                             developer_fields={"is_valid": False, "simplified": str(simplified), "original": str(parsed)},
                         )
+
+        # Precision advisory (issue #347): flag binary floating-point
+        # constants WITHOUT affecting the verdict — advisory_checks are
+        # structurally non-proof-bearing. QWED_RULES.md: flag float math,
+        # suggest decimal.Decimal / sympy. Parse submitted text directly
+        # so equations (including 0.0*x = 0.0*x, 0.5**0 = 1) retain lexical
+        # float literals before symbolic simplification.
+        float_advisory = AdvisoryCheck.float_precision(expression)
+        if float_advisory is not None:
+            dr.developer_fields.setdefault("advisory_checks", []).append(float_advisory)
 
         dr = _enforce_trust(dr, query=expression)
 

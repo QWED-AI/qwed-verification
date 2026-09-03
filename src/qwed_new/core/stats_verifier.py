@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 import ast
 
-from .diagnostics import DiagnosticResult, DiagnosticStatus, enforce_trust_decision
+from .diagnostics import AdvisoryCheck, DiagnosticResult, DiagnosticStatus, enforce_trust_decision
 from .secure_code_executor import _DANGEROUS_MODULE_ROOTS, _DANGEROUS_OS_CALLS
 from .verification_context import (
     Admission,
@@ -560,6 +560,12 @@ class StatsVerifier:
                 },
             )
 
+        # Precision advisory (issue #347): generated stats code is
+        # float-native, so float constants are EXPECTED — the advisory
+        # flags them for exactness-sensitive consumers without affecting
+        # the verdict (advisory_checks are structurally non-proof-bearing).
+        float_advisory = AdvisoryCheck.float_precision(code, expression_mode=False)
+
         # 2. Pre-execution security validation
         try:
             security_report = self._validate_security(code)
@@ -685,14 +691,17 @@ class StatsVerifier:
                 "risk_level": security_report.risk_level,
             },
         }
+        completion_fields = {
+            "constraint_id": CONSTRAINT_CLAIM_NOT_VERIFIED,
+            "is_valid": False,
+            "claim_supported": False,
+            **execution_evidence,
+        }
+        if float_advisory is not None:
+            completion_fields["advisory_checks"] = [float_advisory]
         return DiagnosticResult.unverifiable(
             agent_message="Statistical analysis completed, but the claim could not be deterministically verified.",
-            developer_fields={
-                "constraint_id": CONSTRAINT_CLAIM_NOT_VERIFIED,
-                "is_valid": False,
-                "claim_supported": False,
-                **execution_evidence,
-            },
+            developer_fields=completion_fields,
         )
     
     def to_verification_context(
