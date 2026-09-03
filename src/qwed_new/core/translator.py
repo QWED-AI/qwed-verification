@@ -5,6 +5,8 @@ This module now uses the Provider Pattern to support multiple LLMs.
 It selects the active provider based on configuration.
 """
 
+import ast
+
 from qwed_new.config import settings, ProviderType
 from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.providers.base import LLMProvider
@@ -99,12 +101,32 @@ class TranslationLayer:
         safe_pattern = r'^[0-9+\-*/().\sa-z]+$'
         if not re.match(safe_pattern, task.expression.replace(' ', ''), re.IGNORECASE):
             raise SecurityError(SAFETY_VALIDATOR_REJECTION)
-        
-        # 3. Check for excessive length (possible DoS)
+
+        # 3. Check for excessive length (possible DoS) BEFORE parsing — the
+        #    bound keeps the AST gate's parse cost constant and keeps deeply
+        #    nested adversarial input away from the parser entirely
+        #    (CodeRabbit on PR #346).
         if len(task.expression) > 500:
             raise SecurityError(SAFETY_VALIDATOR_REJECTION)
-        
-        # 4. Validate confidence is in valid range
+
+        # 4. Structural gate (closes #335): the expression is interpolated
+        #    verbatim into `result = {expression}` by
+        #    consensus_verifier._generate_verification_code, so it must be
+        #    exactly ONE Python expression. mode="eval" rejects every
+        #    statement form by construction — imports, assignments,
+        #    semicolon chains, and the multi-line newline smuggling from the
+        #    #335 PoC (a charset-valid multi-line expression executed
+        #    module-level code in the sandbox, because \s admitted newlines
+        #    and the denylist lacked a bare `import`). The charset and
+        #    denylist checks above remain as defense in depth.
+        try:
+            ast.parse(task.expression, mode="eval")
+        except (SyntaxError, ValueError, RecursionError):
+            # ValueError: parse rejects NULs/invalid mode; RecursionError:
+            # deeply nested input must fail closed, never bubble as a 500.
+            raise SecurityError(SAFETY_VALIDATOR_REJECTION)
+
+        # 5. Validate confidence is in valid range
         if not (0.0 <= task.confidence <= 1.0):
             raise SecurityError("Invalid confidence value")
 

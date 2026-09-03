@@ -32,8 +32,25 @@ DANGEROUS_KEYWORDS = [
     'socket', 'urllib', 'requests', 'http'
 ]
 
-_DANGEROUS_MODULE_ROOTS = {"os", "sys", "subprocess", "socket", "urllib", "requests", "http"}
+# v2 (#336): added posix (what os.system delegates to on POSIX), nt, the
+# import/reflection machinery (importlib, ctypes, builtins). pandas/numpy
+# remain allowed at their public surface — gadgets through their internals
+# are caught at the attribute-chain check below.
+_DANGEROUS_MODULE_ROOTS = {"os", "sys", "subprocess", "socket", "urllib", "requests", "http", "posix", "nt", "importlib", "ctypes", "builtins"}
 _DANGEROUS_BUILTINS = {"eval", "exec", "compile", "__import__", "open", "file", "input", "raw_input"}
+# OS primitives reachable through module indirection (#336): `system` /
+# `popen` via package-internal re-exports, `import_module` via importlib, the
+# full exec/spawn family (v and l variants) and fork via posix/nt. Matched on
+# bare names and attribute call targets alike.
+_DANGEROUS_OS_CALLS = {
+    "system", "popen", "import_module",
+    "execv", "execve", "execvp", "execvpe",
+    "execl", "execle", "execlp", "execlpe",
+    "spawnv", "spawnve", "spawnvp", "spawnvpe",
+    "spawnl", "spawnle", "spawnlp", "spawnlpe",
+    "fork", "forkpty",
+}
+_DANGEROUS_CALL_TARGETS = frozenset(_DANGEROUS_BUILTINS | _DANGEROUS_OS_CALLS)
 
 
 def _strip_python_comments(code: str) -> str:
@@ -82,39 +99,68 @@ def _skip_line_comment(code: str, start: int, out: list) -> int:
 
 
 def _dangerous_import(node: ast.AST) -> Optional[str]:
-    """Return a dangerous module name imported by *node*, or None."""
+    """Return a dangerous module name imported by *node*, or None.
+
+    EVERY dotted segment is checked (#336): the first-segment check let
+    `import importlib`, `import posix`, `import ctypes` through because
+    their dangerousness IS the first segment the old set simply omitted,
+    and future `dangerous.submodule` shapes would slip past a root-only
+    match. ImportFrom MEMBER names are checked too (#346 review): the
+    gadget `from pandas.io.common import os as safe` binds the real OS
+    module under an innocuous alias while the module path itself is
+    clean."""
     if isinstance(node, ast.Import):
         names = [a.name for a in node.names]
     elif isinstance(node, ast.ImportFrom) and node.module:
-        names = [node.module]
+        names = [node.module] + [a.name for a in node.names]
     else:
         return None
     for name in names:
-        if name.split('.')[0] in _DANGEROUS_MODULE_ROOTS:
+        if any(seg in _DANGEROUS_MODULE_ROOTS for seg in name.split(".")):
             return name
     return None
 
 
 def _dangerous_attribute(node: ast.AST) -> Optional[str]:
-    """Return a dangerous attribute access (e.g. os.system) or None."""
+    """Return a dangerous attribute chain, or None.
+
+    EVERY segment of the chain is checked (#336): gadgets reach os/sys
+    through package-internal re-exports bound to innocuous aliases — the
+    pandas and numpy internals each re-export the OS module — where the
+    innermost base is `pd`/`np`, not a dangerous root. A dangerous module
+    name anywhere in the chain flags the whole access.
+
+    Known trade-off: a DATA attribute named like a dangerous module (e.g.
+    a column accessed as `df.os`) is rejected as well — per-name static
+    resolution cannot distinguish it from a gadget, and fail-closed beats
+    misclassifying one; use subscript access (`df['os']`) instead."""
     if not isinstance(node, ast.Attribute):
         return None
-    value = node.value
+    parts = []
+    value = node
     while isinstance(value, ast.Attribute):
+        parts.append(value.attr)
         value = value.value
-    if isinstance(value, ast.Name) and value.id in _DANGEROUS_MODULE_ROOTS:
-        return f"{value.id}.{node.attr}"
+    if isinstance(value, ast.Name):
+        parts.append(value.id)
+        if any(p in _DANGEROUS_MODULE_ROOTS for p in parts):
+            return ".".join(reversed(parts))
     return None
 
 
 def _dangerous_call(node: ast.AST) -> Optional[str]:
-    """Return a dangerous call target (eval, exec, builtins.__import__, ...) or None."""
+    """Return a dangerous call target, or None.
+
+    Beyond the interpreter builtins, the OS-primitive call names (#336) are
+    matched on bare names (`system('id')` after `from os import system`) and
+    attribute targets (`importlib.import_module('os').system('id')`, whose
+    chain root is a Call the attribute matcher cannot resolve)."""
     if not isinstance(node, ast.Call):
         return None
     func = node.func
-    if isinstance(func, ast.Name) and func.id in _DANGEROUS_BUILTINS:
+    if isinstance(func, ast.Name) and func.id in _DANGEROUS_CALL_TARGETS:
         return func.id
-    if isinstance(func, ast.Attribute) and func.attr in _DANGEROUS_BUILTINS:
+    if isinstance(func, ast.Attribute) and func.attr in _DANGEROUS_CALL_TARGETS:
         return func.attr
     return None
 

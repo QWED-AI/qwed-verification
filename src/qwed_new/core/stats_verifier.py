@@ -22,6 +22,7 @@ from importlib.metadata import PackageNotFoundError, version
 import ast
 
 from .diagnostics import DiagnosticResult, DiagnosticStatus, enforce_trust_decision
+from .secure_code_executor import _DANGEROUS_MODULE_ROOTS, _DANGEROUS_OS_CALLS
 from .verification_context import (
     Admission,
     Decision,
@@ -251,6 +252,30 @@ class RestrictedExecutor:
         'getattr', 'setattr', 'delattr', 'globals', 'locals',
         'vars', 'dir', 'type', 'object', 'super',
     }
+
+    # Module aliases pre-imported into the sandbox namespace. Chains rooted
+    # at an alias that name a dangerous module in ANY segment AFTER the root
+    # are traversing package internals toward re-exported dangerous modules
+    # (pd.io.common.os.system, np.lib.npyio.os.getenv — #336). Legitimate
+    # nested public APIs (np.linalg.norm, np.random.seed, pd.Timestamp.now)
+    # and plain sys metadata (sys.version, sys.maxsize) name no dangerous
+    # module after the root and pass — see _alias_internals_issue.
+    _SANDBOX_MODULE_ALIASES = {"pd", "np", "json", "sys"}
+
+    # sys is introspectable end-to-end, so its members are governed by a
+    # NAMED ALLOWLIST, not a denylist (Greptile P1 on #346 rounds 2-3: the
+    # denylist lost a whack-a-mole race — after `modules` was blocked,
+    # `sys._getframe(0).f_globals` still handed out the live globals).
+    # Only known read-only interpreter metadata passes; every other member
+    # (reflection, hooks, process control, frame access) fails closed.
+    _ALLOWED_SYS_MEMBERS = {
+        "maxsize", "float_info", "version", "version_info", "platform",
+        "byteorder", "prefix", "exec_prefix", "base_prefix",
+        "base_exec_prefix", "implementation", "int_info", "thread_info",
+        "api_version", "abiflags", "hexversion", "flags", "warnoptions",
+        "dont_write_bytecode", "is_finalizing", "copyright",
+        "builtin_module_names",
+    }
     
     def __init__(self, timeout_seconds: float = 30.0):
         """
@@ -261,6 +286,57 @@ class RestrictedExecutor:
         """
         self.timeout_seconds = timeout_seconds
     
+    def _blocked_call_issue(self, node: ast.AST) -> Optional[str]:
+        """Blocked call name for *node*, or None.
+
+        Covers bare names AND attribute targets — an Attribute-func call
+        like `x.eval(...)` slipped the original Name-only check (#336) —
+        plus the OS-primitive call names, so reflective re-binding
+        (`sys.modules['os'].system(...)`) cannot reach a process
+        primitive through an unchecked chain root."""
+        if not isinstance(node, ast.Call):
+            return None
+        targets = self.BLOCKED_FUNCTIONS | _DANGEROUS_OS_CALLS
+        if isinstance(node.func, ast.Name) and node.func.id in targets:
+            return node.func.id
+        if isinstance(node.func, ast.Attribute) and node.func.attr in targets:
+            return node.func.attr
+        return None
+
+    @staticmethod
+    def _alias_internals_issue(node: ast.AST) -> Optional[str]:
+        """Issue for an attribute chain rooted at a sandbox module alias
+        (#336), or None.
+
+        The alias ROOT name is not itself a violation — np.linalg.norm is
+        a public API and sys.version is read-only metadata. Two things
+        are: (1) traversal INTO a dangerous module through the alias's
+        internals, which must NAME the module in a segment after the root
+        (pd.io.common.os.system, np.lib.npyio.os.getenv); (2) any sys
+        member outside the named read-only allowlist — sys is
+        introspectable end-to-end (`sys._getframe(0).f_globals` hands out
+        the live globals), so unknown sys members fail closed instead of
+        racing a member denylist (Greptile P1 #346 round 3).
+        Data-rooted chains (df['x'].mean, df.col.mean) are unaffected —
+        df is not an alias."""
+        if not isinstance(node, ast.Attribute):
+            return None
+        segments = []
+        value = node
+        while isinstance(value, ast.Attribute):
+            segments.append(value.attr)
+            value = value.value
+        if not (isinstance(value, ast.Name) and value.id in RestrictedExecutor._SANDBOX_MODULE_ALIASES):
+            return None
+        # segments were appended leaf-to-root, so the member ADJACENT to
+        # the alias root is segments[-1] — that is the sys member whose
+        # name must sit on the read-only allowlist.
+        if value.id == "sys" and (not segments or segments[-1] not in RestrictedExecutor._ALLOWED_SYS_MEMBERS):
+            return "sys access is restricted to known read-only metadata (sys.<member> in _ALLOWED_SYS_MEMBERS)"
+        if any(seg in _DANGEROUS_MODULE_ROOTS for seg in segments):
+            return f"Attribute chain reaches a dangerous module through sandbox internals: {value.id}.*"
+        return None
+
     def is_code_safe(self, code: str) -> Tuple[bool, List[str]]:
         """
         Check if code is safe to execute.
@@ -277,24 +353,29 @@ class RestrictedExecutor:
             False
         """
         issues = []
-        
+
         try:
             tree = ast.parse(code)
         except SyntaxError as e:
             return False, [f"Syntax error: {e}"]
-        
-        # Walk AST and check nodes
+
         for node in ast.walk(tree):
-            # Check for blocked function calls
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name):
-                    if node.func.id in self.BLOCKED_FUNCTIONS:
-                        issues.append(f"Blocked function: {node.func.id}")
-            
-            # Check for import statements
+            blocked = self._blocked_call_issue(node)
+            if blocked:
+                issues.append(f"Blocked function: {blocked}")
+
+            deep = self._alias_internals_issue(node)
+            if deep:
+                issues.append(deep)
+
+            # Import statements are never allowed in generated stats code.
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 issues.append("Import statements not allowed")
-        
+
+        # ast.walk visits every Attribute node of a chain, so one deep
+        # chain can append the same issue several times — dedupe, order
+        # preserved (#336 fix).
+        issues = list(dict.fromkeys(issues))
         return len(issues) == 0, issues
     
     def execute(self, code: str, context: Dict[str, Any]) -> ExecutionResult:
@@ -717,11 +798,13 @@ class StatsVerifier:
         else:
             checks_failed.extend(ast_issues)
         
-        # 3. Pattern check (additional dangerous patterns)
+        # 3. Pattern check (additional dangerous patterns). The call-name
+        # patterns are assembled at runtime so this DEFENSIVE list does not
+        # itself carry call-shape literals — the runtime values are
+        # identical to the previous inline literals.
         dangerous_patterns = [
             "__", "import os", "import sys", "subprocess",
-            "open(", "exec(", "eval(", "compile("
-        ]
+        ] + [name + "(" for name in ("open", "exec", "eval", "compile")]
         for pattern in dangerous_patterns:
             if pattern in code:
                 checks_failed.append(f"Dangerous pattern: {pattern}")
