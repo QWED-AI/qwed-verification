@@ -40,6 +40,7 @@ Dict[str, Any] returns to DiagnosticResult) is tracked in blocked issues:
 from __future__ import annotations
 
 import ast
+import re
 import hashlib
 import json
 import logging
@@ -110,24 +111,72 @@ class AdmissionDecision(str, Enum):
 # developer_fields.advisory_checks for audit/developer review only.
 # ---------------------------------------------------------------------------
 
+_IMPLICIT_MUL_RE = re.compile(r"(?<![\w.])((\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?)([a-zA-Z_])")
+
+
+def _parse_expression_side(side: str) -> Optional[ast.AST]:
+    try:
+        return ast.parse(side, mode="eval")
+    except (SyntaxError, ValueError, RecursionError):
+        pass
+    norm = _IMPLICIT_MUL_RE.sub(r"\1*\3", side)
+    try:
+        return ast.parse(norm, mode="eval")
+    except (SyntaxError, ValueError, RecursionError):
+        # Normalization failed or unparsable side; skip
+        return None
+
+
+def _parse_equation_trees(source: str) -> List[ast.AST]:
+    if "=" not in source:
+        return []
+    left, sep, right = source.partition("=")
+    if "=" in left or "=" in right:
+        return []
+    left_tree = _parse_expression_side(left.strip())
+    right_tree = _parse_expression_side(right.strip())
+    if left_tree is None or right_tree is None:
+        return []
+    return [left_tree, right_tree]
+
+
+def _parse_source_trees(source: str, expression_mode: bool = True) -> List[ast.AST]:
+    try:
+        return [ast.parse(source, mode="eval" if expression_mode else "exec")]
+    except (SyntaxError, ValueError, RecursionError):
+        if expression_mode:
+            return _parse_equation_trees(source)
+        return []
+
+
+def _extract_float_constants(trees: List[ast.AST]) -> List[str]:
+    return sorted(
+        {
+            repr(node.value)
+            for tree in trees
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, (float, complex))
+        }
+    )
+
+
 @dataclass(frozen=True)
 class AdvisoryCheck:
-    """A non-proof-bearing analysis result attached as advisory metadata.
+    """A single non-verdict-affecting advisory check.
 
-    Advisory checks may carry useful information for developers or auditors,
-    but they MUST NOT influence the verification verdict. The constraint:
-
-        advisory_only = True
-
-    is structurally enforced: advisory checks populate
-    developer_fields.advisory_checks, never status or proof_ref.
+    Advisory checks flag operational, precision, or architectural
+    concerns (e.g. binary float math, deprecations, performance
+    suggestions). They are strictly informational: by contract, they
+    MUST NOT influence the verification verdict or proof_ref (Issue #347).
     """
+
     name: str
     advisory_only: bool = True
-    constraint_id: Optional[str] = None
+    constraint_id: str = ""
     details: Dict[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self):
         if self.advisory_only is not True:
             raise ValueError(
                 "AdvisoryCheck.advisory_only must be True — "
@@ -152,39 +201,18 @@ class AdvisoryCheck:
         not what is exact, and documented inputs like
         `1000 * (1 + 0.05)**2` legitimately contain floats (#347).
 
-        Equality input (`0.1 + 0.2 = 0.3`) is not one eval-mode expression,
-        so in expression mode the two sides of a bare `=` are parsed
-        separately (CodeAnt on #348). Complex constants count too:
-        `1.0j` is binary-float-based arithmetic the same way `0.1` is.
+        Equality input (`0.1 + 0.2 = 0.3`, `0.0*x = 0.0*x`) is parsed
+        side-by-side to preserve lexical float literals even when symbolic
+        simplification would eagerly collapse them. Complex constants count
+        too: `1.0j` is binary-float-based arithmetic the same way `0.1` is.
 
         Returns None when the source parses clean of float/complex
         constants or cannot be parsed at all (parse failures are the
         security gates' business, not this advisory's)."""
-        trees = []
-        try:
-            trees.append(ast.parse(source, mode="eval" if expression_mode else "exec"))
-        except (SyntaxError, ValueError, RecursionError):
-            if expression_mode:
-                left, sep, right = source.partition("=")
-                if sep and "=" not in left and "=" not in right:
-                    import re
-                    for side in (left.strip(), right.strip()):
-                        try:
-                            trees.append(ast.parse(side, mode="eval"))
-                        except (SyntaxError, ValueError, RecursionError):
-                            # Try normalizing implicit multiplication (e.g. 0.5x -> 0.5*x)
-                            norm = re.sub(r'(\d+([.]\d*)?|\.\d+)([a-zA-Z_])', r'\1*\3', side)
-                            try:
-                                trees.append(ast.parse(norm, mode="eval"))
-                            except (SyntaxError, ValueError, RecursionError):
-                                pass
+        trees = _parse_source_trees(source, expression_mode=expression_mode)
         if not trees:
             return None
-        constants = sorted(
-            {repr(node.value) for tree in trees for node in ast.walk(tree)
-             if isinstance(node, ast.Constant)
-             and isinstance(node.value, (float, complex))}
-        )
+        constants = _extract_float_constants(trees)
         if not constants:
             return None
         return cls(

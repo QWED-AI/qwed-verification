@@ -62,6 +62,17 @@ class TestFloatPrecisionAdvisoryHelper:
         assert advisory is not None
         assert advisory.details["constants"] == ["0.5"]
 
+    def test_symbolic_simplification_preserves_lexical_floats(self):
+        # Greptile on #348: 0.0*x = 0.0*x and 0.5**0 = 1 collapse symbolically
+        # to 0 = 0 and 1 = 1, but must retain their lexical float advisories.
+        adv1 = AdvisoryCheck.float_precision("0.0*x = 0.0*x")
+        assert adv1 is not None
+        assert adv1.details["constants"] == ["0.0"]
+
+        adv2 = AdvisoryCheck.float_precision("0.5**0 = 1")
+        assert adv2 is not None
+        assert adv2.details["constants"] == ["0.5"]
+
     def test_equality_literal_flagged(self):
         # CodeRabbit on #348: 0.1 = 0.1
         advisory = AdvisoryCheck.float_precision("0.1 = 0.1")
@@ -74,9 +85,17 @@ class TestFloatPrecisionAdvisoryHelper:
         assert advisory is not None
         assert any("j" in c for c in advisory.details["constants"])
 
+    def test_scientific_notation_equation_preserves_advisory(self):
+        # CodeRabbit on #348: 1e3x = 1e3x consumes the exponent before implicit multiplication
+        advisory = AdvisoryCheck.float_precision("1e3x = 1e3x")
+        assert advisory is not None
+        assert any("1000" in c for c in advisory.details["constants"])
+
     def test_malformed_equality_returns_none(self):
-        # Neither side parses: no advisory, no exception.
+        # CodeRabbit on #348: return None if either side cannot be parsed
         assert AdvisoryCheck.float_precision("!! = ??") is None
+        assert AdvisoryCheck.float_precision("0.1 = ??") is None
+        assert AdvisoryCheck.float_precision("?? = 0.1") is None
 
     def test_unparsable_source_returns_none(self):
         # Parse failures are the security gates' business, not this
@@ -160,6 +179,23 @@ class TestVerifyMathEndpointAdvisory:
         assert resp.status_code == 200, resp.text
         checks = resp.json().get("developer_fields", {}).get("advisory_checks", [])
         assert any(c.get("constraint_id") == "precision.float-constants" for c in checks)
+
+    def test_collapsing_equation_preserves_float_advisory(self, client):
+        # Greptile on #348: 0.0*x = 0.0*x simplifies to 0 = 0, but advisory must retain 0.0
+        resp = client.post("/verify/math", json={"expression": "0.0*x = 0.0*x"})
+        assert resp.status_code == 200, resp.text
+        checks = resp.json().get("developer_fields", {}).get("advisory_checks", [])
+        adv = next((c for c in checks if c.get("constraint_id") == "precision.float-constants"), None)
+        assert adv is not None
+        assert "0.0" in adv["details"]["constants"]
+
+        # 0.5**0 = 1 simplifies to 1 = 1, but advisory must retain 0.5
+        resp2 = client.post("/verify/math", json={"expression": "0.5**0 = 1"})
+        assert resp2.status_code == 200, resp2.text
+        checks2 = resp2.json().get("developer_fields", {}).get("advisory_checks", [])
+        adv2 = next((c for c in checks2 if c.get("constraint_id") == "precision.float-constants"), None)
+        assert adv2 is not None
+        assert "0.5" in adv2["details"]["constants"]
 
     def test_exact_equation_carries_no_float_advisory(self, client):
         resp = client.post("/verify/math", json={"expression": "x = x"})

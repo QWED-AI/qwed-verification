@@ -656,14 +656,10 @@ async def verify_math(
         # Precision advisory (issue #347): flag binary floating-point
         # constants WITHOUT affecting the verdict — advisory_checks are
         # structurally non-proof-bearing. QWED_RULES.md: flag float math,
-        # suggest decimal.Decimal / sympy.
-        if "=" in expression:
-            # Build advisory source from normalized equation sides (safe_parse_expr)
-            # so equations like 0.5*x = 0.5*x, 0.5x = 0.5x, and 0.1 = 0.1 receive the advisory.
-            advisory_source = f"({left}) + ({right})"
-        else:
-            advisory_source = expression
-        float_advisory = AdvisoryCheck.float_precision(advisory_source)
+        # suggest decimal.Decimal / sympy. Parse submitted text directly
+        # so equations (including 0.0*x = 0.0*x, 0.5**0 = 1) retain lexical
+        # float literals before symbolic simplification.
+        float_advisory = AdvisoryCheck.float_precision(expression)
         if float_advisory is not None:
             dr.developer_fields.setdefault("advisory_checks", []).append(float_advisory)
 
