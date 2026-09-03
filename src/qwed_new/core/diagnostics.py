@@ -232,6 +232,13 @@ def _emit_ident_operand(side: str, i: int, out: List[str]) -> int:
     out.append("(")
     out.append(side[j:num_end])
     out.append(")")
+    # A trailing operand (``sin 0.5x``, ``sin 0.5(x+1)``) needs an explicit
+    # ``*`` — otherwise ``sin(0.5)x`` is a syntax error and the advisory is
+    # lost (Sentry on #348).
+    k = _skip_ws(side, num_end)
+    if k < len(side) and (_is_ident_start(side[k]) or side[k] == "("):
+        out.append("*")
+        return k
     return num_end
 
 

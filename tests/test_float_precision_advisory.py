@@ -76,6 +76,16 @@ class TestFloatPrecisionAdvisoryHelper:
         assert advisory is not None
         assert advisory.details["constants"] == ["0.5"]
 
+    def test_function_application_with_trailing_operand_flagged(self):
+        # Sentry on #348: `sin 0.5x` normalized to `sin(0.5)x` — a syntax
+        # error that lost the advisory. The trailing operand needs `*`.
+        advisory = AdvisoryCheck.float_precision("sin 0.5x = sin 0.5x")
+        assert advisory is not None
+        assert advisory.details["constants"] == ["0.5"]
+        advisory = AdvisoryCheck.float_precision("sin 0.5 x = sin 0.5 x")
+        assert advisory is not None
+        assert advisory.details["constants"] == ["0.5"]
+
     def test_implicit_mul_with_paren_flagged(self):
         # Same implicit-multiplication class, paren form: `0.5(x+1)`.
         advisory = AdvisoryCheck.float_precision("0.5(x+1) = 0.5(x+1)")
