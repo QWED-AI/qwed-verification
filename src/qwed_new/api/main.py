@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 from typing import Optional, Annotated
 from sqlmodel import Session, select
+from datetime import datetime
 import os
 import logging
 from fractions import Fraction
@@ -192,6 +193,16 @@ def get_optional_api_key_record(
     api_key = session.execute(statement).scalars().first()
 
     if not api_key:
+        raise HTTPException(status_code=403, detail="Invalid or revoked API Key")
+
+    # is_active alone is not a liveness check: an expired key linked to an
+    # allowlisted operator kept reading all-tenant metrics indefinitely
+    # (CodeAnt on PR #349). expires_at is stored naive-UTC per the
+    # datetime.utcnow() convention across models/key_rotation, so compare
+    # naive-UTC, not now(timezone.utc).
+    if api_key.expires_at is not None and api_key.expires_at <= datetime.utcnow():
+        raise HTTPException(status_code=403, detail="API Key expired")
+    if api_key.revoked_at is not None:
         raise HTTPException(status_code=403, detail="Invalid or revoked API Key")
 
     return api_key

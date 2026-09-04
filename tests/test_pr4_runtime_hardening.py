@@ -394,6 +394,52 @@ def test_metrics_rejects_unlinked_api_key(client, monkeypatch):
     mock_session.get.assert_not_called()
 
 
+def test_get_optional_api_key_record_rejects_expired_key():
+    """CodeAnt on PR #349: is_active is not a liveness check — an expired
+    key linked to an allowlisted operator must not resolve."""
+    from datetime import datetime, timedelta
+
+    expired = MagicMock(expires_at=datetime.utcnow() - timedelta(days=1), revoked_at=None)
+    mock_session = MagicMock()
+    mock_session.execute.return_value.scalars.return_value.first.return_value = expired
+
+    with patch("qwed_new.api.main.hash_api_key", return_value="h"):
+        with pytest.raises(api_main.HTTPException) as exc_info:
+            get_optional_api_key_record(x_api_key="k", session=mock_session)
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "API Key expired"
+
+
+def test_get_optional_api_key_record_rejects_revoked_key():
+    """Defense-in-depth: revoked_at stamped but is_active not flipped."""
+    from datetime import datetime, timedelta
+
+    revoked = MagicMock(expires_at=None, revoked_at=datetime.utcnow() - timedelta(days=1))
+    mock_session = MagicMock()
+    mock_session.execute.return_value.scalars.return_value.first.return_value = revoked
+
+    with patch("qwed_new.api.main.hash_api_key", return_value="h"):
+        with pytest.raises(api_main.HTTPException) as exc_info:
+            get_optional_api_key_record(x_api_key="k", session=mock_session)
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Invalid or revoked API Key"
+
+
+def test_get_optional_api_key_record_allows_unexpired_key():
+    from datetime import datetime, timedelta
+
+    live = MagicMock(expires_at=datetime.utcnow() + timedelta(days=30), revoked_at=None)
+    mock_session = MagicMock()
+    mock_session.execute.return_value.scalars.return_value.first.return_value = live
+
+    with patch("qwed_new.api.main.hash_api_key", return_value="h"):
+        result = get_optional_api_key_record(x_api_key="k", session=mock_session)
+
+    assert result is live
+
+
 def test_get_optional_current_user_rejects_missing_sub_claim():
     session = MagicMock()
 
