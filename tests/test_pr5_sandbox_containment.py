@@ -253,7 +253,8 @@ class TestLogResultCap:
         dr = {"blob": '"' * (_MAX_LOG_RESULT_CHARS + 1000)}
         capped = _cap_log_result(dr)
 
-        parsed = json.loads(capped)
+        # bare validation: the payload must be parseable JSON
+        json.loads(capped)
         assert len(capped) < 5000
 
     def test_circular_reference_yields_bounded_json(self):
@@ -264,4 +265,14 @@ class TestLogResultCap:
 
         parsed = json.loads(capped)
         assert parsed["self"] == "...[circular]"
+        assert len(capped) < 500
+
+    def test_circular_list_reference_yields_bounded_json(self):
+        """Sentry on PR #351: lists must get the same cycle handling as dicts."""
+        dr = {"status": "VERIFIED", "rows": []}
+        dr["rows"].append(dr["rows"])
+        capped = _cap_log_result(dr)
+
+        parsed = json.loads(capped)
+        assert parsed["rows"] == ["...[circular]"]
         assert len(capped) < 500

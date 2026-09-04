@@ -132,7 +132,13 @@ def _bound_observed_strings(value: Any, seen: set) -> Any:
         finally:
             seen.discard(id(value))
     if isinstance(value, (list, tuple)):
-        return [_bound_observed_strings(v, seen) for v in value]
+        if id(value) in seen:
+            return "...[circular]"
+        seen.add(id(value))
+        try:
+            return [_bound_observed_strings(v, seen) for v in value]
+        finally:
+            seen.discard(id(value))
     return value
 
 

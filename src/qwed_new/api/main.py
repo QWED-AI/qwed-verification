@@ -247,7 +247,13 @@ def _bound_log_strings(value, seen=None):
             seen.discard(id(value))
     if isinstance(value, list):
         seen = set() if seen is None else seen
-        return [_bound_log_strings(v, seen) for v in value]
+        if id(value) in seen:
+            return "...[circular]"
+        seen.add(id(value))
+        try:
+            return [_bound_log_strings(v, seen) for v in value]
+        finally:
+            seen.discard(id(value))
     return value
 
 
