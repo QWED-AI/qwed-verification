@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 from typing import Optional, Annotated
 from sqlmodel import Session, select
+from datetime import datetime, timezone
 import os
 import logging
 from fractions import Fraction
@@ -194,12 +195,52 @@ def get_optional_api_key_record(
     if not api_key:
         raise HTTPException(status_code=403, detail="Invalid or revoked API Key")
 
+    # is_active alone is not a liveness check: an expired key linked to an
+    # allowlisted operator kept reading all-tenant metrics indefinitely
+    # (CodeAnt on PR #349). An expired or revoked key is not a usable
+    # credential — resolve to None instead of raising so a request that also
+    # carries a valid operator JWT is not preempted at the dependency layer
+    # (Sentry on PR #349); require_metrics_access re-decides on the remaining
+    # credentials and still denies key-only callers. expires_at is written
+    # naive-UTC (key_rotation's convention), so interpret naive values as UTC
+    # for the timezone-aware comparison (Sonar: no naive utcnow()).
+    if api_key.revoked_at is not None:
+        return None
+    if api_key.expires_at is not None:
+        expires_at = api_key.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= datetime.now(timezone.utc):
+            return None
+
     return api_key
 
 
-def _has_metrics_admin_role(user: Optional[User]) -> bool:
-    """Return True when the user can access global operational metrics."""
-    return user is not None and user.is_active and user.role in {"owner", "admin"}
+_METRICS_OPERATOR_ENV_VAR = "QWED_METRICS_OPERATOR_USER_IDS"
+
+
+def _get_metrics_operator_ids() -> set:
+    """Parse the platform-operator allowlist from the environment.
+
+    Read per request (not cached at import) so operators can be granted or
+    rotated without a process restart. Entries are user IDs, comma-separated;
+    blank entries are ignored.
+    """
+    raw = os.getenv(_METRICS_OPERATOR_ENV_VAR, "")
+    return {entry.strip() for entry in raw.split(",") if entry.strip()}
+
+
+def _is_metrics_operator(user: Optional[User]) -> bool:
+    """Platform-operator check for ALL-tenant metrics (issue #337).
+
+    "owner"/"admin" are per-organization roles: self-service signup mints
+    role="owner" for every new account, so a role check here degenerates to
+    "possess any account". Only explicitly configured operator user IDs may
+    read cross-tenant metrics; an unset allowlist denies everyone (fail-closed).
+    """
+    if user is None or not user.is_active or user.id is None:
+        return False
+    return str(user.id) in _get_metrics_operator_ids()
 
 
 def require_metrics_access(
@@ -207,18 +248,23 @@ def require_metrics_access(
     api_key_record: Annotated[Optional[ApiKey], Depends(get_optional_api_key_record)],
     session: Annotated[Session, Depends(get_session)],
 ) -> None:
-    """Restrict operational metrics to admin JWT users or admin-linked API keys."""
-    if _has_metrics_admin_role(current_user):
+    """Restrict all-tenant metrics to explicit platform operators.
+
+    DEPLOY NOTE: set QWED_METRICS_OPERATOR_USER_IDS (comma-separated user IDs)
+    to grant access — with the variable unset these endpoints deny every
+    caller, including org owners and admins (issue #337).
+    """
+    if _is_metrics_operator(current_user):
         return
 
     if api_key_record is not None:
         api_key_user = session.get(User, api_key_record.user_id) if api_key_record.user_id else None
-        if _has_metrics_admin_role(api_key_user):
+        if _is_metrics_operator(api_key_user):
             return
-        raise HTTPException(status_code=403, detail="Admin access required")
+        raise HTTPException(status_code=403, detail="Platform operator access required")
 
     if current_user is not None:
-        raise HTTPException(status_code=403, detail="Admin access required")
+        raise HTTPException(status_code=403, detail="Platform operator access required")
 
     raise HTTPException(status_code=401, detail="Authentication required")
 

@@ -7,11 +7,25 @@ global:
 
 scrape_configs:
   # QWED API metrics
+  #
+  # /metrics is operator-only (issue #337): every caller must present the
+  # x-api-key of an API key whose owning user ID is listed in
+  # QWED_METRICS_OPERATOR_USER_IDS (see docker-compose.yml). Prometheus
+  # cannot interpolate env vars into this file, so the credential cannot be
+  # templated here — bootstrap the scrape by:
+  #   1. creating a dedicated scraper account,
+  #   2. minting it an API key,
+  #   3. adding that user's ID to QWED_METRICS_OPERATOR_USER_IDS in .env,
+  #   4. uncommenting http_headers below with the minted key.
+  # Until then this job records 401s (fail-closed is intentional).
   - job_name: 'qwed-api'
     static_configs:
       - targets: ['host.docker.internal:8000']
     metrics_path: '/metrics'
     scrape_interval: 10s
+    # http_headers:
+    #   X-Api-Key:
+    #     values: ['<operator-api-key>']
 
   # Redis metrics (via redis_exporter if added later)
   - job_name: 'redis'

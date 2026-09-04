@@ -18,6 +18,11 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
       - QWED_CORS_ORIGINS=${QWED_CORS_ORIGINS:?set QWED_CORS_ORIGINS}
       - API_KEY_SECRET=${API_KEY_SECRET:?set API_KEY_SECRET}
+      # All-tenant metrics operator allowlist (issue #337): user IDs permitted
+      # to read /metrics and /metrics/prometheus. Unset = deny every caller,
+      # including the Prometheus scraper. Set it to the scraper identity's
+      # user ID and mint that identity an API key for prometheus.yml.
+      - QWED_METRICS_OPERATOR_USER_IDS=${QWED_METRICS_OPERATOR_USER_IDS:-}
     ports:
       - "8000:8000"
     volumes:

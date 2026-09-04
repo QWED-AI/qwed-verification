@@ -701,7 +701,9 @@ def test_get_optional_api_key_record_success():
     """Cover get_optional_api_key_record success path: return api_key."""
     from qwed_new.api.main import get_optional_api_key_record
 
-    mock_api_key = MagicMock()
+    # expires_at/revoked_at must be None explicitly: a bare MagicMock makes
+    # them auto-truthy and the liveness check (PR #349) rejects the key.
+    mock_api_key = MagicMock(expires_at=None, revoked_at=None)
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = mock_api_key
 
