@@ -281,17 +281,24 @@ def test_action_fingerprint_rejects_non_deterministic_parameters():
         AgentService._action_fingerprint(action)
 
 
-def test_metrics_requires_admin_user(client):
-    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="member", is_active=True)
+def test_metrics_rejects_org_admin_when_allowlist_unset(client, monkeypatch):
+    """Issue #337: org role "owner"/"admin" is NOT platform authority.
+
+    Self-service signup mints role="owner" for every account, so with the
+    operator allowlist unset the gate must fail closed.
+    """
+    monkeypatch.delenv("QWED_METRICS_OPERATOR_USER_IDS", raising=False)
+    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="admin", is_active=True, id=7)
 
     response = client.get("/metrics", headers={"Authorization": "Bearer fake"})
 
     assert response.status_code == 403
-    assert response.json()["detail"] == "Admin access required"
+    assert response.json()["detail"] == "Platform operator access required"
 
 
-def test_metrics_allows_admin_user(client):
-    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="admin", is_active=True)
+def test_metrics_allows_configured_operator_user(client, monkeypatch):
+    monkeypatch.setenv("QWED_METRICS_OPERATOR_USER_IDS", "7")
+    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="owner", is_active=True, id=7)
 
     with patch.object(api_main.metrics_collector, "get_global_metrics", return_value={"requests": 1}), patch.object(
         api_main.metrics_collector,
@@ -304,22 +311,44 @@ def test_metrics_allows_admin_user(client):
     assert response.json()["global"] == {"requests": 1}
 
 
-def test_prometheus_metrics_requires_admin_user(client):
-    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="member", is_active=True)
+def test_metrics_rejects_operator_user_not_in_allowlist(client, monkeypatch):
+    monkeypatch.setenv("QWED_METRICS_OPERATOR_USER_IDS", "1,2,3")
+    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="admin", is_active=True, id=7)
+
+    response = client.get("/metrics", headers={"Authorization": "Bearer fake"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Platform operator access required"
+
+
+def test_metrics_rejects_inactive_operator_user(client, monkeypatch):
+    monkeypatch.setenv("QWED_METRICS_OPERATOR_USER_IDS", "7")
+    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="owner", is_active=False, id=7)
+
+    response = client.get("/metrics", headers={"Authorization": "Bearer fake"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Platform operator access required"
+
+
+def test_prometheus_metrics_requires_operator_user(client, monkeypatch):
+    monkeypatch.delenv("QWED_METRICS_OPERATOR_USER_IDS", raising=False)
+    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="admin", is_active=True, id=7)
 
     response = client.get("/metrics/prometheus", headers={"Authorization": "Bearer fake"})
 
     assert response.status_code == 403
-    assert response.json()["detail"] == "Admin access required"
+    assert response.json()["detail"] == "Platform operator access required"
 
 
-def test_metrics_allows_api_key_client(client):
+def test_metrics_allows_api_key_of_configured_operator(client, monkeypatch):
+    monkeypatch.setenv("QWED_METRICS_OPERATOR_USER_IDS", "42")
     api_main.app.dependency_overrides[get_optional_api_key_record] = lambda: MagicMock(
         organization_id=1,
         user_id=42,
     )
     mock_session = MagicMock()
-    mock_session.get.return_value = MagicMock(role="admin", is_active=True)
+    mock_session.get.return_value = MagicMock(role="member", is_active=True, id=42)
     api_main.app.dependency_overrides[api_main.get_session] = lambda: mock_session
 
     with patch.object(api_main.metrics_collector, "get_global_metrics", return_value={"requests": 1}), patch.object(
@@ -332,19 +361,37 @@ def test_metrics_allows_api_key_client(client):
     assert response.status_code == 200
 
 
-def test_metrics_rejects_non_admin_api_key_client(client):
+def test_metrics_rejects_api_key_of_non_operator_user(client, monkeypatch):
+    """Issue #337: an org-admin-linked API key must not read all-tenant metrics."""
+    monkeypatch.setenv("QWED_METRICS_OPERATOR_USER_IDS", "99")
     api_main.app.dependency_overrides[get_optional_api_key_record] = lambda: MagicMock(
         organization_id=1,
         user_id=42,
     )
     mock_session = MagicMock()
-    mock_session.get.return_value = MagicMock(role="member", is_active=True)
+    mock_session.get.return_value = MagicMock(role="admin", is_active=True, id=42)
     api_main.app.dependency_overrides[api_main.get_session] = lambda: mock_session
 
     response = client.get("/metrics", headers={"x-api-key": "fake-key"})
 
     assert response.status_code == 403
-    assert response.json()["detail"] == "Admin access required"
+    assert response.json()["detail"] == "Platform operator access required"
+
+
+def test_metrics_rejects_unlinked_api_key(client, monkeypatch):
+    monkeypatch.setenv("QWED_METRICS_OPERATOR_USER_IDS", "42")
+    api_main.app.dependency_overrides[get_optional_api_key_record] = lambda: MagicMock(
+        organization_id=1,
+        user_id=None,
+    )
+    mock_session = MagicMock()
+    api_main.app.dependency_overrides[api_main.get_session] = lambda: mock_session
+
+    response = client.get("/metrics", headers={"x-api-key": "fake-key"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Platform operator access required"
+    mock_session.get.assert_not_called()
 
 
 def test_get_optional_current_user_rejects_missing_sub_claim():
@@ -358,22 +405,24 @@ def test_get_optional_current_user_rejects_missing_sub_claim():
     assert exc_info.value.detail == "Missing sub claim in token"
 
 
-def test_metrics_rejects_inactive_admin_user(client):
-    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="admin", is_active=False)
+def test_metrics_rejects_inactive_admin_user(client, monkeypatch):
+    monkeypatch.setenv("QWED_METRICS_OPERATOR_USER_IDS", "7")
+    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(role="admin", is_active=False, id=7)
 
     response = client.get("/metrics", headers={"Authorization": "Bearer fake"})
 
     assert response.status_code == 403
-    assert response.json()["detail"] == "Admin access required"
+    assert response.json()["detail"] == "Platform operator access required"
 
 
-def test_metrics_allows_api_key_when_authorization_header_is_not_bearer(client):
+def test_metrics_allows_api_key_when_authorization_header_is_not_bearer(client, monkeypatch):
+    monkeypatch.setenv("QWED_METRICS_OPERATOR_USER_IDS", "42")
     api_main.app.dependency_overrides[get_optional_api_key_record] = lambda: MagicMock(
         organization_id=1,
         user_id=42,
     )
     mock_session = MagicMock()
-    mock_session.get.return_value = MagicMock(role="admin", is_active=True)
+    mock_session.get.return_value = MagicMock(role="admin", is_active=True, id=42)
     api_main.app.dependency_overrides[api_main.get_session] = lambda: mock_session
 
     with patch.object(api_main.metrics_collector, "get_global_metrics", return_value={"requests": 1}), patch.object(
@@ -384,6 +433,16 @@ def test_metrics_allows_api_key_when_authorization_header_is_not_bearer(client):
         response = client.get("/metrics", headers={"Authorization": "Basic abc", "x-api-key": "fake-key"})
 
     assert response.status_code == 200
+
+
+def test_metrics_operator_allowlist_parser_tolerates_whitespace_and_blanks(monkeypatch):
+    monkeypatch.setenv("QWED_METRICS_OPERATOR_USER_IDS", " 7 , , 42,,")
+    assert api_main._get_metrics_operator_ids() == {"7", "42"}
+
+
+def test_metrics_operator_allowlist_empty_string_denies_everyone(monkeypatch):
+    monkeypatch.setenv("QWED_METRICS_OPERATOR_USER_IDS", "")
+    assert api_main._get_metrics_operator_ids() == set()
 
 
 def test_budget_denial_does_not_consume_conversation_step():
