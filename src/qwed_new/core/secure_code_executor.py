@@ -568,7 +568,9 @@ try:
         with open('/workspace/result.json', 'w') as f:
             for chunk in QwedEncoder().iterencode(payload):
                 total += len(chunk)
-                if total > {self.max_result_bytes}:
+                # a string value is emitted as a single token — reject it
+                # immediately rather than materializing it in full
+                if total > {self.max_result_bytes} or len(chunk) > {self.max_result_bytes}:
                     exceeded = True
                     break
                 f.write(chunk)

@@ -95,13 +95,17 @@ _MAX_OBSERVED_RESULT_JSON_CHARS = 10_000
 def _cap_observed_result(value: Any) -> Any:
     """Return *value* unchanged when small; a bounded preview otherwise.
 
-    Streams the serialization so an oversized value is rejected without fully
-    materializing it in the synchronous event-loop path.
+    Strings are bounded BEFORE encoding (Greptile P2 on PR #351: iterencode
+    emits a string value as a single token, so an unbounded string would be
+    fully materialized despite the streaming cap), then serialization is
+    streamed so an oversized structure never fully materializes on the
+    synchronous event-loop path.
     """
     try:
         parts = []
         total = 0
-        for chunk in json.JSONEncoder().iterencode(value):
+        bounded = _bound_observed_strings(value, set())
+        for chunk in json.JSONEncoder().iterencode(bounded):
             parts.append(chunk)
             total += len(chunk)
             if total > _MAX_OBSERVED_RESULT_JSON_CHARS:
@@ -109,8 +113,26 @@ def _cap_observed_result(value: Any) -> Any:
                     "truncated": True,
                     "preview": ("".join(parts))[:_MAX_OBSERVED_RESULT_JSON_CHARS],
                 }
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return "<unserializable result>"
+    return value
+
+
+def _bound_observed_strings(value: Any, seen: set) -> Any:
+    if isinstance(value, str):
+        if len(value) <= _MAX_OBSERVED_RESULT_JSON_CHARS:
+            return value
+        return value[:_MAX_OBSERVED_RESULT_JSON_CHARS] + "...[truncated]"
+    if isinstance(value, dict):
+        if id(value) in seen:
+            return "...[circular]"
+        seen.add(id(value))
+        try:
+            return {str(k): _bound_observed_strings(v, seen) for k, v in value.items()}
+        finally:
+            seen.discard(id(value))
+    if isinstance(value, (list, tuple)):
+        return [_bound_observed_strings(v, seen) for v in value]
     return value
 
 

@@ -226,29 +226,42 @@ class TestLogResultCap:
 
         assert json.loads(capped) == dr
 
-    def test_large_result_truncated_but_still_valid_json(self):
+    def test_large_string_value_bounded_inline(self):
+        """Greptile P2 on PR #351: a string value is a single iterencode
+        token — it must be truncated BEFORE encoding, not after. The output
+        keeps the document structure with the value bounded inline."""
         dr = {"status": "UNVERIFIABLE", "blob": "A" * (_MAX_LOG_RESULT_CHARS + 1000)}
         capped = _cap_log_result(dr)
 
         parsed = json.loads(capped)
+        assert parsed["blob"].endswith("...[truncated]")
+        assert len(parsed["blob"]) <= 1100
+        assert len(capped) < 2000
+
+    def test_aggregate_size_still_hits_the_truncated_document(self):
+        """Many individually-bounded strings summing past the cap produce
+        the bounded preview document."""
+        dr = {f"k{i}": "A" * 1000 for i in range(100)}
+        capped = _cap_log_result(dr)
+
+        parsed = json.loads(capped)
         assert parsed["truncated"] is True
-        # bounded: sanitized preview + envelope must not exceed ~2x the cap
         assert len(capped) < _MAX_LOG_RESULT_CHARS + 500
 
-    def test_oversized_ouput_stays_bounded(self):
+    def test_oversized_output_stays_bounded(self):
         """Worst case for escaping: a result made of quotes/backslashes."""
         dr = {"blob": '"' * (_MAX_LOG_RESULT_CHARS + 1000)}
         capped = _cap_log_result(dr)
 
         parsed = json.loads(capped)
-        assert parsed["truncated"] is True
-        assert len(capped) < _MAX_LOG_RESULT_CHARS + 500
+        assert len(capped) < 5000
 
     def test_circular_reference_yields_bounded_json(self):
+        """The bounder breaks the cycle inline; output stays small valid JSON."""
         dr = {"status": "VERIFIED"}
         dr["self"] = dr
         capped = _cap_log_result(dr)
 
         parsed = json.loads(capped)
-        assert parsed["truncated"] is True
-        assert parsed["unserializable"] is True
+        assert parsed["self"] == "...[circular]"
+        assert len(capped) < 500

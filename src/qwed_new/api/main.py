@@ -221,6 +221,34 @@ def get_optional_api_key_record(
 # this is the audit-trail backstop so no endpoint can persist an unbounded
 # serialized result row.
 _MAX_LOG_RESULT_CHARS = 64_000
+_MAX_LOG_RESULT_STRING_CHARS = 1_000
+
+
+def _bound_log_strings(value, seen=None):
+    """Truncate long strings pre-encoding (Greptile P2 on PR #351).
+
+    iterencode emits a JSON string value as a SINGLE token, so an unbounded
+    string inside the dict would be fully materialized before the size cap
+    could run. Bounding first keeps every chunk small. RecursionError from a
+    circular reference is caught by the caller like other encode failures.
+    """
+    if isinstance(value, str):
+        if len(value) <= _MAX_LOG_RESULT_STRING_CHARS:
+            return value
+        return value[:_MAX_LOG_RESULT_STRING_CHARS] + "...[truncated]"
+    if isinstance(value, dict):
+        seen = set() if seen is None else seen
+        if id(value) in seen:
+            return "...[circular]"
+        seen.add(id(value))
+        try:
+            return {k: _bound_log_strings(v, seen) for k, v in value.items()}
+        finally:
+            seen.discard(id(value))
+    if isinstance(value, list):
+        seen = set() if seen is None else seen
+        return [_bound_log_strings(v, seen) for v in value]
+    return value
 
 
 def _cap_log_result(result_dict) -> str:
@@ -229,20 +257,21 @@ def _cap_log_result(result_dict) -> str:
     The audit integrity verifier decodes this field with json.loads
     (audit_logger._decode_result_payload — malformed payloads raise
     SecurityError), so both paths must emit VALID JSON, not Python repr.
-    Serialization is streamed so an oversized dict never materializes in
-    memory, and the fallback stays inside the cap: the preview is sanitized
-    of JSON-escapable characters BEFORE embedding, so escaping cannot
-    re-expand it (CodeRabbit on PR #351).
+    Serialization is streamed and string-bounded so an oversized dict never
+    materializes in memory, and the fallback stays inside the cap: the
+    preview is sanitized of JSON-escapable characters BEFORE embedding, so
+    escaping cannot re-expand it (CodeRabbit on PR #351).
     """
     parts = []
     total = 0
     try:
-        for chunk in json.JSONEncoder(default=str).iterencode(result_dict):
+        bounded = _bound_log_strings(result_dict)
+        for chunk in json.JSONEncoder(default=str).iterencode(bounded):
             parts.append(chunk)
             total += len(chunk)
             if total > _MAX_LOG_RESULT_CHARS:
                 break
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return json.dumps({"truncated": True, "unserializable": True})
     if total <= _MAX_LOG_RESULT_CHARS:
         return "".join(parts)
