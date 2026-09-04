@@ -93,18 +93,25 @@ _MAX_OBSERVED_RESULT_JSON_CHARS = 10_000
 
 
 def _cap_observed_result(value: Any) -> Any:
-    """Return *value* unchanged when small; a bounded preview otherwise."""
+    """Return *value* unchanged when small; a bounded preview otherwise.
+
+    Streams the serialization so an oversized value is rejected without fully
+    materializing it in the synchronous event-loop path.
+    """
     try:
-        blob = json.dumps(value)
+        parts = []
+        total = 0
+        for chunk in json.JSONEncoder().iterencode(value):
+            parts.append(chunk)
+            total += len(chunk)
+            if total > _MAX_OBSERVED_RESULT_JSON_CHARS:
+                return {
+                    "truncated": True,
+                    "preview": ("".join(parts))[:_MAX_OBSERVED_RESULT_JSON_CHARS],
+                }
     except (TypeError, ValueError):
         return "<unserializable result>"
-    if len(blob) <= _MAX_OBSERVED_RESULT_JSON_CHARS:
-        return value
-    return {
-        "truncated": True,
-        "serialized_chars": len(blob),
-        "preview": blob[:_MAX_OBSERVED_RESULT_JSON_CHARS],
-    }
+    return value
 
 
 def _dataset_fingerprint(df: pd.DataFrame) -> str:

@@ -7,6 +7,7 @@ the container wrapper, at the host read-back, in the stats verifier's
 observed_result evidence, and in the VerificationLog audit row.
 """
 
+import docker
 import json
 import os
 
@@ -28,26 +29,29 @@ def _executor_with_mock_docker():
 class TestContainerContainment:
     """#338: log_config, pids_limit, and guaranteed container removal."""
 
-    def test_run_sets_log_rotation_and_pids_limit(self):
+    def test_create_sets_log_rotation_and_pids_limit(self):
         executor = _executor_with_mock_docker()
-        executor.client.containers.run.return_value = MagicMock()
+        executor.client.containers.create.return_value = MagicMock()
 
         executor._run_in_container("/tmp/does-not-matter", "exec_1")
 
-        kwargs = executor.client.containers.run.call_args.kwargs
+        kwargs = executor.client.containers.create.call_args.kwargs
         log_config = kwargs["log_config"]
         assert log_config.config == {"max-size": "10m", "max-file": "1"}
         assert kwargs["pids_limit"] == executor.pids_limit == 128
-        # removal is explicit in the finally, not delegated to the daemon
-        assert kwargs["remove"] is False
+        # create-then-start (#351 review): the finally must cover start
+        container = executor.client.containers.create.return_value
+        container.start.assert_called_once()
+        container.remove.assert_called_once_with(force=True)
 
     def test_container_removed_after_successful_wait(self):
         executor = _executor_with_mock_docker()
         container = MagicMock()
-        executor.client.containers.run.return_value = container
+        executor.client.containers.create.return_value = container
 
         executor._run_in_container("/tmp", "exec_1")
 
+        container.start.assert_called_once()
         container.wait.assert_called_once_with(timeout=executor.timeout)
         container.remove.assert_called_once_with(force=True)
         container.kill.assert_not_called()
@@ -56,19 +60,33 @@ class TestContainerContainment:
         executor = _executor_with_mock_docker()
         container = MagicMock()
         container.wait.side_effect = Exception("read timeout")
-        executor.client.containers.run.return_value = container
+        executor.client.containers.create.return_value = container
 
         with pytest.raises(ExecutionError):
             executor._run_in_container("/tmp", "exec_1")
 
+        container.start.assert_called_once()
         container.kill.assert_called_once()
+        container.remove.assert_called_once_with(force=True)
+
+    def test_container_removed_when_start_fails(self):
+        """#351 review: run() would create-then-start, leaking the container
+        when start() raises after creation. create() + start() must not."""
+        executor = _executor_with_mock_docker()
+        container = MagicMock()
+        container.start.side_effect = docker.errors.APIError("start failed")
+        executor.client.containers.create.return_value = container
+
+        with pytest.raises(docker.errors.APIError):
+            executor._run_in_container("/tmp", "exec_1")
+
         container.remove.assert_called_once_with(force=True)
 
     def test_removal_failure_does_not_mask_successful_execution(self):
         executor = _executor_with_mock_docker()
         container = MagicMock()
         container.remove.side_effect = Exception("daemon hiccup")
-        executor.client.containers.run.return_value = container
+        executor.client.containers.create.return_value = container
 
         result = executor._run_in_container("/tmp", "exec_1")
 
@@ -172,21 +190,31 @@ class TestObservedResultCap:
         capped = _cap_observed_result(value)
 
         assert capped["truncated"] is True
-        assert capped["serialized_chars"] > 10_000
         assert len(capped["preview"]) <= 10_000
         assert len(json.dumps(capped)) < 20_000
 
+    def test_unserializable_value_falls_back_to_marker(self):
+        assert _cap_observed_result({"bad": object()}) == "<unserializable result>"
+
 
 class TestLogResultCap:
-    """#339: audit rows cannot persist an unbounded serialized result."""
+    """#339: audit rows cannot persist an unbounded serialized result.
 
-    def test_small_result_unchanged(self):
+    The audit integrity verifier decodes this field with json.loads, so the
+    output must be VALID JSON in both paths (CodeAnt on PR #351).
+    """
+
+    def test_small_result_is_valid_json(self):
         dr = {"status": "VERIFIED", "developer_fields": {"a": 1}}
-        assert _cap_log_result(dr) == str(dr)
+        capped = _cap_log_result(dr)
 
-    def test_large_result_truncated_with_marker(self):
+        assert json.loads(capped) == dr
+
+    def test_large_result_truncated_but_still_valid_json(self):
         dr = {"status": "UNVERIFIABLE", "blob": "A" * (_MAX_LOG_RESULT_CHARS + 1000)}
         capped = _cap_log_result(dr)
 
-        assert len(capped) < _MAX_LOG_RESULT_CHARS + 200
-        assert "truncated" in capped
+        parsed = json.loads(capped)
+        assert parsed["truncated"] is True
+        assert parsed["serialized_chars"] > _MAX_LOG_RESULT_CHARS
+        assert len(capped) < _MAX_LOG_RESULT_CHARS + 500

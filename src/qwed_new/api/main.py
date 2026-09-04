@@ -224,11 +224,21 @@ _MAX_LOG_RESULT_CHARS = 64_000
 
 
 def _cap_log_result(result_dict) -> str:
-    """Serialize a DiagnosticResult dict for VerificationLog.result, capped."""
-    text = str(result_dict)
+    """Serialize a DiagnosticResult dict for VerificationLog.result, capped.
+
+    The audit integrity verifier decodes this field with json.loads
+    (audit_logger._decode_result_payload — malformed payloads raise
+    SecurityError), so both paths must emit VALID JSON, not Python repr
+    (CodeAnt on PR #351).
+    """
+    text = json.dumps(result_dict, default=str)
     if len(text) <= _MAX_LOG_RESULT_CHARS:
         return text
-    return text[:_MAX_LOG_RESULT_CHARS] + f"...[truncated {len(text) - _MAX_LOG_RESULT_CHARS} chars]"
+    return json.dumps({
+        "truncated": True,
+        "serialized_chars": len(text),
+        "preview": text[:_MAX_LOG_RESULT_CHARS],
+    }, default=str)
 
 
 _METRICS_OPERATOR_ENV_VAR = "QWED_METRICS_OPERATOR_USER_IDS"

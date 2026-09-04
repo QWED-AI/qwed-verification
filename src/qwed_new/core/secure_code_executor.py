@@ -340,7 +340,12 @@ class SecureCodeExecutor:
         # Use pre-built pandas image
         cmd = "python /workspace/script.py"
 
-        container = self.client.containers.run(
+        # Create first, start INSIDE the cleanup scope (#351 review): the SDK's
+        # containers.run() creates the container and only then starts it, so a
+        # start failure raised before our finally existed and leaked the created
+        # container. With create() + start(), the finally covers the whole
+        # post-creation lifecycle.
+        container = self.client.containers.create(
             image=self.image,
             command=cmd,
             volumes={tmpdir: {'bind': '/workspace', 'mode': 'rw'}},
@@ -356,22 +361,22 @@ class SecureCodeExecutor:
                 config={"max-size": "10m", "max-file": "1"},
             ),
             pids_limit=self.pids_limit,
-            remove=False,  # removed explicitly in the finally below
-            detach=True,  # Run in background
         )
 
         try:
-            # Wait for completion with timeout
-            # Note: docker-py wait() timeout is in seconds since v3.0.0
-            container.wait(timeout=self.timeout)
-            return container
-        except Exception as e:
-            logger.warning(f"Container timeout or error: {e}")
+            container.start()
             try:
-                container.kill()
-            except Exception:
-                logger.debug("Failed to kill container after timeout", exc_info=True)
-            raise ExecutionError(f"Execution timed out after {self.timeout}s") from e
+                # Wait for completion with timeout
+                # Note: docker-py wait() timeout is in seconds since v3.0.0
+                container.wait(timeout=self.timeout)
+            except Exception as e:
+                logger.warning(f"Container timeout or error: {e}")
+                try:
+                    container.kill()
+                except Exception:
+                    logger.debug("Failed to kill container after timeout", exc_info=True)
+                raise ExecutionError(f"Execution timed out after {self.timeout}s") from e
+            return container
         finally:
             # #338: every execution must leave no container behind — a stopped
             # container keeps its full json-file log on the daemon host
@@ -529,18 +534,24 @@ try:
             payload = {{'result': res.to_dict(orient='records')}}
         else:
             payload = {{'result': res}}
-        blob = json.dumps(payload, cls=QwedEncoder)
-        if len(blob) > {self.max_result_bytes}:
-            # #339: reject oversized results INSIDE the container — a
-            # reference-multiplied payload stays under the container memory
-            # cap while its serialized JSON grows unboundedly on disk.
-            blob = json.dumps({{'error': 'Result exceeds maximum allowed size'}}, cls=QwedEncoder)
+        # #339: stream-serialize and abort at the cap. A one-shot json.dumps
+        # would fully materialize the escaped expansion in container memory
+        # before any size check could run; iterencode emits lazily so memory
+        # stays bounded. ensure_ascii keeps len(chunk) == bytes on disk.
+        total = 0
+        exceeded = False
+        with open('/workspace/result.json', 'w') as f:
+            for chunk in QwedEncoder().iterencode(payload):
+                total += len(chunk)
+                if total > {self.max_result_bytes}:
+                    exceeded = True
+                    break
+                f.write(chunk)
+        if exceeded:
             with open('/workspace/result.json', 'w') as f:
-                f.write(blob)
+                f.write(json.dumps({{'error': 'Result exceeds maximum allowed size'}}))
             print('Result exceeds maximum allowed size', file=sys.stderr)
             sys.exit(1)
-        with open('/workspace/result.json', 'w') as f:
-            f.write(blob)
     else:
         with open('/workspace/result.json', 'w') as f:
             json.dump({{'error': 'Code did not set result variable'}}, f)
