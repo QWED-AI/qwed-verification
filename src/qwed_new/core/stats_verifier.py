@@ -83,6 +83,30 @@ def _json_safe(value: Any) -> Any:
         return repr(value)
 
 
+# #339: observed_result lands in developer_fields, which flows into both the
+# VerificationLog row (str(dr.to_dict())) and the response body
+# (merge_diagnostic_result). A reference-multiplied result — e.g.
+# ['\U0001F600' * 12_000_000] * K — stays under the container memory cap while
+# its serialized form grows unboundedly, so the value must be capped at the
+# source rather than trusted downstream.
+_MAX_OBSERVED_RESULT_JSON_CHARS = 10_000
+
+
+def _cap_observed_result(value: Any) -> Any:
+    """Return *value* unchanged when small; a bounded preview otherwise."""
+    try:
+        blob = json.dumps(value)
+    except (TypeError, ValueError):
+        return "<unserializable result>"
+    if len(blob) <= _MAX_OBSERVED_RESULT_JSON_CHARS:
+        return value
+    return {
+        "truncated": True,
+        "serialized_chars": len(blob),
+        "preview": blob[:_MAX_OBSERVED_RESULT_JSON_CHARS],
+    }
+
+
 def _dataset_fingerprint(df: pd.DataFrame) -> str:
     """Deterministic fingerprint of the input dataset.
 
@@ -677,7 +701,7 @@ class StatsVerifier:
             )
 
         execution_evidence = {
-            "observed_result": _json_safe(exec_result.result),
+            "observed_result": _cap_observed_result(_json_safe(exec_result.result)),
             "generated_code": code,
             "columns": columns,
             "dataset_sha256": dataset_sha256,

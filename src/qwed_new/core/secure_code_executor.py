@@ -11,6 +11,7 @@ Provides sandboxed execution of LLM-generated code with:
 
 import ast
 import docker
+from docker.types import LogConfig
 import tempfile
 import json
 import os
@@ -230,6 +231,15 @@ class SecureCodeExecutor:
         self.cpu_limit = 0.5  # 50% of one CPU core
         self.memory_limit = "512m"  # 512 MB
         self.timeout = 10  # seconds
+        # #338: process count is the last kernel resource the container
+        # config left unbounded — a gate-passing fork bomb allocates host
+        # PIDs up to kernel.pid_max for the whole execution window.
+        self.pids_limit = 128
+        # #339: result.json read-back cap. json.load reads the whole file
+        # plus the decoded value into this process; gate-passing code can
+        # multiply references under the container memory cap to grow the
+        # on-disk JSON unboundedly.
+        self.max_result_bytes = 2 * 1024 * 1024
         self.execution_count = 0
         
         # Docker image to use
@@ -285,6 +295,14 @@ class SecureCodeExecutor:
                     # 4. Parse result
                     result_file = os.path.join(tmpdir, "result.json")
                     if os.path.exists(result_file):
+                        # #339: size-check BEFORE reading — json.load holds the
+                        # whole file plus the decoded value in this process,
+                        # parsed synchronously on the event loop. The wrapper
+                        # enforces the same cap, so reaching this branch with
+                        # an oversized file means the cap was bypassed.
+                        if os.path.getsize(result_file) > self.max_result_bytes:
+                            logger.warning("Result file exceeds size cap for %s", execution_id)
+                            return False, "Result exceeds maximum allowed size", None
                         with open(result_file, 'r') as f:
                             result_data = json.load(f)
                         
@@ -321,7 +339,7 @@ class SecureCodeExecutor:
         
         # Use pre-built pandas image
         cmd = "python /workspace/script.py"
-        
+
         container = self.client.containers.run(
             image=self.image,
             command=cmd,
@@ -330,10 +348,18 @@ class SecureCodeExecutor:
             cpu_period=100000,
             cpu_quota=int(self.cpu_limit * 100000),
             network_mode="none",  # No internet access
-            remove=False,  # Keep so we can check status/logs
+            # #338: the daemon's default json-file driver is unbounded —
+            # sandbox stdout grows on the daemon HOST, outside every
+            # container resource limit, until the disk fills.
+            log_config=LogConfig(
+                type=LogConfig.types.JSON,
+                config={"max-size": "10m", "max-file": "1"},
+            ),
+            pids_limit=self.pids_limit,
+            remove=False,  # removed explicitly in the finally below
             detach=True,  # Run in background
         )
-        
+
         try:
             # Wait for completion with timeout
             # Note: docker-py wait() timeout is in seconds since v3.0.0
@@ -346,6 +372,18 @@ class SecureCodeExecutor:
             except Exception:
                 logger.debug("Failed to kill container after timeout", exc_info=True)
             raise ExecutionError(f"Execution timed out after {self.timeout}s") from e
+        finally:
+            # #338: every execution must leave no container behind — a stopped
+            # container keeps its full json-file log on the daemon host
+            # indefinitely. Result read-back uses the mounted result.json,
+            # never container logs, so removal here is safe.
+            try:
+                container.remove(force=True)
+            except Exception:
+                logger.warning(
+                    "Failed to remove sandbox container for %s", execution_id,
+                    exc_info=True,
+                )
     
     def _is_safe_code(self, code: str) -> DiagnosticResult:
         """
@@ -482,16 +520,27 @@ for key, value in context.items():
 try:
     # User code executes here
 {self._indent_code(user_code, spaces=4)}
-    
+
     # Save result (user code should set 'result' variable)
     if 'result' in globals():
         res = globals()['result']
+        # Handle DataFrame results
+        if hasattr(res, 'to_dict'):
+            payload = {{'result': res.to_dict(orient='records')}}
+        else:
+            payload = {{'result': res}}
+        blob = json.dumps(payload, cls=QwedEncoder)
+        if len(blob) > {self.max_result_bytes}:
+            # #339: reject oversized results INSIDE the container — a
+            # reference-multiplied payload stays under the container memory
+            # cap while its serialized JSON grows unboundedly on disk.
+            blob = json.dumps({{'error': 'Result exceeds maximum allowed size'}}, cls=QwedEncoder)
+            with open('/workspace/result.json', 'w') as f:
+                f.write(blob)
+            print('Result exceeds maximum allowed size', file=sys.stderr)
+            sys.exit(1)
         with open('/workspace/result.json', 'w') as f:
-            # Handle DataFrame results
-            if hasattr(res, 'to_dict'):
-                json.dump({{'result': res.to_dict(orient='records')}}, f, cls=QwedEncoder)
-            else:
-                json.dump({{'result': res}}, f, cls=QwedEncoder)
+            f.write(blob)
     else:
         with open('/workspace/result.json', 'w') as f:
             json.dump({{'error': 'Code did not set result variable'}}, f)
