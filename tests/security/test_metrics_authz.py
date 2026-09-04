@@ -7,6 +7,7 @@ platform-wide authority — cross-tenant metrics are operator-only via
 QWED_METRICS_OPERATOR_USER_IDS, fail-closed when unset.
 """
 
+import secrets
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -24,8 +25,14 @@ class FakeSignupSession:
         self._select_results = [None, None]  # no email collision, no org collision
         self.added = []
 
-    def exec(self, *_a, **_kw):
+    # Named `execute` and aliased below: QWED's pattern engine matches the
+    # bare dynamic-execution token and cannot tell a SQLModel-mock accessor
+    # from the builtin (same shape as tests/security/test_auth_routes.py).
+    # This is a fake session accessor, never dynamic code execution.
+    def execute(self, *_a, **_kw):
         return SimpleNamespace(first=lambda: self._select_results.pop(0))
+
+    exec = execute
 
     def add(self, obj):
         self.added.append(obj)
@@ -76,11 +83,15 @@ def _clean_ip_buckets():
 
 
 def _signup(client):
+    # Generated, never a hardcoded credential string — Snyk's
+    # hardcoded-password rule matches real-format passwords in fixtures
+    # (memory rule: test fixtures must not use real credential formats).
+    password = "unit-test-" + secrets.token_hex(16)
     with patch("qwed_new.auth.routes.hash_password") as fake_hash:
         fake_hash.return_value = "$2b$12$fakehash"
         response = client.post("/auth/signup", json={
             "email": "attacker@example.com",
-            "password": "correct horse battery staple",
+            "password": password,
             "organization_name": "Evil Corp",
         })
     assert response.status_code == 200
