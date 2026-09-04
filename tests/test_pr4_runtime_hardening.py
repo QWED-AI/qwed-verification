@@ -394,43 +394,61 @@ def test_metrics_rejects_unlinked_api_key(client, monkeypatch):
     mock_session.get.assert_not_called()
 
 
-def test_get_optional_api_key_record_rejects_expired_key():
-    """CodeAnt on PR #349: is_active is not a liveness check — an expired
-    key linked to an allowlisted operator must not resolve."""
-    from datetime import datetime, timedelta
+def test_get_optional_api_key_record_treats_expired_key_as_absent():
+    """CodeAnt on PR #349: is_active is not a liveness check. An expired key
+    resolves to None (not a raise) so a valid operator JWT in the same
+    request is not preempted (Sentry on PR #349)."""
+    from datetime import datetime, timedelta, timezone
 
-    expired = MagicMock(expires_at=datetime.utcnow() - timedelta(days=1), revoked_at=None)
+    expired = MagicMock(expires_at=datetime.now(timezone.utc) - timedelta(days=1), revoked_at=None)
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = expired
 
     with patch("qwed_new.api.main.hash_api_key", return_value="h"):
-        with pytest.raises(api_main.HTTPException) as exc_info:
-            get_optional_api_key_record(x_api_key="k", session=mock_session)
+        result = get_optional_api_key_record(x_api_key="k", session=mock_session)
 
-    assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == "API Key expired"
+    assert result is None
 
 
-def test_get_optional_api_key_record_rejects_revoked_key():
-    """Defense-in-depth: revoked_at stamped but is_active not flipped."""
-    from datetime import datetime, timedelta
+def test_get_optional_api_key_record_normalizes_naive_stored_expiry():
+    """expires_at is written naive-UTC (key_rotation convention); a naive
+    past value must still be interpreted as UTC-expired, not crash."""
+    from datetime import datetime, timedelta, timezone
 
-    revoked = MagicMock(expires_at=None, revoked_at=datetime.utcnow() - timedelta(days=1))
+    naive_expired = MagicMock(
+        expires_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1),
+        revoked_at=None,
+    )
+    mock_session = MagicMock()
+    mock_session.execute.return_value.scalars.return_value.first.return_value = naive_expired
+
+    with patch("qwed_new.api.main.hash_api_key", return_value="h"):
+        result = get_optional_api_key_record(x_api_key="k", session=mock_session)
+
+    assert result is None
+
+
+def test_get_optional_api_key_record_treats_revoked_key_as_absent():
+    """Defense-in-depth for corrupted rows (revoked_at stamped, is_active
+    not flipped): not a usable credential."""
+    from datetime import datetime, timedelta, timezone
+
+    revoked = MagicMock(expires_at=None, revoked_at=datetime.now(timezone.utc) - timedelta(days=1))
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = revoked
 
     with patch("qwed_new.api.main.hash_api_key", return_value="h"):
-        with pytest.raises(api_main.HTTPException) as exc_info:
-            get_optional_api_key_record(x_api_key="k", session=mock_session)
+        result = get_optional_api_key_record(x_api_key="k", session=mock_session)
 
-    assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == "Invalid or revoked API Key"
+    assert result is None
 
 
 def test_get_optional_api_key_record_allows_unexpired_key():
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
-    live = MagicMock(expires_at=datetime.utcnow() + timedelta(days=30), revoked_at=None)
+    live = MagicMock(
+        expires_at=datetime.now(timezone.utc) + timedelta(days=30), revoked_at=None
+    )
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = live
 
@@ -438,6 +456,57 @@ def test_get_optional_api_key_record_allows_unexpired_key():
         result = get_optional_api_key_record(x_api_key="k", session=mock_session)
 
     assert result is live
+
+
+def test_metrics_allows_operator_jwt_when_api_key_expired(client, monkeypatch):
+    """Sentry on PR #349 (MEDIUM): an expired X-Api-Key header must not
+    preempt a valid operator JWT — the key resolves to None and the JWT
+    still authorizes the all-tenant metrics read."""
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setenv("QWED_METRICS_OPERATOR_USER_IDS", "7")
+    api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(
+        role="member", is_active=True, id=7
+    )
+
+    expired = MagicMock(
+        expires_at=datetime.now(timezone.utc) - timedelta(days=1), revoked_at=None
+    )
+    mock_session = MagicMock()
+    mock_session.execute.return_value.scalars.return_value.first.return_value = expired
+    api_main.app.dependency_overrides[api_main.get_session] = lambda: mock_session
+
+    with patch("qwed_new.api.main.hash_api_key", return_value="h"), patch.object(
+        api_main.metrics_collector, "get_global_metrics", return_value={"requests": 1}
+    ), patch.object(
+        api_main.metrics_collector, "get_all_tenant_metrics", return_value={"1": {"requests": 1}}
+    ):
+        response = client.get("/metrics", headers={"x-api-key": "stale-key"})
+
+    assert response.status_code == 200
+    assert response.json()["global"] == {"requests": 1}
+
+
+def test_metrics_denies_expired_api_key_without_jwt(client, monkeypatch):
+    """Fail-closed still holds: an expired key presented alone authorizes
+    nothing (resolves to no credential -> 401)."""
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setenv("QWED_METRICS_OPERATOR_USER_IDS", "7")
+    api_main.app.dependency_overrides[get_optional_current_user] = lambda: None
+
+    expired = MagicMock(
+        expires_at=datetime.now(timezone.utc) - timedelta(days=1), revoked_at=None
+    )
+    mock_session = MagicMock()
+    mock_session.execute.return_value.scalars.return_value.first.return_value = expired
+    api_main.app.dependency_overrides[api_main.get_session] = lambda: mock_session
+
+    with patch("qwed_new.api.main.hash_api_key", return_value="h"):
+        response = client.get("/metrics", headers={"x-api-key": "stale-key"})
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Authentication required"
 
 
 def test_get_optional_current_user_rejects_missing_sub_claim():

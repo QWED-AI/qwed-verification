@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 from typing import Optional, Annotated
 from sqlmodel import Session, select
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 import logging
 from fractions import Fraction
@@ -197,13 +197,21 @@ def get_optional_api_key_record(
 
     # is_active alone is not a liveness check: an expired key linked to an
     # allowlisted operator kept reading all-tenant metrics indefinitely
-    # (CodeAnt on PR #349). expires_at is stored naive-UTC per the
-    # datetime.utcnow() convention across models/key_rotation, so compare
-    # naive-UTC, not now(timezone.utc).
-    if api_key.expires_at is not None and api_key.expires_at <= datetime.utcnow():
-        raise HTTPException(status_code=403, detail="API Key expired")
+    # (CodeAnt on PR #349). An expired or revoked key is not a usable
+    # credential — resolve to None instead of raising so a request that also
+    # carries a valid operator JWT is not preempted at the dependency layer
+    # (Sentry on PR #349); require_metrics_access re-decides on the remaining
+    # credentials and still denies key-only callers. expires_at is written
+    # naive-UTC (key_rotation's convention), so interpret naive values as UTC
+    # for the timezone-aware comparison (Sonar: no naive utcnow()).
     if api_key.revoked_at is not None:
-        raise HTTPException(status_code=403, detail="Invalid or revoked API Key")
+        return None
+    if api_key.expires_at is not None:
+        expires_at = api_key.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= datetime.now(timezone.utc):
+            return None
 
     return api_key
 
