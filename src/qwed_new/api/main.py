@@ -222,9 +222,13 @@ def get_optional_api_key_record(
 # serialized result row.
 _MAX_LOG_RESULT_CHARS = 64_000
 _MAX_LOG_RESULT_STRING_CHARS = 1_000
+# Aggregate traversal budget (Greptile P1 on PR #351): stop cloning the
+# structure once enough bounded content has been retained, so a request with
+# very many small values cannot drive unbounded traversal on the event loop.
+_LOG_BOUND_BUDGET_CHARS = 2 * _MAX_LOG_RESULT_CHARS
 
 
-def _bound_log_strings(value, seen=None):
+def _bound_log_strings(value, seen=None, budget=None):
     """Truncate long strings pre-encoding (Greptile P2 on PR #351).
 
     iterencode emits a JSON string value as a SINGLE token, so an unbounded
@@ -232,9 +236,15 @@ def _bound_log_strings(value, seen=None):
     could run. Bounding first keeps every chunk small. RecursionError from a
     circular reference is caught by the caller like other encode failures.
     """
+    if budget is None:
+        budget = [_LOG_BOUND_BUDGET_CHARS]
+    if budget[0] <= 0:
+        return "...[audit truncated]"
     if isinstance(value, str):
         if len(value) <= _MAX_LOG_RESULT_STRING_CHARS:
+            budget[0] -= len(value)
             return value
+        budget[0] -= _MAX_LOG_RESULT_STRING_CHARS
         return value[:_MAX_LOG_RESULT_STRING_CHARS] + "...[truncated]"
     if isinstance(value, dict):
         seen = set() if seen is None else seen
@@ -242,7 +252,13 @@ def _bound_log_strings(value, seen=None):
             return "...[circular]"
         seen.add(id(value))
         try:
-            return {k: _bound_log_strings(v, seen) for k, v in value.items()}
+            out = {}
+            for k, v in value.items():
+                out[k] = _bound_log_strings(v, seen, budget)
+                if budget[0] <= 0:
+                    out["...audit truncated"] = True
+                    break
+            return out
         finally:
             seen.discard(id(value))
     if isinstance(value, list):
@@ -251,7 +267,13 @@ def _bound_log_strings(value, seen=None):
             return "...[circular]"
         seen.add(id(value))
         try:
-            return [_bound_log_strings(v, seen) for v in value]
+            out = []
+            for v in value:
+                out.append(_bound_log_strings(v, seen, budget))
+                if budget[0] <= 0:
+                    out.append("...audit truncated")
+                    break
+            return out
         finally:
             seen.discard(id(value))
     return value
@@ -263,8 +285,8 @@ def _cap_log_result(result_dict) -> str:
     The audit integrity verifier decodes this field with json.loads
     (audit_logger._decode_result_payload — malformed payloads raise
     SecurityError), so both paths must emit VALID JSON, not Python repr.
-    Serialization is streamed and string-bounded so an oversized dict never
-    materializes in memory, and the fallback stays inside the cap: the
+    Serialization is streamed and aggregate-bounded so an oversized dict
+    never materializes in memory, and the fallback stays inside the cap: the
     preview is sanitized of JSON-escapable characters BEFORE embedding, so
     escaping cannot re-expand it (CodeRabbit on PR #351).
     """

@@ -97,14 +97,15 @@ def _cap_observed_result(value: Any) -> Any:
 
     Strings are bounded BEFORE encoding (Greptile P2 on PR #351: iterencode
     emits a string value as a single token, so an unbounded string would be
-    fully materialized despite the streaming cap), then serialization is
-    streamed so an oversized structure never fully materializes on the
-    synchronous event-loop path.
+    fully materialized despite the streaming cap), with a shared aggregate
+    traversal budget (Greptile P1: many small values must not drive unbounded
+    cloning), then serialization is streamed so an oversized structure never
+    fully materializes on the synchronous event-loop path.
     """
     try:
         parts = []
         total = 0
-        bounded = _bound_observed_strings(value, set())
+        bounded = _bound_observed_strings(value, set(), [_MAX_OBSERVED_RESULT_JSON_CHARS * 2])
         for chunk in json.JSONEncoder().iterencode(bounded):
             parts.append(chunk)
             total += len(chunk)
@@ -118,17 +119,27 @@ def _cap_observed_result(value: Any) -> Any:
     return value
 
 
-def _bound_observed_strings(value: Any, seen: set) -> Any:
+def _bound_observed_strings(value: Any, seen: set, budget: list) -> Any:
+    if budget[0] <= 0:
+        return "...[evidence truncated]"
     if isinstance(value, str):
         if len(value) <= _MAX_OBSERVED_RESULT_JSON_CHARS:
+            budget[0] -= len(value)
             return value
+        budget[0] -= _MAX_OBSERVED_RESULT_JSON_CHARS
         return value[:_MAX_OBSERVED_RESULT_JSON_CHARS] + "...[truncated]"
     if isinstance(value, dict):
         if id(value) in seen:
             return "...[circular]"
         seen.add(id(value))
         try:
-            return {str(k): _bound_observed_strings(v, seen) for k, v in value.items()}
+            out = {}
+            for k, v in value.items():
+                out[str(k)] = _bound_observed_strings(v, seen, budget)
+                if budget[0] <= 0:
+                    out["...evidence truncated"] = True
+                    break
+            return out
         finally:
             seen.discard(id(value))
     if isinstance(value, (list, tuple)):
@@ -136,7 +147,13 @@ def _bound_observed_strings(value: Any, seen: set) -> Any:
             return "...[circular]"
         seen.add(id(value))
         try:
-            return [_bound_observed_strings(v, seen) for v in value]
+            out = []
+            for v in value:
+                out.append(_bound_observed_strings(v, seen, budget))
+                if budget[0] <= 0:
+                    out.append("...evidence truncated")
+                    break
+            return out
         finally:
             seen.discard(id(value))
     return value

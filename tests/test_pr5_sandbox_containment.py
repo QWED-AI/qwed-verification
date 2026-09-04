@@ -15,7 +15,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from qwed_new.core.secure_code_executor import ExecutionError, SecureCodeExecutor
-from qwed_new.core.stats_verifier import _cap_observed_result
+from qwed_new.core.stats_verifier import _cap_observed_result, _MAX_OBSERVED_RESULT_JSON_CHARS
 from qwed_new.api.main import _cap_log_result, _MAX_LOG_RESULT_CHARS
 
 
@@ -212,6 +212,14 @@ class TestObservedResultCap:
     def test_unserializable_value_falls_back_to_marker(self):
         assert _cap_observed_result({"bad": object()}) == "<unserializable result>"
 
+    def test_aggregate_traversal_budget_stops_cloning(self):
+        """Greptile P1 on PR #351: many small values must not drive unbounded
+        traversal of the aggregate on the event loop."""
+        value = [{"m": "A" * 100} for _ in range(10_000)]  # ~1 MB raw
+        capped = _cap_observed_result(value)
+
+        assert len(json.dumps(capped)) < _MAX_OBSERVED_RESULT_JSON_CHARS * 3
+
 
 class TestLogResultCap:
     """#339: audit rows cannot persist an unbounded serialized result.
@@ -247,6 +255,15 @@ class TestLogResultCap:
         parsed = json.loads(capped)
         assert parsed["truncated"] is True
         assert len(capped) < _MAX_LOG_RESULT_CHARS + 500
+
+    def test_aggregate_traversal_budget_stops_cloning(self):
+        """Greptile P1 on PR #351: many small values must not drive unbounded
+        traversal of the aggregate — the bounder stops at the budget."""
+        dr = {f"k{i}": "A" * 200 for i in range(20_000)}  # ~4 MB raw
+        capped = _cap_log_result(dr)
+
+        assert len(capped) < _MAX_LOG_RESULT_CHARS * 3
+        json.loads(capped)  # parseability
 
     def test_oversized_output_stays_bounded(self):
         """Worst case for escaping: a result made of quotes/backslashes."""
