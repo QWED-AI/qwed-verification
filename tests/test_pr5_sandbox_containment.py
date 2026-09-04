@@ -82,15 +82,31 @@ class TestContainerContainment:
 
         container.remove.assert_called_once_with(force=True)
 
-    def test_removal_failure_does_not_mask_successful_execution(self):
+    def test_missing_image_is_pulled_then_retried(self):
+        """containers.run() auto-pulled a missing image; create() does not.
+        The create path must preserve that behavior (CI regression)."""
+        executor = _executor_with_mock_docker()
+        container = MagicMock()
+        executor.client.containers.create.side_effect = [
+            docker.errors.ImageNotFound("missing"),
+            container,
+        ]
+
+        result = executor._run_in_container("/tmp", "exec_1")
+
+        assert result is container
+        executor.client.images.pull.assert_called_once_with(executor.image)
+        assert executor.client.containers.create.call_count == 2
+
+    def test_removal_failure_fails_closed(self):
+        """A leaked container must not coexist with a success verdict."""
         executor = _executor_with_mock_docker()
         container = MagicMock()
         container.remove.side_effect = Exception("daemon hiccup")
         executor.client.containers.create.return_value = container
 
-        result = executor._run_in_container("/tmp", "exec_1")
-
-        assert result is container
+        with pytest.raises(Exception, match="daemon hiccup"):
+            executor._run_in_container("/tmp", "exec_1")
 
 
 class TestHostReadbackCap:
@@ -182,7 +198,7 @@ class TestObservedResultCap:
     """#339: stats evidence is capped at the source."""
 
     def test_small_value_passes_through_unchanged(self):
-        value = {"mean": 3.14, "rows": [1, 2, 3]}
+        value = {"mean": 314, "rows": [1, 2, 3]}
         assert _cap_observed_result(value) is value
 
     def test_large_value_replaced_with_bounded_preview(self):
@@ -216,5 +232,23 @@ class TestLogResultCap:
 
         parsed = json.loads(capped)
         assert parsed["truncated"] is True
-        assert parsed["serialized_chars"] > _MAX_LOG_RESULT_CHARS
+        # bounded: sanitized preview + envelope must not exceed ~2x the cap
         assert len(capped) < _MAX_LOG_RESULT_CHARS + 500
+
+    def test_oversized_ouput_stays_bounded(self):
+        """Worst case for escaping: a result made of quotes/backslashes."""
+        dr = {"blob": '"' * (_MAX_LOG_RESULT_CHARS + 1000)}
+        capped = _cap_log_result(dr)
+
+        parsed = json.loads(capped)
+        assert parsed["truncated"] is True
+        assert len(capped) < _MAX_LOG_RESULT_CHARS + 500
+
+    def test_circular_reference_yields_bounded_json(self):
+        dr = {"status": "VERIFIED"}
+        dr["self"] = dr
+        capped = _cap_log_result(dr)
+
+        parsed = json.loads(capped)
+        assert parsed["truncated"] is True
+        assert parsed["unserializable"] is True

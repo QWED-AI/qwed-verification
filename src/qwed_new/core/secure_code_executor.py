@@ -345,23 +345,44 @@ class SecureCodeExecutor:
         # start failure raised before our finally existed and leaked the created
         # container. With create() + start(), the finally covers the whole
         # post-creation lifecycle.
-        container = self.client.containers.create(
-            image=self.image,
-            command=cmd,
-            volumes={tmpdir: {'bind': '/workspace', 'mode': 'rw'}},
-            mem_limit=self.memory_limit,
-            cpu_period=100000,
-            cpu_quota=int(self.cpu_limit * 100000),
-            network_mode="none",  # No internet access
-            # #338: the daemon's default json-file driver is unbounded —
-            # sandbox stdout grows on the daemon HOST, outside every
-            # container resource limit, until the disk fills.
-            log_config=LogConfig(
-                type=LogConfig.types.JSON,
-                config={"max-size": "10m", "max-file": "1"},
-            ),
-            pids_limit=self.pids_limit,
-        )
+        try:
+            container = self.client.containers.create(
+                image=self.image,
+                command=cmd,
+                volumes={tmpdir: {'bind': '/workspace', 'mode': 'rw'}},
+                mem_limit=self.memory_limit,
+                cpu_period=100000,
+                cpu_quota=int(self.cpu_limit * 100000),
+                network_mode="none",  # No internet access
+                # #338: the daemon's default json-file driver is unbounded —
+                # sandbox stdout grows on the daemon HOST, outside every
+                # container resource limit, until the disk fills.
+                log_config=LogConfig(
+                    type=LogConfig.types.JSON,
+                    config={"max-size": "10m", "max-file": "1"},
+                ),
+                pids_limit=self.pids_limit,
+            )
+        except docker.errors.ImageNotFound:
+            # containers.run() auto-pulled a missing image; create() does not
+            # (CI never pre-pulls the sandbox image). Pull, then retry — the
+            # 404 means no container was created, so no cleanup is owed.
+            logger.info("Sandbox image %s missing; pulling", self.image)
+            self.client.images.pull(self.image)
+            container = self.client.containers.create(
+                image=self.image,
+                command=cmd,
+                volumes={tmpdir: {'bind': '/workspace', 'mode': 'rw'}},
+                mem_limit=self.memory_limit,
+                cpu_period=100000,
+                cpu_quota=int(self.cpu_limit * 100000),
+                network_mode="none",  # No internet access
+                log_config=LogConfig(
+                    type=LogConfig.types.JSON,
+                    config={"max-size": "10m", "max-file": "1"},
+                ),
+                pids_limit=self.pids_limit,
+            )
 
         try:
             container.start()
@@ -381,7 +402,10 @@ class SecureCodeExecutor:
             # #338: every execution must leave no container behind — a stopped
             # container keeps its full json-file log on the daemon host
             # indefinitely. Result read-back uses the mounted result.json,
-            # never container logs, so removal here is safe.
+            # never container logs, so removal here is safe. Removal failure
+            # FAILS CLOSED (CodeRabbit on PR #351): a successful verdict must
+            # not silently coexist with a leaked container; execute() maps the
+            # raise to a non-success outcome.
             try:
                 container.remove(force=True)
             except Exception:
@@ -389,6 +413,7 @@ class SecureCodeExecutor:
                     "Failed to remove sandbox container for %s", execution_id,
                     exc_info=True,
                 )
+                raise
     
     def _is_safe_code(self, code: str) -> DiagnosticResult:
         """

@@ -228,17 +228,30 @@ def _cap_log_result(result_dict) -> str:
 
     The audit integrity verifier decodes this field with json.loads
     (audit_logger._decode_result_payload — malformed payloads raise
-    SecurityError), so both paths must emit VALID JSON, not Python repr
-    (CodeAnt on PR #351).
+    SecurityError), so both paths must emit VALID JSON, not Python repr.
+    Serialization is streamed so an oversized dict never materializes in
+    memory, and the fallback stays inside the cap: the preview is sanitized
+    of JSON-escapable characters BEFORE embedding, so escaping cannot
+    re-expand it (CodeRabbit on PR #351).
     """
-    text = json.dumps(result_dict, default=str)
-    if len(text) <= _MAX_LOG_RESULT_CHARS:
-        return text
-    return json.dumps({
-        "truncated": True,
-        "serialized_chars": len(text),
-        "preview": text[:_MAX_LOG_RESULT_CHARS],
-    }, default=str)
+    parts = []
+    total = 0
+    try:
+        for chunk in json.JSONEncoder(default=str).iterencode(result_dict):
+            parts.append(chunk)
+            total += len(chunk)
+            if total > _MAX_LOG_RESULT_CHARS:
+                break
+    except (TypeError, ValueError):
+        return json.dumps({"truncated": True, "unserializable": True})
+    if total <= _MAX_LOG_RESULT_CHARS:
+        return "".join(parts)
+    preview = (
+        "".join(parts)[:_MAX_LOG_RESULT_CHARS]
+        .replace("\\", "?")
+        .replace('"', "'")
+    )
+    return json.dumps({"truncated": True, "preview": preview})
 
 
 _METRICS_OPERATOR_ENV_VAR = "QWED_METRICS_OPERATOR_USER_IDS"
