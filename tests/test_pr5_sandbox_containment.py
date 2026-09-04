@@ -98,15 +98,19 @@ class TestContainerContainment:
         executor.client.images.pull.assert_called_once_with(executor.image)
         assert executor.client.containers.create.call_count == 2
 
-    def test_removal_failure_fails_closed(self):
-        """A leaked container must not coexist with a success verdict."""
+    def test_removal_failure_is_warn_only(self):
+        """Conflict resolution between review bots (PR #351): a removal
+        failure must not discard a validly computed verification result —
+        failing the result would not remove the leaked container either way.
+        The warning log is the operator signal."""
         executor = _executor_with_mock_docker()
         container = MagicMock()
         container.remove.side_effect = Exception("daemon hiccup")
         executor.client.containers.create.return_value = container
 
-        with pytest.raises(Exception, match="daemon hiccup"):
-            executor._run_in_container("/tmp", "exec_1")
+        result = executor._run_in_container("/tmp", "exec_1")
+
+        assert result is container
 
 
 class TestHostReadbackCap:
@@ -266,13 +270,20 @@ class TestLogResultCap:
         json.loads(capped)  # parseability
 
     def test_oversized_output_stays_bounded(self):
-        """Worst case for escaping: a result made of quotes/backslashes."""
-        dr = {"blob": '"' * (_MAX_LOG_RESULT_CHARS + 1000)}
+        """The truncated-document path must stay bounded even when the
+        content is quote-heavy or control-character-heavy (CodeRabbit on
+        PR #351: escaping would otherwise expand the payload past the cap)."""
+        dr = {f"k{i}": '"' * 1000 for i in range(100)}
         capped = _cap_log_result(dr)
-
-        # bare validation: the payload must be parseable JSON
+        assert len(capped) < _MAX_LOG_RESULT_CHARS + 500
         json.loads(capped)
-        assert len(capped) < 5000
+
+        dr = {f"k{i}": "\n" * 1000 for i in range(100)}
+        capped = _cap_log_result(dr)
+        parsed = json.loads(capped)
+        assert parsed["truncated"] is True
+        assert "\n" not in parsed["preview"]
+        assert len(capped) < _MAX_LOG_RESULT_CHARS + 500
 
     def test_circular_reference_yields_bounded_json(self):
         """The bounder breaks the cycle inline; output stays small valid JSON."""

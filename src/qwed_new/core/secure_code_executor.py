@@ -402,10 +402,14 @@ class SecureCodeExecutor:
             # #338: every execution must leave no container behind — a stopped
             # container keeps its full json-file log on the daemon host
             # indefinitely. Result read-back uses the mounted result.json,
-            # never container logs, so removal here is safe. Removal failure
-            # FAILS CLOSED (CodeRabbit on PR #351): a successful verdict must
-            # not silently coexist with a leaked container; execute() maps the
-            # raise to a non-success outcome.
+            # never container logs, so removal here is safe.
+            #
+            # Cleanup failure is warn-only, NOT fail-closed (deliberate
+            # conflict resolution between two review bots on PR #351): a
+            # removal failure does not remove the leak either way — the only
+            # effect of raising would be discarding a validly computed
+            # verification result (Sentry HIGH). The warning log below is the
+            # operator signal for the resource-hygiene problem; alert on it.
             try:
                 container.remove(force=True)
             except Exception:
@@ -413,7 +417,6 @@ class SecureCodeExecutor:
                     "Failed to remove sandbox container for %s", execution_id,
                     exc_info=True,
                 )
-                raise
     
     def _is_safe_code(self, code: str) -> DiagnosticResult:
         """

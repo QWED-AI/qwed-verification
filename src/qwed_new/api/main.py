@@ -303,11 +303,12 @@ def _cap_log_result(result_dict) -> str:
         return json.dumps({"truncated": True, "unserializable": True})
     if total <= _MAX_LOG_RESULT_CHARS:
         return "".join(parts)
-    preview = (
-        "".join(parts)[:_MAX_LOG_RESULT_CHARS]
-        .replace("\\", "?")
-        .replace('"', "'")
-    )
+    preview = "".join(parts)[:_MAX_LOG_RESULT_CHARS]
+    # strip control characters AND JSON-escapable characters before embedding:
+    # escaped control chars expand to 2-6 characters each (CodeRabbit on
+    # PR #351), so the sanitized preview keeps the fallback inside the cap
+    preview = "".join(ch if ch.isprintable() else "?" for ch in preview)
+    preview = preview.replace("\\", "?").replace('"', "'")
     return json.dumps({"truncated": True, "preview": preview})
 
 
