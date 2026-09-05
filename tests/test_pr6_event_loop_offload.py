@@ -308,6 +308,39 @@ class TestAsyncTimeoutBreaker:
         recorded = [c.args[1] for c in verifier._record_engine_result.call_args_list]
         assert any(r.status == "BLOCKED" and r.method == "timeout" for r in recorded)
 
+    def test_async_queued_engine_not_penalized_on_aggregate_expiry(self):
+        """Sentry HIGH on PR #352: a queued, never-started engine is not at
+        fault for an aggregate expiry — it must be cancelled without a
+        breaker penalty, while the running hung engine is recorded."""
+        verifier = _verifier(max_workers=1)
+        verifier._record_engine_result = MagicMock()
+        release = threading.Event()
+
+        def hung(q):
+            release.wait(timeout=15)
+
+        def queued(q):
+            release.wait(timeout=15)
+
+        verifier._select_engines = lambda query, mode: [("H1", hung), ("Q2", queued)]
+        verifier._is_engine_available = lambda engine_name: True
+
+        try:
+            result = asyncio.run(
+                verifier.verify_async("q", mode=cv.VerificationMode.SINGLE, timeout_seconds=0.4)
+            )
+        finally:
+            release.set()
+            verifier._executor.shutdown(wait=False)
+
+        recorded = [
+            c.args[1].engine_name
+            for c in verifier._record_engine_result.call_args_list
+            if c.args[1].status == "BLOCKED"
+        ]
+        assert "H1" in recorded  # ran past its budget
+        assert "Q2" not in recorded  # never started — not at fault
+
     def test_async_aggregate_deadline_bounds_all_engines(self):
         """CodeRabbit on PR #352: sequential per-engine waits would stack
         (N hung engines x 30s). One aggregate deadline bounds the whole

@@ -22,6 +22,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as
 # #340: hard per-engine wall-clock budget for the synchronous execution
 # paths (the async path enforces the same bound via asyncio.wait_for).
 _ENGINE_TIMEOUT_SECONDS = 30
+
+# #352: breaker-rejected engines surface this verbatim in their BLOCKED result
+_CIRCUIT_OPEN_ERROR = "Engine excluded by open circuit breaker"
 import threading
 
 from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
@@ -501,7 +504,7 @@ class ConsensusVerifier:
                 # state, since a skipped request is not a new failure.
                 results.append(self._blocked_engine_result(
                     engine_name, "circuit_open",
-                    "Engine excluded by open circuit breaker",
+                    _CIRCUIT_OPEN_ERROR,
                     record=False,
                 ))
         
@@ -509,15 +512,37 @@ class ConsensusVerifier:
         # #352 review: ONE aggregate deadline — sequential per-engine waits
         # would stack (N hung engines x 30s exceed the API's overall limit).
         # All tasks run concurrently, so the remaining time is shared.
-        deadline = time.monotonic() + timeout_seconds
+        mono_start = time.monotonic()
+        deadline = mono_start + timeout_seconds
         try:
             for engine_name, task in tasks:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    results.append(self._blocked_engine_result(
-                        engine_name, "timeout", "Timeout",
-                        latency_ms=int((time.monotonic() - start_time) * 1000),
-                    ))
+                    # Aggregate deadline exhausted (Greptile P1 / Sentry x3 on
+                    # PR #352). Three distinct cases, three treatments:
+                    #  - done successfully -> HARVEST the result (a fast
+                    #    engine must not be penalized for a slow sibling);
+                    #  - done with error -> record the failure;
+                    #  - not done -> cancel queued work and record the timeout
+                    #    ONLY if the task was already running (a queued,
+                    #    never-started engine is not at fault).
+                    if task.done() and not task.cancelled():
+                        exc = task.exception()
+                        if exc is None:
+                            result = task.result()
+                            self._record_engine_result(engine_name, result)
+                            results.append(result)
+                        else:
+                            results.append(self._blocked_engine_result(
+                                engine_name, "engine_error", str(exc),
+                            ))
+                    else:
+                        cancelled = task.cancel()
+                        results.append(self._blocked_engine_result(
+                            engine_name, "timeout", "Timeout",
+                            latency_ms=int((time.monotonic() - mono_start) * 1000),
+                            record=not cancelled,
+                        ))
                     continue
                 try:
                     result = await asyncio.wait_for(task, timeout=remaining)
@@ -642,7 +667,7 @@ class ConsensusVerifier:
                 # from incomplete evidence.
                 results.append(self._blocked_engine_result(
                     engine_name, "circuit_open",
-                    "Engine excluded by open circuit breaker",
+                    _CIRCUIT_OPEN_ERROR,
                     record=False,
                 ))
         
@@ -706,7 +731,7 @@ class ConsensusVerifier:
             else:
                 results.append(self._blocked_engine_result(
                     engine_name, "circuit_open",
-                    "Engine excluded by open circuit breaker",
+                    _CIRCUIT_OPEN_ERROR,
                     record=False,
                 ))
         
