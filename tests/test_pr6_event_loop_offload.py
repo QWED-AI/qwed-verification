@@ -307,3 +307,23 @@ class TestAsyncTimeoutBreaker:
         assert hung[0].method == "timeout"
         recorded = [c.args[1] for c in verifier._record_engine_result.call_args_list]
         assert any(r.status == "BLOCKED" and r.method == "timeout" for r in recorded)
+
+    def test_async_circuit_open_returns_explicit_blocked(self):
+        """Greptile P1 / Sentry on PR #352: a breaker-rejected engine must
+        yield an auditable BLOCKED result — not an UnboundLocalError — and a
+        skipped request must not extend breaker state."""
+        verifier = _verifier(max_workers=1)
+        verifier._record_engine_result = MagicMock()
+        verifier._select_engines = lambda query, mode: [("Hung", lambda q: None)]
+        verifier._is_engine_available = lambda engine_name: False  # breaker open
+
+        result = asyncio.run(
+            verifier.verify_async("q", mode=cv.VerificationMode.SINGLE, timeout_seconds=1)
+        )
+
+        assert len(result.verification_chain) == 1
+        skipped = result.verification_chain[0]
+        assert skipped.engine_name == "Hung"
+        assert skipped.status == "BLOCKED"
+        assert skipped.method == "circuit_open"
+        verifier._record_engine_result.assert_not_called()

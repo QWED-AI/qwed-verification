@@ -484,6 +484,7 @@ class ConsensusVerifier:
         # Create async tasks
         loop = asyncio.get_event_loop()
         tasks = []
+        results = []
         
         for engine_name, method in engine_methods:
             if self._is_engine_available(engine_name):
@@ -505,7 +506,6 @@ class ConsensusVerifier:
                 ))
         
         # Gather results with timeout
-        results = []
         try:
             for engine_name, task in tasks:
                 try:
@@ -595,7 +595,7 @@ class ConsensusVerifier:
     # Execution Methods
     # =========================================================================
     
-    def _blocked_engine_result(self, engine_name: str, method: str, error: str, latency_ms: int = 0, record: bool = True) -> EngineResult:
+    def _blocked_engine_result(self, engine_name: str, method: str, error: str, latency_ms: float = 0, record: bool = True) -> EngineResult:
         """Build a BLOCKED EngineResult and record it with the circuit breaker.
 
         #340: hung engines never complete, so without recording here the
