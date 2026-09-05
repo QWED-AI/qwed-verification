@@ -4,6 +4,7 @@ from pydantic import BaseModel, field_validator
 from typing import Optional, Annotated
 from sqlmodel import Session, select
 from datetime import datetime, timezone
+import asyncio
 import os
 import logging
 from fractions import Fraction
@@ -472,12 +473,15 @@ async def verify_stats(
     
     try:
         import pandas as pd
-        df = pd.read_csv(file.file)
-        
+        # #341: the whole stats chain is synchronous — read_csv (CPU-bound,
+        # attacker-sized upload), the blocking LLM codegen round trip, and
+        # the Docker daemon calls must not run inline on the event loop.
+        df = await asyncio.to_thread(pd.read_csv, file.file)
+
         from qwed_new.core.stats_verifier import StatsVerifier
         verifier = StatsVerifier()
 
-        dr = verifier.verify_stats(query, df, provider=None)
+        dr = await asyncio.to_thread(verifier.verify_stats, query, df, None)
         dr = _enforce_trust(dr, query=query)
 
         # Fail-closed audit semantics (P1 #297): never log a BLOCKED / non-
@@ -1598,11 +1602,17 @@ async def verify_with_consensus(
             detail=f"Invalid verification_mode. Must be: single, high, or maximum"
         )
     
-    # Perform consensus verification
-    result = consensus_verifier.verify_with_consensus(
+    # Perform consensus verification.
+    # #340: the sync orchestrator runs engines inline on the event loop
+    # (a 'single'-mode request blocks the WHOLE service for the full
+    # synchronous LLM round trip + sympy evaluation). verify_async submits
+    # every engine to the executor and enforces a hard per-engine timeout
+    # via asyncio.wait_for; min_confidence is enforced below by this
+    # endpoint, as it was before.
+    result = await consensus_verifier.verify_async(
         query=request.query,
         mode=mode,
-        min_confidence=request.min_confidence
+        timeout_seconds=30.0,
     )
 
     if result.agreement_status == "blocked_secure_execution":

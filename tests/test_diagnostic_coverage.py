@@ -431,7 +431,7 @@ def test_verify_consensus_blocked_status(client):
         status=DiagnosticStatus.BLOCKED,
     )
 
-    with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake), \
+    with patch("qwed_new.api.main.consensus_verifier.verify_async", new_callable=AsyncMock, return_value=fake), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/consensus",
@@ -460,7 +460,7 @@ def test_verify_consensus_unverifiable_status(client):
         status=DiagnosticStatus.UNVERIFIABLE,
     )
 
-    with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake), \
+    with patch("qwed_new.api.main.consensus_verifier.verify_async", new_callable=AsyncMock, return_value=fake), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/consensus",
@@ -490,7 +490,7 @@ def test_verify_consensus_verified_with_proof_ref(client):
         verified_evidence={"agreement_status": "unanimous", "confidence": 0.99},
     )
 
-    with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake), \
+    with patch("qwed_new.api.main.consensus_verifier.verify_async", new_callable=AsyncMock, return_value=fake), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/consensus",
@@ -519,7 +519,7 @@ def test_verify_consensus_all_engines_blocked(client):
         status=DiagnosticStatus.BLOCKED,
     )
 
-    with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake), \
+    with patch("qwed_new.api.main.consensus_verifier.verify_async", new_callable=AsyncMock, return_value=fake), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/consensus",
@@ -547,7 +547,7 @@ def test_verify_consensus_unverifiable_with_high_confidence_not_requirements_met
         status=DiagnosticStatus.UNVERIFIABLE,
     )
 
-    with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake), \
+    with patch("qwed_new.api.main.consensus_verifier.verify_async", new_callable=AsyncMock, return_value=fake), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/consensus",
@@ -580,7 +580,7 @@ def test_verify_consensus_unverifiable_no_blocked_engines_message(client):
         status=DiagnosticStatus.UNVERIFIABLE,
     )
 
-    with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake), \
+    with patch("qwed_new.api.main.consensus_verifier.verify_async", new_callable=AsyncMock, return_value=fake), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/consensus",
@@ -608,7 +608,7 @@ def test_verify_consensus_no_results_gives_specific_message(client):
         status=DiagnosticStatus.UNVERIFIABLE,
     )
 
-    with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake), \
+    with patch("qwed_new.api.main.consensus_verifier.verify_async", new_callable=AsyncMock, return_value=fake), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/consensus",
@@ -635,7 +635,7 @@ def test_verify_consensus_all_failed_gives_specific_message(client):
         status=DiagnosticStatus.UNVERIFIABLE,
     )
 
-    with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake), \
+    with patch("qwed_new.api.main.consensus_verifier.verify_async", new_callable=AsyncMock, return_value=fake), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/consensus",
@@ -662,7 +662,7 @@ def test_verify_consensus_no_agreement(client):
         status=None,
     )
 
-    with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake), \
+    with patch("qwed_new.api.main.consensus_verifier.verify_async", new_callable=AsyncMock, return_value=fake), \
          patch("qwed_new.api.main.check_rate_limit"):
         response = client.post(
             "/verify/consensus",

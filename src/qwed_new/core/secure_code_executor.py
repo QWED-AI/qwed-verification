@@ -23,6 +23,9 @@ from .diagnostics import AdvisoryCheck, DiagnosticResult
 
 
 logger = logging.getLogger(__name__)
+
+# #341: hard bound on every Docker daemon API call (ping/create/start/kill)
+_DOCKER_API_TIMEOUT_SECONDS = 30
 SECURE_RUNTIME_UNAVAILABLE = "SECURE_RUNTIME_UNAVAILABLE"
 CONSTRAINT_VERIFIER_UNAVAILABLE = "secure_code_executor.verifier_unavailable"
 CONSTRAINT_BASIC_SAFETY_ADVISORY = "secure_code_executor.basic_safety_advisory"
@@ -221,7 +224,9 @@ class SecureCodeExecutor:
     def __init__(self):
         self.client = None
         try:
-            self.client = docker.from_env()
+            # #341: without a timeout, ping/create/start/kill calls to the
+            # Docker daemon are unbounded — only container.wait was bounded.
+            self.client = docker.from_env(timeout=_DOCKER_API_TIMEOUT_SECONDS)
             self.docker_available = True
             logger.info("Docker client initialized successfully")
         except Exception as e:
