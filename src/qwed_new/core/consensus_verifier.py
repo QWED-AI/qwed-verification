@@ -505,11 +505,22 @@ class ConsensusVerifier:
                     record=False,
                 ))
         
-        # Gather results with timeout
+        # Gather results with timeout.
+        # #352 review: ONE aggregate deadline — sequential per-engine waits
+        # would stack (N hung engines x 30s exceed the API's overall limit).
+        # All tasks run concurrently, so the remaining time is shared.
+        deadline = time.monotonic() + timeout_seconds
         try:
             for engine_name, task in tasks:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    results.append(self._blocked_engine_result(
+                        engine_name, "timeout", "Timeout",
+                        latency_ms=int((time.monotonic() - start_time) * 1000),
+                    ))
+                    continue
                 try:
-                    result = await asyncio.wait_for(task, timeout=timeout_seconds)
+                    result = await asyncio.wait_for(task, timeout=remaining)
                     self._record_engine_result(engine_name, result)
                     results.append(result)
                 except asyncio.TimeoutError:
@@ -625,6 +636,15 @@ class ConsensusVerifier:
             if self._is_engine_available(engine_name):
                 future = self._executor.submit(method, query)
                 futures[future] = engine_name
+            else:
+                # #352 review: circuit-open engines must stay explicit — a
+                # silent skip could let a remaining engine produce VERIFIED
+                # from incomplete evidence.
+                results.append(self._blocked_engine_result(
+                    engine_name, "circuit_open",
+                    "Engine excluded by open circuit breaker",
+                    record=False,
+                ))
         
         # #340: as_completed raises TimeoutError FROM the for statement —
         # outside the inner try, so it escaped as an uncaught HTTP 500 after
@@ -683,6 +703,12 @@ class ConsensusVerifier:
                     results.append(self._blocked_engine_result(
                         engine_name, "sequential_execution", str(e),
                     ))
+            else:
+                results.append(self._blocked_engine_result(
+                    engine_name, "circuit_open",
+                    "Engine excluded by open circuit breaker",
+                    record=False,
+                ))
         
         return results
     

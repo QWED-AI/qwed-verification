@@ -308,6 +308,64 @@ class TestAsyncTimeoutBreaker:
         recorded = [c.args[1] for c in verifier._record_engine_result.call_args_list]
         assert any(r.status == "BLOCKED" and r.method == "timeout" for r in recorded)
 
+    def test_async_aggregate_deadline_bounds_all_engines(self):
+        """CodeRabbit on PR #352: sequential per-engine waits would stack
+        (N hung engines x 30s). One aggregate deadline bounds the whole
+        request to a single timeout window."""
+        verifier = _verifier(max_workers=2)
+        verifier._record_engine_result = MagicMock()
+        release = threading.Event()
+
+        def hung_engine(q):
+            release.wait(timeout=15)
+
+        verifier._select_engines = lambda query, mode: [("H1", hung_engine), ("H2", hung_engine)]
+        verifier._is_engine_available = lambda engine_name: True
+
+        start = time.monotonic()
+        try:
+            result = asyncio.run(
+                verifier.verify_async("q", mode=cv.VerificationMode.SINGLE, timeout_seconds=0.5)
+            )
+        finally:
+            release.set()
+            verifier._executor.shutdown(wait=False)
+
+        elapsed = time.monotonic() - start
+        assert elapsed < 1.0  # aggregate, not 2 x 0.5 stacked
+        blocked = [r for r in result.verification_chain if r.status == "BLOCKED"]
+        assert len(blocked) == 2
+
+
+class TestSyncCircuitOpen:
+    """#352 review: circuit-open engines must stay explicit in the sync
+    paths — a silent skip could let a remaining engine produce VERIFIED
+    from incomplete evidence."""
+
+    def test_parallel_circuit_open_yields_blocked_without_breaker_extension(self):
+        verifier = _verifier(max_workers=2)
+        verifier._record_engine_result = MagicMock()
+        verifier._is_engine_available = lambda engine_name: False
+
+        results = verifier._execute_parallel("q", [("E", lambda q: None)])
+
+        assert len(results) == 1
+        assert results[0].status == "BLOCKED"
+        assert results[0].method == "circuit_open"
+        verifier._record_engine_result.assert_not_called()
+
+    def test_sequential_circuit_open_yields_blocked_without_breaker_extension(self):
+        verifier = _verifier(max_workers=1)
+        verifier._record_engine_result = MagicMock()
+        verifier._is_engine_available = lambda engine_name: False
+
+        results = verifier._execute_sequential("q", [("E", lambda q: None)])
+
+        assert len(results) == 1
+        assert results[0].status == "BLOCKED"
+        assert results[0].method == "circuit_open"
+        verifier._record_engine_result.assert_not_called()
+
     def test_async_circuit_open_returns_explicit_blocked(self):
         """Greptile P1 / Sentry on PR #352: a breaker-rejected engine must
         yield an auditable BLOCKED result — not an UnboundLocalError — and a
