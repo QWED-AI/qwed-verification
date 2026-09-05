@@ -29,6 +29,7 @@ from qwed_new.core.tenant_context import get_current_tenant, TenantContext
 from qwed_new.core.database import create_db_and_tables, get_session
 from qwed_new.core.models import VerificationLog, ApiKey, User
 from qwed_new.core.rate_limiter import check_rate_limit
+from qwed_new.core.json_bounding import bound_json_value
 
 # Import auth router
 from qwed_new.auth import auth_router
@@ -216,6 +217,64 @@ def get_optional_api_key_record(
     return api_key
 
 
+# #339: VerificationLog.result snapshots the full DiagnosticResult dict. The
+# amplifier path is capped at its source (stats_verifier caps observed_result),
+# this is the audit-trail backstop so no endpoint can persist an unbounded
+# serialized result row.
+_MAX_LOG_RESULT_CHARS = 64_000
+_MAX_LOG_RESULT_STRING_CHARS = 1_000
+# Aggregate traversal budget (Greptile P1 on PR #351): stop cloning the
+# structure once enough bounded content has been retained, so a request
+# with very many small values cannot drive unbounded traversal on the
+# event loop. The bounding traversal itself lives in
+# qwed_new.core.json_bounding, shared with stats_verifier (Sonar: the two
+# copies had already diverged).
+_LOG_BOUND_BUDGET_CHARS = 2 * _MAX_LOG_RESULT_CHARS
+
+
+
+def _cap_log_result(result_dict) -> str:
+    """Serialize a DiagnosticResult dict for VerificationLog.result, capped.
+
+    The audit integrity verifier decodes this field with json.loads
+    (audit_logger._decode_result_payload — malformed payloads raise
+    SecurityError), so both paths must emit VALID JSON, not Python repr.
+    Serialization is streamed and aggregate-bounded (see
+    qwed_new.core.json_bounding) so an oversized dict never materializes in
+    memory, and the fallback stays strictly inside the cap: the envelope
+    length is reserved before slicing, the preview is sanitized of
+    non-printable and JSON-escapable characters, and ensure_ascii=False keeps
+    printable non-ASCII at 1 char each (CodeRabbit on PR #351).
+    """
+    parts = []
+    total = 0
+    try:
+        bounded = bound_json_value(
+            result_dict,
+            max_string_chars=_MAX_LOG_RESULT_STRING_CHARS,
+            budget_chars=_LOG_BOUND_BUDGET_CHARS,
+            string_marker="...[truncated]",
+            budget_marker="...audit truncated",
+        )
+        for chunk in json.JSONEncoder(default=str).iterencode(bounded):
+            parts.append(chunk)
+            total += len(chunk)
+            if total > _MAX_LOG_RESULT_CHARS:
+                break
+    except (TypeError, ValueError, RecursionError):
+        return json.dumps({"truncated": True, "unserializable": True})
+    if total <= _MAX_LOG_RESULT_CHARS:
+        return "".join(parts)
+    envelope = json.dumps({"truncated": True, "preview": ""})
+    preview = "".join(parts)[:(_MAX_LOG_RESULT_CHARS - len(envelope))]
+    # strip control characters AND JSON-escapable characters: with both gone,
+    # ensure_ascii=False encodes the preview exactly 1 char per char, so the
+    # stored payload is envelope + preview <= _MAX_LOG_RESULT_CHARS
+    preview = "".join(ch if ch.isprintable() else "?" for ch in preview)
+    preview = preview.replace("\\", "?").replace('"', "'")
+    return json.dumps({"truncated": True, "preview": preview}, ensure_ascii=False)
+
+
 _METRICS_OPERATOR_ENV_VAR = "QWED_METRICS_OPERATOR_USER_IDS"
 
 
@@ -306,7 +365,7 @@ async def verify_natural_language(
         organization_id=tenant.organization_id,
         user_id=tenant.user_id if hasattr(tenant, 'user_id') else None,
         query=request.query,
-        result=str(dr.to_dict()),
+        result=_cap_log_result(dr.to_dict()),
         is_verified=dr.is_authoritative,
         domain="MATH"
     )
@@ -356,7 +415,7 @@ async def verify_logic(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=request.query,
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=dr.is_authoritative,
             domain="LOGIC"
         )
@@ -382,7 +441,7 @@ async def verify_logic(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=request.query,
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=False,
             domain="LOGIC"
         )
@@ -430,7 +489,7 @@ async def verify_stats(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=query,
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=dr.is_authoritative
             and dr.developer_fields.get("is_valid") is True,
             domain="STATS"
@@ -451,7 +510,7 @@ async def verify_stats(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=query,
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=False,
             domain="STATS"
         )
@@ -511,7 +570,7 @@ async def verify_fact(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=claim,
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=dr.is_authoritative,
             domain="FACT"
         )
@@ -531,7 +590,7 @@ async def verify_fact(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=claim,
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=False,
             domain="FACT"
         )
@@ -572,7 +631,7 @@ async def verify_code(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=code[:200],
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=dr.developer_fields.get("is_valid") is True,
             domain="CODE"
         )
@@ -594,7 +653,7 @@ async def verify_code(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=(code or "")[:200],
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=False,
             domain="CODE"
         )
@@ -714,7 +773,7 @@ async def verify_math(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=expression,
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=dr.is_authoritative,
             domain="MATH"
         )
@@ -734,7 +793,7 @@ async def verify_math(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=expression,
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=False,
             domain="MATH"
         )
@@ -779,7 +838,7 @@ async def verify_sql(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=query,
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=dr.is_authoritative,
             domain="SQL"
         )
@@ -801,7 +860,7 @@ async def verify_sql(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=query,
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=False,
             domain="SQL"
         )
@@ -855,7 +914,7 @@ async def verify_image(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=f"Image claim: {claim}",
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=dr.is_authoritative,
             domain="IMAGE"
         )
@@ -875,7 +934,7 @@ async def verify_image(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=f"Image claim: {claim}",
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=False,
             domain="IMAGE"
         )
@@ -951,7 +1010,7 @@ async def verify_rag(
             log = VerificationLog(
                 organization_id=tenant.organization_id,
                 query=f"RAG Document Verify: {request.target_document_id}",
-                result=str(dr.to_dict()),
+                result=_cap_log_result(dr.to_dict()),
                 is_verified=False,
                 domain="RAG"
             )
@@ -975,7 +1034,7 @@ async def verify_rag(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=f"RAG Document Verify: {request.target_document_id}",
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=dr.is_authoritative,
             domain="RAG"
         )
@@ -996,7 +1055,7 @@ async def verify_rag(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=f"RAG Document Verify: {doc_id}",
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=False,
             domain="RAG"
         )
@@ -1060,7 +1119,7 @@ async def verify_process(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=f"Process Verification ({request.mode})",
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=dr.is_authoritative,
             domain="PROCESS"
         )
@@ -1080,7 +1139,7 @@ async def verify_process(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=f"Process Verification ({request.mode})",
-            result=str(dr.to_dict()),
+            result=_cap_log_result(dr.to_dict()),
             is_verified=False,
             domain="PROCESS"
         )

@@ -117,7 +117,7 @@ class TestDangerousPatternScanner(unittest.TestCase):
         executor.docker_available = True
         executor.client = MagicMock()
         # Mock container run to raise ImageNotFound
-        executor.client.containers.run.side_effect = docker.errors.ImageNotFound("Missing image")
+        executor.client.containers.create.side_effect = docker.errors.ImageNotFound("Missing image")
         
         # We need to bypass the tempdir context manager for the run call to happen
         # or just let it run normally since we only mock the docker call
@@ -130,7 +130,7 @@ class TestDangerousPatternScanner(unittest.TestCase):
         executor = SecureCodeExecutor()
         executor.docker_available = True
         executor.client = MagicMock()
-        executor.client.containers.run.side_effect = docker.errors.ContainerError(
+        executor.client.containers.create.side_effect = docker.errors.ContainerError(
             "container", 1, "cmd", "image", b"stderr"
         )
         
@@ -143,7 +143,7 @@ class TestDangerousPatternScanner(unittest.TestCase):
         executor = SecureCodeExecutor()
         executor.docker_available = True
         executor.client = MagicMock()
-        executor.client.containers.run.side_effect = Exception("Chaos")
+        executor.client.containers.create.side_effect = Exception("Chaos")
         
         success, error, _ = executor.execute("print(1)", {})
         self.assertFalse(success)
@@ -162,7 +162,7 @@ class TestDangerousPatternScanner(unittest.TestCase):
         # kill raises exception
         mock_container.kill.side_effect = Exception("Zombie container")
         
-        executor.client.containers.run.return_value = mock_container
+        executor.client.containers.create.return_value = mock_container
         
         # Should raise ExecutionError but also catch kill exception
         with self.assertRaises(ExecutionError):
@@ -194,7 +194,7 @@ class TestDangerousPatternScanner(unittest.TestCase):
             self.assertIn("Code safety validation failed", error)
             self.assertIn("Code safety verification unavailable", error)
             self.assertIsNone(result)
-            executor.client.containers.run.assert_not_called()
+            executor.client.containers.create.assert_not_called()
 
     def test_execute_import_error_never_authorizes_execution(self):
         """The heuristic fallback is advisory only and must never authorize execution."""
@@ -208,7 +208,7 @@ class TestDangerousPatternScanner(unittest.TestCase):
             self.assertFalse(success)
             self.assertIn("Code safety verification unavailable", error)
             self.assertIsNone(result)
-            executor.client.containers.run.assert_not_called()
+            executor.client.containers.create.assert_not_called()
 
             safety = executor._is_safe_code("import os; result = os.name")
             advisory = safety.advisory_checks[0]

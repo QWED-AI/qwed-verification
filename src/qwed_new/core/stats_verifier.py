@@ -22,6 +22,7 @@ from importlib.metadata import PackageNotFoundError, version
 import ast
 
 from .diagnostics import AdvisoryCheck, DiagnosticResult, DiagnosticStatus, enforce_trust_decision
+from .json_bounding import bound_json_value
 from .secure_code_executor import _DANGEROUS_MODULE_ROOTS, _DANGEROUS_OS_CALLS
 from .verification_context import (
     Admission,
@@ -82,6 +83,49 @@ def _json_safe(value: Any) -> Any:
     except (TypeError, ValueError):
         return repr(value)
 
+
+# #339: observed_result lands in developer_fields, which flows into both the
+# VerificationLog row (str(dr.to_dict())) and the response body
+# (merge_diagnostic_result). A reference-multiplied result — e.g.
+# ['\U0001F600' * 12_000_000] * K — stays under the container memory cap while
+# its serialized form grows unboundedly, so the value must be capped at the
+# source rather than trusted downstream.
+_MAX_OBSERVED_RESULT_JSON_CHARS = 10_000
+
+
+def _cap_observed_result(value: Any) -> Any:
+    """Return *value* unchanged when small; a bounded preview otherwise.
+
+    Strings are bounded BEFORE encoding (Greptile P2 on PR #351: iterencode
+    emits a string value as a single token, so an unbounded string would be
+    fully materialized despite the streaming cap), with a shared aggregate
+    traversal budget (Greptile P1: many small values must not drive unbounded
+    cloning), then serialization is streamed so an oversized structure never
+    fully materializes on the synchronous event-loop path. The bounding
+    traversal is shared with api.main's VerificationLog cap (Sonar: the two
+    copies had already diverged).
+    """
+    try:
+        parts = []
+        total = 0
+        bounded = bound_json_value(
+            value,
+            max_string_chars=_MAX_OBSERVED_RESULT_JSON_CHARS,
+            budget_chars=_MAX_OBSERVED_RESULT_JSON_CHARS * 2,
+            string_marker="...[truncated]",
+            budget_marker="...evidence truncated",
+        )
+        for chunk in json.JSONEncoder().iterencode(bounded):
+            parts.append(chunk)
+            total += len(chunk)
+            if total > _MAX_OBSERVED_RESULT_JSON_CHARS:
+                return {
+                    "truncated": True,
+                    "preview": ("".join(parts))[:_MAX_OBSERVED_RESULT_JSON_CHARS],
+                }
+    except (TypeError, ValueError, RecursionError):
+        return "<unserializable result>"
+    return value
 
 def _dataset_fingerprint(df: pd.DataFrame) -> str:
     """Deterministic fingerprint of the input dataset.
@@ -677,7 +721,7 @@ class StatsVerifier:
             )
 
         execution_evidence = {
-            "observed_result": _json_safe(exec_result.result),
+            "observed_result": _cap_observed_result(_json_safe(exec_result.result)),
             "generated_code": code,
             "columns": columns,
             "dataset_sha256": dataset_sha256,

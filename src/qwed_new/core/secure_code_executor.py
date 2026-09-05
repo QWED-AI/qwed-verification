@@ -11,9 +11,11 @@ Provides sandboxed execution of LLM-generated code with:
 
 import ast
 import docker
+from docker.types import LogConfig
 import tempfile
 import json
 import os
+import time
 import logging
 from typing import Any, Dict, Tuple, Optional
 
@@ -230,6 +232,15 @@ class SecureCodeExecutor:
         self.cpu_limit = 0.5  # 50% of one CPU core
         self.memory_limit = "512m"  # 512 MB
         self.timeout = 10  # seconds
+        # #338: process count is the last kernel resource the container
+        # config left unbounded — a gate-passing fork bomb allocates host
+        # PIDs up to kernel.pid_max for the whole execution window.
+        self.pids_limit = 128
+        # #339: result.json read-back cap. json.load reads the whole file
+        # plus the decoded value into this process; gate-passing code can
+        # multiply references under the container memory cap to grow the
+        # on-disk JSON unboundedly.
+        self.max_result_bytes = 2 * 1024 * 1024
         self.execution_count = 0
         
         # Docker image to use
@@ -285,6 +296,14 @@ class SecureCodeExecutor:
                     # 4. Parse result
                     result_file = os.path.join(tmpdir, "result.json")
                     if os.path.exists(result_file):
+                        # #339: size-check BEFORE reading — json.load holds the
+                        # whole file plus the decoded value in this process,
+                        # parsed synchronously on the event loop. The wrapper
+                        # enforces the same cap, so reaching this branch with
+                        # an oversized file means the cap was bypassed.
+                        if os.path.getsize(result_file) > self.max_result_bytes:
+                            logger.warning("Result file exceeds size cap for %s", execution_id)
+                            return False, "Result exceeds maximum allowed size", None
                         with open(result_file, 'r') as f:
                             result_data = json.load(f)
                         
@@ -321,31 +340,83 @@ class SecureCodeExecutor:
         
         # Use pre-built pandas image
         cmd = "python /workspace/script.py"
-        
-        container = self.client.containers.run(
-            image=self.image,
-            command=cmd,
-            volumes={tmpdir: {'bind': '/workspace', 'mode': 'rw'}},
-            mem_limit=self.memory_limit,
-            cpu_period=100000,
-            cpu_quota=int(self.cpu_limit * 100000),
-            network_mode="none",  # No internet access
-            remove=False,  # Keep so we can check status/logs
-            detach=True,  # Run in background
-        )
-        
+
+        # Create first, start INSIDE the cleanup scope (#351 review): the SDK's
+        # containers.run() creates the container and only then starts it, so a
+        # start failure raised before our finally existed and leaked the created
+        # container. With create() + start(), the finally covers the whole
+        # post-creation lifecycle. One kwargs dict shared by both create calls
+        # (CodeRabbit: a limit added to only one copy would silently miss the
+        # pull-retry path).
+        create_kwargs = {
+            "image": self.image,
+            "command": cmd,
+            "volumes": {tmpdir: {'bind': '/workspace', 'mode': 'rw'}},
+            "mem_limit": self.memory_limit,
+            "cpu_period": 100000,
+            "cpu_quota": int(self.cpu_limit * 100000),
+            "network_mode": "none",  # No internet access
+            # #338: the daemon's default json-file driver is unbounded —
+            # sandbox stdout grows on the daemon HOST, outside every
+            # container resource limit, until the disk fills.
+            "log_config": LogConfig(
+                type=LogConfig.types.JSON,
+                config={"max-size": "10m", "max-file": "1"},
+            ),
+            "pids_limit": self.pids_limit,
+        }
         try:
-            # Wait for completion with timeout
-            # Note: docker-py wait() timeout is in seconds since v3.0.0
-            container.wait(timeout=self.timeout)
-            return container
-        except Exception as e:
-            logger.warning(f"Container timeout or error: {e}")
+            container = self.client.containers.create(**create_kwargs)
+        except docker.errors.ImageNotFound:
+            # containers.run() auto-pulled a missing image; create() does not
+            # (CI never pre-pulls the sandbox image). Pull, then retry — the
+            # 404 means no container was created, so no cleanup is owed.
+            logger.info("Sandbox image %s missing; pulling", self.image)
+            self.client.images.pull(self.image)
+            container = self.client.containers.create(**create_kwargs)
+
+        try:
+            container.start()
             try:
-                container.kill()
+                # Wait for completion with timeout
+                # Note: docker-py wait() timeout is in seconds since v3.0.0
+                container.wait(timeout=self.timeout)
+            except Exception as e:
+                logger.warning(f"Container timeout or error: {e}")
+                try:
+                    container.kill()
+                except Exception:
+                    logger.debug("Failed to kill container after timeout", exc_info=True)
+                raise ExecutionError(f"Execution timed out after {self.timeout}s") from e
+            return container
+        finally:
+            # #338: every execution must leave no container behind — a stopped
+            # container keeps its full json-file log on the daemon host
+            # indefinitely. Result read-back uses the mounted result.json,
+            # never container logs, so removal here is safe.
+            #
+            # Cleanup failure is warn-only, NOT fail-closed (deliberate
+            # conflict resolution between three review bots on PR #351):
+            # CodeRabbit wanted fail-closed (CWE-400), Greptile wanted a
+            # retry/reaper, Sentry HIGH correctly noted a removal failure
+            # does not remove the leak either way — raising would only
+            # discard a validly computed verification result. Resolution:
+            # one automatic retry (most removal failures are transient
+            # daemon races right after wait/kill), then a loud warning as
+            # the operator signal — alert on it; a daemon-side reaper
+            # (label-filtered `docker container prune`) remains follow-up
+            # material if leak accumulation is ever observed.
+            try:
+                try:
+                    container.remove(force=True)
+                except Exception:
+                    time.sleep(0.5)
+                    container.remove(force=True)
             except Exception:
-                logger.debug("Failed to kill container after timeout", exc_info=True)
-            raise ExecutionError(f"Execution timed out after {self.timeout}s") from e
+                logger.warning(
+                    "Failed to remove sandbox container for %s", execution_id,
+                    exc_info=True,
+                )
     
     def _is_safe_code(self, code: str) -> DiagnosticResult:
         """
@@ -482,16 +553,35 @@ for key, value in context.items():
 try:
     # User code executes here
 {self._indent_code(user_code, spaces=4)}
-    
+
     # Save result (user code should set 'result' variable)
     if 'result' in globals():
         res = globals()['result']
+        # Handle DataFrame results
+        if hasattr(res, 'to_dict'):
+            payload = {{'result': res.to_dict(orient='records')}}
+        else:
+            payload = {{'result': res}}
+        # #339: stream-serialize and abort at the cap. A one-shot json.dumps
+        # would fully materialize the escaped expansion in container memory
+        # before any size check could run; iterencode emits lazily so memory
+        # stays bounded. ensure_ascii keeps len(chunk) == bytes on disk.
+        total = 0
+        exceeded = False
         with open('/workspace/result.json', 'w') as f:
-            # Handle DataFrame results
-            if hasattr(res, 'to_dict'):
-                json.dump({{'result': res.to_dict(orient='records')}}, f, cls=QwedEncoder)
-            else:
-                json.dump({{'result': res}}, f, cls=QwedEncoder)
+            for chunk in QwedEncoder().iterencode(payload):
+                total += len(chunk)
+                # a string value is emitted as a single token — reject it
+                # immediately rather than materializing it in full
+                if total > {self.max_result_bytes} or len(chunk) > {self.max_result_bytes}:
+                    exceeded = True
+                    break
+                f.write(chunk)
+        if exceeded:
+            with open('/workspace/result.json', 'w') as f:
+                f.write(json.dumps({{'error': 'Result exceeds maximum allowed size'}}))
+            print('Result exceeds maximum allowed size', file=sys.stderr)
+            sys.exit(1)
     else:
         with open('/workspace/result.json', 'w') as f:
             json.dump({{'error': 'Code did not set result variable'}}, f)
