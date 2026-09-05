@@ -13,7 +13,7 @@ import asyncio
 import os
 import threading
 import time
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -308,11 +308,49 @@ class TestAsyncTimeoutBreaker:
         recorded = [c.args[1] for c in verifier._record_engine_result.call_args_list]
         assert any(r.status == "BLOCKED" and r.method == "timeout" for r in recorded)
 
+    def test_engine_exception_records_engine_error_and_preserves_partial_results(self):
+        """CodeRabbit on PR #352: an engine exception is an engine_error, not
+        a timeout; already-harvested sibling results are preserved and the
+        breaker receives the failure."""
+        verifier = _verifier(max_workers=2)
+        verifier._record_engine_result = MagicMock()
+        release = threading.Event()
+
+        def ok_engine(q):
+            return EngineResult(
+                engine_name="OK", method="mock", result=None, confidence=1.0,
+                latency_ms=0, success=True, status="VERIFIED",
+            )
+
+        def broken_engine(q):
+            raise RuntimeError("engine blew up")
+
+        verifier._select_engines = lambda query, mode: [
+            ("OK", ok_engine), ("Broken", broken_engine),
+        ]
+        verifier._is_engine_available = lambda engine_name: True
+
+        try:
+            result = asyncio.run(
+                verifier.verify_async("q", mode=cv.VerificationMode.SINGLE, timeout_seconds=2.0)
+            )
+        finally:
+            release.set()
+            verifier._executor.shutdown(wait=False)
+
+        by_name = {r.engine_name: r for r in result.verification_chain}
+        assert by_name["OK"].success is True
+        assert by_name["Broken"].status == "BLOCKED"
+        assert by_name["Broken"].method == "engine_error"
+        recorded_names = {
+            c.args[1].engine_name for c in verifier._record_engine_result.call_args_list
+        }
+        assert {"OK", "Broken"} <= recorded_names
+
     def test_per_call_pool_is_sized_to_the_engine_list(self):
         """#352 round 8: verify_async uses a dedicated executor sized to the
         engine list — nothing ever queues, so no engine can be left
         un-started at expiry and falsely spared (or penalized)."""
-        import concurrent.futures
 
         verifier = _verifier(max_workers=1)  # shared pool: 1 worker only
         verifier._record_engine_result = MagicMock()
@@ -329,7 +367,7 @@ class TestAsyncTimeoutBreaker:
 
         with patch(
             "qwed_new.core.consensus_verifier.ThreadPoolExecutor",
-            wraps=concurrent.futures.ThreadPoolExecutor,
+            wraps=ThreadPoolExecutor,
         ) as pool_ctor:
             asyncio.run(
                 verifier.verify_async("q", mode=cv.VerificationMode.SINGLE, timeout_seconds=2)
