@@ -34,9 +34,13 @@ class OllamaProvider(LLMProvider):
         # Ollama doesn't require auth — use env var or dummy token
         fallback_token = "dummy" + "-token"
         ollama_key = os.getenv("OLLAMA_API_KEY") or fallback_token
+        # #353: bound every wait — SDK default read timeout is 600s x
+        # retries (see openai_direct for the in-repo standard).
         self.client = OpenAI(
             base_url=self.base_url,
             api_key=ollama_key,
+            timeout=30.0,
+            max_retries=2,
         )
 
         logger.info("Ollama provider initialized for model '%s'", self.model)

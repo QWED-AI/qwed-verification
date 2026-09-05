@@ -232,6 +232,11 @@ _MAX_LOG_RESULT_STRING_CHARS = 1_000
 # copies had already diverged).
 _LOG_BOUND_BUDGET_CHARS = 2 * _MAX_LOG_RESULT_CHARS
 
+# #353: hard byte cap on the /verify/stats upload. read_csv is CPU- and
+# memory-bound on input size, so the upload is read under this cap and the
+# excess rejected (413) before any parse work starts.
+_MAX_STATS_UPLOAD_BYTES = 10_000_000
+
 
 
 def _cap_log_result(result_dict) -> str:
@@ -470,13 +475,24 @@ async def verify_stats(
     - Query: "Did sales increase by 15% this quarter?"
     """
     check_rate_limit(tenant.api_key)
-    
+
     try:
+        import io
+
         import pandas as pd
+        # #353: read_csv on an uncapped upload is an unbounded CPU/memory
+        # wait inside the engine call path — read the upload under a hard
+        # byte cap and reject the excess before any parse work happens.
+        upload = await file.read(_MAX_STATS_UPLOAD_BYTES + 1)
+        if len(upload) > _MAX_STATS_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Upload exceeds the {_MAX_STATS_UPLOAD_BYTES} byte limit for statistical verification.",
+            )
         # #341: the whole stats chain is synchronous — read_csv (CPU-bound,
         # attacker-sized upload), the blocking LLM codegen round trip, and
         # the Docker daemon calls must not run inline on the event loop.
-        df = await asyncio.to_thread(pd.read_csv, file.file)
+        df = await asyncio.to_thread(pd.read_csv, io.BytesIO(upload))
 
         from qwed_new.core.stats_verifier import StatsVerifier
         verifier = StatsVerifier()

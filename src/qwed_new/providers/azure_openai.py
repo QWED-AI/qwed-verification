@@ -24,10 +24,15 @@ class AzureOpenAIProvider(LLMProvider):
         if not all([self.endpoint, self.api_key, self.deployment, self.api_version]):
             raise ValueError("Missing Azure OpenAI environment variables")
             
+        # #353: SDK default read timeout is 600s x retries — a silently
+        # stalled endpoint would occupy its engine worker for ~30 minutes.
+        # 30s + 2 retries matches the openai_direct in-repo standard.
         self.client = AzureOpenAI(
             api_version=self.api_version,
             azure_endpoint=self.endpoint,
             api_key=self.api_key,
+            timeout=30.0,
+            max_retries=2,
         )
         
         self.function_schema = {

@@ -23,9 +23,13 @@ class AnthropicProvider(LLMProvider):
         if not all([self.endpoint, self.api_key, self.deployment]):
             raise ValueError("Missing Anthropic environment variables")
             
+        # #353: SDK default read timeout is 600s x retries — bound every
+        # wait like the openai providers (openai_direct in-repo standard).
         self.client = AnthropicFoundry(
             api_key=self.api_key,
             base_url=self.endpoint,
+            timeout=30.0,
+            max_retries=2,
         )
         
         # Anthropic tool definition
