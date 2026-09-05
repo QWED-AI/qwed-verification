@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from qwed_new.core import consensus_verifier as cv
-from qwed_new.core.consensus_verifier import ConsensusVerifier
+from qwed_new.core.consensus_verifier import ConsensusVerifier, EngineResult
 from qwed_new.core.secure_code_executor import SecureCodeExecutor
 
 
@@ -308,46 +308,41 @@ class TestAsyncTimeoutBreaker:
         recorded = [c.args[1] for c in verifier._record_engine_result.call_args_list]
         assert any(r.status == "BLOCKED" and r.method == "timeout" for r in recorded)
 
-    def test_async_queued_engine_not_penalized_on_aggregate_expiry(self):
-        """Sentry HIGH on PR #352: a queued, never-started engine is not at
-        fault for an aggregate expiry — it must be cancelled without a
-        breaker penalty, while the running hung engine is recorded."""
-        verifier = _verifier(max_workers=1)
+    def test_per_call_pool_is_sized_to_the_engine_list(self):
+        """#352 round 8: verify_async uses a dedicated executor sized to the
+        engine list — nothing ever queues, so no engine can be left
+        un-started at expiry and falsely spared (or penalized)."""
+        import concurrent.futures
+
+        verifier = _verifier(max_workers=1)  # shared pool: 1 worker only
         verifier._record_engine_result = MagicMock()
-        release = threading.Event()
+        def fake_engine(q):
+            return EngineResult(
+                engine_name="E", method="mock", result=None, confidence=1.0,
+                latency_ms=0, success=True, status="VERIFIED",
+            )
 
-        def hung(q):
-            release.wait(timeout=15)
-
-        def queued(q):
-            release.wait(timeout=15)
-
-        verifier._select_engines = lambda query, mode: [("H1", hung), ("Q2", queued)]
+        verifier._select_engines = lambda query, mode: [
+            ("E1", fake_engine), ("E2", fake_engine), ("E3", fake_engine),
+        ]
         verifier._is_engine_available = lambda engine_name: True
 
-        try:
+        with patch(
+            "qwed_new.core.consensus_verifier.ThreadPoolExecutor",
+            wraps=concurrent.futures.ThreadPoolExecutor,
+        ) as pool_ctor:
             asyncio.run(
-                verifier.verify_async("q", mode=cv.VerificationMode.SINGLE, timeout_seconds=0.4)
+                verifier.verify_async("q", mode=cv.VerificationMode.SINGLE, timeout_seconds=2)
             )
-        finally:
-            release.set()
-            verifier._executor.shutdown(wait=False)
 
-        recorded = [
-            c.args[1].engine_name
-            for c in verifier._record_engine_result.call_args_list
-            if c.args[1].status == "BLOCKED"
-        ]
-        assert "H1" in recorded  # ran past its budget
-        assert "Q2" not in recorded  # never started — not at fault
+        pool_ctor.assert_called_once()
+        assert pool_ctor.call_args.kwargs.get("max_workers") == 3
 
     def test_running_engine_recorded_even_when_wrapper_cancelled(self):
         """Greptile P1 on PR #352: cancelling the asyncio wrapper SUCCEEDS
         even while the worker thread runs — breaker recording must key on
-        started evidence, not wrapper state. Both engines are guaranteed to
-        start before the deadline: the pool is pre-warmed (workers alive and
-        idle) and the test waits on both started Events, with a generous
-        deadline so CI thread-start jitter cannot miss the window."""
+        started evidence, not wrapper state. The per-call pool is sized to
+        the engine list, so both engines start and both must be recorded."""
         verifier = _verifier(max_workers=2)
         verifier._record_engine_result = MagicMock()
         release = threading.Event()
@@ -366,22 +361,17 @@ class TestAsyncTimeoutBreaker:
         ]
         verifier._is_engine_available = lambda engine_name: True
 
-        # pre-warm both pool workers so neither engine is left queued when
-        # the short deadline expires on a loaded CI runner
-        warm = [verifier._executor.submit(lambda: None) for _ in range(2)]
-        for w in warm:
-            w.result(timeout=10)
-
         try:
-            result = asyncio.run(
-                verifier.verify_async("q", mode=cv.VerificationMode.SINGLE, timeout_seconds=5.0)
+            asyncio.run(
+                verifier.verify_async("q", mode=cv.VerificationMode.SINGLE, timeout_seconds=2.0)
             )
         finally:
             release.set()
             verifier._executor.shutdown(wait=False)
 
-        # both engines must actually have started before expiry
-        assert started["H1"].is_set() and started["H2"].is_set()
+        # both engines genuinely started; both must advance the breaker
+        assert started["H1"].is_set()
+        assert started["H2"].is_set()
         recorded = [
             c.args[1].engine_name
             for c in verifier._record_engine_result.call_args_list

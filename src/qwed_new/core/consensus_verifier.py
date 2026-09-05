@@ -469,12 +469,12 @@ class ConsensusVerifier:
     ) -> ConsensusResult:
         """
         Async verification using multiple engines in parallel.
-        
+
         Args:
             query: The query to verify.
             mode: Verification depth.
-            timeout_seconds: Max time for all engines.
-            
+            timeout_seconds: Max time for ALL engines (one aggregate deadline).
+
         Returns:
             ConsensusResult object.
 
@@ -483,103 +483,60 @@ class ConsensusVerifier:
         """
         start_time = time.time()
         engine_methods = self._select_engines(query, mode)
-        
-        # Create async tasks
-        loop = asyncio.get_event_loop()
-        tasks = []
+
         results = []
-        # #352 review (Greptile P1): cancelling the asyncio wrapper succeeds
-        # even when the worker thread is already running, so wrapper state
-        # alone cannot distinguish a hung engine from a queued one. A
-        # per-engine started Event is positive evidence the engine actually
-        # began executing.
-        started_flags = {}
-        
-        for engine_name, method in engine_methods:
-            if self._is_engine_available(engine_name):
-                started = threading.Event()
-                started_flags[engine_name] = started
-
-                def _run(m=method, flag=started, q=query):
-                    flag.set()
-                    return m(q)
-
-                task = loop.run_in_executor(
-                    self._executor,
-                    _run,
-                )
-                tasks.append((engine_name, task))
-            else:
-                # #352 review: a breaker-rejected engine must surface as an
-                # explicit, auditable BLOCKED result (QWED_RULES: degraded
-                # results stay explicit) — and WITHOUT extending breaker
-                # state, since a skipped request is not a new failure.
-                results.append(self._blocked_engine_result(
-                    engine_name, "circuit_open",
-                    _CIRCUIT_OPEN_ERROR,
-                    record=False,
-                ))
-        
-        # Gather results under ONE aggregate deadline (#352 review:
-        # sequential per-engine waits stack N x 30s and exceed the API's
-        # overall limit; all tasks run concurrently, so the remaining time
-        # is shared).
         mono_start_ns = time.monotonic_ns()
         deadline_ns = mono_start_ns + int(timeout_seconds * 1_000_000_000)
+
+        # #352: a DEDICATED per-call executor sized to the engine list.
+        # Every engine starts immediately (nothing ever queues), so a hung
+        # engine can neither poison a pool shared with other requests nor
+        # starve a sibling — the root cause the started-Event patches were
+        # working around. Cooperative cancellation remains issue #353.
+        pool = ThreadPoolExecutor(max_workers=max(1, len(engine_methods)))
         try:
-            for engine_name, task in tasks:
-                started = started_flags.get(engine_name)
-                remaining_s = (deadline_ns - time.monotonic_ns()) / 1_000_000_000
-                timed_out = False
-                if remaining_s <= 0:
-                    # deadline already spent when we reach this engine
-                    if task.done() and not task.cancelled():
-                        exc = task.exception()
-                        if exc is None:
-                            # finished inside the window — harvest, never waste it
-                            result = task.result()
-                            self._record_engine_result(engine_name, result)
-                            results.append(result)
-                            continue
-                        timed_out = True
-                    else:
-                        task.cancel()
-                        timed_out = True
+            loop = asyncio.get_running_loop()
+            tasks = []
+            for engine_name, method in engine_methods:
+                if self._is_engine_available(engine_name):
+                    tasks.append(
+                        (engine_name, loop.run_in_executor(pool, method, query))
+                    )
                 else:
-                    try:
-                        result = await asyncio.wait_for(task, timeout=remaining_s)
-                        self._record_engine_result(engine_name, result)
-                        results.append(result)
-                    except asyncio.TimeoutError:
-                        timed_out = True
-                if timed_out:
-                    # Started evidence decides the breaker (Greptile P1: a task
-                    # that began executing consumed its budget — wrapper
-                    # cancellation proves nothing; Sentry HIGH: a queued,
-                    # never-started engine is not at fault). Either way the
-                    # caller gets an explicit BLOCKED result.
+                    # #352 review: a breaker-rejected engine must surface as
+                    # an explicit, auditable BLOCKED result (QWED_RULES:
+                    # degraded results stay explicit) — and WITHOUT extending
+                    # breaker state, since a skipped request is not a new
+                    # failure.
                     results.append(self._blocked_engine_result(
-                        engine_name, "timeout", "Timeout",
-                        latency_ms=(time.monotonic_ns() - mono_start_ns) // 1_000_000,
-                        record=bool(started and started.is_set()),
+                        engine_name, "circuit_open",
+                        _CIRCUIT_OPEN_ERROR,
+                        record=False,
                     ))
-        except Exception as e:
-            # Partial engine results are still usable for consensus calculation.
-            logger.exception("Unexpected async aggregation failure")
-            results.append(EngineResult(
-                engine_name="consensus_orchestrator",
-                method="async_aggregation",
-                result=None,
-                confidence=0.0,
-                latency_ms=(time.time() - start_time) * 1000,
-                success=False,
-                error=str(e),
-                status="BLOCKED",
-            ))
-        
+            try:
+                results.extend(await self._collect_engine_results(tasks, deadline_ns, mono_start_ns))
+            except Exception:
+                # Partial engine results are still usable for consensus
+                # calculation.
+                logger.exception("Unexpected async aggregation failure")
+                results.append(EngineResult(
+                    engine_name="consensus_orchestrator",
+                    method="async_aggregation",
+                    result=None,
+                    confidence=0.0,
+                    latency_ms=(time.time() - start_time) * 1000,
+                    success=False,
+                    error="async aggregation failed",
+                    status="BLOCKED",
+                ))
+        finally:
+            # discard the pool: queued work is cancelled, running threads
+            # finish naturally but can never affect later requests
+            pool.shutdown(wait=False, cancel_futures=True)
+
         consensus = self._calculate_consensus(results)
         total_latency = (time.time() - start_time) * 1000
-        
+
         return ConsensusResult(
             final_answer=consensus["answer"],
             confidence=consensus["confidence"],
@@ -592,10 +549,6 @@ class ConsensusVerifier:
             proof_ref=consensus.get("proof_ref"),
             verified_evidence=consensus.get("verified_evidence"),
         )
-
-    # =========================================================================
-    # Engine Selection
-    # =========================================================================
 
     def _select_engines(self, query: str, mode: VerificationMode) -> List[Tuple[str, Callable]]:
         """Select engines based on mode and query type."""
@@ -623,6 +576,46 @@ class ConsensusVerifier:
             return self.circuit_breaker.is_available(engine_name)
         return True
     
+    async def _collect_engine_results(self, tasks, deadline_ns: int, mono_start_ns: int) -> list:
+        """Await engine tasks under ONE aggregate deadline (#352 review:
+        sequential per-engine waits stack N x 30s and exceed the API's
+        overall limit; the pool is sized to the engine list, so every task
+        starts immediately and nothing queues)."""
+        results = []
+        for engine_name, task in tasks:
+            remaining_s = (deadline_ns - time.monotonic_ns()) / 1_000_000_000
+            timed_out = False
+            if remaining_s <= 0:
+                if task.done() and not task.cancelled():
+                    exc = task.exception()
+                    if exc is None:
+                        # finished inside the window — harvest, never waste it
+                        result = task.result()
+                        self._record_engine_result(engine_name, result)
+                        results.append(result)
+                        continue
+                    timed_out = True
+                else:
+                    task.cancel()
+                    timed_out = True
+            else:
+                try:
+                    result = await asyncio.wait_for(task, timeout=remaining_s)
+                    self._record_engine_result(engine_name, result)
+                    results.append(result)
+                except asyncio.TimeoutError:
+                    timed_out = True
+            if timed_out:
+                # The pool is sized to the engine list, so an unfinished task
+                # at expiry was genuinely running past its budget — record it
+                # with the breaker (Greptile P1: a started engine consumed its
+                # budget; no queuing means no innocent engines to protect).
+                results.append(self._blocked_engine_result(
+                    engine_name, "timeout", "Timeout",
+                    latency_ms=(time.monotonic_ns() - mono_start_ns) // 1_000_000,
+                ))
+        return results
+
     def _record_engine_result(self, engine_name: str, result: EngineResult):
         """Record result with circuit breaker."""
         if self.circuit_breaker:

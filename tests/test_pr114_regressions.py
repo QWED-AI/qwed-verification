@@ -243,8 +243,12 @@ async def test_consensus_verifier_records_async_aggregation_failure():
 
     result = await verifier.verify_async("2+2", mode=VerificationMode.SINGLE, timeout_seconds=0.1)
 
+    # PR #352 round 6: the orchestrator's own error is a static message
+    # (str(exc) advisory) — the exception detail goes to the server log.
     assert any(
-        item.engine_name == "consensus_orchestrator" and item.error == "boom"
+        item.engine_name == "consensus_orchestrator"
+        and item.status == "BLOCKED"
+        and item.error == "async aggregation failed"
         for item in result.verification_chain
     )
 
