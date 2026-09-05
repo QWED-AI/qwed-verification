@@ -488,13 +488,25 @@ class ConsensusVerifier:
         loop = asyncio.get_event_loop()
         tasks = []
         results = []
+        # #352 review (Greptile P1): cancelling the asyncio wrapper succeeds
+        # even when the worker thread is already running, so wrapper state
+        # alone cannot distinguish a hung engine from a queued one. A
+        # per-engine started Event is positive evidence the engine actually
+        # began executing.
+        started_flags = {}
         
         for engine_name, method in engine_methods:
             if self._is_engine_available(engine_name):
+                started = threading.Event()
+                started_flags[engine_name] = started
+
+                def _run(m=method, flag=started, q=query):
+                    flag.set()
+                    return m(q)
+
                 task = loop.run_in_executor(
                     self._executor,
-                    method,
-                    query
+                    _run,
                 )
                 tasks.append((engine_name, task))
             else:
@@ -508,56 +520,48 @@ class ConsensusVerifier:
                     record=False,
                 ))
         
-        # Gather results with timeout.
-        # #352 review: ONE aggregate deadline — sequential per-engine waits
-        # would stack (N hung engines x 30s exceed the API's overall limit).
-        # All tasks run concurrently, so the remaining time is shared.
-        mono_start = time.monotonic()
-        deadline = mono_start + timeout_seconds
+        # Gather results under ONE aggregate deadline (#352 review:
+        # sequential per-engine waits stack N x 30s and exceed the API's
+        # overall limit; all tasks run concurrently, so the remaining time
+        # is shared).
+        mono_start_ns = time.monotonic_ns()
+        deadline_ns = mono_start_ns + int(timeout_seconds * 1_000_000_000)
         try:
             for engine_name, task in tasks:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    # Aggregate deadline exhausted (Greptile P1 / Sentry x3 on
-                    # PR #352). Three distinct cases, three treatments:
-                    #  - done successfully -> HARVEST the result (a fast
-                    #    engine must not be penalized for a slow sibling);
-                    #  - done with error -> record the failure;
-                    #  - not done -> cancel queued work and record the timeout
-                    #    ONLY if the task was already running (a queued,
-                    #    never-started engine is not at fault).
+                started = started_flags.get(engine_name)
+                remaining_s = (deadline_ns - time.monotonic_ns()) / 1_000_000_000
+                timed_out = False
+                if remaining_s <= 0:
+                    # deadline already spent when we reach this engine
                     if task.done() and not task.cancelled():
                         exc = task.exception()
                         if exc is None:
+                            # finished inside the window — harvest, never waste it
                             result = task.result()
                             self._record_engine_result(engine_name, result)
                             results.append(result)
-                        else:
-                            results.append(self._blocked_engine_result(
-                                engine_name, "engine_error", str(exc),
-                            ))
+                            continue
+                        timed_out = True
                     else:
-                        cancelled = task.cancel()
-                        results.append(self._blocked_engine_result(
-                            engine_name, "timeout", "Timeout",
-                            latency_ms=int((time.monotonic() - mono_start) * 1000),
-                            record=not cancelled,
-                        ))
-                    continue
-                try:
-                    result = await asyncio.wait_for(task, timeout=remaining)
-                    self._record_engine_result(engine_name, result)
-                    results.append(result)
-                except asyncio.TimeoutError:
-                    # #352 review: the timeout MUST be recorded — hung engines
-                    # never complete, so without this the breaker never opens
-                    # and the engine stays eligible for every later request.
-                    # wait_for cancellation cannot stop a thread already
-                    # running in the pool; once the breaker opens, engine
-                    # exclusion stops new submissions from queueing behind it.
+                        task.cancel()
+                        timed_out = True
+                else:
+                    try:
+                        result = await asyncio.wait_for(task, timeout=remaining_s)
+                        self._record_engine_result(engine_name, result)
+                        results.append(result)
+                    except asyncio.TimeoutError:
+                        timed_out = True
+                if timed_out:
+                    # Started evidence decides the breaker (Greptile P1: a task
+                    # that began executing consumed its budget — wrapper
+                    # cancellation proves nothing; Sentry HIGH: a queued,
+                    # never-started engine is not at fault). Either way the
+                    # caller gets an explicit BLOCKED result.
                     results.append(self._blocked_engine_result(
                         engine_name, "timeout", "Timeout",
-                        latency_ms=float(Decimal(str(timeout_seconds)) * 1000),
+                        latency_ms=(time.monotonic_ns() - mono_start_ns) // 1_000_000,
+                        record=bool(started and started.is_set()),
                     ))
         except Exception as e:
             # Partial engine results are still usable for consensus calculation.

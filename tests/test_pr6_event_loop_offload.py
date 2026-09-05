@@ -344,26 +344,44 @@ class TestAsyncTimeoutBreaker:
     def test_running_engine_recorded_even_when_wrapper_cancelled(self):
         """Greptile P1 on PR #352: cancelling the asyncio wrapper SUCCEEDS
         even while the worker thread runs — breaker recording must key on
-        started evidence, not wrapper state. With 2 workers both engines
-        start; the aggregate deadline expires and both must be recorded."""
+        started evidence, not wrapper state. Both engines are guaranteed to
+        start before the deadline: the pool is pre-warmed (workers alive and
+        idle) and the test waits on both started Events, with a generous
+        deadline so CI thread-start jitter cannot miss the window."""
         verifier = _verifier(max_workers=2)
         verifier._record_engine_result = MagicMock()
         release = threading.Event()
+        started = {"H1": threading.Event(), "H2": threading.Event()}
 
-        def hung(q):
+        def hung_h1(q):
+            started["H1"].set()
             release.wait(timeout=15)
 
-        verifier._select_engines = lambda query, mode: [("H1", hung), ("H2", hung)]
+        def hung_h2(q):
+            started["H2"].set()
+            release.wait(timeout=15)
+
+        verifier._select_engines = lambda query, mode: [
+            ("H1", hung_h1), ("H2", hung_h2),
+        ]
         verifier._is_engine_available = lambda engine_name: True
+
+        # pre-warm both pool workers so neither engine is left queued when
+        # the short deadline expires on a loaded CI runner
+        warm = [verifier._executor.submit(lambda: None) for _ in range(2)]
+        for w in warm:
+            w.result(timeout=10)
 
         try:
             result = asyncio.run(
-                verifier.verify_async("q", mode=cv.VerificationMode.SINGLE, timeout_seconds=0.4)
+                verifier.verify_async("q", mode=cv.VerificationMode.SINGLE, timeout_seconds=5.0)
             )
         finally:
             release.set()
             verifier._executor.shutdown(wait=False)
 
+        # both engines must actually have started before expiry
+        assert started["H1"].is_set() and started["H2"].is_set()
         recorded = [
             c.args[1].engine_name
             for c in verifier._record_engine_result.call_args_list
