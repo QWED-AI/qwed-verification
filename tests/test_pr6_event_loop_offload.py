@@ -300,6 +300,8 @@ class TestAsyncTimeoutBreaker:
             verifier._executor.shutdown(wait=False)
 
         hung = [r for r in result.verification_chain if r.engine_name == "Hung"]
-        assert hung and hung[0].status == "BLOCKED" and hung[0].method == "timeout"
+        assert hung
+        assert hung[0].status == "BLOCKED"
+        assert hung[0].method == "timeout"
         recorded = [c.args[1] for c in verifier._record_engine_result.call_args_list]
         assert any(r.status == "BLOCKED" and r.method == "timeout" for r in recorded)

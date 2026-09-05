@@ -622,14 +622,13 @@ class ConsensusVerifier:
             for future in as_completed(futures, timeout=_ENGINE_TIMEOUT_SECONDS):
                 engine_name = futures[future]
                 try:
+                    # as_completed only yields DONE futures, so result() never
+                    # times out here — the aggregate timeout surfaces from the
+                    # for statement and is caught by the outer handler below
+                    # (Sentry on PR #352: no dead inner timeout handler).
                     result = future.result()
                     self._record_engine_result(engine_name, result)
                     results.append(result)
-                except FutureTimeoutError:
-                    results.append(self._blocked_engine_result(
-                        engine_name, "parallel_timeout",
-                        f"Engine timed out after {_ENGINE_TIMEOUT_SECONDS}s",
-                    ))
                 except Exception as e:
                     results.append(self._blocked_engine_result(
                         engine_name, "parallel_execution", str(e),
