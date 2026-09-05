@@ -15,6 +15,7 @@ from docker.types import LogConfig
 import tempfile
 import json
 import os
+import time
 import logging
 from typing import Any, Dict, Tuple, Optional
 
@@ -405,13 +406,22 @@ class SecureCodeExecutor:
             # never container logs, so removal here is safe.
             #
             # Cleanup failure is warn-only, NOT fail-closed (deliberate
-            # conflict resolution between two review bots on PR #351): a
-            # removal failure does not remove the leak either way — the only
-            # effect of raising would be discarding a validly computed
-            # verification result (Sentry HIGH). The warning log below is the
-            # operator signal for the resource-hygiene problem; alert on it.
+            # conflict resolution between three review bots on PR #351):
+            # CodeRabbit wanted fail-closed (CWE-400), Greptile wanted a
+            # retry/reaper, Sentry HIGH correctly noted a removal failure
+            # does not remove the leak either way — raising would only
+            # discard a validly computed verification result. Resolution:
+            # one automatic retry (most removal failures are transient
+            # daemon races right after wait/kill), then a loud warning as
+            # the operator signal — alert on it; a daemon-side reaper
+            # (label-filtered `docker container prune`) remains follow-up
+            # material if leak accumulation is ever observed.
             try:
-                container.remove(force=True)
+                try:
+                    container.remove(force=True)
+                except Exception:
+                    time.sleep(0.5)
+                    container.remove(force=True)
             except Exception:
                 logger.warning(
                     "Failed to remove sandbox container for %s", execution_id,

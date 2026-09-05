@@ -102,15 +102,29 @@ class TestContainerContainment:
         """Conflict resolution between review bots (PR #351): a removal
         failure must not discard a validly computed verification result —
         failing the result would not remove the leaked container either way.
-        The warning log is the operator signal."""
+        One automatic retry absorbs transient daemon races; the warning log
+        is the operator signal if both attempts fail."""
         executor = _executor_with_mock_docker()
         container = MagicMock()
-        container.remove.side_effect = Exception("daemon hiccup")
+        # first attempt fails, retry succeeds
+        container.remove.side_effect = [Exception("daemon race"), None]
         executor.client.containers.create.return_value = container
 
         result = executor._run_in_container("/tmp", "exec_1")
 
         assert result is container
+        assert container.remove.call_count == 2
+
+    def test_removal_retry_exhaustion_is_warn_only(self):
+        executor = _executor_with_mock_docker()
+        container = MagicMock()
+        container.remove.side_effect = Exception("daemon down")
+        executor.client.containers.create.return_value = container
+
+        result = executor._run_in_container("/tmp", "exec_1")
+
+        assert result is container
+        assert container.remove.call_count == 2
 
 
 class TestHostReadbackCap:
