@@ -15,7 +15,6 @@ from enum import Enum
 from decimal import Decimal
 import time
 import asyncio
-from decimal import Decimal
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
 
@@ -514,101 +513,6 @@ class ConsensusVerifier:
                         record=False,
                     ))
             try:
-                results.extend(await self._collect_engine_results(
-                    tasks, deadline_ns, mono_start_ns,
-                ))
-            except Exception:
-                # Partial engine results are still usable for consensus
-                # calculation.
-                logger.exception("Unexpected async aggregation failure")
-                results.append(EngineResult(
-                    engine_name="consensus_orchestrator",
-                    method="async_aggregation",
-                    result=None,
-                    confidence=0.0,
-                    latency_ms=(time.time() - start_time) * 1000,
-                    success=False,
-                    error="async aggregation failed",
-                    status="BLOCKED",
-                ))
-        finally:
-            # discard the pool: queued work is cancelled, running threads
-            # finish naturally but can never affect later requests
-            pool.shutdown(wait=False, cancel_futures=True)
-
-        consensus = self._calculate_consensus(results)
-        total_latency = (time.time() - start_time) * 1000
-        
-        return ConsensusResult(
-            final_answer=consensus["answer"],
-            confidence=consensus["confidence"],
-            engines_used=len(results),
-            agreement_status=consensus["status"],
-            verification_chain=results,
-            total_latency_ms=total_latency,
-            parallel_execution=parallel and len(engine_methods) > 1,
-            status=consensus.get("diagnostic_status"),
-            proof_ref=consensus.get("proof_ref"),
-            verified_evidence=consensus.get("verified_evidence"),
-        )
-    
-    # =========================================================================
-    # Async Verification
-    # =========================================================================
-    
-    async def verify_async(
-        self,
-        query: str,
-        mode: VerificationMode = VerificationMode.SINGLE,
-        timeout_seconds: float = 30.0
-    ) -> ConsensusResult:
-        """
-        Async verification using multiple engines in parallel.
-
-        Args:
-            query: The query to verify.
-            mode: Verification depth.
-            timeout_seconds: Max time for ALL engines (one aggregate deadline).
-
-        Returns:
-            ConsensusResult object.
-
-        Example:
-            >>> result = await verifier.verify_async("2+2")
-        """
-        start_time = time.time()
-        engine_methods = self._select_engines(query, mode)
-
-        results = []
-        mono_start_ns = time.monotonic_ns()
-        deadline_ns = mono_start_ns + int(timeout_seconds * 1_000_000_000)
-
-        # #352: a DEDICATED per-call executor sized to the engine list.
-        # Every engine starts immediately (nothing ever queues), so a hung
-        # engine can neither poison a pool shared with other requests nor
-        # starve a sibling — the root cause the started-Event patches were
-        # working around. Cooperative cancellation remains issue #353.
-        pool = ThreadPoolExecutor(max_workers=max(1, len(engine_methods)))
-        try:
-            loop = asyncio.get_running_loop()
-            tasks = []
-            for engine_name, method in engine_methods:
-                if self._is_engine_available(engine_name):
-                    tasks.append(
-                        (engine_name, loop.run_in_executor(pool, method, query))
-                    )
-                else:
-                    # #352 review: a breaker-rejected engine must surface as
-                    # an explicit, auditable BLOCKED result (QWED_RULES:
-                    # degraded results stay explicit) — and WITHOUT extending
-                    # breaker state, since a skipped request is not a new
-                    # failure.
-                    results.append(self._blocked_engine_result(
-                        engine_name, "circuit_open",
-                        _CIRCUIT_OPEN_ERROR,
-                        record=False,
-                    ))
-            try:
                 results.extend(await self._collect_engine_results(tasks, deadline_ns, mono_start_ns))
             except Exception:
                 # Partial engine results are still usable for consensus
@@ -716,14 +620,26 @@ class ConsensusVerifier:
                 return None, exc, False
         # Deadline already spent when we reach this task (the per-call pool
         # is sized to the engine list, so this task was RUNNING, not queued).
-        if task.done() and not task.cancelled():
-            exc = task.exception()
-            if exc is None:
-                # finished inside the window — harvest, never waste it
-                return task.result(), None, False
-            return None, exc, False
-        task.cancel()
-        return None, None, True
+        if not task.done():
+            # One loop tick lets a completion callback queued by a worker
+            # that finished just before the deadline land — harvest it
+            # instead of recording a false breaker penalty (Sentry on
+            # PR #352).
+            await asyncio.sleep(0)
+        if not task.done():
+            if task.cancel() or task.cancelled():
+                return None, None, True
+            # cancel() returned False and the task is not cancelled: it
+            # finished in the race window between the done() check and the
+            # cancel request — harvest it below instead of misclassifying a
+            # healthy engine as a timeout.
+        if task.cancelled():
+            return None, None, True
+        exc = task.exception()
+        if exc is None:
+            # finished inside the window — harvest, never waste it
+            return task.result(), None, False
+        return None, exc, False
 
     def _record_engine_result(self, engine_name: str, result: EngineResult):
         """Record result with circuit breaker."""

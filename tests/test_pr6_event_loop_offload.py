@@ -498,3 +498,229 @@ class TestSyncCircuitOpen:
         assert skipped.status == "BLOCKED"
         assert skipped.method == "circuit_open"
         verifier._record_engine_result.assert_not_called()
+
+
+class TestDeadlineSpentHarvest:
+    """#352 Sonar coverage: _await_engine's deadline-spent branch — when the
+    aggregate deadline expires while a sibling engine hangs, a task that
+    already FINISHED must be harvested (result or exception), never wasted."""
+
+    def test_deadline_spent_harvests_already_finished_engine(self):
+        verifier = _verifier(max_workers=2)
+        verifier._record_engine_result = MagicMock()
+        release = threading.Event()
+
+        def hung_engine(q):
+            release.wait(timeout=15)
+
+        def quick_engine(q):
+            return EngineResult(
+                engine_name="Quick", method="mock", result="42", confidence=1.0,
+                latency_ms=0, success=True, status="VERIFIED",
+            )
+
+        # Hung is awaited first and consumes the whole deadline; Quick
+        # finishes instantly but is only awaited after expiry.
+        verifier._select_engines = lambda query, mode: [
+            ("Hung", hung_engine), ("Quick", quick_engine),
+        ]
+        try:
+            result = asyncio.run(
+                verifier.verify_async("q", mode=cv.VerificationMode.SINGLE, timeout_seconds=0.4)
+            )
+        finally:
+            release.set()
+            verifier._executor.shutdown(wait=False)
+
+        by_name = {r.engine_name: r for r in result.verification_chain}
+        assert by_name["Hung"].status == "BLOCKED"
+        assert by_name["Hung"].method == "timeout"
+        assert by_name["Quick"].success is True
+        assert by_name["Quick"].status == "VERIFIED"
+        recorded_names = {
+            c.args[1].engine_name for c in verifier._record_engine_result.call_args_list
+        }
+        assert "Quick" in recorded_names
+
+    def test_deadline_spent_harvests_engine_exception(self):
+        verifier = _verifier(max_workers=2)
+        verifier._record_engine_result = MagicMock()
+        release = threading.Event()
+
+        def hung_engine(q):
+            release.wait(timeout=15)
+
+        def broken_quick_engine(q):
+            raise RuntimeError("quick engine blew up")
+
+        verifier._select_engines = lambda query, mode: [
+            ("Hung", hung_engine), ("BrokenQuick", broken_quick_engine),
+        ]
+        try:
+            result = asyncio.run(
+                verifier.verify_async("q", mode=cv.VerificationMode.SINGLE, timeout_seconds=0.4)
+            )
+        finally:
+            release.set()
+            verifier._executor.shutdown(wait=False)
+
+        by_name = {r.engine_name: r for r in result.verification_chain}
+        assert by_name["Hung"].method == "timeout"
+        assert by_name["BrokenQuick"].status == "BLOCKED"
+        assert by_name["BrokenQuick"].method == "engine_error"
+
+
+class TestSyncEngineExceptionPaths:
+    """#352 Sonar coverage: the sync paths' engine-exception branch — an
+    engine that RAISES (distinct from hanging) must degrade to an explicit
+    BLOCKED result while sibling results are preserved."""
+
+    def test_parallel_engine_exception_yields_blocked_and_preserves_siblings(self):
+        verifier = _verifier(max_workers=2)
+        verifier._record_engine_result = MagicMock()
+
+        def ok_engine(q):
+            return EngineResult(
+                engine_name="OK", method="mock", result=None, confidence=1.0,
+                latency_ms=0, success=True, status="VERIFIED",
+            )
+
+        def broken_engine(q):
+            raise RuntimeError("boom")
+
+        results = verifier._execute_parallel(
+            "q", [("OK", ok_engine), ("Broken", broken_engine)],
+        )
+
+        by_name = {r.engine_name: r for r in results}
+        assert by_name["OK"].success is True
+        assert by_name["Broken"].status == "BLOCKED"
+        assert by_name["Broken"].method == "parallel_execution"
+        recorded_names = {
+            c.args[1].engine_name for c in verifier._record_engine_result.call_args_list
+        }
+        assert {"OK", "Broken"} <= recorded_names
+
+    def test_sequential_engine_exception_yields_blocked(self):
+        verifier = _verifier(max_workers=1)
+        verifier._record_engine_result = MagicMock()
+
+        def ok_engine(q):
+            return EngineResult(
+                engine_name="OK", method="mock", result=None, confidence=1.0,
+                latency_ms=0, success=True, status="VERIFIED",
+            )
+
+        def broken_engine(q):
+            raise RuntimeError("boom")
+
+        results = verifier._execute_sequential(
+            "q", [("OK", ok_engine), ("Broken", broken_engine)],
+        )
+
+        by_name = {r.engine_name: r for r in results}
+        assert by_name["OK"].success is True
+        assert by_name["Broken"].status == "BLOCKED"
+        assert by_name["Broken"].method == "sequential_execution"
+
+
+class _FakeRaceTask:
+    """Mimics the run_in_executor Future surface for the cancel race: done()
+    reports False exactly once (so the deadline-spent branch takes the cancel
+    path), and the task completes BEFORE cancel() is consulted."""
+
+    def __init__(self, result=None, error=None):
+        self._result = result
+        self._error = error
+        self._done_checked = False
+
+    def done(self):
+        if not self._done_checked:
+            self._done_checked = True
+            return False
+        return True
+
+    def cancel(self):
+        # a finished task can no longer be cancelled — the race signature
+        return False
+
+    def cancelled(self):
+        return False
+
+    def exception(self):
+        return self._error
+
+    def result(self):
+        return self._result
+
+
+class TestCancelRaceHarvest:
+    """#352 round 11 (Sentry): a task that finishes in the window between
+    the done() check and the cancel request must be harvested — discarding
+    its result records a false breaker penalty against a healthy engine."""
+
+    def test_cancel_race_harvests_result(self):
+        verifier = _verifier(max_workers=1)
+        verifier._record_engine_result = MagicMock()
+
+        async def scenario():
+            deadline_ns = time.monotonic_ns() - 1  # already spent
+            return await verifier._await_engine(
+                _FakeRaceTask(result="late-result"), deadline_ns,
+            )
+
+        result, failure, timed_out = asyncio.run(scenario())
+        assert timed_out is False
+        assert failure is None
+        assert result == "late-result"
+
+    def test_cancel_race_harvests_exception(self):
+        verifier = _verifier(max_workers=1)
+
+        async def scenario():
+            deadline_ns = time.monotonic_ns() - 1
+            return await verifier._await_engine(
+                _FakeRaceTask(error=RuntimeError("finished, then blew up")),
+                deadline_ns,
+            )
+
+        result, failure, timed_out = asyncio.run(scenario())
+        assert timed_out is False
+        assert result is None
+        assert isinstance(failure, RuntimeError)
+
+    def test_chained_future_drains_completion_tick_before_cancel(self):
+        """run_in_executor wraps the concurrent future in a chained asyncio
+        future — a worker that finished just before the deadline may still
+        read done()==False until its completion callback is drained. The
+        one-tick drain must harvest it, not cancel it."""
+        verifier = _verifier(max_workers=1)
+        verifier._record_engine_result = MagicMock()
+
+        async def scenario():
+            loop = asyncio.get_running_loop()
+            fut = loop.run_in_executor(verifier._executor, lambda: "drained")
+            deadline_ns = time.monotonic_ns() - 1  # already spent
+            return await verifier._await_engine(fut, deadline_ns)
+
+        result, failure, timed_out = asyncio.run(scenario())
+        verifier._executor.shutdown(wait=False)
+        assert timed_out is False
+        assert failure is None
+        assert result == "drained"
+
+    def test_already_cancelled_task_reports_timeout(self):
+        """A task that was already cancelled when the deadline-spent branch
+        runs must surface as a timeout — task.exception() on a cancelled
+        future raises CancelledError, so the cancelled() check guards it."""
+        verifier = _verifier(max_workers=1)
+
+        async def scenario():
+            loop = asyncio.get_running_loop()
+            fut = loop.create_future()
+            fut.cancel()
+            return await verifier._await_engine(fut, time.monotonic_ns() - 1)
+
+        result, failure, timed_out = asyncio.run(scenario())
+        assert timed_out is True
+        assert result is None and failure is None
