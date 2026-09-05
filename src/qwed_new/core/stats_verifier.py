@@ -22,6 +22,7 @@ from importlib.metadata import PackageNotFoundError, version
 import ast
 
 from .diagnostics import AdvisoryCheck, DiagnosticResult, DiagnosticStatus, enforce_trust_decision
+from .json_bounding import bound_json_value
 from .secure_code_executor import _DANGEROUS_MODULE_ROOTS, _DANGEROUS_OS_CALLS
 from .verification_context import (
     Admission,
@@ -119,45 +120,39 @@ def _cap_observed_result(value: Any) -> Any:
     return value
 
 
-def _bound_observed_strings(value: Any, seen: set, budget: list) -> Any:
-    if budget[0] <= 0:
-        return "...[evidence truncated]"
-    if isinstance(value, str):
-        if len(value) <= _MAX_OBSERVED_RESULT_JSON_CHARS:
-            budget[0] -= len(value)
-            return value
-        budget[0] -= _MAX_OBSERVED_RESULT_JSON_CHARS
-        return value[:_MAX_OBSERVED_RESULT_JSON_CHARS] + "...[truncated]"
-    if isinstance(value, dict):
-        if id(value) in seen:
-            return "...[circular]"
-        seen.add(id(value))
-        try:
-            out = {}
-            for k, v in value.items():
-                out[str(k)] = _bound_observed_strings(v, seen, budget)
-                if budget[0] <= 0:
-                    out["...evidence truncated"] = True
-                    break
-            return out
-        finally:
-            seen.discard(id(value))
-    if isinstance(value, (list, tuple)):
-        if id(value) in seen:
-            return "...[circular]"
-        seen.add(id(value))
-        try:
-            out = []
-            for v in value:
-                out.append(_bound_observed_strings(v, seen, budget))
-                if budget[0] <= 0:
-                    out.append("...evidence truncated")
-                    break
-            return out
-        finally:
-            seen.discard(id(value))
-    return value
+def _cap_observed_result(value: Any) -> Any:
+    """Return *value* unchanged when small; a bounded preview otherwise.
 
+    Strings are bounded BEFORE encoding (Greptile P2 on PR #351: iterencode
+    emits a string value as a single token, so an unbounded string would be
+    fully materialized despite the streaming cap), with a shared aggregate
+    traversal budget (Greptile P1: many small values must not drive unbounded
+    cloning), then serialization is streamed so an oversized structure never
+    fully materializes on the synchronous event-loop path. The bounding
+    traversal is shared with api.main's VerificationLog cap (Sonar: the two
+    copies had already diverged).
+    """
+    try:
+        parts = []
+        total = 0
+        bounded = bound_json_value(
+            value,
+            max_string_chars=_MAX_OBSERVED_RESULT_JSON_CHARS,
+            budget_chars=_MAX_OBSERVED_RESULT_JSON_CHARS * 2,
+            string_marker="...[truncated]",
+            budget_marker="...evidence truncated",
+        )
+        for chunk in json.JSONEncoder().iterencode(bounded):
+            parts.append(chunk)
+            total += len(chunk)
+            if total > _MAX_OBSERVED_RESULT_JSON_CHARS:
+                return {
+                    "truncated": True,
+                    "preview": ("".join(parts))[:_MAX_OBSERVED_RESULT_JSON_CHARS],
+                }
+    except (TypeError, ValueError, RecursionError):
+        return "<unserializable result>"
+    return value
 
 def _dataset_fingerprint(df: pd.DataFrame) -> str:
     """Deterministic fingerprint of the input dataset.

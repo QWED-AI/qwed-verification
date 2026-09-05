@@ -29,6 +29,7 @@ from qwed_new.core.tenant_context import get_current_tenant, TenantContext
 from qwed_new.core.database import create_db_and_tables, get_session
 from qwed_new.core.models import VerificationLog, ApiKey, User
 from qwed_new.core.rate_limiter import check_rate_limit
+from qwed_new.core.json_bounding import bound_json_value
 
 # Import auth router
 from qwed_new.auth import auth_router
@@ -223,60 +224,13 @@ def get_optional_api_key_record(
 _MAX_LOG_RESULT_CHARS = 64_000
 _MAX_LOG_RESULT_STRING_CHARS = 1_000
 # Aggregate traversal budget (Greptile P1 on PR #351): stop cloning the
-# structure once enough bounded content has been retained, so a request with
-# very many small values cannot drive unbounded traversal on the event loop.
+# structure once enough bounded content has been retained, so a request
+# with very many small values cannot drive unbounded traversal on the
+# event loop. The bounding traversal itself lives in
+# qwed_new.core.json_bounding, shared with stats_verifier (Sonar: the two
+# copies had already diverged).
 _LOG_BOUND_BUDGET_CHARS = 2 * _MAX_LOG_RESULT_CHARS
 
-
-def _bound_log_strings(value, seen=None, budget=None):
-    """Truncate long strings pre-encoding (Greptile P2 on PR #351).
-
-    iterencode emits a JSON string value as a SINGLE token, so an unbounded
-    string inside the dict would be fully materialized before the size cap
-    could run. Bounding first keeps every chunk small. RecursionError from a
-    circular reference is caught by the caller like other encode failures.
-    """
-    if budget is None:
-        budget = [_LOG_BOUND_BUDGET_CHARS]
-    if budget[0] <= 0:
-        return "...[audit truncated]"
-    if isinstance(value, str):
-        if len(value) <= _MAX_LOG_RESULT_STRING_CHARS:
-            budget[0] -= len(value)
-            return value
-        budget[0] -= _MAX_LOG_RESULT_STRING_CHARS
-        return value[:_MAX_LOG_RESULT_STRING_CHARS] + "...[truncated]"
-    if isinstance(value, dict):
-        seen = set() if seen is None else seen
-        if id(value) in seen:
-            return "...[circular]"
-        seen.add(id(value))
-        try:
-            out = {}
-            for k, v in value.items():
-                out[k] = _bound_log_strings(v, seen, budget)
-                if budget[0] <= 0:
-                    out["...audit truncated"] = True
-                    break
-            return out
-        finally:
-            seen.discard(id(value))
-    if isinstance(value, list):
-        seen = set() if seen is None else seen
-        if id(value) in seen:
-            return "...[circular]"
-        seen.add(id(value))
-        try:
-            out = []
-            for v in value:
-                out.append(_bound_log_strings(v, seen, budget))
-                if budget[0] <= 0:
-                    out.append("...audit truncated")
-                    break
-            return out
-        finally:
-            seen.discard(id(value))
-    return value
 
 
 def _cap_log_result(result_dict) -> str:
@@ -285,15 +239,23 @@ def _cap_log_result(result_dict) -> str:
     The audit integrity verifier decodes this field with json.loads
     (audit_logger._decode_result_payload — malformed payloads raise
     SecurityError), so both paths must emit VALID JSON, not Python repr.
-    Serialization is streamed and aggregate-bounded so an oversized dict
-    never materializes in memory, and the fallback stays inside the cap: the
-    preview is sanitized of JSON-escapable characters BEFORE embedding, so
-    escaping cannot re-expand it (CodeRabbit on PR #351).
+    Serialization is streamed and aggregate-bounded (see
+    qwed_new.core.json_bounding) so an oversized dict never materializes in
+    memory, and the fallback stays strictly inside the cap: the envelope
+    length is reserved before slicing, the preview is sanitized of
+    non-printable and JSON-escapable characters, and ensure_ascii=False keeps
+    printable non-ASCII at 1 char each (CodeRabbit on PR #351).
     """
     parts = []
     total = 0
     try:
-        bounded = _bound_log_strings(result_dict)
+        bounded = bound_json_value(
+            result_dict,
+            max_string_chars=_MAX_LOG_RESULT_STRING_CHARS,
+            budget_chars=_LOG_BOUND_BUDGET_CHARS,
+            string_marker="...[truncated]",
+            budget_marker="...audit truncated",
+        )
         for chunk in json.JSONEncoder(default=str).iterencode(bounded):
             parts.append(chunk)
             total += len(chunk)
@@ -303,13 +265,14 @@ def _cap_log_result(result_dict) -> str:
         return json.dumps({"truncated": True, "unserializable": True})
     if total <= _MAX_LOG_RESULT_CHARS:
         return "".join(parts)
-    preview = "".join(parts)[:_MAX_LOG_RESULT_CHARS]
-    # strip control characters AND JSON-escapable characters before embedding:
-    # escaped control chars expand to 2-6 characters each (CodeRabbit on
-    # PR #351), so the sanitized preview keeps the fallback inside the cap
+    envelope = json.dumps({"truncated": True, "preview": ""})
+    preview = "".join(parts)[:(_MAX_LOG_RESULT_CHARS - len(envelope))]
+    # strip control characters AND JSON-escapable characters: with both gone,
+    # ensure_ascii=False encodes the preview exactly 1 char per char, so the
+    # stored payload is envelope + preview <= _MAX_LOG_RESULT_CHARS
     preview = "".join(ch if ch.isprintable() else "?" for ch in preview)
     preview = preview.replace("\\", "?").replace('"', "'")
-    return json.dumps({"truncated": True, "preview": preview})
+    return json.dumps({"truncated": True, "preview": preview}, ensure_ascii=False)
 
 
 _METRICS_OPERATOR_ENV_VAR = "QWED_METRICS_OPERATOR_USER_IDS"

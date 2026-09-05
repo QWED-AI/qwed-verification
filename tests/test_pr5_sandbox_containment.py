@@ -272,7 +272,8 @@ class TestLogResultCap:
 
         parsed = json.loads(capped)
         assert parsed["truncated"] is True
-        assert len(capped) < _MAX_LOG_RESULT_CHARS + 500
+        # envelope length reserved before slicing: strictly inside the cap
+        assert len(capped) <= _MAX_LOG_RESULT_CHARS
 
     def test_aggregate_traversal_budget_stops_cloning(self):
         """Greptile P1 on PR #351: many small values must not drive unbounded
@@ -282,6 +283,26 @@ class TestLogResultCap:
 
         assert len(capped) < _MAX_LOG_RESULT_CHARS * 3
         json.loads(capped)  # parseability
+
+    def test_printable_non_ascii_stays_bounded(self):
+        """CodeRabbit envelope follow-up: printable non-ASCII (emoji) escapes
+        to 12 chars under ensure_ascii — the fallback must still hold the
+        cap, so it encodes with ensure_ascii=False after sanitization."""
+        dr = {f"k{i}": "😀" * 2000 for i in range(100)}
+        capped = _cap_log_result(dr)
+
+        parsed = json.loads(capped)
+        assert parsed["truncated"] is True
+        assert len(capped) <= _MAX_LOG_RESULT_CHARS
+
+    def test_non_string_dict_key_does_not_discard_payload(self):
+        """CodeRabbit shared-helper note: a non-string key must not TypeError
+        the whole payload into the unserializable fallback."""
+        dr = {"status": "VERIFIED", 42: "answer"}
+        capped = _cap_log_result(dr)
+
+        parsed = json.loads(capped)
+        assert parsed["42"] == "answer"
 
     def test_oversized_output_stays_bounded(self):
         """The truncated-document path must stay bounded even when the
