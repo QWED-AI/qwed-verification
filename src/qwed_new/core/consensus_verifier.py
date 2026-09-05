@@ -15,6 +15,7 @@ from enum import Enum
 from decimal import Decimal
 import time
 import asyncio
+from decimal import Decimal
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
 
@@ -492,6 +493,16 @@ class ConsensusVerifier:
                     query
                 )
                 tasks.append((engine_name, task))
+            else:
+                # #352 review: a breaker-rejected engine must surface as an
+                # explicit, auditable BLOCKED result (QWED_RULES: degraded
+                # results stay explicit) — and WITHOUT extending breaker
+                # state, since a skipped request is not a new failure.
+                results.append(self._blocked_engine_result(
+                    engine_name, "circuit_open",
+                    "Engine excluded by open circuit breaker",
+                    record=False,
+                ))
         
         # Gather results with timeout
         results = []
@@ -510,7 +521,7 @@ class ConsensusVerifier:
                     # exclusion stops new submissions from queueing behind it.
                     results.append(self._blocked_engine_result(
                         engine_name, "timeout", "Timeout",
-                        latency_ms=int(timeout_seconds * 1000),
+                        latency_ms=float(Decimal(str(timeout_seconds)) * 1000),
                     ))
         except Exception as e:
             # Partial engine results are still usable for consensus calculation.
@@ -584,7 +595,7 @@ class ConsensusVerifier:
     # Execution Methods
     # =========================================================================
     
-    def _blocked_engine_result(self, engine_name: str, method: str, error: str, latency_ms: int = 0) -> EngineResult:
+    def _blocked_engine_result(self, engine_name: str, method: str, error: str, latency_ms: int = 0, record: bool = True) -> EngineResult:
         """Build a BLOCKED EngineResult and record it with the circuit breaker.
 
         #340: hung engines never complete, so without recording here the
@@ -601,7 +612,8 @@ class ConsensusVerifier:
             error=error,
             status="BLOCKED",
         )
-        self._record_engine_result(engine_name, blocked)
+        if record:
+            self._record_engine_result(engine_name, blocked)
         return blocked
 
     def _execute_parallel(self, query: str, engines: List[Tuple[str, Callable]]) -> List[EngineResult]:

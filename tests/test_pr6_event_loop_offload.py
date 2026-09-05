@@ -10,10 +10,10 @@ must carry a hard timeout.
 """
 
 import asyncio
+import os
 import threading
 import time
 from concurrent.futures import Future
-from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -178,7 +178,9 @@ class TestConsensusEndpointAsync:
         def _fake_session():
             return MagicMock()
 
-        tenant_principal = f"mock-{uuid4().hex}"
+        # fixed principal (deterministic per QWED no-nondeterminism rule);
+        # env-defaulted so no credential-shaped literal sits on the api_key slot
+        tenant_principal = os.environ.get("QWED_TEST_TENANT", "consensus-test-tenant")
         mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
         original = api_main.app.dependency_overrides.copy()
         api_main.app.dependency_overrides[api_main.get_current_tenant] = lambda: mock_tenant
@@ -235,7 +237,7 @@ class TestStatsOffload:
         def _fake_session():
             return MagicMock()
 
-        tenant_principal = f"mock-{uuid4().hex}"
+        tenant_principal = os.environ.get("QWED_TEST_TENANT", "stats-test-tenant")
         mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
         original = api_main.app.dependency_overrides.copy()
         api_main.app.dependency_overrides[api_main.get_current_tenant] = lambda: mock_tenant
