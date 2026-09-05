@@ -626,13 +626,16 @@ class ConsensusVerifier:
             # instead of recording a false breaker penalty (Sentry on
             # PR #352).
             await asyncio.sleep(0)
-        if not task.done():
-            if task.cancel() or task.cancelled():
-                return None, None, True
-            # cancel() returned False and the task is not cancelled: it
-            # finished in the race window between the done() check and the
-            # cancel request — harvest it below instead of misclassifying a
-            # healthy engine as a timeout.
+        if not task.done() and (task.cancel() or task.cancelled()):
+            return None, None, True
+        # asyncio.Future.cancel() returns False ONLY when the task is already
+        # done (unlike the wrapped concurrent.futures.Future, which reports
+        # False for running workers). So past this point the task is always
+        # finished: either it completed before the deadline-spent branch ran,
+        # or it landed in the race window between the done() check and the
+        # cancel request — either way it is harvested, never misclassified as
+        # a timeout against a healthy engine, and exception() can never hit a
+        # running future.
         if task.cancelled():
             return None, None, True
         exc = task.exception()

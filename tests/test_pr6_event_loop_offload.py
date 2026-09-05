@@ -723,4 +723,51 @@ class TestCancelRaceHarvest:
 
         result, failure, timed_out = asyncio.run(scenario())
         assert timed_out is True
-        assert result is None and failure is None
+        assert result is None
+        assert failure is None
+
+    def test_pending_executor_future_is_never_harvested(self):
+        """Sentry round-12 claim refuted: exception() is unreachable for a
+        still-running task. The tasks here are the asyncio WRAPPER futures
+        from run_in_executor, and asyncio.Future.cancel() returns False only
+        when already done — the False-on-RUNNING behavior belongs to the
+        wrapped concurrent.futures.Future, which _await_engine never cancels
+        directly. A pending task at the deadline-spent branch therefore always
+        takes the cancel/timeout path (no InvalidStateError)."""
+        verifier = _verifier(max_workers=1)
+        verifier._record_engine_result = MagicMock()
+        release = threading.Event()
+
+        async def scenario():
+            loop = asyncio.get_running_loop()
+            fut = loop.run_in_executor(
+                verifier._executor, lambda: release.wait(timeout=15),
+            )
+            try:
+                # deadline spent while the worker is genuinely still running
+                return await verifier._await_engine(fut, time.monotonic_ns() - 1)
+            finally:
+                release.set()
+
+        result, failure, timed_out = asyncio.run(scenario())
+        verifier._executor.shutdown(wait=False)
+        assert timed_out is True
+        assert result is None
+        assert failure is None
+
+    def test_asyncio_future_cancel_returns_false_only_when_done(self):
+        """Pins the stdlib invariant the harvest-after-cancel-false branch
+        relies on: cancel() is False iff the future is already done."""
+        async def scenario():
+            loop = asyncio.get_running_loop()
+            pending = loop.create_future()
+            done = loop.create_future()
+            done.set_result("x")
+            cancelled = loop.create_future()
+            cancelled.cancel()
+            return pending.cancel(), done.cancel(), cancelled.cancel()
+
+        pending_cancelled, done_cancelled, cancelled_cancelled = asyncio.run(scenario())
+        assert pending_cancelled is True
+        assert done_cancelled is False
+        assert cancelled_cancelled is False
