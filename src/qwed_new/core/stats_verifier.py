@@ -101,33 +101,6 @@ def _cap_observed_result(value: Any) -> Any:
     fully materialized despite the streaming cap), with a shared aggregate
     traversal budget (Greptile P1: many small values must not drive unbounded
     cloning), then serialization is streamed so an oversized structure never
-    fully materializes on the synchronous event-loop path.
-    """
-    try:
-        parts = []
-        total = 0
-        bounded = _bound_observed_strings(value, set(), [_MAX_OBSERVED_RESULT_JSON_CHARS * 2])
-        for chunk in json.JSONEncoder().iterencode(bounded):
-            parts.append(chunk)
-            total += len(chunk)
-            if total > _MAX_OBSERVED_RESULT_JSON_CHARS:
-                return {
-                    "truncated": True,
-                    "preview": ("".join(parts))[:_MAX_OBSERVED_RESULT_JSON_CHARS],
-                }
-    except (TypeError, ValueError, RecursionError):
-        return "<unserializable result>"
-    return value
-
-
-def _cap_observed_result(value: Any) -> Any:
-    """Return *value* unchanged when small; a bounded preview otherwise.
-
-    Strings are bounded BEFORE encoding (Greptile P2 on PR #351: iterencode
-    emits a string value as a single token, so an unbounded string would be
-    fully materialized despite the streaming cap), with a shared aggregate
-    traversal budget (Greptile P1: many small values must not drive unbounded
-    cloning), then serialization is streamed so an oversized structure never
     fully materializes on the synchronous event-loop path. The bounding
     traversal is shared with api.main's VerificationLog cap (Sonar: the two
     copies had already diverged).

@@ -16,7 +16,7 @@ Cognitive complexity is kept per-function (Sonar) by splitting the traversal
 into per-type helpers.
 """
 
-from typing import Any, List, Optional, Set
+from typing import Any, List, Set
 
 CYCLE_MARKER = "...[circular]"
 

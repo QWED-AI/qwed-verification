@@ -348,23 +348,23 @@ class SecureCodeExecutor:
         # post-creation lifecycle. One kwargs dict shared by both create calls
         # (CodeRabbit: a limit added to only one copy would silently miss the
         # pull-retry path).
-        create_kwargs = dict(
-            image=self.image,
-            command=cmd,
-            volumes={tmpdir: {'bind': '/workspace', 'mode': 'rw'}},
-            mem_limit=self.memory_limit,
-            cpu_period=100000,
-            cpu_quota=int(self.cpu_limit * 100000),
-            network_mode="none",  # No internet access
+        create_kwargs = {
+            "image": self.image,
+            "command": cmd,
+            "volumes": {tmpdir: {'bind': '/workspace', 'mode': 'rw'}},
+            "mem_limit": self.memory_limit,
+            "cpu_period": 100000,
+            "cpu_quota": int(self.cpu_limit * 100000),
+            "network_mode": "none",  # No internet access
             # #338: the daemon's default json-file driver is unbounded —
             # sandbox stdout grows on the daemon HOST, outside every
             # container resource limit, until the disk fills.
-            log_config=LogConfig(
+            "log_config": LogConfig(
                 type=LogConfig.types.JSON,
                 config={"max-size": "10m", "max-file": "1"},
             ),
-            pids_limit=self.pids_limit,
-        )
+            "pids_limit": self.pids_limit,
+        }
         try:
             container = self.client.containers.create(**create_kwargs)
         except docker.errors.ImageNotFound:
