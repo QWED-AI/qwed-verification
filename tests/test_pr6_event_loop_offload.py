@@ -326,7 +326,7 @@ class TestAsyncTimeoutBreaker:
         verifier._is_engine_available = lambda engine_name: True
 
         try:
-            result = asyncio.run(
+            asyncio.run(
                 verifier.verify_async("q", mode=cv.VerificationMode.SINGLE, timeout_seconds=0.4)
             )
         finally:
@@ -341,6 +341,36 @@ class TestAsyncTimeoutBreaker:
         assert "H1" in recorded  # ran past its budget
         assert "Q2" not in recorded  # never started — not at fault
 
+    def test_running_engine_recorded_even_when_wrapper_cancelled(self):
+        """Greptile P1 on PR #352: cancelling the asyncio wrapper SUCCEEDS
+        even while the worker thread runs — breaker recording must key on
+        started evidence, not wrapper state. With 2 workers both engines
+        start; the aggregate deadline expires and both must be recorded."""
+        verifier = _verifier(max_workers=2)
+        verifier._record_engine_result = MagicMock()
+        release = threading.Event()
+
+        def hung(q):
+            release.wait(timeout=15)
+
+        verifier._select_engines = lambda query, mode: [("H1", hung), ("H2", hung)]
+        verifier._is_engine_available = lambda engine_name: True
+
+        try:
+            result = asyncio.run(
+                verifier.verify_async("q", mode=cv.VerificationMode.SINGLE, timeout_seconds=0.4)
+            )
+        finally:
+            release.set()
+            verifier._executor.shutdown(wait=False)
+
+        recorded = [
+            c.args[1].engine_name
+            for c in verifier._record_engine_result.call_args_list
+            if c.args[1].status == "BLOCKED" and c.args[1].method == "timeout"
+        ]
+        assert set(recorded) == {"H1", "H2"}
+
     def test_async_aggregate_deadline_bounds_all_engines(self):
         """CodeRabbit on PR #352: sequential per-engine waits would stack
         (N hung engines x 30s). One aggregate deadline bounds the whole
@@ -352,7 +382,9 @@ class TestAsyncTimeoutBreaker:
         def hung_engine(q):
             release.wait(timeout=15)
 
-        verifier._select_engines = lambda query, mode: [("H1", hung_engine), ("H2", hung_engine)]
+        verifier._select_engines = lambda query, mode: [
+            ("H1", hung_engine), ("H2", hung_engine), ("H3", hung_engine),
+        ]
         verifier._is_engine_available = lambda engine_name: True
 
         start = time.monotonic()
@@ -365,9 +397,11 @@ class TestAsyncTimeoutBreaker:
             verifier._executor.shutdown(wait=False)
 
         elapsed = time.monotonic() - start
-        assert elapsed < 1.0  # aggregate, not 2 x 0.5 stacked
+        # aggregate = ~0.5s; stacked per-engine waits would be >= 1.5s — wide
+        # margins on both sides keep the assertion CI-safe
+        assert elapsed < 1.0
         blocked = [r for r in result.verification_chain if r.status == "BLOCKED"]
-        assert len(blocked) == 2
+        assert len(blocked) == 3
 
 
 class TestSyncCircuitOpen:
