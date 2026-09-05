@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -72,7 +72,7 @@ def test_consensus_endpoint_checks_rate_limit(client):
 
     with (
         patch("qwed_new.api.main.check_rate_limit") as mock_rate_limit,
-        patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake_result),
+        patch("qwed_new.api.main.consensus_verifier.verify_async", new_callable=AsyncMock, return_value=fake_result),
     ):
         response = client.post(
             "/verify/consensus",

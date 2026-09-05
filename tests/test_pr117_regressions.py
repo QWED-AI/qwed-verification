@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -264,7 +264,7 @@ def test_consensus_api_masks_secure_execution_block(client):
         total_latency_ms=5.0,
     )
 
-    with patch("qwed_new.api.main.consensus_verifier.verify_with_consensus", return_value=fake_result):
+    with patch("qwed_new.api.main.consensus_verifier.verify_async", new_callable=AsyncMock, return_value=fake_result):
         response = client.post(
             "/verify/consensus",
             json={"query": "2+2", "verification_mode": "high", "min_confidence": 0.95},

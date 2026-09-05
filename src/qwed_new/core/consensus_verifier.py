@@ -16,7 +16,11 @@ from decimal import Decimal
 import time
 import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
+
+# #340: hard per-engine wall-clock budget for the synchronous execution
+# paths (the async path enforces the same bound via asyncio.wait_for).
+_ENGINE_TIMEOUT_SECONDS = 30
 import threading
 
 from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
@@ -580,6 +584,26 @@ class ConsensusVerifier:
     # Execution Methods
     # =========================================================================
     
+    def _blocked_engine_result(self, engine_name: str, method: str, error: str) -> EngineResult:
+        """Build a BLOCKED EngineResult and record it with the circuit breaker.
+
+        #340: hung engines never complete, so without recording here the
+        breaker never opens and every tenant's consensus requests keep
+        degrading until restart.
+        """
+        blocked = EngineResult(
+            engine_name=engine_name,
+            method=method,
+            result=None,
+            confidence=0.0,
+            latency_ms=0,
+            success=False,
+            error=error,
+            status="BLOCKED",
+        )
+        self._record_engine_result(engine_name, blocked)
+        return blocked
+
     def _execute_parallel(self, query: str, engines: List[Tuple[str, Callable]]) -> List[EngineResult]:
         """Execute engines in parallel using thread pool."""
         results = []
@@ -590,23 +614,36 @@ class ConsensusVerifier:
                 future = self._executor.submit(method, query)
                 futures[future] = engine_name
         
-        for future in as_completed(futures, timeout=30):
-            engine_name = futures[future]
-            try:
-                result = future.result()
-                self._record_engine_result(engine_name, result)
-                results.append(result)
-            except Exception as e:
-                results.append(EngineResult(
-                    engine_name=engine_name,
-                    method="parallel_execution",
-                    result=None,
-                    confidence=0.0,
-                    latency_ms=0,
-                    success=False,
-                    error=str(e),
-                    status="BLOCKED",
-                ))
+        # #340: as_completed raises TimeoutError FROM the for statement —
+        # outside the inner try, so it escaped as an uncaught HTTP 500 after
+        # blocking the caller for the full timeout. Catch it, cancel the
+        # not-yet-started futures, and degrade to partial BLOCKED results.
+        try:
+            for future in as_completed(futures, timeout=_ENGINE_TIMEOUT_SECONDS):
+                engine_name = futures[future]
+                try:
+                    result = future.result()
+                    self._record_engine_result(engine_name, result)
+                    results.append(result)
+                except FutureTimeoutError:
+                    results.append(self._blocked_engine_result(
+                        engine_name, "parallel_timeout",
+                        f"Engine timed out after {_ENGINE_TIMEOUT_SECONDS}s",
+                    ))
+                except Exception as e:
+                    results.append(self._blocked_engine_result(
+                        engine_name, "parallel_execution", str(e),
+                    ))
+        except FutureTimeoutError:
+            for future, engine_name in futures.items():
+                # a started thread cannot be force-killed in Python; cancel
+                # reaches only the not-yet-started futures
+                future.cancel()
+                if engine_name not in {r.engine_name for r in results}:
+                    results.append(self._blocked_engine_result(
+                        engine_name, "parallel_timeout",
+                        f"Engine timed out after {_ENGINE_TIMEOUT_SECONDS}s",
+                    ))
         
         return results
     
@@ -614,22 +651,26 @@ class ConsensusVerifier:
         """Execute engines sequentially."""
         results = []
         
+        # #340: NEVER run an engine inline on the caller's thread — a
+        # synchronous engine call blocks the event loop for its full
+        # duration (unbounded for LLM round trips + sympy evaluation).
+        # Submit to the pool and wait with a hard per-engine timeout.
         for engine_name, method in engines:
             if self._is_engine_available(engine_name):
+                future = self._executor.submit(method, query)
                 try:
-                    result = method(query)
+                    result = future.result(timeout=_ENGINE_TIMEOUT_SECONDS)
                     self._record_engine_result(engine_name, result)
                     results.append(result)
+                except FutureTimeoutError:
+                    future.cancel()
+                    results.append(self._blocked_engine_result(
+                        engine_name, "sequential_timeout",
+                        f"Engine timed out after {_ENGINE_TIMEOUT_SECONDS}s",
+                    ))
                 except Exception as e:
-                    results.append(EngineResult(
-                        engine_name=engine_name,
-                        method="sequential_execution",
-                        result=None,
-                        confidence=0.0,
-                        latency_ms=0,
-                        success=False,
-                        error=str(e),
-                        status="BLOCKED",
+                    results.append(self._blocked_engine_result(
+                        engine_name, "sequential_execution", str(e),
                     ))
         
         return results
