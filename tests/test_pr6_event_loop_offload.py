@@ -9,14 +9,17 @@ daemon calls) must run off the event loop, and every Docker daemon API call
 must carry a hard timeout.
 """
 
+import asyncio
 import threading
 import time
+from concurrent.futures import Future
+from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from qwed_new.core import consensus_verifier as cv
-from qwed_new.core.consensus_verifier import ConsensusVerifier, VerificationMode  # noqa: F401
+from qwed_new.core.consensus_verifier import ConsensusVerifier
 from qwed_new.core.secure_code_executor import SecureCodeExecutor
 
 
@@ -32,19 +35,26 @@ class TestParallelTimeout:
     def test_parallel_timeout_degrades_to_blocked_not_500(self, monkeypatch):
         monkeypatch.setattr(cv, "_ENGINE_TIMEOUT_SECONDS", 0.5)
         verifier = _verifier(max_workers=2)
+        release = threading.Event()
 
         def fast_engine(q):
             return MagicMock(success=True, engine_name="Fast")
 
         def hung_engine(q):
-            time.sleep(10)
+            # controllable hang: released in cleanup so no worker outlives
+            # the test (Greptile P2 on PR #352)
+            release.wait(timeout=15)
             return MagicMock(success=True, engine_name="Hung")
 
         verifier._record_engine_result = MagicMock()
-        results = verifier._execute_parallel(
-            "q",
-            [("Fast", fast_engine), ("Hung", hung_engine)],
-        )
+        try:
+            results = verifier._execute_parallel(
+                "q",
+                [("Fast", fast_engine), ("Hung", hung_engine)],
+            )
+        finally:
+            release.set()
+            verifier._executor.shutdown(wait=False)
 
         names = {r.engine_name: r for r in results}
         assert names["Fast"].success is True
@@ -60,11 +70,17 @@ class TestParallelTimeout:
         try:
             verifier = _verifier(max_workers=1)
             verifier._record_engine_result = MagicMock()
+            release = threading.Event()
 
             def hung_engine(q):
-                time.sleep(10)
+                release.wait(timeout=15)
 
-            verifier._execute_parallel("q", [("Hung", hung_engine)])
+            try:
+                verifier._execute_parallel("q", [("Hung", hung_engine)])
+            finally:
+                release.set()
+                verifier._executor.shutdown(wait=False)
+
             blocked_calls = [
                 c for c in verifier._record_engine_result.call_args_list
                 if c.args[1].status == "BLOCKED"
@@ -75,26 +91,30 @@ class TestParallelTimeout:
 
     def test_parallel_pending_futures_cancelled_on_timeout(self, monkeypatch):
         """With a single worker, a hung running engine blocks the queue —
-        the second future is still NOT-STARTED and must be cancelled."""
+        the second future is still NOT-STARTED and must be cancelled.
+        Uses real Future objects: as_completed inspects internal state, not
+        done()/result() (CodeRabbit on PR #352)."""
         monkeypatch.setattr(cv, "_ENGINE_TIMEOUT_SECONDS", 0.5)
         verifier = _verifier(max_workers=1)
         verifier._record_engine_result = MagicMock()
 
-        cancel_probe = MagicMock()
-        cancel_probe.done.return_value = False
+        fast_future = Future()
+        fast_future.set_result(MagicMock(success=True, engine_name="Fast"))
+        cancel_probe = Future()  # never started: a pending, cancellable future
+
+        verifier._executor = MagicMock()
+        verifier._executor.submit.side_effect = [fast_future, cancel_probe]
 
         def hung_engine(q):
             time.sleep(10)
 
-        verifier._executor = MagicMock()
-        verifier._executor.submit.side_effect = [
-            MagicMock(done=lambda: False, result=lambda: MagicMock(success=True, engine_name="Fast"), cancel=MagicMock()),
-            cancel_probe,
-        ]
+        try:
+            verifier._execute_parallel("q", [("Fast", None), ("Hung", hung_engine)])
+        finally:
+            verifier._executor.shutdown(wait=False)
 
-        verifier._execute_parallel("q", [("Fast", None), ("Hung", hung_engine)])
-
-        cancel_probe.cancel.assert_called_once()
+        assert cancel_probe.cancelled()
+        assert fast_future.done()
 
 
 class TestSequentialOffload:
@@ -114,17 +134,23 @@ class TestSequentialOffload:
         results = verifier._execute_sequential("q", [("E", engine)])
 
         assert results[0].success is True
-        assert seen_threads and all(t != caller_thread for t in seen_threads)
+        assert seen_threads, "engine must have executed"
+        assert all(t != caller_thread for t in seen_threads)
 
     def test_sequential_timeout_degrades_to_blocked(self, monkeypatch):
         monkeypatch.setattr(cv, "_ENGINE_TIMEOUT_SECONDS", 0.3)
         verifier = _verifier(max_workers=1)
         verifier._record_engine_result = MagicMock()
+        release = threading.Event()
 
         def hung_engine(q):
-            time.sleep(10)
+            release.wait(timeout=15)
 
-        results = verifier._execute_sequential("q", [("Hung", hung_engine)])
+        try:
+            results = verifier._execute_sequential("q", [("Hung", hung_engine)])
+        finally:
+            release.set()
+            verifier._executor.shutdown(wait=False)
 
         assert results[0].success is False
         assert results[0].status == "BLOCKED"
@@ -152,7 +178,8 @@ class TestConsensusEndpointAsync:
         def _fake_session():
             return MagicMock()
 
-        mock_tenant = MagicMock(organization_id=1, api_key="sentinel")
+        tenant_principal = f"mock-{uuid4().hex}"
+        mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
         original = api_main.app.dependency_overrides.copy()
         api_main.app.dependency_overrides[api_main.get_current_tenant] = lambda: mock_tenant
         integrity = patch("qwed_new.api.main._enforce_environment_integrity", return_value=None)
@@ -208,7 +235,8 @@ class TestStatsOffload:
         def _fake_session():
             return MagicMock()
 
-        mock_tenant = MagicMock(organization_id=1, api_key="sentinel")
+        tenant_principal = f"mock-{uuid4().hex}"
+        mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
         original = api_main.app.dependency_overrides.copy()
         api_main.app.dependency_overrides[api_main.get_current_tenant] = lambda: mock_tenant
         integrity = patch("qwed_new.api.main._enforce_environment_integrity", return_value=None)
@@ -248,3 +276,30 @@ class TestDockerDaemonTimeout:
 
         fake_env.assert_called_once_with(timeout=30)
         assert executor.docker_available is True
+
+
+class TestAsyncTimeoutBreaker:
+    """#352 review: verify_async timeouts must record breaker failures —
+    hung engines otherwise stay eligible for every later request."""
+
+    def test_async_timeout_records_breaker_failure(self):
+        verifier = _verifier(max_workers=1)
+        verifier._record_engine_result = MagicMock()
+        verifier._select_engines = lambda query, mode: [("Hung", hung_engine)]
+        release = threading.Event()
+
+        def hung_engine(q):
+            release.wait(timeout=15)
+
+        try:
+            result = asyncio.run(
+                verifier.verify_async("q", mode=cv.VerificationMode.SINGLE, timeout_seconds=0.3)
+            )
+        finally:
+            release.set()
+            verifier._executor.shutdown(wait=False)
+
+        hung = [r for r in result.verification_chain if r.engine_name == "Hung"]
+        assert hung and hung[0].status == "BLOCKED" and hung[0].method == "timeout"
+        recorded = [c.args[1] for c in verifier._record_engine_result.call_args_list]
+        assert any(r.status == "BLOCKED" and r.method == "timeout" for r in recorded)

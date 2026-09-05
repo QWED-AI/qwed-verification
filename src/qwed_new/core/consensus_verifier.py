@@ -502,15 +502,15 @@ class ConsensusVerifier:
                     self._record_engine_result(engine_name, result)
                     results.append(result)
                 except asyncio.TimeoutError:
-                    results.append(EngineResult(
-                        engine_name=engine_name,
-                        method="timeout",
-                        result=None,
-                        confidence=0.0,
-                        latency_ms=timeout_seconds * 1000,
-                        success=False,
-                        error="Timeout",
-                        status="BLOCKED",
+                    # #352 review: the timeout MUST be recorded — hung engines
+                    # never complete, so without this the breaker never opens
+                    # and the engine stays eligible for every later request.
+                    # wait_for cancellation cannot stop a thread already
+                    # running in the pool; once the breaker opens, engine
+                    # exclusion stops new submissions from queueing behind it.
+                    results.append(self._blocked_engine_result(
+                        engine_name, "timeout", "Timeout",
+                        latency_ms=int(timeout_seconds * 1000),
                     ))
         except Exception as e:
             # Partial engine results are still usable for consensus calculation.
@@ -584,7 +584,7 @@ class ConsensusVerifier:
     # Execution Methods
     # =========================================================================
     
-    def _blocked_engine_result(self, engine_name: str, method: str, error: str) -> EngineResult:
+    def _blocked_engine_result(self, engine_name: str, method: str, error: str, latency_ms: int = 0) -> EngineResult:
         """Build a BLOCKED EngineResult and record it with the circuit breaker.
 
         #340: hung engines never complete, so without recording here the
@@ -596,7 +596,7 @@ class ConsensusVerifier:
             method=method,
             result=None,
             confidence=0.0,
-            latency_ms=0,
+            latency_ms=latency_ms,
             success=False,
             error=error,
             status="BLOCKED",
