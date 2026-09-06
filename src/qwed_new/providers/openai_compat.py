@@ -53,12 +53,13 @@ class OpenAICompatProvider(LLMProvider):
         client_api_key = self.api_key if self.api_key else "dummy"
 
         # #353: bound every wait — SDK default read timeout is 600s x
-        # retries (see openai_direct for the in-repo standard).
+        # retries; timeout=30 + one retry bounds worker occupancy at ~60s
+        # (CodeAnt on PR #354: retries stack on top of the timeout).
         self.client = OpenAI(
             base_url=self.base_url,
             api_key=client_api_key,
             timeout=30.0,
-            max_retries=2,
+            max_retries=0,
         )
 
     def _call_text(self, system: str, user_msg: str) -> str:

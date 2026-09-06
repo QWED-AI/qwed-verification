@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File, Form, Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 from typing import Optional, Annotated
@@ -65,6 +66,47 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class _BodySizeLimitMiddleware:
+    """#353 (CodeAnt + CodeRabbit on PR #354): the endpoint byte cap runs
+    AFTER FastAPI has received and spooled the whole multipart body, so by
+    itself it cannot stop disk exhaustion. Buffer the request stream here
+    and reply 413 before the app ever sees an oversized body — counting
+    received chunks, so Content-Length-less chunked uploads are bounded
+    too. The endpoint cap stays as the authoritative backstop."""
+
+    def __init__(self, app, max_bytes: int, path: str):
+        self.app = app
+        self.max_bytes = max_bytes
+        self.path = path
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["path"] != self.path:
+            await self.app(scope, receive, send)
+            return
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            body.extend(message.get("body", b""))
+            if len(body) > self.max_bytes:
+                response = JSONResponse(
+                    status_code=413,
+                    content={"detail": f"Upload exceeds the {self.max_bytes} byte limit for statistical verification."},
+                )
+                await response(scope, receive, send)
+                return
+            if not message.get("more_body", False):
+                break
+
+        async def replay_receive():
+            return {"type": "http.request", "body": bytes(body), "more_body": False}
+
+        await self.app(scope, replay_receive, send)
+
+
 
 # Include routers
 app.include_router(auth_router)
@@ -236,6 +278,11 @@ _LOG_BOUND_BUDGET_CHARS = 2 * _MAX_LOG_RESULT_CHARS
 # memory-bound on input size, so the upload is read under this cap and the
 # excess rejected (413) before any parse work starts.
 _MAX_STATS_UPLOAD_BYTES = 10_000_000
+# #353 (CodeAnt on PR #354): the byte cap bounds transfer, not the expanded
+# in-memory frame — bound rows x columns after the parse as well.
+_MAX_STATS_CELL_COUNT = 1_000_000
+
+app.add_middleware(_BodySizeLimitMiddleware, max_bytes=_MAX_STATS_UPLOAD_BYTES, path="/verify/stats")
 
 
 
@@ -459,6 +506,7 @@ async def verify_logic(
     responses={
         403: {"description": "Verification blocked by security policy."},
         503: {"description": "Secure execution runtime unavailable."},
+        413: {"description": "Upload exceeds the byte or expanded-cell limit for statistical verification."},
     },
 )
 async def verify_stats(
@@ -493,6 +541,14 @@ async def verify_stats(
         # attacker-sized upload), the blocking LLM codegen round trip, and
         # the Docker daemon calls must not run inline on the event loop.
         df = await asyncio.to_thread(pd.read_csv, io.BytesIO(upload))
+        # #353 (CodeAnt on PR #354): the byte cap bounds TRANSFER, not pandas
+        # memory — a compact CSV (many columns, expanded values) can become a
+        # much larger in-memory frame. Bound the expanded shape too.
+        if getattr(df, "size", 0) > _MAX_STATS_CELL_COUNT:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Uploaded dataset expands beyond the {_MAX_STATS_CELL_COUNT} cell limit for statistical verification.",
+            )
 
         from qwed_new.core.stats_verifier import StatsVerifier
         verifier = StatsVerifier()

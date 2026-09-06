@@ -50,6 +50,23 @@ def _engine_result(name: str, status: str = "VERIFIED") -> EngineResult:
     )
 
 
+
+def _install_stats_overrides(api_main, mock_tenant):
+    """FastAPI introspects the override callable's signature, so the
+    overrides must be zero-arg defs (CodeQL on PR #354 flagged the lambdas;
+    a MagicMock instance as the override breaks introspection -> 422)."""
+    def _tenant():
+        return mock_tenant
+
+    def _session():
+        return MagicMock()
+
+    original = api_main.app.dependency_overrides.copy()
+    api_main.app.dependency_overrides[api_main.get_current_tenant] = _tenant
+    api_main.app.dependency_overrides[api_main.get_session] = _session
+    return original
+
+
 class TestSympyComputeBounds:
     """#353: SymPy expands exact Integer powers eagerly — a 10-character
     expression (9**9**9**9) hung evalf() past 20s. Every gate here must
@@ -116,6 +133,34 @@ class TestSympyComputeBounds:
         assert safe_parse_expr(expr) is not None
 
     @pytest.mark.parametrize("expr", [
+        "100000^x",   # symbolic right operand: sympy-side pow stays lazy
+        "x^9^9",      # symbolic base: x**387420489 is created lazily
+        "2^x^9",
+    ])
+    def test_caret_chain_with_symbolic_operand_stays_lazy(self, expr):
+        # CodeAnt on PR #354: bounding every caret operand rejected valid
+        # lazy expressions; only fully-static chains are bounded
+        assert safe_parse_expr(expr) is not None
+
+    @pytest.mark.parametrize("expr", [
+        "2^(9^9)",      # explicit parens preserved by sympy: 2**(9**9)
+        "100000^9^9",   # left-assoc AST, right-assoc sympy: 100000**(9**9)
+    ])
+    def test_static_caret_reassociation_bombs_rejected(self, expr):
+        with pytest.raises(SafeParserError):
+            safe_parse_expr(expr)
+
+    @pytest.mark.parametrize("expr", [
+        "Integer(10001)",
+        "Rational(10001, 3)",
+        "Float(20000)",
+    ])
+    def test_constructor_calls_accept_large_values(self, expr):
+        # CodeAnt on PR #354: Integer/Float/Rational are cheap constructors;
+        # explosive arguments are caught by their own Pow/factorial checks
+        assert safe_parse_expr(expr) is not None
+
+    @pytest.mark.parametrize("expr", [
         "2**(1/0)",        # ZeroDivisionError inside the evaluator -> fail closed
         "2**(10.0**400)",  # float pow overflow inside the evaluator -> fail closed
     ])
@@ -142,9 +187,12 @@ class TestSympyComputeBounds:
 class TestProviderClientBounds:
     """#353: 5 of 7 LLM clients carried the SDK default read timeout
     (600s) x retries — a silently stalled endpoint occupied its engine
-    worker for ~30 minutes. Every client must carry the openai_direct
-    in-repo standard (timeout=30.0, max_retries=2). gemini_provider was
-    already bounded (request_options={'timeout': 30.0})."""
+    worker for ~30 minutes. Every client must carry timeout=30.0 with
+    retries DISABLED (CodeRabbit on PR #354: SDK retries stack on top of
+    the timeout with backoff — even one retry put worst-case worker
+    occupancy at ~60s, past the 30s consensus deadline; the caller owns
+    retry policy). gemini_provider was already bounded
+    (request_options={'timeout': 30.0})."""
 
     @pytest.mark.parametrize("provider_cls,env", [
         (OpenAIDirectProvider,
@@ -169,26 +217,21 @@ class TestProviderClientBounds:
             monkeypatch.setenv(key, value)
         provider = provider_cls()
         assert provider.client.timeout == 30.0
-        assert provider.client.max_retries == 2
+        assert provider.client.max_retries == 0
 
 
 class TestStatsUploadCap:
     """#353: read_csv on an uncapped upload is an unbounded CPU/memory wait
     inside the engine call path — the upload is read under a hard byte cap."""
 
-    def _client(self, api_main):
-        tenant_principal = os.environ.get("QWED_TEST_TENANT", "stats-cap-test-tenant")
-        mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
-        original = api_main.app.dependency_overrides.copy()
-        api_main.app.dependency_overrides[api_main.get_current_tenant] = lambda: mock_tenant
-        api_main.app.dependency_overrides[api_main.get_session] = lambda: MagicMock()
-        return original
 
     def test_oversized_upload_rejected_before_parse(self):
         from fastapi.testclient import TestClient
         from qwed_new.api import main as api_main
 
-        original = self._client(api_main)
+        tenant_principal = os.environ.get("QWED_TEST_TENANT", "stats-cap-test-tenant")
+        mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
+        original = _install_stats_overrides(api_main, mock_tenant)
         try:
             with patch("qwed_new.api.main.check_rate_limit"), \
                  patch("qwed_new.api.main._safe_commit_log"):
@@ -215,7 +258,7 @@ class TestStatsUploadCap:
         def fake_to_thread(fn, *args, **kwargs):
             if fn is pd.read_csv:
                 captured["source"] = args[0]
-                return "DF"
+                return pd.DataFrame({"col": [1, 2]})
             if fn.__name__ == "verify_stats":
                 return dr
             raise AssertionError(f"unexpected to_thread target: {fn}")
@@ -223,8 +266,7 @@ class TestStatsUploadCap:
         tenant_principal = os.environ.get("QWED_TEST_TENANT", "stats-cap-test-tenant")
         mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
         original = api_main.app.dependency_overrides.copy()
-        api_main.app.dependency_overrides[api_main.get_current_tenant] = lambda: mock_tenant
-        api_main.app.dependency_overrides[api_main.get_session] = lambda: MagicMock()
+        original = _install_stats_overrides(api_main, mock_tenant)
         patches = [
             patch("qwed_new.api.main.check_rate_limit"),
             patch("qwed_new.api.main._safe_commit_log"),
@@ -327,3 +369,156 @@ class TestBreakerOpenSubmitsNothing:
         assert by_name["Open"].status == "VERIFIED"
         # exactly one submission — the available engine only
         assert submits == [ok_engine]
+
+
+class TestStatsExpandedShapeCap:
+    """#353 (CodeAnt on PR #354): the byte cap bounds TRANSFER, not pandas
+    memory — a compact CSV can expand into a much larger in-memory frame.
+    The expanded rows x columns count is bounded after the parse."""
+
+    def test_oversized_expanded_frame_rejected_413(self):
+        import pandas as pd
+        from fastapi.testclient import TestClient
+        from qwed_new.api import main as api_main
+
+        expanded = MagicMock()
+        expanded.size = api_main._MAX_STATS_CELL_COUNT + 1
+
+        def fake_to_thread(fn, *args, **kwargs):
+            if fn is pd.read_csv:
+                return expanded
+            raise AssertionError(f"unexpected to_thread target: {fn}")
+
+        tenant_principal = os.environ.get("QWED_TEST_TENANT", "stats-cap-test-tenant")
+        mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
+        original = api_main.app.dependency_overrides.copy()
+        original = _install_stats_overrides(api_main, mock_tenant)
+        patches = [
+            patch("qwed_new.api.main.check_rate_limit"),
+            patch("qwed_new.api.main._safe_commit_log"),
+            patch("qwed_new.api.main._enforce_environment_integrity", return_value=None),
+            patch("qwed_new.api.main.asyncio.to_thread", side_effect=fake_to_thread),
+        ]
+        try:
+            for p in patches:
+                p.start()
+            client = TestClient(api_main.app, raise_server_exceptions=False)
+            response = client.post(
+                "/verify/stats",
+                files={"file": ("tiny.csv", b"col\n1\n")},
+                data={"query": "what is the mean"},
+            )
+        finally:
+            for p in patches:
+                p.stop()
+            api_main.app.dependency_overrides.clear()
+            api_main.app.dependency_overrides.update(original)
+        assert response.status_code == 413
+        assert "cell limit" in response.json()["detail"]
+
+    def test_frame_within_cell_budget_passes(self):
+        import pandas as pd
+        from fastapi.testclient import TestClient
+        from qwed_new.api import main as api_main
+        from qwed_new.core.diagnostics import DiagnosticResult
+
+        dr = DiagnosticResult.unverifiable("no claim detected", developer_fields={"is_valid": False})
+
+        def fake_to_thread(fn, *args, **kwargs):
+            if fn is pd.read_csv:
+                return pd.DataFrame({"col": [1, 2]})
+            if fn.__name__ == "verify_stats":
+                return dr
+            raise AssertionError(f"unexpected to_thread target: {fn}")
+
+        tenant_principal = os.environ.get("QWED_TEST_TENANT", "stats-cap-test-tenant")
+        mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
+        original = api_main.app.dependency_overrides.copy()
+        original = _install_stats_overrides(api_main, mock_tenant)
+        patches = [
+            patch("qwed_new.api.main.check_rate_limit"),
+            patch("qwed_new.api.main._safe_commit_log"),
+            patch("qwed_new.api.main._enforce_environment_integrity", return_value=None),
+            patch("qwed_new.api.main.asyncio.to_thread", side_effect=fake_to_thread),
+        ]
+        try:
+            for p in patches:
+                p.start()
+            client = TestClient(api_main.app, raise_server_exceptions=False)
+            response = client.post(
+                "/verify/stats",
+                files={"file": ("small.csv", b"col\n1\n2\n")},
+                data={"query": "what is the mean"},
+            )
+        finally:
+            for p in patches:
+                p.stop()
+            api_main.app.dependency_overrides.clear()
+            api_main.app.dependency_overrides.update(original)
+        assert response.status_code == 200
+
+
+class TestConcreteCallPropagation:
+    """#354 review (Greptile P1 + CodeRabbit): allowlisted calls evaluate
+    CONCRETE values that sympy expands eagerly — 2**abs(-100000) and
+    2**factorial(10000) used to slip past the exponent bound as 'symbolic'.
+    _static_value now evaluates them (bounded, fail-closed) so the bound
+    sees the real magnitude."""
+
+    @pytest.mark.parametrize("expr", [
+        "2**abs(-100000)",
+        "2**factorial(10000)",
+        "2**binomial(10**9, 2)",
+        "2**(1+abs(-100000))",
+    ])
+    def test_concrete_calls_in_exponent_position_rejected(self, expr):
+        with pytest.raises(SafeParserError):
+            safe_parse_expr(expr)
+
+    @pytest.mark.parametrize("expr", [
+        "2**factorial(5)",       # 120 — inside the bound
+        "2**abs(-100)",          # 100
+        "abs(-100000)",          # top-level value is not an expansion sink
+        "2**sin(2)",             # symbolic-argument call stays lazy
+        "2**abs(x)",             # allowlisted call over a symbolic arg
+        "2**Rational(10001, 3)", # exact Fraction magnitude inside the bound
+        "2**Rational(5000)",     # single-arg Rational constructor
+    ])
+    def test_bounded_or_symbolic_calls_still_parse(self, expr):
+        assert safe_parse_expr(expr) is not None
+
+    def test_decimal_pow_is_exact_at_the_boundary(self):
+        # CodeRabbit on PR #354: binary float rounding must not decide the
+        # bound. A COMPUTED value just over 10_000 is rejected...
+        with pytest.raises(SafeParserError):
+            safe_parse_expr("2**((100.0**2) + 2**(-20) + 1)")
+        # ...while a literal float that Python itself rounds to 10000.0 at
+        # parse time is genuinely 10000.0 (and a Float exponent means lazy
+        # mpmath on the sympy side — no exact expansion either way)
+        assert safe_parse_expr("2**(10000.0000000000001)") is not None
+
+
+class TestStaticEvaluatorEdgePaths:
+    """Edge paths of the #353 static evaluator (codecov patch coverage)."""
+
+    @pytest.mark.parametrize("expr", [
+        "2**((-1.0)**0.5)",    # Decimal pow -> complex -> InvalidOperation -> fail closed
+        "2**factorial(10**9)", # bounded factorial reports astronomical magnitude
+        "2**Rational(1, 2, 3)",  # arity error inside the evaluator -> fail closed
+    ])
+    def test_unresolvable_concrete_values_fail_closed(self, expr):
+        with pytest.raises(SafeParserError):
+            safe_parse_expr(expr)
+
+    @pytest.mark.parametrize("expr", [
+        "2**binomial(10, 3)",   # math.comb path: 120 — inside the bound
+        "Rational(10001)",      # single-arg Rational constructor
+        "2**sin(x)",            # symbolic-argument call stays exempt
+    ])
+    def test_resolvable_or_symbolic_calls_still_parse(self, expr):
+        assert safe_parse_expr(expr) is not None
+
+    def test_exact_comb_boundary_rejected(self):
+        # comb(20, 10) = 184756 — a concrete value past the exponent bound
+        with pytest.raises(SafeParserError):
+            safe_parse_expr("2**binomial(20, 10)")

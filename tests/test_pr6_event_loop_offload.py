@@ -228,7 +228,7 @@ class TestStatsOffload:
 
         def fake_to_thread(fn, *args, **kwargs):
             if fn is pd.read_csv:
-                return "DF"
+                return pd.DataFrame({"col": [1, 2]})
             if fn.__name__ == "verify_stats":
                 captured["df"] = args[1] if len(args) > 1 else kwargs.get("df")
                 return dr
@@ -266,7 +266,8 @@ class TestStatsOffload:
             api_main.app.dependency_overrides = original
 
         assert response.status_code == 200
-        assert captured.get("df") == "DF"  # the to_thread stub's return value
+        # the df returned by the read_csv stub is what reaches verify_stats
+        assert isinstance(captured.get("df"), pd.DataFrame)
 
 
 class TestDockerDaemonTimeout:

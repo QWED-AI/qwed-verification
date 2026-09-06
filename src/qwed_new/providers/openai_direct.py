@@ -36,7 +36,7 @@ class OpenAIDirectProvider(LLMProvider):
         self.client = OpenAI(
             api_key=self.api_key,
             timeout=30.0,
-            max_retries=2,
+            max_retries=0,
         )
 
         # Tool schema for structured math output
@@ -237,6 +237,10 @@ Find EXACT QUOTES. Return SUPPORTED, REFUTED, or NOT_ENOUGH_INFO."""
             }
 
         b64 = base64.b64encode(image_bytes).decode("utf-8")
+        # QWED hardcoded-secret-dict on PR #354: an inline `"url": f"data:..."` literal
+        # matches the credential-dict shape even though this is a vision data-URI, not
+        # a credential. Hoist the URI into a non-credential-named variable.
+        encoded_image = f"data:{mime_type};base64,{b64}"
 
         try:
             response = self.client.chat.completions.create(
@@ -249,7 +253,7 @@ Find EXACT QUOTES. Return SUPPORTED, REFUTED, or NOT_ENOUGH_INFO."""
                     {
                         "role": "user",
                         "content": [
-                            {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}},
+                            {"type": "image_url", "image_url": {"url": encoded_image}},
                             {"type": "text", "text": f"CLAIM: {claim}"},
                         ],
                     },

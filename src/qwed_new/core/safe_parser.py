@@ -39,8 +39,12 @@ and issues #329/#330 for the bypasses this structure closes.
 """
 
 import ast
+import math
+import operator
 import re
 import unicodedata
+from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 from typing import Any, Dict, Optional, Tuple
 
 import sympy
@@ -67,9 +71,12 @@ _AST_MAX_DEPTH = 30
 # expansion instead of trusting depth or length.
 _MAX_INTEGER_LITERAL = 10**300
 _MAX_EXPONENT_MAGNITUDE = 10_000
-# factorial/binomial/Integer/Float/Rational expand their exact-integer
-# arguments the same way Pow expands its exact-integer exponent.
-_EXACT_EXPANSION_CALLS = frozenset({"factorial", "binomial", "Integer", "Float", "Rational"})
+# factorial/binomial expand their exact-integer arguments the same way Pow
+# expands its exact-integer exponent. Integer/Float/Rational are cheap
+# constructors — an explosive ARGUMENT is itself a static Pow/factorial
+# subtree caught by its own node check (CodeAnt on PR #354: bounding them
+# rejected inexpensive inputs like Rational(10001, 3)).
+_EXACT_EXPANSION_CALLS = frozenset({"factorial", "binomial"})
 
 _DENYLIST_PATTERN = re.compile(
     r"(?:"
@@ -132,6 +139,96 @@ _ALLOWED_AST_NODES = frozenset(
 _SAFE_GLOBAL_DICT_TEMPLATE: Dict[str, Any] = {"__builtins__": {}}
 
 
+_BINOP_EVALUATORS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+}
+
+
+def _check_node_shape(node: ast.AST) -> None:
+    """Node-allowlist + numeric-constant shape check (#329/#330)."""
+    if type(node) not in _ALLOWED_AST_NODES:
+        raise SafeParserError(
+            f"Expression contains disallowed syntax: {type(node).__name__}. "
+            "Only arithmetic expressions are supported."
+        )
+    if isinstance(node, ast.Constant):
+        value = node.value
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise SafeParserError(
+                f"Expression contains disallowed constant of type "
+                f"{type(value).__name__}; only numeric literals are supported."
+            )
+
+
+def _check_constant_magnitude(node: ast.AST) -> None:
+    """A literal large enough to BE its own expansion cost is rejected."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) and abs(node.value) > _MAX_INTEGER_LITERAL:
+        raise SafeParserError(
+            "Expression contains an integer literal exceeding "
+            f"{_MAX_INTEGER_LITERAL}; exact expansion is unbounded."
+        )
+
+
+def _check_pow_cost(node: ast.AST) -> None:
+    """Bound statically-known ** exponents: sympy expands Integer**Integer
+    eagerly, so the exponent decides the cost."""
+    if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)):
+        return
+    exponent = _static_value(node.right)
+    if exponent is not None and abs(exponent) > _MAX_EXPONENT_MAGNITUDE:
+        raise SafeParserError(
+            f"Exponent exceeds the maximum magnitude of "
+            f"{_MAX_EXPONENT_MAGNITUDE}; exact-integer expansion "
+            "would be unbounded."
+        )
+
+
+def _check_caret_chain_cost(node: ast.AST) -> None:
+    """Bound caret chains: convert_xor maps ^ to ** in sympy-land, where **
+    is RIGHT-associative — but Python's ^ is LEFT-associative, so the
+    Python AST cannot know which operand ends up as an exponent: 9^9^9
+    parses as ((9^9)^9) here but evaluates as 9**(9**9) sympy-side.
+    Flatten the chain and bound every right-assoc suffix fold — each one
+    is an exponent after reassociation. A symbolic operand anywhere in the
+    chain keeps every enclosing power lazy on the sympy side, so
+    fully-static chains only."""
+    if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitXor)):
+        return
+    values = [_static_value(operand) for operand in _flatten_caret_chain(node)]
+    if None in values:
+        return
+    exponent = _right_assoc_fold(values[1:])
+    if exponent is not None and abs(exponent) > _MAX_EXPONENT_MAGNITUDE:
+        raise SafeParserError(
+            f"Caret-chain exponent exceeds the maximum magnitude of "
+            f"{_MAX_EXPONENT_MAGNITUDE}; ^ is parsed as right-associative "
+            "exponentiation by sympy."
+        )
+
+
+def _check_exact_expansion_call_cost(node: ast.AST) -> None:
+    """factorial/binomial expand their exact-integer arguments the same way
+    Pow expands its exact-integer exponent — bound those arguments even at
+    top level (the result there is not in an exponent position, but sympy
+    still materializes it exactly)."""
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id in _EXACT_EXPANSION_CALLS):
+        return
+    for arg in node.args:
+        value = _static_value(arg)
+        if value is not None and abs(value) > _MAX_EXPONENT_MAGNITUDE:
+            raise SafeParserError(
+                f"{node.func.id}() argument exceeds the maximum magnitude "
+                f"of {_MAX_EXPONENT_MAGNITUDE}; exact expansion would be "
+                "unbounded."
+            )
+
+
 def _check_ast_safety(expression: str) -> None:
     """Reject Python-parseable expressions that use non-arithmetic syntax,
     exceed max AST depth, or demand unbounded exact-integer expansion
@@ -151,124 +248,161 @@ def _check_ast_safety(expression: str) -> None:
             f"Expression AST depth {depth} exceeds limit of {_AST_MAX_DEPTH}"
         )
     for node in ast.walk(tree):
-        if type(node) not in _ALLOWED_AST_NODES:
-            raise SafeParserError(
-                f"Expression contains disallowed syntax: {type(node).__name__}. "
-                "Only arithmetic expressions are supported."
-            )
-        if isinstance(node, ast.Constant):
-            value = node.value
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise SafeParserError(
-                    f"Expression contains disallowed constant of type "
-                    f"{type(value).__name__}; only numeric literals are supported."
-                )
-            if isinstance(value, int) and abs(value) > _MAX_INTEGER_LITERAL:
-                # a literal this large IS its own expansion cost
-                raise SafeParserError(
-                    "Expression contains an integer literal exceeding "
-                    f"{_MAX_INTEGER_LITERAL}; exact expansion is unbounded."
-                )
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
-            exponent = _static_value(node.right)
-            if exponent is not None and abs(exponent) > _MAX_EXPONENT_MAGNITUDE:
-                raise SafeParserError(
-                    f"Exponent exceeds the maximum magnitude of "
-                    f"{_MAX_EXPONENT_MAGNITUDE}; exact-integer expansion "
-                    "would be unbounded."
-                )
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitXor):
-            # convert_xor maps ^ to ** in sympy-land, where ** is
-            # RIGHT-associative — but Python's ^ is LEFT-associative, so the
-            # Python AST cannot know which operand ends up as an exponent.
-            # Every operand of every ^ must therefore sit inside the bound
-            # (a symbolic operand stays exempt — handled lazily by sympy).
-            for operand in (node.left, node.right):
-                value = _static_value(operand)
-                if value is not None and abs(value) > _MAX_EXPONENT_MAGNITUDE:
-                    raise SafeParserError(
-                        f"Caret-chain operand exceeds the maximum magnitude "
-                        f"of {_MAX_EXPONENT_MAGNITUDE}; ^ is parsed as "
-                        "right-associative exponentiation by sympy."
-                    )
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
-                and node.func.id in _EXACT_EXPANSION_CALLS:
-            for arg in node.args:
-                value = _static_value(arg)
-                if value is not None and abs(value) > _MAX_EXPONENT_MAGNITUDE:
-                    raise SafeParserError(
-                        f"{node.func.id}() argument exceeds the maximum "
-                        f"magnitude of {_MAX_EXPONENT_MAGNITUDE}; exact "
-                        "expansion would be unbounded."
-                    )
+        _check_node_shape(node)
+        _check_constant_magnitude(node)
+        _check_pow_cost(node)
+        _check_caret_chain_cost(node)
+        _check_exact_expansion_call_cost(node)
 
 
 _ASTRONOMICAL = float("inf")
 
 
+def _flatten_caret_chain(node: ast.BinOp) -> list:
+    """Collect the operands of a caret chain into source order.
+
+    Python's ^ is left-assoc, so a chain nests on the left; explicit
+    parentheses are indistinguishable from chain nesting in the AST, so
+    flattening assumes the sympy-side worst case (right-assoc fold).
+    """
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitXor):
+        return _flatten_caret_chain(node.left) + _flatten_caret_chain(node.right)
+    return [node]
+
+
+def _static_pow(left, right):
+    """Exact-int pow behind an affordability gate — the evaluator must never
+    expand what it cannot afford (decide by digit estimate, not by trying).
+
+    Non-integer operands go through Decimal(str(...)), never binary float:
+    CodeRabbit on PR #354 — float(x) rounding let 10000.0000000000001 pass
+    the 10_000 admission bound as 10000.0. Decimal preserves the value the
+    user wrote; anything non-finite or unrepresentable fails closed.
+    """
+    if isinstance(left, int) and isinstance(right, int) \
+            and abs(right) <= _MAX_EXPONENT_MAGNITUDE \
+            and len(str(abs(left))) * abs(right) <= 100_000:
+        return left ** right
+    try:
+        result = Decimal(str(left)) ** Decimal(str(right))
+    except (ArithmeticError, InvalidOperation, TypeError, ValueError):
+        return _ASTRONOMICAL
+    if not result.is_finite():
+        return _ASTRONOMICAL
+    return result
+
+
+def _right_assoc_fold(values):
+    """Right-assoc static evaluation: v0 ** (v1 ** (...))."""
+    result = values[-1]
+    for value in reversed(values[:-1]):
+        result = _static_pow(value, result)
+    return result
+
+
+def _bounded_factorial(value):
+    if isinstance(value, float) or value < 0 or value > _MAX_EXPONENT_MAGNITUDE:
+        return _ASTRONOMICAL
+    return math.factorial(value)
+
+
+def _bounded_binomial(n, k):
+    if isinstance(n, float) or isinstance(k, float) \
+            or min(n, k) < 0 or max(n, k) > _MAX_EXPONENT_MAGNITUDE:
+        return _ASTRONOMICAL
+    return math.comb(n, k)
+
+
+def _rational(numerator, denominator=None):
+    if denominator is None:
+        return Fraction(numerator)
+    return Fraction(numerator, denominator)
+
+
+# Concrete-valued allowlisted calls: sympy evaluates these eagerly, so a
+# result in an exponent position is NOT symbolic and must be bounded
+# (Greptile P1 / CodeRabbit on PR #354: 2**abs(-100000) and
+# 2**factorial(10000) previously slipped through as 'symbolic').
+_STATIC_EVALUABLE_CALLS = {
+    "abs": abs,
+    "factorial": _bounded_factorial,
+    "binomial": _bounded_binomial,
+    "Integer": int,
+    "Float": float,
+    "Rational": _rational,
+}
+
+
+def _static_constant(node: ast.Constant):
+    if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+        return None
+    return node.value
+
+
+def _static_unary(node: ast.UnaryOp):
+    operand = _static_value(node.operand)
+    if operand is None:
+        return None
+    if isinstance(node.op, ast.USub):
+        return -operand
+    return operand  # UAdd — Invert never reaches here (node allowlist)
+
+
+def _static_binop(node: ast.BinOp):
+    left = _static_value(node.left)
+    right = _static_value(node.right)
+    if left is None or right is None:
+        return None
+    try:
+        if isinstance(node.op, (ast.Pow, ast.BitXor)):
+            # ^ counts as exponentiation on purpose: sympy's convert_xor
+            # turns it into **, so the sympy-side cost is the power cost.
+            return _static_pow(left, right)
+        evaluate = _BINOP_EVALUATORS.get(type(node.op))
+        if evaluate is None:
+            return None
+        return evaluate(left, right)
+    except (ArithmeticError, InvalidOperation, TypeError, ValueError):
+        # div-by-zero, Decimal/float mix, overflow — magnitude unknowable,
+        # fail closed
+        return _ASTRONOMICAL
+
+
+def _static_call(node: ast.Call):
+    """Evaluate allowlisted concrete-valued calls; symbolic-argument calls
+    (sin(x)...) and non-allowlisted names stay exempt (None = symbolic)."""
+    if not isinstance(node.func, ast.Name) or node.func.id not in _STATIC_EVALUABLE_CALLS:
+        return None
+    args = [_static_value(arg) for arg in node.args]
+    if any(value is None for value in args):
+        return None
+    try:
+        return _STATIC_EVALUABLE_CALLS[node.func.id](*args)
+    except (ArithmeticError, TypeError, ValueError):
+        return _ASTRONOMICAL
+
+
 def _static_value(node: ast.AST):
-    """Statically evaluate a subtree of numeric constants and arithmetic
-    operators, for the #353 computational-cost bounds.
+    """Statically evaluate a subtree of numeric constants, arithmetic
+    operators, and concrete-valued allowlisted calls, for the #353
+    computational-cost bounds.
 
-    Returns an int/float when the subtree is fully static, ``_ASTRONOMICAL``
-    when it is static but its exact value is intentionally NOT expanded
-    (magnitude provably beyond the evaluator's own expansion budget), and
-    ``None`` when anything non-static (a name or call) is present — the
-    caller fails closed on a static oversized value and lets symbolic
-    expressions through (sympy handles symbolic magnitudes lazily).
-
-    ``^`` (ast.BitXor) is treated as exponentiation on purpose: sympy's
-    convert_xor turns it into **, so the sympy-side cost is the power cost.
+    Returns an int/float/Decimal/Fraction when the subtree is fully static,
+    _ASTRONOMICAL when it is static but its exact value is intentionally
+    NOT expanded (magnitude beyond the evaluator's own expansion budget),
+    and None when anything symbolic (a name, or a call with symbolic
+    arguments) is present — the caller fails closed on a static oversized
+    value and lets symbolic expressions through (sympy handles symbolic
+    magnitudes lazily).
     """
     if isinstance(node, ast.Constant):
-        value = node.value
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return None
-        return value
+        return _static_constant(node)
     if isinstance(node, ast.UnaryOp):
-        operand = _static_value(node.operand)
-        if operand is None:
-            return None
-        if isinstance(node.op, ast.USub):
-            return -operand
-        if isinstance(node.op, ast.UAdd):
-            return operand
-        return None
+        return _static_unary(node)
     if isinstance(node, ast.BinOp):
-        left = _static_value(node.left)
-        right = _static_value(node.right)
-        if left is None or right is None:
-            return None
-        try:
-            if isinstance(node.op, (ast.Pow, ast.BitXor)):
-                # Never expand a power the evaluator cannot afford: decide
-                # by magnitude, expand only provably-small exact int pows.
-                # (Estimating from the operands' digit counts, NOT from
-                # their values, is what keeps this evaluator itself off the
-                # 9**9**9**9 bomb it exists to reject.)
-                if isinstance(left, int) and isinstance(right, int) \
-                        and abs(right) <= _MAX_EXPONENT_MAGNITUDE \
-                        and len(str(abs(left))) * abs(right) <= 100_000:
-                    return left ** right
-                if isinstance(left, float) or isinstance(right, float):
-                    # float pow flows through mpmath in sympy — no exact
-                    # expansion, so mirror it cheaply and let inf happen
-                    return float(left) ** float(right)
-                return _ASTRONOMICAL
-            if isinstance(node.op, ast.Add):
-                return left + right
-            if isinstance(node.op, ast.Sub):
-                return left - right
-            if isinstance(node.op, ast.Mult):
-                return left * right
-            if isinstance(node.op, ast.Div):
-                return left / right
-            if isinstance(node.op, ast.FloorDiv):
-                return left // right
-            if isinstance(node.op, ast.Mod):
-                return left % right
-        except (ZeroDivisionError, OverflowError, ValueError):
-            return _ASTRONOMICAL
+        return _static_binop(node)
+    if isinstance(node, ast.Call):
+        return _static_call(node)
     return None
 
 
