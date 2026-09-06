@@ -333,7 +333,6 @@ class TestPoolIsolationUnderHang:
 
 
 def asyncio_run_request(verifier, query, timeout_seconds):
-    import asyncio
     return asyncio.run(
         verifier.verify_async(query, mode=cv.VerificationMode.SINGLE, timeout_seconds=timeout_seconds)
     )
@@ -713,3 +712,63 @@ class TestUploadConcurrencyCap:
         baseline = api_main._BodySizeLimitMiddleware._in_flight
         asyncio.run(scenario())
         assert api_main._BodySizeLimitMiddleware._in_flight == baseline
+
+
+class TestBodyReadDeadline:
+    """#354 review (Greptile P1): the capacity slot is reserved before
+    authentication — a slow-loris upload must not hold it forever. The
+    whole body read is bounded by one wall-clock deadline; on expiry the
+    slot is released with a 408."""
+
+    def test_stalled_body_times_out_and_releases_slot(self):
+        from qwed_new.api import main as api_main
+
+        async def scenario():
+            async def slow_receive():
+                await asyncio.sleep(5)
+                return {"type": "http.request", "body": b"x", "more_body": False}
+
+            sent = []
+
+            async def send(message):
+                sent.append(message)
+
+            async def app(scope, receive, send):
+                raise AssertionError("app must not see a timed-out request")
+
+            middleware = api_main._BodySizeLimitMiddleware(
+                app, max_bytes=100, path="/verify/stats",
+                read_deadline_seconds=0.2,
+            )
+            scope = {"type": "http", "path": "/verify/stats"}
+            await middleware(scope, slow_receive, send)
+            return sent
+
+        sent = asyncio.run(scenario())
+        assert sent[0]["type"] == "http.response.start"
+        assert sent[0]["status"] == 408
+        assert api_main._BodySizeLimitMiddleware._in_flight == 0
+
+    def test_fast_body_completes_within_deadline(self):
+        from qwed_new.api import main as api_main
+
+        async def scenario():
+            async def fast_receive():
+                return {"type": "http.request", "body": b"col\n1\n", "more_body": False}
+
+            async def send(message):
+                pass
+
+            async def app(scope, receive, send):
+                await send({"type": "http.response.start", "status": 200})
+                await send({"type": "http.response.body", "body": b""})
+
+            middleware = api_main._BodySizeLimitMiddleware(
+                app, max_bytes=100, path="/verify/stats",
+                read_deadline_seconds=5.0,
+            )
+            scope = {"type": "http", "path": "/verify/stats"}
+            await middleware(scope, fast_receive, send)
+
+        asyncio.run(scenario())
+        assert api_main._BodySizeLimitMiddleware._in_flight == 0

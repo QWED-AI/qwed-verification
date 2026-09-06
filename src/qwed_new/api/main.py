@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import asyncio
 import os
 import logging
+import time
 from fractions import Fraction
 
 from qwed_new.core.security import redact_pii
@@ -76,10 +77,15 @@ class _BodySizeLimitMiddleware:
     _max_concurrent = 8
     _in_flight = 0
 
-    def __init__(self, app, max_bytes: int, path: str):
+    def __init__(self, app, max_bytes: int, path: str,
+                 read_deadline_seconds: float = 30.0):
         self.app = app
         self.max_bytes = max_bytes
         self.path = path
+        # Greptile P1 on PR #354: the capacity slot is reserved before
+        # authentication, so slow-loris uploads must not hold it forever —
+        # the whole body read is bounded by one wall-clock deadline.
+        self.read_deadline_seconds = read_deadline_seconds
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or scope["path"] != self.path:
@@ -102,8 +108,25 @@ class _BodySizeLimitMiddleware:
 
     async def _buffer_and_forward(self, scope, receive, send):
         body = bytearray()
+        deadline = time.monotonic() + self.read_deadline_seconds
         while True:
-            message = await receive()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                response = JSONResponse(
+                    status_code=408,
+                    content={"detail": "Request body not received in time."},
+                )
+                await response(scope, receive, send)
+                return
+            try:
+                message = await asyncio.wait_for(receive(), timeout=remaining)
+            except asyncio.TimeoutError:
+                response = JSONResponse(
+                    status_code=408,
+                    content={"detail": "Request body not received in time."},
+                )
+                await response(scope, receive, send)
+                return
             if message["type"] == "http.disconnect":
                 return
             body.extend(message.get("body", b""))
