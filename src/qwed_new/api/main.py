@@ -92,7 +92,16 @@ class _BodySizeLimitMiddleware:
             if not message.get("more_body", False):
                 break
 
-        async def replay_receive():  # NOSONAR: the ASGI receive contract requires a coroutine
+        # ASGI receive contract (Sentry on PR #354): the replayed body is
+        # delivered ONCE; later calls report disconnect, and the coroutine
+        # shape itself is required by the protocol (NOSONAR below).
+        replayed = False
+
+        async def replay_receive():  # NOSONAR
+            nonlocal replayed
+            if replayed:
+                return {"type": "http.disconnect"}
+            replayed = True
             return {"type": "http.request", "body": bytes(body), "more_body": False}
 
         await self.app(scope, replay_receive, send)
@@ -110,8 +119,6 @@ _MAX_STATS_CELL_COUNT = 1_000_000
 # larger body — give the BODY cap envelope headroom; the endpoint's file
 # cap stays the authoritative file-size boundary.
 _STATS_BODY_LIMIT_BYTES = _MAX_STATS_UPLOAD_BYTES + 65_536
-# rows per chunked read_csv batch — bounds peak parse allocation
-_STATS_CHUNK_ROWS = 50_000
 
 # Registered BEFORE CORSMiddleware: add_middleware is LIFO, so CORS must be
 # added last to stay outermost and stamp its headers onto the 413s this
@@ -559,7 +566,22 @@ async def verify_stats(
         # budget, so a compact-but-wide CSV cannot allocate an oversized
         # frame before the 413.
         def _read_bounded_csv(source):
-            reader = pd.read_csv(source, chunksize=_STATS_CHUNK_ROWS)
+            # CodeRabbit on PR #354: chunksize bounds ROWS, not columns —
+            # preflight the column count from the header and derive the
+            # rows-per-chunk budget so no single chunk can exceed the cell
+            # budget when pandas materializes it.
+            if hasattr(source, "seek"):
+                source.seek(0)
+            n_columns = len(pd.read_csv(source, nrows=0).columns)
+            if n_columns > _MAX_STATS_CELL_COUNT:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Uploaded dataset expands beyond the {_MAX_STATS_CELL_COUNT} cell limit for statistical verification.",
+                )
+            if hasattr(source, "seek"):
+                source.seek(0)
+            rows_per_chunk = max(1, _MAX_STATS_CELL_COUNT // n_columns)
+            reader = pd.read_csv(source, chunksize=rows_per_chunk)
             chunks = []
             total_cells = 0
             try:

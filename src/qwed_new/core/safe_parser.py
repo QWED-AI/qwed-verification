@@ -43,7 +43,7 @@ import math
 import operator
 import re
 import unicodedata
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from fractions import Fraction
 from typing import Any, Dict, Optional, Tuple
 
@@ -330,7 +330,7 @@ def _static_pow(left, right):
         return left ** right
     try:
         result = Decimal(str(left)) ** Decimal(str(right))
-    except (ArithmeticError, InvalidOperation, TypeError, ValueError):
+    except (ArithmeticError, TypeError, ValueError):
         return _ASTRONOMICAL
     if not result.is_finite():
         return _ASTRONOMICAL
@@ -407,7 +407,7 @@ def _static_binop(node: ast.BinOp):
         if evaluate is None:
             return None
         return evaluate(left, right)
-    except (ArithmeticError, InvalidOperation, TypeError, ValueError):
+    except (ArithmeticError, TypeError, ValueError):
         # div-by-zero, Decimal/float mix, overflow — magnitude unknowable,
         # fail closed
         return _ASTRONOMICAL

@@ -16,7 +16,6 @@ Coverage per criterion:
      default x retries), TestStatsUploadCap (read_csv on uncapped upload).
 """
 
-import io
 import os
 import threading
 import time
@@ -85,12 +84,17 @@ class TestSympyComputeBounds:
         # a power tower whose Python-AST nodes all look harmless
         "9^9^9",
     ])
-    def test_magnitude_bombs_rejected_without_expanding(self, bomb):
-        start = time.monotonic()
+    def test_magnitude_bombs_rejected_without_expanding(self, bomb, monkeypatch):
+        # deterministic guard (CodeRabbit on PR #354): the AST gate must
+        # reject BEFORE sympy's parser runs — if parse_expr is ever reached,
+        # the AssertionError is not a SafeParserError and the test fails
+        monkeypatch.setattr(
+            "qwed_new.core.safe_parser.parse_expr",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("parse_expr reached — compute-cost gate failed")),
+        )
         with pytest.raises(SafeParserError):
             safe_parse_expr(bomb)
-        # pre-fix these hung indefinitely; the guard must decide in ms
-        assert time.monotonic() - start < 5
 
     def test_large_integer_literal_rejected(self):
         with pytest.raises(SafeParserError):
@@ -393,12 +397,17 @@ class TestStatsExpandedShapeCap:
         tenant_principal = os.environ.get("QWED_TEST_TENANT", "stats-cap-test-tenant")
         mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
         original = _install_stats_overrides(api_main, mock_tenant)
+        def fake_read_csv(source, nrows=None, chunksize=None, **kwargs):
+            if nrows == 0:
+                return pd.DataFrame(columns=["col"])
+            return iter([expanded])
+
         patches = [
             patch("qwed_new.api.main.check_rate_limit"),
             patch("qwed_new.api.main._safe_commit_log"),
             patch("qwed_new.api.main._enforce_environment_integrity", return_value=None),
             patch("qwed_new.api.main.asyncio.to_thread", side_effect=fake_to_thread),
-            patch("pandas.read_csv", return_value=iter([expanded])),
+            patch("pandas.read_csv", side_effect=fake_read_csv),
         ]
         try:
             for p in patches:
@@ -435,12 +444,17 @@ class TestStatsExpandedShapeCap:
         tenant_principal = os.environ.get("QWED_TEST_TENANT", "stats-cap-test-tenant")
         mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
         original = _install_stats_overrides(api_main, mock_tenant)
+        def fake_read_csv(source, nrows=None, chunksize=None, **kwargs):
+            if nrows == 0:
+                return pd.DataFrame(columns=["col"])
+            return iter([pd.DataFrame({"col": [1, 2]})])
+
         patches = [
             patch("qwed_new.api.main.check_rate_limit"),
             patch("qwed_new.api.main._safe_commit_log"),
             patch("qwed_new.api.main._enforce_environment_integrity", return_value=None),
             patch("qwed_new.api.main.asyncio.to_thread", side_effect=fake_to_thread),
-            patch("pandas.read_csv", return_value=iter([pd.DataFrame({"col": [1, 2]})])),
+            patch("pandas.read_csv", side_effect=fake_read_csv),
         ]
         try:
             for p in patches:
@@ -537,11 +551,14 @@ class TestNestedPowerExpansionBudget:
         "(9**9**9)**2",          # the bomb lives in the base subtree
         "(10**60000)**2",        # 60001x2 digits > the 100k budget
     ])
-    def test_nested_power_bombs_rejected(self, expr):
-        start = time.monotonic()
+    def test_nested_power_bombs_rejected(self, expr, monkeypatch):
+        monkeypatch.setattr(
+            "qwed_new.core.safe_parser.parse_expr",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("parse_expr reached — compute-cost gate failed")),
+        )
         with pytest.raises(SafeParserError):
             safe_parse_expr(expr)
-        assert time.monotonic() - start < 5
 
     @pytest.mark.parametrize("expr", [
         "((9**9)**9)**9",     # 9^729 — tiny
@@ -549,3 +566,59 @@ class TestNestedPowerExpansionBudget:
     ])
     def test_nested_powers_inside_budget_still_parse(self, expr):
         assert safe_parse_expr(expr) is not None
+
+
+class TestWideCsvFirstChunkRegression:
+    """#354 review (CodeRabbit): chunksize bounds ROWS, not columns — a
+    compact-but-wide CSV can exceed the cell budget inside the FIRST chunk
+    pandas materializes. The reader preflights the column count, derives
+    rows-per-chunk from the cell budget, and aborts on the accumulated
+    count."""
+
+    def test_wide_csv_exceeding_budget_in_first_chunk_rejected_413(self):
+        import pandas as pd
+        from fastapi.testclient import TestClient
+        from qwed_new.api import main as api_main
+
+        wide_chunk = MagicMock()
+        wide_chunk.size = api_main._MAX_STATS_CELL_COUNT + 1
+
+        def fake_read_csv(source, nrows=None, chunksize=None, **kwargs):
+            if nrows == 0:
+                # compact header: 25 columns — budget-derived chunksize is
+                # large, but the materialized chunk blows the budget
+                return pd.DataFrame(columns=[f"c{i}" for i in range(25)])
+            assert chunksize == api_main._MAX_STATS_CELL_COUNT // 25
+            return iter([wide_chunk])
+
+        def fake_to_thread(fn, *args, **kwargs):
+            if fn.__name__ == "_read_bounded_csv":
+                return fn(*args, **kwargs)
+            raise AssertionError(f"unexpected to_thread target: {fn}")
+
+        tenant_principal = os.environ.get("QWED_TEST_TENANT", "stats-cap-test-tenant")
+        mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
+        original = _install_stats_overrides(api_main, mock_tenant)
+        patches = [
+            patch("qwed_new.api.main.check_rate_limit"),
+            patch("qwed_new.api.main._safe_commit_log"),
+            patch("qwed_new.api.main._enforce_environment_integrity", return_value=None),
+            patch("qwed_new.api.main.asyncio.to_thread", side_effect=fake_to_thread),
+            patch("pandas.read_csv", side_effect=fake_read_csv),
+        ]
+        try:
+            for p in patches:
+                p.start()
+            client = TestClient(api_main.app, raise_server_exceptions=False)
+            response = client.post(
+                "/verify/stats",
+                files={"file": ("wide.csv", b"c0,c1\n1,2\n")},
+                data={"query": "what is the mean"},
+            )
+        finally:
+            for p in patches:
+                p.stop()
+            api_main.app.dependency_overrides.clear()
+            api_main.app.dependency_overrides.update(original)
+        assert response.status_code == 413
+        assert "cell limit" in response.json()["detail"]
