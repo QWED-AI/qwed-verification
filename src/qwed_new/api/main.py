@@ -65,7 +65,16 @@ class _BodySizeLimitMiddleware:
     itself it cannot stop disk exhaustion. Buffer the request stream here
     and reply 413 before the app ever sees an oversized body — counting
     received chunks, so Content-Length-less chunked uploads are bounded
-    too. The endpoint cap stays as the authoritative backstop."""
+    too. The endpoint cap stays as the authoritative backstop.
+
+    Buffering happens BEFORE authentication, so concurrent unauthenticated
+    uploads could multiply the per-request memory cost (CodeRabbit on PR
+    #354: N x max_bytes against the pod limit). A process-wide in-flight
+    cap bounds the worst case to max_concurrent x max_bytes; ingress-level
+    connection caps stay an infrastructure concern."""
+
+    _max_concurrent = 8
+    _in_flight = 0
 
     def __init__(self, app, max_bytes: int, path: str):
         self.app = app
@@ -76,6 +85,22 @@ class _BodySizeLimitMiddleware:
         if scope["type"] != "http" or scope["path"] != self.path:
             await self.app(scope, receive, send)
             return
+        # single-event-loop counter: increments happen synchronously between
+        # awaits, so no lock is needed
+        if _BodySizeLimitMiddleware._in_flight >= _BodySizeLimitMiddleware._max_concurrent:
+            response = JSONResponse(
+                status_code=503,
+                content={"detail": "Upload capacity reached — retry shortly."},
+            )
+            await response(scope, receive, send)
+            return
+        _BodySizeLimitMiddleware._in_flight += 1
+        try:
+            await self._buffer_and_forward(scope, receive, send)
+        finally:
+            _BodySizeLimitMiddleware._in_flight -= 1
+
+    async def _buffer_and_forward(self, scope, receive, send):
         body = bytearray()
         while True:
             message = await receive()
@@ -93,8 +118,8 @@ class _BodySizeLimitMiddleware:
                 break
 
         # ASGI receive contract (Sentry on PR #354): the replayed body is
-        # delivered ONCE; later calls report disconnect, and the coroutine
-        # shape itself is required by the protocol (NOSONAR below).
+        # delivered ONCE; later calls report disconnect. The coroutine shape
+        # is required by the ASGI protocol — suppressed on the def line.
         replayed = False
 
         async def replay_receive():  # NOSONAR
@@ -521,6 +546,50 @@ async def verify_logic(
         _safe_commit_log(session, log)
         return _merge_response(dr)
 
+# #353 (CodeAnt + CodeRabbit on PR #354): the byte cap bounds TRANSFER,
+# not pandas memory — parse in chunks and abort the moment the accumulated
+# rows x columns cell count crosses the budget, so a compact-but-wide CSV
+# cannot allocate an oversized frame before the 413.
+def _read_bounded_csv(source):
+    # CodeRabbit on PR #354: chunksize bounds ROWS, not columns —
+    # preflight the column count from the header and derive the
+    # rows-per-chunk budget so no single chunk can exceed the cell
+    # budget when pandas materializes it.
+    import pandas as pd
+
+    if hasattr(source, "seek"):
+        source.seek(0)
+    n_columns = len(pd.read_csv(source, nrows=0).columns)
+    if n_columns > _MAX_STATS_CELL_COUNT:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Uploaded dataset expands beyond the {_MAX_STATS_CELL_COUNT} cell limit for statistical verification.",
+        )
+    if hasattr(source, "seek"):
+        source.seek(0)
+    rows_per_chunk = max(1, _MAX_STATS_CELL_COUNT // n_columns)
+    reader = pd.read_csv(source, chunksize=rows_per_chunk)
+    chunks = []
+    total_cells = 0
+    try:
+        for chunk in reader:
+            total_cells += int(chunk.size)
+            if total_cells > _MAX_STATS_CELL_COUNT:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Uploaded dataset expands beyond the {_MAX_STATS_CELL_COUNT} cell limit for statistical verification.",
+                )
+            chunks.append(chunk)
+    finally:
+        close = getattr(reader, "close", None)
+        if close is not None:
+            close()
+    if not chunks:
+        return pd.DataFrame()
+    return pd.concat(chunks, ignore_index=True)
+
+
+
 @app.post(
     "/verify/stats",
     responses={
@@ -565,42 +634,6 @@ async def verify_stats(
         # moment the accumulated rows x columns cell count crosses the
         # budget, so a compact-but-wide CSV cannot allocate an oversized
         # frame before the 413.
-        def _read_bounded_csv(source):
-            # CodeRabbit on PR #354: chunksize bounds ROWS, not columns —
-            # preflight the column count from the header and derive the
-            # rows-per-chunk budget so no single chunk can exceed the cell
-            # budget when pandas materializes it.
-            if hasattr(source, "seek"):
-                source.seek(0)
-            n_columns = len(pd.read_csv(source, nrows=0).columns)
-            if n_columns > _MAX_STATS_CELL_COUNT:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"Uploaded dataset expands beyond the {_MAX_STATS_CELL_COUNT} cell limit for statistical verification.",
-                )
-            if hasattr(source, "seek"):
-                source.seek(0)
-            rows_per_chunk = max(1, _MAX_STATS_CELL_COUNT // n_columns)
-            reader = pd.read_csv(source, chunksize=rows_per_chunk)
-            chunks = []
-            total_cells = 0
-            try:
-                for chunk in reader:
-                    total_cells += int(chunk.size)
-                    if total_cells > _MAX_STATS_CELL_COUNT:
-                        raise HTTPException(
-                            status_code=413,
-                            detail=f"Uploaded dataset expands beyond the {_MAX_STATS_CELL_COUNT} cell limit for statistical verification.",
-                        )
-                    chunks.append(chunk)
-            finally:
-                close = getattr(reader, "close", None)
-                if close is not None:
-                    close()
-            if not chunks:
-                return pd.DataFrame()
-            return pd.concat(chunks, ignore_index=True)
-
         df = await asyncio.to_thread(_read_bounded_csv, io.BytesIO(upload))
 
         from qwed_new.core.stats_verifier import StatsVerifier

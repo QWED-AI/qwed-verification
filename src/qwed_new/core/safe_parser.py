@@ -234,6 +234,23 @@ def _check_caret_chain_cost(node: ast.AST) -> None:
             f"{_MAX_EXPONENT_MAGNITUDE}; ^ is parsed as right-associative "
             "exponentiation by sympy."
         )
+    if exponent is None:
+        return
+    # Sentry CRITICAL on PR #354: the first operand's magnitude multiplies
+    # into the expansion cost exactly like a ** base — (9**9999)^9999 has a
+    # cheap inner power (9543 digits) and an in-bound exponent, yet sympy
+    # eagerly expands the ~95M-digit result. Same budget as **.
+    base = values[0]
+    if base == _ASTRONOMICAL:
+        raise SafeParserError(
+            "Caret-chain base exceeds the expansion budget; exact-integer "
+            "expansion would be unbounded."
+        )
+    if _magnitude_digits(base) * abs(exponent) > _MAX_EXPANSION_DIGITS:
+        raise SafeParserError(
+            f"Caret expansion would exceed the {_MAX_EXPANSION_DIGITS} "
+            "digit budget; exact-integer expansion is too costly."
+        )
 
 
 def _check_exact_expansion_call_cost(node: ast.AST) -> None:

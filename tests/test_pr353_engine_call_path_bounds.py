@@ -16,6 +16,7 @@ Coverage per criterion:
      default x retries), TestStatsUploadCap (read_csv on uncapped upload).
 """
 
+import asyncio
 import os
 import threading
 import time
@@ -622,3 +623,93 @@ class TestWideCsvFirstChunkRegression:
             api_main.app.dependency_overrides.update(original)
         assert response.status_code == 413
         assert "cell limit" in response.json()["detail"]
+
+
+class TestCaretBaseMagnitudeBudget:
+    """#354 review (Sentry CRITICAL): the caret chain's FIRST operand
+    multiplies into the expansion cost exactly like a ** base —
+    (9**9999)^9999 has a cheap 9543-digit inner power and an in-bound
+    exponent, yet sympy eagerly expands the ~95M-digit result."""
+
+    @pytest.mark.parametrize("expr", [
+        "(9**9999)^9999",   # 9543-digit base x 9999 >> the digit budget
+        "(9**9999)^99999",  # exponent itself over the bound
+    ])
+    def test_large_computed_caret_base_rejected(self, expr):
+        start = time.monotonic()
+        with pytest.raises(SafeParserError):
+            safe_parse_expr(expr)
+        assert time.monotonic() - start < 5
+
+    @pytest.mark.parametrize("expr", [
+        "(2**10)^10",    # 4-digit base x 10 = 40 digits
+        "(9**9999)^9",   # 9543 x 9 = ~86k digits — inside the budget
+    ])
+    def test_small_caret_expansions_still_parse(self, expr):
+        assert safe_parse_expr(expr) is not None
+
+
+class TestUploadConcurrencyCap:
+    """#354 review (CodeRabbit): buffering happens before authentication,
+    so concurrent unauthenticated uploads multiply the per-request memory
+    cost. The middleware gates in-flight buffered uploads process-wide."""
+
+    def test_over_concurrent_limit_rejected_without_buffering(self):
+        from qwed_new.api import main as api_main
+
+        async def scenario():
+            received = []
+
+            async def receive():
+                received.append(True)
+                return {"type": "http.request", "body": b"x", "more_body": False}
+
+            sent = []
+
+            async def send(message):
+                sent.append(message)
+
+            async def app(scope, receive, send):
+                raise AssertionError("app must not see a rejected request")
+
+            middleware = api_main._BodySizeLimitMiddleware(
+                app, max_bytes=100, path="/verify/stats",
+            )
+            scope = {"type": "http", "path": "/verify/stats"}
+            api_main._BodySizeLimitMiddleware._in_flight = (
+                api_main._BodySizeLimitMiddleware._max_concurrent
+            )
+            try:
+                await middleware(scope, receive, send)
+            finally:
+                api_main._BodySizeLimitMiddleware._in_flight = 0
+            return received, sent
+
+        received, sent = asyncio.run(scenario())
+        assert received == []                      # body never buffered
+        assert sent[0]["type"] == "http.response.start"
+        assert sent[0]["status"] == 503            # capacity, not policy
+
+    def test_in_flight_counter_released_after_request(self):
+        from qwed_new.api import main as api_main
+
+        async def scenario():
+            async def receive():
+                return {"type": "http.request", "body": b"col\n1\n", "more_body": False}
+
+            async def send(message):
+                pass
+
+            async def app(scope, receive, send):
+                await send({"type": "http.response.start", "status": 200})
+                await send({"type": "http.response.body", "body": b""})
+
+            middleware = api_main._BodySizeLimitMiddleware(
+                app, max_bytes=100, path="/verify/stats",
+            )
+            scope = {"type": "http", "path": "/verify/stats"}
+            await middleware(scope, receive, send)
+
+        baseline = api_main._BodySizeLimitMiddleware._in_flight
+        asyncio.run(scenario())
+        assert api_main._BodySizeLimitMiddleware._in_flight == baseline
