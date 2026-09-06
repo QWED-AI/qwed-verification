@@ -71,6 +71,7 @@ _AST_MAX_DEPTH = 30
 # expansion instead of trusting depth or length.
 _MAX_INTEGER_LITERAL = 10**300
 _MAX_EXPONENT_MAGNITUDE = 10_000
+_MAX_EXPANSION_DIGITS = 100_000
 # factorial/binomial expand their exact-integer arguments the same way Pow
 # expands its exact-integer exponent. Integer/Float/Rational are cheap
 # constructors — an explosive ARGUMENT is itself a static Pow/factorial
@@ -175,16 +176,40 @@ def _check_constant_magnitude(node: ast.AST) -> None:
 
 
 def _check_pow_cost(node: ast.AST) -> None:
-    """Bound statically-known ** exponents: sympy expands Integer**Integer
-    eagerly, so the exponent decides the cost."""
+    """Bound statically-known ** powers: sympy expands Integer**Integer
+    eagerly, so the exponent AND the base's own magnitude decide the cost."""
     if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)):
         return
+    base = _static_value(node.left)
     exponent = _static_value(node.right)
     if exponent is not None and abs(exponent) > _MAX_EXPONENT_MAGNITUDE:
         raise SafeParserError(
             f"Exponent exceeds the maximum magnitude of "
             f"{_MAX_EXPONENT_MAGNITUDE}; exact-integer expansion "
             "would be unbounded."
+        )
+    if base is None:
+        return
+    if base == _ASTRONOMICAL:
+        # the base subtree itself demands unbounded expansion
+        # (e.g. (9**9**9)**2 — the bomb lives in the base)
+        raise SafeParserError(
+            "Power base exceeds the expansion budget; exact-integer "
+            "expansion would be unbounded."
+        )
+    if exponent is None:
+        return  # symbolic exponent keeps the power lazy
+    # CodeRabbit on PR #354: sympy expands (Integer**Integer)**Integer
+    # STEPWISE, so nested powers multiply the base's magnitude into the
+    # cost — ((9**9)**9999)**9999 has every immediate exponent inside the
+    # bound yet still expands to a ~400M-digit integer. Estimate the
+    # result's digit count and hold it to the same budget the evaluator
+    # itself obeys.
+    base_digits = _magnitude_digits(base)
+    if base_digits * abs(exponent) > _MAX_EXPANSION_DIGITS:
+        raise SafeParserError(
+            f"Power expansion would exceed the {_MAX_EXPANSION_DIGITS} "
+            "digit budget; exact-integer expansion is too costly."
         )
 
 
@@ -258,6 +283,26 @@ def _check_ast_safety(expression: str) -> None:
 _ASTRONOMICAL = float("inf")
 
 
+def _magnitude_digits(value) -> int:
+    """Upper-bound digit count of |value| WITHOUT int->str conversion —
+    Python 3.11+ raises ValueError past 4300 digits, which would turn this
+    cost guard into the crash it exists to prevent. The bit-length estimate
+    may overshoot by a digit; that only makes the budget stricter."""
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            return _MAX_EXPANSION_DIGITS * 2
+        return max(value.adjusted() + 1, 1)
+    if isinstance(value, Fraction):
+        bits = abs(value.numerator).bit_length()
+    elif isinstance(value, float):
+        if not math.isfinite(value) or value == 0:
+            return _MAX_EXPANSION_DIGITS * 2
+        return max(int(math.log10(abs(value))) + 1, 1)
+    else:
+        bits = value.bit_length()
+    return max((bits * 30103) // 100000 + 1, 1)
+
+
 def _flatten_caret_chain(node: ast.BinOp) -> list:
     """Collect the operands of a caret chain into source order.
 
@@ -281,7 +326,7 @@ def _static_pow(left, right):
     """
     if isinstance(left, int) and isinstance(right, int) \
             and abs(right) <= _MAX_EXPONENT_MAGNITUDE \
-            and len(str(abs(left))) * abs(right) <= 100_000:
+            and _magnitude_digits(left) * abs(right) <= _MAX_EXPANSION_DIGITS:
         return left ** right
     try:
         result = Decimal(str(left)) ** Decimal(str(right))

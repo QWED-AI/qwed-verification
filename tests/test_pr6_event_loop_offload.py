@@ -227,8 +227,10 @@ class TestStatsOffload:
         captured = {}
 
         def fake_to_thread(fn, *args, **kwargs):
-            if fn is pd.read_csv:
-                return pd.DataFrame({"col": [1, 2]})
+            # _read_bounded_csv runs for real (tiny input); intercept the
+            # heavy verify_stats call only
+            if fn.__name__ == "_read_bounded_csv":
+                return fn(*args, **kwargs)
             if fn.__name__ == "verify_stats":
                 captured["df"] = args[1] if len(args) > 1 else kwargs.get("df")
                 return dr

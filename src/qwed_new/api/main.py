@@ -59,15 +59,6 @@ CORS_ORIGINS = [origin.strip() for origin in raw_cors_origins.split(",") if orig
 if not CORS_ORIGINS:
     logger.critical("QWED_CORS_ORIGINS must be configured")
     raise RuntimeError("QWED_CORS_ORIGINS must be configured")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
-    allow_credentials=CORS_ORIGINS != ["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 class _BodySizeLimitMiddleware:
     """#353 (CodeAnt + CodeRabbit on PR #354): the endpoint byte cap runs
     AFTER FastAPI has received and spooled the whole multipart body, so by
@@ -101,10 +92,41 @@ class _BodySizeLimitMiddleware:
             if not message.get("more_body", False):
                 break
 
-        async def replay_receive():
+        async def replay_receive():  # NOSONAR: the ASGI receive contract requires a coroutine
             return {"type": "http.request", "body": bytes(body), "more_body": False}
 
         await self.app(scope, replay_receive, send)
+
+
+# #353: hard byte cap on the /verify/stats upload. read_csv is CPU- and
+# memory-bound on input size, so the upload is read under this cap and the
+# excess rejected (413) before any parse work starts.
+_MAX_STATS_UPLOAD_BYTES = 10_000_000
+# #353 (CodeAnt on PR #354): the byte cap bounds transfer, not the expanded
+# in-memory frame — bound rows x columns after the parse as well.
+_MAX_STATS_CELL_COUNT = 1_000_000
+# #353 (Greptile P1 on PR #354): the body-limit middleware caps the whole
+# multipart envelope, so a documented-max 10MB CSV rides in a slightly
+# larger body — give the BODY cap envelope headroom; the endpoint's file
+# cap stays the authoritative file-size boundary.
+_STATS_BODY_LIMIT_BYTES = _MAX_STATS_UPLOAD_BYTES + 65_536
+# rows per chunked read_csv batch — bounds peak parse allocation
+_STATS_CHUNK_ROWS = 50_000
+
+# Registered BEFORE CORSMiddleware: add_middleware is LIFO, so CORS must be
+# added last to stay outermost and stamp its headers onto the 413s this
+# middleware short-circuits with (Sentry + Sonar on PR #354).
+app.add_middleware(_BodySizeLimitMiddleware, max_bytes=_STATS_BODY_LIMIT_BYTES, path="/verify/stats")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=CORS_ORIGINS != ["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 
 
 
@@ -274,15 +296,6 @@ _MAX_LOG_RESULT_STRING_CHARS = 1_000
 # copies had already diverged).
 _LOG_BOUND_BUDGET_CHARS = 2 * _MAX_LOG_RESULT_CHARS
 
-# #353: hard byte cap on the /verify/stats upload. read_csv is CPU- and
-# memory-bound on input size, so the upload is read under this cap and the
-# excess rejected (413) before any parse work starts.
-_MAX_STATS_UPLOAD_BYTES = 10_000_000
-# #353 (CodeAnt on PR #354): the byte cap bounds transfer, not the expanded
-# in-memory frame — bound rows x columns after the parse as well.
-_MAX_STATS_CELL_COUNT = 1_000_000
-
-app.add_middleware(_BodySizeLimitMiddleware, max_bytes=_MAX_STATS_UPLOAD_BYTES, path="/verify/stats")
 
 
 
@@ -540,15 +553,33 @@ async def verify_stats(
         # #341: the whole stats chain is synchronous — read_csv (CPU-bound,
         # attacker-sized upload), the blocking LLM codegen round trip, and
         # the Docker daemon calls must not run inline on the event loop.
-        df = await asyncio.to_thread(pd.read_csv, io.BytesIO(upload))
-        # #353 (CodeAnt on PR #354): the byte cap bounds TRANSFER, not pandas
-        # memory — a compact CSV (many columns, expanded values) can become a
-        # much larger in-memory frame. Bound the expanded shape too.
-        if getattr(df, "size", 0) > _MAX_STATS_CELL_COUNT:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Uploaded dataset expands beyond the {_MAX_STATS_CELL_COUNT} cell limit for statistical verification.",
-            )
+        # #353 (CodeAnt + CodeRabbit on PR #354): the byte cap bounds
+        # TRANSFER, not pandas memory — parse in chunks and abort the
+        # moment the accumulated rows x columns cell count crosses the
+        # budget, so a compact-but-wide CSV cannot allocate an oversized
+        # frame before the 413.
+        def _read_bounded_csv(source):
+            reader = pd.read_csv(source, chunksize=_STATS_CHUNK_ROWS)
+            chunks = []
+            total_cells = 0
+            try:
+                for chunk in reader:
+                    total_cells += int(chunk.size)
+                    if total_cells > _MAX_STATS_CELL_COUNT:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"Uploaded dataset expands beyond the {_MAX_STATS_CELL_COUNT} cell limit for statistical verification.",
+                        )
+                    chunks.append(chunk)
+            finally:
+                close = getattr(reader, "close", None)
+                if close is not None:
+                    close()
+            if not chunks:
+                return pd.DataFrame()
+            return pd.concat(chunks, ignore_index=True)
+
+        df = await asyncio.to_thread(_read_bounded_csv, io.BytesIO(upload))
 
         from qwed_new.core.stats_verifier import StatsVerifier
         verifier = StatsVerifier()

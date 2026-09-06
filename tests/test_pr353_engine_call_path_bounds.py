@@ -256,16 +256,17 @@ class TestStatsUploadCap:
         captured = {}
 
         def fake_to_thread(fn, *args, **kwargs):
-            if fn is pd.read_csv:
-                captured["source"] = args[0]
-                return pd.DataFrame({"col": [1, 2]})
+            # the bounded reader runs for real (tiny input); intercept the
+            # heavy verify_stats call only
+            if fn.__name__ == "_read_bounded_csv":
+                return fn(*args, **kwargs)
             if fn.__name__ == "verify_stats":
+                captured["df"] = args[1] if len(args) > 1 else kwargs.get("df")
                 return dr
             raise AssertionError(f"unexpected to_thread target: {fn}")
 
         tenant_principal = os.environ.get("QWED_TEST_TENANT", "stats-cap-test-tenant")
         mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
-        original = api_main.app.dependency_overrides.copy()
         original = _install_stats_overrides(api_main, mock_tenant)
         patches = [
             patch("qwed_new.api.main.check_rate_limit"),
@@ -288,7 +289,7 @@ class TestStatsUploadCap:
             api_main.app.dependency_overrides.clear()
             api_main.app.dependency_overrides.update(original)
         assert response.status_code == 200
-        assert isinstance(captured.get("source"), io.BytesIO)
+        assert isinstance(captured.get("df"), pd.DataFrame)
 
 
 class TestPoolIsolationUnderHang:
@@ -385,19 +386,19 @@ class TestStatsExpandedShapeCap:
         expanded.size = api_main._MAX_STATS_CELL_COUNT + 1
 
         def fake_to_thread(fn, *args, **kwargs):
-            if fn is pd.read_csv:
-                return expanded
+            if fn.__name__ == "_read_bounded_csv":
+                return fn(*args, **kwargs)
             raise AssertionError(f"unexpected to_thread target: {fn}")
 
         tenant_principal = os.environ.get("QWED_TEST_TENANT", "stats-cap-test-tenant")
         mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
-        original = api_main.app.dependency_overrides.copy()
         original = _install_stats_overrides(api_main, mock_tenant)
         patches = [
             patch("qwed_new.api.main.check_rate_limit"),
             patch("qwed_new.api.main._safe_commit_log"),
             patch("qwed_new.api.main._enforce_environment_integrity", return_value=None),
             patch("qwed_new.api.main.asyncio.to_thread", side_effect=fake_to_thread),
+            patch("pandas.read_csv", return_value=iter([expanded])),
         ]
         try:
             for p in patches:
@@ -425,21 +426,21 @@ class TestStatsExpandedShapeCap:
         dr = DiagnosticResult.unverifiable("no claim detected", developer_fields={"is_valid": False})
 
         def fake_to_thread(fn, *args, **kwargs):
-            if fn is pd.read_csv:
-                return pd.DataFrame({"col": [1, 2]})
+            if fn.__name__ == "_read_bounded_csv":
+                return fn(*args, **kwargs)
             if fn.__name__ == "verify_stats":
                 return dr
             raise AssertionError(f"unexpected to_thread target: {fn}")
 
         tenant_principal = os.environ.get("QWED_TEST_TENANT", "stats-cap-test-tenant")
         mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
-        original = api_main.app.dependency_overrides.copy()
         original = _install_stats_overrides(api_main, mock_tenant)
         patches = [
             patch("qwed_new.api.main.check_rate_limit"),
             patch("qwed_new.api.main._safe_commit_log"),
             patch("qwed_new.api.main._enforce_environment_integrity", return_value=None),
             patch("qwed_new.api.main.asyncio.to_thread", side_effect=fake_to_thread),
+            patch("pandas.read_csv", return_value=iter([pd.DataFrame({"col": [1, 2]})])),
         ]
         try:
             for p in patches:
@@ -522,3 +523,29 @@ class TestStaticEvaluatorEdgePaths:
         # comb(20, 10) = 184756 — a concrete value past the exponent bound
         with pytest.raises(SafeParserError):
             safe_parse_expr("2**binomial(20, 10)")
+
+
+class TestNestedPowerExpansionBudget:
+    """#354 review (CodeRabbit): sympy expands (Integer**Integer)**Integer
+    STEPWISE, so nested powers multiply the base's magnitude into the cost —
+    ((9**9)**9999)**9999 has every IMMEDIATE exponent inside the 10_000
+    bound yet still expands to a ~400M-digit integer. The base's estimated
+    expansion cost is bound to the same digit budget."""
+
+    @pytest.mark.parametrize("expr", [
+        "((9**9)**9999)**9999",  # every immediate exponent <= 10_000
+        "(9**9**9)**2",          # the bomb lives in the base subtree
+        "(10**60000)**2",        # 60001x2 digits > the 100k budget
+    ])
+    def test_nested_power_bombs_rejected(self, expr):
+        start = time.monotonic()
+        with pytest.raises(SafeParserError):
+            safe_parse_expr(expr)
+        assert time.monotonic() - start < 5
+
+    @pytest.mark.parametrize("expr", [
+        "((9**9)**9)**9",     # 9^729 — tiny
+        "(10**9000)**2",      # 18002 digits — inside the budget
+    ])
+    def test_nested_powers_inside_budget_still_parse(self, expr):
+        assert safe_parse_expr(expr) is not None
