@@ -14,6 +14,12 @@
 #   updates; these entries only cover non-vulnerable routine updates.
 # - open-pull-requests-limit 5 mirrors qwed-security's dependabot config.
 # - no `allow` restrictions: majors included, CI + review judge them.
+# - no cargo entry (deliberate): Dependabot version updates for Cargo
+#   require a committed Cargo.lock and sdk-rust/ has none (library crate
+#   without one). Re-add the entry once Cargo.lock exists — generating it
+#   is one command on any machine with Rust: `cd sdk-rust &&
+#   cargo generate-lockfile`. Go needs no such file (its module graph
+#   resolves from go.mod — proven by merged PR #18 with no go.sum).
 version: 2
 updates:
   - package-ecosystem: "pip"
@@ -49,18 +55,6 @@ updates:
     open-pull-requests-limit: 5
     groups:
       go-deps:
-        patterns:
-          - "*"
-
-  - package-ecosystem: "cargo"
-    directory: "/sdk-rust"
-    schedule:
-      interval: "monthly"
-      time: "06:00"
-      timezone: "UTC"
-    open-pull-requests-limit: 5
-    groups:
-      cargo-deps:
         patterns:
           - "*"
 
