@@ -776,3 +776,81 @@ class TestBodyReadDeadline:
 
         asyncio.run(scenario())
         assert api_main._BodySizeLimitMiddleware._in_flight == 0
+
+
+class TestMiddlewareEdgeCases:
+    """#354 review round 9 (Sentry): trailing-slash path normalization and
+    the zero-column CSV guard."""
+
+    def test_trailing_slash_path_still_limited(self):
+        from fastapi.testclient import TestClient
+        from qwed_new.api import main as api_main
+
+        tenant_principal = os.environ.get("QWED_TEST_TENANT", "stats-cap-test-tenant")
+        mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
+        original = _install_stats_overrides(api_main, mock_tenant)
+        patches = [
+            patch("qwed_new.api.main.check_rate_limit"),
+            patch("qwed_new.api.main._safe_commit_log"),
+        ]
+        try:
+            for p in patches:
+                p.start()
+            client = TestClient(api_main.app, raise_server_exceptions=False)
+            response = client.post(
+                "/verify/stats/",
+                files={"file": ("big.csv", b"x" * (api_main._MAX_STATS_UPLOAD_BYTES + 1))},
+                data={"query": "what is the mean"},
+            )
+        finally:
+            for p in patches:
+                p.stop()
+            api_main.app.dependency_overrides.clear()
+            api_main.app.dependency_overrides.update(original)
+        assert response.status_code == 413
+
+    def test_zero_column_csv_rejected_400(self):
+        import pandas as pd
+        from fastapi.testclient import TestClient
+        from qwed_new.api import main as api_main
+
+        empty_columns = MagicMock()
+        empty_columns.columns = []
+        empty_columns.size = 0
+
+        def fake_read_csv(source, nrows=None, chunksize=None, **kwargs):
+            if nrows == 0:
+                return empty_columns
+            return iter([empty_columns])
+
+        def fake_to_thread(fn, *args, **kwargs):
+            if fn.__name__ == "_read_bounded_csv":
+                return fn(*args, **kwargs)
+            raise AssertionError(f"unexpected to_thread target: {fn}")
+
+        tenant_principal = os.environ.get("QWED_TEST_TENANT", "stats-cap-test-tenant")
+        mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
+        original = _install_stats_overrides(api_main, mock_tenant)
+        patches = [
+            patch("qwed_new.api.main.check_rate_limit"),
+            patch("qwed_new.api.main._safe_commit_log"),
+            patch("qwed_new.api.main._enforce_environment_integrity", return_value=None),
+            patch("qwed_new.api.main.asyncio.to_thread", side_effect=fake_to_thread),
+            patch("pandas.read_csv", side_effect=fake_read_csv),
+        ]
+        try:
+            for p in patches:
+                p.start()
+            client = TestClient(api_main.app, raise_server_exceptions=False)
+            response = client.post(
+                "/verify/stats",
+                files={"file": ("empty.csv", b"\n\n")},
+                data={"query": "what is the mean"},
+            )
+        finally:
+            for p in patches:
+                p.stop()
+            api_main.app.dependency_overrides.clear()
+            api_main.app.dependency_overrides.update(original)
+        assert response.status_code == 400
+        assert "no columns" in response.json()["detail"]

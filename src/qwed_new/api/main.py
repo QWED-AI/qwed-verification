@@ -88,7 +88,11 @@ class _BodySizeLimitMiddleware:
         self.read_deadline_seconds = read_deadline_seconds
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope["path"] != self.path:
+        # normalize the trailing slash: FastAPI redirects /verify/stats/
+        # but the server still receives and spools the WHOLE body before
+        # the redirect, so the guard must match both forms (Sentry on
+        # PR #354)
+        if scope["type"] != "http" or scope["path"].rstrip("/") != self.path:
             await self.app(scope, receive, send)
             return
         # single-event-loop counter: increments happen synchronously between
@@ -583,6 +587,13 @@ def _read_bounded_csv(source):
     if hasattr(source, "seek"):
         source.seek(0)
     n_columns = len(pd.read_csv(source, nrows=0).columns)
+    if n_columns == 0:
+        # Sentry LOW on PR #354: a malformed CSV parsed as zero columns
+        # would otherwise ZeroDivisionError into a generic 500
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded CSV has no columns to verify.",
+        )
     if n_columns > _MAX_STATS_CELL_COUNT:
         raise HTTPException(
             status_code=413,
