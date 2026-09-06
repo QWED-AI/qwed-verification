@@ -1,4 +1,4 @@
-﻿name: CodSpeed Benchmarks
+name: CodSpeed Benchmarks
 
 on:
   push:
@@ -17,10 +17,10 @@ jobs:
     name: Run benchmarks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -31,7 +31,7 @@ jobs:
           pip install pytest-codspeed
 
       - name: Run benchmarks
-        uses: CodSpeedHQ/action@9d332c4d90b43981c3e55ae8e38e68709996240f  # v4.17.0
+        uses: CodSpeedHQ/action@373d6868929f444bc08d901fd0eb0ad52a8875ea  # v5.2.1
         with:
           mode: simulation
           run: pytest tests/benchmarks/ --codspeed
