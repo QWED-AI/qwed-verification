@@ -854,3 +854,35 @@ class TestMiddlewareEdgeCases:
             api_main.app.dependency_overrides.update(original)
         assert response.status_code == 400
         assert "no columns" in response.json()["detail"]
+
+    def test_empty_upload_rejected_400(self):
+        # Greptile P2 on PR #354: empty and blank-only uploads raise
+        # pandas EmptyDataError before the column guard — they must be a
+        # 400, not the broad handler's generic BLOCKED 200
+        from fastapi.testclient import TestClient
+        from qwed_new.api import main as api_main
+
+        tenant_principal = os.environ.get("QWED_TEST_TENANT", "stats-cap-test-tenant")
+        mock_tenant = MagicMock(organization_id=1, api_key=tenant_principal)
+        original = _install_stats_overrides(api_main, mock_tenant)
+        patches = [
+            patch("qwed_new.api.main.check_rate_limit"),
+            patch("qwed_new.api.main._safe_commit_log"),
+        ]
+        try:
+            for p in patches:
+                p.start()
+            client = TestClient(api_main.app, raise_server_exceptions=False)
+            for payload in (b"", b"\n\n\n"):
+                response = client.post(
+                    "/verify/stats",
+                    files={"file": ("empty.csv", payload)},
+                    data={"query": "what is the mean"},
+                )
+                assert response.status_code == 400, payload
+                assert "no data" in response.json()["detail"]
+        finally:
+            for p in patches:
+                p.stop()
+            api_main.app.dependency_overrides.clear()
+            api_main.app.dependency_overrides.update(original)

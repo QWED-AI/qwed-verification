@@ -586,7 +586,18 @@ def _read_bounded_csv(source):
 
     if hasattr(source, "seek"):
         source.seek(0)
-    n_columns = len(pd.read_csv(source, nrows=0).columns)
+    # Greptile P2 on PR #354: empty and blank-only uploads raise
+    # EmptyDataError BEFORE any column exists — a 400 here, not the broad
+    # handler's generic BLOCKED 200, is what tells clients the input was
+    # malformed
+    try:
+        header = pd.read_csv(source, nrows=0)
+    except pd.errors.EmptyDataError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded CSV contains no data.",
+        ) from exc
+    n_columns = len(header.columns)
     if n_columns == 0:
         # Sentry LOW on PR #354: a malformed CSV parsed as zero columns
         # would otherwise ZeroDivisionError into a generic 500
