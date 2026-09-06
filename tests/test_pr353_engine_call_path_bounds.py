@@ -634,11 +634,15 @@ class TestCaretBaseMagnitudeBudget:
         "(9**9999)^9999",   # 9543-digit base x 9999 >> the digit budget
         "(9**9999)^99999",  # exponent itself over the bound
     ])
-    def test_large_computed_caret_base_rejected(self, expr):
-        start = time.monotonic()
+    def test_large_computed_caret_base_rejected(self, expr, monkeypatch):
+        # deterministic: the AST gate must reject BEFORE sympy parsing
+        monkeypatch.setattr(
+            "qwed_new.core.safe_parser.parse_expr",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("parse_expr reached — compute-cost gate failed")),
+        )
         with pytest.raises(SafeParserError):
             safe_parse_expr(expr)
-        assert time.monotonic() - start < 5
 
     @pytest.mark.parametrize("expr", [
         "(2**10)^10",    # 4-digit base x 10 = 40 digits

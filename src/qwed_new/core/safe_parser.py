@@ -206,7 +206,9 @@ def _check_pow_cost(node: ast.AST) -> None:
     # result's digit count and hold it to the same budget the evaluator
     # itself obeys.
     base_digits = _magnitude_digits(base)
-    if base_digits * abs(exponent) > _MAX_EXPANSION_DIGITS:
+    # exact arithmetic: an exponent may be a float — int x float would
+    # decide the admission bound in binary floating-point (CodeRabbit)
+    if base_digits * _exact_magnitude(abs(exponent)) > _MAX_EXPANSION_DIGITS:
         raise SafeParserError(
             f"Power expansion would exceed the {_MAX_EXPANSION_DIGITS} "
             "digit budget; exact-integer expansion is too costly."
@@ -246,7 +248,7 @@ def _check_caret_chain_cost(node: ast.AST) -> None:
             "Caret-chain base exceeds the expansion budget; exact-integer "
             "expansion would be unbounded."
         )
-    if _magnitude_digits(base) * abs(exponent) > _MAX_EXPANSION_DIGITS:
+    if _magnitude_digits(base) * _exact_magnitude(abs(exponent)) > _MAX_EXPANSION_DIGITS:
         raise SafeParserError(
             f"Caret expansion would exceed the {_MAX_EXPANSION_DIGITS} "
             "digit budget; exact-integer expansion is too costly."
@@ -298,6 +300,16 @@ def _check_ast_safety(expression: str) -> None:
 
 
 _ASTRONOMICAL = float("inf")
+
+
+def _exact_magnitude(value):
+    """Admission-comparison operand: floats convert via Decimal(str(...))
+    so the bound never runs in binary float (CodeRabbit on PR #354);
+    int/Decimal/Fraction pass through exactly (Fraction compares exactly
+    against ints — Decimal(str(Fraction)) would be ConversionSyntax)."""
+    if isinstance(value, float):
+        return Decimal(str(value))
+    return value
 
 
 def _magnitude_digits(value) -> int:
