@@ -39,8 +39,10 @@ class AzureOpenAIProvider(LLMProvider):
             
         # #353: SDK default read timeout is 600s x retries — a silently
         # stalled endpoint would occupy its engine worker for ~30 minutes.
-        # timeout=30 + one retry bounds worker occupancy at ~60s (CodeAnt
-        # on PR #354: retries stack on top of the timeout).
+        # timeout=30 with retries DISABLED — worst-case worker occupancy
+        # is one 30s attempt (CodeAnt/CodeRabbit on PR #354: SDK retry
+        # backoff stacks on top of the timeout and extends past the
+        # consensus deadline; the caller owns retry policy).
         self.client = AzureOpenAI(
             api_version=self.api_version,
             azure_endpoint=self.endpoint,

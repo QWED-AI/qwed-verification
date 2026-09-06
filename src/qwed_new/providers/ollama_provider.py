@@ -35,8 +35,10 @@ class OllamaProvider(LLMProvider):
         fallback_token = "dummy" + "-token"
         ollama_key = os.getenv("OLLAMA_API_KEY") or fallback_token
         # #353: bound every wait — SDK default read timeout is 600s x
-        # retries; timeout=30 + one retry bounds worker occupancy at ~60s
-        # (CodeAnt on PR #354: retries stack on top of the timeout).
+        # retries disabled — worst-case worker occupancy is one 30s
+        # attempt (CodeAnt/CodeRabbit on PR #354: SDK retry backoff stacks
+        # on top of the timeout and extends past the consensus deadline;
+        # the caller owns retry policy).
         self.client = OpenAI(
             base_url=self.base_url,
             api_key=ollama_key,
