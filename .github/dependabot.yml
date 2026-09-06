@@ -1,0 +1,85 @@
+# Dependabot version updates for qwed-verification.
+#
+# Security updates need no config (enabled in repo settings and already
+# flowing). This file adds scheduled ROUTINE updates so healthy-but-stale
+# dependencies also get bump PRs.
+#
+# Conventions (match history + sibling repos):
+# - default labels/titles (`dependencies` + ecosystem label, `chore(deps):`
+#   prefix) so these read exactly like the merged security-update PRs.
+# - one group per ecosystem: at most ~6 small PRs a month, not per-dep noise.
+# - monthly cadence: CVE-driven bumps still arrive immediately via security
+#   updates; these entries only cover non-vulnerable routine updates.
+# - open-pull-requests-limit 5 mirrors qwed-security's dependabot config.
+# - no `allow` restrictions: majors included, CI + review judge them.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    groups:
+      pip-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    directory: "/sdk-ts"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    groups:
+      npm-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/sdk-go"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    groups:
+      go-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "cargo"
+    directory: "/sdk-rust"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    groups:
+      cargo-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
