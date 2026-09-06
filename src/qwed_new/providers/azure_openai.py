@@ -9,6 +9,19 @@ from openai import AzureOpenAI
 from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.providers.base import LLMProvider
 
+def _detect_image_mime(image_bytes: bytes) -> str:
+    """Magic-byte MIME detection for vision data URIs, mirroring
+    openai_direct (Sentry HIGH on PR #354: the data URI previously
+    hardcoded image/jpeg, mislabeling PNG/WebP images routed to Azure)."""
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if image_bytes.startswith(b"RIFF") and len(image_bytes) > 12 and image_bytes[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
+
+
 class AzureOpenAIProvider(LLMProvider):
     """
     Provider for Azure OpenAI (GPT-4).
@@ -466,7 +479,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             # f"data:..."` literal matches the credential-dict shape even
             # though this is a vision data-URI, not a credential. Hoist the
             # URI into a non-credential-named variable.
-            encoded_image = f"data:image/jpeg;base64,{base64_image}"
+            encoded_image = f"data:{_detect_image_mime(image_bytes)};base64,{base64_image}"
             response = self.client.chat.completions.create(
                 model=self.deployment, # Ensure this deployment supports vision (e.g. gpt-4o)
                 messages=[

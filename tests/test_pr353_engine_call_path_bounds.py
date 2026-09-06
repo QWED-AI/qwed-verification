@@ -886,3 +886,19 @@ class TestMiddlewareEdgeCases:
                 p.stop()
             api_main.app.dependency_overrides.clear()
             api_main.app.dependency_overrides.update(original)
+
+
+class TestAzureImageMimeDetection:
+    """#354 review (Sentry HIGH): the Azure vision data URI hardcoded
+    image/jpeg — PNG/WebP images routed to Azure were mislabeled.
+    _detect_image_mime mirrors openai_direct's magic-byte detection."""
+
+    @pytest.mark.parametrize("magic,want", [
+        (bytes([0xff, 0xd8, 0xff]), "image/jpeg"),
+        (bytes([0x89]) + b"PNG" + bytes([0x0d, 0x0a, 0x1a, 0x0a]), "image/png"),
+        (b"RIFF" + b"1234" + b"WEBP", "image/webp"),
+        (b"not-an-image", "image/jpeg"),  # unknown formats keep the legacy default
+    ])
+    def test_magic_byte_detection(self, magic, want):
+        from qwed_new.providers.azure_openai import _detect_image_mime
+        assert _detect_image_mime(magic + b"payload") == want
