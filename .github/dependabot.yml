@@ -1,0 +1,93 @@
+# Dependabot version updates for qwed-verification.
+#
+# Security updates need no config (enabled in repo settings and already
+# flowing). This file adds scheduled ROUTINE updates so healthy-but-stale
+# dependencies also get bump PRs.
+#
+# Conventions (match history + sibling repos):
+# - default labels/titles: Dependabot's own defaults already produce the
+#   `dependencies` + ecosystem labels and `chore(deps):` prefix seen on the
+#   merged security-update PRs, so nothing is set explicitly here.
+# - one group per ecosystem: at most ~6 small PRs a month, not per-dep noise.
+# - monthly cadence runs on the 1st (Dependabot ignores `day` for monthly
+#   schedules): CVE-driven bumps still arrive immediately via security
+#   updates; these entries only cover non-vulnerable routine updates.
+# - open-pull-requests-limit 5 mirrors qwed-security's dependabot config.
+# - no `allow` restrictions: majors included, CI + review judge them.
+# - cargo needs no committed lockfile: the fetcher requires only
+#   Cargo.toml (`required_files_in?`) and includes Cargo.lock only when
+#   present (`fetch_file_if_present`), so manifest-only sdk-rust/ still
+#   gets routine updates (verified against dependabot-core main).
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    groups:
+      pip-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    directory: "/sdk-ts"
+    schedule:
+      interval: "monthly"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    groups:
+      npm-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/sdk-go"
+    schedule:
+      interval: "monthly"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    groups:
+      go-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "cargo"
+    directory: "/sdk-rust"
+    schedule:
+      interval: "monthly"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    groups:
+      cargo-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    groups:
+      docker-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    groups:
+      github-actions-deps:
+        patterns:
+          - "*"
