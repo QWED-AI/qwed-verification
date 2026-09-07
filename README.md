@@ -38,20 +38,18 @@
 
 ---
 
-## Release Update: v7.1.0 — Verification Context v1.0 Rollout
+## Release Update: v7.2.0 — Security Hardening Batch + Precision Advisory
 
-`v7.1.0` ships the **Verification Context (VC) v1.0** — the external, interoperable layer on top of `DiagnosticResult`. Verification methods continue to return `DiagnosticResult`; a schema-validated, canonically-encoded, tamper-evident verification document describing *what* was verified, against *what* evidence, under *which* interpretation, with *what* admission decision is produced on demand via the explicit `to_verification_context()` conversion.
+`v7.2.0` is a fail-closed hardening release: expression/auth/sandbox/event-loop security fixes that restore intended behavior, plus one additive capability — an advisory flag for binary floating-point constants in math/stats verification (`precision.advisory`). No breaking wire changes.
 
-- **VC v1.0 spec + ontology (ADR-001..005, #301–#302)** — object of verification, verification context, truth-vs-admission separation, formalization boundary, and root of trust are formally defined
-- **`VerificationContext` model + JSON schema (#308)** — 4-layer document (interpretation / proof / evidence / decision) with RFC 8785 canonical JSON encoding, UTF-16 key ordering, and fail-closed schema validation
-- **Public `proof_ref` generation / resolution (#309)** — content-bound SHA-256 reference generation and resolver exposed as public API
-- **Bridge: `verification_context_from_diagnostic_result()` (#310)** — converts `DiagnosticResult` → VC document; StatsVerifier is the first mapped verifier
-- **SDK / API / CLI exposure (#311)** — VC surfaces across the API routes, CLI, and SDK
-- **Docker action VC outputs (#313)** — the containerized GitHub Action now emits `verdict`, `admission`, `proof_ref`, and `verification_context` outputs
-- **SDK re-exports (#315)** — all VC types re-exported from `qwed_sdk`
-- **`to_verification_context()` on all 13 verifiers (#316)** — full engine coverage; conversion is explicit and returns a `VerificationContextDocument` from a `DiagnosticResult`
+- **Expression & math safety (#329, #330, #344, #346)** — `safe_parse_expr` RCE fixes (NFKC bypass, denylist bypass), structural hardening, math-output gate
+- **Auth hardening (#333, #334, #345)** — KDF removed from pre-auth path, bcrypt offloaded, `/auth/*` throttling
+- **Sandbox containment (#335, #338, #339, #351)** — AST gate bypass closed, container leaks fixed, result read-back bounded
+- **Event-loop safety (#340, #341, #352, #354)** — consensus/stats offloaded, translator smuggling closed, engine waits bounded
+- **Precision advisory (#347, #348)** — new additive flag for binary float constants
+- **Dependency modernization (#355–#361)** — scheduled Dependabot updates; z3 5.x, sqlglot 30.x, Python 3.14 image, reqwest 0.13, esbuild CVE override
 
-> This is an **additive** minor release — no breaking wire changes; existing wire contracts remain unchanged. If you're upgrading from `v7.0.0`, the new VC surface is available but nothing you relied on changed behavior.
+> This is a **minor** release — one additive capability plus fixes; existing wire contracts remain unchanged. If you're upgrading from `v7.1.0`, review the [changelog](CHANGELOG.md) for the security fixes that apply to your deployment.
 
 If you're upgrading from `v6.0.x`, review the [changelog](CHANGELOG.md) for the full migration notes.
 
