@@ -44,6 +44,7 @@
         "README.md"
     ],
     "overrides": {
-        "minimatch": "9.0.9"
+        "minimatch": "9.0.9",
+        "esbuild": ">=0.28.1 <0.29.0"
     }
 }
