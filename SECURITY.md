@@ -50,6 +50,13 @@ We ask that you:
 
 We value the security community and will publicly credit vulnerability reporters who responsibly disclose issues and do not request anonymity. Credit may be given in release notes, advisories, or repository security history.
 
+### Acknowledgments
+
+We thank the following researchers for responsibly disclosed findings fixed in our releases (all credits accepted by the reporters; see the linked advisories):
+
+- **Sebastion Höpfl (@Sebastion, sebastiondev) via Foundation Machines** — authenticated RCE via SymPy expression injection (CWE-95, [CVE-2026-55585](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-q27q-98j4-9pfv)): initial mitigation in v5.1.2, bypass variant fully re-architected in v7.2.0 (#330, #344).
+- **EQSTLab (@EQSTLab)** — independent report and confirmation of the above.
+
 ## Security Issue vs. Bug
 
 To help us triage issues effectively, please distinguish between security issues and bugs:
