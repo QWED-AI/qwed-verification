@@ -19,7 +19,7 @@ Fail-closed fixes restoring intended behavior — no breaking wire changes:
 
 ### Precision advisory (new capability, #347, #348)
 
-- **Advisory flag for binary floating-point constants** in math/stats verification (`precision.advisory`).
+- **Advisory flag for binary floating-point constants** in math/stats verification — emitted as `developer_fields.advisory_checks[]` entries with `constraint_id` `"precision.float-constants"` (also mirrored at top level).
 
 ### Dependency modernization
 

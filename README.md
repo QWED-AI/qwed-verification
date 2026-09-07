@@ -40,7 +40,7 @@
 
 ## Release Update: v7.2.0 — Security Hardening Batch + Precision Advisory
 
-`v7.2.0` is a fail-closed hardening release: expression/auth/sandbox/event-loop security fixes that restore intended behavior, plus one additive capability — an advisory flag for binary floating-point constants in math/stats verification (`precision.advisory`). No breaking wire changes.
+`v7.2.0` is a fail-closed hardening release: expression/auth/sandbox/event-loop security fixes that restore intended behavior, plus one additive capability — an advisory flag for binary floating-point constants in math/stats verification (emitted as `developer_fields.advisory_checks[]` with `constraint_id: "precision.float-constants"`). No breaking wire changes.
 
 - **Expression & math safety (#329, #330, #344, #346)** — `safe_parse_expr` RCE fixes (NFKC bypass, denylist bypass), structural hardening, math-output gate
 - **Auth hardening (#333, #334, #345)** — KDF removed from pre-auth path, bcrypt offloaded, `/auth/*` throttling
