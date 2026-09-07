@@ -4,6 +4,29 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+## [7.2.0] - 2026-09-07
+
+### Security hardening batch
+
+Fail-closed fixes restoring intended behavior — no breaking wire changes:
+
+- **Expression & math safety (#329, #330, #344)** — `safe_parse_expr` NFKC normalization bypass and denylist bypass fixes (authenticated RCE), plus structural hardening (charset gate, AST allowlist) and a structural math-output gate with module-indirection blocklist (#346).
+- **Auth hardening (#333, #334, #345)** — pre-auth KDF removed from lookup path, bcrypt offloaded, `/auth/*` throttling, brute-force oracle closed.
+- **Sandbox containment (#335, #338, #339, #351)** — module-indirection AST gate bypass closed, container leaks fixed (log rotation, `pids_limit`, container removal, result size caps), stats sandbox result read-back bounded against host-memory amplification.
+- **Event-loop safety (#340, #341, #352, #354)** — consensus orchestration and stats verification offloaded from the event loop; consensus translator expression smuggling closed; engine-call waits bounded (sympy compute-cost gate, provider HTTP timeouts, stats upload cap); CircuitBreaker non-reentrant lock replaced with RLock (#332, #343).
+- **Metrics & deploy (#337, #349, #350)** — all-tenant metrics restricted to explicit platform operators; Prometheus scraping fixed to the `/metrics/prometheus` endpoint.
+- **Supply chain (#355–#361)** — scheduled Dependabot version updates across pip/npm/Go/Rust/Docker/Actions; esbuild dev-server CVE overridden past the patched release.
+
+### Precision advisory (new capability, #347, #348)
+
+- **Advisory flag for binary floating-point constants** in math/stats verification — emitted as `developer_fields.advisory_checks[]` entries with `constraint_id` `"precision.float-constants"` (also mirrored at top level).
+
+### Dependency modernization
+
+- pip: sympy 1.14, z3-solver 5.x, sqlglot 30.x, sentry-sdk 2.68, hatchling 1.32 (#359); GitHub Actions group across 15 actions (#360); Python 3.13 → 3.14 base image (#356); reqwest 0.12 → 0.13 in `sdk-rust` (`rustls-tls` renamed to `rustls`, #357); esbuild override past dev-server CVE (#361).
+
+> **Semver:** minor release — one additive capability (precision advisory) plus fail-closed fixes and dependency modernization. No breaking wire changes.
+
 ## [7.1.0] - 2026-08-16
 
 ### Verification Context v1.0 Rollout

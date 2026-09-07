@@ -14,7 +14,11 @@ def test_sdk_init_module_executes():
         from qwed_sdk import __version__ as _  # noqa: F401
     from qwed_sdk import __all__ as sdk_all, __version__ as sdk_version
     assert sdk_all is not None
-    assert sdk_version == "7.1.0"
+    assert sdk_version == "7.2.0"
+    # CodeRabbit on the v7.2.0 release PR: qwed_sdk.__version__ is assigned
+    # independently, so pin src/qwed_new's version here too.
+    from src.qwed_new import __version__ as core_version
+    assert core_version == "7.2.0"
 
 
 def test_sdk_init_exports_verdict_enum():
