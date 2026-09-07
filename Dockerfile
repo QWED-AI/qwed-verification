@@ -3,7 +3,7 @@
 # Security: python:3.13-slim-bookworm for minimal CVE exposure
 # Upgraded from 3.12 (Feb 2024) → 3.13 (April 2026 stable)
 # python:3.13-slim-bookworm @ 2026-04-22
-FROM python:3.13-slim-bookworm@sha256:bb73517d48bd32016e15eade0c009b2724ec3a025a9975b5cd9b251d0dcadb33
+FROM python:3.14-slim-bookworm@sha256:9ab8d9c8514b44f90cf0029dd42fdd7e9e211e639c8b995304cc04568dee900f
 
 # Environment
 ENV PYTHONDONTWRITEBYTECODE=1 \
