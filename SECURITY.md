@@ -4,9 +4,8 @@
 
 | Version | Supported |
 | ------- | --------- |
-| 5.0.x   | :white_check_mark: |
-| 4.x     | :x: |
-| < 4.0   | :x: |
+| 7.2.x   | :white_check_mark: |
+| < 7.2   | :x: |
 
 ## Reporting a Vulnerability
 
@@ -54,7 +53,7 @@ We value the security community and will publicly credit vulnerability reporters
 
 We thank the following researchers for responsibly disclosed findings fixed in our releases (all credits accepted by the reporters; see the linked advisories):
 
-- **Sebastion Höpfl (@Sebastion, sebastiondev) via Foundation Machines** — authenticated RCE via SymPy expression injection (CWE-95, [CVE-2026-55585](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-q27q-98j4-9pfv)): initial mitigation in v5.1.2, bypass variant fully re-architected in v7.2.0 (#330, #344).
+- **Sebastion Höpfl (@Sebastion, sebastiondev) via Foundation Machines** — authenticated RCE via SymPy expression injection (CWE-94, [CVE-2026-55585](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-q27q-98j4-9pfv)): initial mitigation in v5.1.2, bypass variant fully re-architected in v7.2.0 (#330, #344).
 - **EQSTLab (@EQSTLab)** — independent report and confirmation of the above.
 
 ## Security Issue vs. Bug
