@@ -40,7 +40,7 @@ pytest tests/ -v
 - Remove unused imports.
 - Avoid introducing a new dependency when an existing project dependency can solve the problem.
 - If a new dependency is necessary, explain the reason in the PR description.
-- Do not commit generated dependency files or local environment files unless they are explicitly required by the project.
+- Do not commit generated dependency files or local environment files unless they are explicitly required by the project. Required tracked lockfiles, including `requirements.txt` and `sdk-ts/package-lock.json`, must remain committed.
 
 ### Formatting
 
