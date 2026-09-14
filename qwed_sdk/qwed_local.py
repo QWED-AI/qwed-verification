@@ -86,6 +86,15 @@ try:
 except ImportError:
     Solver = None
 
+try:
+    # Hardened SymPy entry point for untrusted input (character allow-list,
+    # AST allow-list, builtins stripped, cost-bounded). qwed_new ships in
+    # the wheel alongside the SDK; a standalone SDK without it fails
+    # closed at every call site that needs safe parsing.
+    from qwed_new.core.safe_parser import safe_parse_expr
+except ImportError:
+    safe_parse_expr = None
+
 
 
 
@@ -295,15 +304,23 @@ def _format_sympy_result(value: Any) -> str:
 
 
 def _math_answers_match(llm_answer: str, verified_result: Any) -> bool:
-    """Compare LLM and verified answers using SymPy when possible."""
+    """Compare LLM and verified answers without evaluating untrusted input.
+
+    The answer string is untrusted model output: it is parsed ONLY through
+    the hardened safe_parse_expr (character allow-list, AST allow-list, no
+    builtins, cost-bounded) — never raw sympy.sympify(), whose eval sink
+    executes dunder-traversal gadgets smuggled in the answer turn
+    (GHSA-xmm6-8r3x-j567). Anything unparseable, and any missing
+    dependency, fails closed to False.
+    """
     normalized_llm = llm_answer.strip()
     verified_text = _format_sympy_result(verified_result)
     if normalized_llm == verified_text:
         return True
-    if sympy is None:
+    if sympy is None or safe_parse_expr is None:
         return False
     try:
-        llm_expr = sympy.sympify(normalized_llm)
+        llm_expr = safe_parse_expr(normalized_llm)
         return sympy.simplify(llm_expr - verified_result) == 0
     except Exception:
         return False

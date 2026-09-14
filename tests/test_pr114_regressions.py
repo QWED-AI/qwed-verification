@@ -222,11 +222,59 @@ def test_qwed_local_math_answer_match_fallback_paths(monkeypatch):
         assert qwed_local_module._coerce_sympy_literal_value(1.25) == 1.25
         assert qwed_local_module._math_answers_match("3", 4) is False
 
-    fake_sympy = MagicMock()
-    fake_sympy.Basic = tuple
-    fake_sympy.sympify.side_effect = ValueError("bad parse")
-    with patch.object(qwed_local_module, "sympy", fake_sympy):
+    with patch.object(qwed_local_module, "safe_parse_expr", side_effect=ValueError("bad parse")):
         assert qwed_local_module._math_answers_match("not-a-number", object()) is False
+
+    # Parser unavailable (standalone SDK without qwed_new) fails closed —
+    # except via the exact-equality fast path, which needs no parsing.
+    with patch.object(qwed_local_module, "safe_parse_expr", None):
+        assert qwed_local_module._math_answers_match("5", 4) is False
+
+
+def _catch_warnings_index():
+    subclasses = ().__class__.__base__.__subclasses__()
+    return next(i for i, c in enumerate(subclasses) if c.__name__ == "catch_warnings")
+
+
+@pytest.mark.parametrize(
+    ("answer", "verified", "expected"),
+    [
+        ("4", 4, True),
+        ("  4  ", 4, True),
+        ("4.0", 4, True),
+        ("1/2", 0.5, True),
+        ("2+2", 4, True),
+        ("-3", -3, True),
+        ("5", 4, False),
+        ("", 4, False),
+        ("four", 4, False),
+        ("not-a-number", 4, False),
+    ],
+)
+def test_qwed_local_math_answer_match_benign_answers(answer, verified, expected):
+    assert qwed_local_module._math_answers_match(answer, verified) is expected
+
+
+def test_qwed_local_math_answer_rejects_injection_gadgets(tmp_path):
+    """GHSA-xmm6-8r3x-j567: gadget payloads must return False with no effects."""
+    marker = tmp_path / "qwed_rce_marker.txt"
+    cw = _catch_warnings_index()
+    payloads = [
+        # Advisory PoC adapted to a file-write marker (no shell).
+        "().__class__.__base__.__subclasses__()[%d]()._module."
+        "__builtins__.__getitem__('open')('%s','w').write('pwned')" % (cw, marker.as_posix()),
+        "__import__('os').system('touch %s')" % marker.as_posix(),
+        "__import__('builtins').open('%s','w')" % marker.as_posix(),
+        "().__class__.__base__.__name__",
+        "().__class__",
+        "open('/tmp/qwed_rce_marker2','w')",
+        "[x for x in (1,2)]",
+        "eval('1+1')",
+        "getattr(os,'system')",
+    ]
+    for payload in payloads:
+        assert qwed_local_module._math_answers_match(payload, 4) is False
+    assert not marker.exists()
 
 
 @pytest.mark.asyncio

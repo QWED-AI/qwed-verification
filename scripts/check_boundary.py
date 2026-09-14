@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SRC_DIR = REPO_ROOT / "src"
+SRC_DIRS = [REPO_ROOT / "src", REPO_ROOT / "qwed_sdk"]
 
 # Approved wrapper paths (relative to repo root) — basename matching is too broad
 APPROVED_WRAPPER_PATHS = {
@@ -66,6 +66,10 @@ def check_file(filepath: Path) -> list[str]:
 
     relpath = filepath.relative_to(REPO_ROOT).as_posix()
     in_wrapper = relpath in APPROVED_WRAPPER_PATHS
+    try:
+        source_lines = filepath.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        source_lines = []
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -95,8 +99,25 @@ def check_file(filepath: Path) -> list[str]:
                     f"Disallowed call '{name}()' — use approved wrappers"
                 )
 
-            # os.system, subprocess.*, popen, system, spawn
+            # sympify: flag both bare and qualified (sympy.sympify(...) etc.)
+            # Raw sympify() evaluates its input — untrusted strings must go
+            # through safe_parse_expr instead (GHSA-xmm6-8r3x-j567). No
+            # wrapper is approved for raw sympify: safe_parser.py itself
+            # uses guarded parse_expr, never sympify.
+            if leaf == "sympify" and not in_wrapper:
+                errors.append(
+                    f"  [BARE_SYMPIFY] {relpath}:{node.lineno}: "
+                    f"Disallowed call '{name}()' — use safe_parse_expr"
+                )
+
+            # os.system, subprocess.*, popen, system, spawn — honored only
+            # with an explicit line-scoped `# noqa` marker (reviewed
+            # suppression, e.g. a CodeGuard-gated server launch). eval,
+            # parse_expr, and sympify findings are never noqa-excused.
             if name in FORBIDDEN_CALLS and not in_wrapper:
+                line_text = source_lines[node.lineno - 1] if 0 < node.lineno <= len(source_lines) else ""
+                if "noqa" in line_text:
+                    continue
                 errors.append(
                     f"  [BARE_SHELL] {relpath}:{node.lineno}: "
                     f"Disallowed call '{name}()' — use safe_shell() or approved wrapper"
@@ -107,8 +128,9 @@ def check_file(filepath: Path) -> list[str]:
 
 def main() -> int:
     errors: list[str] = []
-    for pyfile in sorted(SRC_DIR.rglob("*.py")):
-        errors.extend(check_file(pyfile))
+    for src_dir in SRC_DIRS:
+        for pyfile in sorted(src_dir.rglob("*.py")):
+            errors.extend(check_file(pyfile))
 
     if errors:
         print(" QWED Boundary check FAILED")
