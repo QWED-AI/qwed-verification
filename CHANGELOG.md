@@ -4,6 +4,15 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+## [7.2.1] - 2026-09-14
+
+### Security fix
+
+- **Math answer comparison hardening (GHSA-xmm6-8r3x-j567)** — `QWEDLocal._math_answers_match` fed the untrusted model answer to raw `sympy.sympify()`, whose eval sink executes dunder-traversal gadgets smuggled in the answer turn. The answer is now parsed only through the hardened `safe_parse_expr` (character allow-list, AST allow-list, builtins stripped, cost-bounded); unparseable input and a missing parser fail closed to `False`.
+- **Release boundary gate** — `scripts/check_boundary.py` now scans `qwed_sdk/` and forbids raw `sympify` outside approved wrappers (shell findings honor line-scoped `# noqa`).
+
+> **Semver:** patch release — security fix only, no new capability, no breaking wire changes. All supported install coordinates (`qwed` 7.2.1 on PyPI, `@qwed-ai/sdk` 7.2.1 on npm, `qwed` 7.2.1 on crates.io) carry the fix.
+
 ## [7.2.0] - 2026-09-07
 
 ### Security hardening batch

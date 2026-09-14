@@ -38,6 +38,10 @@
 
 ---
 
+## Release Update: v7.2.1 — Math Answer Comparison Security Fix
+
+`v7.2.1` is a fail-closed security patch: the math answer comparison path now parses untrusted model answers only through the hardened `safe_parse_expr` (GHSA-xmm6-8r3x-j567), and the release boundary gate covers `qwed_sdk/` with raw `sympify` forbidden. No new capability, no breaking wire changes — upgrade from any `>= 6.0.0, <= 7.2.0` deployment is recommended.
+
 ## Release Update: v7.2.0 — Security Hardening Batch + Precision Advisory
 
 `v7.2.0` is a fail-closed hardening release: expression/auth/sandbox/event-loop security fixes that restore intended behavior, plus one additive capability — an advisory flag for binary floating-point constants in math/stats verification (emitted as `developer_fields.advisory_checks[]` with `constraint_id: "precision.float-constants"`). No breaking wire changes.
