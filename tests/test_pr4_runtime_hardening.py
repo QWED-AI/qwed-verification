@@ -473,14 +473,15 @@ def test_get_optional_api_key_record_allows_unexpired_key():
 def test_get_optional_api_key_record_rejects_malformed_key_before_lookup():
     """Issue #366: a key that can never be valid is rejected by the offline
     format pre-filter — no HMAC, no DB query."""
-    import os
-
     mock_session = MagicMock()
 
     with patch("qwed_new.api.main.hash_api_key") as mock_hash:
-        # Deliberately malformed (not a secret): read from env-with-placeholder
-        # per the repo convention that satisfies Snyk's hardcoded-secret rule.
-        malformed = os.environ.get("QWED_TEST_MALFORMED_KEY", "not-a-valid-key")
+        # Fixed, deliberately-malformed input: no "qwed_" prefix, so the format
+        # classifier always returns "invalid". Deterministic (NOT read from the
+        # environment — an override could supply a *valid* key and silently flip
+        # this test onto the lookup path, breaking assert_not_called()) and not
+        # a credential-shaped literal, so it needs no Snyk suppression.
+        malformed = "malformed-header-value"
         result = get_optional_api_key_record(x_api_key=malformed, session=mock_session)
 
     assert result is None
