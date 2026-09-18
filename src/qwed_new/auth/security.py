@@ -159,15 +159,16 @@ def _checksum_for(random_body: str) -> str:
 def is_valid_key_checksum(api_key: str) -> bool:
     """Return True iff ``api_key`` is a structurally-valid v2 key.
 
-    Strictly a v2 shape check: exact length, alphanumeric body, and a
-    matching checksum. Returns False for v1 keys, test keys, and any
-    malformed input. Pure function — no DB, no secrets, constant-work.
+    Strictly a v2 shape check: a supported prefix (``qwed_live`` or
+    ``qwed_test``), exact body length, alphanumeric body, and a matching
+    checksum. Returns False for v1 keys and any malformed input. Pure
+    function — no DB, no secrets, constant-work.
     """
     parts = _split_key(api_key)
     if parts is None:
         return False
     prefix, body = parts
-    if prefix != "qwed_live" or len(body) != _V2_BODY_LEN:
+    if prefix not in _KEY_PREFIXES or len(body) != _V2_BODY_LEN:
         return False
     if any(ch not in _BASE62 for ch in body):
         return False

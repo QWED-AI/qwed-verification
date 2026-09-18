@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from qwed_new.api import main as api_main
 from qwed_new.api.main import get_optional_api_key_record, get_optional_current_user
+from qwed_new.auth.security import generate_api_key as _generate_v2_key
 from qwed_new.core.agent_service import ActionContext, AgentAction, AgentService
 from qwed_new.core.policy import RedisSlidingWindowLimiter
 
@@ -452,10 +453,26 @@ def test_get_optional_api_key_record_allows_unexpired_key():
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = live
 
+    # A structurally-valid (v2) key shape so the issue-#366 format pre-filter
+    # lets it through to the (mocked) hash + lookup path this test exercises.
+    valid_key, _ = _generate_v2_key()
     with patch("qwed_new.api.main.hash_api_key", return_value="h"):
-        result = get_optional_api_key_record(x_api_key="k", session=mock_session)
+        result = get_optional_api_key_record(x_api_key=valid_key, session=mock_session)
 
     assert result is live
+
+
+def test_get_optional_api_key_record_rejects_malformed_key_before_lookup():
+    """Issue #366: a key that can never be valid is rejected by the offline
+    format pre-filter — no HMAC, no DB query."""
+    mock_session = MagicMock()
+
+    with patch("qwed_new.api.main.hash_api_key") as mock_hash:
+        result = get_optional_api_key_record(x_api_key="not-a-valid-key", session=mock_session)
+
+    assert result is None
+    mock_hash.assert_not_called()
+    mock_session.execute.assert_not_called()
 
 
 def test_metrics_allows_operator_jwt_when_api_key_expired(client, monkeypatch):

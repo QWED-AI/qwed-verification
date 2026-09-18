@@ -61,6 +61,10 @@ class TestGenerateV2(unittest.TestCase):
         body = key[len("qwed_test_"):]
         self.assertEqual(len(body), 36)
         self.assertTrue(body.isalnum())
+        # A properly checksummed qwed_test v2 key is a valid v2 shape (it is a
+        # supported non-production credential, not "invalid").
+        self.assertTrue(is_valid_key_checksum(key))
+        self.assertEqual(validate_api_key_format(key), "v2")
 
     def test_unknown_prefix_rejected(self):
         with self.assertRaises(ValueError):
@@ -107,8 +111,11 @@ class TestChecksumValidation(unittest.TestCase):
         self.assertFalse(is_valid_key_checksum(bad))
 
     def test_wrong_prefix_rejected(self):
-        self.assertFalse(is_valid_key_checksum("qwed_test_" + "a" * 36))
+        # An unsupported prefix is rejected outright.
         self.assertFalse(is_valid_key_checksum("sk_live_" + "a" * 36))
+        # A supported prefix with a BAD checksum is still rejected.
+        self.assertFalse(is_valid_key_checksum("qwed_live_" + "a" * 36))
+        self.assertFalse(is_valid_key_checksum("qwed_test_" + "a" * 36))
 
     def test_garbage_rejected(self):
         for bad in ("", "qwed_live_", "not-a-key", "qwed_live", None, 12345):
@@ -148,7 +155,12 @@ class TestDualVersionAcceptance(unittest.TestCase):
     def test_v1_roundtrip(self):
         key = _v1_key()
         self.assertEqual(validate_api_key_format(key), "v1")
-        self.assertEqual(hash_api_key(key), hash_api_key(key))
+        # Deterministic lookup digest: hashing the same key twice matches, and
+        # a real generated key's stored hash equals a fresh recomputation.
+        expected = hash_api_key(key)
+        self.assertEqual(hash_api_key(key), expected)
+        generated, stored = generate_api_key()
+        self.assertEqual(hash_api_key(generated), stored)
 
     def test_v1_not_misclassified_as_v2(self):
         self.assertFalse(is_valid_key_checksum(_v1_key()))
@@ -157,6 +169,45 @@ class TestDualVersionAcceptance(unittest.TestCase):
         v1 = _v1_key()
         v2, _ = generate_api_key()
         self.assertNotEqual(hash_api_key(v1), hash_api_key(v2))
+
+
+class TestHelpers(unittest.TestCase):
+    """Direct coverage of the internal helpers' guard branches."""
+
+    def test_base62_encode_rejects_negative(self):
+        from qwed_new.auth.security import _base62_encode
+
+        with self.assertRaises(ValueError):
+            _base62_encode(-1, 6)
+
+    def test_base62_encode_rejects_overflow(self):
+        from qwed_new.auth.security import _base62_encode
+
+        with self.assertRaises(ValueError):
+            _base62_encode(62**6, 6)  # does not fit in 6 Base62 chars
+
+    def test_base62_encode_fixed_width_zero_padding(self):
+        from qwed_new.auth.security import _base62_encode
+
+        self.assertEqual(_base62_encode(0, 6), "000000")
+        self.assertEqual(len(_base62_encode(123456789, 6)), 6)
+
+    def test_split_key_rejects_non_string_and_empty_body(self):
+        from qwed_new.auth.security import _split_key
+
+        self.assertIsNone(_split_key(None))
+        self.assertIsNone(_split_key(12345))
+        self.assertIsNone(_split_key("qwed_live_"))  # empty body
+        self.assertIsNone(_split_key("no_known_prefix"))
+
+    def test_split_key_splits_on_known_prefix_only(self):
+        from qwed_new.auth.security import _split_key
+
+        self.assertEqual(_split_key("qwed_live_" + "a" * 36), ("qwed_live", "a" * 36))
+        # base64url v1 bodies can contain '_' — the body is never re-split.
+        self.assertEqual(
+            _split_key("qwed_live_ab_cd"), ("qwed_live", "ab_cd")
+        )
 
 
 if __name__ == "__main__":
