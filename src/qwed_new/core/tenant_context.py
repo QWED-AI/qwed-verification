@@ -5,11 +5,13 @@ This module handles API key validation and tenant identification.
 It's the "authentication layer" of the QWED OS.
 """
 
-from fastapi import Header, HTTPException, Depends
+from fastapi import Depends, Header, HTTPException
 from sqlmodel import Session, select
+
+from qwed_new.auth.security import hash_api_key, validate_api_key_format
 from qwed_new.core.database import get_session
 from qwed_new.core.models import ApiKey, Organization
-from qwed_new.auth.security import hash_api_key
+
 
 class TenantContext:
     """
@@ -29,6 +31,15 @@ async def get_current_tenant(
     Dependency function to extract and validate the API key.
     Returns the authenticated tenant context.
     """
+    # Offline format pre-filter (issue #366): reject keys that can never be
+    # valid before they cost an HMAC + DB lookup on this unauthenticated
+    # path. Both v1 and v2 shapes pass; anything else fails closed.
+    if validate_api_key_format(x_api_key) == "invalid":
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or inactive API key"
+        )
+
     # 1. Hash the provided key
     hashed_key = hash_api_key(x_api_key)
     

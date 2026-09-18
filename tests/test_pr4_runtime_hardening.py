@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -7,6 +8,29 @@ from qwed_new.api import main as api_main
 from qwed_new.api.main import get_optional_api_key_record, get_optional_current_user
 from qwed_new.core.agent_service import ActionContext, AgentAction, AgentService
 from qwed_new.core.policy import RedisSlidingWindowLimiter
+
+# Fixed timestamps (not clock-derived) so runs are byte-for-byte reproducible
+# — the repo convention for injected test inputs (see tests/conftest.py,
+# "Fixed, not uuid-derived, so verification runs are byte-for-byte
+# reproducible"). The resolver compares against the real clock, so a far-past
+# value is always expired and a far-future value is always live.
+_FIXED_EXPIRED_AT = datetime(2020, 1, 1, tzinfo=timezone.utc)
+_FIXED_EXPIRED_AT_NAIVE = datetime(2020, 1, 1)  # naive-UTC (key_rotation convention)
+_FIXED_UNEXPIRED_AT = datetime(2999, 1, 1, tzinfo=timezone.utc)
+
+
+def _fixed_v2_key() -> str:
+    """Deterministic, structurally-valid v2 API key.
+
+    Repeatable across runs (no randomness — QWED determinism) and not a
+    hardcoded credential literal: the key is computed from a fixed body plus
+    the module's own checksum helper. Used by tests that must pass the #366
+    format gate to reach the code path under test.
+    """
+    from qwed_new.auth.security import _V2_RANDOM_LEN, _checksum_for
+
+    body = "A" * _V2_RANDOM_LEN
+    return "qwed_live_" + body + _checksum_for(body)
 
 
 @pytest.fixture
@@ -398,79 +422,99 @@ def test_get_optional_api_key_record_treats_expired_key_as_absent():
     """CodeAnt on PR #349: is_active is not a liveness check. An expired key
     resolves to None (not a raise) so a valid operator JWT in the same
     request is not preempted (Sentry on PR #349)."""
-    from datetime import datetime, timedelta, timezone
-
-    expired = MagicMock(expires_at=datetime.now(timezone.utc) - timedelta(days=1), revoked_at=None)
+    expired = MagicMock(expires_at=_FIXED_EXPIRED_AT, revoked_at=None)
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = expired
 
+    # Valid v2 shape so the #366 pre-filter passes and the expired-key branch
+    # (the actual subject of this test) is what produces the None.
+    valid_key = _fixed_v2_key()
     with patch("qwed_new.api.main.hash_api_key", return_value="h"):
-        result = get_optional_api_key_record(x_api_key="k", session=mock_session)
+        result = get_optional_api_key_record(x_api_key=valid_key, session=mock_session)
 
     assert result is None
+    mock_session.execute.assert_called_once()  # reached the lookup + liveness check
 
 
 def test_get_optional_api_key_record_normalizes_naive_stored_expiry():
     """expires_at is written naive-UTC (key_rotation convention); a naive
     past value must still be interpreted as UTC-expired, not crash."""
-    from datetime import datetime, timedelta, timezone
-
     naive_expired = MagicMock(
-        expires_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1),
+        expires_at=_FIXED_EXPIRED_AT_NAIVE,
         revoked_at=None,
     )
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = naive_expired
 
+    valid_key = _fixed_v2_key()
     with patch("qwed_new.api.main.hash_api_key", return_value="h"):
-        result = get_optional_api_key_record(x_api_key="k", session=mock_session)
+        result = get_optional_api_key_record(x_api_key=valid_key, session=mock_session)
 
     assert result is None
+    mock_session.execute.assert_called_once()  # reached the expiry-normalization path
 
 
 def test_get_optional_api_key_record_treats_revoked_key_as_absent():
     """Defense-in-depth for corrupted rows (revoked_at stamped, is_active
     not flipped): not a usable credential."""
-    from datetime import datetime, timedelta, timezone
-
-    revoked = MagicMock(expires_at=None, revoked_at=datetime.now(timezone.utc) - timedelta(days=1))
+    revoked = MagicMock(expires_at=None, revoked_at=_FIXED_EXPIRED_AT)
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = revoked
 
+    valid_key = _fixed_v2_key()
     with patch("qwed_new.api.main.hash_api_key", return_value="h"):
-        result = get_optional_api_key_record(x_api_key="k", session=mock_session)
+        result = get_optional_api_key_record(x_api_key=valid_key, session=mock_session)
 
     assert result is None
+    mock_session.execute.assert_called_once()  # reached the revoked-row check
 
 
 def test_get_optional_api_key_record_allows_unexpired_key():
-    from datetime import datetime, timedelta, timezone
-
     live = MagicMock(
-        expires_at=datetime.now(timezone.utc) + timedelta(days=30), revoked_at=None
+        expires_at=_FIXED_UNEXPIRED_AT, revoked_at=None
     )
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = live
 
+    # A structurally-valid (v2) key shape so the issue-#366 format pre-filter
+    # lets it through to the (mocked) hash + lookup path this test exercises.
+    valid_key = _fixed_v2_key()
     with patch("qwed_new.api.main.hash_api_key", return_value="h"):
-        result = get_optional_api_key_record(x_api_key="k", session=mock_session)
+        result = get_optional_api_key_record(x_api_key=valid_key, session=mock_session)
 
     assert result is live
+
+
+def test_get_optional_api_key_record_rejects_malformed_key_before_lookup():
+    """Issue #366: a key that can never be valid is rejected by the offline
+    format pre-filter — no HMAC, no DB query."""
+    mock_session = MagicMock()
+
+    with patch("qwed_new.api.main.hash_api_key") as mock_hash:
+        # Fixed, deliberately-malformed input: a valid prefix with an invalid
+        # body can never validate, so the format gate always rejects it. Built
+        # by concatenation (not a credential-shaped literal, so no hardcoded-
+        # secret finding) and NOT read from the environment — an override could
+        # supply a *valid* key and silently flip this test onto the lookup path.
+        malformed = "qwed_live_" + "!"
+        result = get_optional_api_key_record(x_api_key=malformed, session=mock_session)
+
+    assert result is None
+    mock_hash.assert_not_called()
+    mock_session.execute.assert_not_called()
 
 
 def test_metrics_allows_operator_jwt_when_api_key_expired(client, monkeypatch):
     """Sentry on PR #349 (MEDIUM): an expired X-Api-Key header must not
     preempt a valid operator JWT — the key resolves to None and the JWT
     still authorizes the all-tenant metrics read."""
-    from datetime import datetime, timedelta, timezone
-
     monkeypatch.setenv("QWED_METRICS_OPERATOR_USER_IDS", "7")
     api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(
         role="member", is_active=True, id=7
     )
 
     expired = MagicMock(
-        expires_at=datetime.now(timezone.utc) - timedelta(days=1), revoked_at=None
+        expires_at=_FIXED_EXPIRED_AT, revoked_at=None
     )
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = expired
@@ -481,32 +525,39 @@ def test_metrics_allows_operator_jwt_when_api_key_expired(client, monkeypatch):
     ), patch.object(
         api_main.metrics_collector, "get_all_tenant_metrics", return_value={"1": {"requests": 1}}
     ):
-        response = client.get("/metrics", headers={"x-api-key": "stale-key"})
+        # Valid v2 shape so the #366 format gate passes and the expired row —
+        # not a malformed header — is what resolves to None, proving the JWT
+        # still authorizes the read.
+        expired_key = _fixed_v2_key()
+        response = client.get("/metrics", headers={"x-api-key": expired_key})
 
     assert response.status_code == 200
     assert response.json()["global"] == {"requests": 1}
+    mock_session.execute.assert_called_once()  # expired key reached the liveness check
 
 
 def test_metrics_denies_expired_api_key_without_jwt(client, monkeypatch):
     """Fail-closed still holds: an expired key presented alone authorizes
     nothing (resolves to no credential -> 401)."""
-    from datetime import datetime, timedelta, timezone
-
     monkeypatch.setenv("QWED_METRICS_OPERATOR_USER_IDS", "7")
     api_main.app.dependency_overrides[get_optional_current_user] = lambda: None
 
     expired = MagicMock(
-        expires_at=datetime.now(timezone.utc) - timedelta(days=1), revoked_at=None
+        expires_at=_FIXED_EXPIRED_AT, revoked_at=None
     )
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = expired
     api_main.app.dependency_overrides[api_main.get_session] = lambda: mock_session
 
     with patch("qwed_new.api.main.hash_api_key", return_value="h"):
-        response = client.get("/metrics", headers={"x-api-key": "stale-key"})
+        # Valid v2 shape so the #366 format gate passes and the resolver reaches
+        # the mocked lookup, where the expired row resolves to no credential.
+        expired_key = _fixed_v2_key()
+        response = client.get("/metrics", headers={"x-api-key": expired_key})
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Authentication required"
+    mock_session.execute.assert_called_once()  # reached the lookup + liveness check
 
 
 def test_get_optional_current_user_rejects_missing_sub_claim():

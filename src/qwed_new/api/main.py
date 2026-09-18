@@ -39,7 +39,7 @@ from qwed_new.auth import auth_router
 from qwed_new.auth.audit_routes import router as audit_router
 from qwed_new.auth.middleware import get_api_key
 from qwed_new.auth.routes import get_current_user_token
-from qwed_new.auth.security import hash_api_key
+from qwed_new.auth.security import hash_api_key, validate_api_key_format
 
 TenantDependency = Annotated[TenantContext, Depends(get_current_tenant)]
 SessionDependency = Annotated[Session, Depends(get_session)]
@@ -311,6 +311,13 @@ def get_optional_api_key_record(
 ) -> Optional[ApiKey]:
     """Resolve an API key record when the caller provides x-api-key."""
     if not x_api_key:
+        return None
+
+    # Offline format pre-filter (issue #366): a malformed key resolves to no
+    # credential (None) before an HMAC + DB lookup, so a request that also
+    # carries a valid operator JWT is not preempted by garbage in the
+    # x-api-key header. Both v1 and v2 shapes pass through to the lookup.
+    if validate_api_key_format(x_api_key) == "invalid":
         return None
 
     hashed_key = hash_api_key(x_api_key)

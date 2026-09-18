@@ -2,12 +2,13 @@
 
 Targets uncovered code paths reported by SonarQube for #264.
 """
+import hashlib
 import os
-import secrets
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
-from fastapi.testclient import TestClient
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
 
@@ -700,6 +701,7 @@ def test_get_optional_current_user_success():
 def test_get_optional_api_key_record_success():
     """Cover get_optional_api_key_record success path: return api_key."""
     from qwed_new.api.main import get_optional_api_key_record
+    from qwed_new.auth.security import _V2_RANDOM_LEN, _checksum_for
 
     # expires_at/revoked_at must be None explicitly: a bare MagicMock makes
     # them auto-truthy and the liveness check (PR #349) rejects the key.
@@ -707,8 +709,15 @@ def test_get_optional_api_key_record_success():
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = mock_api_key
 
-    fake_hash = secrets.token_hex(8)
-    fake_key = secrets.token_hex(8)
+    # Deterministic (not secrets-derived) so runs are byte-for-byte
+    # reproducible: this is the patched hash_api_key return, so any fixed
+    # 64-char digest works.
+    fake_hash = hashlib.sha256(b"fixed-api-key-digest").hexdigest()
+    # Deterministic, structurally-valid v2 key: computed (no randomness, not a
+    # hardcoded credential literal) so the #366 format gate passes and the
+    # mocked hash + lookup path is exercised.
+    body = "A" * _V2_RANDOM_LEN
+    fake_key = "qwed_live_" + body + _checksum_for(body)
     with patch("qwed_new.api.main.hash_api_key", return_value=fake_hash):
         result = get_optional_api_key_record(
             x_api_key=fake_key,
