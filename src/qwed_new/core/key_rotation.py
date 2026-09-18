@@ -8,17 +8,16 @@ Features:
 - Notification triggers for expiring keys
 """
 
-import secrets
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
-from sqlmodel import select
 
-from qwed_new.core.models import ApiKey
-from qwed_new.core.database import engine
-from sqlmodel import Session
+from sqlmodel import Session, select
+
+from qwed_new.auth.security import generate_api_key, mask_api_key
 from qwed_new.core.alerting import alert_manager
-from qwed_new.auth.security import hash_api_key
+from qwed_new.core.database import engine
+from qwed_new.core.models import ApiKey
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +40,10 @@ class KeyManager:
         Create a new API key.
         Returns (ApiKey object, raw_key_string).
         """
-        # Generate secure random key
-        raw_key = f"qwed_live_{secrets.token_urlsafe(32)}"
-        
-        # Hash for storage (using PBKDF2 to match auth/security.py)
-        key_hash = hash_api_key(raw_key)
-        key_preview = f"{raw_key[:10]}...{raw_key[-4:]}"
+        # Generate via the single centralized generator (issue #366) so the
+        # v2 checksummed format can't drift from a second inline copy.
+        raw_key, key_hash = generate_api_key()
+        key_preview = mask_api_key(raw_key)
         
         expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
         

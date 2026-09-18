@@ -2,13 +2,15 @@
 Security utilities for QWED authentication.
 Handles password hashing, JWT token generation, and API key management.
 """
-import bcrypt
-import jwt
-import secrets
 import hmac
 import os
+import secrets
+import zlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+import bcrypt
+import jwt
 
 # Configuration - MUST be set via environment variables
 SECRET_KEY = os.getenv("QWED_JWT_SECRET_KEY")
@@ -84,22 +86,130 @@ def decode_access_token(token: str) -> Optional[dict]:
     except jwt.InvalidTokenError:
         return None
 
+# ---------------------------------------------------------------------------
+# API-key formats (issue #366)
+#
+# v2 (current):  qwed_live_<30 Base62 random><6 Base62 CRC32 checksum>
+#   - charset strictly alphanumeric after the prefix, so the token
+#     double-click selects cleanly and never breaks on a word separator.
+#   - the trailing 6-char checksum lets the format be validated OFFLINE
+#     (pure math, no DB) and collapses random false-positive matches to
+#     ~2^-32. The checksum authenticates *shape*, never *authorization* —
+#     access still requires the HMAC lookup in hash_api_key().
+#   - entropy: 30 x log2(62) ~= 178.6 bits.
+#
+# v1 (legacy):   qwed_live_<43 base64url chars from token_urlsafe(32)>
+#   - 32 bytes = 256 bits of entropy (NOT 258 — the 43rd base64 char
+#     carries 2 zero padding bits). Accepted for backward compatibility;
+#     existing v1 keys keep working and are never force-rotated.
+# ---------------------------------------------------------------------------
+_V2_RANDOM_LEN = 30
+_V2_CHECKSUM_LEN = 6
+_V2_BODY_LEN = _V2_RANDOM_LEN + _V2_CHECKSUM_LEN  # 36
+_V1_BODY_LEN = 43  # len(secrets.token_urlsafe(32)) — always exactly 43
+
+# Base62 alphabet (0-9A-Za-z ordering makes the checksum fixed-width).
+_BASE62_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+_BASE62 = frozenset(_BASE62_ALPHABET)
+# token_urlsafe alphabet: A-Za-z0-9 plus '-' and '_'.
+_V1_BODY_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+)
+
+_KEY_PREFIXES = ("qwed_live", "qwed_test")
+
+
+def _split_key(api_key: str) -> tuple[str, str] | None:
+    """Split a key into (prefix, body), or None if the shape is wrong.
+
+    The known prefixes (``qwed_live``, ``qwed_test``) themselves contain an
+    underscore, so we match the full ``"<prefix>_"`` prefix rather than
+    splitting on the first '_'. A v1 base64url body may also contain '_',
+    which is why we never re-split the body. Returns None for anything
+    without a known prefix.
+    """
+    if not isinstance(api_key, str):
+        return None
+    for prefix in _KEY_PREFIXES:
+        head = prefix + "_"
+        if api_key.startswith(head):
+            body = api_key[len(head):]
+            return (prefix, body) if body else None
+    return None
+
+
+def _base62_encode(value: int, width: int) -> str:
+    """Encode a non-negative int as fixed-width Base62, zero-padded."""
+    if value < 0:
+        raise ValueError("Base62 checksum input must be non-negative")
+    out = []
+    for _ in range(width):
+        value, rem = divmod(value, 62)
+        out.append(_BASE62_ALPHABET[rem])
+    if value:  # pragma: no cover - crc32 always fits in 6 Base62 chars
+        raise ValueError("value does not fit in the requested Base62 width")
+    return "".join(reversed(out))
+
+
+def _checksum_for(random_body: str) -> str:
+    """6-char Base62 CRC32 checksum over the random body."""
+    return _base62_encode(zlib.crc32(random_body.encode("ascii")), _V2_CHECKSUM_LEN)
+
+
+def is_valid_key_checksum(api_key: str) -> bool:
+    """Return True iff ``api_key`` is a structurally-valid v2 key.
+
+    Strictly a v2 shape check: exact length, alphanumeric body, and a
+    matching checksum. Returns False for v1 keys, test keys, and any
+    malformed input. Pure function — no DB, no secrets, constant-work.
+    """
+    parts = _split_key(api_key)
+    if parts is None:
+        return False
+    prefix, body = parts
+    if prefix != "qwed_live" or len(body) != _V2_BODY_LEN:
+        return False
+    if any(ch not in _BASE62 for ch in body):
+        return False
+    random_body, checksum = body[:_V2_RANDOM_LEN], body[_V2_RANDOM_LEN:]
+    # hmac.compare_digest so a wrong checksum doesn't leak WHERE it diverged.
+    return hmac.compare_digest(_checksum_for(random_body), checksum)
+
+
+def validate_api_key_format(api_key: str) -> str:
+    """Classify a key as ``"v2"``, ``"v1"``, or ``"invalid"``.
+
+    ``"v2"`` requires a valid checksum; ``"v1"`` is the legacy 43-char
+    base64url shape. Everything else is ``"invalid"``.
+    """
+    if is_valid_key_checksum(api_key):
+        return "v2"
+    parts = _split_key(api_key)
+    if parts is None:
+        return "invalid"
+    _, body = parts
+    if len(body) == _V1_BODY_LEN and all(ch in _V1_BODY_CHARS for ch in body):
+        return "v1"
+    return "invalid"
+
+
 def generate_api_key(prefix: str = "qwed_live") -> tuple[str, str]:
     """
-    Generate a new API key and its hash.
+    Generate a new v2 API key and its storage hash.
+
     Returns: (plaintext_key, key_hash)
-    
-    Format: qwed_live_<32_random_chars>
+
+    Format: ``<prefix>_<30 Base62 random><6 Base62 CRC32 checksum>``
+    (see the format note above). ``prefix`` is ``qwed_live`` for production
+    keys and ``qwed_test`` for non-production keys.
     """
-    random_part = secrets.token_urlsafe(32)
-    # Plain concatenation: no literal credential-shaped material is
-    # hard-coded here — the value is freshly generated randomness.
-    plaintext_key = prefix + "_" + random_part
-    
-    # Hash the key for storage
-    key_hash = hash_api_key(plaintext_key)
-    
-    return plaintext_key, key_hash
+    if prefix not in _KEY_PREFIXES:
+        raise ValueError(f"unsupported API-key prefix: {prefix!r}")
+    random_body = "".join(secrets.choice(_BASE62_ALPHABET) for _ in range(_V2_RANDOM_LEN))
+    # Plain concatenation: no credential-shaped material is hard-coded —
+    # the value is freshly generated randomness plus its checksum.
+    plaintext_key = f"{prefix}_{random_body}{_checksum_for(random_body)}"
+    return plaintext_key, hash_api_key(plaintext_key)
 
 
 def _api_key_lookup_secret() -> bytes:
@@ -132,8 +242,9 @@ def hash_api_key(api_key: str) -> str:
     The previous PBKDF2-HMAC-SHA256 with 100,000 iterations sat on the
     unauthenticated request path (hash-then-lookup) and let ~15 req/s of
     garbage x-api-key values saturate the whole service (issue #333).
-    The cost bought no brute-force resistance: API keys are 258-bit random
-    tokens, so equality lookup is unbreakable at any digest speed.
+    The cost bought no brute-force resistance: API keys are >=178-bit
+    random tokens (v1 = 256 bits, v2 = ~178.6 bits), so equality lookup is
+    unbreakable at any digest speed.
 
     Keying material: QWED_API_KEY_LOOKUP_SECRET (REQUIRED — the process
     fails closed at startup without it; stable across JWT-secret
@@ -148,9 +259,9 @@ def hash_api_key(api_key: str) -> str:
     never required. Do NOT add a PBKDF2 fallback for legacy rows — that
     re-introduces #333.
     """
-    # Keyed MAC over a 258-bit random token for equality lookup — not
-    # password storage. A KDF here is the DoS bug (#333): digest speed is
-    # irrelevant to security at this key entropy.
+    # Keyed MAC over a high-entropy (>=178-bit) random token for equality
+    # lookup — not password storage. A KDF here is the DoS bug (#333):
+    # digest speed is irrelevant to security at this key entropy.
     # codeql[py/weak-sensitive-data-hashing]
     mac = hmac.digest(_api_key_lookup_secret() + b":qwed_api_key_lookup", api_key.encode("utf-8"), "sha256")
     return mac.hex()
