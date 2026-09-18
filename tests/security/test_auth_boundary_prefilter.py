@@ -8,9 +8,13 @@ used — so a regression that removes or relocates the pre-filter fails here.
 Covers the whole family of boundaries (middleware.get_api_key,
 tenant_context.get_current_tenant, api.main.get_optional_api_key_record)
 rather than only the one that happened to be flagged.
+
+These dependencies are async, so the tests are `async def` under the repo's
+`@pytest.mark.asyncio` convention (as in test_logic_exceptions.py). A single
+`await` sits inside `pytest.raises`, so the raising call is unambiguous and no
+`asyncio.run` wrapper adds a second invocation to the block.
 """
 
-import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -36,33 +40,36 @@ MALFORMED_KEY = "qwed_live_" + "!"
 class TestMiddlewareGetApiKey:
     """src/qwed_new/auth/middleware.py::get_api_key"""
 
-    def test_rejects_malformed_header_before_lookup(self):
+    @pytest.mark.asyncio
+    async def test_rejects_malformed_header_before_lookup(self):
         session = MagicMock()
-        with patch("qwed_new.auth.middleware.hash_api_key") as mock_hash:
-            with pytest.raises(HTTPException) as exc:
-                asyncio.run(get_api_key(api_key_header=MALFORMED_KEY, session=session))
+        with (
+            patch("qwed_new.auth.middleware.hash_api_key") as mock_hash,
+            pytest.raises(HTTPException) as exc,
+        ):
+            await get_api_key(api_key_header=MALFORMED_KEY, session=session)
 
         assert exc.value.status_code == 403
         assert exc.value.detail == "Invalid or revoked API Key"
         mock_hash.assert_not_called()
         session.exec.assert_not_called()
 
-    def test_missing_header_is_401(self):
+    @pytest.mark.asyncio
+    async def test_missing_header_is_401(self):
         session = MagicMock()
         with pytest.raises(HTTPException) as exc:
-            asyncio.run(get_api_key(api_key_header="", session=session))
+            await get_api_key(api_key_header="", session=session)
 
         assert exc.value.status_code == 401
         session.exec.assert_not_called()
 
-    def test_valid_v2_key_reaches_lookup(self):
+    @pytest.mark.asyncio
+    async def test_valid_v2_key_reaches_lookup(self):
         """Dual acceptance: a valid v2 key must pass the gate, not be blocked."""
         session = MagicMock()
         session.exec.return_value.first.return_value = MagicMock()
         with patch("qwed_new.auth.middleware.hash_api_key", return_value="digest") as mock_hash:
-            result = asyncio.run(
-                get_api_key(api_key_header=_fixed_v2_key(), session=session)
-            )
+            result = await get_api_key(api_key_header=_fixed_v2_key(), session=session)
 
         assert result is not None
         mock_hash.assert_called_once()
@@ -72,18 +79,22 @@ class TestMiddlewareGetApiKey:
 class TestTenantContextGetCurrentTenant:
     """src/qwed_new/core/tenant_context.py::get_current_tenant"""
 
-    def test_rejects_malformed_key_before_lookup(self):
+    @pytest.mark.asyncio
+    async def test_rejects_malformed_key_before_lookup(self):
         session = MagicMock()
-        with patch("qwed_new.core.tenant_context.hash_api_key") as mock_hash:
-            with pytest.raises(HTTPException) as exc:
-                asyncio.run(get_current_tenant(x_api_key=MALFORMED_KEY, session=session))
+        with (
+            patch("qwed_new.core.tenant_context.hash_api_key") as mock_hash,
+            pytest.raises(HTTPException) as exc,
+        ):
+            await get_current_tenant(x_api_key=MALFORMED_KEY, session=session)
 
         assert exc.value.status_code == 401
         assert exc.value.detail == "Invalid or inactive API key"
         mock_hash.assert_not_called()
         session.exec.assert_not_called()
 
-    def test_valid_v2_key_reaches_lookup(self):
+    @pytest.mark.asyncio
+    async def test_valid_v2_key_reaches_lookup(self):
         """Dual acceptance: valid v2 key passes the gate to the key + org lookup."""
         session = MagicMock()
         api_key_row = MagicMock(organization_id=1)
@@ -91,9 +102,7 @@ class TestTenantContextGetCurrentTenant:
         session.exec.return_value.first.side_effect = [api_key_row, org_row]
 
         with patch("qwed_new.core.tenant_context.hash_api_key", return_value="digest") as mock_hash:
-            tenant = asyncio.run(
-                get_current_tenant(x_api_key=_fixed_v2_key(), session=session)
-            )
+            tenant = await get_current_tenant(x_api_key=_fixed_v2_key(), session=session)
 
         assert tenant.organization_id == 1
         mock_hash.assert_called_once()
