@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -7,6 +8,15 @@ from qwed_new.api import main as api_main
 from qwed_new.api.main import get_optional_api_key_record, get_optional_current_user
 from qwed_new.core.agent_service import ActionContext, AgentAction, AgentService
 from qwed_new.core.policy import RedisSlidingWindowLimiter
+
+# Fixed timestamps (not clock-derived) so runs are byte-for-byte reproducible
+# — the repo convention for injected test inputs (see tests/conftest.py,
+# "Fixed, not uuid-derived, so verification runs are byte-for-byte
+# reproducible"). The resolver compares against the real clock, so a far-past
+# value is always expired and a far-future value is always live.
+_FIXED_EXPIRED_AT = datetime(2020, 1, 1, tzinfo=timezone.utc)
+_FIXED_EXPIRED_AT_NAIVE = datetime(2020, 1, 1)  # naive-UTC (key_rotation convention)
+_FIXED_UNEXPIRED_AT = datetime(2999, 1, 1, tzinfo=timezone.utc)
 
 
 def _fixed_v2_key() -> str:
@@ -412,9 +422,7 @@ def test_get_optional_api_key_record_treats_expired_key_as_absent():
     """CodeAnt on PR #349: is_active is not a liveness check. An expired key
     resolves to None (not a raise) so a valid operator JWT in the same
     request is not preempted (Sentry on PR #349)."""
-    from datetime import datetime, timedelta, timezone
-
-    expired = MagicMock(expires_at=datetime.now(timezone.utc) - timedelta(days=1), revoked_at=None)
+    expired = MagicMock(expires_at=_FIXED_EXPIRED_AT, revoked_at=None)
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = expired
 
@@ -431,10 +439,8 @@ def test_get_optional_api_key_record_treats_expired_key_as_absent():
 def test_get_optional_api_key_record_normalizes_naive_stored_expiry():
     """expires_at is written naive-UTC (key_rotation convention); a naive
     past value must still be interpreted as UTC-expired, not crash."""
-    from datetime import datetime, timedelta, timezone
-
     naive_expired = MagicMock(
-        expires_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1),
+        expires_at=_FIXED_EXPIRED_AT_NAIVE,
         revoked_at=None,
     )
     mock_session = MagicMock()
@@ -451,9 +457,7 @@ def test_get_optional_api_key_record_normalizes_naive_stored_expiry():
 def test_get_optional_api_key_record_treats_revoked_key_as_absent():
     """Defense-in-depth for corrupted rows (revoked_at stamped, is_active
     not flipped): not a usable credential."""
-    from datetime import datetime, timedelta, timezone
-
-    revoked = MagicMock(expires_at=None, revoked_at=datetime.now(timezone.utc) - timedelta(days=1))
+    revoked = MagicMock(expires_at=None, revoked_at=_FIXED_EXPIRED_AT)
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = revoked
 
@@ -466,10 +470,8 @@ def test_get_optional_api_key_record_treats_revoked_key_as_absent():
 
 
 def test_get_optional_api_key_record_allows_unexpired_key():
-    from datetime import datetime, timedelta, timezone
-
     live = MagicMock(
-        expires_at=datetime.now(timezone.utc) + timedelta(days=30), revoked_at=None
+        expires_at=_FIXED_UNEXPIRED_AT, revoked_at=None
     )
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = live
@@ -506,15 +508,13 @@ def test_metrics_allows_operator_jwt_when_api_key_expired(client, monkeypatch):
     """Sentry on PR #349 (MEDIUM): an expired X-Api-Key header must not
     preempt a valid operator JWT — the key resolves to None and the JWT
     still authorizes the all-tenant metrics read."""
-    from datetime import datetime, timedelta, timezone
-
     monkeypatch.setenv("QWED_METRICS_OPERATOR_USER_IDS", "7")
     api_main.app.dependency_overrides[get_optional_current_user] = lambda: MagicMock(
         role="member", is_active=True, id=7
     )
 
     expired = MagicMock(
-        expires_at=datetime.now(timezone.utc) - timedelta(days=1), revoked_at=None
+        expires_at=_FIXED_EXPIRED_AT, revoked_at=None
     )
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = expired
@@ -539,13 +539,11 @@ def test_metrics_allows_operator_jwt_when_api_key_expired(client, monkeypatch):
 def test_metrics_denies_expired_api_key_without_jwt(client, monkeypatch):
     """Fail-closed still holds: an expired key presented alone authorizes
     nothing (resolves to no credential -> 401)."""
-    from datetime import datetime, timedelta, timezone
-
     monkeypatch.setenv("QWED_METRICS_OPERATOR_USER_IDS", "7")
     api_main.app.dependency_overrides[get_optional_current_user] = lambda: None
 
     expired = MagicMock(
-        expires_at=datetime.now(timezone.utc) - timedelta(days=1), revoked_at=None
+        expires_at=_FIXED_EXPIRED_AT, revoked_at=None
     )
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = expired

@@ -2,12 +2,13 @@
 
 Targets uncovered code paths reported by SonarQube for #264.
 """
+import hashlib
 import os
-import secrets
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
-from fastapi.testclient import TestClient
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
 
@@ -708,7 +709,10 @@ def test_get_optional_api_key_record_success():
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = mock_api_key
 
-    fake_hash = secrets.token_hex(8)
+    # Deterministic (not secrets-derived) so runs are byte-for-byte
+    # reproducible: this is the patched hash_api_key return, so any fixed
+    # 64-char digest works.
+    fake_hash = hashlib.sha256(b"fixed-api-key-digest").hexdigest()
     # Deterministic, structurally-valid v2 key: computed (no randomness, not a
     # hardcoded credential literal) so the #366 format gate passes and the
     # mocked hash + lookup path is exercised.
