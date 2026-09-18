@@ -700,7 +700,7 @@ def test_get_optional_current_user_success():
 def test_get_optional_api_key_record_success():
     """Cover get_optional_api_key_record success path: return api_key."""
     from qwed_new.api.main import get_optional_api_key_record
-    from qwed_new.auth.security import generate_api_key
+    from qwed_new.auth.security import _V2_RANDOM_LEN, _checksum_for
 
     # expires_at/revoked_at must be None explicitly: a bare MagicMock makes
     # them auto-truthy and the liveness check (PR #349) rejects the key.
@@ -709,9 +709,11 @@ def test_get_optional_api_key_record_success():
     mock_session.execute.return_value.scalars.return_value.first.return_value = mock_api_key
 
     fake_hash = secrets.token_hex(8)
-    # A structurally-valid v2 key so the #366 format pre-filter lets it reach
-    # the (mocked) hash + lookup path this success test exercises.
-    fake_key, _ = generate_api_key()
+    # Deterministic, structurally-valid v2 key: computed (no randomness, not a
+    # hardcoded credential literal) so the #366 format gate passes and the
+    # mocked hash + lookup path is exercised.
+    body = "A" * _V2_RANDOM_LEN
+    fake_key = "qwed_live_" + body + _checksum_for(body)
     with patch("qwed_new.api.main.hash_api_key", return_value=fake_hash):
         result = get_optional_api_key_record(
             x_api_key=fake_key,

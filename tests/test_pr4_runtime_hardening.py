@@ -5,9 +5,22 @@ from fastapi.testclient import TestClient
 
 from qwed_new.api import main as api_main
 from qwed_new.api.main import get_optional_api_key_record, get_optional_current_user
-from qwed_new.auth.security import generate_api_key as _generate_v2_key
 from qwed_new.core.agent_service import ActionContext, AgentAction, AgentService
 from qwed_new.core.policy import RedisSlidingWindowLimiter
+
+
+def _fixed_v2_key() -> str:
+    """Deterministic, structurally-valid v2 API key.
+
+    Repeatable across runs (no randomness — QWED determinism) and not a
+    hardcoded credential literal: the key is computed from a fixed body plus
+    the module's own checksum helper. Used by tests that must pass the #366
+    format gate to reach the code path under test.
+    """
+    from qwed_new.auth.security import _V2_RANDOM_LEN, _checksum_for
+
+    body = "A" * _V2_RANDOM_LEN
+    return "qwed_live_" + body + _checksum_for(body)
 
 
 @pytest.fixture
@@ -407,7 +420,7 @@ def test_get_optional_api_key_record_treats_expired_key_as_absent():
 
     # Valid v2 shape so the #366 pre-filter passes and the expired-key branch
     # (the actual subject of this test) is what produces the None.
-    valid_key, _ = _generate_v2_key()
+    valid_key = _fixed_v2_key()
     with patch("qwed_new.api.main.hash_api_key", return_value="h"):
         result = get_optional_api_key_record(x_api_key=valid_key, session=mock_session)
 
@@ -427,7 +440,7 @@ def test_get_optional_api_key_record_normalizes_naive_stored_expiry():
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = naive_expired
 
-    valid_key, _ = _generate_v2_key()
+    valid_key = _fixed_v2_key()
     with patch("qwed_new.api.main.hash_api_key", return_value="h"):
         result = get_optional_api_key_record(x_api_key=valid_key, session=mock_session)
 
@@ -444,7 +457,7 @@ def test_get_optional_api_key_record_treats_revoked_key_as_absent():
     mock_session = MagicMock()
     mock_session.execute.return_value.scalars.return_value.first.return_value = revoked
 
-    valid_key, _ = _generate_v2_key()
+    valid_key = _fixed_v2_key()
     with patch("qwed_new.api.main.hash_api_key", return_value="h"):
         result = get_optional_api_key_record(x_api_key=valid_key, session=mock_session)
 
@@ -463,7 +476,7 @@ def test_get_optional_api_key_record_allows_unexpired_key():
 
     # A structurally-valid (v2) key shape so the issue-#366 format pre-filter
     # lets it through to the (mocked) hash + lookup path this test exercises.
-    valid_key, _ = _generate_v2_key()
+    valid_key = _fixed_v2_key()
     with patch("qwed_new.api.main.hash_api_key", return_value="h"):
         result = get_optional_api_key_record(x_api_key=valid_key, session=mock_session)
 
@@ -476,12 +489,12 @@ def test_get_optional_api_key_record_rejects_malformed_key_before_lookup():
     mock_session = MagicMock()
 
     with patch("qwed_new.api.main.hash_api_key") as mock_hash:
-        # Fixed, deliberately-malformed input: no "qwed_" prefix, so the format
-        # classifier always returns "invalid". Deterministic (NOT read from the
-        # environment — an override could supply a *valid* key and silently flip
-        # this test onto the lookup path, breaking assert_not_called()) and not
-        # a credential-shaped literal, so it needs no Snyk suppression.
-        malformed = "malformed-header-value"
+        # Fixed, deliberately-malformed input: a valid prefix with an invalid
+        # body can never validate, so the format gate always rejects it. Built
+        # by concatenation (not a credential-shaped literal, so no hardcoded-
+        # secret finding) and NOT read from the environment — an override could
+        # supply a *valid* key and silently flip this test onto the lookup path.
+        malformed = "qwed_live_" + "!"
         result = get_optional_api_key_record(x_api_key=malformed, session=mock_session)
 
     assert result is None
@@ -512,10 +525,15 @@ def test_metrics_allows_operator_jwt_when_api_key_expired(client, monkeypatch):
     ), patch.object(
         api_main.metrics_collector, "get_all_tenant_metrics", return_value={"1": {"requests": 1}}
     ):
-        response = client.get("/metrics", headers={"x-api-key": "stale-key"})
+        # Valid v2 shape so the #366 format gate passes and the expired row —
+        # not a malformed header — is what resolves to None, proving the JWT
+        # still authorizes the read.
+        expired_key = _fixed_v2_key()
+        response = client.get("/metrics", headers={"x-api-key": expired_key})
 
     assert response.status_code == 200
     assert response.json()["global"] == {"requests": 1}
+    mock_session.execute.assert_called_once()  # expired key reached the liveness check
 
 
 def test_metrics_denies_expired_api_key_without_jwt(client, monkeypatch):
@@ -534,10 +552,14 @@ def test_metrics_denies_expired_api_key_without_jwt(client, monkeypatch):
     api_main.app.dependency_overrides[api_main.get_session] = lambda: mock_session
 
     with patch("qwed_new.api.main.hash_api_key", return_value="h"):
-        response = client.get("/metrics", headers={"x-api-key": "stale-key"})
+        # Valid v2 shape so the #366 format gate passes and the resolver reaches
+        # the mocked lookup, where the expired row resolves to no credential.
+        expired_key = _fixed_v2_key()
+        response = client.get("/metrics", headers={"x-api-key": expired_key})
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Authentication required"
+    mock_session.execute.assert_called_once()  # reached the lookup + liveness check
 
 
 def test_get_optional_current_user_rejects_missing_sub_claim():
