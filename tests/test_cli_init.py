@@ -45,14 +45,20 @@ def _stub_lookup_secret():
     real randomness into the process env and never read the developer's real
     .env (issue #372). The preset markers also model the retained-secret
     rerun, so the stale-server hard stop only triggers in tests that
-    explicitly clear them. Tests needing other behavior patch over this."""
+    explicitly clear them. The full environ snapshot makes the file hermetic:
+    onboarding writes directly to os.environ, which monkeypatch cannot track,
+    and leaked keys (provider/API/lookup) have historically perturbed later
+    tests in full-suite runs. Tests needing other behavior patch over this."""
+    before = dict(os.environ)
     with patch("qwed_new.config.ensure_lookup_secret", return_value=TEST_LOOKUP_MARKER):
         with patch("qwed_sdk.cli._seed_server_secrets_from_project_root", return_value=None):
             with patch.dict(os.environ, {
                 "QWED_JWT_SECRET_KEY": TEST_TOKEN_MARKER,
                 "QWED_API_KEY_LOOKUP_SECRET": TEST_LOOKUP_MARKER,
-            }):
+            }, clear=False):
                 yield
+    os.environ.clear()
+    os.environ.update(before)
 
 
 def _engine_report():
