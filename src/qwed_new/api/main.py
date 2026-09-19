@@ -40,6 +40,7 @@ from qwed_new.auth.audit_routes import router as audit_router
 from qwed_new.auth.middleware import get_api_key
 from qwed_new.auth.routes import get_current_user_token
 from qwed_new.auth.security import hash_api_key, validate_api_key_format
+from qwed_new.api.secret_scanning_routes import router as secret_scanning_router
 
 TenantDependency = Annotated[TenantContext, Depends(get_current_tenant)]
 SessionDependency = Annotated[Session, Depends(get_session)]
@@ -193,6 +194,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(audit_router)
 app.include_router(verification_context_router)
+app.include_router(secret_scanning_router)
 
 STARTUP_ALLOWED_PTH_FILES = {
     "__editable__.qwed_a2a-0.1.0.pth",
