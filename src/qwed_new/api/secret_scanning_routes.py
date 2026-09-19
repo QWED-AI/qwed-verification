@@ -565,11 +565,11 @@ async def _verified_key_id(raw_body: bytes, key_id: str, signature_b64: str) -> 
     """
     try:
         keys = await run_in_threadpool(get_signing_keys)
-    except (httpx.HTTPError, OSError, RuntimeError, ValueError):
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError) as exc:
         # Fail closed with a retryable 503, not an unhandled 500 (Sentry
         # HIGH on #374). SignatureRejected (401/403) is an HTTPException
         # and is NOT caught here — it propagates unchanged.
-        raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL)
+        raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL) from exc
     verifier = _try_build(keys)
     if verifier is None:
         # Anchor present but unusable (e.g. the only cached key is off-spec):
@@ -590,12 +590,12 @@ async def _verified_key_id(raw_body: bytes, key_id: str, signature_b64: str) -> 
     verifier = _build_verifier(keys)
     try:
         return verifier.verify(raw_body, key_id, signature_b64)
-    except SignatureRejected:
+    except SignatureRejected as exc:
         # Fresh anchor + still unknown -> forged -> 403. Suspect anchor
         # (recent fetch failure or stale cache, e.g. throttled during an
         # outage) -> 503 so the scanner redelivers (Sentry HIGH on #374).
         if _trust_anchor_suspect():
-            raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL)
+            raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL) from exc
         raise
 
 
@@ -605,8 +605,8 @@ async def _forced_keys() -> dict[str, str]:
     was impossible — the scanner should redeliver (CodeRabbit major #374)."""
     try:
         return await run_in_threadpool(get_signing_keys, True)
-    except (httpx.HTTPError, OSError, RuntimeError, ValueError):
-        raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL)
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL) from exc
 
 
 def _try_build(keys: dict[str, str]) -> SignatureVerifier | None:
@@ -626,8 +626,8 @@ def _build_verifier(keys: dict[str, str]) -> SignatureVerifier:
     """
     try:
         return SignatureVerifier(keys)
-    except SignatureRejected:
-        raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL)
+    except SignatureRejected as exc:
+        raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL) from exc
 
 
 # ---------------------------------------------------------------------------
