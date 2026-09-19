@@ -118,6 +118,24 @@ consume the verified result as produced; it must not reinterpret, downgrade, or
 upgrade the verdict to fit a policy outcome. The control plane consumes the
 admission decision and the preserved diagnostic separately.
 
+## Precision Conventions
+
+Exact arithmetic is required where rounding changes the verdict; approximate
+clocks are acceptable where only coarse windows are decided:
+
+- Money and financial quantities: `Decimal` throughout (never binary float
+  for accumulation or comparison). `float` is acceptable only at untrusted
+  input boundaries (e.g. parsing LLM text), converted immediately via
+  `Decimal(str(...))` and compared against an explicit tolerance.
+- Sub-second deadlines and latency accounting: integer `time.monotonic_ns()`.
+- Coarse windows (TTL, throttle, backoff, rate-limit buckets of >=1s):
+  float `time.monotonic()` / `time.time()` comparisons are acceptable —
+  float error at these magnitudes is microseconds and cannot flip the
+  decision.
+
+A blanket "no float math" finding against a coarse-window clock comparison
+is a false positive under this convention; cite it when dismissing.
+
 ## Forbidden Suggestions
 
 - "Add fallback for reliability"
