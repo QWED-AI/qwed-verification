@@ -34,7 +34,7 @@ from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
@@ -103,8 +103,7 @@ class SecretMatch(BaseModel):
     url: str = Field(default="", max_length=4096)
     source: str = Field(default="unknown", max_length=64)
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 #: Sink for verified match batches. Replaced by the #368 revocation handler;
@@ -475,7 +474,6 @@ def _leader_refresh(event: threading.Event, want_forced_stamp: bool) -> dict[str
             _FETCH_STATE["event"] = None
             event.set()
     return published
-
 
 
 def _trust_anchor_suspect() -> bool:

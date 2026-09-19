@@ -325,9 +325,9 @@ class TestSignatureGate:
         # must still trigger the rotation refetch — checked against the
         # verifier's usable set, not the raw dict. Fixed upstream key ->
         # 200, not a permanent 403.
+        from cryptography.hazmat.primitives.asymmetric import rsa
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
-        from cryptography.hazmat.primitives.asymmetric import rsa
 
         private_key, good_pem = keypair
         rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -621,7 +621,7 @@ class TestKeyCache:
         def _worker():
             try:
                 results.append(routes.get_signing_keys())
-            except Exception as exc:  # fail-closed surface only
+            except Exception as exc:  # noqa: BLE001 -- any failure is recorded, never raised
                 errors.append(exc)
 
         with patch.object(routes, "_KEYS_CACHE", cache), patch.object(
