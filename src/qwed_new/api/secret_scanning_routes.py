@@ -488,6 +488,7 @@ def _record_receipt(matches: list[SecretMatch], *, event: str) -> None:
         401: {"description": "Missing signature headers"},
         403: {"description": "Invalid, forged, or unverifiable signature"},
         413: {"description": "Body or batch over cap"},
+        503: {"description": "Signing keys unavailable; retry later"},
     },
 )
 async def secret_scanning_webhook(request: Request, background: BackgroundTasks) -> Response:
@@ -508,6 +509,9 @@ async def secret_scanning_webhook(request: Request, background: BackgroundTasks)
     Verified receipt (200) is returned even though downstream work (#368) runs
     later — the report itself is authentic, so acknowledging it is safe. Only
     signature failures (401/403) and malformed envelopes (400/413) are non-2xx.
+    A dead/unreachable key service is 503 (retryable), never a 500: the trust
+    anchor cannot be refreshed, so verification fails closed without leaking
+    internals.
     """
     # Bound the read FIRST: consume the stream incrementally and reject the
     # moment the cap is exceeded. We never buffer an unbounded unsigned body.
@@ -523,7 +527,14 @@ async def secret_scanning_webhook(request: Request, background: BackgroundTasks)
     if not key_id or not signature_b64:
         raise SignatureRejected(status_code=401, detail="missing webhook signature")
 
-    keys = await run_in_threadpool(get_signing_keys)
+    try:
+        keys = await run_in_threadpool(get_signing_keys)
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError):
+        # Fail closed with a retryable 503, not an unhandled 500 (Sentry
+        # HIGH on #374): without the trust anchor the signature cannot be
+        # verified, so reject explicitly. SignatureRejected (401/403) is an
+        # HTTPException and is NOT caught here — it propagates unchanged.
+        raise HTTPException(status_code=503, detail="signing keys unavailable")
     verifier = SignatureVerifier(keys)
     try:
         verified_id = verifier.verify(raw_body, key_id, signature_b64)

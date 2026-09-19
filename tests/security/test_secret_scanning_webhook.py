@@ -231,6 +231,38 @@ class TestSignatureGate:
         assert resp.status_code == 400
         sink.assert_not_called()
 
+    def test_keys_unavailable_returns_503_not_500(self, keypair, key_id, payload):
+        # Sentry HIGH on #374: empty/expired cache + dead key service must
+        # fail closed with retryable 503, never an unhandled 500.
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        private_key, _ = keypair
+        raw = _canonical(payload)
+        sig = _sign(private_key, raw)
+        app = FastAPI()
+        app.include_router(router)
+        empty_cache = {
+            "keys": {},
+            "etag": None,
+            "fetched_at": 0.0,
+            "last_forced_refresh": None,
+        }
+        routes._FETCH_STATE["event"] = None
+        with patch.object(routes, "_KEYS_CACHE", empty_cache), patch.object(
+            routes, "_fetch_keys", side_effect=RuntimeError("keys endpoint down")
+        ), patch.object(routes, "on_verified_matches") as sink:
+            resp = TestClient(app, raise_server_exceptions=False).post(
+                "/webhooks/secret-scanning",
+                content=raw,
+                headers={
+                    "Github-Public-Key-Identifier": key_id,
+                    "Github-Public-Key-Signature": sig,
+                },
+            )
+        assert resp.status_code == 503
+        sink.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # The verifier unit: DER parsing, curve enforcement, timing safety
