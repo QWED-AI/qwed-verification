@@ -269,7 +269,10 @@ _KEYS_CACHE_LOCK = threading.Lock()
 #: network I/O and never serves stale keys on failure — followers re-check
 #: and fail closed if the leader failed.
 _FETCH_GATE_LOCK = threading.Lock()
-_FETCH_IN_FLIGHT: threading.Event | None = None
+#: In-flight refresh event, held as {"event": Event|None} (dict, not a bare
+#: rebinding global, so no `global` statement is needed). Exactly one leader
+#: fetches; followers wait bounded and re-check freshness, failing closed.
+_FETCH_STATE: dict[str, Any] = {"event": None}
 #: Upper bound for a follower to wait for the leader's fetch (httpx timeout
 #: is 10s; margin covers scheduling jitter). Expiry means fail closed, not
 #: a cascading second fetch — the next webhook retries.
@@ -372,37 +375,51 @@ def get_signing_keys(force_refresh: bool = False) -> dict[str, str]:
             return cached
 
     # Singleflight election: only the leader hits the network.
-    global _FETCH_IN_FLIGHT
+    # No `global` rebinding: the event lives in _FETCH_STATE (dict mutation).
     with _FETCH_GATE_LOCK:
-        if _FETCH_IN_FLIGHT is not None:
-            follower_event = _FETCH_IN_FLIGHT
+        in_flight = _FETCH_STATE.get("event")
+        if in_flight is not None:
+            follower_event = in_flight
             is_leader = False
         else:
             follower_event = threading.Event()
-            _FETCH_IN_FLIGHT = follower_event
+            _FETCH_STATE["event"] = follower_event
             is_leader = True
     if not is_leader:
+        # Follower: bounded wait, then require a FRESH cache. A failed
+        # leader must not leave followers trusting expired keys (Sentry
+        # HIGH + CodeRabbit major on #374): stale or empty -> fail closed.
         follower_event.wait(timeout=_FETCH_WAIT_SECONDS)
         with _KEYS_CACHE_LOCK:
             after = dict(_KEYS_CACHE.get("keys", {}))
-        if not after:
+            after_fetched_at = _KEYS_CACHE.get("fetched_at")
+        refreshed = (
+            bool(after)
+            and after_fetched_at is not None
+            and (time.monotonic() - after_fetched_at < KEYS_CACHE_TTL_SECONDS)
+        )
+        if not refreshed:
             raise RuntimeError("signing-key refresh in progress failed")
         return after
 
-    # Leader path: fetch outside both locks; always release followers.
+    # Leader path: publish BEFORE releasing followers (Greptile P1 on #374).
+    # A follower woken before publication would otherwise verify against the
+    # old cache and 403 an authentic rotated-key report. The finally only
+    # releases the gate; publication happens first inside try.
     try:
-        keys, etag = _fetch_keys()
+        fetched_keys, fetched_etag = _fetch_keys()
+        if not fetched_keys:
+            raise RuntimeError("no signing keys available")
+        with _KEYS_CACHE_LOCK:
+            _KEYS_CACHE["keys"] = fetched_keys
+            _KEYS_CACHE["etag"] = fetched_etag
+            _KEYS_CACHE["fetched_at"] = time.monotonic()
+        published = dict(fetched_keys)
     finally:
         with _FETCH_GATE_LOCK:
-            _FETCH_IN_FLIGHT = None
+            _FETCH_STATE["event"] = None
             follower_event.set()
-    if not keys:
-        raise RuntimeError("no signing keys available")
-    with _KEYS_CACHE_LOCK:
-        _KEYS_CACHE["keys"] = keys
-        _KEYS_CACHE["etag"] = etag
-        _KEYS_CACHE["fetched_at"] = time.monotonic()
-    return keys
+    return published
 
 
 # ---------------------------------------------------------------------------

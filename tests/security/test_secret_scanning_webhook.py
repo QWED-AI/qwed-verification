@@ -332,7 +332,7 @@ class TestKeyCache:
     """
 
     def _cache(self, *, keys=None, etag=None, fetched_at=0.0, last_forced_refresh=None):
-        routes._FETCH_IN_FLIGHT = None
+        routes._FETCH_STATE["event"] = None
         return {
             "keys": keys or {},
             "etag": etag,
@@ -444,6 +444,43 @@ class TestKeyCache:
         assert len(results) == 8
         assert calls["n"] == 1
         assert all("kid" in r for r in results)
+
+    def test_follower_fails_closed_when_leader_fails(self):
+        # Sentry HIGH + CodeRabbit major on #374: leader fetch fails with
+        # expired keys cached -> concurrent follower must also raise, never
+        # return the expired keys.
+        import threading as _threading
+
+        _, public_key = _fixture_keypair()
+        pem = _pem_of(public_key)
+        expired_at = 0.0
+        now = routes.KEYS_CACHE_TTL_SECONDS + 100.0
+        cache = self._cache(keys={"kid": pem}, fetched_at=expired_at)
+
+        def _failing_fetch():
+            import time as _time
+
+            _time.sleep(0.2)
+            raise RuntimeError("keys endpoint down")
+
+        errors: list = []
+
+        def _worker():
+            try:
+                routes.get_signing_keys()
+            except RuntimeError as exc:
+                errors.append(exc)
+
+        with patch.object(routes, "_KEYS_CACHE", cache), patch.object(
+            routes, "_fetch_keys", side_effect=_failing_fetch
+        ), patch.object(routes.time, "monotonic", return_value=now):
+            t1 = _threading.Thread(target=_worker)
+            t2 = _threading.Thread(target=_worker)
+            t1.start()
+            t2.start()
+            t1.join(timeout=10)
+            t2.join(timeout=10)
+        assert len(errors) == 2
 
 
 class TestMixedCurveResilience:
