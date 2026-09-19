@@ -209,16 +209,31 @@ class TestSignatureGate:
     def test_unknown_key_id_rejected_and_sink_not_called(
         self, app_client, keypair, key_id, payload
     ):
-        private_key, _ = keypair
+        private_key, pem = keypair
         raw = _canonical(payload)
         unknown = "0" * 64
         with patch.object(routes, "on_verified_matches") as sink, patch.object(
-            routes, "_fetch_keys", side_effect=_raise_fetch
+            routes, "_fetch_keys", return_value=({key_id: pem}, '"etag-1"')
         ) as fetch:
             resp = _post(app_client, raw, unknown, _sign(private_key, raw))
         assert resp.status_code == 403
         sink.assert_not_called()
         fetch.assert_called_once()  # one rotation-refetch, then fail closed
+
+    def test_unknown_key_id_with_dead_refetch_returns_503(
+        self, app_client, keypair, key_id, payload
+    ):
+        # Unknown key + refetch service down: verification was impossible,
+        # so retryable 503, not 403 (CodeRabbit major #374).
+        private_key, _ = keypair
+        raw = _canonical(payload)
+        unknown = "0" * 64
+        with patch.object(routes, "on_verified_matches") as sink, patch.object(
+            routes, "_fetch_keys", side_effect=_raise_fetch
+        ):
+            resp = _post(app_client, raw, unknown, _sign(private_key, raw))
+        assert resp.status_code == 503
+        sink.assert_not_called()
 
     def test_non_json_body_rejected(self, app_client, keypair, key_id):
         private_key, _ = keypair
@@ -492,12 +507,15 @@ class TestKeyCache:
         def _failing_fetch():
             import time as _time
 
+            calls["n"] += 1
             _time.sleep(0.2)
             raise RuntimeError("keys endpoint down")
 
         errors: list = []
+        calls = {"n": 0}
 
-        def _worker():
+        def _worker(start_gate):
+            start_gate.wait(timeout=10)
             try:
                 routes.get_signing_keys()
             except RuntimeError as exc:
@@ -506,13 +524,19 @@ class TestKeyCache:
         with patch.object(routes, "_KEYS_CACHE", cache), patch.object(
             routes, "_fetch_keys", side_effect=_failing_fetch
         ), patch.object(routes.time, "monotonic", return_value=now):
-            t1 = _threading.Thread(target=_worker)
-            t2 = _threading.Thread(target=_worker)
+            import threading as _t
+
+            start_gate = _t.Barrier(2)
+            t1 = _threading.Thread(target=_worker, args=(start_gate,))
+            t2 = _threading.Thread(target=_worker, args=(start_gate,))
             t1.start()
             t2.start()
             t1.join(timeout=10)
             t2.join(timeout=10)
         assert len(errors) == 2
+        # Exactly one leader fetch: proves one worker was a true follower
+        # that failed because the leader failed (CodeRabbit minor #374).
+        assert calls["n"] == 1
 
 
 class TestMixedCurveResilience:

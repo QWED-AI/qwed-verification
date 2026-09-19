@@ -545,10 +545,13 @@ async def secret_scanning_webhook(request: Request, background: BackgroundTasks)
         # retry against the fresh list; anything still unknown fails closed.
         # The forced refetch is throttled inside get_signing_keys, so a flood
         # of unknown ids cannot drive the outbound GitHub rate.
+        # A dead refetch service is 503 (retryable), NOT the original 403:
+        # 403 means "forged/retired, don't retry", but here verification was
+        # impossible — the scanner should redeliver (CodeRabbit major #374).
         try:
             keys = await run_in_threadpool(get_signing_keys, True)
         except (httpx.HTTPError, OSError, RuntimeError, ValueError):
-            raise first
+            raise HTTPException(status_code=503, detail="signing keys unavailable")
         verifier = SignatureVerifier(keys)
         verified_id = verifier.verify(raw_body, key_id, signature_b64)
     if verified_id != key_id:
