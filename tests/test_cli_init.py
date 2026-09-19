@@ -43,10 +43,16 @@ def runner():
 def _stub_lookup_secret():
     """Pin the lookup secret and root seeding so init-path tests never mint
     real randomness into the process env and never read the developer's real
-    .env (issue #372). Tests needing other behavior patch over this."""
+    .env (issue #372). The preset markers also model the retained-secret
+    rerun, so the stale-server hard stop only triggers in tests that
+    explicitly clear them. Tests needing other behavior patch over this."""
     with patch("qwed_new.config.ensure_lookup_secret", return_value=TEST_LOOKUP_MARKER):
         with patch("qwed_sdk.cli._seed_server_secrets_from_project_root", return_value=None):
-            yield
+            with patch.dict(os.environ, {
+                "QWED_JWT_SECRET_KEY": TEST_TOKEN_MARKER,
+                "QWED_API_KEY_LOOKUP_SECRET": TEST_LOOKUP_MARKER,
+            }):
+                yield
 
 
 def _engine_report():
@@ -165,7 +171,7 @@ def test_init_non_interactive_success(
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
 @patch("qwed_new.config.ensure_jwt_secret", return_value="fresh-jwt-value")
-def test_init_warns_when_healthy_server_predates_fresh_secrets(
+def test_init_stops_when_healthy_server_predates_fresh_secrets(
     _mock_jwt,
     _mock_write_env,
     _mock_test_connection,
@@ -180,9 +186,9 @@ def test_init_warns_when_healthy_server_predates_fresh_secrets(
     runner,
     monkeypatch,
 ):
-    """CodeAnt stale-reference on #375: freshly generated secrets + an
-    already-healthy server means the running process cannot serve them —
-    warn loudly instead of silently bootstrapping against stale state."""
+    """Greptile P1 on #375: freshly generated secrets + an already-healthy
+    server means bootstrapping would issue a key the restarted server cannot
+    resolve (proven 200-then-401). Stop before bootstrapping instead."""
     monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
     monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
     with patch("qwed_new.config.ensure_lookup_secret", return_value="fresh-lookup-value"):
@@ -191,8 +197,8 @@ def test_init_warns_when_healthy_server_predates_fresh_secrets(
             ["--provider", "openai", "--api-key", "sk-test-key",
              "--organization-name", "demo-org", "--non-interactive"],
         )
-    assert result.exit_code == 0
-    assert "already running" in result.output
+    assert result.exit_code == 1
+    assert "already running with older secrets" in result.output
 
 
 @patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
@@ -221,7 +227,7 @@ def test_init_no_warning_when_server_matches_retained_secrets(
     runner,
     monkeypatch,
 ):
-    """Retained secrets + healthy server: nothing stale, no warning."""
+    """Retained secrets + healthy server: nothing stale, proceeds cleanly."""
     monkeypatch.setenv("QWED_JWT_SECRET_KEY", "retained-jwt-value")
     monkeypatch.setenv("QWED_API_KEY_LOOKUP_SECRET", "retained-lookup-value")
     result = runner.invoke(
@@ -230,7 +236,7 @@ def test_init_no_warning_when_server_matches_retained_secrets(
          "--organization-name", "demo-org", "--non-interactive"],
     )
     assert result.exit_code == 0
-    assert "already running" not in result.output
+    assert "already running with older secrets" not in result.output
 
 
 @patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
@@ -784,10 +790,26 @@ def test_seed_server_secrets_degrades_quietly(monkeypatch):
     monkeypatch.delitem(sys.modules, "qwed_new.providers.credential_store", raising=False)
 
     import qwed_new.providers.credential_store as credential_store
+
     monkeypatch.setattr(
         credential_store, "_find_project_root", lambda *a, **k: (_ for _ in ()).throw(OSError("denied"))
     )
     cli_module._seed_server_secrets_from_project_root()  # must not raise
+
+
+def test_seed_server_secrets_survives_malformed_dotenv(monkeypatch, tmp_path):
+    """Sentry MEDIUM on #375: non-UTF-8 bytes in the root .env raise
+    UnicodeDecodeError (a ValueError, not OSError) — seeding must swallow it."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname = 'proj'\n", encoding="utf-8")
+    (root / ".env").write_bytes(b"QWED_JWT_SECRET_KEY=\xff\xfe-broken\n")
+    monkeypatch.chdir(root)
+    monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
+
+    _REAL_SEED_FROM_ROOT()  # must not raise
+
+    assert os.getenv("QWED_JWT_SECRET_KEY", "") == ""
 
 
 def test_fresh_provisioned_server_import_gate(monkeypatch, tmp_path):

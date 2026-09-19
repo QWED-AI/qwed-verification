@@ -959,7 +959,10 @@ def _seed_server_secrets_from_project_root() -> None:
         return
     try:
         stored = _read_existing_env(_find_project_root() / ".env")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # Best effort: a missing file (OSError) or a malformed non-UTF-8
+        # file (UnicodeDecodeError, a ValueError subclass — not OSError)
+        # must not crash onboarding (Sentry on #375).
         return
     for var in ("QWED_JWT_SECRET_KEY", "QWED_API_KEY_LOOKUP_SECRET"):
         value = stored.get(var, "").strip()
@@ -1181,15 +1184,14 @@ def init(
     if started_new:
         click.echo("  [ok] Runtime path guard applied (src/ added to PYTHONPATH)")
     elif not had_jwt_before or not had_lookup_before:
-        # The healthy server predates secrets generated in this run, so it
-        # cannot serve them (CodeAnt stale-reference on #375). Never
-        # auto-restart — the process may belong to another project — warn
-        # loudly instead.
-        click.echo(
-            "  [!] Server was already running: restart it to pick up the newly generated secrets,",
-            err=True,
-        )
-        click.echo("      otherwise keys issued now will stop resolving after a restart.", err=True)
+        # The healthy server predates secrets generated in this run, so any
+        # key bootstrapped against it stops resolving after a restart with
+        # the persisted secrets (Greptile P1 on #375 — proven data loss).
+        # Never auto-restart: the process may belong to another project.
+        # Stop before bootstrapping instead of warning through.
+        click.echo("  [x] Server was already running with older secrets.", err=True)
+        click.echo("      Restart it, then re-run init so keys are issued under the persisted secrets.", err=True)
+        sys.exit(1)
 
     try:
         qwed_api_key, actual_org_name = _bootstrap_api_key(normalized_server_url, organization_name)
