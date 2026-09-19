@@ -8,27 +8,38 @@ from click.testing import CliRunner
 
 from qwed_sdk.cli import (
     OnboardingProvider,
-    _check_server_health,
     _bootstrap_api_key,
+    _check_server_health,
     _ensure_gitignore_protection_noninteractive,
     _ensure_local_server_running,
     _looks_like_placeholder_api_key,
+    _persist_onboarding_env,
     _required_engine_report,
     _resolve_provider_api_key,
     _resolve_server_runtime_dir,
-    _runtime_sqlite_database_url,
     _run_init_smoke_suite,
+    _runtime_sqlite_database_url,
     _test_gemini_connection,
     _validate_local_server_target,
     init,
 )
 
 TEST_TOKEN_MARKER = f"fixture-{uuid.uuid4().hex}"
+TEST_LOOKUP_MARKER = f"lookup-{uuid.uuid4().hex}"
 
 
 @pytest.fixture
 def runner():
     return CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _stub_lookup_secret():
+    """Pin the lookup secret so init-path tests never mint real randomness
+    into the process env (issue #372). Tests needing other behavior patch
+    over this with their own target."""
+    with patch("qwed_new.config.ensure_lookup_secret", return_value=TEST_LOOKUP_MARKER):
+        yield
 
 
 def _engine_report():
@@ -491,6 +502,93 @@ def test_ensure_local_server_running_applies_pythonpath_guard(monkeypatch):
     assert env["DATABASE_URL"] == _runtime_sqlite_database_url(runtime_dir)
     assert env["PYTHONPATH"].split(os.pathsep)[0] == expected_src
     assert popen_capture["kwargs"]["cwd"] == str(runtime_dir)
+
+
+def test_ensure_local_server_running_threads_lookup_secret(monkeypatch):
+    """Issue #372: the child server env must carry the lookup secret or the
+    fail-closed import crashes the fresh boot."""
+    checks = iter([False, True])
+    popen_capture = {}
+    runtime_dir = Path("runtime-dir")
+
+    monkeypatch.setattr("qwed_sdk.cli._check_server_health", lambda _url, timeout=2.0: next(checks))
+    monkeypatch.setattr("qwed_sdk.cli._src_path", lambda: "src")
+    monkeypatch.setattr("qwed_sdk.cli._resolve_server_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setattr("qwed_sdk.cli.time.sleep", lambda _s: None)
+    monkeypatch.setattr("qwed_sdk.cli.subprocess.Popen", lambda c, **k: popen_capture.update(kwargs=k))
+
+    ready, started = _ensure_local_server_running(
+        "http://127.0.0.1:9001", "jwt-value", "lookup-value"
+    )
+    assert (ready, started) == (True, True)
+    env = popen_capture["kwargs"]["env"]
+    assert env["QWED_JWT_SECRET_KEY"] == "jwt-value"
+    assert env["QWED_API_KEY_LOOKUP_SECRET"] == "lookup-value"
+
+
+def test_ensure_local_server_running_falls_back_to_parent_env(monkeypatch):
+    """Legacy two-arg callers still work via the parent environment."""
+    checks = iter([False, True])
+    popen_capture = {}
+    runtime_dir = Path("runtime-dir")
+
+    monkeypatch.setattr("qwed_sdk.cli._check_server_health", lambda _url, timeout=2.0: next(checks))
+    monkeypatch.setattr("qwed_sdk.cli._src_path", lambda: "src")
+    monkeypatch.setattr("qwed_sdk.cli._resolve_server_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setattr("qwed_sdk.cli.time.sleep", lambda _s: None)
+    monkeypatch.setattr("qwed_sdk.cli.subprocess.Popen", lambda c, **k: popen_capture.update(kwargs=k))
+    monkeypatch.setenv("QWED_API_KEY_LOOKUP_SECRET", "parent-lookup")
+
+    ready, _ = _ensure_local_server_running("http://127.0.0.1:9001", "jwt-value")
+    assert ready is True
+    assert popen_capture["kwargs"]["env"]["QWED_API_KEY_LOOKUP_SECRET"] == "parent-lookup"
+
+
+def test_persist_onboarding_env_stores_distinct_lookup_secret(monkeypatch, tmp_path):
+    """Issue #372: persist must store a lookup secret distinct from JWT and
+    return it for the child env; re-running must retain, not rotate."""
+    from qwed_new.config import ensure_lookup_secret as real_ensure
+
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+    monkeypatch.setenv("QWED_JWT_SECRET_KEY", "jwt-secret-value")
+    written = {}
+
+    profile = _provider_map()["openai"]
+    jwt_secret, lookup_secret, _env_path = _persist_onboarding_env(
+        profile=profile,
+        resolved_key="sk-test-key",
+        resolved_base_url="",
+        resolved_model="gpt-4o-mini",
+        ensure_jwt_secret=lambda: "jwt-secret-value",
+        ensure_lookup_secret=real_ensure,
+        verify_gitignore=lambda: True,
+        add_env_to_gitignore=lambda: True,
+        write_env_file=lambda vars, active_provider=None: written.update(vars) or str(tmp_path / ".env"),
+        non_interactive=True,
+    )
+    assert jwt_secret == "jwt-secret-value"
+    assert lookup_secret
+    assert lookup_secret != jwt_secret
+    assert written["QWED_API_KEY_LOOKUP_SECRET"] == lookup_secret
+    assert written["QWED_JWT_SECRET_KEY"] == jwt_secret
+    assert os.environ["QWED_API_KEY_LOOKUP_SECRET"] == lookup_secret
+
+    # Re-running with the stored value must retain it verbatim.
+    stored = written["QWED_API_KEY_LOOKUP_SECRET"]
+    monkeypatch.setenv("QWED_API_KEY_LOOKUP_SECRET", stored)
+    _, lookup_again, _ = _persist_onboarding_env(
+        profile=profile,
+        resolved_key="sk-test-key",
+        resolved_base_url="",
+        resolved_model="gpt-4o-mini",
+        ensure_jwt_secret=lambda: "jwt-secret-value",
+        ensure_lookup_secret=real_ensure,
+        verify_gitignore=lambda: True,
+        add_env_to_gitignore=lambda: True,
+        write_env_file=lambda vars, active_provider=None: str(tmp_path / ".env"),
+        non_interactive=True,
+    )
+    assert lookup_again == stored
 
 
 def test_ensure_local_server_running_terminates_on_timeout(monkeypatch):
