@@ -154,6 +154,16 @@ class SignatureVerifier:
 
     # -- public API ------------------------------------------------------
 
+    def knows(self, key_id: str) -> bool:
+        """True iff ``key_id`` maps to a usable (P-256) public key.
+
+        The raw fetched dict may contain off-spec entries skipped at load;
+        rotation decisions must use THIS set, not the raw dict (Sentry on
+        #374): a kid present-but-unusable still needs a refetch when its
+        curve is fixed upstream.
+        """
+        return key_id in self._pubkeys
+
     def verify(self, raw_body: bytes, key_id: str, signature_b64: str) -> str:
         """Return ``key_id`` iff the signature is valid; raise otherwise.
 
@@ -344,6 +354,12 @@ def _fetch_keys() -> tuple[dict[str, str], str | None]:
     except (ValueError, KeyError, TypeError):
         logger.warning("signing-key response had an unexpected shape")
         raise RuntimeError("keys endpoint returned an unexpected shape")
+    if not isinstance(entries, list):
+        # 200 with public_keys: null (or any non-list) must be a retryable
+        # 503 via the leader's RuntimeError path — never a TypeError 500
+        # with no error stamp (Greptile P1 on #374).
+        logger.warning("signing-key response had an unexpected shape")
+        raise RuntimeError("keys endpoint returned an unexpected shape")
 
     keys: dict[str, str] = {}
     for entry in entries:
@@ -359,78 +375,85 @@ def _fetch_keys() -> tuple[dict[str, str], str | None]:
 def get_signing_keys(force_refresh: bool = False) -> dict[str, str]:
     """Return the current signing keys, refreshing on TTL expiry.
 
-    Fail-closed and bounded:
+    Fail-closed and bounded (see helpers below for the pieces):
 
-    * a failed refresh **propagates** — we never fall back to stale cached keys.
-      If the trust anchor cannot be refreshed, verification fails closed rather
-      than trusting a key GitHub may have retired (CodeRabbit on #374; QWED
-      Rule 2 "Fail Closed", Rule 6 "No Silent Degradation").
-    * ``force_refresh`` is throttled against the last *successful forced*
-      refresh only (plus a short backoff after failures), so a normal
-      startup/TTL fetch never delays recognising a newly rotated key
-      (Greptile on #374), and a FAILED fetch never arms the 60s success
-      throttle (Sentry HIGH on #374). Outcome stamps happen after the
-      fetch, in the leader path — never optimistically before it.
-    * the network call runs OUTSIDE the cache lock, so one refresh cannot
-      serialize every other webhook request (Sentry on #374).
-    * concurrent refreshes are singleflighted: exactly one leader fetches,
-      followers wait bounded and re-read (Greptile P1 on #374). Followers
-      never trigger a cascading fetch on leader failure — they fail closed.
+    * a failed refresh **propagates** — we never fall back to stale cached keys
+      (QWED Rule 2 "Fail Closed", Rule 6 "No Silent Degradation").
+    * ``force_refresh`` is throttled (success 60s / failure backoff 10s);
+      outcome stamps happen after the fetch, never optimistically.
+    * network I/O runs OUTSIDE the cache lock; concurrent refreshes are
+      singleflighted with publish-before-release.
     """
     now = time.monotonic()
+    cached, do_fetch, want_forced_stamp = _plan_refresh(force_refresh, now)
+    if not do_fetch:
+        return cached
+    is_leader, event = _elect_refresh()
+    if not is_leader:
+        return _await_leader(event)
+    return _leader_refresh(event, want_forced_stamp)
+
+
+def _plan_refresh(force_refresh: bool, now: float) -> tuple[dict[str, str], bool, bool]:
+    """Locked read + throttle resolution. Returns (cached, do_fetch, want_stamp).
+
+    Merges the success throttle and the failure backoff into ONE predicate
+    (Sonar: no duplicated ``force_refresh = False`` branches).
+    """
     with _KEYS_CACHE_LOCK:
         cached = dict(_KEYS_CACHE.get("keys", {}))
         fetched_at = _KEYS_CACHE.get("fetched_at")
         fresh = bool(cached) and fetched_at is not None and (
             now - fetched_at < KEYS_CACHE_TTL_SECONDS
         )
-        # Throttle rotation-triggered refetches only: unknown key ids must not
-        # drive the outbound GitHub fetch rate (CodeRabbit on #374).
         if force_refresh:
+            # Throttle rotation-triggered refetches only: unknown key ids must
+            # not drive the outbound GitHub fetch rate (CodeRabbit on #374).
             last_ok = _KEYS_CACHE.get("last_forced_refresh")
             last_err = _KEYS_CACHE.get("last_fetch_error_at")
-            if last_err is not None and (now - last_err < _FETCH_ERROR_BACKOFF_SECONDS):
+            err_backoff = last_err is not None and (now - last_err < _FETCH_ERROR_BACKOFF_SECONDS)
+            ok_throttled = last_ok is not None and (now - last_ok < MIN_FORCED_REFRESH_SECONDS)
+            if err_backoff or ok_throttled:
                 force_refresh = False
-            elif last_ok is not None and (now - last_ok < MIN_FORCED_REFRESH_SECONDS):
-                force_refresh = False
-        if fresh and not force_refresh:
-            return cached
-    want_forced_stamp = force_refresh
+        return cached, (not fresh or force_refresh), force_refresh
 
-    # Singleflight election: only the leader hits the network.
-    # No `global` rebinding: the event lives in _FETCH_STATE (dict mutation).
+
+def _elect_refresh() -> tuple[bool, threading.Event]:
+    """Singleflight election: exactly one leader fetches. No ``global``
+    rebinding: the event lives in _FETCH_STATE (dict mutation)."""
     with _FETCH_GATE_LOCK:
         in_flight = _FETCH_STATE.get("event")
         if in_flight is not None:
-            follower_event = in_flight
-            is_leader = False
-        else:
-            follower_event = threading.Event()
-            _FETCH_STATE["event"] = follower_event
-            is_leader = True
-    if not is_leader:
-        # Follower: bounded wait, then require a FRESH cache. A failed
-        # leader must not leave followers trusting expired keys (Sentry
-        # HIGH + CodeRabbit major on #374): stale or empty -> fail closed.
-        follower_event.wait(timeout=_FETCH_WAIT_SECONDS)
-        with _KEYS_CACHE_LOCK:
-            after = dict(_KEYS_CACHE.get("keys", {}))
-            after_fetched_at = _KEYS_CACHE.get("fetched_at")
-        refreshed = (
-            bool(after)
-            and after_fetched_at is not None
-            and (time.monotonic() - after_fetched_at < KEYS_CACHE_TTL_SECONDS)
-        )
-        if not refreshed:
-            raise RuntimeError("signing-key refresh in progress failed")
-        return after
+            return False, in_flight
+        event = threading.Event()
+        _FETCH_STATE["event"] = event
+        return True, event
 
-    # Leader path: publish BEFORE releasing followers (Greptile P1 on #374).
-    # A follower woken before publication would otherwise verify against the
-    # old cache and 403 an authentic rotated-key report. The finally only
-    # releases the gate; publication happens first inside try. Outcome stamps
-    # (success throttle / error backoff) are written here too — a failed
-    # fetch must never arm the success throttle (Sentry HIGH on #374).
+
+def _await_leader(event: threading.Event) -> dict[str, str]:
+    """Follower: bounded wait, then require a FRESH cache.
+
+    A failed leader must not leave followers trusting expired keys (Sentry
+    HIGH + CodeRabbit major on #374): stale or empty -> fail closed, never
+    a cascading second fetch.
+    """
+    event.wait(timeout=_FETCH_WAIT_SECONDS)
+    with _KEYS_CACHE_LOCK:
+        after = dict(_KEYS_CACHE.get("keys", {}))
+        after_fetched_at = _KEYS_CACHE.get("fetched_at")
+    refreshed = (
+        bool(after)
+        and after_fetched_at is not None
+        and (time.monotonic() - after_fetched_at < KEYS_CACHE_TTL_SECONDS)
+    )
+    if not refreshed:
+        raise RuntimeError("signing-key refresh in progress failed")
+    return after
+
+
+def _leader_refresh(event: threading.Event, want_forced_stamp: bool) -> dict[str, str]:
+    """Leader: fetch outside all locks, publish BEFORE releasing followers
+    (Greptile P1 on #374), stamp the outcome (Sentry HIGH on #374)."""
     try:
         fetched_keys, fetched_etag = _fetch_keys()
         if not fetched_keys:
@@ -450,8 +473,9 @@ def get_signing_keys(force_refresh: bool = False) -> dict[str, str]:
     finally:
         with _FETCH_GATE_LOCK:
             _FETCH_STATE["event"] = None
-            follower_event.set()
+            event.set()
     return published
+
 
 
 def _trust_anchor_suspect() -> bool:
@@ -546,23 +570,23 @@ async def _verified_key_id(raw_body: bytes, key_id: str, signature_b64: str) -> 
         # HIGH on #374). SignatureRejected (401/403) is an HTTPException
         # and is NOT caught here — it propagates unchanged.
         raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL)
-    verifier = _build_verifier(keys)
+    verifier = _try_build(keys)
+    if verifier is None:
+        # Anchor present but unusable (e.g. the only cached key is off-spec):
+        # one rotation attempt before giving up — the curve may have been
+        # fixed upstream (Sentry MEDIUM on #374).
+        keys = await _forced_keys()
+        verifier = _build_verifier(keys)
     try:
         return verifier.verify(raw_body, key_id, signature_b64)
     except SignatureRejected as first:
-        if first.status_code != 403 or key_id in keys:
+        if first.status_code != 403 or verifier.knows(key_id):
             raise
     # Unknown key id, exactly once: maybe GitHub rotated. Refetch and
     # retry against the fresh list; anything still unknown fails closed.
     # The forced refetch is throttled inside get_signing_keys, so a flood
     # of unknown ids cannot drive the outbound GitHub rate.
-    try:
-        keys = await run_in_threadpool(get_signing_keys, True)
-    except (httpx.HTTPError, OSError, RuntimeError, ValueError):
-        # Dead refetch service is 503 (retryable), NOT the original 403:
-        # 403 means "forged/retired, don't retry", but here verification was
-        # impossible — the scanner should redeliver (CodeRabbit major #374).
-        raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL)
+    keys = await _forced_keys()
     verifier = _build_verifier(keys)
     try:
         return verifier.verify(raw_body, key_id, signature_b64)
@@ -573,6 +597,24 @@ async def _verified_key_id(raw_body: bytes, key_id: str, signature_b64: str) -> 
         if _trust_anchor_suspect():
             raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL)
         raise
+
+
+async def _forced_keys() -> dict[str, str]:
+    """One rotation-triggered refetch. Fetch failure is 503 (retryable),
+    NOT 403: 403 means "forged/retired, don't retry", but here verification
+    was impossible — the scanner should redeliver (CodeRabbit major #374)."""
+    try:
+        return await run_in_threadpool(get_signing_keys, True)
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError):
+        raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL)
+
+
+def _try_build(keys: dict[str, str]) -> SignatureVerifier | None:
+    """Build the verifier, or None if the anchor has no usable P-256 key."""
+    try:
+        return SignatureVerifier(keys)
+    except SignatureRejected:
+        return None
 
 
 def _build_verifier(keys: dict[str, str]) -> SignatureVerifier:

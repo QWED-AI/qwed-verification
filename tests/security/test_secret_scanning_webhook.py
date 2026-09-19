@@ -298,6 +298,44 @@ class TestSignatureGate:
         assert resp.status_code == 503
         sink.assert_not_called()
 
+    def test_present_but_unusable_key_still_rotates(
+        self, keypair, key_id, payload
+    ):
+        # Sentry MEDIUM on #374: kid cached but skipped as off-spec (RSA)
+        # must still trigger the rotation refetch — checked against the
+        # verifier's usable set, not the raw dict. Fixed upstream key ->
+        # 200, not a permanent 403.
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        private_key, good_pem = keypair
+        rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        app = FastAPI()
+        app.include_router(router)
+        cache = {
+            "keys": {key_id: _pem_of(rsa_key.public_key())},
+            "etag": None,
+            "fetched_at": 10**18,
+            "last_forced_refresh": None,
+            "last_fetch_error_at": None,
+        }
+        routes._FETCH_STATE["event"] = None
+        raw = _canonical(payload)
+        with patch.object(routes, "_KEYS_CACHE", cache), patch.object(
+            routes, "_fetch_keys", return_value=({key_id: good_pem}, '"etag-2"')
+        ) as fetch, patch.object(routes, "on_verified_matches"):
+            resp = TestClient(app, raise_server_exceptions=False).post(
+                "/webhooks/secret-scanning",
+                content=raw,
+                headers={
+                    "Github-Public-Key-Identifier": key_id,
+                    "Github-Public-Key-Signature": _sign(private_key, raw),
+                },
+            )
+        assert resp.status_code == 200
+        fetch.assert_called_once()
+
     def test_keys_unavailable_returns_503_not_500(self, keypair, key_id, payload):
         # Sentry HIGH on #374: empty/expired cache + dead key service must
         # fail closed with retryable 503, never an unhandled 500.
@@ -719,6 +757,17 @@ class TestFetchKeys:
         with (
             patch.object(routes, "_KEYS_CACHE", {"keys": {}, "etag": None}),
             patch.object(routes.httpx, "get", return_value=self._resp(200, {"unexpected": []})),
+            pytest.raises(RuntimeError, match="unexpected shape"),
+        ):
+            routes._fetch_keys()
+
+    def test_null_public_keys_raises_retryable(self):
+        # Greptile P1 on #374: 200 with public_keys: null must raise
+        # RuntimeError (leader maps it to 503 + error stamp), never escape
+        # as TypeError 500.
+        with (
+            patch.object(routes, "_KEYS_CACHE", {"keys": {}, "etag": None}),
+            patch.object(routes.httpx, "get", return_value=self._resp(200, {"public_keys": None})),
             pytest.raises(RuntimeError, match="unexpected shape"),
         ):
             routes._fetch_keys()
