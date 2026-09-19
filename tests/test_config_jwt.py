@@ -1,5 +1,7 @@
 import os
 
+import pytest
+
 from qwed_new.config import ensure_jwt_secret, ensure_lookup_secret
 
 
@@ -59,3 +61,19 @@ def test_ensure_lookup_secret_differs_from_jwt_secret(monkeypatch):
     value = ensure_lookup_secret()
     assert value == "distinct-value"
     assert value != os.getenv("QWED_JWT_SECRET_KEY")
+
+
+def test_ensure_lookup_secret_rejects_existing_equal_to_jwt(monkeypatch):
+    # CodeRabbit/CodeAnt on #375: persisting an equal value only produces a
+    # server that refuses to boot — fail loudly instead. Never rotate: the
+    # user fixes .env explicitly.
+    monkeypatch.setenv("QWED_JWT_SECRET_KEY", "same-value")
+    monkeypatch.setenv("QWED_API_KEY_LOOKUP_SECRET", "same-value")
+
+    def _unexpected_call(_size):
+        raise AssertionError("must not generate when refusing an equal value")
+
+    monkeypatch.setattr("qwed_new.config.secrets.token_urlsafe", _unexpected_call)
+
+    with pytest.raises(RuntimeError, match="must differ"):
+        ensure_lookup_secret()

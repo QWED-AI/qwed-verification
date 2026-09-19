@@ -943,6 +943,30 @@ def _prompt_retry_credentials(
     return updated_key, updated_base_url, updated_model
 
 
+def _seed_server_secrets_from_project_root() -> None:
+    """Seed server secrets from the project-root .env without overriding env.
+
+    Issue #372 / Greptile P1 on #375: `qwed init` run from a subdirectory
+    loads only the cwd .env, so a pre-existing root secret looks missing — a
+    fresh value would then be generated and persisted OVER the root one,
+    invalidating every issued key's lookup digest. Seeding with setdefault
+    keeps explicit environment winning while letting ensure_* retain root
+    values. Scoped to the two server secrets only.
+    """
+    try:
+        from qwed_new.providers.credential_store import _find_project_root, _read_existing_env
+    except ImportError:
+        return
+    try:
+        stored = _read_existing_env(_find_project_root() / ".env")
+    except OSError:
+        return
+    for var in ("QWED_JWT_SECRET_KEY", "QWED_API_KEY_LOOKUP_SECRET"):
+        value = stored.get(var, "").strip()
+        if value:
+            os.environ.setdefault(var, value)
+
+
 def _persist_onboarding_env(
     profile: OnboardingProvider,
     resolved_key: str,
@@ -970,11 +994,13 @@ def _persist_onboarding_env(
     try:
         # Stable for the lifetime of issued keys: existing values are never
         # rotated here (issue #372). Fresh setups generate one distinct from
-        # the JWT secret, which the server refuses to boot with.
+        # the JWT secret, which the server refuses to boot with. The message
+        # is preserved (not just the type name) so a misconfiguration — e.g.
+        # lookup equal to JWT — tells the user exactly how to fix .env.
         lookup_secret = ensure_lookup_secret()
     except Exception as exc:
         logger.exception("Lookup secret preparation failed")
-        raise RuntimeError(f"Failed to prepare lookup secret: {type(exc).__name__}") from exc
+        raise RuntimeError(f"Failed to prepare lookup secret: {exc}") from exc
 
     env_vars["QWED_API_KEY_LOOKUP_SECRET"] = lookup_secret
 
@@ -1034,6 +1060,10 @@ def init(
 ):
     """Initialize QWED onboarding: engines, provider credentials, and local API key bootstrap."""
     _load_dotenv_if_available()
+    # Nested invocation (cwd != project root) loads only the cwd .env — seed
+    # root secrets first so existing values are retained, not regenerated
+    # over (Greptile P1 on #375).
+    _seed_server_secrets_from_project_root()
 
     try:
         (
@@ -1096,6 +1126,8 @@ def init(
             non_interactive=non_interactive,
             test_connection=test_connection,
         )
+        had_jwt_before = bool(os.getenv("QWED_JWT_SECRET_KEY", "").strip())
+        had_lookup_before = bool(os.getenv("QWED_API_KEY_LOOKUP_SECRET", "").strip())
         jwt_secret, lookup_secret, env_path = _persist_onboarding_env(
             profile=profile,
             resolved_key=resolved_key,
@@ -1148,6 +1180,16 @@ def init(
     click.echo("  [ok] Local server initialized")
     if started_new:
         click.echo("  [ok] Runtime path guard applied (src/ added to PYTHONPATH)")
+    elif not had_jwt_before or not had_lookup_before:
+        # The healthy server predates secrets generated in this run, so it
+        # cannot serve them (CodeAnt stale-reference on #375). Never
+        # auto-restart — the process may belong to another project — warn
+        # loudly instead.
+        click.echo(
+            "  [!] Server was already running: restart it to pick up the newly generated secrets,",
+            err=True,
+        )
+        click.echo("      otherwise keys issued now will stop resolving after a restart.", err=True)
 
     try:
         qwed_api_key, actual_org_name = _bootstrap_api_key(normalized_server_url, organization_name)

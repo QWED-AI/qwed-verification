@@ -110,17 +110,26 @@ def ensure_lookup_secret(min_bytes: int = 32) -> str:
     Ensure QWED_API_KEY_LOOKUP_SECRET exists for API-key lookup digests.
 
     The value is stable for the lifetime of issued keys: regenerating it
-    invalidates every stored lookup digest, so an existing value is ALWAYS
-    returned untouched — only a missing value is generated (issue #372).
-    A fresh value is guaranteed to differ from QWED_JWT_SECRET_KEY, which
-    the auth layer refuses to boot with (equal values re-couple digests
-    to JWT rotations).
+    invalidates every stored lookup digest, so an existing DISTINCT value is
+    ALWAYS returned untouched — only a missing value is generated (issue #372).
+    An existing value EQUAL to QWED_JWT_SECRET_KEY raises instead of being
+    returned: persisting it would only produce a server that refuses to boot
+    (fail loudly here, per fail-closed design — never silently rotate, which
+    would break every issued key).
+    A fresh value is generated until it differs from QWED_JWT_SECRET_KEY.
     """
+    jwt_secret = os.getenv("QWED_JWT_SECRET_KEY", "").strip()
     existing = os.getenv("QWED_API_KEY_LOOKUP_SECRET", "").strip()
     if existing:
+        if jwt_secret and existing == jwt_secret:
+            raise RuntimeError(
+                "QWED_API_KEY_LOOKUP_SECRET must differ from QWED_JWT_SECRET_KEY — "
+                "remove the lookup line from .env (a fresh value will be generated) "
+                "or set a distinct value. Refusing to persist a value the server "
+                "cannot boot with."
+            )
         return existing
 
-    jwt_secret = os.getenv("QWED_JWT_SECRET_KEY", "")
     secret = secrets.token_urlsafe(max(min_bytes, 48))
     while jwt_secret and secret == jwt_secret:
         secret = secrets.token_urlsafe(max(min_bytes, 48))
