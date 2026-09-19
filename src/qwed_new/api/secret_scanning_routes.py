@@ -261,6 +261,20 @@ _KEYS_CACHE: dict[str, Any] = {
 }
 _KEYS_CACHE_LOCK = threading.Lock()
 
+#: Singleflight gate for signing-key refreshes (Greptile P1 on #374).
+#: Without it, N concurrent webhooks on an empty/expired cache each start
+#: their own GitHub fetch (threadpool + key-endpoint amplification). With
+#: it, exactly one leader fetches; followers wait on the event (bounded)
+#: and then re-read the cache. The gate never holds the cache lock during
+#: network I/O and never serves stale keys on failure — followers re-check
+#: and fail closed if the leader failed.
+_FETCH_GATE_LOCK = threading.Lock()
+_FETCH_IN_FLIGHT: threading.Event | None = None
+#: Upper bound for a follower to wait for the leader's fetch (httpx timeout
+#: is 10s; margin covers scheduling jitter). Expiry means fail closed, not
+#: a cascading second fetch — the next webhook retries.
+_FETCH_WAIT_SECONDS = 20.0
+
 
 def _signing_key_token() -> str | None:
     """Optional PAT for the keys endpoint (rate-limit hygiene only)."""
@@ -274,9 +288,16 @@ def _fetch_keys() -> tuple[dict[str, str], str | None]:
     untouched (and — since nothing changed — needs no new trust decision).
     Any transport-level or shape problem raises; the caller decides whether
     cached keys are still usable.
+
+    The etag/keys snapshot is taken under the cache lock (Sentry on #374):
+    a bare ``_KEYS_CACHE.get`` outside the lock could read a torn
+    etag-then-keys pair and write the stale etag back over a fresh one.
+    The lock is held only for the two dict reads, never for the network.
     """
+    with _KEYS_CACHE_LOCK:
+        cached_etag = _KEYS_CACHE.get("etag")
+        cached_keys = dict(_KEYS_CACHE.get("keys", {}))
     headers = {"Accept": "application/vnd.github+json"}
-    cached_etag = _KEYS_CACHE.get("etag")
     if cached_etag:
         headers["If-None-Match"] = cached_etag
     token = _signing_key_token()
@@ -290,7 +311,7 @@ def _fetch_keys() -> tuple[dict[str, str], str | None]:
         raise
 
     if resp.status_code == 304:
-        return dict(_KEYS_CACHE.get("keys", {})), cached_etag
+        return cached_keys, cached_etag
     if resp.status_code != 200:
         logger.warning("signing-key fetch returned HTTP %s", resp.status_code)
         raise RuntimeError(f"keys endpoint returned HTTP {resp.status_code}")
@@ -327,6 +348,9 @@ def get_signing_keys(force_refresh: bool = False) -> dict[str, str]:
       (Greptile on #374).
     * the network call runs OUTSIDE the cache lock, so one refresh cannot
       serialize every other webhook request (Sentry on #374).
+    * concurrent refreshes are singleflighted: exactly one leader fetches,
+      followers wait bounded and re-read (Greptile P1 on #374). Followers
+      never trigger a cascading fetch on leader failure — they fail closed.
     """
     now = time.monotonic()
     with _KEYS_CACHE_LOCK:
@@ -347,8 +371,31 @@ def get_signing_keys(force_refresh: bool = False) -> dict[str, str]:
         if fresh and not force_refresh:
             return cached
 
-    # Network I/O outside the lock. Any failure propagates -> fail closed.
-    keys, etag = _fetch_keys()
+    # Singleflight election: only the leader hits the network.
+    global _FETCH_IN_FLIGHT
+    with _FETCH_GATE_LOCK:
+        if _FETCH_IN_FLIGHT is not None:
+            follower_event = _FETCH_IN_FLIGHT
+            is_leader = False
+        else:
+            follower_event = threading.Event()
+            _FETCH_IN_FLIGHT = follower_event
+            is_leader = True
+    if not is_leader:
+        follower_event.wait(timeout=_FETCH_WAIT_SECONDS)
+        with _KEYS_CACHE_LOCK:
+            after = dict(_KEYS_CACHE.get("keys", {}))
+        if not after:
+            raise RuntimeError("signing-key refresh in progress failed")
+        return after
+
+    # Leader path: fetch outside both locks; always release followers.
+    try:
+        keys, etag = _fetch_keys()
+    finally:
+        with _FETCH_GATE_LOCK:
+            _FETCH_IN_FLIGHT = None
+            follower_event.set()
     if not keys:
         raise RuntimeError("no signing keys available")
     with _KEYS_CACHE_LOCK:

@@ -332,6 +332,7 @@ class TestKeyCache:
     """
 
     def _cache(self, *, keys=None, etag=None, fetched_at=0.0, last_forced_refresh=None):
+        routes._FETCH_IN_FLIGHT = None
         return {
             "keys": keys or {},
             "etag": etag,
@@ -404,6 +405,45 @@ class TestKeyCache:
             fetch.assert_called_once()
             assert out == {"kid": pem}
             assert routes._KEYS_CACHE["etag"] == '"new-etag"'
+
+    def test_concurrent_refresh_singleflight(self):
+        # Greptile P1 on #374: N concurrent refreshes on an empty cache must
+        # produce exactly one GitHub fetch; followers share the leader result.
+        import threading as _threading
+
+        _, public_key = _fixture_keypair()
+        pem = _pem_of(public_key)
+        cache = self._cache(keys={}, fetched_at=0.0)
+        calls = {"n": 0}
+
+        def _slow_fetch():
+            calls["n"] += 1
+            import time as _time
+
+            _time.sleep(0.2)
+            return ({"kid": pem}, '"etag-1"')
+
+        errors: list = []
+        results: list = []
+
+        def _worker():
+            try:
+                results.append(routes.get_signing_keys())
+            except Exception as exc:  # fail-closed surface only
+                errors.append(exc)
+
+        with patch.object(routes, "_KEYS_CACHE", cache), patch.object(
+            routes, "_fetch_keys", side_effect=_slow_fetch
+        ), patch.object(routes.time, "monotonic", return_value=routes.KEYS_CACHE_TTL_SECONDS + 1):
+            threads = [_threading.Thread(target=_worker) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+        assert not errors
+        assert len(results) == 8
+        assert calls["n"] == 1
+        assert all("kid" in r for r in results)
 
 
 class TestMixedCurveResilience:
