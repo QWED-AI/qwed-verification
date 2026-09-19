@@ -77,6 +77,10 @@ MIN_FORCED_REFRESH_SECONDS = 60.0
 #: return the identical message (Sonar: no duplicated literals).
 _INVALID_SIGNATURE_DETAIL = "invalid webhook signature"
 
+#: Generic 503 detail when the trust anchor cannot be refreshed or is
+#: unusable. Retryable: the scanner should redeliver (Sonar: one constant).
+_KEYS_UNAVAILABLE_DETAIL = "signing keys unavailable"
+
 #: Hard cap on the base64 signature header before decoding. A DER P-256
 #: signature is ~70-72 bytes (~96-100 b64 chars); anything far larger is
 #: garbage, rejected before decode work.
@@ -249,15 +253,18 @@ def _expected_verdict_bytes() -> bytes:
 
 #: Process-wide cache. Keys are trusted material but not secrets — the shape
 #: is {"keys": {key_id: pem}, "etag": str|None, "fetched_at": epoch,
-#: "last_forced_refresh": epoch|None}. Only rotation-triggered forced
-#: refreshes touch last_forced_refresh, so a normal TTL/startup fetch never
-#: delays recognising a newly rotated key.
+#: "last_forced_refresh": epoch|None, "last_fetch_error_at": epoch|None}.
+#: Only rotation-triggered forced refreshes touch last_forced_refresh, so a
+#: normal TTL/startup fetch never delays recognising a newly rotated key.
+#: last_fetch_error_at is stamped on fetch FAILURE only (never optimistically)
+#: so a failed fetch cannot arm the success throttle (Sentry HIGH on #374).
 #: A lock serializes cache reads/writes (network I/O runs outside the lock).
 _KEYS_CACHE: dict[str, Any] = {
     "keys": {},
     "etag": None,
     "fetched_at": 0.0,
     "last_forced_refresh": None,
+    "last_fetch_error_at": None,
 }
 _KEYS_CACHE_LOCK = threading.Lock()
 
@@ -277,6 +284,18 @@ _FETCH_STATE: dict[str, Any] = {"event": None}
 #: is 10s; margin covers scheduling jitter). Expiry means fail closed, not
 #: a cascading second fetch — the next webhook retries.
 _FETCH_WAIT_SECONDS = 20.0
+
+#: Backoff for rotation-triggered fetches after a FAILED fetch. Successes
+#: throttle at MIN_FORCED_REFRESH_SECONDS (60s); failures back off much
+#: shorter so a legit rotation during an outage is retried promptly, while
+#: still bounding the outbound rate to 1 fetch / 10s (Sentry HIGH on #374).
+_FETCH_ERROR_BACKOFF_SECONDS = 10.0
+
+#: Window in which a past fetch failure makes the trust anchor suspect: an
+#: unknown key in this window is 503 (unverifiable, retry), not 403
+#: (forged, don't retry). Restamped on every failed fetch, so it stays
+#: true through an ongoing outage and clears on the first success.
+_FETCH_ERROR_SUSPECT_SECONDS = 60.0
 
 
 def _signing_key_token() -> str | None:
@@ -346,9 +365,12 @@ def get_signing_keys(force_refresh: bool = False) -> dict[str, str]:
       If the trust anchor cannot be refreshed, verification fails closed rather
       than trusting a key GitHub may have retired (CodeRabbit on #374; QWED
       Rule 2 "Fail Closed", Rule 6 "No Silent Degradation").
-    * ``force_refresh`` is throttled against the last *forced* refresh only, so
-      a normal startup/TTL fetch never delays recognising a newly rotated key
-      (Greptile on #374).
+    * ``force_refresh`` is throttled against the last *successful forced*
+      refresh only (plus a short backoff after failures), so a normal
+      startup/TTL fetch never delays recognising a newly rotated key
+      (Greptile on #374), and a FAILED fetch never arms the 60s success
+      throttle (Sentry HIGH on #374). Outcome stamps happen after the
+      fetch, in the leader path — never optimistically before it.
     * the network call runs OUTSIDE the cache lock, so one refresh cannot
       serialize every other webhook request (Sentry on #374).
     * concurrent refreshes are singleflighted: exactly one leader fetches,
@@ -363,16 +385,17 @@ def get_signing_keys(force_refresh: bool = False) -> dict[str, str]:
             now - fetched_at < KEYS_CACHE_TTL_SECONDS
         )
         # Throttle rotation-triggered refetches only: unknown key ids must not
-        # drive the outbound GitHub fetch rate (CodeRabbit on #374). A normal
-        # fetch does not set this, so rotation is recognised immediately.
+        # drive the outbound GitHub fetch rate (CodeRabbit on #374).
         if force_refresh:
-            last_forced = _KEYS_CACHE.get("last_forced_refresh")
-            if last_forced is not None and (now - last_forced < MIN_FORCED_REFRESH_SECONDS):
+            last_ok = _KEYS_CACHE.get("last_forced_refresh")
+            last_err = _KEYS_CACHE.get("last_fetch_error_at")
+            if last_err is not None and (now - last_err < _FETCH_ERROR_BACKOFF_SECONDS):
                 force_refresh = False
-            else:
-                _KEYS_CACHE["last_forced_refresh"] = now
+            elif last_ok is not None and (now - last_ok < MIN_FORCED_REFRESH_SECONDS):
+                force_refresh = False
         if fresh and not force_refresh:
             return cached
+    want_forced_stamp = force_refresh
 
     # Singleflight election: only the leader hits the network.
     # No `global` rebinding: the event lives in _FETCH_STATE (dict mutation).
@@ -405,7 +428,9 @@ def get_signing_keys(force_refresh: bool = False) -> dict[str, str]:
     # Leader path: publish BEFORE releasing followers (Greptile P1 on #374).
     # A follower woken before publication would otherwise verify against the
     # old cache and 403 an authentic rotated-key report. The finally only
-    # releases the gate; publication happens first inside try.
+    # releases the gate; publication happens first inside try. Outcome stamps
+    # (success throttle / error backoff) are written here too — a failed
+    # fetch must never arm the success throttle (Sentry HIGH on #374).
     try:
         fetched_keys, fetched_etag = _fetch_keys()
         if not fetched_keys:
@@ -414,12 +439,39 @@ def get_signing_keys(force_refresh: bool = False) -> dict[str, str]:
             _KEYS_CACHE["keys"] = fetched_keys
             _KEYS_CACHE["etag"] = fetched_etag
             _KEYS_CACHE["fetched_at"] = time.monotonic()
+            _KEYS_CACHE["last_fetch_error_at"] = None
+            if want_forced_stamp:
+                _KEYS_CACHE["last_forced_refresh"] = time.monotonic()
         published = dict(fetched_keys)
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError):
+        with _KEYS_CACHE_LOCK:
+            _KEYS_CACHE["last_fetch_error_at"] = time.monotonic()
+        raise
     finally:
         with _FETCH_GATE_LOCK:
             _FETCH_STATE["event"] = None
             follower_event.set()
     return published
+
+
+def _trust_anchor_suspect() -> bool:
+    """True iff an unknown key must be 503 (not 403).
+
+    403 means "verified against a good anchor and still unknown: forged".
+    503 means "the anchor itself is suspect, redeliver later". Suspect iff
+    a fetch failed recently (ongoing outage, restamped per failure) or the
+    cache is missing/stale. Fresh anchor + unknown key -> forged -> 403.
+    """
+    now = time.monotonic()
+    with _KEYS_CACHE_LOCK:
+        last_err = _KEYS_CACHE.get("last_fetch_error_at")
+        keys = _KEYS_CACHE.get("keys", {})
+        fetched_at = _KEYS_CACHE.get("fetched_at")
+    if last_err is not None and (now - last_err < _FETCH_ERROR_SUSPECT_SECONDS):
+        return True
+    return not (
+        bool(keys) and fetched_at is not None and (now - fetched_at < KEYS_CACHE_TTL_SECONDS)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +528,67 @@ def _record_receipt(matches: list[SecretMatch], *, event: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Verification driver: fetch anchor, verify, one rotation retry.
+# (Module level so the endpoint stays under the Sonar complexity gate.)
+# ---------------------------------------------------------------------------
+
+
+async def _verified_key_id(raw_body: bytes, key_id: str, signature_b64: str) -> str:
+    """Verify the signature, with exactly one rotation retry.
+
+    Returns ``key_id`` iff genuine. Raises 401 (missing), 403 (forged against
+    a good anchor), 503 (anchor dead/unusable/suspect — redeliver later).
+    """
+    try:
+        keys = await run_in_threadpool(get_signing_keys)
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError):
+        # Fail closed with a retryable 503, not an unhandled 500 (Sentry
+        # HIGH on #374). SignatureRejected (401/403) is an HTTPException
+        # and is NOT caught here — it propagates unchanged.
+        raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL)
+    verifier = _build_verifier(keys)
+    try:
+        return verifier.verify(raw_body, key_id, signature_b64)
+    except SignatureRejected as first:
+        if first.status_code != 403 or key_id in keys:
+            raise
+    # Unknown key id, exactly once: maybe GitHub rotated. Refetch and
+    # retry against the fresh list; anything still unknown fails closed.
+    # The forced refetch is throttled inside get_signing_keys, so a flood
+    # of unknown ids cannot drive the outbound GitHub rate.
+    try:
+        keys = await run_in_threadpool(get_signing_keys, True)
+    except (httpx.HTTPError, OSError, RuntimeError, ValueError):
+        # Dead refetch service is 503 (retryable), NOT the original 403:
+        # 403 means "forged/retired, don't retry", but here verification was
+        # impossible — the scanner should redeliver (CodeRabbit major #374).
+        raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL)
+    verifier = _build_verifier(keys)
+    try:
+        return verifier.verify(raw_body, key_id, signature_b64)
+    except SignatureRejected:
+        # Fresh anchor + still unknown -> forged -> 403. Suspect anchor
+        # (recent fetch failure or stale cache, e.g. throttled during an
+        # outage) -> 503 so the scanner redelivers (Sentry HIGH on #374).
+        if _trust_anchor_suspect():
+            raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL)
+        raise
+
+
+def _build_verifier(keys: dict[str, str]) -> SignatureVerifier:
+    """Build the verifier, mapping an unusable anchor to 503.
+
+    Construction fails only when NO key is usable P-256: verification was
+    impossible, not forged -> retryable 503, never 403 (Sentry LOW on #374).
+    verify() failures are raised by the caller and keep 401/403.
+    """
+    try:
+        return SignatureVerifier(keys)
+    except SignatureRejected:
+        raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL)
+
+
+# ---------------------------------------------------------------------------
 # The endpoint: raw body in, verified matches out (fast).
 # ---------------------------------------------------------------------------
 
@@ -527,46 +640,7 @@ async def secret_scanning_webhook(request: Request, background: BackgroundTasks)
     if not key_id or not signature_b64:
         raise SignatureRejected(status_code=401, detail="missing webhook signature")
 
-    try:
-        keys = await run_in_threadpool(get_signing_keys)
-    except (httpx.HTTPError, OSError, RuntimeError, ValueError):
-        # Fail closed with a retryable 503, not an unhandled 500 (Sentry
-        # HIGH on #374): without the trust anchor the signature cannot be
-        # verified, so reject explicitly. SignatureRejected (401/403) is an
-        # HTTPException and is NOT caught here — it propagates unchanged.
-        raise HTTPException(status_code=503, detail="signing keys unavailable")
-    try:
-        verifier = SignatureVerifier(keys)
-    except SignatureRejected:
-        # Trust anchor unusable (e.g. refetched set has no P-256 keys):
-        # verification was impossible, not forged -> retryable 503, never
-        # 403 (Sentry LOW on #374). verify() failures below still 401/403.
-        raise HTTPException(status_code=503, detail="signing keys unavailable")
-    try:
-        verified_id = verifier.verify(raw_body, key_id, signature_b64)
-    except SignatureRejected as first:
-        if first.status_code != 403 or key_id in keys:
-            raise
-        # Unknown key id, exactly once: maybe GitHub rotated. Refetch and
-        # retry against the fresh list; anything still unknown fails closed.
-        # The forced refetch is throttled inside get_signing_keys, so a flood
-        # of unknown ids cannot drive the outbound GitHub rate.
-        # A dead refetch service is 503 (retryable), NOT the original 403:
-        # 403 means "forged/retired, don't retry", but here verification was
-        # impossible — the scanner should redeliver (CodeRabbit major #374).
-        try:
-            keys = await run_in_threadpool(get_signing_keys, True)
-        except (httpx.HTTPError, OSError, RuntimeError, ValueError):
-            raise HTTPException(status_code=503, detail="signing keys unavailable")
-        try:
-            verifier = SignatureVerifier(keys)
-        except SignatureRejected:
-            # Refetch succeeded but yielded no usable P-256 keys: same as
-            # a dead key service, retryable 503 (Sentry LOW on #374).
-            raise HTTPException(status_code=503, detail="signing keys unavailable")
-        verified_id = verifier.verify(raw_body, key_id, signature_b64)
-    if verified_id != key_id:
-        raise SignatureRejected(status_code=403, detail=_INVALID_SIGNATURE_DETAIL)
+    await _verified_key_id(raw_body, key_id, signature_b64)
 
     matches = _parse_match_batch(raw_body)
     background.add_task(_deliver_verified_matches, matches)

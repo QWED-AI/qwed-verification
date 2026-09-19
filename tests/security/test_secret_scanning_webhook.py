@@ -430,13 +430,15 @@ class TestKeyCache:
     clock source.
     """
 
-    def _cache(self, *, keys=None, etag=None, fetched_at=0.0, last_forced_refresh=None):
+    def _cache(self, *, keys=None, etag=None, fetched_at=0.0, last_forced_refresh=None,
+               last_fetch_error_at=None):
         routes._FETCH_STATE["event"] = None
         return {
             "keys": keys or {},
             "etag": etag,
             "fetched_at": fetched_at,
             "last_forced_refresh": last_forced_refresh,
+            "last_fetch_error_at": last_fetch_error_at,
         }
 
     def test_fresh_cache_serves_without_fetch(self):
@@ -504,6 +506,39 @@ class TestKeyCache:
             fetch.assert_called_once()
             assert out == {"kid": pem}
             assert routes._KEYS_CACHE["etag"] == '"new-etag"'
+            # Normal TTL fetch must NOT arm the rotation throttle (Greptile).
+            assert routes._KEYS_CACHE["last_forced_refresh"] is None
+
+    def test_failed_fetch_does_not_arm_success_throttle(self):
+        # Sentry HIGH on #374: outcome stamps happen after the fetch — a
+        # failed forced fetch stamps the error, never last_forced_refresh.
+        _, public_key = _fixture_keypair()
+        pem = _pem_of(public_key)
+        cache = self._cache(keys={"kid": pem}, fetched_at=0.0)
+        with patch.object(routes, "_KEYS_CACHE", cache), patch.object(
+            routes, "_fetch_keys", side_effect=RuntimeError("down")
+        ), patch.object(routes.time, "monotonic", return_value=500.0):
+            with pytest.raises(RuntimeError, match="down"):
+                routes.get_signing_keys(force_refresh=True)
+            assert routes._KEYS_CACHE["last_forced_refresh"] is None
+            assert routes._KEYS_CACHE["last_fetch_error_at"] == 500.0
+
+    def test_rotation_unknown_key_with_recent_error_returns_503(
+        self, app_client, keypair, key_id, payload
+    ):
+        # Throttled during an outage (recent fetch error) + still unknown:
+        # suspect anchor -> 503 so the scanner redelivers, never 403.
+        private_key, _ = keypair
+        raw = _canonical(payload)
+        unknown = "0" * 64
+        with patch.object(routes, "on_verified_matches") as sink, patch.object(
+            routes, "_fetch_keys", side_effect=_raise_fetch
+        ), patch.object(routes.time, "monotonic", return_value=1000.0):
+            routes._FETCH_STATE["event"] = None
+            routes._KEYS_CACHE["last_fetch_error_at"] = 999.0
+            resp = _post(app_client, raw, unknown, _sign(private_key, raw))
+        assert resp.status_code == 503
+        sink.assert_not_called()
 
     def test_concurrent_refresh_singleflight(self):
         # Greptile P1 on #374: N concurrent refreshes on an empty cache must
