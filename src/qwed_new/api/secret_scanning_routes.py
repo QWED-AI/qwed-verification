@@ -586,15 +586,29 @@ async def _verified_key_id(raw_body: bytes, key_id: str, signature_b64: str) -> 
     # retry against the fresh list; anything still unknown fails closed.
     # The forced refetch is throttled inside get_signing_keys, so a flood
     # of unknown ids cannot drive the outbound GitHub rate.
+    with _KEYS_CACHE_LOCK:
+        stamp_before = _KEYS_CACHE.get("last_forced_refresh")
     keys = await _forced_keys()
+    with _KEYS_CACHE_LOCK:
+        stamp_after = _KEYS_CACHE.get("last_forced_refresh")
+    # Throttled (no fresh fetch happened): the anchor may predate a rotation
+    # that landed inside the throttle window, so "unknown" proves nothing —
+    # 503 below, never 403 (Sentry HIGH on #374). A completed fetch restamps,
+    # so stamp_after != stamp_before exactly when we fetched.
+    now = time.monotonic()
+    rotation_throttled = (
+        stamp_after == stamp_before
+        and stamp_after is not None
+        and (now - stamp_after < MIN_FORCED_REFRESH_SECONDS)
+    )
     verifier = _build_verifier(keys)
     try:
         return verifier.verify(raw_body, key_id, signature_b64)
     except SignatureRejected as exc:
         # Fresh anchor + still unknown -> forged -> 403. Suspect anchor
-        # (recent fetch failure or stale cache, e.g. throttled during an
-        # outage) -> 503 so the scanner redelivers (Sentry HIGH on #374).
-        if _trust_anchor_suspect():
+        # (recent fetch failure, stale cache, or throttled rotation retry)
+        # -> 503 so the scanner redelivers (Sentry HIGH on #374).
+        if rotation_throttled or _trust_anchor_suspect():
             raise HTTPException(status_code=503, detail=_KEYS_UNAVAILABLE_DETAIL) from exc
         raise
 

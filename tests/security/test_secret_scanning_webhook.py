@@ -235,6 +235,26 @@ class TestSignatureGate:
         assert resp.status_code == 503
         sink.assert_not_called()
 
+    def test_rotation_inside_throttle_window_returns_503(
+        self, app_client, keypair, key_id, payload
+    ):
+        # Sentry HIGH on #374: success-throttled forced refresh (a fetch
+        # succeeded <60s ago) + a rotation landing inside the window.
+        # No fresh fetch happened, so unknown proves nothing -> 503, and
+        # no outbound fetch is attempted.
+        private_key, _ = keypair
+        raw = _canonical(payload)
+        unknown = "0" * 64
+        with patch.object(routes, "on_verified_matches") as sink, patch.object(
+            routes, "_fetch_keys", side_effect=_raise_fetch
+        ) as fetch, patch.object(routes.time, "monotonic", return_value=1000.0):
+            routes._FETCH_STATE["event"] = None
+            routes._KEYS_CACHE["last_forced_refresh"] = 999.0
+            resp = _post(app_client, raw, unknown, _sign(private_key, raw))
+        assert resp.status_code == 503
+        sink.assert_not_called()
+        fetch.assert_not_called()
+
     def test_non_json_body_rejected(self, app_client, keypair, key_id):
         private_key, _ = keypair
         raw = b"this is not json"
