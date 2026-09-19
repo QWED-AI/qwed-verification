@@ -34,17 +34,24 @@ from qwed_new.api.secret_scanning_routes import router
 # Deterministic fixture key pair (fixed scalar — NEVER a deployed key)
 # ---------------------------------------------------------------------------
 
+#: P-256 group order, test-local. The production module intentionally defines
+#: no such constant (CodeQL unused-global on #374) — the loader pins the
+#: curve via isinstance(SECP256R1) instead of a manual scalar bound.
+_P256_ORDER_FIXTURE = int(
+    "FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551", 16
+)
+
 
 def _fixture_keypair():
     """Fixed P-256 pair so signatures are reproducible across runs."""
-    scalar = int.from_bytes(bytes.fromhex("11" * 31 + "12"), "big") % routes._P256_ORDER
+    scalar = int.from_bytes(bytes.fromhex("11" * 31 + "12"), "big") % _P256_ORDER_FIXTURE
     private_key = ec.derive_private_key(scalar, ec.SECP256R1())
     return private_key, private_key.public_key()
 
 
 def _fixture_keypair_alt():
     """A second fixed pair: a DIFFERENT key, for forged-signature tests."""
-    scalar = int.from_bytes(bytes.fromhex("22" * 31 + "23"), "big") % routes._P256_ORDER
+    scalar = int.from_bytes(bytes.fromhex("22" * 31 + "23"), "big") % _P256_ORDER_FIXTURE
     private_key = ec.derive_private_key(scalar, ec.SECP256R1())
     return private_key, private_key.public_key()
 
@@ -242,8 +249,9 @@ class TestVerifierUnit:
         other, _ = _fixture_keypair_alt()
         raw = _canonical([{"source": "commit", "token": "t", "type": "y", "url": "u"}])
         verifier = routes.SignatureVerifier({"kid": _pem_of(public_key)})
+        forged_sig = _sign(other, raw)
         with pytest.raises(routes.SignatureRejected) as ctx:
-            verifier.verify(raw, "kid", _sign(other, raw))
+            verifier.verify(raw, "kid", forged_sig)
         assert ctx.value.status_code == 403
 
     def test_verify_rejects_garbage_signature(self):
@@ -254,15 +262,17 @@ class TestVerifierUnit:
 
     def test_verify_rejects_unknown_key_id(self):
         # empty key set -> construction fails closed (no usable signing keys)
+        empty_keys: dict = {}
         with pytest.raises(routes.SignatureRejected, match="no usable signing keys"):
-            routes.SignatureVerifier({})
+            routes.SignatureVerifier(empty_keys)
 
     def test_rejects_non_p256_key(self):
         from cryptography.hazmat.primitives.asymmetric import rsa
 
         rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        rsa_pem = _pem_of(rsa_key.public_key())
         with pytest.raises(routes.SignatureRejected):
-            routes.SignatureVerifier({"kid": _pem_of(rsa_key.public_key())})
+            routes.SignatureVerifier({"kid": rsa_pem})
 
     def test_comparison_does_not_short_circuit(self):
         """Different wrong signatures take the same rejection path."""
@@ -314,21 +324,33 @@ class TestEnvelopeGuards:
 
 
 class TestKeyCache:
-    """get_signing_keys bounded staleness + throttled rotation refetch."""
+    """get_signing_keys fail-closed + throttled rotation refetch.
 
-    def _cache(self, *, keys=None, etag=None, fetched_at=0.0, last_attempt=0.0):
-        return {"keys": keys or {}, "etag": etag, "fetched_at": fetched_at, "last_attempt": last_attempt}
+    Floats are deliberate: time.monotonic() returns float, so the tests use
+    the same type as production. Integer ticks would diverge from the real
+    clock source.
+    """
 
-    def test_failed_refresh_serves_fresh_cached_key(self):
+    def _cache(self, *, keys=None, etag=None, fetched_at=0.0, last_forced_refresh=None):
+        return {
+            "keys": keys or {},
+            "etag": etag,
+            "fetched_at": fetched_at,
+            "last_forced_refresh": last_forced_refresh,
+        }
+
+    def test_fresh_cache_serves_without_fetch(self):
         _, public_key = _fixture_keypair()
-        cache = self._cache(keys={"kid": _pem_of(public_key)}, fetched_at=10.0)
+        cache = self._cache(keys={"kid": _pem_of(public_key)}, fetched_at=100.0)
         with patch.object(routes, "_KEYS_CACHE", cache), patch.object(
-            routes, "_fetch_keys", side_effect=RuntimeError("down")
-        ), patch.object(routes.time, "monotonic", return_value=100.0):
-            # within MAX_STALE -> keep serving despite the failed refresh
+            routes, "_fetch_keys", side_effect=_raise_fetch
+        ) as fetch, patch.object(routes.time, "monotonic", return_value=100.0 + 5):
             assert "kid" in routes.get_signing_keys()
+            fetch.assert_not_called()
 
-    def test_failed_refresh_fails_closed_past_stale_cap(self):
+    def test_failed_refresh_fails_closed(self):
+        # TTL expired + fetch down -> propagate, never serve stale
+        # (CodeRabbit on #374; QWED fail-closed, no silent degradation).
         _, public_key = _fixture_keypair()
         cache = self._cache(keys={"kid": _pem_of(public_key)}, fetched_at=0.0)
         with (
@@ -337,17 +359,19 @@ class TestKeyCache:
             patch.object(
                 routes.time,
                 "monotonic",
-                return_value=routes.KEYS_CACHE_MAX_STALE_SECONDS + 1,
+                return_value=routes.KEYS_CACHE_TTL_SECONDS + 1,
             ),
-            # past MAX_STALE -> do NOT keep trusting a possibly-removed key;
-            # the fetch error propagates (fail closed), not served from stale cache
             pytest.raises(RuntimeError, match="down"),
         ):
             routes.get_signing_keys()
 
     def test_forced_refresh_throttled(self):
         _, public_key = _fixture_keypair()
-        cache = self._cache(keys={"kid": _pem_of(public_key)}, fetched_at=100.0, last_attempt=100.0)
+        cache = self._cache(
+            keys={"kid": _pem_of(public_key)},
+            fetched_at=100.0,
+            last_forced_refresh=100.0,
+        )
         with patch.object(routes, "_KEYS_CACHE", cache), patch.object(
             routes, "_fetch_keys", side_effect=_raise_fetch
         ) as fetch, patch.object(routes.time, "monotonic", return_value=100.0 + 5):
@@ -355,10 +379,24 @@ class TestKeyCache:
             routes.get_signing_keys(force_refresh=True)
             fetch.assert_not_called()
 
+    def test_rotation_recognised_immediately_after_normal_fetch(self):
+        # Greptile P1 on #374: a normal startup/TTL fetch must NOT arm the
+        # forced-refresh throttle, so a key GitHub rotates immediately after
+        # is still fetched on unknown-key-id retry.
+        _, public_key = _fixture_keypair()
+        pem = _pem_of(public_key)
+        cache = self._cache(keys={"kid": pem}, fetched_at=100.0, last_forced_refresh=None)
+        with patch.object(routes, "_KEYS_CACHE", cache), patch.object(
+            routes, "_fetch_keys", return_value=({"kid": pem, "new": pem}, '"etag-2"')
+        ) as fetch, patch.object(routes.time, "monotonic", return_value=100.0 + 5):
+            out = routes.get_signing_keys(force_refresh=True)
+            fetch.assert_called_once()
+            assert "new" in out
+
     def test_ttl_expired_triggers_refresh(self):
         _, public_key = _fixture_keypair()
         pem = _pem_of(public_key)
-        cache = self._cache(keys={"kid": pem}, fetched_at=0.0, last_attempt=0.0)
+        cache = self._cache(keys={"kid": pem}, fetched_at=0.0)
         with patch.object(routes, "_KEYS_CACHE", cache), patch.object(
             routes, "_fetch_keys", return_value=({"kid": pem}, '"new-etag"')
         ) as fetch, patch.object(routes.time, "monotonic", return_value=routes.KEYS_CACHE_TTL_SECONDS + 1):
@@ -381,7 +419,8 @@ class TestMixedCurveResilience:
             "bad-rsa": _pem_of(rsa_key.public_key()),
         }
         verifier = routes.SignatureVerifier(keys)  # must NOT raise
-        assert "good" in verifier._pubkeys and "bad-rsa" not in verifier._pubkeys
+        assert "good" in verifier._pubkeys
+        assert "bad-rsa" not in verifier._pubkeys
 
         raw = _canonical([{"token": "t", "type": "y"}])
         assert verifier.verify(raw, "good", _sign(private_key, raw)) == "good"
@@ -400,21 +439,22 @@ class TestCurvePinning:
     def test_non_p256_ec_curve_rejected(self):
         # A valid EC key on a different curve must not be treated as P-256.
         other_curve_key = ec.generate_private_key(ec.SECP384R1()).public_key()
+        other_pem = _pem_of(other_curve_key)
         with pytest.raises(routes.SignatureRejected):
-            routes.SignatureVerifier({"kid": _pem_of(other_curve_key)})
+            routes.SignatureVerifier({"kid": other_pem})
 
     def test_unparseable_pem_rejected(self):
+        bad_keys = {"kid": "-----BEGIN PUBLIC KEY-----\nnope\n-----END PUBLIC KEY-----"}
         with pytest.raises(routes.SignatureRejected):
-            routes.SignatureVerifier(
-                {"kid": "-----BEGIN PUBLIC KEY-----\nnope\n-----END PUBLIC KEY-----"}
-            )
+            routes.SignatureVerifier(bad_keys)
 
     def test_all_keys_offspec_fails_closed(self):
         from cryptography.hazmat.primitives.asymmetric import rsa
 
         rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        bad_rsa_pem = _pem_of(rsa_key.public_key())
         with pytest.raises(routes.SignatureRejected, match="no usable signing keys"):
-            routes.SignatureVerifier({"bad-rsa": _pem_of(rsa_key.public_key())})
+            routes.SignatureVerifier({"bad-rsa": bad_rsa_pem})
 
 
 class TestFetchKeys:
