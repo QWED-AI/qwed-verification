@@ -36,6 +36,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from pydantic import BaseModel, Field, ValidationError
+from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,17 @@ MAX_TOKEN_CHARS = 512
 
 #: How long cached signing keys are trusted before a background refresh.
 KEYS_CACHE_TTL_SECONDS = 6 * 60 * 60  # 6h
+
+#: Beyond this age a cached key is no longer usable even as a fallback. A
+#: transient GitHub outage keeps serving; a removed key does not stay trusted
+#: indefinitely. This is the fail-closed bound on staleness (Greptile/CodeAnt
+#: on #374).
+KEYS_CACHE_MAX_STALE_SECONDS = 24 * 60 * 60  # 24h
+
+#: Minimum interval between rotation-triggered forced refetches. An attacker
+#: cannot drive the outbound GitHub fetch rate faster than this (CodeRabbit
+#: on #374).
+MIN_FORCED_REFRESH_SECONDS = 60.0
 
 # ---------------------------------------------------------------------------
 # Payload models
@@ -126,7 +138,15 @@ class SignatureVerifier:
     def __init__(self, keys: dict[str, str]) -> None:
         self._pubkeys: dict[str, Any] = {}
         for key_id, pem in keys.items():
-            self._pubkeys[key_id] = self._parse_key(pem)
+            try:
+                self._pubkeys[key_id] = self._parse_key(pem)
+            except SignatureRejected:
+                # One off-spec entry must not kill the whole verifier: GitHub
+                # may add a key on another curve during a future rotation. Skip
+                # it, keep the valid ones, fail closed only if NONE are usable.
+                logger.warning("signing key %s… skipped (unsupported shape)", key_id[:8])
+        if not self._pubkeys:
+            raise SignatureRejected(status_code=403, detail="no usable signing keys")
 
     # -- public API ------------------------------------------------------
 
@@ -140,6 +160,9 @@ class SignatureVerifier:
         """
         public_key = self._pubkeys.get(key_id)
         try:
+            # The signature is a base64 ECDSA blob (protocol envelope), NOT a
+            # code payload — `validate=True` bounds it and the result is only
+            # ever passed to ECDSA verify, never executed.
             signature = base64.b64decode(signature_b64, validate=True)
         except (binascii.Error, ValueError):
             signature = b""
@@ -174,9 +197,8 @@ class SignatureVerifier:
             raise SignatureRejected(status_code=403, detail="invalid webhook signature")
         if not isinstance(key.curve, ec.SECP256R1):
             raise SignatureRejected(status_code=403, detail="invalid webhook signature")
-        numbers = key.public_numbers()
-        if not (1 <= numbers.x < _P256_ORDER and 1 <= numbers.y < _P256_ORDER):
-            raise SignatureRejected(status_code=403, detail="invalid webhook signature")
+        # Coordinates are already validated against the curve's field prime by
+        # the loader + curve check above; a separate bound would be redundant.
         return key
 
     # -- timing safety ---------------------------------------------------
@@ -214,7 +236,12 @@ def _expected_verdict_bytes() -> bytes:
 #: Process-wide cache. Keys are trusted material but not secrets — the shape
 #: is {"keys": {key_id: pem}, "etag": str|None, "fetched_at": epoch}.
 #: A lock serializes refetches so concurrent webhooks don't stampede GitHub.
-_KEYS_CACHE: dict[str, Any] = {"keys": {}, "etag": None, "fetched_at": 0.0}
+_KEYS_CACHE: dict[str, Any] = {
+    "keys": {},
+    "etag": None,
+    "fetched_at": 0.0,
+    "last_attempt": None,
+}
 _KEYS_CACHE_LOCK = threading.Lock()
 
 
@@ -272,21 +299,40 @@ def _fetch_keys() -> tuple[dict[str, str], str | None]:
 def get_signing_keys(force_refresh: bool = False) -> dict[str, str]:
     """Return the current signing keys, refreshing on TTL expiry.
 
-    A failed refresh never empties the cache: stale keys keep verifying
-    already-issued signatures until the TTL plus a grace window passes; only
-    then do we fail closed. GitHub rotates by ADDING the new key alongside the
-    old one, so a short staleness window never rejects legitimate traffic.
+    Fail-closed and bounded:
+    * a failed refresh keeps serving cached keys only up to
+      ``KEYS_CACHE_MAX_STALE_SECONDS`` — past that, fail closed (a removed key
+      must not stay trusted indefinitely);
+    * ``force_refresh`` is throttled: ignored when the last fetch attempt is
+      newer than ``MIN_FORCED_REFRESH_SECONDS``, so an attacker cannot drive
+      the outbound GitHub fetch rate.
+
+    GitHub rotates by ADDING the new key alongside the old one, so a short
+    staleness window never rejects legitimate traffic.
     """
     now = time.monotonic()
     with _KEYS_CACHE_LOCK:
         cached = dict(_KEYS_CACHE.get("keys", {}))
-        fresh = bool(cached) and (now - float(_KEYS_CACHE.get("fetched_at", 0.0)) < KEYS_CACHE_TTL_SECONDS)
+        fetched_at = float(_KEYS_CACHE.get("fetched_at", 0.0))
+        last_attempt = _KEYS_CACHE.get("last_attempt")
+        fresh = bool(cached) and (now - fetched_at < KEYS_CACHE_TTL_SECONDS)
+        usable = bool(cached) and (now - fetched_at < KEYS_CACHE_MAX_STALE_SECONDS)
+        # Throttle rotation-triggered refetches so unknown key ids can't drive
+        # the outbound fetch rate (CodeRabbit on #374). No prior attempt means
+        # nothing to throttle.
+        if (
+            force_refresh
+            and last_attempt is not None
+            and (now - float(last_attempt) < MIN_FORCED_REFRESH_SECONDS)
+        ):
+            force_refresh = False
         if fresh and not force_refresh:
             return cached
+        _KEYS_CACHE["last_attempt"] = now
         try:
             keys, etag = _fetch_keys()
         except (httpx.HTTPError, OSError, RuntimeError, ValueError):
-            if cached:
+            if usable:
                 logger.warning("using stale signing keys after failed refresh")
                 return cached
             raise
@@ -295,7 +341,7 @@ def get_signing_keys(force_refresh: bool = False) -> dict[str, str]:
             _KEYS_CACHE["etag"] = etag
             _KEYS_CACHE["fetched_at"] = now
             return dict(keys)
-        if cached:
+        if usable:
             return cached
         raise RuntimeError("no signing keys available")
 
@@ -358,9 +404,11 @@ async def secret_scanning_webhook(request: Request, background: BackgroundTasks)
     ECDSA signature is the ONLY credential. The order below is the whole
     security model:
 
-    1. read the RAW body bytes (never parse-then-reserialize);
-    2. fetch the headers and verify the signature against the cached keys;
-    3. on unknown key id, refetch ONCE (rotation) then fail closed;
+    1. read the body incrementally, bounded at ``MAX_BODY_BYTES`` (reject 413
+       the instant the cap is exceeded — never buffer an unbounded body);
+    2. fetch the headers and verify the signature against the cached keys
+       (key lookup runs in a threadpool so sync HTTP never blocks the loop);
+    3. on unknown key id, refetch ONCE (rotation, throttled) then fail closed;
     4. only then parse the envelope;
     5. hand verified matches to the sink in the background and return 200.
 
@@ -368,13 +416,21 @@ async def secret_scanning_webhook(request: Request, background: BackgroundTasks)
     later — the report itself is authentic, so acknowledging it is safe. Only
     signature failures (401/403) and malformed envelopes (400/413) are non-2xx.
     """
-    raw_body = await request.body()
+    # Bound the read FIRST: consume the stream incrementally and reject the
+    # moment the cap is exceeded. We never buffer an unbounded unsigned body.
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="webhook body too large")
+        body.extend(chunk)
+    raw_body = bytes(body)
+
     key_id = request.headers.get(KEY_ID_HEADER, "")
     signature_b64 = request.headers.get(SIGNATURE_HEADER, "")
     if not key_id or not signature_b64:
         raise SignatureRejected(status_code=401, detail="missing webhook signature")
 
-    keys = get_signing_keys()
+    keys = await run_in_threadpool(get_signing_keys)
     verifier = SignatureVerifier(keys)
     try:
         verified_id = verifier.verify(raw_body, key_id, signature_b64)
@@ -383,8 +439,10 @@ async def secret_scanning_webhook(request: Request, background: BackgroundTasks)
             raise
         # Unknown key id, exactly once: maybe GitHub rotated. Refetch and
         # retry against the fresh list; anything still unknown fails closed.
+        # The forced refetch is throttled inside get_signing_keys, so a flood
+        # of unknown ids cannot drive the outbound GitHub rate.
         try:
-            keys = get_signing_keys(force_refresh=True)
+            keys = await run_in_threadpool(get_signing_keys, True)
         except (httpx.HTTPError, OSError, RuntimeError, ValueError):
             raise first
         verifier = SignatureVerifier(keys)

@@ -18,8 +18,9 @@ the fixture key is computed inline and the keys endpoint is stubbed by patching
 import base64
 import json
 import logging
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -252,10 +253,9 @@ class TestVerifierUnit:
             verifier.verify(b"{}", "kid", "!!!not-base64!!!")
 
     def test_verify_rejects_unknown_key_id(self):
-        verifier = routes.SignatureVerifier({})
-        with pytest.raises(routes.SignatureRejected) as ctx:
-            verifier.verify(b"{}", "nope", base64.b64encode(b"x" * 64).decode())
-        assert ctx.value.status_code == 403
+        # empty key set -> construction fails closed (no usable signing keys)
+        with pytest.raises(routes.SignatureRejected, match="no usable signing keys"):
+            routes.SignatureVerifier({})
 
     def test_rejects_non_p256_key(self):
         from cryptography.hazmat.primitives.asymmetric import rsa
@@ -306,3 +306,243 @@ class TestEnvelopeGuards:
             routes._record_receipt(matches, event="unit-probe")
         emitted = " ".join(record.getMessage() for record in caplog.records)
         assert marker not in emitted
+
+
+# ---------------------------------------------------------------------------
+# Key cache: stale cap, forced-refresh throttle, mixed-curve resilience
+# ---------------------------------------------------------------------------
+
+
+class TestKeyCache:
+    """get_signing_keys bounded staleness + throttled rotation refetch."""
+
+    def _cache(self, *, keys=None, etag=None, fetched_at=0.0, last_attempt=0.0):
+        return {"keys": keys or {}, "etag": etag, "fetched_at": fetched_at, "last_attempt": last_attempt}
+
+    def test_failed_refresh_serves_fresh_cached_key(self):
+        _, public_key = _fixture_keypair()
+        cache = self._cache(keys={"kid": _pem_of(public_key)}, fetched_at=10.0)
+        with patch.object(routes, "_KEYS_CACHE", cache), patch.object(
+            routes, "_fetch_keys", side_effect=RuntimeError("down")
+        ), patch.object(routes.time, "monotonic", return_value=100.0):
+            # within MAX_STALE -> keep serving despite the failed refresh
+            assert "kid" in routes.get_signing_keys()
+
+    def test_failed_refresh_fails_closed_past_stale_cap(self):
+        _, public_key = _fixture_keypair()
+        cache = self._cache(keys={"kid": _pem_of(public_key)}, fetched_at=0.0)
+        with (
+            patch.object(routes, "_KEYS_CACHE", cache),
+            patch.object(routes, "_fetch_keys", side_effect=RuntimeError("down")),
+            patch.object(
+                routes.time,
+                "monotonic",
+                return_value=routes.KEYS_CACHE_MAX_STALE_SECONDS + 1,
+            ),
+            # past MAX_STALE -> do NOT keep trusting a possibly-removed key;
+            # the fetch error propagates (fail closed), not served from stale cache
+            pytest.raises(RuntimeError, match="down"),
+        ):
+            routes.get_signing_keys()
+
+    def test_forced_refresh_throttled(self):
+        _, public_key = _fixture_keypair()
+        cache = self._cache(keys={"kid": _pem_of(public_key)}, fetched_at=100.0, last_attempt=100.0)
+        with patch.object(routes, "_KEYS_CACHE", cache), patch.object(
+            routes, "_fetch_keys", side_effect=_raise_fetch
+        ) as fetch, patch.object(routes.time, "monotonic", return_value=100.0 + 5):
+            # a forced refetch within the throttle window must NOT hit the network
+            routes.get_signing_keys(force_refresh=True)
+            fetch.assert_not_called()
+
+    def test_ttl_expired_triggers_refresh(self):
+        _, public_key = _fixture_keypair()
+        pem = _pem_of(public_key)
+        cache = self._cache(keys={"kid": pem}, fetched_at=0.0, last_attempt=0.0)
+        with patch.object(routes, "_KEYS_CACHE", cache), patch.object(
+            routes, "_fetch_keys", return_value=({"kid": pem}, '"new-etag"')
+        ) as fetch, patch.object(routes.time, "monotonic", return_value=routes.KEYS_CACHE_TTL_SECONDS + 1):
+            out = routes.get_signing_keys()
+            fetch.assert_called_once()
+            assert out == {"kid": pem}
+            assert routes._KEYS_CACHE["etag"] == '"new-etag"'
+
+
+class TestMixedCurveResilience:
+    """One off-spec key must not kill the verifier (Sentry on #374)."""
+
+    def test_offspec_key_skipped_valid_key_still_works(self):
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        private_key, public_key = _fixture_keypair()
+        rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        keys = {
+            "good": _pem_of(public_key),
+            "bad-rsa": _pem_of(rsa_key.public_key()),
+        }
+        verifier = routes.SignatureVerifier(keys)  # must NOT raise
+        assert "good" in verifier._pubkeys and "bad-rsa" not in verifier._pubkeys
+
+        raw = _canonical([{"token": "t", "type": "y"}])
+        assert verifier.verify(raw, "good", _sign(private_key, raw)) == "good"
+
+    def test_garbage_pem_skipped_and_not_fatal(self):
+        private_key, public_key = _fixture_keypair()
+        keys = {"good": _pem_of(public_key), "junk": "not a pem at all"}
+        verifier = routes.SignatureVerifier(keys)
+        raw = _canonical([{"token": "t", "type": "y"}])
+        assert verifier.verify(raw, "good", _sign(private_key, raw)) == "good"
+
+
+class TestCurvePinning:
+    """Only P-256 is accepted; other EC curves are dropped (CodeAnt/Sentry)."""
+
+    def test_non_p256_ec_curve_rejected(self):
+        # A valid EC key on a different curve must not be treated as P-256.
+        other_curve_key = ec.generate_private_key(ec.SECP384R1()).public_key()
+        with pytest.raises(routes.SignatureRejected):
+            routes.SignatureVerifier({"kid": _pem_of(other_curve_key)})
+
+    def test_unparseable_pem_rejected(self):
+        with pytest.raises(routes.SignatureRejected):
+            routes.SignatureVerifier(
+                {"kid": "-----BEGIN PUBLIC KEY-----\nnope\n-----END PUBLIC KEY-----"}
+            )
+
+    def test_all_keys_offspec_fails_closed(self):
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        with pytest.raises(routes.SignatureRejected, match="no usable signing keys"):
+            routes.SignatureVerifier({"bad-rsa": _pem_of(rsa_key.public_key())})
+
+
+class TestFetchKeys:
+    """_fetch_keys: conditional request, 304, non-200, bad shape, junk entries."""
+
+    def _resp(self, status, payload=None, etag=None):
+        resp = MagicMock()
+        resp.status_code = status
+        resp.json.return_value = payload if payload is not None else {}
+        resp.headers = {"ETag": etag} if etag else {}
+        return resp
+
+    def test_200_parses_keys_and_etag(self):
+        pem = _pem_of(_fixture_keypair()[1])
+        body = {"public_keys": [{"key_identifier": "kid", "key": pem}]}
+        with patch.object(routes, "_KEYS_CACHE", {"keys": {}, "etag": None}), patch.object(
+            routes.httpx, "get", return_value=self._resp(200, body, '"etag-1"')
+        ):
+            keys, etag = routes._fetch_keys()
+        assert keys == {"kid": pem}
+        assert etag == '"etag-1"'
+
+    def test_304_returns_cached_keys(self):
+        pem = _pem_of(_fixture_keypair()[1])
+        with patch.object(
+            routes, "_KEYS_CACHE", {"keys": {"kid": pem}, "etag": '"old"'}
+        ), patch.object(routes.httpx, "get", return_value=self._resp(304)) as get:
+            keys, etag = routes._fetch_keys()
+        assert keys == {"kid": pem}
+        assert etag == '"old"'
+        assert get.call_args.kwargs["headers"]["If-None-Match"] == '"old"'
+
+    def test_non_200_raises(self):
+        with (
+            patch.object(routes, "_KEYS_CACHE", {"keys": {}, "etag": None}),
+            patch.object(routes.httpx, "get", return_value=self._resp(500)),
+            pytest.raises(RuntimeError, match="HTTP 500"),
+        ):
+            routes._fetch_keys()
+
+    def test_bad_shape_raises(self):
+        with (
+            patch.object(routes, "_KEYS_CACHE", {"keys": {}, "etag": None}),
+            patch.object(routes.httpx, "get", return_value=self._resp(200, {"unexpected": []})),
+            pytest.raises(RuntimeError, match="unexpected shape"),
+        ):
+            routes._fetch_keys()
+
+    def test_transport_error_reraises(self):
+        with (
+            patch.object(routes, "_KEYS_CACHE", {"keys": {}, "etag": None}),
+            patch.object(routes.httpx, "get", side_effect=httpx.ConnectError("boom")),
+            pytest.raises(httpx.ConnectError),
+        ):
+            routes._fetch_keys()
+
+    def test_malformed_entries_skipped(self):
+        body = {
+            "public_keys": [
+                {"key_identifier": "ok", "key": _pem_of(_fixture_keypair()[1])},
+                {"no_key_identifier": True},
+                {"key_identifier": "", "key": "x"},
+                {"key_identifier": "nokey"},
+                "not-a-dict",
+            ]
+        }
+        with patch.object(routes, "_KEYS_CACHE", {"keys": {}, "etag": None}), patch.object(
+            routes.httpx, "get", return_value=self._resp(200, body)
+        ):
+            keys, _ = routes._fetch_keys()
+        assert list(keys.keys()) == ["ok"]
+
+    def test_token_header_added_when_env_set(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_KEYS_TOKEN", "tok-123")
+        with patch.object(routes, "_KEYS_CACHE", {"keys": {}, "etag": None}), patch.object(
+            routes.httpx, "get", return_value=self._resp(200, {"public_keys": []})
+        ) as get:
+            routes._fetch_keys()
+        assert get.call_args.kwargs["headers"]["Authorization"] == "Bearer tok-123"
+
+
+class TestEnvelopeEdgeCases:
+    """_parse_match_batch: empty array, non-dict items, bad field types."""
+
+    def test_empty_array_rejected(self):
+        with pytest.raises(HTTPException) as exc:
+            routes._parse_match_batch(b"[]")
+        assert exc.value.status_code == 400
+
+    def test_non_array_rejected(self):
+        with pytest.raises(HTTPException) as exc:
+            routes._parse_match_batch(b'{"not": "an array"}')
+        assert exc.value.status_code == 400
+
+    def test_non_dict_item_rejected(self):
+        with pytest.raises(HTTPException) as exc:
+            routes._parse_match_batch(b'["just-a-string"]')
+        assert exc.value.status_code == 400
+
+    def test_bad_field_type_rejected(self):
+        with pytest.raises(HTTPException) as exc:
+            routes._parse_match_batch(b'[{"token": 123, "type": "y"}]')
+        assert exc.value.status_code == 400
+
+    def test_valid_item_parsed(self):
+        matches = routes._parse_match_batch(
+            b'[{"token": "t", "type": "y", "url": "u", "source": "commit"}]'
+        )
+        assert matches[0].token == "t"
+        assert matches[0].source == "commit"
+
+
+class TestSinkFailure:
+    """A crashing downstream sink must not surface to the caller (#368 seam)."""
+
+    def test_sink_failure_is_logged_not_raised(self, caplog):
+        def _boom(_matches):
+            raise RuntimeError("sink exploded")
+
+        matches = [routes.SecretMatch(token="t", type="y")]
+        with patch.object(routes, "on_verified_matches", side_effect=_boom), caplog.at_level(
+            logging.ERROR, logger="qwed_new.api.secret_scanning_routes"
+        ):
+            routes._deliver_verified_matches(matches)  # must not raise
+
+    def test_sink_success_path(self):
+        seen = []
+        matches = [routes.SecretMatch(token="t", type="y")]
+        with patch.object(routes, "on_verified_matches", side_effect=lambda m: seen.extend(m)):
+            routes._deliver_verified_matches(matches)
+        assert seen == matches
