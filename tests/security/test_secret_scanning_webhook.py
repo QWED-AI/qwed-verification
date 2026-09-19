@@ -246,6 +246,58 @@ class TestSignatureGate:
         assert resp.status_code == 400
         sink.assert_not_called()
 
+    def test_unusable_trust_anchor_returns_503(self, keypair, payload):
+        # Cache holds only off-spec keys (e.g. RSA): verification impossible
+        # -> retryable 503, never 403 (Sentry LOW on #374).
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        private_key, _ = keypair
+        raw = _canonical(payload)
+        rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        rsa_pem = _pem_of(rsa_key.public_key())
+        app = FastAPI()
+        app.include_router(router)
+        cache = {
+            "keys": {"bad-rsa": rsa_pem},
+            "etag": None,
+            "fetched_at": 10**18,
+            "last_forced_refresh": None,
+        }
+        routes._FETCH_STATE["event"] = None
+        with patch.object(routes, "_KEYS_CACHE", cache), patch.object(
+            routes, "_fetch_keys", side_effect=_raise_fetch
+        ), patch.object(routes, "on_verified_matches") as sink:
+            resp = TestClient(app, raise_server_exceptions=False).post(
+                "/webhooks/secret-scanning",
+                content=raw,
+                headers={
+                    "Github-Public-Key-Identifier": "bad-rsa",
+                    "Github-Public-Key-Signature": _sign(private_key, raw),
+                },
+            )
+        assert resp.status_code == 503
+        sink.assert_not_called()
+
+    def test_rotation_refetch_unusable_keys_returns_503(
+        self, app_client, keypair, key_id, payload
+    ):
+        # Unknown key + refetch yields no usable P-256 keys -> 503, not 403.
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        private_key, _ = keypair
+        raw = _canonical(payload)
+        unknown = "0" * 64
+        rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        rsa_pem = _pem_of(rsa_key.public_key())
+        with patch.object(routes, "on_verified_matches") as sink, patch.object(
+            routes, "_fetch_keys", return_value=({"bad-rsa": rsa_pem}, '"etag-x"')
+        ):
+            resp = _post(app_client, raw, unknown, _sign(private_key, raw))
+        assert resp.status_code == 503
+        sink.assert_not_called()
+
     def test_keys_unavailable_returns_503_not_500(self, keypair, key_id, payload):
         # Sentry HIGH on #374: empty/expired cache + dead key service must
         # fail closed with retryable 503, never an unhandled 500.

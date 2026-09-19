@@ -535,7 +535,13 @@ async def secret_scanning_webhook(request: Request, background: BackgroundTasks)
         # verified, so reject explicitly. SignatureRejected (401/403) is an
         # HTTPException and is NOT caught here — it propagates unchanged.
         raise HTTPException(status_code=503, detail="signing keys unavailable")
-    verifier = SignatureVerifier(keys)
+    try:
+        verifier = SignatureVerifier(keys)
+    except SignatureRejected:
+        # Trust anchor unusable (e.g. refetched set has no P-256 keys):
+        # verification was impossible, not forged -> retryable 503, never
+        # 403 (Sentry LOW on #374). verify() failures below still 401/403.
+        raise HTTPException(status_code=503, detail="signing keys unavailable")
     try:
         verified_id = verifier.verify(raw_body, key_id, signature_b64)
     except SignatureRejected as first:
@@ -552,7 +558,12 @@ async def secret_scanning_webhook(request: Request, background: BackgroundTasks)
             keys = await run_in_threadpool(get_signing_keys, True)
         except (httpx.HTTPError, OSError, RuntimeError, ValueError):
             raise HTTPException(status_code=503, detail="signing keys unavailable")
-        verifier = SignatureVerifier(keys)
+        try:
+            verifier = SignatureVerifier(keys)
+        except SignatureRejected:
+            # Refetch succeeded but yielded no usable P-256 keys: same as
+            # a dead key service, retryable 503 (Sentry LOW on #374).
+            raise HTTPException(status_code=503, detail="signing keys unavailable")
         verified_id = verifier.verify(raw_body, key_id, signature_b64)
     if verified_id != key_id:
         raise SignatureRejected(status_code=403, detail=_INVALID_SIGNATURE_DETAIL)
