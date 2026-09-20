@@ -20,10 +20,12 @@
 #
 # These entries are a TEMPORARY BRIDGE, not permanent policy: once the
 # scanner fix ships and reaches the deployed ruleset, remove both entries
-# (the carve-out then exempts the names natively). Until then, scope is
-# deliberately tight — exact file + exact patterns — so every other finding
-# in cli.py (and everywhere else) stays enforced. The scanner's own repo
-# baselines its generated rule catalog the same way.
+# (the carve-out then exempts the names natively). Removal is tracked in
+# #378 so the bridge cannot be forgotten. Until then, scope is deliberately
+# the tightest the policy grammar supports — exact file + exact patterns
+# (the scanner's suppression schema has no line/value scoping) — so every
+# other finding in cli.py (and everywhere else) stays enforced. The
+# scanner's own repo baselines its generated rule catalog the same way.
 suppressions:
   - pattern=hardcoded-secret path=qwed_sdk/cli.py reason=false-positive
   - pattern=hardcoded-secret-dict path=qwed_sdk/cli.py reason=false-positive
