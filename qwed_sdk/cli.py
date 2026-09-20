@@ -955,19 +955,34 @@ def _seed_server_secrets_from_project_root() -> set:
 
     Returns the names actually filled, so callers can distinguish retained
     (disk or env) from freshly generated values without re-reading files.
+    Raises RuntimeError if the project-root .env EXISTS but cannot be read
+    or decoded: swallowing that would let a replacement overwrite secrets
+    the existing file holds (CodeRabbit on #375). A missing file is normal
+    first-run behavior and yields an empty set.
     """
     filled: set = set()
     try:
-        from qwed_new.providers.credential_store import _find_project_root, _read_existing_env
+        from qwed_new.providers.credential_store import (
+            _find_project_root,
+            _read_existing_env,
+        )
     except ImportError:
         return filled
     try:
-        stored = _read_existing_env(_find_project_root() / ".env")
-    except (OSError, UnicodeDecodeError):
-        # Best effort: a missing file (OSError) or a malformed non-UTF-8
-        # file (UnicodeDecodeError, a ValueError subclass — not OSError)
-        # must not crash onboarding (Sentry on #375).
+        env_path = _find_project_root() / ".env"
+    except OSError:
         return filled
+    if not env_path.exists():
+        return filled
+    try:
+        stored = _read_existing_env(env_path)
+    except (OSError, UnicodeDecodeError) as exc:
+        # An EXISTING file that cannot be read or decoded must fail closed:
+        # silently proceeding could overwrite secrets it holds (CodeRabbit
+        # on #375). (UnicodeDecodeError is a ValueError, not OSError.)
+        raise RuntimeError(
+            f"project root .env exists but cannot be read: {env_path}"
+        ) from exc
     for var in ("QWED_JWT_SECRET_KEY", "QWED_API_KEY_LOOKUP_SECRET"):
         value = stored.get(var, "").strip()
         if value and var not in os.environ:
@@ -1128,8 +1143,11 @@ def init(
     # .env must not outrank the canonical project-root secrets. Precedence
     # after both steps is explicit env > root .env > nested .env, because
     # seeding uses setdefault and the dotenv load never overrides.
-    seeded_from_root = _seed_server_secrets_from_project_root()
-    logger.debug("server secrets seeded from project root: %s", sorted(seeded_from_root))
+    try:
+        _seed_server_secrets_from_project_root()
+    except RuntimeError as exc:
+        click.echo(f"  [x] {exc}", err=True)
+        sys.exit(1)
     _load_dotenv_if_available()
     # Presence AFTER root seeding + dotenv load (Greptile P1 + Sentry on
     # #375): secrets from ANY prior source — process env, root .env, or
@@ -1239,7 +1257,7 @@ def init(
         sys.exit(1)
 
     click.echo("\n  Starting local server...")
-    qwed_api_key, actual_org_name = _start_server_and_bootstrap(
+    qwed_api_key, _actual_org_name = _start_server_and_bootstrap(
         normalized_server_url=normalized_server_url,
         jwt_secret=jwt_secret,
         lookup_secret=lookup_secret,

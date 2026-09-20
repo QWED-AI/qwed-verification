@@ -953,9 +953,35 @@ def test_seed_server_secrets_degrades_quietly(monkeypatch):
     _REAL_SEED_FROM_ROOT()  # must not raise
 
 
+def test_seed_missing_dotenv_is_quiet_first_run(monkeypatch, tmp_path):
+    """No root .env at all: normal first run, seeding is a quiet no-op."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname = 'proj'\n", encoding="utf-8")
+    monkeypatch.chdir(root)
+    monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+
+    assert _REAL_SEED_FROM_ROOT() == set()
+
+
+def test_seed_unreadable_existing_dotenv_fails_closed(monkeypatch, tmp_path):
+    """CodeRabbit on #375: an EXISTING but unreadable root .env must fail
+    closed — silently proceeding could overwrite secrets it holds."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname = 'proj'\n", encoding="utf-8")
+    (root / ".env").mkdir()  # a directory: open() raises IsADirectoryError (OSError)
+    monkeypatch.chdir(root)
+
+    with pytest.raises(RuntimeError, match="cannot be read"):
+        _REAL_SEED_FROM_ROOT()
+
+
 def test_seed_server_secrets_survives_malformed_dotenv(monkeypatch, tmp_path):
-    """Sentry MEDIUM on #375: non-UTF-8 bytes in the root .env raise
-    UnicodeDecodeError (a ValueError, not OSError) — seeding must swallow it."""
+    """CodeRabbit on #375: non-UTF-8 bytes in an EXISTING root .env raise
+    UnicodeDecodeError (a ValueError, not OSError) — seeding must fail
+    closed, never silently proceed to overwrite it."""
     root = tmp_path / "proj"
     root.mkdir()
     (root / "pyproject.toml").write_text("[project]\nname = 'proj'\n", encoding="utf-8")
@@ -963,9 +989,8 @@ def test_seed_server_secrets_survives_malformed_dotenv(monkeypatch, tmp_path):
     monkeypatch.chdir(root)
     monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
 
-    _REAL_SEED_FROM_ROOT()  # must not raise
-
-    assert os.getenv("QWED_JWT_SECRET_KEY", "") == ""
+    with pytest.raises(RuntimeError, match="cannot be read"):
+        _REAL_SEED_FROM_ROOT()
 
 
 def test_fresh_provisioned_server_import_gate(monkeypatch, tmp_path):
