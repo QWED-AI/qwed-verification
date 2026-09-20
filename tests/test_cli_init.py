@@ -52,7 +52,7 @@ def _stub_lookup_secret():
     tests in full-suite runs. Tests needing other behavior patch over this."""
     before = dict(os.environ)
     with patch("qwed_new.config.ensure_lookup_secret", return_value=TEST_LOOKUP_MARKER):
-        with patch("qwed_sdk.cli._seed_server_secrets_from_project_root", return_value=None):
+        with patch("qwed_sdk.cli._seed_server_secrets_from_project_root", return_value=set()):
             with patch.dict(os.environ, {
                 "QWED_JWT_SECRET_KEY": TEST_TOKEN_MARKER,
                 "QWED_API_KEY_LOOKUP_SECRET": TEST_LOOKUP_MARKER,
@@ -206,6 +206,51 @@ def test_init_stops_when_healthy_server_predates_fresh_secrets(
         )
     assert result.exit_code == 1
     assert "already running with older secrets" in result.output
+
+
+@patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
+@patch("qwed_sdk.cli._ensure_local_server_running", return_value=(True, False))
+@patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
+@patch("qwed_sdk.cli._required_engine_report", return_value=(True, _engine_report()))
+@patch("qwed_sdk.cli._ensure_gitignore_protection_noninteractive")
+@patch("qwed_sdk.cli._ensure_gitignore_protection")
+@patch("qwed_sdk.cli._load_dotenv_if_available")
+@patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
+@patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
+@patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
+@patch("qwed_new.config.ensure_jwt_secret", return_value="seeded-jwt-value")
+def test_init_proceeds_when_secrets_seeded_from_root(
+    _mock_jwt,
+    _mock_write_env,
+    _mock_test_connection,
+    _mock_validate,
+    _mock_load_dotenv,
+    _mock_gitignore_interactive,
+    _mock_gitignore,
+    _mock_required_engines,
+    _mock_provider_map,
+    _mock_server,
+    _mock_bootstrap,
+    runner,
+    monkeypatch,
+):
+    """Seeded-from-root values are retained, not fresh: a healthy server must
+    NOT trip the stale guard (this is the false positive Sentry's literal
+    suggestion would introduce)."""
+    monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+    with patch(
+        "qwed_sdk.cli._seed_server_secrets_from_project_root",
+        return_value={"QWED_JWT_SECRET_KEY", "QWED_API_KEY_LOOKUP_SECRET"},
+    ):
+        with patch("qwed_new.config.ensure_lookup_secret", return_value="seeded-lookup-value"):
+            result = runner.invoke(
+                init,
+                ["--provider", "openai", "--api-key", "sk-test-key",
+                 "--organization-name", "demo-org", "--non-interactive"],
+            )
+    assert result.exit_code == 0
+    assert "already running with older secrets" not in result.output
 
 
 @patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
@@ -769,6 +814,22 @@ def test_seed_server_secrets_from_nested_directory(monkeypatch, tmp_path):
 
     assert os.getenv("QWED_JWT_SECRET_KEY") == "root-jwt"
     assert os.getenv("QWED_API_KEY_LOOKUP_SECRET") == "root-lookup"
+
+
+def test_seed_reports_filled_names(monkeypatch, tmp_path):
+    """The filled-set lets the stale-server guard tell retained apart from
+    freshly generated (Sentry on #375)."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname = 'proj'\n", encoding="utf-8")
+    (root / ".env").write_text("QWED_JWT_SECRET_KEY=root-jwt\n", encoding="utf-8")
+    monkeypatch.chdir(root)
+    monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+
+    filled = _REAL_SEED_FROM_ROOT()
+
+    assert filled == {"QWED_JWT_SECRET_KEY"}
 
 
 def test_seed_server_secrets_keeps_explicit_env(monkeypatch, tmp_path):

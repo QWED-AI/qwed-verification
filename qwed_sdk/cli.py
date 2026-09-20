@@ -943,7 +943,7 @@ def _prompt_retry_credentials(
     return updated_key, updated_base_url, updated_model
 
 
-def _seed_server_secrets_from_project_root() -> None:
+def _seed_server_secrets_from_project_root() -> set:
     """Seed server secrets from the project-root .env without overriding env.
 
     Issue #372 / Greptile P1 on #375: `qwed init` run from a subdirectory
@@ -952,22 +952,28 @@ def _seed_server_secrets_from_project_root() -> None:
     invalidating every issued key's lookup digest. Seeding with setdefault
     keeps explicit environment winning while letting ensure_* retain root
     values. Scoped to the two server secrets only.
+
+    Returns the names actually filled, so callers can distinguish retained
+    (disk or env) from freshly generated values without re-reading files.
     """
+    filled: set = set()
     try:
         from qwed_new.providers.credential_store import _find_project_root, _read_existing_env
     except ImportError:
-        return
+        return filled
     try:
         stored = _read_existing_env(_find_project_root() / ".env")
     except (OSError, UnicodeDecodeError):
         # Best effort: a missing file (OSError) or a malformed non-UTF-8
         # file (UnicodeDecodeError, a ValueError subclass — not OSError)
         # must not crash onboarding (Sentry on #375).
-        return
+        return filled
     for var in ("QWED_JWT_SECRET_KEY", "QWED_API_KEY_LOOKUP_SECRET"):
         value = stored.get(var, "").strip()
-        if value:
-            os.environ.setdefault(var, value)
+        if value and var not in os.environ:
+            os.environ[var] = value
+            filled.add(var)
+    return filled
 
 
 def _persist_onboarding_env(
@@ -1063,10 +1069,16 @@ def init(
 ):
     """Initialize QWED onboarding: engines, provider credentials, and local API key bootstrap."""
     _load_dotenv_if_available()
+    # Presence BEFORE any init-driven change: the stale-server guard must
+    # distinguish truly generated secrets from retained ones (Sentry on #375).
+    had_secrets_before_init = {
+        var: bool(os.getenv(var, "").strip())
+        for var in ("QWED_JWT_SECRET_KEY", "QWED_API_KEY_LOOKUP_SECRET")
+    }
     # Nested invocation (cwd != project root) loads only the cwd .env — seed
     # root secrets first so existing values are retained, not regenerated
     # over (Greptile P1 on #375).
-    _seed_server_secrets_from_project_root()
+    seeded_from_root = _seed_server_secrets_from_project_root()
 
     try:
         (
@@ -1129,8 +1141,8 @@ def init(
             non_interactive=non_interactive,
             test_connection=test_connection,
         )
-        had_jwt_before = bool(os.getenv("QWED_JWT_SECRET_KEY", "").strip())
-        had_lookup_before = bool(os.getenv("QWED_API_KEY_LOOKUP_SECRET", "").strip())
+        had_jwt_before = had_secrets_before_init["QWED_JWT_SECRET_KEY"]
+        had_lookup_before = had_secrets_before_init["QWED_API_KEY_LOOKUP_SECRET"]
         jwt_secret, lookup_secret, env_path = _persist_onboarding_env(
             profile=profile,
             resolved_key=resolved_key,
@@ -1183,10 +1195,15 @@ def init(
     click.echo("  [ok] Local server initialized")
     if started_new:
         click.echo("  [ok] Runtime path guard applied (src/ added to PYTHONPATH)")
-    elif not had_jwt_before or not had_lookup_before:
-        # The healthy server predates secrets generated in this run, so any
-        # key bootstrapped against it stops resolving after a restart with
-        # the persisted secrets (Greptile P1 on #375 — proven data loss).
+    elif (not had_jwt_before and "QWED_JWT_SECRET_KEY" not in seeded_from_root) or (
+        not had_lookup_before and "QWED_API_KEY_LOOKUP_SECRET" not in seeded_from_root
+    ):
+        # A secret absent from BOTH the pre-init environment AND the root
+        # .env was generated fresh in this run, so a pre-existing healthy
+        # server cannot have it: bootstrapping would issue a key that dies
+        # on restart (Greptile P1 on #375 — proven data loss). Seeded-from-root
+        # values are retained, not fresh — stopping on those would false-positive
+        # every nested retained rerun (Sentry on #375).
         # Never auto-restart: the process may belong to another project.
         # Stop before bootstrapping instead of warning through.
         click.echo("  [x] Server was already running with older secrets.", err=True)
