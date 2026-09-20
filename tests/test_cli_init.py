@@ -786,21 +786,37 @@ def test_seed_server_secrets_keeps_explicit_env(monkeypatch, tmp_path):
 
 def test_seed_server_secrets_degrades_quietly(monkeypatch):
     """Missing credential_store or unreadable root .env: seeding is best
-    effort — onboarding falls back to plain env + generation."""
-    import sys
+    effort — onboarding falls back to plain env + generation.
 
-    from qwed_sdk import cli as cli_module
+    Implemented by stubbing the import machinery, NEVER by mutating
+    sys.modules: replacing + re-importing the module leaves the parent
+    package attribute pointing at a ghost copy, so later mock.patch calls
+    (getattr-walk) and production from-imports (sys.modules) diverge for
+    the rest of the session (broke 3 tests on 3.10).
+    """
+    import builtins
 
-    monkeypatch.setitem(sys.modules, "qwed_new.providers.credential_store", None)
-    cli_module._seed_server_secrets_from_project_root()  # must not raise
-    monkeypatch.delitem(sys.modules, "qwed_new.providers.credential_store", raising=False)
+    real_import = builtins.__import__
+
+    def _failing_import(name, *args, **kwargs):
+        if name == "qwed_new.providers.credential_store":
+            raise ImportError("no credential_store (test stub)")
+        return real_import(name, *args, **kwargs)
+
+    # Plain try/finally (not monkeypatch): this runs before the OSError arm
+    # in the same test and must not disturb any other patch state.
+    builtins.__import__ = _failing_import
+    try:
+        _REAL_SEED_FROM_ROOT()  # must not raise
+    finally:
+        builtins.__import__ = real_import
 
     import qwed_new.providers.credential_store as credential_store
 
     monkeypatch.setattr(
         credential_store, "_find_project_root", lambda *a, **k: (_ for _ in ()).throw(OSError("denied"))
     )
-    cli_module._seed_server_secrets_from_project_root()  # must not raise
+    _REAL_SEED_FROM_ROOT()  # must not raise
 
 
 def test_seed_server_secrets_survives_malformed_dotenv(monkeypatch, tmp_path):
@@ -1274,7 +1290,11 @@ def test_init_non_interactive_custom_uses_default_base_url(
     _mock_server,
     _mock_bootstrap,
     runner,
+    monkeypatch,
 ):
+    # Drop ambient CUSTOM_BASE_URL (e.g. a developer's real .env loaded at
+    # collection): the point is the *default* is used when nothing provides one.
+    monkeypatch.delenv("CUSTOM_BASE_URL", raising=False)
     result = runner.invoke(
         init,
         [

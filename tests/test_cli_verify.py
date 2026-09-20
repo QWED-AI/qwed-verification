@@ -168,7 +168,10 @@ def test_verify_exception_handling(mock_qwedlocal, runner):
 def test_verify_active_provider_openai_compat_missing_base_url(mock_qwedlocal, runner):
     """openai_compat must fail fast when CUSTOM_BASE_URL is missing."""
     with patch.dict(os.environ, {"ACTIVE_PROVIDER": "openai_compat"}):
-        result = runner.invoke(verify, ["query"])
+        # Neutralize the real .env loader: `verify` loads dotenv at runtime,
+        # so a developer's populated .env would otherwise satisfy the URL.
+        with patch("qwed_new.config.load_dotenv_ordered", return_value=None):
+            result = runner.invoke(verify, ["query"])
 
     assert result.exit_code == 1
     assert "CUSTOM_BASE_URL is required for openai-compatible provider" in result.output
