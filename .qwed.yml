@@ -1,0 +1,21 @@
+# QWED Security repository policy.
+#
+# Maintainer-approved suppressions (base-branch config — trusted per the
+# scanner's maintainer-wins model: inline qwed-ignore cannot suppress
+# findings on lines a change introduces; base-branch config entries ARE the
+# maintainer approval mechanism).
+#
+# qwed_sdk/cli.py hardcoded-secret / hardcoded-secret-dict (surfaced by #375):
+# the matched values are environment-variable NAMES, not credentials — e.g.
+#   key_env="ANTHROPIC_API_KEY"          (L173, assignment form)
+#   "key_env": "AZURE_OPENAI_API_KEY"    (provider config dicts)
+# No key material is present; the strings name the env var the CLI reads.
+# The confirmation gate convicts them because an UPPER_SNAKE identifier of
+# 16+ chars measures ~3.6 bits/char of Shannon entropy, and the policy
+# layer's intended env-var-name carve-out was dead code (uppercase-only
+# regex tested against lowercased text — scanner-side fix tracked in
+# qwed-security). Scoped to the exact file + patterns; every other finding
+# in the file stays enforced.
+suppressions:
+  - pattern=hardcoded-secret path=qwed_sdk/cli.py reason=false-positive
+  - pattern=hardcoded-secret-dict path=qwed_sdk/cli.py reason=false-positive
