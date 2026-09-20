@@ -6,16 +6,24 @@
 # maintainer approval mechanism).
 #
 # qwed_sdk/cli.py hardcoded-secret / hardcoded-secret-dict (surfaced by #375):
-# the matched values are environment-variable NAMES, not credentials — e.g.
-#   key_env="ANTHROPIC_API_KEY"          (L173, assignment form)
-#   "key_env": "AZURE_OPENAI_API_KEY"    (provider config dicts)
+# the matched values are environment-variable NAMES, not credentials — i.e.
+# assignments of the form  key_env = "<UPPER_SNAKE provider env-var name>"
+# and provider-config dict entries of the form  {"key_env": "<same>"}.
 # No key material is present; the strings name the env var the CLI reads.
+# (Names are redacted here because literal 16+ char examples in this comment
+# self-trip the same rules — COMMENT context is non-downgradable.)
+#
 # The confirmation gate convicts them because an UPPER_SNAKE identifier of
 # 16+ chars measures ~3.6 bits/char of Shannon entropy, and the policy
 # layer's intended env-var-name carve-out was dead code (uppercase-only
-# regex tested against lowercased text — scanner-side fix tracked in
-# qwed-security). Scoped to the exact file + patterns; every other finding
-# in the file stays enforced.
+# regex tested against lowercased text). Scanner-side fix: QWED-AI/qwed-security#104.
+#
+# These entries are a TEMPORARY BRIDGE, not permanent policy: once the
+# scanner fix ships and reaches the deployed ruleset, remove both entries
+# (the carve-out then exempts the names natively). Until then, scope is
+# deliberately tight — exact file + exact patterns — so every other finding
+# in cli.py (and everywhere else) stays enforced. The scanner's own repo
+# baselines its generated rule catalog the same way.
 suppressions:
   - pattern=hardcoded-secret path=qwed_sdk/cli.py reason=false-positive
   - pattern=hardcoded-secret-dict path=qwed_sdk/cli.py reason=false-positive
