@@ -251,11 +251,64 @@ def test_init_proceeds_when_secrets_seeded_from_root(
     suggestion would introduce)."""
     monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
     monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+
+    def _fake_seed_sets_env():
+        os.environ.setdefault("QWED_JWT_SECRET_KEY", "seeded-jwt-value")
+        os.environ.setdefault("QWED_API_KEY_LOOKUP_SECRET", "seeded-lookup-value")
+        return {"QWED_JWT_SECRET_KEY", "QWED_API_KEY_LOOKUP_SECRET"}
+
     with patch(
         "qwed_sdk.cli._seed_server_secrets_from_project_root",
-        return_value={"QWED_JWT_SECRET_KEY", "QWED_API_KEY_LOOKUP_SECRET"},
+        side_effect=_fake_seed_sets_env,
     ):
         with patch("qwed_new.config.ensure_lookup_secret", return_value="seeded-lookup-value"):
+            result = runner.invoke(
+                init,
+                ["--provider", "openai", "--api-key", "sk-test-key",
+                 "--organization-name", "demo-org", "--non-interactive"],
+            )
+    assert result.exit_code == 0
+    assert "already running with older secrets" not in result.output
+
+
+@patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
+@patch("qwed_sdk.cli._ensure_local_server_running", return_value=(True, False))
+@patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
+@patch("qwed_sdk.cli._required_engine_report", return_value=(True, _engine_report()))
+@patch("qwed_sdk.cli._ensure_gitignore_protection_noninteractive")
+@patch("qwed_sdk.cli._ensure_gitignore_protection")
+@patch("qwed_sdk.cli._load_dotenv_if_available")
+@patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
+@patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
+@patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
+@patch("qwed_new.config.ensure_jwt_secret", return_value="nested-jwt-value")
+def test_init_proceeds_when_secrets_come_from_nested_dotenv(
+    _mock_jwt,
+    _mock_write_env,
+    _mock_test_connection,
+    _mock_validate,
+    _mock_load_dotenv,
+    _mock_gitignore_interactive,
+    _mock_gitignore,
+    _mock_required_engines,
+    _mock_provider_map,
+    _mock_server,
+    _mock_bootstrap,
+    runner,
+    monkeypatch,
+):
+    """Greptile P1 + Sentry on #375: secrets present ONLY via the nested
+    .env (loaded after capture base) count as retained — a healthy server
+    must not trip the stale guard for them."""
+    monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+
+    def _fake_dotenv():
+        os.environ.setdefault("QWED_JWT_SECRET_KEY", "nested-jwt-value")
+        os.environ.setdefault("QWED_API_KEY_LOOKUP_SECRET", "nested-lookup-value")
+
+    with patch("qwed_sdk.cli._load_dotenv_if_available", side_effect=_fake_dotenv):
+        with patch("qwed_new.config.ensure_lookup_secret", return_value="nested-lookup-value"):
             result = runner.invoke(
                 init,
                 ["--provider", "openai", "--api-key", "sk-test-key",

@@ -1042,6 +1042,62 @@ def _resolve_organization_name(organization_name: Optional[str], non_interactive
     return resolved_org
 
 
+def _start_server_and_bootstrap(
+    normalized_server_url: str,
+    jwt_secret: str,
+    lookup_secret: str,
+    organization_name: str,
+    secrets_fresh: bool,
+) -> tuple[str, str]:
+    """Start (or reuse) the local server, guard stale secrets, bootstrap a key.
+
+    Extracted from init to keep it under the complexity gate (Sonar on #375).
+    Exits the process on any failure; returns (api_key, org_name) on success.
+    """
+    try:
+        server_ready, started_new = _ensure_local_server_running(
+            normalized_server_url, jwt_secret, lookup_secret
+        )
+    except ValueError as exc:
+        logger.exception("Local server target validation failed")
+        click.echo(f"  [x] Invalid server URL: {exc}", err=True)
+        sys.exit(1)
+    except Exception as exc:
+        logger.exception("Failed to start local server")
+        click.echo(f"  [x] Failed to start local server: {type(exc).__name__}", err=True)
+        click.echo("    Ensure dependencies are installed and runtime permissions allow subprocess start.", err=True)
+        sys.exit(1)
+    if not server_ready:
+        click.echo("  [x] Failed to start local server.", err=True)
+        click.echo("    Ensure dependencies are installed and `src/` is available in PYTHONPATH.", err=True)
+        click.echo(f"    Suggested fix: pip install -e \"{_project_root()}\"", err=True)
+        sys.exit(1)
+    click.echo("  [ok] Local server initialized")
+    if started_new:
+        click.echo("  [ok] Runtime path guard applied (src/ added to PYTHONPATH)")
+    elif secrets_fresh:
+        # Freshly generated secrets + pre-existing healthy server: the server
+        # cannot have them, so bootstrapping would issue a key that dies on
+        # restart (Greptile P1 on #375 — proven data loss).
+        # Never auto-restart: the process may belong to another project.
+        # Stop before bootstrapping instead of warning through.
+        click.echo("  [x] Server was already running with older secrets.", err=True)
+        click.echo("      Restart it, then re-run init so keys are issued under the persisted secrets.", err=True)
+        sys.exit(1)
+
+    try:
+        qwed_api_key, actual_org_name = _bootstrap_api_key(normalized_server_url, organization_name)
+    except Exception as exc:
+        logger.exception("API key bootstrap failed")
+        click.echo(f"  [x] API key bootstrap failed: {exc}", err=True)
+        sys.exit(1)
+
+    click.echo("  [ok] Organization created")
+    if actual_org_name != organization_name:
+        click.echo(f"  [ok] Organization alias used: {actual_org_name}")
+    return qwed_api_key, actual_org_name
+
+
 @cli.command()
 @click.option(
     "--provider",
@@ -1068,18 +1124,21 @@ def init(
     skip_tests: bool,
 ):
     """Initialize QWED onboarding: engines, provider credentials, and local API key bootstrap."""
-    # Presence BEFORE any init-driven change: the stale-server guard must
-    # distinguish truly generated secrets from retained ones (Sentry on #375).
-    had_secrets_before_init = {
-        var: bool(os.getenv(var, "").strip())
-        for var in ("QWED_JWT_SECRET_KEY", "QWED_API_KEY_LOOKUP_SECRET")
-    }
     # Root seeding BEFORE the cwd dotenv load (CodeRabbit on #375): a nested
     # .env must not outrank the canonical project-root secrets. Precedence
     # after both steps is explicit env > root .env > nested .env, because
     # seeding uses setdefault and the dotenv load never overrides.
     seeded_from_root = _seed_server_secrets_from_project_root()
+    logger.debug("server secrets seeded from project root: %s", sorted(seeded_from_root))
     _load_dotenv_if_available()
+    # Presence AFTER root seeding + dotenv load (Greptile P1 + Sentry on
+    # #375): secrets from ANY prior source — process env, root .env, or
+    # nested .env — count as retained. Only a value absent everywhere (hence
+    # generated fresh below) may stop a healthy server.
+    had_secrets_before_init = {
+        var: bool(os.getenv(var, "").strip())
+        for var in ("QWED_JWT_SECRET_KEY", "QWED_API_KEY_LOOKUP_SECRET")
+    }
 
     try:
         (
@@ -1180,52 +1239,13 @@ def init(
         sys.exit(1)
 
     click.echo("\n  Starting local server...")
-    try:
-        server_ready, started_new = _ensure_local_server_running(
-            normalized_server_url, jwt_secret, lookup_secret
-        )
-    except ValueError as exc:
-        logger.exception("Local server target validation failed")
-        click.echo(f"  [x] Invalid server URL: {exc}", err=True)
-        sys.exit(1)
-    except Exception as exc:
-        logger.exception("Failed to start local server")
-        click.echo(f"  [x] Failed to start local server: {type(exc).__name__}", err=True)
-        click.echo("    Ensure dependencies are installed and runtime permissions allow subprocess start.", err=True)
-        sys.exit(1)
-    if not server_ready:
-        click.echo("  [x] Failed to start local server.", err=True)
-        click.echo("    Ensure dependencies are installed and `src/` is available in PYTHONPATH.", err=True)
-        click.echo(f"    Suggested fix: pip install -e \"{_project_root()}\"", err=True)
-        sys.exit(1)
-    click.echo("  [ok] Local server initialized")
-    if started_new:
-        click.echo("  [ok] Runtime path guard applied (src/ added to PYTHONPATH)")
-    elif (not had_jwt_before and "QWED_JWT_SECRET_KEY" not in seeded_from_root) or (
-        not had_lookup_before and "QWED_API_KEY_LOOKUP_SECRET" not in seeded_from_root
-    ):
-        # A secret absent from BOTH the pre-init environment AND the root
-        # .env was generated fresh in this run, so a pre-existing healthy
-        # server cannot have it: bootstrapping would issue a key that dies
-        # on restart (Greptile P1 on #375 — proven data loss). Seeded-from-root
-        # values are retained, not fresh — stopping on those would false-positive
-        # every nested retained rerun (Sentry on #375).
-        # Never auto-restart: the process may belong to another project.
-        # Stop before bootstrapping instead of warning through.
-        click.echo("  [x] Server was already running with older secrets.", err=True)
-        click.echo("      Restart it, then re-run init so keys are issued under the persisted secrets.", err=True)
-        sys.exit(1)
-
-    try:
-        qwed_api_key, actual_org_name = _bootstrap_api_key(normalized_server_url, organization_name)
-    except Exception as exc:
-        logger.exception("API key bootstrap failed")
-        click.echo(f"  [x] API key bootstrap failed: {exc}", err=True)
-        sys.exit(1)
-
-    click.echo("  [ok] Organization created")
-    if actual_org_name != organization_name:
-        click.echo(f"  [ok] Organization alias used: {actual_org_name}")
+    qwed_api_key, actual_org_name = _start_server_and_bootstrap(
+        normalized_server_url=normalized_server_url,
+        jwt_secret=jwt_secret,
+        lookup_secret=lookup_secret,
+        organization_name=organization_name,
+        secrets_fresh=not had_jwt_before or not had_lookup_before,
+    )
 
     click.echo(f"\n  Your API key: {qwed_api_key}")
     click.echo("  Warning: Save this key. It is shown only once.")
