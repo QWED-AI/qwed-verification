@@ -1,4 +1,5 @@
 import os
+import sys
 import uuid
 from pathlib import Path
 from unittest.mock import patch
@@ -788,28 +789,16 @@ def test_seed_server_secrets_degrades_quietly(monkeypatch):
     """Missing credential_store or unreadable root .env: seeding is best
     effort — onboarding falls back to plain env + generation.
 
-    Implemented by stubbing the import machinery, NEVER by mutating
-    sys.modules: replacing + re-importing the module leaves the parent
-    package attribute pointing at a ghost copy, so later mock.patch calls
+    The missing-module arm uses patch.dict (no re-import happens inside),
+    NEVER sys.modules replace + re-import: that leaves the parent package
+    attribute pointing at a ghost copy, so later mock.patch calls
     (getattr-walk) and production from-imports (sys.modules) diverge for
     the rest of the session (broke 3 tests on 3.10).
     """
-    import builtins
-
-    real_import = builtins.__import__
-
-    def _failing_import(name, *args, **kwargs):
-        if name == "qwed_new.providers.credential_store":
-            raise ImportError("no credential_store (test stub)")
-        return real_import(name, *args, **kwargs)
-
-    # Plain try/finally (not monkeypatch): this runs before the OSError arm
-    # in the same test and must not disturb any other patch state.
-    builtins.__import__ = _failing_import
-    try:
+    with patch.dict(
+        sys.modules, {"qwed_new.providers.credential_store": None}
+    ):
         _REAL_SEED_FROM_ROOT()  # must not raise
-    finally:
-        builtins.__import__ = real_import
 
     import qwed_new.providers.credential_store as credential_store
 
