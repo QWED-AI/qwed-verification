@@ -122,6 +122,18 @@ def _gemini_provider_map():
     }
 
 
+@patch("qwed_sdk.cli._import_init_dependencies", side_effect=RuntimeError("API_KEY_SECRET missing"))
+def test_init_exits_cleanly_when_core_config_invalid(
+    _mock_imports,
+    runner,
+):
+    """Sentry on #375: config import-time failures (e.g. missing
+    API_KEY_SECRET) must fail closed with guidance, not a traceback."""
+    result = runner.invoke(init, ["--non-interactive", "--skip-tests"])
+    assert result.exit_code == 1
+    assert "QWED core misconfigured" in result.output
+
+
 @patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
 @patch("qwed_sdk.cli._ensure_local_server_running", return_value=(True, True))
 @patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
@@ -830,6 +842,25 @@ def test_seed_reports_filled_names(monkeypatch, tmp_path):
     filled = _REAL_SEED_FROM_ROOT()
 
     assert filled == {"QWED_JWT_SECRET_KEY"}
+
+
+def test_seed_prefers_root_over_nested_dotenv(monkeypatch, tmp_path):
+    """CodeRabbit on #375: with dotenv loading the nested .env afterwards
+    (override=False), the seeded root values must already hold so the
+    nested file cannot outrank them."""
+    root = tmp_path / "proj"
+    nested = root / "sub"
+    nested.mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\nname = 'proj'\n", encoding="utf-8")
+    (root / ".env").write_text("QWED_API_KEY_LOOKUP_SECRET=root-lookup\n", encoding="utf-8")
+    (nested / ".env").write_text("QWED_API_KEY_LOOKUP_SECRET=nested-lookup\n", encoding="utf-8")
+    monkeypatch.chdir(nested)
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+
+    filled = _REAL_SEED_FROM_ROOT()
+
+    assert filled == {"QWED_API_KEY_LOOKUP_SECRET"}
+    assert os.getenv("QWED_API_KEY_LOOKUP_SECRET") == "root-lookup"
 
 
 def test_seed_server_secrets_keeps_explicit_env(monkeypatch, tmp_path):

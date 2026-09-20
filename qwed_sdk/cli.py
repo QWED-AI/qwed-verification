@@ -1068,17 +1068,18 @@ def init(
     skip_tests: bool,
 ):
     """Initialize QWED onboarding: engines, provider credentials, and local API key bootstrap."""
-    _load_dotenv_if_available()
     # Presence BEFORE any init-driven change: the stale-server guard must
     # distinguish truly generated secrets from retained ones (Sentry on #375).
     had_secrets_before_init = {
         var: bool(os.getenv(var, "").strip())
         for var in ("QWED_JWT_SECRET_KEY", "QWED_API_KEY_LOOKUP_SECRET")
     }
-    # Nested invocation (cwd != project root) loads only the cwd .env — seed
-    # root secrets first so existing values are retained, not regenerated
-    # over (Greptile P1 on #375).
+    # Root seeding BEFORE the cwd dotenv load (CodeRabbit on #375): a nested
+    # .env must not outrank the canonical project-root secrets. Precedence
+    # after both steps is explicit env > root .env > nested .env, because
+    # seeding uses setdefault and the dotenv load never overrides.
     seeded_from_root = _seed_server_secrets_from_project_root()
+    _load_dotenv_if_available()
 
     try:
         (
@@ -1093,6 +1094,11 @@ def init(
         ) = _import_init_dependencies()
     except ImportError as exc:
         click.echo(f"QWED core not found: {type(exc).__name__}", err=True)
+        sys.exit(1)
+    except RuntimeError as exc:
+        # e.g. qwed_new.config.Settings requires API_KEY_SECRET at import.
+        # Fail closed with guidance, not a traceback (Sentry on #375).
+        click.echo(f"QWED core misconfigured: {exc}", err=True)
         sys.exit(1)
 
     provider_map = _build_onboarding_provider_map(get_provider)
