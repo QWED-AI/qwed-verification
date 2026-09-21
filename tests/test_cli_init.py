@@ -1,4 +1,5 @@
 import os
+import sys
 import uuid
 from pathlib import Path
 from unittest.mock import patch
@@ -6,29 +7,59 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
+# Original helper, bound at collection before the autouse stub below patches
+# the module attribute (CodeRabbit on #375).
+from qwed_new.config import ensure_lookup_secret as _REAL_ENSURE_LOOKUP_SECRET
+
+from qwed_sdk.cli import _seed_server_secrets_from_project_root as _REAL_SEED_FROM_ROOT
+
 from qwed_sdk.cli import (
     OnboardingProvider,
-    _check_server_health,
     _bootstrap_api_key,
+    _check_server_health,
     _ensure_gitignore_protection_noninteractive,
     _ensure_local_server_running,
     _looks_like_placeholder_api_key,
+    _persist_onboarding_env,
     _required_engine_report,
     _resolve_provider_api_key,
     _resolve_server_runtime_dir,
-    _runtime_sqlite_database_url,
     _run_init_smoke_suite,
+    _runtime_sqlite_database_url,
     _test_gemini_connection,
     _validate_local_server_target,
     init,
 )
 
 TEST_TOKEN_MARKER = f"fixture-{uuid.uuid4().hex}"
+TEST_LOOKUP_MARKER = f"lookup-{uuid.uuid4().hex}"
 
 
 @pytest.fixture
 def runner():
     return CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _stub_lookup_secret():
+    """Pin the lookup secret and root seeding so init-path tests never mint
+    real randomness into the process env and never read the developer's real
+    .env (issue #372). The preset markers also model the retained-secret
+    rerun, so the stale-server hard stop only triggers in tests that
+    explicitly clear them. The full environ snapshot makes the file hermetic:
+    onboarding writes directly to os.environ, which monkeypatch cannot track,
+    and leaked keys (provider/API/lookup) have historically perturbed later
+    tests in full-suite runs. Tests needing other behavior patch over this."""
+    before = dict(os.environ)
+    with patch("qwed_new.config.ensure_lookup_secret", return_value=TEST_LOOKUP_MARKER):
+        with patch("qwed_sdk.cli._seed_server_secrets_from_project_root", return_value=set()):
+            with patch.dict(os.environ, {
+                "QWED_JWT_SECRET_KEY": TEST_TOKEN_MARKER,
+                "QWED_API_KEY_LOOKUP_SECRET": TEST_LOOKUP_MARKER,
+            }, clear=False):
+                yield
+    os.environ.clear()
+    os.environ.update(before)
 
 
 def _engine_report():
@@ -91,6 +122,18 @@ def _gemini_provider_map():
     }
 
 
+@patch("qwed_sdk.cli._import_init_dependencies", side_effect=RuntimeError("API_KEY_SECRET missing"))
+def test_init_exits_cleanly_when_core_config_invalid(
+    _mock_imports,
+    runner,
+):
+    """Sentry on #375: config import-time failures (e.g. missing
+    API_KEY_SECRET) must fail closed with guidance, not a traceback."""
+    result = runner.invoke(init, ["--non-interactive", "--skip-tests"])
+    assert result.exit_code == 1
+    assert "QWED core misconfigured" in result.output
+
+
 @patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
 @patch("qwed_sdk.cli._ensure_local_server_running", return_value=(True, True))
 @patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
@@ -134,6 +177,183 @@ def test_init_non_interactive_success(
     assert "Step 2/3: API Key" in result.output
     assert "Step 3/3: Generate QWED API Key" in result.output
     assert "qwed_live_test_key" in result.output
+
+
+@patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
+@patch("qwed_sdk.cli._ensure_local_server_running", return_value=(True, False))
+@patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
+@patch("qwed_sdk.cli._required_engine_report", return_value=(True, _engine_report()))
+@patch("qwed_sdk.cli._ensure_gitignore_protection_noninteractive")
+@patch("qwed_sdk.cli._ensure_gitignore_protection")
+@patch("qwed_sdk.cli._load_dotenv_if_available")
+@patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
+@patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
+@patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
+@patch("qwed_new.config.ensure_jwt_secret", return_value="fresh-jwt-value")
+def test_init_stops_when_healthy_server_predates_fresh_secrets(
+    _mock_jwt,
+    _mock_write_env,
+    _mock_test_connection,
+    _mock_validate,
+    _mock_load_dotenv,
+    _mock_gitignore_interactive,
+    _mock_gitignore,
+    _mock_required_engines,
+    _mock_provider_map,
+    _mock_server,
+    _mock_bootstrap,
+    runner,
+    monkeypatch,
+):
+    """Greptile P1 on #375: freshly generated secrets + an already-healthy
+    server means bootstrapping would issue a key the restarted server cannot
+    resolve (proven 200-then-401). Stop before bootstrapping instead."""
+    monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+    with patch("qwed_new.config.ensure_lookup_secret", return_value="fresh-lookup-value"):
+        result = runner.invoke(
+            init,
+            ["--provider", "openai", "--api-key", "sk-test-key",
+             "--organization-name", "demo-org", "--non-interactive"],
+        )
+    assert result.exit_code == 1
+    assert "already running with older secrets" in result.output
+
+
+@patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
+@patch("qwed_sdk.cli._ensure_local_server_running", return_value=(True, False))
+@patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
+@patch("qwed_sdk.cli._required_engine_report", return_value=(True, _engine_report()))
+@patch("qwed_sdk.cli._ensure_gitignore_protection_noninteractive")
+@patch("qwed_sdk.cli._ensure_gitignore_protection")
+@patch("qwed_sdk.cli._load_dotenv_if_available")
+@patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
+@patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
+@patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
+@patch("qwed_new.config.ensure_jwt_secret", return_value="seeded-jwt-value")
+def test_init_proceeds_when_secrets_seeded_from_root(
+    _mock_jwt,
+    _mock_write_env,
+    _mock_test_connection,
+    _mock_validate,
+    _mock_load_dotenv,
+    _mock_gitignore_interactive,
+    _mock_gitignore,
+    _mock_required_engines,
+    _mock_provider_map,
+    _mock_server,
+    _mock_bootstrap,
+    runner,
+    monkeypatch,
+):
+    """Seeded-from-root values are retained, not fresh: a healthy server must
+    NOT trip the stale guard (this is the false positive Sentry's literal
+    suggestion would introduce)."""
+    monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+
+    def _fake_seed_sets_env():
+        os.environ.setdefault("QWED_JWT_SECRET_KEY", "seeded-jwt-value")
+        os.environ.setdefault("QWED_API_KEY_LOOKUP_SECRET", "seeded-lookup-value")
+        return {"QWED_JWT_SECRET_KEY", "QWED_API_KEY_LOOKUP_SECRET"}
+
+    with patch(
+        "qwed_sdk.cli._seed_server_secrets_from_project_root",
+        side_effect=_fake_seed_sets_env,
+    ):
+        with patch("qwed_new.config.ensure_lookup_secret", return_value="seeded-lookup-value"):
+            result = runner.invoke(
+                init,
+                ["--provider", "openai", "--api-key", "sk-test-key",
+                 "--organization-name", "demo-org", "--non-interactive"],
+            )
+    assert result.exit_code == 0
+    assert "already running with older secrets" not in result.output
+
+
+@patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
+@patch("qwed_sdk.cli._ensure_local_server_running", return_value=(True, False))
+@patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
+@patch("qwed_sdk.cli._required_engine_report", return_value=(True, _engine_report()))
+@patch("qwed_sdk.cli._ensure_gitignore_protection_noninteractive")
+@patch("qwed_sdk.cli._ensure_gitignore_protection")
+@patch("qwed_sdk.cli._load_dotenv_if_available")
+@patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
+@patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
+@patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
+@patch("qwed_new.config.ensure_jwt_secret", return_value="nested-jwt-value")
+def test_init_proceeds_when_secrets_come_from_nested_dotenv(
+    _mock_jwt,
+    _mock_write_env,
+    _mock_test_connection,
+    _mock_validate,
+    _mock_load_dotenv,
+    _mock_gitignore_interactive,
+    _mock_gitignore,
+    _mock_required_engines,
+    _mock_provider_map,
+    _mock_server,
+    _mock_bootstrap,
+    runner,
+    monkeypatch,
+):
+    """Greptile P1 + Sentry on #375: secrets present ONLY via the nested
+    .env (loaded after capture base) count as retained — a healthy server
+    must not trip the stale guard for them."""
+    monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+
+    def _fake_dotenv():
+        os.environ.setdefault("QWED_JWT_SECRET_KEY", "nested-jwt-value")
+        os.environ.setdefault("QWED_API_KEY_LOOKUP_SECRET", "nested-lookup-value")
+
+    with patch("qwed_sdk.cli._load_dotenv_if_available", side_effect=_fake_dotenv):
+        with patch("qwed_new.config.ensure_lookup_secret", return_value="nested-lookup-value"):
+            result = runner.invoke(
+                init,
+                ["--provider", "openai", "--api-key", "sk-test-key",
+                 "--organization-name", "demo-org", "--non-interactive"],
+            )
+    assert result.exit_code == 0
+    assert "already running with older secrets" not in result.output
+
+
+@patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
+@patch("qwed_sdk.cli._ensure_local_server_running", return_value=(True, False))
+@patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
+@patch("qwed_sdk.cli._required_engine_report", return_value=(True, _engine_report()))
+@patch("qwed_sdk.cli._ensure_gitignore_protection_noninteractive")
+@patch("qwed_sdk.cli._ensure_gitignore_protection")
+@patch("qwed_sdk.cli._load_dotenv_if_available")
+@patch("qwed_new.providers.key_validator.validate_key_format", return_value=(True, "ok"))
+@patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
+@patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
+@patch("qwed_new.config.ensure_jwt_secret", return_value="retained-jwt-value")
+def test_init_no_warning_when_server_matches_retained_secrets(
+    _mock_jwt,
+    _mock_write_env,
+    _mock_test_connection,
+    _mock_validate,
+    _mock_load_dotenv,
+    _mock_gitignore_interactive,
+    _mock_gitignore,
+    _mock_required_engines,
+    _mock_provider_map,
+    _mock_server,
+    _mock_bootstrap,
+    runner,
+    monkeypatch,
+):
+    """Retained secrets + healthy server: nothing stale, proceeds cleanly."""
+    monkeypatch.setenv("QWED_JWT_SECRET_KEY", "retained-jwt-value")
+    monkeypatch.setenv("QWED_API_KEY_LOOKUP_SECRET", "retained-lookup-value")
+    result = runner.invoke(
+        init,
+        ["--provider", "openai", "--api-key", "sk-test-key",
+         "--organization-name", "demo-org", "--non-interactive"],
+    )
+    assert result.exit_code == 0
+    assert "already running with older secrets" not in result.output
 
 
 @patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_provider_map())
@@ -491,6 +711,343 @@ def test_ensure_local_server_running_applies_pythonpath_guard(monkeypatch):
     assert env["DATABASE_URL"] == _runtime_sqlite_database_url(runtime_dir)
     assert env["PYTHONPATH"].split(os.pathsep)[0] == expected_src
     assert popen_capture["kwargs"]["cwd"] == str(runtime_dir)
+
+
+def test_ensure_local_server_running_threads_lookup_secret(monkeypatch):
+    """Issue #372: the child server env must carry the lookup secret or the
+    fail-closed import crashes the fresh boot."""
+    checks = iter([False, True])
+    popen_capture = {}
+    runtime_dir = Path("runtime-dir")
+
+    monkeypatch.setattr("qwed_sdk.cli._check_server_health", lambda _url, timeout=2.0: next(checks))
+    monkeypatch.setattr("qwed_sdk.cli._src_path", lambda: "src")
+    monkeypatch.setattr("qwed_sdk.cli._resolve_server_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setattr("qwed_sdk.cli.time.sleep", lambda _s: None)
+    monkeypatch.setattr("qwed_sdk.cli.subprocess.Popen", lambda c, **k: popen_capture.update(kwargs=k))
+
+    ready, started = _ensure_local_server_running(
+        "http://127.0.0.1:9001", "jwt-value", "lookup-value"
+    )
+    assert (ready, started) == (True, True)
+    env = popen_capture["kwargs"]["env"]
+    assert env["QWED_JWT_SECRET_KEY"] == "jwt-value"
+    assert env["QWED_API_KEY_LOOKUP_SECRET"] == "lookup-value"
+
+
+def test_ensure_local_server_running_falls_back_to_parent_env(monkeypatch):
+    """Legacy two-arg callers still work via the parent environment."""
+    checks = iter([False, True])
+    popen_capture = {}
+    runtime_dir = Path("runtime-dir")
+
+    monkeypatch.setattr("qwed_sdk.cli._check_server_health", lambda _url, timeout=2.0: next(checks))
+    monkeypatch.setattr("qwed_sdk.cli._src_path", lambda: "src")
+    monkeypatch.setattr("qwed_sdk.cli._resolve_server_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setattr("qwed_sdk.cli.time.sleep", lambda _s: None)
+    monkeypatch.setattr("qwed_sdk.cli.subprocess.Popen", lambda c, **k: popen_capture.update(kwargs=k))
+    monkeypatch.setenv("QWED_API_KEY_LOOKUP_SECRET", "parent-lookup")
+
+    ready, _ = _ensure_local_server_running("http://127.0.0.1:9001", "jwt-value")
+    assert ready is True
+    assert popen_capture["kwargs"]["env"]["QWED_API_KEY_LOOKUP_SECRET"] == "parent-lookup"
+
+
+def test_persist_onboarding_env_stores_distinct_lookup_secret(monkeypatch, tmp_path):
+    """Issue #372: persist must store a lookup secret distinct from JWT and
+    return it for the child env; re-running must retain, not rotate."""
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+    monkeypatch.setenv("QWED_JWT_SECRET_KEY", "jwt-secret-value")
+    written = {}
+
+    profile = _provider_map()["openai"]
+    jwt_secret, lookup_secret, _env_path = _persist_onboarding_env(
+        profile=profile,
+        resolved_key="sk-test-key",
+        resolved_base_url="",
+        resolved_model="gpt-4o-mini",
+        ensure_jwt_secret=lambda: "jwt-secret-value",
+        ensure_lookup_secret=_REAL_ENSURE_LOOKUP_SECRET,
+        verify_gitignore=lambda: True,
+        add_env_to_gitignore=lambda: True,
+        write_env_file=lambda vars, active_provider=None: written.update(vars) or str(tmp_path / ".env"),
+        non_interactive=True,
+    )
+    assert jwt_secret == "jwt-secret-value"
+    assert lookup_secret
+    assert lookup_secret != jwt_secret
+    assert written["QWED_API_KEY_LOOKUP_SECRET"] == lookup_secret
+    assert written["QWED_JWT_SECRET_KEY"] == jwt_secret
+    assert os.environ["QWED_API_KEY_LOOKUP_SECRET"] == lookup_secret
+
+    # Re-running with the stored value must retain it verbatim.
+    stored = written["QWED_API_KEY_LOOKUP_SECRET"]
+    monkeypatch.setenv("QWED_API_KEY_LOOKUP_SECRET", stored)
+    _, lookup_again, _ = _persist_onboarding_env(
+        profile=profile,
+        resolved_key="sk-test-key",
+        resolved_base_url="",
+        resolved_model="gpt-4o-mini",
+        ensure_jwt_secret=lambda: "jwt-secret-value",
+        ensure_lookup_secret=_REAL_ENSURE_LOOKUP_SECRET,
+        verify_gitignore=lambda: True,
+        add_env_to_gitignore=lambda: True,
+        write_env_file=lambda vars, active_provider=None: str(tmp_path / ".env"),
+        non_interactive=True,
+    )
+    assert lookup_again == stored
+
+
+def test_persist_onboarding_env_lookup_failure_blocks(monkeypatch, tmp_path):
+    """A lookup-secret failure must fail the persist loudly (fail closed)."""
+    profile = _provider_map()["openai"]
+
+    def _boom():
+        raise RuntimeError("vault unreachable")
+
+    with pytest.raises(RuntimeError, match="Failed to prepare lookup secret"):
+        _persist_onboarding_env(
+            profile=profile,
+            resolved_key="sk-test-key",
+            resolved_base_url="",
+            resolved_model="gpt-4o-mini",
+            ensure_jwt_secret=lambda: "jwt-secret-value",
+            ensure_lookup_secret=_boom,
+            verify_gitignore=lambda: True,
+            add_env_to_gitignore=lambda: True,
+            write_env_file=lambda vars, active_provider=None: str(tmp_path / ".env"),
+            non_interactive=True,
+        )
+
+
+def test_persist_onboarding_env_rejects_equal_lookup_secret(monkeypatch, tmp_path):
+    """Collision surfaces with the fix instruction, not a bare type name."""
+    monkeypatch.setenv("QWED_JWT_SECRET_KEY", "same-value")
+    monkeypatch.setenv("QWED_API_KEY_LOOKUP_SECRET", "same-value")
+    profile = _provider_map()["openai"]
+
+    with pytest.raises(RuntimeError, match="must differ"):
+        _persist_onboarding_env(
+            profile=profile,
+            resolved_key="sk-test-key",
+            resolved_base_url="",
+            resolved_model="gpt-4o-mini",
+            ensure_jwt_secret=lambda: "same-value",
+            ensure_lookup_secret=_REAL_ENSURE_LOOKUP_SECRET,
+            verify_gitignore=lambda: True,
+            add_env_to_gitignore=lambda: True,
+            write_env_file=lambda vars, active_provider=None: str(tmp_path / ".env"),
+            non_interactive=True,
+        )
+
+
+def test_ensure_local_server_running_without_any_lookup_secret(monkeypatch):
+    """Legacy path with no lookup anywhere: child env carries no lookup key,
+    preserving the old (crashing, fail-closed) behavior for non-onboarded use."""
+    checks = iter([False, True])
+    popen_capture = {}
+    runtime_dir = Path("runtime-dir")
+
+    monkeypatch.setattr("qwed_sdk.cli._check_server_health", lambda _url, timeout=2.0: next(checks))
+    monkeypatch.setattr("qwed_sdk.cli._src_path", lambda: "src")
+    monkeypatch.setattr("qwed_sdk.cli._resolve_server_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setattr("qwed_sdk.cli.time.sleep", lambda _s: None)
+    monkeypatch.setattr("qwed_sdk.cli.subprocess.Popen", lambda c, **k: popen_capture.update(kwargs=k))
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+
+    ready, _ = _ensure_local_server_running("http://127.0.0.1:9001", "jwt-value")
+    assert ready is True
+    assert "QWED_API_KEY_LOOKUP_SECRET" not in popen_capture["kwargs"]["env"]
+
+
+def test_seed_server_secrets_from_nested_directory(monkeypatch, tmp_path):
+    """Greptile P1 on #375: init from a subdirectory must see (and retain)
+    the project-root secrets instead of generating overwrites."""
+    root = tmp_path / "proj"
+    nested = root / "sub" / "dir"
+    nested.mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\nname = 'proj'\n", encoding="utf-8")
+    (root / ".env").write_text(
+        "QWED_JWT_SECRET_KEY=root-jwt\nQWED_API_KEY_LOOKUP_SECRET=root-lookup\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(nested)
+    monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+
+    _REAL_SEED_FROM_ROOT()
+
+    assert os.getenv("QWED_JWT_SECRET_KEY") == "root-jwt"
+    assert os.getenv("QWED_API_KEY_LOOKUP_SECRET") == "root-lookup"
+
+
+def test_seed_reports_filled_names(monkeypatch, tmp_path):
+    """The filled-set lets the stale-server guard tell retained apart from
+    freshly generated (Sentry on #375)."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname = 'proj'\n", encoding="utf-8")
+    (root / ".env").write_text("QWED_JWT_SECRET_KEY=root-jwt\n", encoding="utf-8")
+    monkeypatch.chdir(root)
+    monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+
+    filled = _REAL_SEED_FROM_ROOT()
+
+    assert filled == {"QWED_JWT_SECRET_KEY"}
+
+
+def test_seed_prefers_root_over_nested_dotenv(monkeypatch, tmp_path):
+    """CodeRabbit on #375: with dotenv loading the nested .env afterwards
+    (override=False), the seeded root values must already hold so the
+    nested file cannot outrank them."""
+    root = tmp_path / "proj"
+    nested = root / "sub"
+    nested.mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\nname = 'proj'\n", encoding="utf-8")
+    (root / ".env").write_text("QWED_API_KEY_LOOKUP_SECRET=root-lookup\n", encoding="utf-8")
+    (nested / ".env").write_text("QWED_API_KEY_LOOKUP_SECRET=nested-lookup\n", encoding="utf-8")
+    monkeypatch.chdir(nested)
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+
+    filled = _REAL_SEED_FROM_ROOT()
+
+    assert filled == {"QWED_API_KEY_LOOKUP_SECRET"}
+    assert os.getenv("QWED_API_KEY_LOOKUP_SECRET") == "root-lookup"
+
+
+def test_seed_server_secrets_keeps_explicit_env(monkeypatch, tmp_path):
+    """Explicit environment still wins over the root .env (setdefault)."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname = 'proj'\n", encoding="utf-8")
+    (root / ".env").write_text("QWED_JWT_SECRET_KEY=root-jwt\n", encoding="utf-8")
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("QWED_JWT_SECRET_KEY", "explicit-jwt")
+
+    _REAL_SEED_FROM_ROOT()
+
+    assert os.getenv("QWED_JWT_SECRET_KEY") == "explicit-jwt"
+
+
+def test_seed_server_secrets_degrades_quietly(monkeypatch):
+    """Missing credential_store: seeding is best effort — onboarding falls
+    back to plain env + generation.
+
+    The missing-module arm uses patch.dict (no re-import happens inside),
+    NEVER sys.modules replace + re-import: that leaves the parent package
+    attribute pointing at a ghost copy, so later mock.patch calls
+    (getattr-walk) and production from-imports (sys.modules) diverge for
+    the rest of the session (broke 3 tests on 3.10).
+
+    (CodeRabbit on #375 round N+1: the _find_project_root OSError arm was
+    REMOVED from this test — discovery failure now fails closed, see
+    test_seed_project_root_discovery_failure_fails_closed. Only a missing
+    module degrades quietly: there the seeding feature itself is absent,
+    so there are no root secrets this function could put at risk.)
+    """
+    with patch.dict(
+        sys.modules, {"qwed_new.providers.credential_store": None}
+    ):
+        _REAL_SEED_FROM_ROOT()  # must not raise
+
+
+def test_seed_project_root_discovery_failure_fails_closed(monkeypatch):
+    """CodeRabbit on #375: if _find_project_root raises, init cannot know
+    whether the canonical root .env exists — continuing could generate
+    fresh secrets and persist them over the ones it holds. Fail closed
+    (QWED_RULES.md rule 2), mirroring the unreadable-file case."""
+    import qwed_new.providers.credential_store as credential_store
+
+    monkeypatch.setattr(
+        credential_store,
+        "_find_project_root",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("denied")),
+    )
+
+    with pytest.raises(RuntimeError, match="project root could not be located"):
+        _REAL_SEED_FROM_ROOT()
+
+
+def test_seed_missing_dotenv_is_quiet_first_run(monkeypatch, tmp_path):
+    """No root .env at all: normal first run, seeding is a quiet no-op."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname = 'proj'\n", encoding="utf-8")
+    monkeypatch.chdir(root)
+    monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+
+    assert _REAL_SEED_FROM_ROOT() == set()
+
+
+def test_seed_unreadable_existing_dotenv_fails_closed(monkeypatch, tmp_path):
+    """CodeRabbit on #375: an EXISTING but unreadable root .env must fail
+    closed — silently proceeding could overwrite secrets it holds."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname = 'proj'\n", encoding="utf-8")
+    (root / ".env").mkdir()  # a directory: open() raises IsADirectoryError (OSError)
+    monkeypatch.chdir(root)
+
+    with pytest.raises(RuntimeError, match="cannot be read"):
+        _REAL_SEED_FROM_ROOT()
+
+
+def test_seed_server_secrets_survives_malformed_dotenv(monkeypatch, tmp_path):
+    """CodeRabbit on #375: non-UTF-8 bytes in an EXISTING root .env raise
+    UnicodeDecodeError (a ValueError, not OSError) — seeding must fail
+    closed, never silently proceed to overwrite it."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname = 'proj'\n", encoding="utf-8")
+    (root / ".env").write_bytes(b"QWED_JWT_SECRET_KEY=\xff\xfe-broken\n")
+    monkeypatch.chdir(root)
+    monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="cannot be read"):
+        _REAL_SEED_FROM_ROOT()
+
+
+def test_fresh_provisioned_server_import_gate(monkeypatch, tmp_path):
+    """The exact gate from issue #372, in a real interpreter: with freshly
+    provisioned secrets in env, `qwed_new.api.main:app` imports without the
+    fail-closed RuntimeError. No ports, no uvicorn — the import IS the gate."""
+    import subprocess
+    import sys
+
+    from qwed_new.config import ensure_jwt_secret as fresh_jwt
+
+    monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
+    jwt_secret = fresh_jwt()
+    # Module-level unpatched binding (the autouse fixture stubs the module
+    # attribute — a local import here would bind the mock).
+    lookup_secret = _REAL_ENSURE_LOOKUP_SECRET()
+    assert jwt_secret != lookup_secret
+
+    repo_src = Path(__file__).resolve().parents[1] / "src"
+    # Ambient env plus overrides: the gate only cares about the two secrets,
+    # but the import chain needs HOME etc. (Path.home() in config load).
+    env = dict(os.environ)
+    env.update(
+        {
+            "PYTHONPATH": str(repo_src),
+            "QWED_JWT_SECRET_KEY": jwt_secret,
+            "QWED_API_KEY_LOOKUP_SECRET": lookup_secret,
+        }
+    )
+    code = "from qwed_new.api.main import app; print(type(app).__name__)"
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+        cwd=str(tmp_path),
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert "FastAPI" in proc.stdout
 
 
 def test_ensure_local_server_running_terminates_on_timeout(monkeypatch):
@@ -908,7 +1465,11 @@ def test_init_non_interactive_custom_uses_default_base_url(
     _mock_server,
     _mock_bootstrap,
     runner,
+    monkeypatch,
 ):
+    # Drop ambient CUSTOM_BASE_URL (e.g. a developer's real .env loaded at
+    # collection): the point is the *default* is used when nothing provides one.
+    monkeypatch.delenv("CUSTOM_BASE_URL", raising=False)
     result = runner.invoke(
         init,
         [

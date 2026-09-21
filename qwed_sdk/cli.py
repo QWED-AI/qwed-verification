@@ -401,7 +401,11 @@ def _runtime_sqlite_database_url(runtime_dir: Path) -> str:
     return f"sqlite:///{db_path.as_posix()}"
 
 
-def _ensure_local_server_running(server_url: str, jwt_secret: str) -> tuple[bool, bool]:
+def _ensure_local_server_running(
+    server_url: str,
+    jwt_secret: str,
+    lookup_secret: Optional[str] = None,
+) -> tuple[bool, bool]:
     normalized_server_url = _normalize_local_server_url(server_url)
     if _check_server_health(normalized_server_url):
         return True, False
@@ -415,6 +419,12 @@ def _ensure_local_server_running(server_url: str, jwt_secret: str) -> tuple[bool
     if src not in current_pythonpath.split(os.pathsep):
         env["PYTHONPATH"] = f"{src}{os.pathsep}{current_pythonpath}" if current_pythonpath else src
     env["QWED_JWT_SECRET_KEY"] = jwt_secret
+    # The child boots qwed_new.auth.security, which fail-closes at import
+    # without a dedicated lookup secret (issue #372). Explicit threading —
+    # never inherit-or-crash: fall back to the parent env for legacy callers.
+    resolved_lookup = (lookup_secret or os.getenv("QWED_API_KEY_LOOKUP_SECRET", "")).strip()
+    if resolved_lookup:
+        env["QWED_API_KEY_LOOKUP_SECRET"] = resolved_lookup
     env["DATABASE_URL"] = _runtime_sqlite_database_url(runtime_dir)
 
     command = [
@@ -669,7 +679,7 @@ def _ensure_gitignore_protection(verify_gitignore, add_env_to_gitignore) -> bool
 
 
 def _import_init_dependencies():
-    from qwed_new.config import ensure_jwt_secret
+    from qwed_new.config import ensure_jwt_secret, ensure_lookup_secret
     from qwed_new.providers.credential_store import (
         add_env_to_gitignore,
         verify_gitignore,
@@ -680,6 +690,7 @@ def _import_init_dependencies():
 
     return (
         ensure_jwt_secret,
+        ensure_lookup_secret,
         add_env_to_gitignore,
         verify_gitignore,
         write_env_file,
@@ -932,17 +943,73 @@ def _prompt_retry_credentials(
     return updated_key, updated_base_url, updated_model
 
 
+def _seed_server_secrets_from_project_root() -> set:
+    """Seed server secrets from the project-root .env without overriding env.
+
+    Issue #372 / Greptile P1 on #375: `qwed init` run from a subdirectory
+    loads only the cwd .env, so a pre-existing root secret looks missing — a
+    fresh value would then be generated and persisted OVER the root one,
+    invalidating every issued key's lookup digest. Seeding with setdefault
+    keeps explicit environment winning while letting ensure_* retain root
+    values. Scoped to the two server secrets only.
+
+    Returns the names actually filled, so callers can distinguish retained
+    (disk or env) from freshly generated values without re-reading files.
+    Raises RuntimeError (fail closed, QWED_RULES.md rule 2) if project-root
+    discovery fails or if the project-root .env EXISTS but cannot be read
+    or decoded: swallowing either would let a replacement overwrite secrets
+    the existing file holds (CodeRabbit on #375). A missing file is normal
+    first-run behavior and yields an empty set. Missing credential_store is
+    a genuine degrade-quietly case: the seeding feature itself is absent.
+    """
+    filled: set = set()
+    try:
+        from qwed_new.providers.credential_store import (
+            _find_project_root,
+            _read_existing_env,
+        )
+    except ImportError:
+        return filled
+    try:
+        env_path = _find_project_root() / ".env"
+    except OSError as exc:
+        # Discovery failure means we cannot know whether the canonical
+        # project-root .env exists — continuing could generate fresh
+        # secrets and persist them over the ones it holds. Fail closed
+        # (QWED_RULES.md rule 2), same as the unreadable-file case below
+        # (CodeRabbit on #375): init already exits cleanly on RuntimeError.
+        raise RuntimeError("project root could not be located") from exc
+    if not env_path.exists():
+        return filled
+    try:
+        stored = _read_existing_env(env_path)
+    except (OSError, UnicodeDecodeError) as exc:
+        # An EXISTING file that cannot be read or decoded must fail closed:
+        # silently proceeding could overwrite secrets it holds (CodeRabbit
+        # on #375). (UnicodeDecodeError is a ValueError, not OSError.)
+        raise RuntimeError(
+            f"project root .env exists but cannot be read: {env_path}"
+        ) from exc
+    for var in ("QWED_JWT_SECRET_KEY", "QWED_API_KEY_LOOKUP_SECRET"):
+        value = stored.get(var, "").strip()
+        if value and var not in os.environ:
+            os.environ[var] = value
+            filled.add(var)
+    return filled
+
+
 def _persist_onboarding_env(
     profile: OnboardingProvider,
     resolved_key: str,
     resolved_base_url: str,
     resolved_model: str,
     ensure_jwt_secret,
+    ensure_lookup_secret,
     verify_gitignore,
     add_env_to_gitignore,
     write_env_file,
     non_interactive: bool,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     env_vars = {profile.key_env: resolved_key, profile.model_env: resolved_model}
     if profile.base_url_env:
         env_vars[profile.base_url_env] = resolved_base_url
@@ -954,6 +1021,19 @@ def _persist_onboarding_env(
         raise RuntimeError(f"Failed to prepare JWT secret: {type(exc).__name__}") from exc
 
     env_vars["QWED_JWT_SECRET_KEY"] = jwt_secret
+
+    try:
+        # Stable for the lifetime of issued keys: existing values are never
+        # rotated here (issue #372). Fresh setups generate one distinct from
+        # the JWT secret, which the server refuses to boot with. The message
+        # is preserved (not just the type name) so a misconfiguration — e.g.
+        # lookup equal to JWT — tells the user exactly how to fix .env.
+        lookup_secret = ensure_lookup_secret()
+    except Exception as exc:
+        logger.exception("Lookup secret preparation failed")
+        raise RuntimeError(f"Failed to prepare lookup secret: {exc}") from exc
+
+    env_vars["QWED_API_KEY_LOOKUP_SECRET"] = lookup_secret
 
     try:
         if non_interactive:
@@ -968,7 +1048,7 @@ def _persist_onboarding_env(
     os.environ.update(env_vars)
     os.environ["ACTIVE_PROVIDER"] = profile.active_provider
     click.echo("  [ok] Credentials stored (.env, mode 0600)")
-    return jwt_secret, env_path
+    return jwt_secret, lookup_secret, env_path
 
 
 def _resolve_organization_name(organization_name: Optional[str], non_interactive: bool) -> str:
@@ -982,6 +1062,62 @@ def _resolve_organization_name(organization_name: Optional[str], non_interactive
     if not resolved_org:
         raise RuntimeError("Organization name is required.")
     return resolved_org
+
+
+def _start_server_and_bootstrap(
+    normalized_server_url: str,
+    jwt_secret: str,
+    lookup_secret: str,
+    organization_name: str,
+    secrets_fresh: bool,
+) -> tuple[str, str]:
+    """Start (or reuse) the local server, guard stale secrets, bootstrap a key.
+
+    Extracted from init to keep it under the complexity gate (Sonar on #375).
+    Exits the process on any failure; returns (api_key, org_name) on success.
+    """
+    try:
+        server_ready, started_new = _ensure_local_server_running(
+            normalized_server_url, jwt_secret, lookup_secret
+        )
+    except ValueError as exc:
+        logger.exception("Local server target validation failed")
+        click.echo(f"  [x] Invalid server URL: {exc}", err=True)
+        sys.exit(1)
+    except Exception as exc:
+        logger.exception("Failed to start local server")
+        click.echo(f"  [x] Failed to start local server: {type(exc).__name__}", err=True)
+        click.echo("    Ensure dependencies are installed and runtime permissions allow subprocess start.", err=True)
+        sys.exit(1)
+    if not server_ready:
+        click.echo("  [x] Failed to start local server.", err=True)
+        click.echo("    Ensure dependencies are installed and `src/` is available in PYTHONPATH.", err=True)
+        click.echo(f"    Suggested fix: pip install -e \"{_project_root()}\"", err=True)
+        sys.exit(1)
+    click.echo("  [ok] Local server initialized")
+    if started_new:
+        click.echo("  [ok] Runtime path guard applied (src/ added to PYTHONPATH)")
+    elif secrets_fresh:
+        # Freshly generated secrets + pre-existing healthy server: the server
+        # cannot have them, so bootstrapping would issue a key that dies on
+        # restart (Greptile P1 on #375 — proven data loss).
+        # Never auto-restart: the process may belong to another project.
+        # Stop before bootstrapping instead of warning through.
+        click.echo("  [x] Server was already running with older secrets.", err=True)
+        click.echo("      Restart it, then re-run init so keys are issued under the persisted secrets.", err=True)
+        sys.exit(1)
+
+    try:
+        qwed_api_key, actual_org_name = _bootstrap_api_key(normalized_server_url, organization_name)
+    except Exception as exc:
+        logger.exception("API key bootstrap failed")
+        click.echo(f"  [x] API key bootstrap failed: {exc}", err=True)
+        sys.exit(1)
+
+    click.echo("  [ok] Organization created")
+    if actual_org_name != organization_name:
+        click.echo(f"  [ok] Organization alias used: {actual_org_name}")
+    return qwed_api_key, actual_org_name
 
 
 @cli.command()
@@ -1010,11 +1146,29 @@ def init(
     skip_tests: bool,
 ):
     """Initialize QWED onboarding: engines, provider credentials, and local API key bootstrap."""
+    # Root seeding BEFORE the cwd dotenv load (CodeRabbit on #375): a nested
+    # .env must not outrank the canonical project-root secrets. Precedence
+    # after both steps is explicit env > root .env > nested .env, because
+    # seeding uses setdefault and the dotenv load never overrides.
+    try:
+        _seed_server_secrets_from_project_root()
+    except RuntimeError as exc:
+        click.echo(f"  [x] {exc}", err=True)
+        sys.exit(1)
     _load_dotenv_if_available()
+    # Presence AFTER root seeding + dotenv load (Greptile P1 + Sentry on
+    # #375): secrets from ANY prior source — process env, root .env, or
+    # nested .env — count as retained. Only a value absent everywhere (hence
+    # generated fresh below) may stop a healthy server.
+    had_secrets_before_init = {
+        var: bool(os.getenv(var, "").strip())
+        for var in ("QWED_JWT_SECRET_KEY", "QWED_API_KEY_LOOKUP_SECRET")
+    }
 
     try:
         (
             ensure_jwt_secret,
+            ensure_lookup_secret,
             add_env_to_gitignore,
             verify_gitignore,
             write_env_file,
@@ -1024,6 +1178,11 @@ def init(
         ) = _import_init_dependencies()
     except ImportError as exc:
         click.echo(f"QWED core not found: {type(exc).__name__}", err=True)
+        sys.exit(1)
+    except RuntimeError as exc:
+        # e.g. qwed_new.config.Settings requires API_KEY_SECRET at import.
+        # Fail closed with guidance, not a traceback (Sentry on #375).
+        click.echo(f"QWED core misconfigured: {exc}", err=True)
         sys.exit(1)
 
     provider_map = _build_onboarding_provider_map(get_provider)
@@ -1072,12 +1231,15 @@ def init(
             non_interactive=non_interactive,
             test_connection=test_connection,
         )
-        jwt_secret, env_path = _persist_onboarding_env(
+        had_jwt_before = had_secrets_before_init["QWED_JWT_SECRET_KEY"]
+        had_lookup_before = had_secrets_before_init["QWED_API_KEY_LOOKUP_SECRET"]
+        jwt_secret, lookup_secret, env_path = _persist_onboarding_env(
             profile=profile,
             resolved_key=resolved_key,
             resolved_base_url=resolved_base_url,
             resolved_model=resolved_model,
             ensure_jwt_secret=ensure_jwt_secret,
+            ensure_lookup_secret=ensure_lookup_secret,
             verify_gitignore=verify_gitignore,
             add_env_to_gitignore=add_env_to_gitignore,
             write_env_file=write_env_file,
@@ -1102,36 +1264,13 @@ def init(
         sys.exit(1)
 
     click.echo("\n  Starting local server...")
-    try:
-        server_ready, started_new = _ensure_local_server_running(normalized_server_url, jwt_secret)
-    except ValueError as exc:
-        logger.exception("Local server target validation failed")
-        click.echo(f"  [x] Invalid server URL: {exc}", err=True)
-        sys.exit(1)
-    except Exception as exc:
-        logger.exception("Failed to start local server")
-        click.echo(f"  [x] Failed to start local server: {type(exc).__name__}", err=True)
-        click.echo("    Ensure dependencies are installed and runtime permissions allow subprocess start.", err=True)
-        sys.exit(1)
-    if not server_ready:
-        click.echo("  [x] Failed to start local server.", err=True)
-        click.echo("    Ensure dependencies are installed and `src/` is available in PYTHONPATH.", err=True)
-        click.echo(f"    Suggested fix: pip install -e \"{_project_root()}\"", err=True)
-        sys.exit(1)
-    click.echo("  [ok] Local server initialized")
-    if started_new:
-        click.echo("  [ok] Runtime path guard applied (src/ added to PYTHONPATH)")
-
-    try:
-        qwed_api_key, actual_org_name = _bootstrap_api_key(normalized_server_url, organization_name)
-    except Exception as exc:
-        logger.exception("API key bootstrap failed")
-        click.echo(f"  [x] API key bootstrap failed: {exc}", err=True)
-        sys.exit(1)
-
-    click.echo("  [ok] Organization created")
-    if actual_org_name != organization_name:
-        click.echo(f"  [ok] Organization alias used: {actual_org_name}")
+    qwed_api_key, _actual_org_name = _start_server_and_bootstrap(
+        normalized_server_url=normalized_server_url,
+        jwt_secret=jwt_secret,
+        lookup_secret=lookup_secret,
+        organization_name=organization_name,
+        secrets_fresh=not had_jwt_before or not had_lookup_before,
+    )
 
     click.echo(f"\n  Your API key: {qwed_api_key}")
     click.echo("  Warning: Save this key. It is shown only once.")
