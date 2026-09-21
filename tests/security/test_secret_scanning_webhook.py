@@ -892,23 +892,22 @@ class TestSinkFailure:
             routes._deliver_verified_matches(matches)
         assert seen == matches
 
-    def test_receipt_failure_propagates_after_dropping_batch(self, caplog):
-        """Sentry LOW on #380: a raising _record_receipt must not skip the
-        `del matches` that keeps the plaintext batch out of frame locals —
-        the receipt runs in try/finally with the deletion in finally, so the
-        receipt error propagates loudly (chained to the sink error) instead
-        of being swallowed or leaking the batch."""
+    def test_receipt_failure_neither_masks_sink_nor_raises(self, monkeypatch, caplog):
+        """Sentry MEDIUM on #380: a raising receipt must neither skip the
+        `del matches` nor swallow the original sink traceback — both
+        failures are logged, nothing propagates (the response was already
+        acknowledged). No pytest.raises block: the point is nothing raises."""
         def _boom(_matches):
             raise RuntimeError("sink exploded")
 
         def _receipt_boom(_matches, event):
             raise RuntimeError("receipt exploded")
 
-        with (
-            patch.object(routes, "on_verified_matches", side_effect=_boom),
-            patch.object(routes, "_record_receipt", side_effect=_receipt_boom),
-            caplog.at_level(logging.ERROR, logger="qwed_new.api.secret_scanning_routes"),
-            pytest.raises(RuntimeError, match="receipt exploded") as excinfo,
-        ):
-            routes._deliver_verified_matches([routes.SecretMatch(token="t", type="y")])
-        assert isinstance(excinfo.value.__context__, RuntimeError)
+        monkeypatch.setattr(routes, "on_verified_matches", _boom)
+        monkeypatch.setattr(routes, "_record_receipt", _receipt_boom)
+        probe = [routes.SecretMatch(token="t", type="y")]
+        with caplog.at_level(logging.ERROR, logger="qwed_new.api.secret_scanning_routes"):
+            routes._deliver_verified_matches(probe)  # must not raise
+        messages = [record.message for record in caplog.records]
+        assert "verified-match receipt failed" in messages
+        assert "verified-match sink failed" in messages

@@ -150,6 +150,34 @@ def _redact_token(text: str, token: str) -> str:
     return text.replace(token, "[REDACTED]") if token in text else text
 
 
+def _redacted_field(text: str, token: str, field: str) -> str:
+    """Redact ``token`` from one metadata field, clamped to the model's cap.
+
+    Redaction replaces each token occurrence with ``"[REDACTED]"``, which
+    EXPANDS the value when the token is shorter than 10 chars. An expanded
+    value past the field's ``max_length`` would raise ``ValidationError``
+    inside ``_stage_batch`` and abort the whole batch — one pathological
+    match DoSing its legitimate siblings (Sentry LOW on #380). Via GitHub
+    this is unreachable (only fixed-length regex matches are forwarded, and
+    redacting those always shrinks), but the sink is public and other
+    scanners may feed it. The cap is read off the model so it cannot drift.
+    Truncation only removes characters, so it can never reintroduce token
+    material.
+    """
+    redacted = _redact_token(text, token)
+    cap = next(
+        (
+            meta.max_length
+            for meta in SecretMatch.model_fields[field].metadata
+            if hasattr(meta, "max_length")
+        ),
+        None,
+    )
+    if cap is not None and len(redacted) > cap:
+        return redacted[:cap]
+    return redacted
+
+
 def _sanitized_match(match: SecretMatch, token: str) -> SecretMatch:
     """Copy of ``match`` with any embedded token occurrences redacted.
 
@@ -161,9 +189,9 @@ def _sanitized_match(match: SecretMatch, token: str) -> SecretMatch:
     """
     return SecretMatch(
         token="[REDACTED]",
-        type=_redact_token(match.type, token),
-        url=_redact_token(match.url, token),
-        source=_redact_token(match.source, token),
+        type=_redacted_field(match.type, token, "type"),
+        url=_redacted_field(match.url, token, "url"),
+        source=_redacted_field(match.source, token, "source"),
     )
 
 

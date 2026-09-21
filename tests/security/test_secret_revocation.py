@@ -248,6 +248,32 @@ def test_resolve_failure_revokes_without_error(session_factory, monkeypatch, cap
     assert _fresh_key_row(session_factory, hash_api_key(raw_good)).is_active is False
 
 
+def test_redaction_expansion_clamped_siblings_still_revoke(session_factory, monkeypatch):
+    """Sentry LOW on #380: a short token repeated through a metadata field
+    expands under redaction ("a"*64 -> "[REDACTED]"*64); the sanitized copy
+    must clamp to the field cap instead of raising ValidationError and
+    aborting the batch around a legitimate sibling key."""
+    sent = _mails(monkeypatch)
+    with session_factory() as session:
+        org = _seed_org(session)
+        user = _seed_user(session, org)
+        raw_good, _ = _seed_key(session, org, user, name="good")
+
+    evil = SecretMatch(
+        token="a",
+        type="qwed_live_api_key",
+        url="https://x.test/a",
+        source="a" * 64,
+    )
+    outcome = revocation_module.revoke_leaked_keys(
+        [_match(raw_good), evil], session_factory=session_factory
+    )
+
+    assert outcome == {"revoked": 1, "already_revoked": 0, "unknown": 1, "errors": 0}
+    assert len(sent) == 1
+    assert _fresh_key_row(session_factory, hash_api_key(raw_good)).is_active is False
+
+
 def test_duplicate_delivery_notifies_once(session_factory, monkeypatch):
     sent = _mails(monkeypatch)
     with session_factory() as session:

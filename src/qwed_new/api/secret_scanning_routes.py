@@ -751,11 +751,15 @@ def _deliver_verified_matches(matches: list[SecretMatch]) -> None:
         # raw batch BEFORE logging: a locals-capturing reporter must not
         # observe the plaintext batch through this frame (#380 follow-up —
         # the sink now raises loudly on enforcement failure, so this path
-        # is live, not theoretical). The receipt itself runs inside
-        # try/finally so a logging failure can never skip the deletion
-        # (Sentry LOW on #380).
+        # is live, not theoretical). The receipt itself must never mask the
+        # original sink failure (Sentry MEDIUM on #380): a receipt error is
+        # logged and swallowed so the sink traceback below always runs.
+        # Deletion stays in finally so the plaintext batch always leaves
+        # frame locals even when the receipt raises (Sentry LOW on #380).
         try:
             _record_receipt(matches, event="sink_failed")
+        except Exception:
+            logger.exception("verified-match receipt failed")
         finally:
             del matches
         # #368's sink must never crash the already-acknowledged response; log
