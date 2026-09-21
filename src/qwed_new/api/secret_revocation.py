@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from sqlmodel import Session, select, update
@@ -100,7 +100,7 @@ def _try_revoke(session: Session, api_key: ApiKey, match: SecretMatch) -> bool:
     is synced on win so later reads (preview, ids) stay consistent.
     Also stages the audit row; the caller commits.
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     result = session.execute(
         update(ApiKey)
         .where(ApiKey.id == api_key.id, ApiKey.is_active)
@@ -141,9 +141,16 @@ def _redact_token(text: str, token: str) -> str:
 
 
 def _sanitized_match(match: SecretMatch, token: str) -> SecretMatch:
-    """Copy of ``match`` with any embedded token occurrences redacted."""
+    """Copy of ``match`` with any embedded token occurrences redacted.
+
+    The copy's own ``token`` field is replaced with a fixed placeholder:
+    nothing downstream needs the plaintext (lookup uses the digest), and a
+    live ``token`` attribute would ride along into exception tracebacks and
+    error-reporting locals capture (Sentry HIGH on #380). ``token`` still
+    satisfies the model's min_length=1 constraint.
+    """
     return SecretMatch(
-        token=match.token,
+        token="[REDACTED]",
         type=_redact_token(match.type, token),
         url=_redact_token(match.url, token),
         source=_redact_token(match.source, token),

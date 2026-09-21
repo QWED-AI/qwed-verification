@@ -298,11 +298,12 @@ def test_digest_failure_aborts_batch_loudly(session_factory, monkeypatch):
         raw, _key = _seed_key(session, org, user)
 
     monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET")
+    batch = [
+        _match(raw),
+        _match("qwed_live_" + "Q" * 30 + "000000"),
+    ]
     with pytest.raises(RuntimeError):
-        revocation_module.revoke_leaked_keys(
-            [_match(raw), _match("qwed_live_" + "Q" * 30 + "000000")],
-            session_factory=session_factory,
-        )
+        revocation_module.revoke_leaked_keys(batch, session_factory=session_factory)
 
 
 def test_send_owner_email_success(monkeypatch):
@@ -471,6 +472,18 @@ def test_token_embedded_in_url_redacted_everywhere(session_factory, monkeypatch,
 
 def test_redact_token_empty_token_noop():
     assert revocation_module._redact_token("https://example.test/x", "") == "https://example.test/x"
+
+
+def test_sanitized_copy_carries_no_plaintext_token():
+    """Sentry HIGH on #380: the sanitized copy must not retain the token —
+    it rides into tracebacks and error-reporter locals on downstream failure."""
+    raw = "qwed_live_" + "R" * 30 + "000000"
+    original = _match(raw)
+    safe = revocation_module._sanitized_match(original, raw)
+
+    assert safe.token != raw
+    assert raw not in safe.model_dump_json()
+    assert original.token == raw
 
 
 def test_default_session_factory_constructs():
