@@ -25,6 +25,7 @@ Security model (mirrors the issue requirements):
 from __future__ import annotations
 
 import logging
+import sys
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -176,14 +177,24 @@ class LeakBatchIncomplete(RuntimeError):
 
 
 def _notify_best_effort(session: Session, api_key: ApiKey, match: SecretMatch) -> None:
-    """Resolve the owner and notify, swallowing only delivery failures.
+    """Resolve the owner and notify, swallowing all notification-plane failures.
 
-    Owner *resolution* errors propagate (they are enforcement-adjacent DB
-    failures for the outer tally); delivery failure after a committed
-    revocation only logs (Sentry MEDIUM on #380 — never double-count, never
-    roll back). Extracted so the batch loop stays under the complexity gate.
+    Owner *resolution* failures are best-effort too, not enforcement
+    failures: the revocation already committed, and failing the batch over
+    an addressing lookup misreports completed enforcement as failed
+    (Greptile T-Rex on #380 — the DB row proves revoked while the receipt
+    says sink_failed). Genuine enforcement failures (lookup, claim, commit)
+    still tally errors in the caller and raise loudly at batch end.
     """
-    recipient = _resolve_owner_email(session, api_key)
+    try:
+        recipient = _resolve_owner_email(session, api_key)
+    except Exception:
+        logger.exception(
+            "leak intake: owner resolution failed for key %d; "
+            "revocation stands without notification",
+            api_key.id,
+        )
+        return
     if recipient is None:
         logger.warning(
             "leak intake: revoked key %d has no reachable owner; "
@@ -199,6 +210,37 @@ def _notify_best_effort(session: Session, api_key: ApiKey, match: SecretMatch) -
             "revocation stands",
             api_key.id,
         )
+
+
+# Frames that bind the plaintext token as a local and therefore travel
+# with any exception raised through them: the hasher's ``api_key`` argument
+# and this module's own staging loop. Scrubbed (not merely unreferenced) on
+# the digest-failure path below.
+_TOKEN_HOLDING_FRAMES = frozenset({"hash_api_key", "_stage_batch"})
+
+
+def _scrub_token_frames(exc: BaseException) -> None:
+    """Clear locals of dead frames known to hold the plaintext token.
+
+    A traceback keeps every frame it passes through, so deleting names in
+    the logging frame is insufficient: ``hash_api_key``'s frame retains its
+    ``api_key`` argument, and any locals-capturing reporter ships it with
+    the event (Greptile T-Rex on #380 proved exactly this). Clearing a frame
+    that has already exited is safe — none of them resume. The CURRENT
+    (still-executing) frame is never touched: it has logging left to do.
+    """
+    current = sys._getframe(1)
+    seen = set()
+    error: Optional[BaseException] = exc
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        tb = error.__traceback__
+        while tb is not None:
+            frame = tb.tb_frame
+            if frame is not current and frame.f_code.co_name in _TOKEN_HOLDING_FRAMES:
+                frame.clear()
+            tb = tb.tb_next
+        error = error.__cause__ or error.__context__
 
 
 def _stage_batch(matches: List[SecretMatch]) -> List[tuple]:
@@ -249,10 +291,11 @@ def revoke_leaked_keys(
     with session_factory() as session:
         try:
             staged = _stage_batch(matches)
-        except Exception:
-            # Digest failure means enforcement cannot run at all: drop the
-            # raw batch reference BEFORE logging so a locals-capturing
-            # reporter cannot observe it, then fail the batch closed.
+        except Exception as exc:
+            # Digest failure means enforcement cannot run at all: scrub the
+            # callee frames (hash_api_key's api_key argument travels with
+            # the traceback), drop our own batch reference, then fail loud.
+            _scrub_token_frames(exc)
             del matches
             logger.exception(
                 "leak intake: unable to digest — enforcement cannot run, "

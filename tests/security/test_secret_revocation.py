@@ -217,6 +217,28 @@ def test_no_reachable_owner_revokes_without_email(session_factory, monkeypatch, 
     assert "no reachable owner" in caplog.text
 
 
+def test_resolve_failure_revokes_without_error(session_factory, monkeypatch, caplog):
+    """Greptile T-Rex on #380: owner resolution raising after commit must
+    not misreport completed enforcement as failed — best effort, no error."""
+    def _boom(session, api_key):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(revocation_module, "_resolve_owner_email", _boom)
+    sent = _mails(monkeypatch)
+    with session_factory() as session:
+        org = _seed_org(session)
+        user = _seed_user(session, org)
+        raw, _key = _seed_key(session, org, user)
+
+    with caplog.at_level(logging.ERROR, logger="qwed_new.api.secret_revocation"):
+        outcome = revocation_module.revoke_leaked_keys([_match(raw)], session_factory=session_factory)
+
+    assert outcome == {"revoked": 1, "already_revoked": 0, "unknown": 0, "errors": 0}
+    assert sent == []
+    row = _fresh_key_row(session_factory, hash_api_key(raw))
+    assert row.is_active is False
+
+
 def test_duplicate_delivery_notifies_once(session_factory, monkeypatch):
     sent = _mails(monkeypatch)
     with session_factory() as session:
@@ -570,6 +592,39 @@ def test_traceback_frames_carry_no_plaintext_on_digest_failure(session_factory, 
     assert frame_count >= 1
     assert "'revoked'" in blob
     assert raw not in blob
+
+
+def test_digest_failure_scrubs_callee_frames(session_factory, monkeypatch):
+    """Greptile T-Rex on #380: hash_api_key's own frame binds the token as
+    ``api_key`` — scrubbed before logging so capture sees nothing."""
+    _mails(monkeypatch)
+    with session_factory() as session:
+        org = _seed_org(session)
+        user = _seed_user(session, org)
+        raw, _key = _seed_key(session, org, user)
+
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET")
+    batch = [_match(raw)]
+    try:
+        revocation_module.revoke_leaked_keys(batch, session_factory=session_factory)
+        raised = None
+    except RuntimeError as exc:
+        raised = exc
+    assert raised is not None
+    callee_frames = []
+    seen = set()
+    current = raised
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        tb = current.__traceback__
+        while tb is not None:
+            if tb.tb_frame.f_code.co_name == "hash_api_key":
+                callee_frames.append(tb.tb_frame.f_locals)
+            tb = tb.tb_next
+        current = current.__cause__ or current.__context__
+    assert callee_frames, "expected the hasher frame in the chain"
+    for locals_map in callee_frames:
+        assert locals_map.get("api_key", "") != raw
 
 
 def test_traceback_frames_carry_no_plaintext_on_row_failure(session_factory, monkeypatch):
