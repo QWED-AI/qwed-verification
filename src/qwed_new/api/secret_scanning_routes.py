@@ -762,11 +762,18 @@ def _deliver_verified_matches(matches: list[SecretMatch]) -> None:
         receipt_error = None
         try:
             _record_receipt(matches, event="sink_failed")
-        except Exception as exc:  # noqa: BLE001 — any receipt failure must be captured, never mask the sink error
+        except Exception as exc:  # noqa: BLE001
             receipt_error = exc
         del matches
         if receipt_error is not None:
-            logger.error("verified-match receipt failed", exc_info=receipt_error)
+            # NO traceback attached (Greptile P1 T-Rex on #380, runtime
+            # verified): the receipt exception's traceback retains
+            # _record_receipt's `matches` frame — the plaintext batch — so
+            # exc_info would hand the keys to a locals-capturing reporter
+            # through the callee's frame, past our deletion above. The
+            # message alone is safe: the receipt formats counts only, never
+            # token material.
+            logger.error("verified-match receipt failed: %s", receipt_error)
         # #368's sink must never crash the already-acknowledged response; log
         # with the traceback so the batch can be re-delivered or investigated.
         logger.exception("verified-match sink failed")

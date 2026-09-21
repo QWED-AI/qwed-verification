@@ -909,9 +909,9 @@ class TestSinkFailure:
         probe = [routes.SecretMatch(token="t", type="y")]
         with caplog.at_level(logging.ERROR, logger="qwed_new.api.secret_scanning_routes"):
             routes._deliver_verified_matches(probe)  # must not raise
-        messages = [record.message for record in caplog.records]
-        assert "verified-match receipt failed" in messages
-        assert "verified-match sink failed" in messages
+        texts = [record.getMessage() for record in caplog.records]
+        assert any("verified-match receipt failed" in text for text in texts)
+        assert any("verified-match sink failed" in text for text in texts)
 
     def test_receipt_log_cannot_observe_plaintext_batch(self, monkeypatch, caplog):
         """Sentry CRITICAL on #380: when the receipt itself fails, the batch
@@ -931,8 +931,12 @@ class TestSinkFailure:
 
         class _FrameSpy(logging.Handler):
             def emit(self, record):
-                if record.getMessage() != "verified-match receipt failed":
+                if not record.getMessage().startswith("verified-match receipt failed"):
                     return
+                # Pin the no-traceback invariant too: the receipt error's
+                # traceback retains _record_receipt's token-bearing frame
+                # (Greptile P1 T-Rex on #380), so the record must carry none.
+                seen["exc_info"] = record.exc_info
                 frame = sys._getframe(1)
                 while frame is not None:
                     if frame.f_code.co_name == "_deliver_verified_matches":
@@ -948,4 +952,4 @@ class TestSinkFailure:
                 routes._deliver_verified_matches([routes.SecretMatch(token="t", type="y")])
         finally:
             target.removeHandler(spy)
-        assert seen == {"matches_bound": False}
+        assert seen == {"exc_info": None, "matches_bound": False}
