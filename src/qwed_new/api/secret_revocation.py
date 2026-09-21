@@ -175,6 +175,50 @@ class LeakBatchIncomplete(RuntimeError):
     """
 
 
+def _notify_best_effort(session: Session, api_key: ApiKey, match: SecretMatch) -> None:
+    """Resolve the owner and notify, swallowing only delivery failures.
+
+    Owner *resolution* errors propagate (they are enforcement-adjacent DB
+    failures for the outer tally); delivery failure after a committed
+    revocation only logs (Sentry MEDIUM on #380 — never double-count, never
+    roll back). Extracted so the batch loop stays under the complexity gate.
+    """
+    recipient = _resolve_owner_email(session, api_key)
+    if recipient is None:
+        logger.warning(
+            "leak intake: revoked key %d has no reachable owner; "
+            "revocation stands without notification",
+            api_key.id,
+        )
+        return
+    try:
+        _notify_owner(recipient, api_key, match)
+    except Exception:
+        logger.exception(
+            "leak intake: owner notification failed for key %d; "
+            "revocation stands",
+            api_key.id,
+        )
+
+
+def _stage_batch(matches: List[SecretMatch]) -> List[tuple]:
+    """Digest + sanitize every match up front.
+
+    Returns ``[(sanitized_match, digest)]``. Plaintext tokens live ONLY in
+    this helper's frame: on success the frame (and its locals) dies on
+    return; on digest failure the exception propagates with no logging
+    here, so error-reporting locals capture (e.g. Sentry, CodeRabbit
+    CWE-532 on #380) can never observe raw tokens from this stage. The
+    main loop below therefore binds no plaintext names at all.
+    """
+    staged = []
+    for original in matches:
+        token = original.token
+        digest = hash_api_key(token)
+        staged.append((_sanitized_match(original, token), digest))
+    return staged
+
+
 def revoke_leaked_keys(
     matches: List[SecretMatch],
     session_factory: SessionFactory = _default_session_factory,
@@ -196,25 +240,22 @@ def revoke_leaked_keys(
         "errors": 0,
     }
     with session_factory() as session:
-        for original in matches:
-            # Plaintext lifetime ends here: digest, sanitize, then drop the
-            # raw token AND rebind the loop variable to the sanitized copy
-            # before any DB, logging, or notify work — so error-reporting
-            # locals capture (e.g. Sentry) can never see it (CodeRabbit
-            # CWE-532 review on #380). Digest failure aborts loudly below.
-            token = original.token
-            digest = ""
-            try:
-                digest = hash_api_key(token)
-            except Exception:
-                logger.exception(
-                    "leak intake: unable to digest — enforcement cannot run, "
-                    "failing the batch closed"
-                )
-                del token
-                raise
-            match = _sanitized_match(original, token)
-            del token
+        try:
+            staged = _stage_batch(matches)
+        except Exception:
+            # Digest failure means enforcement cannot run at all: drop the
+            # raw batch reference BEFORE logging so a locals-capturing
+            # reporter cannot observe it, then fail the batch closed.
+            del matches
+            logger.exception(
+                "leak intake: unable to digest — enforcement cannot run, "
+                "failing the batch closed"
+            )
+            raise
+        # The raw batch is no longer needed: every logging site below sees
+        # only sanitized copies and one-way digests.
+        del matches
+        for match, digest in staged:
             try:
                 api_key = session.exec(
                     select(ApiKey).where(ApiKey.key_hash == digest)
@@ -238,25 +279,7 @@ def revoke_leaked_keys(
                     continue
                 session.commit()
                 outcome["revoked"] += 1
-                try:
-                    recipient = _resolve_owner_email(session, api_key)
-                    if recipient is None:
-                        logger.warning(
-                            "leak intake: revoked key %d has no reachable owner; "
-                            "revocation stands without notification",
-                            api_key.id,
-                        )
-                        continue
-                    _notify_owner(recipient, api_key, match)
-                except Exception:
-                    # Resolve + notify failures must not double-count: the
-                    # revocation above already tallied and committed (Sentry
-                    # MEDIUM on #380). Log and move on.
-                    logger.exception(
-                        "leak intake: owner resolution/notification failed "
-                        "for key %d; revocation stands",
-                        api_key.id,
-                    )
+                _notify_best_effort(session, api_key, match)
             except Exception:
                 logger.exception("leak intake: failed processing a reported match")
                 session.rollback()

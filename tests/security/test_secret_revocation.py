@@ -518,3 +518,42 @@ def test_default_session_factory_constructs():
         assert session is not None
     finally:
         session.close()
+
+
+def test_sentry_captured_event_has_no_plaintext(session_factory, monkeypatch):
+    """Sentry HIGH on #380, proven end to end: with the SDK capturing
+    frame locals (the default), a downstream failure inside the sink must
+    not ship the token. before_send drops the event (no network); the
+    captured payload is what WOULD have shipped."""
+    sentry_sdk = pytest.importorskip("sentry_sdk")
+    import json
+
+    from sentry_sdk.integrations.logging import LoggingIntegration
+
+    events = []
+
+    def _boom(self, recipient, subject, body):
+        raise RuntimeError("smtp down")
+
+    monkeypatch.setattr(AlertManager, "send_owner_email", _boom)
+    with session_factory() as session:
+        org = _seed_org(session)
+        user = _seed_user(session, org)
+        raw, _key = _seed_key(session, org, user)
+
+    sentry_sdk.init(
+        dsn="http://public@localhost/1",
+        default_integrations=False,
+        integrations=[LoggingIntegration()],
+        before_send=lambda event, hint: events.append(event) or None,
+    )
+    outcome = revocation_module.revoke_leaked_keys(
+        [_match(raw)], session_factory=session_factory
+    )
+
+    assert outcome["revoked"] == 1
+    assert events, "expected the SDK to capture the notify failure"
+    blob = json.dumps(events)
+    assert raw not in blob
+    # Non-vacuous: the event is real and carries the (safe) context.
+    assert "revocation stands" in blob
