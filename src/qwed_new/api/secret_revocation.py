@@ -189,6 +189,12 @@ def _notify_best_effort(session: Session, api_key: ApiKey, match: SecretMatch) -
     try:
         recipient = _resolve_owner_email(session, api_key)
     except Exception:
+        # Resolution runs post-commit, so nothing staged needs saving — but
+        # the failed SELECT poisons the transaction (Postgres aborts it),
+        # and every later lookup in this batch would fail with it.
+        # Roll back to a clean transaction before returning (Greptile P1
+        # on #380).
+        session.rollback()
         logger.exception(
             "leak intake: owner resolution failed for key %d; "
             "revocation stands without notification",

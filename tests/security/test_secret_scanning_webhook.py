@@ -891,3 +891,24 @@ class TestSinkFailure:
         with patch.object(routes, "on_verified_matches", side_effect=lambda m: seen.extend(m)):
             routes._deliver_verified_matches(matches)
         assert seen == matches
+
+    def test_receipt_failure_propagates_after_dropping_batch(self, caplog):
+        """Sentry LOW on #380: a raising _record_receipt must not skip the
+        `del matches` that keeps the plaintext batch out of frame locals —
+        the receipt runs in try/finally with the deletion in finally, so the
+        receipt error propagates loudly (chained to the sink error) instead
+        of being swallowed or leaking the batch."""
+        def _boom(_matches):
+            raise RuntimeError("sink exploded")
+
+        def _receipt_boom(_matches, event):
+            raise RuntimeError("receipt exploded")
+
+        with (
+            patch.object(routes, "on_verified_matches", side_effect=_boom),
+            patch.object(routes, "_record_receipt", side_effect=_receipt_boom),
+            caplog.at_level(logging.ERROR, logger="qwed_new.api.secret_scanning_routes"),
+            pytest.raises(RuntimeError, match="receipt exploded") as excinfo,
+        ):
+            routes._deliver_verified_matches([routes.SecretMatch(token="t", type="y")])
+        assert isinstance(excinfo.value.__context__, RuntimeError)

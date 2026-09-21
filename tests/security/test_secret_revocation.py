@@ -219,24 +219,33 @@ def test_no_reachable_owner_revokes_without_email(session_factory, monkeypatch, 
 
 def test_resolve_failure_revokes_without_error(session_factory, monkeypatch, caplog):
     """Greptile T-Rex on #380: owner resolution raising after commit must
-    not misreport completed enforcement as failed — best effort, no error."""
-    def _boom(session, api_key):
-        raise RuntimeError("db down")
+    not misreport completed enforcement as failed — best effort, no error.
+    Greptile P1 on #380: a later key in the same batch must still revoke,
+    proving the poisoned transaction was rolled back before continuing."""
+    real_resolve = revocation_module._resolve_owner_email
 
-    monkeypatch.setattr(revocation_module, "_resolve_owner_email", _boom)
+    def _boom_on_bad(session, api_key):
+        if api_key.name == "bad-resolve":
+            raise RuntimeError("db down")
+        return real_resolve(session, api_key)
+
+    monkeypatch.setattr(revocation_module, "_resolve_owner_email", _boom_on_bad)
     sent = _mails(monkeypatch)
     with session_factory() as session:
         org = _seed_org(session)
         user = _seed_user(session, org)
-        raw, _key = _seed_key(session, org, user)
+        raw_bad, _ = _seed_key(session, org, user, name="bad-resolve")
+        raw_good, _ = _seed_key(session, org, user, name="good")
 
     with caplog.at_level(logging.ERROR, logger="qwed_new.api.secret_revocation"):
-        outcome = revocation_module.revoke_leaked_keys([_match(raw)], session_factory=session_factory)
+        outcome = revocation_module.revoke_leaked_keys(
+            [_match(raw_bad), _match(raw_good)], session_factory=session_factory
+        )
 
-    assert outcome == {"revoked": 1, "already_revoked": 0, "unknown": 0, "errors": 0}
-    assert sent == []
-    row = _fresh_key_row(session_factory, hash_api_key(raw))
-    assert row.is_active is False
+    assert outcome == {"revoked": 2, "already_revoked": 0, "unknown": 0, "errors": 0}
+    assert len(sent) == 1  # only the resolvable owner is notified
+    assert _fresh_key_row(session_factory, hash_api_key(raw_bad)).is_active is False
+    assert _fresh_key_row(session_factory, hash_api_key(raw_good)).is_active is False
 
 
 def test_duplicate_delivery_notifies_once(session_factory, monkeypatch):
