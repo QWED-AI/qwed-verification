@@ -8,6 +8,7 @@ Hermetic: isolated temp-file sqlite engine per test + its own lookup secret.
 """
 
 import logging
+from datetime import datetime, timezone
 
 import pytest
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -274,8 +275,15 @@ def test_concurrent_revoke_single_winner_no_double_email(session_factory, monkey
         assert key_a.is_active
         assert key_b.is_active
         match = _match(raw)
-        assert revocation_module._try_revoke(session_b, key_b, match) is True
+        fixed_now = datetime(2026, 9, 21, 12, 0, 0, tzinfo=timezone.utc)
+        assert (
+            revocation_module._try_revoke(session_b, key_b, match, revoked_at=fixed_now)
+            is True
+        )
         session_b.commit()
+        # Naive-column storage drops tzinfo on round-trip (the column is
+        # naive by repo-wide convention); the instant must match exactly.
+        assert key_b.revoked_at == fixed_now.replace(tzinfo=None)
         assert revocation_module._try_revoke(session_a, key_a, match) is False
     finally:
         session_a.close()
@@ -422,23 +430,40 @@ def test_race_loss_counted_via_sink_not_notified(session_factory, monkeypatch):
     assert row.is_active is True
 
 
-def test_match_processing_error_counted(session_factory, monkeypatch):
-    """An unexpected failure inside per-match handling tallies errors."""
-
+def test_match_processing_error_revokes_siblings_then_raises(session_factory, monkeypatch):
+    """A per-row failure must not block sibling revocations — but the batch
+    still fails loudly at the end (CodeRabbit fail-closed on #380)."""
     sent = _mails(monkeypatch)
     with session_factory() as session:
         org = _seed_org(session)
         user = _seed_user(session, org)
-        raw, _key = _seed_key(session, org, user)
+        raw_bad, _key_bad = _seed_key(session, org, user, name="bad")
+        raw_good, _key_good = _seed_key(session, org, user, name="good")
 
-    def _boom(*args, **kwargs):
-        raise RuntimeError("db down")
+    real_try_revoke = revocation_module._try_revoke
 
-    monkeypatch.setattr(revocation_module, "_try_revoke", _boom)
-    outcome = revocation_module.revoke_leaked_keys([_match(raw)], session_factory=session_factory)
+    def _flaky(session, api_key, match, **kwargs):
+        if api_key.name == "bad":
+            raise RuntimeError("db down")
+        return real_try_revoke(session, api_key, match)
 
-    assert outcome == {"revoked": 0, "already_revoked": 0, "unknown": 0, "errors": 1}
-    assert sent == []
+    monkeypatch.setattr(revocation_module, "_try_revoke", _flaky)
+    with pytest.raises(revocation_module.LeakBatchIncomplete):
+        revocation_module.revoke_leaked_keys(
+            [_match(raw_bad), _match(raw_good)],
+            session_factory=session_factory,
+        )
+
+    with session_factory() as session:
+        bad_row = session.exec(
+            select(ApiKey).where(ApiKey.key_hash == hash_api_key(raw_bad))
+        ).first()
+        good_row = session.exec(
+            select(ApiKey).where(ApiKey.key_hash == hash_api_key(raw_good))
+        ).first()
+        assert bad_row.is_active is True
+        assert good_row.is_active is False
+    assert len(sent) == 1
 
 
 def test_token_embedded_in_url_redacted_everywhere(session_factory, monkeypatch, caplog):

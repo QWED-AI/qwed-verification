@@ -90,7 +90,12 @@ def _notify_owner(recipient: str, api_key: ApiKey, match: SecretMatch) -> None:
     alert_manager.send_owner_email(recipient, subject, body)
 
 
-def _try_revoke(session: Session, api_key: ApiKey, match: SecretMatch) -> bool:
+def _try_revoke(
+    session: Session,
+    api_key: ApiKey,
+    match: SecretMatch,
+    revoked_at: Optional[datetime] = None,
+) -> bool:
     """Atomically revoke iff still active. Returns True iff this call won.
 
     Concurrent deliveries can both SELECT an active key; the conditional
@@ -99,8 +104,12 @@ def _try_revoke(session: Session, api_key: ApiKey, match: SecretMatch) -> bool:
     already-revoked — critically, without notifying again. The ORM object
     is synced on win so later reads (preview, ids) stay consistent.
     Also stages the audit row; the caller commits.
+
+    ``revoked_at`` is injectable so tests use a fixed timestamp instead of
+    ambient clock (CodeRabbit determinism review on #380); production
+    passes nothing and gets UTC now.
     """
-    now = datetime.now(timezone.utc)
+    now = revoked_at or datetime.now(timezone.utc)
     result = session.execute(
         update(ApiKey)
         .where(ApiKey.id == api_key.id, ApiKey.is_active)
@@ -157,6 +166,15 @@ def _sanitized_match(match: SecretMatch, token: str) -> SecretMatch:
     )
 
 
+class LeakBatchIncomplete(RuntimeError):
+    """A batch finished with per-row enforcement failures.
+
+    Raised AFTER every match was attempted (revocations maximized), so the
+    failure is loud instead of a quiet ``errors`` tally (CodeRabbit
+    fail-closed review on #380). Carries the outcome counts for monitoring.
+    """
+
+
 def revoke_leaked_keys(
     matches: List[SecretMatch],
     session_factory: SessionFactory = _default_session_factory,
@@ -167,8 +185,9 @@ def revoke_leaked_keys(
     ``unknown``, ``errors``). Unknown tokens are tallied, never acted on —
     #369 consumes that tally for false-positive feedback. A digest failure
     means enforcement cannot run at all, so it aborts the batch loudly
-    instead of tallying (CodeRabbit fail-closed on #380); per-row failures
-    tally ``errors`` without blocking other keys.
+    instead of tallying (CodeRabbit fail-closed on #380). Per-row failures
+    tally ``errors`` without blocking sibling keys — then the batch raises
+    ``LeakBatchIncomplete`` so the failure is loud, not a quiet tally.
     """
     outcome: Dict[str, int] = {
         "revoked": 0,
@@ -177,11 +196,13 @@ def revoke_leaked_keys(
         "errors": 0,
     }
     with session_factory() as session:
-        for match in matches:
-            # Plaintext locals are dropped on every path below: digest
-            # failure dels + re-raises before the main block; the main
-            # block's finally dels after use.
-            token = match.token
+        for original in matches:
+            # Plaintext lifetime ends here: digest, sanitize, then drop the
+            # raw token AND rebind the loop variable to the sanitized copy
+            # before any DB, logging, or notify work — so error-reporting
+            # locals capture (e.g. Sentry) can never see it (CodeRabbit
+            # CWE-532 review on #380). Digest failure aborts loudly below.
+            token = original.token
             digest = ""
             try:
                 digest = hash_api_key(token)
@@ -192,8 +213,9 @@ def revoke_leaked_keys(
                 )
                 del token
                 raise
+            match = _sanitized_match(original, token)
+            del token
             try:
-                safe = _sanitized_match(match, token)
                 api_key = session.exec(
                     select(ApiKey).where(ApiKey.key_hash == digest)
                 ).first()
@@ -201,14 +223,14 @@ def revoke_leaked_keys(
                     outcome["unknown"] += 1
                     logger.info(
                         "leak intake: no matching key (type=%s source=%s)",
-                        safe.type,
-                        safe.source,
+                        match.type,
+                        match.source,
                     )
                     continue
                 if not api_key.is_active:
                     outcome["already_revoked"] += 1
                     continue
-                if not _try_revoke(session, api_key, safe):
+                if not _try_revoke(session, api_key, match):
                     # Lost a concurrent race: the key flipped after our
                     # SELECT. Same tally as already-revoked, no notify.
                     session.rollback()
@@ -225,7 +247,7 @@ def revoke_leaked_keys(
                             api_key.id,
                         )
                         continue
-                    _notify_owner(recipient, api_key, safe)
+                    _notify_owner(recipient, api_key, match)
                 except Exception:
                     # Resolve + notify failures must not double-count: the
                     # revocation above already tallied and committed (Sentry
@@ -240,8 +262,7 @@ def revoke_leaked_keys(
                 session.rollback()
                 outcome["errors"] += 1
             finally:
-                # Drop plaintext references as soon as the lookup is done.
-                del token
+                # Drop the digest once the lookup is done.
                 del digest
     logger.info(
         "leak intake done: revoked=%d already_revoked=%d unknown=%d errors=%d",
@@ -250,4 +271,9 @@ def revoke_leaked_keys(
         outcome["unknown"],
         outcome["errors"],
     )
+    if outcome["errors"]:
+        raise LeakBatchIncomplete(
+            "leak intake finished with per-row enforcement failures: "
+            f"{outcome}"
+        )
     return outcome
