@@ -163,7 +163,8 @@ def test_unknown_token_no_action_tallied(session_factory, monkeypatch, caplog):
         user = _seed_user(session, org)
         _seed_key(session, org, user)
 
-    stranger = "qwed_live_" + "Z" * 30 + "000000"    with caplog.at_level(logging.INFO, logger="qwed_new.api.secret_revocation"):
+    stranger = "qwed_live_" + "Z" * 30 + "000000"
+    with caplog.at_level(logging.INFO, logger="qwed_new.api.secret_revocation"):
         outcome = revoke_leaked_keys([_match(stranger)], session_factory=session_factory)
 
     assert outcome == {"revoked": 0, "already_revoked": 0, "unknown": 1, "errors": 0}
