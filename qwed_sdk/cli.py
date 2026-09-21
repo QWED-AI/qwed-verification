@@ -955,10 +955,12 @@ def _seed_server_secrets_from_project_root() -> set:
 
     Returns the names actually filled, so callers can distinguish retained
     (disk or env) from freshly generated values without re-reading files.
-    Raises RuntimeError if the project-root .env EXISTS but cannot be read
-    or decoded: swallowing that would let a replacement overwrite secrets
+    Raises RuntimeError (fail closed, QWED_RULES.md rule 2) if project-root
+    discovery fails or if the project-root .env EXISTS but cannot be read
+    or decoded: swallowing either would let a replacement overwrite secrets
     the existing file holds (CodeRabbit on #375). A missing file is normal
-    first-run behavior and yields an empty set.
+    first-run behavior and yields an empty set. Missing credential_store is
+    a genuine degrade-quietly case: the seeding feature itself is absent.
     """
     filled: set = set()
     try:
@@ -970,8 +972,13 @@ def _seed_server_secrets_from_project_root() -> set:
         return filled
     try:
         env_path = _find_project_root() / ".env"
-    except OSError:
-        return filled
+    except OSError as exc:
+        # Discovery failure means we cannot know whether the canonical
+        # project-root .env exists — continuing could generate fresh
+        # secrets and persist them over the ones it holds. Fail closed
+        # (QWED_RULES.md rule 2), same as the unreadable-file case below
+        # (CodeRabbit on #375): init already exits cleanly on RuntimeError.
+        raise RuntimeError("project root could not be located") from exc
     if not env_path.exists():
         return filled
     try:

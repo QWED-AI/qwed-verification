@@ -931,26 +931,42 @@ def test_seed_server_secrets_keeps_explicit_env(monkeypatch, tmp_path):
 
 
 def test_seed_server_secrets_degrades_quietly(monkeypatch):
-    """Missing credential_store or unreadable root .env: seeding is best
-    effort — onboarding falls back to plain env + generation.
+    """Missing credential_store: seeding is best effort — onboarding falls
+    back to plain env + generation.
 
     The missing-module arm uses patch.dict (no re-import happens inside),
     NEVER sys.modules replace + re-import: that leaves the parent package
     attribute pointing at a ghost copy, so later mock.patch calls
     (getattr-walk) and production from-imports (sys.modules) diverge for
     the rest of the session (broke 3 tests on 3.10).
+
+    (CodeRabbit on #375 round N+1: the _find_project_root OSError arm was
+    REMOVED from this test — discovery failure now fails closed, see
+    test_seed_project_root_discovery_failure_fails_closed. Only a missing
+    module degrades quietly: there the seeding feature itself is absent,
+    so there are no root secrets this function could put at risk.)
     """
     with patch.dict(
         sys.modules, {"qwed_new.providers.credential_store": None}
     ):
         _REAL_SEED_FROM_ROOT()  # must not raise
 
+
+def test_seed_project_root_discovery_failure_fails_closed(monkeypatch):
+    """CodeRabbit on #375: if _find_project_root raises, init cannot know
+    whether the canonical root .env exists — continuing could generate
+    fresh secrets and persist them over the ones it holds. Fail closed
+    (QWED_RULES.md rule 2), mirroring the unreadable-file case."""
     import qwed_new.providers.credential_store as credential_store
 
     monkeypatch.setattr(
-        credential_store, "_find_project_root", lambda *a, **k: (_ for _ in ()).throw(OSError("denied"))
+        credential_store,
+        "_find_project_root",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("denied")),
     )
-    _REAL_SEED_FROM_ROOT()  # must not raise
+
+    with pytest.raises(RuntimeError, match="project root could not be located"):
+        _REAL_SEED_FROM_ROOT()
 
 
 def test_seed_missing_dotenv_is_quiet_first_run(monkeypatch, tmp_path):
