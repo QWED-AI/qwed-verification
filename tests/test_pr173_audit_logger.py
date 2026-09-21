@@ -245,7 +245,7 @@ def test_audit_logger_verifies_legacy_hash_payload(monkeypatch, tmp_path):
         "result": {"value": 4},
         "is_verified": True,
         "domain": "math",
-        "timestamp": "2026-05-08T00:00:00",
+        "timestamp": "2026-05-08T00:00:00+00:00",
         "previous_hash": None,
     }
     entry_hash = logger._compute_hash(legacy_payload)

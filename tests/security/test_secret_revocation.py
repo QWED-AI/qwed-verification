@@ -141,9 +141,7 @@ def test_already_revoked_is_idempotent_no_renotify(session_factory, monkeypatch)
         user = _seed_user(session, org)
         raw, key = _seed_key(session, org, user)
         key.is_active = False
-        from datetime import datetime
-
-        key.revoked_at = datetime.utcnow()
+        key.revoked_at = datetime.now(timezone.utc)
         session.add(key)
         session.commit()
 
@@ -274,6 +272,49 @@ def test_redaction_expansion_clamped_siblings_still_revoke(session_factory, monk
     assert _fresh_key_row(session_factory, hash_api_key(raw_good)).is_active is False
 
 
+def test_sanitize_failure_scrubs_sanitize_frame(session_factory, monkeypatch):
+    """Sentry MEDIUM on #380: if _sanitized_match itself raises, its frame —
+    which binds the plaintext `token` and the token-bearing `match` — must
+    be scrubbed like the other token-holding frames, not left in the
+    traceback for a locals-capturing reporter. The stub keeps real
+    `model_fields` so the redaction helper runs and the explosion happens
+    inside the `SecretMatch(...)` constructor call — i.e. inside the
+    sanitize frame under test."""
+    real_model = revocation_module.SecretMatch
+
+    class _BoomModel:
+        model_fields = real_model.model_fields
+
+        def __init__(self, **kwargs):
+            raise RuntimeError("sanitize exploded")
+
+    monkeypatch.setattr(revocation_module, "SecretMatch", _BoomModel)
+    with session_factory() as session:
+        org = _seed_org(session)
+        user = _seed_user(session, org)
+        raw, _ = _seed_key(session, org, user)
+
+    with pytest.raises(RuntimeError, match="sanitize exploded") as excinfo:
+        revocation_module.revoke_leaked_keys([_match(raw)], session_factory=session_factory)
+
+    frames = []
+    seen = set()
+    error = excinfo.value
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        tb = error.__traceback__
+        while tb is not None:
+            if tb.tb_frame.f_code.co_name == "_sanitized_match":
+                frames.append(tb.tb_frame)
+            tb = tb.tb_next
+        error = error.__cause__ or error.__context__
+    assert frames, "expected a _sanitized_match frame in the traceback"
+    for frame in frames:
+        assert "token" not in frame.f_locals
+        assert "match" not in frame.f_locals
+        assert all(raw not in str(value) for value in frame.f_locals.values())
+
+
 def test_duplicate_delivery_notifies_once(session_factory, monkeypatch):
     sent = _mails(monkeypatch)
     with session_factory() as session:
@@ -338,9 +379,10 @@ def test_concurrent_revoke_single_winner_no_double_email(session_factory, monkey
             is True
         )
         session_b.commit()
-        # Naive-column storage drops tzinfo on round-trip (the column is
-        # naive by repo-wide convention); the instant must match exactly.
-        assert key_b.revoked_at == fixed_now.replace(tzinfo=None)
+        # Compare as instants: UTCDateTime (new sqlmodel) preserves tzinfo
+        # on round-trip while naive-column storage (old sqlmodel) drops it;
+        # attaching UTC to a naive read-back is exact either way.
+        assert key_b.revoked_at.replace(tzinfo=timezone.utc) == fixed_now
         assert revocation_module._try_revoke(session_a, key_a, match) is False
     finally:
         session_a.close()

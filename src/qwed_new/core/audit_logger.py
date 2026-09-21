@@ -14,7 +14,7 @@ import hmac
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from sqlmodel import Session, select
@@ -25,6 +25,21 @@ from qwed_new.core.models import VerificationLog
 logger = logging.getLogger(__name__)
 
 AUDIT_SECRET_ENV_VAR = "QWED_AUDIT_SECRET_KEY"
+
+
+def _canonical_ts(value: datetime) -> datetime:
+    """Normalize a persisted timestamp to UTC-aware for hash reconstruction.
+
+    Chain hashes are computed from ``timestamp.isoformat()`` at write time
+    and recomputed from the read-back row at verify time, so both spellings
+    must match. New sqlmodel (UTCDateTime) round-trips tz-aware; old
+    naive-column storage returns naive wall-clock UTC. Attaching UTC to a
+    naive read-back (or converting aware to UTC) keeps the canonical
+    spelling identical on both — and matches what aware writes hash as.
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 class AuditLogger:
@@ -59,7 +74,7 @@ class AuditLogger:
         Returns:
             log_id: The ID of the created log entry
         """
-        timestamp = datetime.utcnow()
+        timestamp = datetime.now(timezone.utc)
 
         with Session(engine) as session:
             self._prepare_append_session(session)
@@ -242,7 +257,7 @@ class AuditLogger:
             },
             "errors": errors,
             "log_id": log_id,
-            "timestamp": log_entry.timestamp.isoformat(),
+            "timestamp": _canonical_ts(log_entry.timestamp).isoformat(),
         }
 
     def _reconstruct_log_data(self, log_entry: VerificationLog) -> Dict[str, Any]:
@@ -254,7 +269,7 @@ class AuditLogger:
             "result": self._decode_result_payload(log_entry),
             "is_verified": log_entry.is_verified,
             "domain": log_entry.domain,
-            "timestamp": log_entry.timestamp.isoformat(),
+            "timestamp": _canonical_ts(log_entry.timestamp).isoformat(),
             "previous_hash": log_entry.previous_hash,
             "raw_llm_output": log_entry.raw_llm_output,
         }
@@ -268,7 +283,7 @@ class AuditLogger:
             "result": self._decode_result_payload(log_entry),
             "is_verified": log_entry.is_verified,
             "domain": log_entry.domain,
-            "timestamp": log_entry.timestamp.isoformat(),
+            "timestamp": _canonical_ts(log_entry.timestamp).isoformat(),
             "previous_hash": log_entry.previous_hash,
         }
 

@@ -247,10 +247,11 @@ def _notify_best_effort(session: Session, api_key: ApiKey, match: SecretMatch) -
 
 
 # Frames that bind the plaintext token as a local and therefore travel
-# with any exception raised through them: the hasher's ``api_key`` argument
-# and this module's own staging loop. Scrubbed (not merely unreferenced) on
-# the digest-failure path below.
-_TOKEN_HOLDING_FRAMES = frozenset({"hash_api_key", "_stage_batch"})
+# with any exception raised through them: the hasher's ``api_key`` argument,
+# this module's own staging loop, and the sanitizer (its ``token`` argument
+# and ``match`` parameter both carry plaintext — Sentry MEDIUM on #380).
+# Scrubbed (not merely unreferenced) on the digest-failure path below.
+_TOKEN_HOLDING_FRAMES = frozenset({"hash_api_key", "_stage_batch", "_sanitized_match"})
 
 
 def _scrub_token_frames(exc: BaseException) -> None:
