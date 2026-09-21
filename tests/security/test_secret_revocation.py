@@ -448,11 +448,9 @@ def test_match_processing_error_revokes_siblings_then_raises(session_factory, mo
         return real_try_revoke(session, api_key, match)
 
     monkeypatch.setattr(revocation_module, "_try_revoke", _flaky)
+    batch = [_match(raw_bad), _match(raw_good)]
     with pytest.raises(revocation_module.LeakBatchIncomplete):
-        revocation_module.revoke_leaked_keys(
-            [_match(raw_bad), _match(raw_good)],
-            session_factory=session_factory,
-        )
+        revocation_module.revoke_leaked_keys(batch, session_factory=session_factory)
 
     with session_factory() as session:
         bad_row = session.exec(
@@ -520,40 +518,84 @@ def test_default_session_factory_constructs():
         session.close()
 
 
-def test_sentry_captured_event_has_no_plaintext(session_factory, monkeypatch):
-    """Sentry HIGH on #380, proven end to end: with the SDK capturing
-    frame locals (the default), a downstream failure inside the sink must
-    not ship the token. before_send drops the event (no network); the
-    captured payload is what WOULD have shipped."""
-    sentry_sdk = pytest.importorskip("sentry_sdk")
-    import json
+def _traceback_frames_blob(exc):
+    """Render every frame's locals across the full exception chain.
 
-    from sentry_sdk.integrations.logging import LoggingIntegration
+    Only frames from THIS sink module are checked: the endpoint and
+    delivery frames upstream legitimately hold the raw batch (pre-existing
+    #374 surface, covered by deployment-level scrubbing), while every
+    frame in this module must be token-free. Returns (blob, frame_count).
+    """
+    parts = []
+    count = 0
+    seen = set()
+    current = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        tb = current.__traceback__
+        while tb is not None:
+            # Production sink frames only: the filename must be the module
+            # itself (api/secret_revocation.py), not the test module
+            # (test_secret_revocation.py) whose locals legitimately hold
+            # the raw token to drive the test.
+            filename = str(tb.tb_frame.f_code.co_filename).replace("\\", "/")
+            if filename.endswith("api/secret_revocation.py"):
+                parts.append(str(tb.tb_frame.f_locals))
+                count += 1
+            tb = tb.tb_next
+        current = current.__cause__ or current.__context__
+    return "\n".join(parts), count
 
-    events = []
 
-    def _boom(self, recipient, subject, body):
-        raise RuntimeError("smtp down")
-
-    monkeypatch.setattr(AlertManager, "send_owner_email", _boom)
+def test_traceback_frames_carry_no_plaintext_on_digest_failure(session_factory, monkeypatch):
+    """CodeRabbit CWE-532 on #380: a traceback keeps every frame it passes
+    through, so cleaning caller frames is insufficient — the helper frame
+    scrubs itself before re-raising (see _stage_batch)."""
+    _mails(monkeypatch)
     with session_factory() as session:
         org = _seed_org(session)
         user = _seed_user(session, org)
         raw, _key = _seed_key(session, org, user)
 
-    sentry_sdk.init(
-        dsn="http://public@localhost/1",
-        default_integrations=False,
-        integrations=[LoggingIntegration()],
-        before_send=lambda event, hint: events.append(event) or None,
-    )
-    outcome = revocation_module.revoke_leaked_keys(
-        [_match(raw)], session_factory=session_factory
-    )
-
-    assert outcome["revoked"] == 1
-    assert events, "expected the SDK to capture the notify failure"
-    blob = json.dumps(events)
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET")
+    batch = [_match(raw)]
+    try:
+        revocation_module.revoke_leaked_keys(batch, session_factory=session_factory)
+        raised = None
+    except RuntimeError as exc:
+        raised = exc
+    assert raised is not None
+    blob, frame_count = _traceback_frames_blob(raised)
+    # Non-vacuous: sink frames were actually walked (outcome dict renders).
+    assert frame_count >= 1
+    assert "'revoked'" in blob
     assert raw not in blob
-    # Non-vacuous: the event is real and carries the (safe) context.
-    assert "revocation stands" in blob
+
+
+def test_traceback_frames_carry_no_plaintext_on_row_failure(session_factory, monkeypatch):
+    """Same guarantee for the main-loop failure path (DB error mid-batch)."""
+    _mails(monkeypatch)
+    with session_factory() as session:
+        org = _seed_org(session)
+        user = _seed_user(session, org)
+        raw, _key = _seed_key(session, org, user)
+
+    real_try_revoke = revocation_module._try_revoke
+
+    def _flaky_once(session, api_key, match, **kwargs):
+        if not _flaky_once.fired:
+            _flaky_once.fired = True
+            raise RuntimeError("db down")
+        return real_try_revoke(session, api_key, match)
+
+    _flaky_once.fired = False
+    monkeypatch.setattr(revocation_module, "_try_revoke", _flaky_once)
+    try:
+        revocation_module.revoke_leaked_keys([_match(raw)], session_factory=session_factory)
+        raised = None
+    except revocation_module.LeakBatchIncomplete as exc:
+        raised = exc
+    assert raised is not None
+    blob, frame_count = _traceback_frames_blob(raised)
+    assert frame_count >= 1
+    assert raw not in blob

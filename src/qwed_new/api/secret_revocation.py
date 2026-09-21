@@ -205,17 +205,24 @@ def _stage_batch(matches: List[SecretMatch]) -> List[tuple]:
     """Digest + sanitize every match up front.
 
     Returns ``[(sanitized_match, digest)]``. Plaintext tokens live ONLY in
-    this helper's frame: on success the frame (and its locals) dies on
-    return; on digest failure the exception propagates with no logging
-    here, so error-reporting locals capture (e.g. Sentry, CodeRabbit
-    CWE-532 on #380) can never observe raw tokens from this stage. The
-    main loop below therefore binds no plaintext names at all.
+    this helper's frame — and on failure the frame is scrubbed before
+    re-raising (CodeRabbit CWE-532 on #380): a traceback keeps every frame
+    it passes through, so deleting names in the *caller* is not enough;
+    each frame must clean itself. All four names below are pre-bound so the
+    cleanup dels can never NameError.
     """
     staged = []
-    for original in matches:
-        token = original.token
-        digest = hash_api_key(token)
-        staged.append((_sanitized_match(original, token), digest))
+    token = ""
+    original = None
+    digest = ""
+    try:
+        for original in matches:
+            token = original.token
+            digest = hash_api_key(token)
+            staged.append((_sanitized_match(original, token), digest))
+    except Exception:
+        del token, original, digest, matches
+        raise
     return staged
 
 
