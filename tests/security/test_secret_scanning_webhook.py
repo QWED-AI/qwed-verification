@@ -18,6 +18,7 @@ the fixture key is computed inline and the keys endpoint is stubbed by patching
 import base64
 import json
 import logging
+import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -911,3 +912,40 @@ class TestSinkFailure:
         messages = [record.message for record in caplog.records]
         assert "verified-match receipt failed" in messages
         assert "verified-match sink failed" in messages
+
+    def test_receipt_log_cannot_observe_plaintext_batch(self, monkeypatch, caplog):
+        """Sentry CRITICAL on #380: when the receipt itself fails, the batch
+        must be deleted BEFORE the receipt failure is logged. A spy handler
+        inspects the live deliver frame at emit time and records whether
+        `matches` is still bound — walking the whole stack, so no fragile
+        frame-depth assumption. Deterministic: logging is synchronous."""
+        def _boom(_matches):
+            raise RuntimeError("sink exploded")
+
+        def _receipt_boom(_matches, event):
+            raise RuntimeError("receipt exploded")
+
+        monkeypatch.setattr(routes, "on_verified_matches", _boom)
+        monkeypatch.setattr(routes, "_record_receipt", _receipt_boom)
+        seen = {}
+
+        class _FrameSpy(logging.Handler):
+            def emit(self, record):
+                if record.getMessage() != "verified-match receipt failed":
+                    return
+                frame = sys._getframe(1)
+                while frame is not None:
+                    if frame.f_code.co_name == "_deliver_verified_matches":
+                        seen["matches_bound"] = "matches" in frame.f_locals
+                        return
+                    frame = frame.f_back
+
+        target = logging.getLogger("qwed_new.api.secret_scanning_routes")
+        spy = _FrameSpy()
+        target.addHandler(spy)
+        try:
+            with caplog.at_level(logging.ERROR, logger="qwed_new.api.secret_scanning_routes"):
+                routes._deliver_verified_matches([routes.SecretMatch(token="t", type="y")])
+        finally:
+            target.removeHandler(spy)
+        assert seen == {"matches_bound": False}

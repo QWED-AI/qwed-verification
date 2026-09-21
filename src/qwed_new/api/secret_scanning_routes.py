@@ -754,14 +754,19 @@ def _deliver_verified_matches(matches: list[SecretMatch]) -> None:
         # is live, not theoretical). The receipt itself must never mask the
         # original sink failure (Sentry MEDIUM on #380): a receipt error is
         # logged and swallowed so the sink traceback below always runs.
-        # Deletion stays in finally so the plaintext batch always leaves
-        # frame locals even when the receipt raises (Sentry LOW on #380).
+        # Ordering is load-bearing (Sentry CRITICAL on #380): the receipt
+        # failure is captured WITHOUT logging, the batch is deleted, and
+        # only then is the captured error logged — logging first would run
+        # while `matches` is still bound and hand the plaintext batch to a
+        # locals-capturing reporter through this very frame.
+        receipt_error = None
         try:
             _record_receipt(matches, event="sink_failed")
-        except Exception:
-            logger.exception("verified-match receipt failed")
-        finally:
-            del matches
+        except Exception as exc:  # noqa: BLE001 — any receipt failure must be captured, never mask the sink error
+            receipt_error = exc
+        del matches
+        if receipt_error is not None:
+            logger.error("verified-match receipt failed", exc_info=receipt_error)
         # #368's sink must never crash the already-acknowledged response; log
         # with the traceback so the batch can be re-delivered or investigated.
         logger.exception("verified-match sink failed")
