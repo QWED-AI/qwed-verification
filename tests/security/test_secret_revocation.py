@@ -201,7 +201,7 @@ def test_owner_falls_back_to_org_owner(session_factory, monkeypatch):
     outcome = revoke_leaked_keys([_match(raw)], session_factory=session_factory)
 
     assert outcome["revoked"] == 1
-    assert sent and sent[0][0] == "boss@acme.test"
+    assert sent[0][0] == "boss@acme.test"
     assert owner_id is not None
 
 
@@ -254,3 +254,235 @@ def test_mixed_batch_counts(session_factory, monkeypatch):
 
     assert outcome == {"revoked": 1, "already_revoked": 1, "unknown": 1, "errors": 0}
     assert len(sent) == 1
+
+
+def test_concurrent_revoke_single_winner_no_double_email(session_factory, monkeypatch):
+    """CodeAnt race review on #380: two deliveries racing on one active key
+    must produce exactly one revocation + one email. Deterministic: session A
+    SELECTs while active, session B wins first, A's conditional UPDATE then
+    loses by rowcount (no threads, no timing dependence)."""
+    from qwed_new.api.secret_revocation import _try_revoke
+
+    sent = _mails(monkeypatch)
+    with session_factory() as session:
+        org = _seed_org(session)
+        user = _seed_user(session, org)
+        raw, _key = _seed_key(session, org, user)
+        key_id = _key.id
+
+    session_a = session_factory()
+    session_b = session_factory()
+    try:
+        key_a = session_a.exec(select(ApiKey).where(ApiKey.id == key_id)).first()
+        key_b = session_b.exec(select(ApiKey).where(ApiKey.id == key_id)).first()
+        assert key_a.is_active and key_b.is_active
+        match = _match(raw)
+        assert _try_revoke(session_b, key_b, match) is True
+        session_b.commit()
+        assert _try_revoke(session_a, key_a, match) is False
+    finally:
+        session_a.close()
+        session_b.close()
+
+    outcome = revoke_leaked_keys([_match(raw)], session_factory=session_factory)
+    assert outcome["already_revoked"] == 1
+    assert outcome["revoked"] == 0
+    assert sent == []
+
+
+def test_digest_failure_counted_not_crashing(session_factory, monkeypatch, caplog):
+    """Lookup secret unset mid-run: digest raises -> error tally, batch continues."""
+    sent = _mails(monkeypatch)
+    with session_factory() as session:
+        org = _seed_org(session)
+        user = _seed_user(session, org)
+        raw, _key = _seed_key(session, org, user)
+
+    monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET")
+    with caplog.at_level(logging.ERROR, logger="qwed_new.api.secret_revocation"):
+        outcome = revoke_leaked_keys(
+            [_match(raw), _match("qwed_live_" + "Q" * 30 + "000000")],
+            session_factory=session_factory,
+        )
+
+    assert outcome == {"revoked": 0, "already_revoked": 0, "unknown": 0, "errors": 2}
+    assert sent == []
+
+
+def test_send_owner_email_success(monkeypatch):
+    """Real send_owner_email path with stubbed SMTP (covers alerting.py)."""
+    import smtplib
+
+    from qwed_new.core.alerting import AlertManager
+
+    seen = {}
+
+    class _FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            seen["host"], seen["port"], seen["timeout"] = host, port, timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def starttls(self):
+            seen["tls"] = True
+
+        def login(self, user, password):
+            seen["login"] = (user, password)
+
+        def send_message(self, msg):
+            seen["msg"] = msg
+
+    monkeypatch.setenv("SMTP_USER", "bot@qwed.test")
+    monkeypatch.setenv("SMTP_PASSWORD", "pw")
+    monkeypatch.setattr(smtplib, "SMTP", _FakeSMTP)
+    manager = AlertManager()
+
+    manager.send_owner_email("owner@acme.test", "subject-line", "body-text")
+
+    assert seen["login"] == ("bot@qwed.test", "pw")
+    assert seen["timeout"] == 10
+    assert seen["msg"]["To"] == "owner@acme.test"
+    assert "subject-line" in seen["msg"]["Subject"]
+    assert "body-text" in seen["msg"].as_string()
+
+
+def test_send_owner_email_rejects_bad_recipient(monkeypatch):
+    from qwed_new.core.alerting import AlertManager
+
+    monkeypatch.setenv("SMTP_USER", "bot@qwed.test")
+    monkeypatch.setenv("SMTP_PASSWORD", "pw")
+
+    with pytest.raises(ValueError, match="valid recipient"):
+        AlertManager().send_owner_email("not-an-email", "s", "b")
+
+
+def test_send_owner_email_missing_smtp_config(monkeypatch):
+    from qwed_new.core.alerting import AlertManager
+
+    monkeypatch.delenv("SMTP_USER", raising=False)
+    monkeypatch.delenv("SMTP_PASSWORD", raising=False)
+
+    with pytest.raises(RuntimeError, match="not configured"):
+        AlertManager().send_owner_email("owner@acme.test", "s", "b")
+
+
+def test_send_owner_email_smtp_failure_propagates(monkeypatch):
+    """Delivery errors propagate so the caller (revoke sink) can log them."""
+    import smtplib
+
+    from qwed_new.core.alerting import AlertManager
+
+    class _DownSMTP:
+        def __init__(self, host, port, timeout=None):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def starttls(self):
+            pass
+
+        def login(self, user, password):
+            pass
+
+        def send_message(self, msg):
+            raise RuntimeError("smtp down")
+
+    monkeypatch.setenv("SMTP_USER", "bot@qwed.test")
+    monkeypatch.setenv("SMTP_PASSWORD", "pw")
+    monkeypatch.setattr(smtplib, "SMTP", _DownSMTP)
+
+    with pytest.raises(RuntimeError, match="smtp down"):
+        AlertManager().send_owner_email("owner@acme.test", "s", "b")
+
+
+def test_race_loss_counted_via_sink_not_notified(session_factory, monkeypatch):
+    """The lose-the-race branch inside the sink (rollback + already_revoked,
+    no email) — forced deterministically by stubbing _try_revoke False."""
+    import qwed_new.api.secret_revocation as revocation_module
+
+    sent = _mails(monkeypatch)
+    with session_factory() as session:
+        org = _seed_org(session)
+        user = _seed_user(session, org)
+        raw, _key = _seed_key(session, org, user)
+
+    monkeypatch.setattr(revocation_module, "_try_revoke", lambda *a, **k: False)
+    outcome = revoke_leaked_keys([_match(raw)], session_factory=session_factory)
+
+    assert outcome == {"revoked": 0, "already_revoked": 1, "unknown": 0, "errors": 0}
+    assert sent == []
+    row = _fresh_key_row(session_factory, hash_api_key(raw))
+    assert row.is_active is True
+
+
+def test_match_processing_error_counted(session_factory, monkeypatch):
+    """An unexpected failure inside per-match handling tallies errors."""
+    import qwed_new.api.secret_revocation as revocation_module
+
+    sent = _mails(monkeypatch)
+    with session_factory() as session:
+        org = _seed_org(session)
+        user = _seed_user(session, org)
+        raw, _key = _seed_key(session, org, user)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(revocation_module, "_try_revoke", _boom)
+    outcome = revoke_leaked_keys([_match(raw)], session_factory=session_factory)
+
+    assert outcome == {"revoked": 0, "already_revoked": 0, "unknown": 0, "errors": 1}
+    assert sent == []
+
+
+def test_token_embedded_in_url_redacted_everywhere(session_factory, monkeypatch, caplog):
+    """CodeRabbit CWE-312 on #380: a filename (or any metadata) echoing the
+    token must not propagate it into audit rows, emails, or logs."""
+    sent = _mails(monkeypatch)
+    with session_factory() as session:
+        org = _seed_org(session)
+        user = _seed_user(session, org)
+        raw, _key = _seed_key(session, org, user)
+
+    leaky_url = f"https://github.com/octo/Hello-World/blob/1234/{raw}.txt"
+    leaky = SecretMatch(token=raw, type="qwed_live_api_key", url=leaky_url, source="commit")
+    with caplog.at_level(logging.INFO, logger="qwed_new.api.secret_revocation"):
+        outcome = revoke_leaked_keys([leaky], session_factory=session_factory)
+
+    assert outcome["revoked"] == 1
+    # Sink logs carry counts only — the URL never reaches them at all.
+    assert raw not in caplog.text
+    assert sent and raw not in sent[0][2]
+    assert "[REDACTED]" in sent[0][2]
+    with session_factory() as session:
+        events = session.exec(
+            select(SecurityEvent).where(SecurityEvent.event_type == REVOKED_EVENT_TYPE)
+        ).all()
+        assert len(events) == 1
+        assert raw not in events[0].reason
+        assert "[REDACTED]" in events[0].reason
+
+
+def test_redact_token_empty_token_noop():
+    from qwed_new.api.secret_revocation import _redact_token
+
+    assert _redact_token("https://example.test/x", "") == "https://example.test/x"
+
+
+def test_default_session_factory_constructs():
+    """Covers the production factory without touching the database."""
+    from qwed_new.api.secret_revocation import _default_session_factory
+
+    session = _default_session_factory()
+    try:
+        assert session is not None
+    finally:
+        session.close()

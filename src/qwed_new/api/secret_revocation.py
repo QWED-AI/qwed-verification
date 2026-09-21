@@ -29,7 +29,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from sqlmodel import Session, select
+from sqlmodel import Session, select, update
 
 from qwed_new.api.secret_scanning_routes import SecretMatch
 from qwed_new.auth.security import hash_api_key
@@ -63,7 +63,7 @@ def _resolve_owner_email(session: Session, api_key: ApiKey) -> Optional[str]:
         select(User)
         .where(
             User.organization_id == api_key.organization_id,
-            User.is_active == True,
+            User.is_active,
             User.role.in_(["owner", "admin"]),
         )
         .order_by(User.id)
@@ -90,10 +90,26 @@ def _notify_owner(recipient: str, api_key: ApiKey, match: SecretMatch) -> None:
     alert_manager.send_owner_email(recipient, subject, body)
 
 
-def _revoke_one(session: Session, api_key: ApiKey, match: SecretMatch) -> None:
-    """Revoke a single key and record the audit row (caller commits)."""
+def _try_revoke(session: Session, api_key: ApiKey, match: SecretMatch) -> bool:
+    """Atomically revoke iff still active. Returns True iff this call won.
+
+    Concurrent deliveries can both SELECT an active key; the conditional
+    UPDATE (``WHERE is_active``) lets exactly one win (CodeAnt race review
+    on #380). The loser sees rowcount 0 and must treat the key as
+    already-revoked — critically, without notifying again. The ORM object
+    is synced on win so later reads (preview, ids) stay consistent.
+    Also stages the audit row; the caller commits.
+    """
+    now = datetime.utcnow()
+    result = session.execute(
+        update(ApiKey)
+        .where(ApiKey.id == api_key.id, ApiKey.is_active)
+        .values(is_active=False, revoked_at=now)
+    )
+    if (result.rowcount or 0) < 1:
+        return False
     api_key.is_active = False
-    api_key.revoked_at = datetime.utcnow()
+    api_key.revoked_at = now
     session.add(api_key)
     session.add(
         SecurityEvent(
@@ -105,6 +121,32 @@ def _revoke_one(session: Session, api_key: ApiKey, match: SecretMatch) -> None:
             reason=f"Public leak auto-revoked: source={match.source} url={match.url}",
             severity="high",
         )
+    )
+    return True
+
+
+def _redact_token(text: str, token: str) -> str:
+    """Remove exact occurrences of a leaked token from scanner metadata.
+
+    A verified report can echo the plaintext credential inside ``url``
+    (e.g. a filename containing the key) or other metadata fields. Those
+    fields flow into audit rows, emails, and logs — all of which must never
+    carry the token (CWE-312, CodeRabbit on #380). Exact-substring redaction
+    with the known token is used instead of a heuristic redactor: it cannot
+    miss this token and cannot false-positive on anything else.
+    """
+    if not token:
+        return text
+    return text.replace(token, "[REDACTED]") if token in text else text
+
+
+def _sanitized_match(match: SecretMatch, token: str) -> SecretMatch:
+    """Copy of ``match`` with any embedded token occurrences redacted."""
+    return SecretMatch(
+        token=match.token,
+        type=_redact_token(match.type, token),
+        url=_redact_token(match.url, token),
+        source=_redact_token(match.source, token),
     )
 
 
@@ -126,15 +168,14 @@ def revoke_leaked_keys(
     }
     with session_factory() as session:
         for match in matches:
+            # Single try/finally per match (Sentry LOW on #380): the digest
+            # computation lives INSIDE it so every path — including digest
+            # failure — runs the plaintext cleanup in finally.
             token = match.token
             digest = ""
             try:
+                safe = _sanitized_match(match, token)
                 digest = hash_api_key(token)
-            except Exception:
-                logger.exception("leak intake: unable to digest a reported match")
-                outcome["errors"] += 1
-                continue
-            try:
                 api_key = session.exec(
                     select(ApiKey).where(ApiKey.key_hash == digest)
                 ).first()
@@ -142,31 +183,38 @@ def revoke_leaked_keys(
                     outcome["unknown"] += 1
                     logger.info(
                         "leak intake: no matching key (type=%s source=%s)",
-                        match.type,
-                        match.source,
+                        safe.type,
+                        safe.source,
                     )
                     continue
                 if not api_key.is_active:
                     outcome["already_revoked"] += 1
                     continue
-                _revoke_one(session, api_key, match)
+                if not _try_revoke(session, api_key, safe):
+                    # Lost a concurrent race: the key flipped after our
+                    # SELECT. Same tally as already-revoked, no notify.
+                    session.rollback()
+                    outcome["already_revoked"] += 1
+                    continue
                 session.commit()
                 outcome["revoked"] += 1
-                recipient = _resolve_owner_email(session, api_key)
-                if recipient is None:
-                    logger.warning(
-                        "leak intake: revoked key %d has no reachable owner; "
-                        "revocation stands without notification",
-                        api_key.id,
-                    )
-                    continue
                 try:
-                    _notify_owner(recipient, api_key, match)
+                    recipient = _resolve_owner_email(session, api_key)
+                    if recipient is None:
+                        logger.warning(
+                            "leak intake: revoked key %d has no reachable owner; "
+                            "revocation stands without notification",
+                            api_key.id,
+                        )
+                        continue
+                    _notify_owner(recipient, api_key, safe)
                 except Exception:
-                    # Revocation already committed — notify is best effort.
+                    # Resolve + notify failures must not double-count: the
+                    # revocation above already tallied and committed (Sentry
+                    # MEDIUM on #380). Log and move on.
                     logger.exception(
-                        "leak intake: owner notification failed for key %d; "
-                        "revocation stands",
+                        "leak intake: owner resolution/notification failed "
+                        "for key %d; revocation stands",
                         api_key.id,
                     )
             except Exception:

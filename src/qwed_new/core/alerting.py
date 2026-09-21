@@ -26,6 +26,12 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+#: Bound for every SMTP phase (connect, TLS, auth, delivery). The leak sink
+#: notifies inline per match — an unbounded stall would hold later
+#: revocations behind one wedged delivery (Greptile P1 on #380).
+_SMTP_TIMEOUT_SECONDS = 10
+
+
 class AlertManager:
     """
     Manages security alerts and notifications.
@@ -110,7 +116,7 @@ class AlertManager:
             'plain',
         ))
 
-        with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+        with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=_SMTP_TIMEOUT_SECONDS) as server:
             server.starttls()
             server.login(self.smtp_user, self.smtp_password)
             server.send_message(msg)
