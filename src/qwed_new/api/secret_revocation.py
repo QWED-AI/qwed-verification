@@ -158,7 +158,10 @@ def revoke_leaked_keys(
 
     Returns per-batch outcome counts (``revoked``, ``already_revoked``,
     ``unknown``, ``errors``). Unknown tokens are tallied, never acted on —
-    #369 consumes that tally for false-positive feedback.
+    #369 consumes that tally for false-positive feedback. A digest failure
+    means enforcement cannot run at all, so it aborts the batch loudly
+    instead of tallying (CodeRabbit fail-closed on #380); per-row failures
+    tally ``errors`` without blocking other keys.
     """
     outcome: Dict[str, int] = {
         "revoked": 0,
@@ -168,14 +171,22 @@ def revoke_leaked_keys(
     }
     with session_factory() as session:
         for match in matches:
-            # Single try/finally per match (Sentry LOW on #380): the digest
-            # computation lives INSIDE it so every path — including digest
-            # failure — runs the plaintext cleanup in finally.
+            # Plaintext locals are dropped on every path below: digest
+            # failure dels + re-raises before the main block; the main
+            # block's finally dels after use.
             token = match.token
             digest = ""
             try:
-                safe = _sanitized_match(match, token)
                 digest = hash_api_key(token)
+            except Exception:
+                logger.exception(
+                    "leak intake: unable to digest — enforcement cannot run, "
+                    "failing the batch closed"
+                )
+                del token
+                raise
+            try:
+                safe = _sanitized_match(match, token)
                 api_key = session.exec(
                     select(ApiKey).where(ApiKey.key_hash == digest)
                 ).first()
