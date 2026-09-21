@@ -532,15 +532,51 @@ def _parse_match_batch(raw_body: bytes) -> list[SecretMatch]:
     return matches
 
 
+#: Sender-declared locations GitHub secret scanning can report. Receipt logs
+#: bucket anything else as "unknown": the field is sender-controlled metadata
+#: and must never reach logs unvalidated (CodeRabbit CWE-532 on #380).
+_KNOWN_SOURCES = frozenset(
+    {
+        "content",
+        "commit",
+        "pull_request_title",
+        "pull_request_description",
+        "pull_request_comment",
+        "issue_title",
+        "issue_description",
+        "issue_comment",
+        "discussion_title",
+        "discussion_body",
+        "discussion_comment",
+        "commit_comment",
+        "gist_content",
+        "gist_comment",
+        "wiki_content",
+        "wiki_commit",
+        "npm",
+        "manual_submission",
+        "action_logs",
+        "unknown",
+    }
+)
+
+
+def _normalize_source(source: str) -> str:
+    """Map a sender-declared source to the allowlist, else "unknown"."""
+    return source if source in _KNOWN_SOURCES else "unknown"
+
+
 def _record_receipt(matches: list[SecretMatch], *, event: str) -> None:
     """One structured log line per accepted batch. Token values NEVER appear.
 
     Emits counts, types, and sources only. The count is bounded-proof: it is
     derived from len() after the batch cap, not by iterating token material.
+    Sources are allowlisted — never logged raw.
     """
     by_source: dict[str, int] = {}
     for match in matches:
-        by_source[match.source] = by_source.get(match.source, 0) + 1
+        source = _normalize_source(match.source)
+        by_source[source] = by_source.get(source, 0) + 1
     logger.info(
         "secret-scanning webhook %s: received=%d sources=%s",
         event,

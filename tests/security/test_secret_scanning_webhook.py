@@ -474,6 +474,22 @@ class TestEnvelopeGuards:
         emitted = " ".join(record.getMessage() for record in caplog.records)
         assert marker not in emitted
 
+    def test_unknown_source_bucketed_not_logged_raw(self, caplog):
+        marker = "not-a-real-source"
+        matches = [routes.SecretMatch(token="t", type="y", source=marker)]
+        with caplog.at_level(logging.INFO, logger="qwed_new.api.secret_scanning_routes"):
+            routes._record_receipt(matches, event="unit-probe")
+        emitted = " ".join(record.getMessage() for record in caplog.records)
+        assert marker not in emitted
+        assert "unknown" in emitted
+
+    def test_known_source_preserved(self, caplog):
+        matches = [routes.SecretMatch(token="t", type="y", source="gist_content")]
+        with caplog.at_level(logging.INFO, logger="qwed_new.api.secret_scanning_routes"):
+            routes._record_receipt(matches, event="unit-probe")
+        emitted = " ".join(record.getMessage() for record in caplog.records)
+        assert "gist_content" in emitted
+
 
 # ---------------------------------------------------------------------------
 # Key cache: stale cap, forced-refresh throttle, mixed-curve resilience
