@@ -13,7 +13,9 @@
     {"id": "v2-excluded-test-prefix", "value": "qwed_test_1CMZsMKfg3mcHX76DEk9zq5bh2mB2w3wDHo1", "expected": "excluded", "pattern": null, "note": "test prefix matches no production pattern; excluded before the pattern stage, never alert, never act"},
     {"id": "v1-valid-1", "value": "qwed_live_GMO6rNP8ydc-Kpz1YUY_yNdqO0LmSuzJRlLETPw0NUk", "expected": "v1", "pattern": "legacy-accepted", "note": "43-char base64url body"},
     {"id": "v1-valid-2", "value": "qwed_live_yneaqLEEZQpaht3TP71n2OO_WTGEGX_eB-BWcIWEVmY", "expected": "v1", "pattern": "legacy-accepted", "note": "43-char base64url body"},
-    {"id": "v1-valid-3", "value": "qwed_live_0P63tuPx7FKh1Z1LgDFSdKMB_vGRRDwYFS95jybZXf8", "expected": "v1", "pattern": "legacy-accepted", "note": "43-char base64url body"}
+    {"id": "v1-valid-3", "value": "qwed_live_0P63tuPx7FKh1Z1LgDFSdKMB_vGRRDwYFS95jybZXf8", "expected": "v1", "pattern": "legacy-accepted", "note": "43-char base64url body"},
+    {"id": "v1-valid-dash-ending", "value": "qwed_live_GMO6rNP8ydc-Kpz1YUY_yNdqO0LmSuzJRlLETPw0NU-", "expected": "v1", "pattern": "legacy-accepted", "note": "body ends in hyphen: trailing word-boundary patterns miss this, charset-complement lookarounds match"},
+    {"id": "v1-invalid-glued", "value": "Xqwed_live_GMO6rNP8ydc-Kpz1YUY_yNdqO0LmSuzJRlLETPw0NUkY", "expected": "invalid", "pattern": null, "note": "valid key glued to word chars on both sides: no anchored match, validator rejects on length"}
   ]
 }
 

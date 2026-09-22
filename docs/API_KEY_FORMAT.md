@@ -49,10 +49,21 @@ and only the last 4 characters — never a full body.
 
 ## Scanning guidance
 
-Anchor both patterns with word boundaries (`\b…\b`, published as
-`anchored_pattern` in the machine-readable spec). Unanchored, a valid
-shape matches as a prefix inside a longer token, and scanners report
-fragments of larger credentials as complete keys.
+Boundaries are charset complements, not word boundaries (`\b…\b`,
+published as `anchored_pattern` in the machine-readable spec). A trailing
+`\b` is wrong here in both directions: it misses a v1 body ending in `-`
+followed by whitespace or punctuation (both non-word characters, so no
+boundary exists), and the same gap applies anywhere a body edge meets a
+delimiter outside `\w`. The lookarounds `(?<![A-Za-z0-9_-])…(?![A-Za-z0-9_-])`
+match exactly when no body-alphabet character continues on either side.
+Scanners on engines without lookarounds (e.g. RE2) should use an explicit
+delimiter class instead: `(?:^|[^A-Za-z0-9_-])qwed_live_…(?:[^A-Za-z0-9_-]|$)`.
+
+Precision note: `secrets.token_urlsafe(32)` output always ends in one of
+`A`, `Q`, `g`, `w` (the 43rd base64 character carries 2 zero padding bits),
+so generator-issued v1 keys never end in `-` — but the pattern still accepts
+it, and scanner guidance must handle dash endings correctly regardless of
+what the generator emits.
 
 ## Validator
 

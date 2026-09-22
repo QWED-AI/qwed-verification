@@ -42,19 +42,32 @@ def test_vectors_match_spec_patterns():
     data = _load("api-key-test-vectors.json")
     patterns = {entry["status"]: entry["full_pattern"] for entry in spec["types"]}
     compiled = {status: re.compile(pattern + r"\Z") for status, pattern in patterns.items()}
+    anchored = {
+        entry["status"]: re.compile(entry["anchored_pattern"])
+        for entry in spec["types"]
+    }
     # Derived from the data, not hard-coded IDs: every vector declares the
     # spec status whose regex it must satisfy (or null for shape negatives),
     # so a newly added vector cannot silently skip pattern coverage
     # (Greptile P2 on #387). Checksum-bad matches shape by design —
     # checksums are post-processing, not pattern (CodeRabbit on #387).
+    # Anchored patterns are additionally exercised as find-in-text searches
+    # wrapped in ordinary delimiters (Sentry MEDIUM + Greptile P1 on #387:
+    # trailing word boundaries miss dash-ending bodies).
     for vector in data["vectors"]:
         value = vector["value"]
         status = vector["pattern"]
         if status is None:
             assert not compiled["current"].match(value), vector["id"]
             assert not compiled["legacy-accepted"].match(value), vector["id"]
+            for name, expression in anchored.items():
+                assert expression.search(f"leaked {value} here.") is None, (
+                    vector["id"],
+                    name,
+                )
         else:
             assert compiled[status].match(value), vector["id"]
+            assert anchored[status].search(f"leaked {value} here."), vector["id"]
 
 
 def test_spec_names_match_partnership_filing():
