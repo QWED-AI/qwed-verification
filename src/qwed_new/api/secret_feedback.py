@@ -19,11 +19,15 @@ Participation is opt-in: the reporter is behind ``QWED_LEAK_FEEDBACK_ENABLED``
 (default off) and needs ``QWED_LEAK_FEEDBACK_URL``. Raw-token mode needs the
 separate explicit ``QWED_LEAK_FEEDBACK_SEND_RAW`` opt-in.
 
-Frame hygiene: classification binds raw tokens transiently, so this module
-never logs a traceback — failures are message-only, and the batch reference
-is deleted before logging (same lesson as the receipt path on #380). The
-prepared items travel onward instead of the batch: in the default hash mode
-they are one-way digests, safe in any frame.
+Frame hygiene: classification binds raw tokens transiently, so logging
+follows one rule — no log is ever emitted while token-bearing names are
+bound in the emitting frame. Per-match skips are silent (a re-raise would
+trade a partial truthful batch for total silence, and enforcement
+fail-closed lives in the sink, not this telemetry path); an all-skipped
+batch is still loud via counts alone. Raw mode is silent on the send path
+for the same reason (see send_leak_feedback). The prepared items travel
+onward instead of the batch: in the default hash mode they are one-way
+digests, safe in any frame.
 """
 
 from __future__ import annotations
@@ -116,13 +120,17 @@ def _classify_matches(
     entries = []
     for match in matches:
         # Per-match containment: one bad token skips only itself instead of
-        # discarding the whole batch's labels. Message-only: this frame
-        # binds raw tokens, so no traceback may be attached.
+        # discarding the whole batch's labels — a re-raise would trade a
+        # partial truthful batch for total silence, while enforcement
+        # fail-closed lives in the sink and is unaffected (CodeRabbit
+        # re-raise demand on #386, declined for this reason). The skip is
+        # SILENT by necessity: this frame binds raw tokens, so no log may
+        # be emitted from it (CWE-532). An all-skipped batch is still loud:
+        # prepare() detects it from counts alone (CWE-532, CodeRabbit #386).
         try:
             token = match.token
             digest = hash_api_key(token)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("leak feedback skipped a match: %s", exc)
+        except Exception:  # noqa: BLE001, S112 — silent by necessity: this frame binds raw tokens, so no log may be emitted from it (CWE-532)
             continue
         entries.append((match, token, digest))
     found: set[str] = set()
@@ -156,49 +164,67 @@ def prepare_leak_feedback(
     locals-capturing reporter must never observe it here. The log call sits
     outside the handler on purpose: logging with the traceback attached
     (``logger.exception`` or ``exc_info``) would ship the callee frames that
-    bind the plaintext token.
+    bind the plaintext token. An all-skipped batch (e.g. dead lookup
+    secret, where every per-match digest fails) is detected from counts
+    alone and logged loudly: at that point the frame holds only an empty
+    list and ints, safe in both modes.
     """
     if not feedback_enabled():
         return []
     if session_factory is None:
         session_factory = _default_session_factory
+    total = len(matches)
     classification_error = None
     try:
-        return _classify_matches(matches, session_factory)
+        items = _classify_matches(matches, session_factory)
     except Exception as exc:  # noqa: BLE001
         classification_error = exc
     del matches
     if classification_error is not None:
         logger.error("leak feedback skipped: %s", classification_error)
-    return []
+        return []
+    if not items and total:
+        logger.warning("leak feedback labeled 0 of %d matches", total)
+    return items
 
 
 def send_leak_feedback(items: list[FeedbackItem]) -> None:
     """POST labeled items to the configured endpoint. Never raises.
 
-    Only ever called with prepared items (hashes by default), so a
-    traceback here carries no token material — but failures stay
-    message-only anyway. Empty batches are not posted.
+    Logging discipline: every log below runs only after the token-bearing
+    names (``items``, ``payload``) are deleted — in raw mode they hold
+    plaintext, and the delivery frames up-stack still bind it, so raw mode
+    is SILENT by design (no delivered/refused/failed lines). Hash mode
+    keeps its logs: one-way digests are safe in any frame. Failures stay
+    message-only regardless.
     """
-    if not items:
+    count = len(items)
+    if count == 0:
         return
     if not feedback_enabled():
         return
     url = feedback_endpoint()
+    raw = any(item.token_raw for item in items)
     if not url:
-        logger.warning("leak feedback enabled but QWED_LEAK_FEEDBACK_URL is unset; dropping batch")
+        if not raw:
+            logger.warning("leak feedback enabled but QWED_LEAK_FEEDBACK_URL is unset; dropping batch")
         return
-    payload: list[dict[str, str]] = [item.model_dump(exclude_none=True) for item in items]
-    if any(item.token_raw for item in items) and urlparse(url).scheme != "https":
-        # Raw mode transmits plaintext: cleartext transport would expose it
-        # on the wire (CodeRabbit CWE-319 on #386). Hash digests are one-way
-        # and stay postable anywhere; only raw is gated.
-        logger.warning("leak feedback refused: raw mode requires an https endpoint")
+    if raw and urlparse(url).scheme != "https":
+        # Silent by design (see docstring): the delivery frames still bind
+        # plaintext, so even the refusal line is skipped in raw mode.
         return
+    payload: list[dict[str, str]] = []
+    delivery_error = None
     try:
+        payload = [item.model_dump(exclude_none=True) for item in items]
         response = httpx.post(url, json=payload, timeout=_FEEDBACK_TIMEOUT_SECONDS)
         response.raise_for_status()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("leak feedback not delivered: %s", exc)
+        delivery_error = exc
+    del items, payload
+    if delivery_error is not None:
+        if not raw:
+            logger.warning("leak feedback not delivered: %s", delivery_error)
         return
-    logger.info("leak feedback delivered: count=%d", len(items))
+    if not raw:
+        logger.info("leak feedback delivered: count=%d", count)

@@ -278,8 +278,8 @@ def test_post_failure_is_logged_not_raised(monkeypatch, caplog):
 
 
 def test_classifier_failure_yields_no_items_without_raising(session_factory, monkeypatch, caplog):
-    """A digest/DB failure in classification must not break delivery. With
-    per-match containment the bad match is skipped (not batch-aborted)."""
+    """A dead lookup secret fails every digest: the batch labels nothing,
+    but the all-skipped alarm still fires (from counts alone)."""
     _enable(monkeypatch)
     monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET")
 
@@ -289,7 +289,7 @@ def test_classifier_failure_yields_no_items_without_raising(session_factory, mon
         )  # must not raise
 
     assert items == []
-    assert any("skipped a match" in record.getMessage() for record in caplog.records)
+    assert any("labeled 0 of 1 matches" in record.getMessage() for record in caplog.records)
 
 
 def test_broken_factory_aborts_batch_without_raising(session_factory, monkeypatch, caplog):
@@ -311,7 +311,8 @@ def test_broken_factory_aborts_batch_without_raising(session_factory, monkeypatc
 
 def test_one_bad_match_skips_only_itself(session_factory, monkeypatch, caplog):
     """Per-match containment: a digest failure on one token must not
-    discard its healthy siblings' labels."""
+    discard its healthy siblings' labels. The skip itself is silent — the
+    classifying frame binds raw tokens, so it may not log (CWE-532)."""
     _enable(monkeypatch)
     real_hash = feedback_module.hash_api_key
 
@@ -332,7 +333,7 @@ def test_one_bad_match_skips_only_itself(session_factory, monkeypatch, caplog):
         )
 
     assert [item.label for item in items] == ["true_positive"]
-    assert any("skipped a match" in record.getMessage() for record in caplog.records)
+    assert caplog.records == []
 
 
 def test_prepare_defaults_to_production_session_factory(tmp_path, monkeypatch):
@@ -415,7 +416,8 @@ def test_raw_over_cleartext_refused_but_hash_allowed(session_factory, monkeypatc
     with caplog.at_level(logging.WARNING, logger="qwed_new.api.secret_feedback"):
         feedback_module.send_leak_feedback([raw_item])
     assert calls == []
-    assert any("requires an https endpoint" in record.getMessage() for record in caplog.records)
+    # Refusal is silent by design (delivery frames bind plaintext).
+    assert caplog.records == []
 
     feedback_module.send_leak_feedback([hash_item])
     assert len(calls) == 1
@@ -423,6 +425,27 @@ def test_raw_over_cleartext_refused_but_hash_allowed(session_factory, monkeypatc
     monkeypatch.setenv("QWED_LEAK_FEEDBACK_URL", "https://partner.example.test/fb")
     feedback_module.send_leak_feedback([raw_item])
     assert len(calls) == 2
+
+
+def test_raw_mode_send_is_silent(session_factory, monkeypatch, caplog):
+    """Raw mode never logs on the send path: items and payload hold
+    plaintext while delivery frames are live (CWE-532)."""
+    _enable(monkeypatch)
+    monkeypatch.setenv("QWED_LEAK_FEEDBACK_SEND_RAW", "true")
+    monkeypatch.setenv("QWED_LEAK_FEEDBACK_URL", "https://partner.example.test/fb")
+    calls = _posts(monkeypatch)
+    with session_factory() as session:
+        org = _seed_org(session)
+        user = _seed_user(session, org)
+        raw, _ = _seed_key(session, org, user)
+
+    items = feedback_module.prepare_leak_feedback([_match(raw)], session_factory=session_factory)
+    with caplog.at_level(logging.DEBUG, logger="qwed_new.api.secret_feedback"):
+        feedback_module.send_leak_feedback(items)
+
+    assert len(calls) == 1
+    assert calls[0]["json"][0]["token_raw"] == raw
+    assert caplog.records == []
 
 
 def test_classifier_issues_one_query_for_many_matches(session_factory, monkeypatch):
