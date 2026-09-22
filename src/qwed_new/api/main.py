@@ -196,6 +196,14 @@ app.include_router(audit_router)
 app.include_router(verification_context_router)
 app.include_router(secret_scanning_router)
 
+# Verified leak reports -> auto-revoke + owner notify (#368). Assigned here
+# (not import-time in the routes module) so the production wiring is explicit
+# and tests can substitute the sink without touching the router.
+from qwed_new.api import secret_scanning_routes as _secret_scanning_routes
+from qwed_new.api.secret_revocation import revoke_leaked_keys as _revoke_leaked_keys
+
+_secret_scanning_routes.on_verified_matches = _revoke_leaked_keys
+
 STARTUP_ALLOWED_PTH_FILES = {
     "__editable__.qwed_a2a-0.1.0.pth",
     "__editable__.qwed_finance-2.0.1.pth",

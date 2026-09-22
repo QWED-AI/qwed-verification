@@ -18,6 +18,7 @@ the fixture key is computed inline and the keys endpoint is stubbed by patching
 import base64
 import json
 import logging
+import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -474,6 +475,22 @@ class TestEnvelopeGuards:
         emitted = " ".join(record.getMessage() for record in caplog.records)
         assert marker not in emitted
 
+    def test_unknown_source_bucketed_not_logged_raw(self, caplog):
+        marker = "not-a-real-source"
+        matches = [routes.SecretMatch(token="t", type="y", source=marker)]
+        with caplog.at_level(logging.INFO, logger="qwed_new.api.secret_scanning_routes"):
+            routes._record_receipt(matches, event="unit-probe")
+        emitted = " ".join(record.getMessage() for record in caplog.records)
+        assert marker not in emitted
+        assert "unknown" in emitted
+
+    def test_known_source_preserved(self, caplog):
+        matches = [routes.SecretMatch(token="t", type="y", source="gist_content")]
+        with caplog.at_level(logging.INFO, logger="qwed_new.api.secret_scanning_routes"):
+            routes._record_receipt(matches, event="unit-probe")
+        emitted = " ".join(record.getMessage() for record in caplog.records)
+        assert "gist_content" in emitted
+
 
 # ---------------------------------------------------------------------------
 # Key cache: stale cap, forced-refresh throttle, mixed-curve resilience
@@ -875,3 +892,64 @@ class TestSinkFailure:
         with patch.object(routes, "on_verified_matches", side_effect=lambda m: seen.extend(m)):
             routes._deliver_verified_matches(matches)
         assert seen == matches
+
+    def test_receipt_failure_neither_masks_sink_nor_raises(self, monkeypatch, caplog):
+        """Sentry MEDIUM on #380: a raising receipt must neither skip the
+        `del matches` nor swallow the original sink traceback — both
+        failures are logged, nothing propagates (the response was already
+        acknowledged). No pytest.raises block: the point is nothing raises."""
+        def _boom(_matches):
+            raise RuntimeError("sink exploded")
+
+        def _receipt_boom(_matches, event):
+            raise RuntimeError("receipt exploded")
+
+        monkeypatch.setattr(routes, "on_verified_matches", _boom)
+        monkeypatch.setattr(routes, "_record_receipt", _receipt_boom)
+        probe = [routes.SecretMatch(token="t", type="y")]
+        with caplog.at_level(logging.ERROR, logger="qwed_new.api.secret_scanning_routes"):
+            routes._deliver_verified_matches(probe)  # must not raise
+        texts = [record.getMessage() for record in caplog.records]
+        assert any("verified-match receipt failed" in text for text in texts)
+        assert any("verified-match sink failed" in text for text in texts)
+
+    def test_receipt_log_cannot_observe_plaintext_batch(self, monkeypatch, caplog):
+        """Sentry CRITICAL on #380: when the receipt itself fails, the batch
+        must be deleted BEFORE the receipt failure is logged. A spy handler
+        inspects the live deliver frame at emit time and records whether
+        `matches` is still bound — walking the whole stack, so no fragile
+        frame-depth assumption. Deterministic: logging is synchronous."""
+        def _boom(_matches):
+            raise RuntimeError("sink exploded")
+
+        def _receipt_boom(_matches, event):
+            raise RuntimeError("receipt exploded")
+
+        monkeypatch.setattr(routes, "on_verified_matches", _boom)
+        monkeypatch.setattr(routes, "_record_receipt", _receipt_boom)
+        seen = {}
+
+        class _FrameSpy(logging.Handler):
+            def emit(self, record):
+                if not record.getMessage().startswith("verified-match receipt failed"):
+                    return
+                # Pin the no-traceback invariant too: the receipt error's
+                # traceback retains _record_receipt's token-bearing frame
+                # (Greptile P1 T-Rex on #380), so the record must carry none.
+                seen["exc_info"] = record.exc_info
+                frame = sys._getframe(1)
+                while frame is not None:
+                    if frame.f_code.co_name == "_deliver_verified_matches":
+                        seen["matches_bound"] = "matches" in frame.f_locals
+                        return
+                    frame = frame.f_back
+
+        target = logging.getLogger("qwed_new.api.secret_scanning_routes")
+        spy = _FrameSpy()
+        target.addHandler(spy)
+        try:
+            with caplog.at_level(logging.ERROR, logger="qwed_new.api.secret_scanning_routes"):
+                routes._deliver_verified_matches([routes.SecretMatch(token="t", type="y")])
+        finally:
+            target.removeHandler(spy)
+        assert seen == {"exc_info": None, "matches_bound": False}

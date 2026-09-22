@@ -14,7 +14,7 @@ import hmac
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from sqlmodel import Session, select
@@ -25,6 +25,34 @@ from qwed_new.core.models import VerificationLog
 logger = logging.getLogger(__name__)
 
 AUDIT_SECRET_ENV_VAR = "QWED_AUDIT_SECRET_KEY"
+
+
+def _naive_ts(value: datetime) -> datetime:
+    """Historical naive-UTC spelling of a persisted timestamp.
+
+    Rows written before timestamps went tz-aware were hashed from the
+    naive isoformat (e.g. ``2026-05-08T00:00:00``). Stripping an aware
+    read-back to naive UTC reproduces that spelling for the compatibility
+    candidate below; a naive read-back passes through unchanged.
+    """
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _canonical_ts(value: datetime) -> datetime:
+    """Normalize a persisted timestamp to UTC-aware for hash reconstruction.
+
+    Chain hashes are computed from ``timestamp.isoformat()`` at write time
+    and recomputed from the read-back row at verify time, so both spellings
+    must match. New sqlmodel (UTCDateTime) round-trips tz-aware; old
+    naive-column storage returns naive wall-clock UTC. Attaching UTC to a
+    naive read-back (or converting aware to UTC) keeps the canonical
+    spelling identical on both — and matches what aware writes hash as.
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 class AuditLogger:
@@ -59,7 +87,7 @@ class AuditLogger:
         Returns:
             log_id: The ID of the created log entry
         """
-        timestamp = datetime.utcnow()
+        timestamp = datetime.now(timezone.utc)
 
         with Session(engine) as session:
             self._prepare_append_session(session)
@@ -242,7 +270,7 @@ class AuditLogger:
             },
             "errors": errors,
             "log_id": log_id,
-            "timestamp": log_entry.timestamp.isoformat(),
+            "timestamp": _canonical_ts(log_entry.timestamp).isoformat(),
         }
 
     def _reconstruct_log_data(self, log_entry: VerificationLog) -> Dict[str, Any]:
@@ -254,7 +282,7 @@ class AuditLogger:
             "result": self._decode_result_payload(log_entry),
             "is_verified": log_entry.is_verified,
             "domain": log_entry.domain,
-            "timestamp": log_entry.timestamp.isoformat(),
+            "timestamp": _canonical_ts(log_entry.timestamp).isoformat(),
             "previous_hash": log_entry.previous_hash,
             "raw_llm_output": log_entry.raw_llm_output,
         }
@@ -268,7 +296,7 @@ class AuditLogger:
             "result": self._decode_result_payload(log_entry),
             "is_verified": log_entry.is_verified,
             "domain": log_entry.domain,
-            "timestamp": log_entry.timestamp.isoformat(),
+            "timestamp": _canonical_ts(log_entry.timestamp).isoformat(),
             "previous_hash": log_entry.previous_hash,
         }
 
@@ -296,7 +324,7 @@ class AuditLogger:
                 errors.append("Hash missing from audit entry")
             else:
                 errors.append(
-                    "Hash mismatch: audit entry does not match current or legacy canonical payload"
+                    "Hash mismatch: audit entry does not match any accepted canonical payload"
                 )
 
         if not hash_present:
@@ -314,11 +342,28 @@ class AuditLogger:
         return hash_valid, signature_valid
 
     def _expected_hashes(self, log_entry: VerificationLog) -> list[str]:
-        """Return the acceptable canonical hashes for this entry."""
-        return [
-            self._compute_hash(self._reconstruct_log_data(log_entry)),
-            self._compute_hash(self._reconstruct_legacy_log_data(log_entry)),
-        ]
+        """Return the acceptable canonical hashes for this entry.
+
+        Four candidates: current/legacy payload shape × aware/naive
+        timestamp spelling. The naive variants exist for rows written
+        before timestamps went tz-aware — those rows were hashed from the
+        naive isoformat, and without the naive candidate their untampered
+        heads would fail verification and halt all appends via
+        ``_assert_appendable_head`` (Sentry CRITICAL + Greptile P1 T-Rex on
+        #380, runtime-verified). The extra spellings admit no forgery: the
+        HMAC still gates on the stored hash, and without the key no valid
+        signature can be minted for any spelling.
+        """
+        candidates = []
+        for payload in (
+            self._reconstruct_log_data(log_entry),
+            self._reconstruct_legacy_log_data(log_entry),
+        ):
+            candidates.append(self._compute_hash(payload))
+            naive_payload = dict(payload)
+            naive_payload["timestamp"] = _naive_ts(log_entry.timestamp).isoformat()
+            candidates.append(self._compute_hash(naive_payload))
+        return candidates
 
     def _verify_chain_link(
         self,

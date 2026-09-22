@@ -26,6 +26,12 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+#: Bound for every SMTP phase (connect, TLS, auth, delivery). The leak sink
+#: notifies inline per match — an unbounded stall would hold later
+#: revocations behind one wedged delivery (Greptile P1 on #380).
+_SMTP_TIMEOUT_SECONDS = 10
+
+
 class AlertManager:
     """
     Manages security alerts and notifications.
@@ -89,6 +95,33 @@ class AlertManager:
         self.recent_alerts[alert_key].append(datetime.utcnow())
         logger.info(f"Alert sent: {title} (severity: {severity})")
     
+    def send_owner_email(self, recipient: str, subject: str, body: str) -> None:
+        """Send a one-off email to an explicit recipient. Raises on failure.
+
+        Unlike send_alert this is never throttled: each call is a distinct,
+        already-verified event (e.g. a key auto-revocation). Callers decide
+        failure policy — revocation must never depend on delivery.
+        """
+        if not recipient or "@" not in recipient:
+            raise ValueError("owner notification requires a valid recipient email")
+        if not self.smtp_user or not self.smtp_password:
+            raise RuntimeError("Email not configured (SMTP credentials missing)")
+
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = f"[QWED Security] {subject}"
+        msg['From'] = self.smtp_user
+        msg['To'] = recipient
+        msg.attach(MIMEText(
+            body + "\n\n--\nThis is an automated security alert from QWED.\nDo not reply to this email.\n",
+            'plain',
+        ))
+
+        with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=_SMTP_TIMEOUT_SECONDS) as server:
+            server.starttls()
+            server.login(self.smtp_user, self.smtp_password)
+            server.send_message(msg)
+        logger.info("Owner notification sent to %s", recipient)
+
     def _is_throttled(self, alert_key: str) -> bool:
         """Check if alert should be throttled."""
         cutoff = datetime.utcnow() - timedelta(minutes=self.throttle_minutes)

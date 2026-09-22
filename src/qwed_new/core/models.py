@@ -1,6 +1,16 @@
 from typing import Optional
 from sqlmodel import Field, SQLModel
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+def _utcnow() -> datetime:
+    """Timezone-aware UTC now for column defaults.
+
+    sqlmodel>=0.0.28 maps datetime columns to UTCDateTime, which rejects
+    naive values (CI installs latest unpinned, currently 0.0.45). The old
+    datetime.utcnow defaults broke every DB-writing test there.
+    """
+    return datetime.now(timezone.utc)
 
 class Organization(SQLModel, table=True):
     """
@@ -12,7 +22,7 @@ class Organization(SQLModel, table=True):
     display_name: str
     tier: str = Field(default="free")  # free, pro, enterprise
     is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utcnow)
 
 class User(SQLModel, table=True):
     """
@@ -26,7 +36,7 @@ class User(SQLModel, table=True):
     role: str = Field(default="member")  # owner, admin, member, viewer
     permissions: Optional[str] = None  # JSON string of permissions
     is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utcnow)
 
 
 class ApiKey(SQLModel, table=True):
@@ -42,7 +52,7 @@ class ApiKey(SQLModel, table=True):
     user_id: Optional[int] = Field(default=None, foreign_key="user.id")
     name: Optional[str] = Field(default=None)
     is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utcnow)
     last_used_at: Optional[datetime] = None
     revoked_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None  # Key expiration
@@ -58,8 +68,8 @@ class ResourceQuota(SQLModel, table=True):
     max_requests_per_day: int = Field(default=1000)
     max_requests_per_minute: int = Field(default=60)
     max_concurrent_requests: int = Field(default=10)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
 
 class VerificationLog(SQLModel, table=True):
     """
@@ -73,7 +83,7 @@ class VerificationLog(SQLModel, table=True):
     result: str  # JSON string of the result
     is_verified: bool
     domain: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_utcnow)
     
     # Cryptographic audit fields
     entry_hash: Optional[str] = None  # SHA-256 hash of this entry
@@ -94,4 +104,4 @@ class SecurityEvent(SQLModel, table=True):
     reason: str  # Why it was blocked/flagged
     security_layer: Optional[str] = None  # Which layer caught it (e.g., "Base64 Detection")
     severity: str = Field(default="medium")  # low, medium, high, critical
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_utcnow)

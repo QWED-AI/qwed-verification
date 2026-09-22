@@ -532,15 +532,51 @@ def _parse_match_batch(raw_body: bytes) -> list[SecretMatch]:
     return matches
 
 
+#: Sender-declared locations GitHub secret scanning can report. Receipt logs
+#: bucket anything else as "unknown": the field is sender-controlled metadata
+#: and must never reach logs unvalidated (CodeRabbit CWE-532 on #380).
+_KNOWN_SOURCES = frozenset(
+    {
+        "content",
+        "commit",
+        "pull_request_title",
+        "pull_request_description",
+        "pull_request_comment",
+        "issue_title",
+        "issue_description",
+        "issue_comment",
+        "discussion_title",
+        "discussion_body",
+        "discussion_comment",
+        "commit_comment",
+        "gist_content",
+        "gist_comment",
+        "wiki_content",
+        "wiki_commit",
+        "npm",
+        "manual_submission",
+        "action_logs",
+        "unknown",
+    }
+)
+
+
+def _normalize_source(source: str) -> str:
+    """Map a sender-declared source to the allowlist, else "unknown"."""
+    return source if source in _KNOWN_SOURCES else "unknown"
+
+
 def _record_receipt(matches: list[SecretMatch], *, event: str) -> None:
     """One structured log line per accepted batch. Token values NEVER appear.
 
     Emits counts, types, and sources only. The count is bounded-proof: it is
     derived from len() after the batch cap, not by iterating token material.
+    Sources are allowlisted — never logged raw.
     """
     by_source: dict[str, int] = {}
     for match in matches:
-        by_source[match.source] = by_source.get(match.source, 0) + 1
+        source = _normalize_source(match.source)
+        by_source[source] = by_source.get(source, 0) + 1
     logger.info(
         "secret-scanning webhook %s: received=%d sources=%s",
         event,
@@ -711,7 +747,33 @@ def _deliver_verified_matches(matches: list[SecretMatch]) -> None:
     try:
         on_verified_matches(matches)
     except Exception:
+        # Receipt first (counts only, never token material), then drop the
+        # raw batch BEFORE logging: a locals-capturing reporter must not
+        # observe the plaintext batch through this frame (#380 follow-up —
+        # the sink now raises loudly on enforcement failure, so this path
+        # is live, not theoretical). The receipt itself must never mask the
+        # original sink failure (Sentry MEDIUM on #380): a receipt error is
+        # logged and swallowed so the sink traceback below always runs.
+        # Ordering is load-bearing (Sentry CRITICAL on #380): the receipt
+        # failure is captured WITHOUT logging, the batch is deleted, and
+        # only then is the captured error logged — logging first would run
+        # while `matches` is still bound and hand the plaintext batch to a
+        # locals-capturing reporter through this very frame.
+        receipt_error = None
+        try:
+            _record_receipt(matches, event="sink_failed")
+        except Exception as exc:  # noqa: BLE001
+            receipt_error = exc
+        del matches
+        if receipt_error is not None:
+            # NO traceback attached (Greptile P1 T-Rex on #380, runtime
+            # verified): the receipt exception's traceback retains
+            # _record_receipt's `matches` frame — the plaintext batch — so
+            # exc_info would hand the keys to a locals-capturing reporter
+            # through the callee's frame, past our deletion above. The
+            # message alone is safe: the receipt formats counts only, never
+            # token material.
+            logger.error("verified-match receipt failed: %s", receipt_error)
         # #368's sink must never crash the already-acknowledged response; log
         # with the traceback so the batch can be re-delivered or investigated.
         logger.exception("verified-match sink failed")
-        _record_receipt(matches, event="sink_failed")
