@@ -294,8 +294,9 @@ def test_sanitize_failure_scrubs_sanitize_frame(session_factory, monkeypatch):
         user = _seed_user(session, org)
         raw, _ = _seed_key(session, org, user)
 
+    batch = [_match(raw)]
     with pytest.raises(RuntimeError, match="sanitize exploded") as excinfo:
-        revocation_module.revoke_leaked_keys([_match(raw)], session_factory=session_factory)
+        revocation_module.revoke_leaked_keys(batch, session_factory=session_factory)
 
     frames = []
     seen = set()

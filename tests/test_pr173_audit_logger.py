@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from sqlmodel import SQLModel, Session, create_engine
+from sqlmodel import SQLModel, Session, create_engine, select
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
@@ -272,6 +272,59 @@ def test_audit_logger_verifies_legacy_hash_payload(monkeypatch, tmp_path):
         verification = logger.verify_log_entry(legacy_log.id, session)
 
     assert verification["valid"] is True
+
+
+def test_historical_naive_row_verifies_and_chain_appends(monkeypatch, tmp_path):
+    """Sentry CRITICAL + Greptile P1 T-Rex on #380: a row hashed with the
+    historical naive timestamp spelling must still verify, and appends
+    after it must not be refused. The raw-SQL insert simulates the
+    pre-change writer (the ORM now rejects naive writes, which is exactly
+    why such rows only exist historically)."""
+    engine = _configure_audit_logger(monkeypatch, tmp_path)
+    logger = AuditLogger()
+
+    payload = {
+        "organization_id": 7,
+        "user_id": None,
+        "query": "2 + 2",
+        "result": {"value": 4},
+        "is_verified": True,
+        "domain": "math",
+        "timestamp": "2026-05-08T00:00:00",
+        "previous_hash": None,
+        "raw_llm_output": None,
+    }
+    entry_hash = logger._compute_hash(payload)
+    signature = logger._compute_hmac(entry_hash)
+
+    with Session(engine) as session:
+        session.connection().exec_driver_sql(
+            "INSERT INTO verificationlog (organization_id, user_id, query, result, "
+            "is_verified, domain, timestamp, entry_hash, hmac_signature, "
+            "previous_hash, raw_llm_output) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                7, None, "2 + 2", '{"value": 4}', 1, "math",
+                "2026-05-08 00:00:00.000000", entry_hash, signature, None, None,
+            ),
+        )
+        session.commit()
+        row = session.exec(
+            select(VerificationLog).where(VerificationLog.organization_id == 7)
+        ).first()
+        assert row is not None
+        verification = logger.verify_log_entry(row.id, session)
+        assert verification["valid"] is True
+
+    # The historical head verifies, so the append path must extend it.
+    new_id = logger.log_verification(
+        organization_id=7,
+        user_id=None,
+        query="3 + 3",
+        result={"value": 6},
+        is_verified=True,
+        domain="math",
+    )
+    assert int(new_id) > row.id
 
 
 def test_audit_logger_keeps_chains_isolated_per_organization(monkeypatch, tmp_path):
