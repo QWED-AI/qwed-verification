@@ -1,0 +1,21 @@
+{
+  "notice": "SYNTHETIC NON-FUNCTIONAL VECTORS. Every value below was generated fresh for documentation, never issued, never stored, and will never authenticate. Do not use these as credentials. Field names are deliberately neutral (value/expected) so scanners treat this file as data, not config.",
+  "vectors": [
+    {"id": "v2-valid-1", "value": "qwed_live_1CMZsMKfg3mcHX76DEk9zq5bh2mB2w3wDHo1", "expected": "v2", "pattern": "current", "note": "correct checksum"},
+    {"id": "v2-valid-2", "value": "qwed_live_tlfHQs6WyedI0JuCt33OJMuirzDei54VWiO2", "expected": "v2", "pattern": "current", "note": "correct checksum"},
+    {"id": "v2-valid-3", "value": "qwed_live_tGksrByvym9mj51UA9xlgquuuCmlG50YrCf3", "expected": "v2", "pattern": "current", "note": "correct checksum"},
+    {"id": "v2-valid-4", "value": "qwed_live_j6QcMsgWwz1kKPK07zcvPMIzAXlS4G46cmYD", "expected": "v2", "pattern": "current", "note": "correct checksum"},
+    {"id": "v2-valid-5", "value": "qwed_live_Tvjzw9GepAKr4jiMljckZpIFnYiMid2xpKbS", "expected": "v2", "pattern": "current", "note": "correct checksum"},
+    {"id": "v2-invalid-checksum", "value": "qwed_live_1CMZsMKfg3mcHX76DEk9zq5bh2mB2w3wDHo0", "expected": "invalid", "pattern": "current", "note": "matches shape; last checksum char flipped, rejected only in post-processing"},
+    {"id": "v2-invalid-charset", "value": "qwed_live_1CMZsMKfg3!cHX76DEk9zq5bh2mB2w3wDHo1", "expected": "invalid", "pattern": null, "note": "bang is outside Base62"},
+    {"id": "v2-invalid-short", "value": "qwed_live_1CMZsMKfg3mcHX76DEk9", "expected": "invalid", "pattern": null, "note": "20-char body, want 36"},
+    {"id": "v2-invalid-long", "value": "qwed_live_1CMZsMKfg3mcHX76DEk9zq5bh2mB2w3wDHo1A0", "expected": "invalid", "pattern": null, "note": "38-char body, want 36"},
+    {"id": "v2-excluded-test-prefix", "value": "qwed_test_1CMZsMKfg3mcHX76DEk9zq5bh2mB2w3wDHo1", "expected": "excluded", "pattern": null, "note": "test prefix matches no production pattern; excluded before the pattern stage, never alert, never act"},
+    {"id": "v1-valid-1", "value": "qwed_live_GMO6rNP8ydc-Kpz1YUY_yNdqO0LmSuzJRlLETPw0NUk", "expected": "v1", "pattern": "legacy-accepted", "note": "43-char base64url body"},
+    {"id": "v1-valid-2", "value": "qwed_live_yneaqLEEZQpaht3TP71n2OO_WTGEGX_eB-BWcIWEVmY", "expected": "v1", "pattern": "legacy-accepted", "note": "43-char base64url body"},
+    {"id": "v1-valid-3", "value": "qwed_live_0P63tuPx7FKh1Z1LgDFSdKMB_vGRRDwYFS95jybZXf8", "expected": "v1", "pattern": "legacy-accepted", "note": "43-char base64url body"},
+    {"id": "v1-valid-dash-ending", "value": "qwed_live_GMO6rNP8ydc-Kpz1YUY_yNdqO0LmSuzJRlLETPw0NU-", "expected": "v1", "pattern": "legacy-accepted", "note": "body ends in hyphen: trailing word-boundary patterns miss this, charset-complement lookarounds match"},
+    {"id": "v1-invalid-glued", "value": "Xqwed_live_GMO6rNP8ydc-Kpz1YUY_yNdqO0LmSuzJRlLETPw0NUkY", "expected": "invalid", "pattern": null, "note": "valid key glued to word chars on both sides: no anchored match, validator rejects on length"}
+  ]
+}
+
