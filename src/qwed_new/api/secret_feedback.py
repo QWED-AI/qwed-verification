@@ -1,0 +1,172 @@
+"""False-positive feedback reporter for verified leak matches (issue #369).
+
+After a batch of leak matches is processed, report back one label per
+match so the scanning source can improve detection quality over time
+(and qualify for the partner program's lenient 30s timeout)::
+
+    [{"token_hash": "<SHA-256 of the raw token>", "token_type": "<pattern name>", "label": "true_positive"}]
+
+Rules (from the issue — structural, enforced by the model below):
+
+* Send either ``token_raw`` or ``token_hash`` — never both. Default to
+  ``token_hash`` so the plaintext secret is never transmitted back out.
+* The hash, when used, is SHA-256 and nothing else.
+* ``label`` is exactly ``true_positive`` or ``false_positive``.
+* A match is a true positive when the ``hash_api_key()`` lookup found a
+  real key; false positive when nothing matched.
+
+Participation is opt-in: the reporter is behind ``QWED_LEAK_FEEDBACK_ENABLED``
+(default off) and needs ``QWED_LEAK_FEEDBACK_URL``. Raw-token mode needs the
+separate explicit ``QWED_LEAK_FEEDBACK_SEND_RAW`` opt-in.
+
+Frame hygiene: classification binds raw tokens transiently, so this module
+never logs a traceback — failures are message-only, and the batch reference
+is deleted before logging (same lesson as the receipt path on #380). The
+prepared items travel onward instead of the batch: in the default hash mode
+they are one-way digests, safe in any frame.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import os
+from typing import TYPE_CHECKING, Literal
+
+import httpx
+from pydantic import BaseModel, model_validator
+from sqlmodel import Session, select
+
+if TYPE_CHECKING:  # pragma: no cover - import for type checking only; avoids a routes <-> feedback cycle
+    from qwed_new.api.secret_scanning_routes import SecretMatch
+from qwed_new.auth.security import hash_api_key
+from qwed_new.core.database import engine
+from qwed_new.core.models import ApiKey
+
+logger = logging.getLogger(__name__)
+
+#: Label literals — the only two values the feedback receiver accepts.
+TRUE_POSITIVE = "true_positive"
+FALSE_POSITIVE = "false_positive"
+
+#: Upper bound for the outbound feedback POST (mirrors the keys-fetch call).
+_FEEDBACK_TIMEOUT_SECONDS = 10.0
+
+
+def _default_session_factory() -> Session:
+    return Session(engine)
+
+
+class FeedbackItem(BaseModel):
+    """One labeled match. Exactly one of ``token_hash`` / ``token_raw``."""
+
+    token_type: str
+    label: Literal["true_positive", "false_positive"]
+    token_hash: str | None = None
+    token_raw: str | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_token_form(self) -> FeedbackItem:
+        if bool(self.token_hash) == bool(self.token_raw):
+            raise ValueError("exactly one of token_hash / token_raw must be set")
+        return self
+
+
+def feedback_enabled() -> bool:
+    """Opt-in participation flag. Off unless explicitly enabled."""
+    return os.getenv("QWED_LEAK_FEEDBACK_ENABLED", "false").lower() == "true"
+
+
+def feedback_endpoint() -> str:
+    """Where labeled matches are POSTed. Empty means unconfigured."""
+    return os.getenv("QWED_LEAK_FEEDBACK_URL", "").strip()
+
+
+def send_raw_enabled() -> bool:
+    """Separate explicit opt-in for transmitting plaintext tokens."""
+    return os.getenv("QWED_LEAK_FEEDBACK_SEND_RAW", "false").lower() == "true"
+
+
+def _sha256_token(token: str) -> str:
+    """SHA-256 hex digest of a raw token — the only hash the receiver takes."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _classify_matches(
+    matches: list[SecretMatch],
+    session_factory,
+) -> list[FeedbackItem]:
+    """Label every match by read-only lookup. May raise; caller contains it.
+
+    A match is a true positive iff the ``hash_api_key()`` digest finds a
+    real key row — the same found/not-found rule the revocation sink uses,
+    minus the side effects. Classification runs before revocation, which is
+    safe: a key revoked after classification was still a real key at label
+    time, and unknown tokens stay unknown (digests are unforgeable).
+    """
+    raw = bool(send_raw_enabled())
+    items = []
+    with session_factory() as session:
+        for match in matches:
+            token = match.token
+            digest = hash_api_key(token)
+            found = (
+                session.exec(select(ApiKey.id).where(ApiKey.key_hash == digest)).first()
+                is not None
+            )
+            items.append(
+                FeedbackItem(
+                    token_type=match.type,
+                    label=TRUE_POSITIVE if found else FALSE_POSITIVE,
+                    token_hash=None if raw else _sha256_token(token),
+                    token_raw=token if raw else None,
+                )
+            )
+    return items
+
+
+def prepare_leak_feedback(
+    matches: list[SecretMatch], session_factory=None
+) -> list[FeedbackItem]:
+    """Build labeled items for a batch. Never raises; [] on any failure.
+
+    Disabled flag short-circuits before touching the batch. Anything else
+    that goes wrong (digest failure, DB outage) is message-logged without a
+    traceback — the batch is still bound in this frame, and a
+    locals-capturing reporter must never observe it here.
+    """
+    if not feedback_enabled():
+        return []
+    if session_factory is None:
+        session_factory = _default_session_factory
+    try:
+        return _classify_matches(matches, session_factory)
+    except Exception as exc:  # noqa: BLE001
+        del matches
+        logger.error("leak feedback skipped: %s", exc)
+        return []
+
+
+def send_leak_feedback(items: list[FeedbackItem]) -> None:
+    """POST labeled items to the configured endpoint. Never raises.
+
+    Only ever called with prepared items (hashes by default), so a
+    traceback here carries no token material — but failures stay
+    message-only anyway. Empty batches are not posted.
+    """
+    if not items:
+        return
+    if not feedback_enabled():
+        return
+    url = feedback_endpoint()
+    if not url:
+        logger.warning("leak feedback enabled but QWED_LEAK_FEEDBACK_URL is unset; dropping batch")
+        return
+    payload: list[dict[str, str]] = [item.model_dump(exclude_none=True) for item in items]
+    try:
+        response = httpx.post(url, json=payload, timeout=_FEEDBACK_TIMEOUT_SECONDS)
+        response.raise_for_status()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("leak feedback not delivered: %s", exc)
+        return
+    logger.info("leak feedback delivered: count=%d", len(items))
