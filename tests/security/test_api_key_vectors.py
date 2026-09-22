@@ -40,21 +40,21 @@ def test_vectors_match_validator_labels():
 def test_vectors_match_spec_patterns():
     spec = _load("api-key-format.json")
     data = _load("api-key-test-vectors.json")
-    patterns = {
-        entry["status"]: re.compile(entry["full_pattern"] + r"\Z")
-        for entry in spec["types"]
-        for status in [entry["status"]]
-    }
-    by_id = {vector["id"]: vector for vector in data["vectors"]}
-    for i in range(1, 6):
-        assert patterns["current"].match(by_id[f"v2-valid-{i}"]["value"])
-    for i in range(1, 4):
-        assert patterns["legacy-accepted"].match(by_id[f"v1-valid-{i}"]["value"])
-    # Shape-level negatives (checksum-bad still matches the regex by design:
-    # checksums are post-processing, not pattern).
-    assert not patterns["current"].match(by_id["v2-invalid-charset"]["value"])
-    assert not patterns["current"].match(by_id["v2-invalid-short"]["value"])
-    assert not patterns["current"].match(by_id["v2-invalid-long"]["value"])
+    patterns = {entry["status"]: entry["full_pattern"] for entry in spec["types"]}
+    compiled = {status: re.compile(pattern + r"\Z") for status, pattern in patterns.items()}
+    # Derived from the data, not hard-coded IDs: every vector declares the
+    # spec status whose regex it must satisfy (or null for shape negatives),
+    # so a newly added vector cannot silently skip pattern coverage
+    # (Greptile P2 on #387). Checksum-bad matches shape by design —
+    # checksums are post-processing, not pattern (CodeRabbit on #387).
+    for vector in data["vectors"]:
+        value = vector["value"]
+        status = vector["pattern"]
+        if status is None:
+            assert not compiled["current"].match(value), vector["id"]
+            assert not compiled["legacy-accepted"].match(value), vector["id"]
+        else:
+            assert compiled[status].match(value), vector["id"]
 
 
 def test_spec_names_match_partnership_filing():

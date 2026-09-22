@@ -47,6 +47,13 @@ false-positive matches to ~2^-32 while staying pure math (no database).
 Masked previews in documentation and examples show the prefix, asterisks,
 and only the last 4 characters — never a full body.
 
+## Scanning guidance
+
+Anchor both patterns with word boundaries (`\b…\b`, published as
+`anchored_pattern` in the machine-readable spec). Unanchored, a valid
+shape matches as a prefix inside a longer token, and scanners report
+fragments of larger credentials as complete keys.
+
 ## Validator
 
 `validate_api_key_format()` in `src/qwed_new/auth/security.py` classifies a

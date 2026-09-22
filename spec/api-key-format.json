@@ -8,6 +8,7 @@
       "prefix": "qwed_live_",
       "body_pattern": "[A-Za-z0-9]{36}",
       "full_pattern": "qwed_live_[A-Za-z0-9]{36}",
+      "anchored_pattern": "\\bqwed_live_[A-Za-z0-9]{36}\\b",
       "status": "current",
       "entropy_bits": 178.6,
       "checksum": {
@@ -24,6 +25,7 @@
       "prefix": "qwed_live_",
       "body_pattern": "[A-Za-z0-9_-]{43}",
       "full_pattern": "qwed_live_[A-Za-z0-9_-]{43}",
+      "anchored_pattern": "\\bqwed_live_[A-Za-z0-9_-]{43}\\b",
       "status": "legacy-accepted",
       "entropy_bits": 256,
       "checksum": null
