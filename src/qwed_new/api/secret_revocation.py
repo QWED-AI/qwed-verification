@@ -248,10 +248,14 @@ def _notify_best_effort(session: Session, api_key: ApiKey, match: SecretMatch) -
 
 # Frames that bind the plaintext token as a local and therefore travel
 # with any exception raised through them: the hasher's ``api_key`` argument,
-# this module's own staging loop, and the sanitizer (its ``token`` argument
-# and ``match`` parameter both carry plaintext — Sentry MEDIUM on #380).
-# Scrubbed (not merely unreferenced) on the digest-failure path below.
-_TOKEN_HOLDING_FRAMES = frozenset({"hash_api_key", "_stage_batch", "_sanitized_match"})
+# this module's own staging loop, and the sanitizer chain (``_sanitized_match``
+# binds ``token`` and the token-bearing ``match``; ``_redacted_field`` and
+# ``_redact_token`` bind ``token`` plus metadata that may embed it — Sentry
+# MEDIUM on #380, extended to the full chain on final review). Scrubbed (not
+# merely unreferenced) on the digest-failure path below.
+_TOKEN_HOLDING_FRAMES = frozenset(
+    {"hash_api_key", "_stage_batch", "_sanitized_match", "_redacted_field", "_redact_token"}
+)
 
 
 def _scrub_token_frames(exc: BaseException) -> None:
@@ -281,12 +285,13 @@ def _scrub_token_frames(exc: BaseException) -> None:
 def _stage_batch(matches: List[SecretMatch]) -> List[tuple]:
     """Digest + sanitize every match up front.
 
-    Returns ``[(sanitized_match, digest)]``. Plaintext tokens live ONLY in
-    this helper's frame — and on failure the frame is scrubbed before
-    re-raising (CodeRabbit CWE-532 on #380): a traceback keeps every frame
-    it passes through, so deleting names in the *caller* is not enough;
-    each frame must clean itself. All four names below are pre-bound so the
-    cleanup dels can never NameError.
+    Returns ``[(sanitized_match, digest)]``. Plaintext tokens live in this
+    helper's frame and the sanitizer chain below — on failure this frame is
+    cleaned here and the dead callee frames are scrubbed by
+    ``_scrub_token_frames`` before re-raising (CodeRabbit CWE-532 on #380):
+    a traceback keeps every frame it passes through, so deleting names in
+    the *caller* is not enough; each frame must be cleaned. All four names
+    below are pre-bound so the cleanup dels can never NameError.
     """
     staged = []
     token = ""
