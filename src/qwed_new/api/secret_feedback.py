@@ -127,10 +127,12 @@ def _classify_matches(
         # SILENT by necessity: this frame binds raw tokens, so no log may
         # be emitted from it (CWE-532). An all-skipped batch is still loud:
         # prepare() detects it from counts alone (CWE-532, CodeRabbit #386).
+        # Silent by necessity: this frame binds raw tokens, so no log may
+        # be emitted from it (CWE-532).
         try:
             token = match.token
             digest = hash_api_key(token)
-        except Exception:  # noqa: BLE001, S112 — silent by necessity: this frame binds raw tokens, so no log may be emitted from it (CWE-532)
+        except Exception:  # noqa: BLE001, S112
             continue
         entries.append((match, token, digest))
     found: set[str] = set()
