@@ -32,9 +32,10 @@ import hashlib
 import logging
 import os
 from typing import TYPE_CHECKING, Literal
+from urllib.parse import urlparse
 
 import httpx
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from sqlmodel import Session, select
 
 if TYPE_CHECKING:  # pragma: no cover - import for type checking only; avoids a routes <-> feedback cycle
@@ -49,8 +50,11 @@ logger = logging.getLogger(__name__)
 TRUE_POSITIVE = "true_positive"
 FALSE_POSITIVE = "false_positive"
 
-#: Upper bound for the outbound feedback POST (mirrors the keys-fetch call).
-_FEEDBACK_TIMEOUT_SECONDS = 10.0
+#: Upper bound for the outbound feedback POST. Kept short on purpose: the
+#: POST runs on the delivery path, and a sick feedback endpoint must not
+#: hold delivery workers long (CodeAnt nitpick on #386). 5s is generous
+#: for a label batch; anything slower is logged and dropped.
+_FEEDBACK_TIMEOUT_SECONDS = 5.0
 
 
 def _default_session_factory() -> Session:
@@ -62,7 +66,7 @@ class FeedbackItem(BaseModel):
 
     token_type: str
     label: Literal["true_positive", "false_positive"]
-    token_hash: str | None = None
+    token_hash: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")
     token_raw: str | None = None
 
     @model_validator(mode="after")
@@ -100,29 +104,45 @@ def _classify_matches(
 
     A match is a true positive iff the ``hash_api_key()`` digest finds a
     real key row — the same found/not-found rule the revocation sink uses,
-    minus the side effects. Classification runs before revocation, which is
-    safe: a key revoked after classification was still a real key at label
-    time, and unknown tokens stay unknown (digests are unforgeable).
+    minus the side effects. Digests are computed locally for all matches,
+    then resolved with a SINGLE ``IN`` query: per-match SELECTs would put
+    up to 500 round-trips (the request cap) ahead of revocation, delaying
+    enforcement by seconds under load (Greptile P1 T-Rex on #386 measured
+    1.6s). Classification runs before revocation, which is safe: a key
+    revoked after classification was still a real key at label time, and
+    unknown tokens stay unknown (digests are unforgeable).
     """
     raw = bool(send_raw_enabled())
-    items = []
-    with session_factory() as session:
-        for match in matches:
+    entries = []
+    for match in matches:
+        # Per-match containment: one bad token skips only itself instead of
+        # discarding the whole batch's labels. Message-only: this frame
+        # binds raw tokens, so no traceback may be attached.
+        try:
             token = match.token
             digest = hash_api_key(token)
-            found = (
-                session.exec(select(ApiKey.id).where(ApiKey.key_hash == digest)).first()
-                is not None
-            )
-            items.append(
-                FeedbackItem(
-                    token_type=match.type,
-                    label=TRUE_POSITIVE if found else FALSE_POSITIVE,
-                    token_hash=None if raw else _sha256_token(token),
-                    token_raw=token if raw else None,
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("leak feedback skipped a match: %s", exc)
+            continue
+        entries.append((match, token, digest))
+    found: set[str] = set()
+    if entries:
+        with session_factory() as session:
+            rows = session.exec(
+                select(ApiKey.key_hash).where(
+                    ApiKey.key_hash.in_([digest for _, _, digest in entries])
                 )
-            )
-    return items
+            ).all()
+            found = set(rows)
+    return [
+        FeedbackItem(
+            token_type=match.type,
+            label=TRUE_POSITIVE if digest in found else FALSE_POSITIVE,
+            token_hash=None if raw else _sha256_token(token),
+            token_raw=token if raw else None,
+        )
+        for match, token, digest in entries
+    ]
 
 
 def prepare_leak_feedback(
@@ -133,18 +153,24 @@ def prepare_leak_feedback(
     Disabled flag short-circuits before touching the batch. Anything else
     that goes wrong (digest failure, DB outage) is message-logged without a
     traceback — the batch is still bound in this frame, and a
-    locals-capturing reporter must never observe it here.
+    locals-capturing reporter must never observe it here. The log call sits
+    outside the handler on purpose: logging with the traceback attached
+    (``logger.exception`` or ``exc_info``) would ship the callee frames that
+    bind the plaintext token.
     """
     if not feedback_enabled():
         return []
     if session_factory is None:
         session_factory = _default_session_factory
+    classification_error = None
     try:
         return _classify_matches(matches, session_factory)
     except Exception as exc:  # noqa: BLE001
-        del matches
-        logger.error("leak feedback skipped: %s", exc)
-        return []
+        classification_error = exc
+    del matches
+    if classification_error is not None:
+        logger.error("leak feedback skipped: %s", classification_error)
+    return []
 
 
 def send_leak_feedback(items: list[FeedbackItem]) -> None:
@@ -163,6 +189,12 @@ def send_leak_feedback(items: list[FeedbackItem]) -> None:
         logger.warning("leak feedback enabled but QWED_LEAK_FEEDBACK_URL is unset; dropping batch")
         return
     payload: list[dict[str, str]] = [item.model_dump(exclude_none=True) for item in items]
+    if any(item.token_raw for item in items) and urlparse(url).scheme != "https":
+        # Raw mode transmits plaintext: cleartext transport would expose it
+        # on the wire (CodeRabbit CWE-319 on #386). Hash digests are one-way
+        # and stay postable anywhere; only raw is gated.
+        logger.warning("leak feedback refused: raw mode requires an https endpoint")
+        return
     try:
         response = httpx.post(url, json=payload, timeout=_FEEDBACK_TIMEOUT_SECONDS)
         response.raise_for_status()

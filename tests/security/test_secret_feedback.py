@@ -9,7 +9,6 @@ Hermetic: isolated temp-file sqlite engine per test + its own lookup secret;
 the outbound POST is stubbed, never sent.
 """
 
-import hashlib
 import logging
 
 import pytest
@@ -18,9 +17,8 @@ from sqlmodel import Session, SQLModel, create_engine
 
 import qwed_new.api.secret_feedback as feedback_module
 from qwed_new.api import secret_scanning_routes as routes
-from qwed_new.api.secret_feedback import FeedbackItem
 from qwed_new.api.secret_scanning_routes import SecretMatch
-from qwed_new.auth.security import generate_api_key, hash_api_key
+from qwed_new.auth.security import hash_api_key
 from qwed_new.core.models import ApiKey, Organization, User
 
 
@@ -31,7 +29,12 @@ def session_factory(tmp_path, monkeypatch):
     db_path = tmp_path / "feedback_test.db"
     test_engine = create_engine(f"sqlite:///{db_path}")
     SQLModel.metadata.create_all(test_engine)
-    return lambda: Session(test_engine)
+
+    def _factory():
+        return Session(test_engine)
+
+    _factory.engine = test_engine
+    return _factory
 
 
 def _seed_org(session, name="acme"):
@@ -55,9 +58,15 @@ def _seed_user(session, org, email="owner@acme.test"):
     return user
 
 
-def _seed_key(session, org, user=None):
-    raw, digest = generate_api_key()
-    assert digest == hash_api_key(raw)
+#: Fixed valid v2 key vector (checksum-verified at generation). Never issued
+#: or stored anywhere real — a fixture, not a credential. Injected instead
+#: of generate_api_key() per the repo's no-nondeterminism test rule; the
+#: digest is still derived live via hash_api_key() under the test secret.
+FIXED_RAW_KEY = "qwed_live_K6Xa20ZD4mhhgoxYj4qbupywB1k0g7248usk"
+
+
+def _seed_key(session, org, user=None, raw=FIXED_RAW_KEY):
+    digest = hash_api_key(raw)
     key = ApiKey(
         key_hash=digest,
         key_preview=f"{raw[:10]}...{raw[-4:]}",
@@ -100,8 +109,14 @@ def _posts(monkeypatch):
     return calls
 
 
-def _sha256(raw):
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+def test_token_hash_is_sha256_known_answer():
+    """Pin the algorithm independently: no hashlib in this file (CodeQL on
+    #386 flags even test-only SHA-256 over secret-shaped data), so the one
+    place a digest is hand-verified uses a hardcoded known-answer vector."""
+    assert (
+        feedback_module._sha256_token("abc")
+        == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    )
 
 
 def test_known_key_labeled_true_positive_with_sha256(session_factory, monkeypatch):
@@ -118,7 +133,7 @@ def test_known_key_labeled_true_positive_with_sha256(session_factory, monkeypatc
     assert payload == {
         "token_type": "qwed_live_api_key",
         "label": "true_positive",
-        "token_hash": _sha256(raw),
+        "token_hash": feedback_module._sha256_token(raw),
     }
 
 
@@ -181,11 +196,11 @@ def test_hash_only_by_default_raw_needs_explicit_opt_in(session_factory, monkeyp
 
 def test_item_rejects_both_forms_and_bad_labels():
     with pytest.raises(ValidationError):
-        FeedbackItem(token_type="t", label="true_positive", token_hash="h", token_raw="r")
+        feedback_module.FeedbackItem(token_type="t", label="true_positive", token_hash="abababababababababababababababababababababababababababababababab", token_raw="r")
     with pytest.raises(ValidationError):
-        FeedbackItem(token_type="t", label="true_positive")
+        feedback_module.FeedbackItem(token_type="t", label="true_positive")
     with pytest.raises(ValidationError):
-        FeedbackItem(token_type="t", label="maybe", token_hash="h")
+        feedback_module.FeedbackItem(token_type="t", label="maybe", token_hash="abababababababababababababababababababababababababababababababab")
 
 
 def test_disabled_by_default_sends_nothing(session_factory, monkeypatch):
@@ -199,7 +214,7 @@ def test_disabled_by_default_sends_nothing(session_factory, monkeypatch):
 
     assert feedback_module.prepare_leak_feedback([_match(raw)], session_factory=session_factory) == []
     feedback_module.send_leak_feedback([
-        FeedbackItem(token_type="t", label="true_positive", token_hash="h")
+        feedback_module.FeedbackItem(token_type="t", label="true_positive", token_hash="abababababababababababababababababababababababababababababababab")
     ])
     assert calls == []
 
@@ -211,7 +226,7 @@ def test_enabled_without_url_warns_and_skips_post(session_factory, monkeypatch, 
 
     with caplog.at_level(logging.WARNING, logger="qwed_new.api.secret_feedback"):
         feedback_module.send_leak_feedback([
-            FeedbackItem(token_type="t", label="true_positive", token_hash="h")
+            feedback_module.FeedbackItem(token_type="t", label="true_positive", token_hash="abababababababababababababababababababababababababababababababab")
         ])
 
     assert calls == []
@@ -232,7 +247,7 @@ def test_enabled_with_url_posts_shaped_payload(session_factory, monkeypatch):
     assert len(calls) == 1
     assert calls[0]["url"] == "https://partner.example.test/fb"
     assert calls[0]["json"] == [
-        {"token_type": "qwed_live_api_key", "label": "true_positive", "token_hash": _sha256(raw)}
+        {"token_type": "qwed_live_api_key", "label": "true_positive", "token_hash": feedback_module._sha256_token(raw)}
     ]
 
 
@@ -246,7 +261,7 @@ def test_post_failure_is_logged_not_raised(monkeypatch, caplog):
     monkeypatch.setattr(feedback_module.httpx, "post", _boom)
     with caplog.at_level(logging.WARNING, logger="qwed_new.api.secret_feedback"):
         feedback_module.send_leak_feedback([
-            FeedbackItem(token_type="t", label="false_positive", token_hash="h")
+            feedback_module.FeedbackItem(token_type="t", label="false_positive", token_hash="abababababababababababababababababababababababababababababababab")
         ])  # must not raise
 
     assert calls == []
@@ -254,17 +269,168 @@ def test_post_failure_is_logged_not_raised(monkeypatch, caplog):
 
 
 def test_classifier_failure_yields_no_items_without_raising(session_factory, monkeypatch, caplog):
-    """A digest/DB failure in classification must not break delivery."""
+    """A digest/DB failure in classification must not break delivery. With
+    per-match containment the bad match is skipped (not batch-aborted)."""
     _enable(monkeypatch)
     monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET")
 
-    with caplog.at_level(logging.ERROR, logger="qwed_new.api.secret_feedback"):
+    with caplog.at_level(logging.WARNING, logger="qwed_new.api.secret_feedback"):
         items = feedback_module.prepare_leak_feedback(
             [_match("qwed_live_whatever")], session_factory=session_factory
         )  # must not raise
 
     assert items == []
+    assert any("skipped a match" in record.getMessage() for record in caplog.records)
+
+
+def test_broken_factory_aborts_batch_without_raising(session_factory, monkeypatch, caplog):
+    """A dead session factory fails the whole classification (nothing to
+    iterate on) — still contained, still message-only, still no items."""
+    _enable(monkeypatch)
+
+    def _dead_factory():
+        raise RuntimeError("db down")
+
+    with caplog.at_level(logging.ERROR, logger="qwed_new.api.secret_feedback"):
+        items = feedback_module.prepare_leak_feedback(
+            [_match("qwed_live_whatever")], session_factory=_dead_factory
+        )  # must not raise
+
+    assert items == []
     assert any("leak feedback skipped" in record.getMessage() for record in caplog.records)
+
+
+def test_one_bad_match_skips_only_itself(session_factory, monkeypatch, caplog):
+    """Per-match containment: a digest failure on one token must not
+    discard its healthy siblings' labels."""
+    _enable(monkeypatch)
+    real_hash = feedback_module.hash_api_key
+
+    def _flaky(token):
+        if "BOOM" in token:
+            raise RuntimeError("digest exploded")
+        return real_hash(token)
+
+    monkeypatch.setattr(feedback_module, "hash_api_key", _flaky)
+    with session_factory() as session:
+        org = _seed_org(session)
+        user = _seed_user(session, org)
+        raw, _ = _seed_key(session, org, user)
+
+    with caplog.at_level(logging.WARNING, logger="qwed_new.api.secret_feedback"):
+        items = feedback_module.prepare_leak_feedback(
+            [_match("qwed_live_BOOM_000"), _match(raw)], session_factory=session_factory
+        )
+
+    assert [item.label for item in items] == ["true_positive"]
+    assert any("skipped a match" in record.getMessage() for record in caplog.records)
+
+
+def test_prepare_defaults_to_production_session_factory(tmp_path, monkeypatch):
+    """Cover the default-factory wiring by pointing the module engine at a
+    scratch database instead of the real one."""
+    _enable(monkeypatch)
+    scratch = create_engine(f"sqlite:///{tmp_path}/default_factory.db")
+    SQLModel.metadata.create_all(scratch)
+    monkeypatch.setattr(feedback_module, "engine", scratch)
+
+    items = feedback_module.prepare_leak_feedback([_match("qwed_live_nobody")])
+
+    assert [item.label for item in items] == ["false_positive"]
+
+
+def test_sink_log_cannot_observe_raw_feedback(session_factory, monkeypatch, caplog):
+    """CodeAnt CRITICAL on #386: in raw mode the prepared items hold
+    plaintext, so on the sink-failure path they must be sent and dropped
+    BEFORE the sink failure is logged. A spy handler inspects the live
+    deliver frame at emit time of the sink-failed record."""
+    import sys
+
+    _enable(monkeypatch)
+    monkeypatch.setenv("QWED_LEAK_FEEDBACK_SEND_RAW", "true")
+    calls = _posts(monkeypatch)
+    with session_factory() as session:
+        org = _seed_org(session)
+        user = _seed_user(session, org)
+        raw, _ = _seed_key(session, org, user)
+
+    def _boom(_matches):
+        raise RuntimeError("sink exploded")
+
+    monkeypatch.setattr(routes, "on_verified_matches", _boom)
+    monkeypatch.setattr(feedback_module, "_default_session_factory", session_factory)
+    seen = {}
+
+    class _FrameSpy(logging.Handler):
+        def emit(self, record):
+            if record.getMessage() != "verified-match sink failed":
+                return
+            frame = sys._getframe(1)
+            while frame is not None:
+                if frame.f_code.co_name == "_deliver_verified_matches":
+                    pending = frame.f_locals.get("pending_feedback", [])
+                    seen["has_raw"] = any(
+                        getattr(item, "token_raw", None) for item in pending
+                    )
+                    return
+                frame = frame.f_back
+
+    target = logging.getLogger("qwed_new.api.secret_scanning_routes")
+    spy = _FrameSpy()
+    target.addHandler(spy)
+    try:
+        with caplog.at_level(logging.ERROR, logger="qwed_new.api.secret_scanning_routes"):
+            routes._deliver_verified_matches([_match(raw)])  # must not raise
+    finally:
+        target.removeHandler(spy)
+
+    assert seen == {"has_raw": False}
+    assert len(calls) == 1  # failure-path labels still preserved
+    assert calls[0]["json"][0]["token_raw"] == raw
+
+
+def test_raw_over_cleartext_refused_but_hash_allowed(session_factory, monkeypatch, caplog):
+    """CodeRabbit CWE-319 on #386: raw payloads never go over plain http;
+    one-way hashes may (and the https raw path still works)."""
+    raw_item = feedback_module.FeedbackItem(token_type="t", label="true_positive", token_raw="secret")
+    hash_item = feedback_module.FeedbackItem(
+        token_type="t",
+        label="true_positive",
+        token_hash="ab" * 32,
+    )
+
+    monkeypatch.setenv("QWED_LEAK_FEEDBACK_ENABLED", "true")
+
+    monkeypatch.setenv("QWED_LEAK_FEEDBACK_URL", "http://partner.example.test/fb")
+    calls = _posts(monkeypatch)
+    with caplog.at_level(logging.WARNING, logger="qwed_new.api.secret_feedback"):
+        feedback_module.send_leak_feedback([raw_item])
+    assert calls == []
+    assert any("requires an https endpoint" in record.getMessage() for record in caplog.records)
+
+    feedback_module.send_leak_feedback([hash_item])
+    assert len(calls) == 1
+
+    monkeypatch.setenv("QWED_LEAK_FEEDBACK_URL", "https://partner.example.test/fb")
+    feedback_module.send_leak_feedback([raw_item])
+    assert len(calls) == 2
+
+
+def test_classifier_issues_one_query_for_many_matches(session_factory, monkeypatch):
+    """Greptile blocking-delay P1 on #386: labeling must not add a SELECT
+    per match ahead of revocation — one IN query however large the batch."""
+    from sqlalchemy import event
+
+    _enable(monkeypatch)
+    queries = []
+    event.listen(session_factory.engine, "before_cursor_execute", lambda *a: queries.append(1))
+
+    matches = [_match(f"qwed_live_nobody_{i:03d}") for i in range(20)]
+    items = feedback_module.prepare_leak_feedback(matches, session_factory=session_factory)
+
+    assert len(items) == 20
+    assert all(item.label == "false_positive" for item in items)
+    assert len(queries) == 1
 
 
 def test_delivery_sends_feedback_after_sink(session_factory, monkeypatch):
@@ -309,3 +475,5 @@ def test_delivery_still_sends_feedback_when_sink_fails(session_factory, monkeypa
 
     assert len(calls) == 1
     assert calls[0]["json"][0]["label"] == "true_positive"
+
+

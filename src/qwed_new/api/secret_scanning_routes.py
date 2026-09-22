@@ -755,6 +755,15 @@ def _deliver_verified_matches(matches: list[SecretMatch]) -> None:
     try:
         on_verified_matches(matches)
     except Exception:
+        # Failure-path labels go out BEFORE any logging (CodeAnt CRITICAL
+        # on #386): in raw mode `pending_feedback` holds plaintext, and the
+        # sink-failure traceback below would expose it through this frame.
+        # Sending first also preserves labels a sink failure would strand.
+        # Then drop it so the later logs observe nothing. A sick feedback
+        # endpoint delays only these failure logs (bounded by the POST
+        # timeout) — revocation itself never waits on feedback.
+        feedback.send_leak_feedback(pending_feedback)
+        pending_feedback = []
         # Receipt first (counts only, never token material), then drop the
         # raw batch BEFORE logging: a locals-capturing reporter must not
         # observe the plaintext batch through this frame (#380 follow-up —
@@ -787,5 +796,7 @@ def _deliver_verified_matches(matches: list[SecretMatch]) -> None:
         logger.exception("verified-match sink failed")
     # Feedback goes out after the sink attempt either way: labels describe
     # what the lookup found, independent of whether revocation succeeded.
-    # `pending_feedback` is a separate binding, unaffected by `del matches`.
+    # `pending_feedback` is a separate binding, unaffected by `del matches`;
+    # on the failure path it was already sent and cleared above, so this is
+    # a no-op there.
     feedback.send_leak_feedback(pending_feedback)
