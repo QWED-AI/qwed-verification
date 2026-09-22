@@ -6,6 +6,7 @@ from typing import Optional, Annotated
 from sqlmodel import Session, select
 from datetime import datetime, timezone
 import asyncio
+import hashlib
 import os
 import logging
 import time
@@ -1394,6 +1395,29 @@ async def health_check():
         "service": "QWED Platform",
         "version": APP_VERSION,
         "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+@app.get("/health/identity")
+async def server_identity():
+    """
+    Fingerprints of the active server secret set (issue #376).
+
+    Lets `qwed init` prove the healthy localhost server it found actually
+    holds its secrets before bootstrapping an API key against it — a foreign
+    process on the same port (or a stale server on older values) fails the
+    comparison and init refuses to continue. One-way SHA-256 digests only:
+    the preimages are 48-byte random values, so the fingerprints authenticate
+    without exposing anything brute-forceable. Unauthenticated like /health
+    (init has no credentials yet); loopback-scoped by deployment.
+    """
+    def _fingerprint(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    return {
+        "identity": {
+            "jwt_sha256": _fingerprint(os.getenv("QWED_JWT_SECRET_KEY", "")),
+            "lookup_sha256": _fingerprint(os.getenv("QWED_API_KEY_LOOKUP_SECRET", "")),
+        }
     }
 
 @app.get("/metrics")

@@ -1064,6 +1064,67 @@ def _resolve_organization_name(organization_name: Optional[str], non_interactive
     return resolved_org
 
 
+def _server_identity_fingerprint(secret: str) -> str:
+    """One-way fingerprint of a local secret for the identity handshake."""
+    import hashlib
+
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+
+
+def _verify_server_identity(server_url: str, jwt_secret: str, lookup_secret: str) -> None:
+    """Prove the healthy server holds our secret set before bootstrap (issue #376).
+
+    A healthy `/health` only proves SOMETHING answers on the port — a foreign
+    process (or a stale server on older values, which #375's guard cannot see
+    when our secrets were retained) would otherwise receive the bootstrap and
+    issue a key the intended server cannot resolve after restart. Compares
+    the server's one-way fingerprints against locally computed ones and
+    raises with remediation on any mismatch, missing endpoint, or transport
+    failure. Callers fail closed (exit) — never bootstrap on unproven identity.
+    """
+    import hmac
+
+    import httpx
+
+    try:
+        response = httpx.get(f"{server_url.rstrip('/')}/health/identity", timeout=5.0)
+    except (httpx.HTTPError, ValueError) as exc:
+        raise RuntimeError(
+            "server identity check failed: could not reach the identity endpoint. "
+            "Restart the local server, then re-run init."
+        ) from exc
+    if response.status_code != 200:
+        raise RuntimeError(
+            "server identity check failed: the server does not expose its secret "
+            "fingerprints (older server or foreign process). "
+            "Restart the local server, then re-run init."
+        )
+    try:
+        identity = response.json().get("identity", {})
+        remote = (identity.get("jwt_sha256", ""), identity.get("lookup_sha256", ""))
+    except (ValueError, AttributeError) as exc:
+        raise RuntimeError(
+            "server identity check failed: unreadable identity response. "
+            "Restart the local server, then re-run init."
+        ) from exc
+    expected = (
+        _server_identity_fingerprint(jwt_secret or ""),
+        _server_identity_fingerprint(lookup_secret or ""),
+    )
+    mismatched = [
+        name
+        for name, got, want in zip(("jwt", "lookup"), remote, expected)
+        if not hmac.compare_digest(str(got), str(want))
+    ]
+    if mismatched:
+        raise RuntimeError(
+            f"server identity check failed: the running server holds a different "
+            f"{' and '.join(mismatched)} secret(s) than this project. "
+            "Restart the server so it loads this project's .env secrets, then re-run init. "
+            "Never bootstrap keys against a server you don't recognize."
+        )
+
+
 def _start_server_and_bootstrap(
     normalized_server_url: str,
     jwt_secret: str,
@@ -1106,6 +1167,18 @@ def _start_server_and_bootstrap(
         click.echo("  [x] Server was already running with older secrets.", err=True)
         click.echo("      Restart it, then re-run init so keys are issued under the persisted secrets.", err=True)
         sys.exit(1)
+
+    # Identity proof runs on BOTH paths (issue #376): a reused server may be
+    # foreign or stale despite retained secrets (health is only a 200 check),
+    # and a fresh spawn may have lost a port race after the health poll.
+    # Either way, no bootstrap against an unproven server.
+    try:
+        _verify_server_identity(normalized_server_url, jwt_secret, lookup_secret)
+    except Exception as exc:
+        logger.exception("Server identity verification failed")
+        click.echo(f"  [x] Server identity check failed: {exc}", err=True)
+        sys.exit(1)
+    click.echo("  [ok] Server identity verified")
 
     try:
         qwed_api_key, actual_org_name = _bootstrap_api_key(normalized_server_url, organization_name)

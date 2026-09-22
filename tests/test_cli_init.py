@@ -41,6 +41,20 @@ def runner():
 
 
 @pytest.fixture(autouse=True)
+def _stub_server_identity():
+    """Pass the server-identity handshake by default (issue #376).
+
+    These init-flow tests stub the server layer (`_ensure_local_server_running`,
+    `_bootstrap_api_key`) without a live server behind it, so the real
+    handshake would fail closed on connection-refused. The handshake itself
+    is covered in tests/test_server_identity_handshake.py against a stubbed
+    httpx layer; tests here assert init's flow, not the proof. Tests needing
+    handshake failures patch over this (mismatch/404/unreachable)."""
+    with patch("qwed_sdk.cli._verify_server_identity", return_value=None):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _stub_lookup_secret():
     """Pin the lookup secret and root seeding so init-path tests never mint
     real randomness into the process env and never read the developer's real
