@@ -33,7 +33,7 @@
   ],
   "excluded_prefixes": ["qwed_test_"],
   "post_processing": "v2: recompute CRC32 over the first 30 body characters and Base62-encode to width 6; accept only on exact match with the trailing 6. v1: enforce exact shape only (no checksum). Discard any qwed_test_ match.",
-  "delimiters": "none — standard word boundaries",
+  "delimiters": "charset-complement lookarounds per type (see anchored_pattern); word boundaries are wrong here — a v1 body may end in hyphen, which no word boundary borders",
   "ops": {
     "webhook_path": "/webhooks/secret-scanning",
     "webhook_url": null,
