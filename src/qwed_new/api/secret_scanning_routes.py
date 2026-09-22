@@ -37,6 +37,8 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
+from qwed_new.api import secret_feedback as feedback
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -744,9 +746,24 @@ async def secret_scanning_webhook(request: Request, background: BackgroundTasks)
 
 def _deliver_verified_matches(matches: list[SecretMatch]) -> None:
     """Background delivery to the sink; the 200 was already sent."""
+    # Feedback labels are derived up front (read-only digests; only hashes
+    # travel onward in the default mode). The sink below may delete the
+    # batch or abort loudly, and the outbound POST must not delay
+    # revocation — so prepare here, deliver after. Both steps are
+    # best-effort, flag-gated, and never raise (#369).
+    pending_feedback = feedback.prepare_leak_feedback(matches)
     try:
         on_verified_matches(matches)
     except Exception:
+        # Failure-path labels go out BEFORE any logging (CodeAnt CRITICAL
+        # on #386): in raw mode `pending_feedback` holds plaintext, and the
+        # sink-failure traceback below would expose it through this frame.
+        # Sending first also preserves labels a sink failure would strand.
+        # Then drop it so the later logs observe nothing. A sick feedback
+        # endpoint delays only these failure logs (bounded by the POST
+        # timeout) — revocation itself never waits on feedback.
+        feedback.send_leak_feedback(pending_feedback)
+        pending_feedback = []
         # Receipt first (counts only, never token material), then drop the
         # raw batch BEFORE logging: a locals-capturing reporter must not
         # observe the plaintext batch through this frame (#380 follow-up —
@@ -777,3 +794,9 @@ def _deliver_verified_matches(matches: list[SecretMatch]) -> None:
         # #368's sink must never crash the already-acknowledged response; log
         # with the traceback so the batch can be re-delivered or investigated.
         logger.exception("verified-match sink failed")
+    # Feedback goes out after the sink attempt either way: labels describe
+    # what the lookup found, independent of whether revocation succeeded.
+    # `pending_feedback` is a separate binding, unaffected by `del matches`;
+    # on the failure path it was already sent and cleared above, so this is
+    # a no-op there.
+    feedback.send_leak_feedback(pending_feedback)
