@@ -1,0 +1,43 @@
+{
+  "format": "qwed-api-key-format",
+  "format_version": "1.0",
+  "types": [
+    {
+      "name": "QWED Live API Key v2",
+      "slug": "qwed_live_api_key",
+      "prefix": "qwed_live_",
+      "body_pattern": "[A-Za-z0-9]{36}",
+      "full_pattern": "qwed_live_[A-Za-z0-9]{36}",
+      "status": "current",
+      "entropy_bits": 178.6,
+      "checksum": {
+        "algorithm": "CRC32 (IEEE, zlib)",
+        "input": "first 30 body characters, ASCII encoded",
+        "encoding": "Base62, alphabet 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz, zero-padded to width 6",
+        "position": "last 6 body characters",
+        "verifies_offline": true
+      }
+    },
+    {
+      "name": "QWED Live API Key v1 legacy",
+      "slug": "qwed_live_api_key_v1",
+      "prefix": "qwed_live_",
+      "body_pattern": "[A-Za-z0-9_-]{43}",
+      "full_pattern": "qwed_live_[A-Za-z0-9_-]{43}",
+      "status": "legacy-accepted",
+      "entropy_bits": 256,
+      "checksum": null
+    }
+  ],
+  "excluded_prefixes": ["qwed_test_"],
+  "post_processing": "v2: recompute CRC32 over the first 30 body characters and Base62-encode to width 6; accept only on exact match with the trailing 6. v1: enforce exact shape only (no checksum). Discard any qwed_test_ match.",
+  "delimiters": "none — standard word boundaries",
+  "ops": {
+    "webhook_path": "/webhooks/secret-scanning",
+    "webhook_url": null,
+    "webhook_url_status": "tbd — public host unconfirmed; field left blank on the partnership form (allowed)",
+    "sample_source": null,
+    "sample_source_status": "tbd — confirm how partners obtain sample credentials",
+    "vectors_file": "spec/api-key-test-vectors.json"
+  }
+}
