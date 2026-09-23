@@ -7,6 +7,7 @@ from sqlmodel import Session, select
 from datetime import datetime, timezone
 import asyncio
 import hashlib
+import hmac
 import os
 import logging
 import time
@@ -1398,25 +1399,42 @@ async def health_check():
     }
 
 @app.get("/health/identity")
-async def server_identity():
+async def server_identity(nonce: str = ""):
     """
-    Fingerprints of the active server secret set (issue #376).
+    Challenge-response proof of the active server secret set (issue #376).
 
     Lets `qwed init` prove the healthy localhost server it found actually
     holds its secrets before bootstrapping an API key against it — a foreign
     process on the same port (or a stale server on older values) fails the
-    comparison and init refuses to continue. One-way SHA-256 digests only:
-    the preimages are 48-byte random values, so the fingerprints authenticate
-    without exposing anything brute-forceable. Unauthenticated like /health
-    (init has no credentials yet); loopback-scoped by deployment.
+    comparison and init refuses to continue.
+
+    The caller supplies a fresh ``nonce``; the server returns domain-separated
+    HMAC-SHA256 tags over it under each secret. Deterministic fingerprints
+    would be replayable by any same-host process that once observed them
+    (CodeRabbit CWE-294 + Greptile P1 on #388); binding the response to a
+    caller nonce makes a captured response useless for any later handshake.
+    Preimages stay server-side in all cases. Unauthenticated like /health
+    (init has no credentials yet); loopback-scoped by deployment. Missing
+    server secrets fail closed with 503 rather than proving anything.
     """
-    def _fingerprint(value: str) -> str:
-        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    if not nonce or len(nonce) > 128:
+        raise HTTPException(status_code=400, detail="nonce is required (max 128 characters)")
+    jwt_secret = os.getenv("QWED_JWT_SECRET_KEY", "")
+    lookup_secret = os.getenv("QWED_API_KEY_LOOKUP_SECRET", "")
+    if not jwt_secret or not lookup_secret:
+        raise HTTPException(status_code=503, detail="server secrets not configured")
+
+    def _prove(secret: str, domain: str) -> str:
+        return hmac.new(
+            secret.encode(),
+            f"qwed-server-identity-v1:{domain}:{nonce}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
 
     return {
         "identity": {
-            "jwt_sha256": _fingerprint(os.getenv("QWED_JWT_SECRET_KEY", "")),
-            "lookup_sha256": _fingerprint(os.getenv("QWED_API_KEY_LOOKUP_SECRET", "")),
+            "jwt_hmac": _prove(jwt_secret, "jwt"),
+            "lookup_hmac": _prove(lookup_secret, "lookup"),
         }
     }
 

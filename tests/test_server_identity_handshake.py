@@ -1,37 +1,53 @@
 """Server-identity handshake before API-key bootstrap (issue #376).
 
 A healthy /health proves only that SOMETHING answers on the port. These
-tests pin the proof that matters: the server must present fingerprints of
-the exact secret set init holds, otherwise init refuses to bootstrap.
+tests pin the proof that matters: the server must answer a fresh
+caller nonce with domain-separated HMACs under the exact secret set init
+holds, otherwise init refuses to bootstrap.
 
 Hermetic: the server endpoint is called directly (no socket), the CLI
-helper runs against a stubbed httpx.get (no network).
+helper runs against a stubbed httpx.get (no network). The stub plays an
+honest server — it computes real proofs for the requested nonce — so the
+round trip, mismatches, and replay rejection are all exercised for real.
 """
 
 import asyncio
 import hashlib
-import os
+import hmac
 
 import pytest
+from fastapi import HTTPException
 
 from qwed_new.api.main import server_identity
 from qwed_sdk import cli as cli_module
 
 
-def _digest(value):
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+def _proof(secret, domain, nonce):
+    return hmac.new(
+        secret.encode(),
+        f"qwed-server-identity-v1:{domain}:{nonce}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
 
 
-def test_identity_endpoint_returns_fingerprints_not_secrets(monkeypatch):
+def test_proof_is_domain_separated_hmac():
+    assert cli_module._identity_proof("s", "jwt", "n") == _proof("s", "jwt", "n")
+    assert cli_module._identity_proof("s", "lookup", "n") == _proof("s", "lookup", "n")
+    assert cli_module._identity_proof("s", "jwt", "n") != cli_module._identity_proof(
+        "s", "lookup", "n"
+    )
+
+
+def test_endpoint_proves_requested_nonce(monkeypatch):
     monkeypatch.setenv("QWED_JWT_SECRET_KEY", "local-jwt-secret")
     monkeypatch.setenv("QWED_API_KEY_LOOKUP_SECRET", "local-lookup-secret")
 
-    body = asyncio.run(server_identity())
+    body = asyncio.run(server_identity(nonce="caller-nonce-123"))
 
     assert body == {
         "identity": {
-            "jwt_sha256": _digest("local-jwt-secret"),
-            "lookup_sha256": _digest("local-lookup-secret"),
+            "jwt_hmac": _proof("local-jwt-secret", "jwt", "caller-nonce-123"),
+            "lookup_hmac": _proof("local-lookup-secret", "lookup", "caller-nonce-123"),
         }
     }
     rendered = repr(body)
@@ -39,13 +55,24 @@ def test_identity_endpoint_returns_fingerprints_not_secrets(monkeypatch):
     assert "local-lookup-secret" not in rendered
 
 
-def test_identity_endpoint_missing_env_fingerprints_empty(monkeypatch):
+def test_endpoint_rejects_missing_or_wild_nonce():
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(server_identity(nonce=""))
+    assert excinfo.value.status_code == 400
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(server_identity(nonce="x" * 129))
+    assert excinfo.value.status_code == 400
+
+
+def test_endpoint_fails_closed_without_server_secrets(monkeypatch):
+    """Missing env must 503, never prove the empty string (Sentry HIGH)."""
     monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
     monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
 
-    body = asyncio.run(server_identity())
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(server_identity(nonce="caller-nonce-123"))
 
-    assert body["identity"] == {"jwt_sha256": _digest(""), "lookup_sha256": _digest("")}
+    assert excinfo.value.status_code == 503
 
 
 class _FakeResponse:
@@ -60,27 +87,36 @@ class _FakeResponse:
         return self._payload
 
 
-def _identity_payload(jwt_secret="s3cr3t-jwt", lookup_secret="s3cr3t-lookup"):
-    return {
-        "identity": {
-            "jwt_sha256": _digest(jwt_secret),
-            "lookup_sha256": _digest(lookup_secret),
-        }
-    }
+def _honest_server(monkeypatch, jwt_secret="s3cr3t-jwt", lookup_secret="s3cr3t-lookup"):
+    """Stub httpx.get with a server that honestly proves whatever nonce the
+    CLI sends — mismatches then come only from genuinely different secrets."""
 
-
-def _stub_get(monkeypatch, response=None, error=None):
-    def _fake(url, timeout=None):
+    def _fake(url, params=None, timeout=None):
         assert url.endswith("/health/identity")
+        nonce = (params or {}).get("nonce", "")
+        return _FakeResponse(
+            payload={
+                "identity": {
+                    "jwt_hmac": cli_module._identity_proof(jwt_secret, "jwt", nonce),
+                    "lookup_hmac": cli_module._identity_proof(lookup_secret, "lookup", nonce),
+                }
+            }
+        )
+
+    monkeypatch.setattr("httpx.get", _fake)
+
+
+def _fixed_response(monkeypatch, payload=None, status_code=200, broken=False, error=None):
+    def _fake(url, params=None, timeout=None):
         if error is not None:
             raise error
-        return response
+        return _FakeResponse(status_code=status_code, payload=payload, broken=broken)
 
     monkeypatch.setattr("httpx.get", _fake)
 
 
 def test_matching_identity_passes(monkeypatch):
-    _stub_get(monkeypatch, response=_FakeResponse(payload=_identity_payload()))
+    _honest_server(monkeypatch)
 
     assert (
         cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup")
@@ -88,11 +124,20 @@ def test_matching_identity_passes(monkeypatch):
     )
 
 
+def test_empty_local_secrets_fail_closed_without_network(monkeypatch):
+    """Empty local secrets must never reach the wire: both sides proving
+    the empty string would match (Sentry HIGH on #388)."""
+    calls = []
+    monkeypatch.setattr("httpx.get", lambda *args, **kwargs: calls.append(1))
+
+    with pytest.raises(RuntimeError, match="local secrets are missing"):
+        cli_module._verify_server_identity("http://localhost:8000", "", "s3cr3t-lookup")
+
+    assert calls == []
+
+
 def test_jwt_mismatch_fails_closed_with_remediation(monkeypatch):
-    _stub_get(
-        monkeypatch,
-        response=_FakeResponse(payload=_identity_payload(jwt_secret="foreign-jwt")),
-    )
+    _honest_server(monkeypatch, jwt_secret="foreign-jwt")
 
     with pytest.raises(RuntimeError) as excinfo:
         cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup")
@@ -103,35 +148,48 @@ def test_jwt_mismatch_fails_closed_with_remediation(monkeypatch):
 
 
 def test_lookup_mismatch_fails_closed(monkeypatch):
-    _stub_get(
-        monkeypatch,
-        response=_FakeResponse(payload=_identity_payload(lookup_secret="foreign-lookup")),
-    )
+    _honest_server(monkeypatch, lookup_secret="foreign-lookup")
 
     with pytest.raises(RuntimeError, match="lookup"):
+        cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup")
+
+
+def test_captured_response_rejected_for_other_nonce(monkeypatch):
+    """Replay regression (CodeRabbit CWE-294 on #388): a response captured
+    for one nonce must fail verification under a fresh nonce."""
+    stale_nonce = "stale-nonce-from-earlier-handshake"
+    stale = {
+        "identity": {
+            "jwt_hmac": cli_module._identity_proof("s3cr3t-jwt", "jwt", stale_nonce),
+            "lookup_hmac": cli_module._identity_proof("s3cr3t-lookup", "lookup", stale_nonce),
+        }
+    }
+    _fixed_response(monkeypatch, payload=stale)
+
+    with pytest.raises(RuntimeError, match="different"):
         cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup")
 
 
 def test_missing_endpoint_fails_closed(monkeypatch):
     """A server predating the identity endpoint cannot prove itself: an old
     server and a foreign process are indistinguishable here, so both stop."""
-    _stub_get(monkeypatch, response=_FakeResponse(status_code=404, payload={}))
+    _fixed_response(monkeypatch, payload={}, status_code=404)
 
-    with pytest.raises(RuntimeError, match="does not expose"):
+    with pytest.raises(RuntimeError, match="did not prove"):
         cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup")
 
 
 def test_unreachable_server_fails_closed(monkeypatch):
     import httpx
 
-    _stub_get(monkeypatch, error=httpx.ConnectError("refused"))
+    _fixed_response(monkeypatch, error=httpx.ConnectError("refused"))
 
     with pytest.raises(RuntimeError, match="could not reach"):
         cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup")
 
 
 def test_malformed_identity_fails_closed(monkeypatch):
-    _stub_get(monkeypatch, response=_FakeResponse(payload={}, broken=True))
+    _fixed_response(monkeypatch, payload={}, broken=True)
 
     with pytest.raises(RuntimeError, match="unreadable"):
         cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup")
@@ -144,7 +202,7 @@ def test_bootstrap_runs_after_successful_handshake(monkeypatch):
     monkeypatch.setattr(
         cli_module, "_bootstrap_api_key", lambda *args: ("qwed_live_new_key", "demo-org")
     )
-    _stub_get(monkeypatch, response=_FakeResponse(payload=_identity_payload()))
+    _honest_server(monkeypatch)
 
     key, org = cli_module._start_server_and_bootstrap(
         normalized_server_url="http://localhost:8000",
@@ -165,10 +223,7 @@ def test_bootstrap_blocked_on_identity_mismatch(monkeypatch):
     monkeypatch.setattr(
         cli_module, "_bootstrap_api_key", lambda *args: bootstrapped.append(1)
     )
-    _stub_get(
-        monkeypatch,
-        response=_FakeResponse(payload=_identity_payload(jwt_secret="foreign-jwt")),
-    )
+    _honest_server(monkeypatch, jwt_secret="foreign-jwt")
 
     with pytest.raises(SystemExit):
         cli_module._start_server_and_bootstrap(
@@ -180,26 +235,3 @@ def test_bootstrap_blocked_on_identity_mismatch(monkeypatch):
         )
 
     assert bootstrapped == []
-
-
-def test_fingerprint_helper_is_sha256():
-    assert cli_module._server_identity_fingerprint("abc") == (
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-    )
-    assert "abc" not in cli_module._server_identity_fingerprint("abc")
-
-
-def test_endpoint_never_echoes_raw_values(monkeypatch):
-    """Belt and suspenders alongside the direct test: unique markers must
-    not appear anywhere in the rendered response."""
-    jwt_marker = "jwt-marker-not-a-secret"
-    lookup_marker = "lookup-marker-not-a-secret"
-    monkeypatch.setenv("QWED_JWT_SECRET_KEY", jwt_marker)
-    monkeypatch.setenv("QWED_API_KEY_LOOKUP_SECRET", lookup_marker)
-    os.environ.pop("UNRELATED", None)
-
-    body = asyncio.run(server_identity())
-
-    assert jwt_marker not in repr(body)
-    assert lookup_marker not in repr(body)
-    assert body["identity"]["jwt_sha256"] == _digest(jwt_marker)

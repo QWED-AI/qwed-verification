@@ -1064,11 +1064,16 @@ def _resolve_organization_name(organization_name: Optional[str], non_interactive
     return resolved_org
 
 
-def _server_identity_fingerprint(secret: str) -> str:
-    """One-way fingerprint of a local secret for the identity handshake."""
+def _identity_proof(secret: str, domain: str, nonce: str) -> str:
+    """Domain-separated HMAC of the handshake nonce under one secret."""
     import hashlib
+    import hmac
 
-    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+    return hmac.new(
+        secret.encode(),
+        f"qwed-server-identity-v1:{domain}:{nonce}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def _verify_server_identity(server_url: str, jwt_secret: str, lookup_secret: str) -> None:
@@ -1077,17 +1082,36 @@ def _verify_server_identity(server_url: str, jwt_secret: str, lookup_secret: str
     A healthy `/health` only proves SOMETHING answers on the port — a foreign
     process (or a stale server on older values, which #375's guard cannot see
     when our secrets were retained) would otherwise receive the bootstrap and
-    issue a key the intended server cannot resolve after restart. Compares
-    the server's one-way fingerprints against locally computed ones and
-    raises with remediation on any mismatch, missing endpoint, or transport
-    failure. Callers fail closed (exit) — never bootstrap on unproven identity.
+    issue a key the intended server cannot resolve after restart. The CLI
+    mints a fresh nonce per handshake and verifies domain-separated HMACs
+    over it: a captured response is useless for any later handshake
+    (replay-safe, unlike deterministic fingerprints). Empty local secrets
+    fail closed immediately — otherwise both sides would prove the empty
+    string and match (Sentry HIGH on #388). Callers fail closed (exit) —
+    never bootstrap on unproven identity.
+
+    Residual TOCTOU (a process rebinding the port between this proof and the
+    bootstrap) is accepted: a local attacker capable of that already owns
+    secrets at rest, so it is outside this handshake's threat model of
+    accidental staleness (CodeAnt race note on #388).
     """
     import hmac
+    import secrets as secrets_module
 
     import httpx
 
+    if not jwt_secret or not lookup_secret:
+        raise RuntimeError(
+            "server identity check failed: local secrets are missing. "
+            "Re-run init so fresh secrets are generated and persisted."
+        )
+    nonce = secrets_module.token_urlsafe(24)
     try:
-        response = httpx.get(f"{server_url.rstrip('/')}/health/identity", timeout=5.0)
+        response = httpx.get(
+            f"{server_url.rstrip('/')}/health/identity",
+            params={"nonce": nonce},
+            timeout=5.0,
+        )
     except (httpx.HTTPError, ValueError) as exc:
         raise RuntimeError(
             "server identity check failed: could not reach the identity endpoint. "
@@ -1095,21 +1119,21 @@ def _verify_server_identity(server_url: str, jwt_secret: str, lookup_secret: str
         ) from exc
     if response.status_code != 200:
         raise RuntimeError(
-            "server identity check failed: the server does not expose its secret "
-            "fingerprints (older server or foreign process). "
-            "Restart the local server, then re-run init."
+            "server identity check failed: the server did not prove its secrets "
+            "(older server without the handshake, foreign process, or unconfigured "
+            "server). Restart the local server, then re-run init."
         )
     try:
         identity = response.json().get("identity", {})
-        remote = (identity.get("jwt_sha256", ""), identity.get("lookup_sha256", ""))
+        remote = (identity.get("jwt_hmac", ""), identity.get("lookup_hmac", ""))
     except (ValueError, AttributeError) as exc:
         raise RuntimeError(
             "server identity check failed: unreadable identity response. "
             "Restart the local server, then re-run init."
         ) from exc
     expected = (
-        _server_identity_fingerprint(jwt_secret or ""),
-        _server_identity_fingerprint(lookup_secret or ""),
+        _identity_proof(jwt_secret, "jwt", nonce),
+        _identity_proof(lookup_secret, "lookup", nonce),
     )
     mismatched = [
         name
