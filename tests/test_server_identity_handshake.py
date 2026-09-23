@@ -56,11 +56,13 @@ def test_endpoint_proves_requested_nonce(monkeypatch):
 
 
 def test_endpoint_rejects_missing_or_wild_nonce():
+    missing = server_identity(nonce="")
+    wild = server_identity(nonce="x" * 129)
     with pytest.raises(HTTPException) as excinfo:
-        asyncio.run(server_identity(nonce=""))
+        asyncio.run(missing)
     assert excinfo.value.status_code == 400
     with pytest.raises(HTTPException) as excinfo:
-        asyncio.run(server_identity(nonce="x" * 129))
+        asyncio.run(wild)
     assert excinfo.value.status_code == 400
 
 
@@ -69,8 +71,9 @@ def test_endpoint_fails_closed_without_server_secrets(monkeypatch):
     monkeypatch.delenv("QWED_JWT_SECRET_KEY", raising=False)
     monkeypatch.delenv("QWED_API_KEY_LOOKUP_SECRET", raising=False)
 
+    unconfigured = server_identity(nonce="caller-nonce-123")
     with pytest.raises(HTTPException) as excinfo:
-        asyncio.run(server_identity(nonce="caller-nonce-123"))
+        asyncio.run(unconfigured)
 
     assert excinfo.value.status_code == 503
 
@@ -119,7 +122,7 @@ def test_matching_identity_passes(monkeypatch):
     _honest_server(monkeypatch)
 
     assert (
-        cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup")
+        cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup", nonce="test-nonce-1")
         is None
     )
 
@@ -131,7 +134,7 @@ def test_empty_local_secrets_fail_closed_without_network(monkeypatch):
     monkeypatch.setattr("httpx.get", lambda *args, **kwargs: calls.append(1))
 
     with pytest.raises(RuntimeError, match="local secrets are missing"):
-        cli_module._verify_server_identity("http://localhost:8000", "", "s3cr3t-lookup")
+        cli_module._verify_server_identity("http://localhost:8000", "", "s3cr3t-lookup", nonce="test-nonce-1")
 
     assert calls == []
 
@@ -140,7 +143,7 @@ def test_jwt_mismatch_fails_closed_with_remediation(monkeypatch):
     _honest_server(monkeypatch, jwt_secret="foreign-jwt")
 
     with pytest.raises(RuntimeError) as excinfo:
-        cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup")
+        cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup", nonce="test-nonce-1")
 
     message = str(excinfo.value)
     assert "jwt" in message
@@ -151,23 +154,28 @@ def test_lookup_mismatch_fails_closed(monkeypatch):
     _honest_server(monkeypatch, lookup_secret="foreign-lookup")
 
     with pytest.raises(RuntimeError, match="lookup"):
-        cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup")
+        cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup", nonce="test-nonce-1")
 
 
 def test_captured_response_rejected_for_other_nonce(monkeypatch):
-    """Replay regression (CodeRabbit CWE-294 on #388): a response captured
-    for one nonce must fail verification under a fresh nonce."""
-    stale_nonce = "stale-nonce-from-earlier-handshake"
-    stale = {
+    """Replay regression (CodeRabbit CWE-294 on #388): two real handshakes
+    with differing nonces — the first proof, replayed verbatim, fails the
+    second handshake because it binds the other nonce."""
+    first_proof = {
         "identity": {
-            "jwt_hmac": cli_module._identity_proof("s3cr3t-jwt", "jwt", stale_nonce),
-            "lookup_hmac": cli_module._identity_proof("s3cr3t-lookup", "lookup", stale_nonce),
+            "jwt_hmac": cli_module._identity_proof("s3cr3t-jwt", "jwt", "nonce-A"),
+            "lookup_hmac": cli_module._identity_proof("s3cr3t-lookup", "lookup", "nonce-A"),
         }
     }
-    _fixed_response(monkeypatch, payload=stale)
+    _fixed_response(monkeypatch, payload=first_proof)
 
+    cli_module._verify_server_identity(
+        "http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup", nonce="nonce-A"
+    )
     with pytest.raises(RuntimeError, match="different"):
-        cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup")
+        cli_module._verify_server_identity(
+            "http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup", nonce="nonce-B"
+        )
 
 
 def test_missing_endpoint_fails_closed(monkeypatch):
@@ -176,7 +184,7 @@ def test_missing_endpoint_fails_closed(monkeypatch):
     _fixed_response(monkeypatch, payload={}, status_code=404)
 
     with pytest.raises(RuntimeError, match="did not prove"):
-        cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup")
+        cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup", nonce="test-nonce-1")
 
 
 def test_unreachable_server_fails_closed(monkeypatch):
@@ -185,14 +193,14 @@ def test_unreachable_server_fails_closed(monkeypatch):
     _fixed_response(monkeypatch, error=httpx.ConnectError("refused"))
 
     with pytest.raises(RuntimeError, match="could not reach"):
-        cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup")
+        cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup", nonce="test-nonce-1")
 
 
 def test_malformed_identity_fails_closed(monkeypatch):
     _fixed_response(monkeypatch, payload={}, broken=True)
 
     with pytest.raises(RuntimeError, match="unreadable"):
-        cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup")
+        cli_module._verify_server_identity("http://localhost:8000", "s3cr3t-jwt", "s3cr3t-lookup", nonce="test-nonce-1")
 
 
 def test_bootstrap_runs_after_successful_handshake(monkeypatch):
@@ -235,3 +243,4 @@ def test_bootstrap_blocked_on_identity_mismatch(monkeypatch):
         )
 
     assert bootstrapped == []
+

@@ -1076,7 +1076,7 @@ def _identity_proof(secret: str, domain: str, nonce: str) -> str:
     ).hexdigest()
 
 
-def _verify_server_identity(server_url: str, jwt_secret: str, lookup_secret: str) -> None:
+def _verify_server_identity(server_url: str, jwt_secret: str, lookup_secret: str, nonce: str) -> None:
     """Prove the healthy server holds our secret set before bootstrap (issue #376).
 
     A healthy `/health` only proves SOMETHING answers on the port — a foreign
@@ -1085,10 +1085,11 @@ def _verify_server_identity(server_url: str, jwt_secret: str, lookup_secret: str
     issue a key the intended server cannot resolve after restart. The CLI
     mints a fresh nonce per handshake and verifies domain-separated HMACs
     over it: a captured response is useless for any later handshake
-    (replay-safe, unlike deterministic fingerprints). Empty local secrets
-    fail closed immediately — otherwise both sides would prove the empty
-    string and match (Sentry HIGH on #388). Callers fail closed (exit) —
-    never bootstrap on unproven identity.
+    (replay-safe, unlike deterministic fingerprints). The nonce is injected
+    by the caller (fresh per init run) so this function stays deterministic
+    and testable. Empty local secrets fail closed immediately — otherwise
+    both sides would prove the empty string and match (Sentry HIGH on #388).
+    Callers fail closed (exit) — never bootstrap on unproven identity.
 
     Residual TOCTOU (a process rebinding the port between this proof and the
     bootstrap) is accepted: a local attacker capable of that already owns
@@ -1096,7 +1097,6 @@ def _verify_server_identity(server_url: str, jwt_secret: str, lookup_secret: str
     accidental staleness (CodeAnt race note on #388).
     """
     import hmac
-    import secrets as secrets_module
 
     import httpx
 
@@ -1105,7 +1105,11 @@ def _verify_server_identity(server_url: str, jwt_secret: str, lookup_secret: str
             "server identity check failed: local secrets are missing. "
             "Re-run init so fresh secrets are generated and persisted."
         )
-    nonce = secrets_module.token_urlsafe(24)
+    if not nonce:
+        raise RuntimeError(
+            "server identity check failed: no handshake nonce supplied. "
+            "Re-run init."
+        )
     try:
         response = httpx.get(
             f"{server_url.rstrip('/')}/health/identity",
@@ -1195,9 +1199,12 @@ def _start_server_and_bootstrap(
     # Identity proof runs on BOTH paths (issue #376): a reused server may be
     # foreign or stale despite retained secrets (health is only a 200 check),
     # and a fresh spawn may have lost a port race after the health poll.
-    # Either way, no bootstrap against an unproven server.
+    # Either way, no bootstrap against an unproven server. The nonce is
+    # minted here (fresh per init run) and injected, keeping the verifier
+    # deterministic and testable (CodeRabbit on #388).
+    nonce = secrets.token_urlsafe(24)
     try:
-        _verify_server_identity(normalized_server_url, jwt_secret, lookup_secret)
+        _verify_server_identity(normalized_server_url, jwt_secret, lookup_secret, nonce)
     except Exception as exc:
         logger.exception("Server identity verification failed")
         click.echo(f"  [x] Server identity check failed: {exc}", err=True)

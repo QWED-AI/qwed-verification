@@ -1398,7 +1398,13 @@ async def health_check():
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
-@app.get("/health/identity")
+@app.get(
+    "/health/identity",
+    responses={
+        400: {"description": "Missing nonce or nonce longer than 128 characters"},
+        503: {"description": "Server secrets not configured"},
+    },
+)
 async def server_identity(nonce: str = ""):
     """
     Challenge-response proof of the active server secret set (issue #376).
