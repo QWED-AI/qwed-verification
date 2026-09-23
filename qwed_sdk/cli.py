@@ -1064,6 +1064,95 @@ def _resolve_organization_name(organization_name: Optional[str], non_interactive
     return resolved_org
 
 
+def _identity_proof(secret: str, domain: str, nonce: str) -> str:
+    """Domain-separated HMAC of the handshake nonce under one secret."""
+    import hashlib
+    import hmac
+
+    return hmac.new(
+        secret.encode(),
+        f"qwed-server-identity-v1:{domain}:{nonce}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _verify_server_identity(server_url: str, jwt_secret: str, lookup_secret: str, nonce: str) -> None:
+    """Prove the healthy server holds our secret set before bootstrap (issue #376).
+
+    A healthy `/health` only proves SOMETHING answers on the port — a foreign
+    process (or a stale server on older values, which #375's guard cannot see
+    when our secrets were retained) would otherwise receive the bootstrap and
+    issue a key the intended server cannot resolve after restart. The CLI
+    mints a fresh nonce per handshake and verifies domain-separated HMACs
+    over it: a captured response is useless for any later handshake
+    (replay-safe, unlike deterministic fingerprints). The nonce is injected
+    by the caller (fresh per init run) so this function stays deterministic
+    and testable. Empty local secrets fail closed immediately — otherwise
+    both sides would prove the empty string and match (Sentry HIGH on #388).
+    Callers fail closed (exit) — never bootstrap on unproven identity.
+
+    Residual TOCTOU (a process rebinding the port between this proof and the
+    bootstrap) is accepted: a local attacker capable of that already owns
+    secrets at rest, so it is outside this handshake's threat model of
+    accidental staleness (CodeAnt race note on #388).
+    """
+    import hmac
+
+    import httpx
+
+    if not jwt_secret or not lookup_secret:
+        raise RuntimeError(
+            "server identity check failed: local secrets are missing. "
+            "Re-run init so fresh secrets are generated and persisted."
+        )
+    if not nonce:
+        raise RuntimeError(
+            "server identity check failed: no handshake nonce supplied. "
+            "Re-run init."
+        )
+    try:
+        response = httpx.get(
+            f"{server_url.rstrip('/')}/health/identity",
+            params={"nonce": nonce},
+            timeout=5.0,
+        )
+    except (httpx.HTTPError, ValueError) as exc:
+        raise RuntimeError(
+            "server identity check failed: could not reach the identity endpoint. "
+            "Restart the local server, then re-run init."
+        ) from exc
+    if response.status_code != 200:
+        raise RuntimeError(
+            "server identity check failed: the server did not prove its secrets "
+            "(older server without the handshake, foreign process, or unconfigured "
+            "server). Restart the local server, then re-run init."
+        )
+    try:
+        identity = response.json().get("identity", {})
+        remote = (identity.get("jwt_hmac", ""), identity.get("lookup_hmac", ""))
+    except (ValueError, AttributeError) as exc:
+        raise RuntimeError(
+            "server identity check failed: unreadable identity response. "
+            "Restart the local server, then re-run init."
+        ) from exc
+    expected = (
+        _identity_proof(jwt_secret, "jwt", nonce),
+        _identity_proof(lookup_secret, "lookup", nonce),
+    )
+    mismatched = [
+        name
+        for name, got, want in zip(("jwt", "lookup"), remote, expected)
+        if not hmac.compare_digest(str(got), str(want))
+    ]
+    if mismatched:
+        raise RuntimeError(
+            f"server identity check failed: the running server holds a different "
+            f"{' and '.join(mismatched)} secret(s) than this project. "
+            "Restart the server so it loads this project's .env secrets, then re-run init. "
+            "Never bootstrap keys against a server you don't recognize."
+        )
+
+
 def _start_server_and_bootstrap(
     normalized_server_url: str,
     jwt_secret: str,
@@ -1106,6 +1195,21 @@ def _start_server_and_bootstrap(
         click.echo("  [x] Server was already running with older secrets.", err=True)
         click.echo("      Restart it, then re-run init so keys are issued under the persisted secrets.", err=True)
         sys.exit(1)
+
+    # Identity proof runs on BOTH paths (issue #376): a reused server may be
+    # foreign or stale despite retained secrets (health is only a 200 check),
+    # and a fresh spawn may have lost a port race after the health poll.
+    # Either way, no bootstrap against an unproven server. The nonce is
+    # minted here (fresh per init run) and injected, keeping the verifier
+    # deterministic and testable (CodeRabbit on #388).
+    nonce = secrets.token_urlsafe(24)
+    try:
+        _verify_server_identity(normalized_server_url, jwt_secret, lookup_secret, nonce)
+    except Exception as exc:
+        logger.exception("Server identity verification failed")
+        click.echo(f"  [x] Server identity check failed: {exc}", err=True)
+        sys.exit(1)
+    click.echo("  [ok] Server identity verified")
 
     try:
         qwed_api_key, actual_org_name = _bootstrap_api_key(normalized_server_url, organization_name)
