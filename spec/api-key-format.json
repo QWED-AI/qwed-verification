@@ -9,6 +9,8 @@
       "body_pattern": "[A-Za-z0-9]{36}",
       "full_pattern": "qwed_live_[A-Za-z0-9]{36}",
       "anchored_pattern": "(?<![A-Za-z0-9])qwed_live_[A-Za-z0-9]{36}(?![A-Za-z0-9])",
+      "re2_pattern": "(?:^|[^A-Za-z0-9])(qwed_live_[A-Za-z0-9]{36})(?:[^A-Za-z0-9]|$)",
+      "re2_token_group": 1,
       "status": "current",
       "entropy_bits": 178.6,
       "checksum": {
@@ -26,6 +28,8 @@
       "body_pattern": "[A-Za-z0-9_-]{43}",
       "full_pattern": "qwed_live_[A-Za-z0-9_-]{43}",
       "anchored_pattern": "(?<![A-Za-z0-9_-])qwed_live_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])",
+      "re2_pattern": "(?:^|[^A-Za-z0-9_-])(qwed_live_[A-Za-z0-9_-]{43})(?:[^A-Za-z0-9_-]|$)",
+      "re2_token_group": 1,
       "status": "legacy-accepted",
       "entropy_bits": 256,
       "checksum": null
@@ -33,7 +37,7 @@
   ],
   "excluded_prefixes": ["qwed_test_"],
   "post_processing": "v2: recompute CRC32 over the first 30 body characters and Base62-encode to width 6; accept only on exact match with the trailing 6. v1: enforce exact shape only (no checksum). Discard any qwed_test_ match.",
-  "delimiters": "charset-complement lookarounds per type (see anchored_pattern); word boundaries are wrong here — a v1 body may end in hyphen, which no word boundary borders",
+  "delimiters": "charset-complement lookarounds per type (see anchored_pattern); word boundaries are wrong here — a v1 body may end in hyphen, which no word boundary borders. On engines without lookaround support (e.g. RE2) use re2_pattern per type and treat re2_token_group (group 1) as the token: the whole match consumes surrounding delimiter characters, so submitting it breaks the v2 checksum and the revocation lookup, and a global scan must resume after group 1's end, not the whole match's.",
   "ops": {
     "webhook_path": "/webhooks/secret-scanning",
     "webhook_url": null,
