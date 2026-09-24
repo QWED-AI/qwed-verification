@@ -1092,9 +1092,12 @@ def _verify_server_identity(server_url: str, jwt_secret: str, lookup_secret: str
     Callers fail closed (exit) — never bootstrap on unproven identity.
 
     Residual TOCTOU (a process rebinding the port between this proof and the
-    bootstrap) is accepted: a local attacker capable of that already owns
-    secrets at rest, so it is outside this handshake's threat model of
-    accidental staleness (CodeAnt race note on #388).
+    bootstrap) is accepted: binding a released local port needs no project
+    secret, so an active local attacker could win the race without holding
+    anything. Defending against that attacker is out of scope — this
+    handshake's threat model is accidental staleness (CodeAnt race note on
+    #388; overstated "already owns secrets" wording corrected via Greptile
+    on QWED-AI/docs#291).
     """
     import hmac
 
