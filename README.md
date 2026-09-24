@@ -33,7 +33,8 @@
   <a href="docs/INTEGRATION.md">Integration</a> ·
   <a href="docs/QWED_LOCAL.md">QWEDLocal</a> ·
   <a href="docs/CLI.md">CLI</a> ·
-  <a href="https://docs.qwedai.com">Full Documentation</a>
+  <a href="https://docs.qwedai.com">Full Documentation</a> ·
+  <a href="https://github.com/orgs/QWED-AI/projects/3"><b>Contribute — find an issue</b></a>
 </div>
 
 ---
