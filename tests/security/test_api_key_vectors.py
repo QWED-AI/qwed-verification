@@ -46,14 +46,30 @@ def test_vectors_match_spec_patterns():
         entry["status"]: re.compile(entry["anchored_pattern"])
         for entry in spec["types"]
     }
+    re2 = {
+        entry["status"]: re.compile(entry["re2_pattern"])
+        for entry in spec["types"]
+    }
+    group = {
+        entry["status"]: entry["re2_token_group"]
+        for entry in spec["types"]
+    }
+    for entry in spec["types"]:
+        # RE2 has no lookarounds — a delimiter-class pattern carrying one is
+        # un-compilable on the engines it targets (same constraint GitHub
+        # secret-scanning patterns face).
+        assert not re.search(r"\(\?<[=!]", entry["re2_pattern"]), entry["status"]
+        assert "(?=" not in entry["re2_pattern"], entry["status"]
     # Derived from the data, not hard-coded IDs: every vector declares the
-    # spec status whose regex it must satisfy (or null for shape negatives),
-    # so a newly added vector cannot silently skip pattern coverage
-    # (Greptile P2 on #387). Checksum-bad matches shape by design —
+    # spec status whose regex it must satisfy (or null for shape negatives).
+    # Checksum-bad matches shape by design —
     # checksums are post-processing, not pattern (CodeRabbit on #387).
     # Anchored patterns are additionally exercised as find-in-text searches
     # wrapped in ordinary delimiters (Sentry MEDIUM + Greptile P1 on #387:
-    # trailing word boundaries miss dash-ending bodies).
+    # trailing word boundaries miss dash-ending bodies). The re2_pattern
+    # alternates must yield the exact key in their token group — the whole
+    # match includes consumed delimiters, which would break checksum
+    # validation if submitted verbatim (Greptile P1 on docs #290).
     for vector in data["vectors"]:
         value = vector["value"]
         status = vector["pattern"]
@@ -65,9 +81,17 @@ def test_vectors_match_spec_patterns():
                     vector["id"],
                     name,
                 )
+            for name, expression in re2.items():
+                assert expression.search(f"leaked {value} here.") is None, (
+                    vector["id"],
+                    name,
+                )
         else:
             assert compiled[status].match(value), vector["id"]
             assert anchored[status].search(f"leaked {value} here."), vector["id"]
+            match = re2[status].search(f"leaked {value} here.")
+            assert match, vector["id"]
+            assert match.group(group[status]) == value, vector["id"]
 
 
 def test_spec_names_match_partnership_filing():
