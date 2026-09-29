@@ -59,7 +59,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd sdk-ts
-          npm install
+          npm ci
       
       - name: Build
         run: |
