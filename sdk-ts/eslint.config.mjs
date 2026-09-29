@@ -20,9 +20,15 @@ export default [
             '@typescript-eslint': tsPlugin,
         },
         rules: {
+            // This is the legacy eslintrc-shaped config, which is the one that
+            // carries a `.rules` object. The `typescript-eslint` meta-package
+            // exports a same-named `configs.recommended` that is a flat-config
+            // array instead; spreading that here would yield nothing and
+            // silently drop all 23 rules.
             ...tsPlugin.configs.recommended.rules,
-            // The compiler already reports undefined names and unused locals;
-            // re-checking them here only produces duplicate, weaker diagnostics.
+            // `npm run typecheck` reports undefined names and unused locals
+            // with full type information; re-checking them in ESLint only
+            // produces duplicate, weaker diagnostics.
             'no-undef': 'off',
             'no-unused-vars': 'off',
             '@typescript-eslint/no-unused-vars': [

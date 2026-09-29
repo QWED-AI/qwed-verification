@@ -67,6 +67,11 @@ jobs:
           cd sdk-ts
           npm ci
       
+      - name: Typecheck
+        run: |
+          cd sdk-ts
+          npm run typecheck
+      
       - name: Build
         run: |
           cd sdk-ts
