@@ -23,7 +23,7 @@
     "scripts": {
         "build": "tsup src/index.ts --format cjs,esm --dts",
         "test": "vitest",
-        "lint": "eslint src/**/*.ts",
+        "lint": "eslint src",
         "prepublish": "npm run build"
     },
     "dependencies": {},
@@ -32,12 +32,13 @@
         "tsup": "^8.0.0",
         "vitest": "^4.1.0",
         "@types/node": "^20.0.0",
-        "eslint": "^8.55.0",
-        "@typescript-eslint/eslint-plugin": "^6.13.0",
-        "@typescript-eslint/parser": "^6.13.0"
+        "@eslint/js": "^9.39.5",
+        "eslint": "^9.39.5",
+        "@typescript-eslint/eslint-plugin": "^8.71.0",
+        "@typescript-eslint/parser": "^8.71.0"
     },
     "engines": {
-        "node": ">=18.0.0"
+        "node": ">=18.18.0"
     },
     "files": [
         "dist",

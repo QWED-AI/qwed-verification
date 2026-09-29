@@ -65,17 +65,17 @@ jobs:
       - name: Install Dependencies
         run: |
           cd sdk-ts
-          npm install
+          npm ci
       
       - name: Build
         run: |
           cd sdk-ts
           npm run build
       
-      - name: Lint (optional)
+      - name: Lint
         run: |
           cd sdk-ts
-          npm run lint || true
+          npm run lint
 
   # ============================================
   # Go SDK
