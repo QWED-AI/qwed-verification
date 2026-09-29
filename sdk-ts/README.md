@@ -196,8 +196,10 @@ const client = new QWEDClient({
 
 ## Building from source
 
-Working on the SDK itself needs Node.js 20.19.0 or newer: `eslint` 10 and
-`@eslint/js` 10 declare `^20.19.0 || ^22.13.0 || >=24`.
+Working on the SDK itself needs a Node.js release covered by the range `eslint`
+10 and `@eslint/js` 10 declare: `^20.19.0 || ^22.13.0 || >=24`. That is Node 20
+from 20.19, Node 22 from 22.13, or Node 24 and above. Node 21, Node 23, and
+Node 22.0 to 22.12 are outside it.
 
 That is a build-tooling floor, not a runtime one. The published package keeps
 `engines.node: ">=18.0.0"`, because the APIs this client uses (`fetch`,
