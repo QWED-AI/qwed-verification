@@ -194,6 +194,25 @@ const client = new QWEDClient({
 });
 ```
 
+## Building from source
+
+Working on the SDK itself needs Node.js 20.19.0 or newer: `eslint` 10 and
+`@eslint/js` 10 declare `^20.19.0 || ^22.13.0 || >=24`.
+
+That is a build-tooling floor, not a runtime one. The published package keeps
+`engines.node: ">=18.0.0"`, because the APIs this client uses (`fetch`,
+`AbortController`, `atob`) are present in Node 18.0.0 and consumers install
+nothing from `devDependencies`. Raising `engines.node` to match the lint
+toolchain would reject real Node 18 users for a constraint that cannot affect
+them.
+
+```bash
+npm ci
+npm run typecheck   # tsc --noEmit, covers every file under src/
+npm run lint        # eslint src
+npm run build       # tsup -> dist/ (cjs + esm + .d.ts)
+```
+
 ## License
 
 Apache 2.0

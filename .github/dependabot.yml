@@ -65,8 +65,8 @@ updates:
       # Node 20 runner used by sdk-tests.yml: `vitest run` dies with "Cannot find
       # module './rolldown-binding.wasi.cjs'". vitest 5 itself declares engines
       # ^22.12.0 || ^24.0.0 || >=26.0.0. `npm ci` still succeeds, so a green SDK
-      # job says nothing about whether the test runner works — the same blind
-      # spot as the `|| true` lint step #403 removed. Becomes adoptable when CI
+      # job says nothing about whether the test runner works. Same blind spot as
+      # the `|| true` lint step #403 removed. Becomes adoptable when CI
       # moves to Node >=22.12 (and a test step actually runs it).
       vitest:
         patterns:
@@ -77,6 +77,12 @@ updates:
       # SDK against APIs that exist on none of those runtimes, so a clean
       # `tsc --noEmit` would stop meaning anything. The right moment to raise it
       # is alongside `engines.node` and the CI Node version, not on its own.
+      # A group is not a version guard. This does not stop Dependabot offering
+      # 26.x, it only stops that offer riding in with updates that are adoptable,
+      # so the lone @types/node PR still arrives and a human declines it. There
+      # is deliberately no `ignore` condition: GitHub applies ignore rules to
+      # security updates too, and suppressing a whole range would also silence a
+      # future CVE fix that only exists above it.
       types-node:
         patterns:
           - "@types/node"
