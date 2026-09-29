@@ -31,10 +31,10 @@
     "devDependencies": {
         "typescript": "^5.3.0",
         "tsup": "^8.0.0",
-        "vitest": "^4.1.0",
-        "@types/node": "^20.0.0",
-        "@eslint/js": "^9.39.5",
-        "eslint": "^9.39.5",
+        "vitest": "^5.0.2",
+        "@types/node": "^26.6.3",
+        "@eslint/js": "^10.0.1",
+        "eslint": "^10.11.0",
         "@typescript-eslint/eslint-plugin": "^8.71.0",
         "@typescript-eslint/parser": "^8.71.0"
     },
