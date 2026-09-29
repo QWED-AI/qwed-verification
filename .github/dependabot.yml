@@ -9,6 +9,8 @@
 #   `dependencies` + ecosystem labels and `chore(deps):` prefix seen on the
 #   merged security-update PRs, so nothing is set explicitly here.
 # - one group per ecosystem: at most ~6 small PRs a month, not per-dep noise.
+#   Sole exception: sdk-ts splits `typescript` into its own group, because an
+#   unadoptable major there otherwise fails ERESOLVE for the whole npm group.
 # - monthly cadence runs on the 1st (Dependabot ignores `day` for monthly
 #   schedules): CVE-driven bumps still arrive immediately via security
 #   updates; these entries only cover non-vulnerable routine updates.
@@ -43,6 +45,18 @@ updates:
       npm-deps:
         patterns:
           - "*"
+        exclude-patterns:
+          - "typescript"
+      # typescript is grouped alone because its major is currently unadoptable
+      # here: tsup's bundled rollup-plugin-dts crashes on the TS 7 compiler API
+      # and no @typescript-eslint release accepts typescript >=6.1.0. Left in
+      # npm-deps it fails ERESOLVE and blocks every other update in the group
+      # from landing (see the closed #400). Isolated, it fails on its own and
+      # the rest still merge. No `ignore` rule: the bump stays visible so it is
+      # picked up as soon as the toolchain supports it.
+      typescript:
+        patterns:
+          - "typescript"
 
   - package-ecosystem: "gomod"
     directory: "/sdk-go"
