@@ -178,7 +178,7 @@ jobs:
   # ============================================
   summary:
     name: SDK Test Summary
-    needs: [python-sdk, typescript-sdk, go-sdk, rust-sdk]
+    needs: [python-sdk, typescript-sdk, typescript-consumer-compat, go-sdk, rust-sdk]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -187,5 +187,6 @@ jobs:
           echo "=== SDK Test Results ==="
           echo "Python:     ${{ needs.python-sdk.result }}"
           echo "TypeScript: ${{ needs.typescript-sdk.result }}"
+          echo "TS-compat:  ${{ needs.typescript-consumer-compat.result }}"
           echo "Go:         ${{ needs.go-sdk.result }}"
           echo "Rust:       ${{ needs.rust-sdk.result }}"
