@@ -60,7 +60,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
       
       - name: Install Dependencies
         run: |
@@ -81,6 +81,48 @@ jobs:
         run: |
           cd sdk-ts
           npm run lint
+      
+      - name: Test runner smoke (vitest starts, no tests yet)
+        run: |
+          cd sdk-ts
+          npx vitest run --passWithNoTests
+
+  # ============================================
+  # TypeScript SDK consumer compat (oldest supported runtime)
+  # ============================================
+  # The toolchain above runs on Node 24 while engines stays >=18 by design
+  # (devDeps never ship; see sdk-ts/README.md). This job guards that promise:
+  # it builds with the Node 24 toolchain, then imports the built artifact on
+  # Node 18 so a newer runtime API slipping into src/ fails CI instead of
+  # reaching Node 18 consumers.
+  typescript-consumer-compat:
+    name: TypeScript SDK consumer compat (Node 18)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js 24 (build toolchain)
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Install + Build
+        run: |
+          cd sdk-ts
+          npm ci
+          npm run build
+
+      - name: Set up Node.js 18 (oldest supported consumer runtime)
+        uses: actions/setup-node@v7
+        with:
+          node-version: '18'
+
+      - name: Smoke-test built artifact on Node 18
+        # Empty options on purpose: the constructor only stores fields and makes
+        # no request, and a key-shaped literal here trips secret scanning.
+        run: |
+          cd sdk-ts
+          node -e "import('./dist/index.mjs').then(m => { new m.QWEDClient({}); console.log('consumer smoke OK'); })"
 
   # ============================================
   # Go SDK
@@ -138,7 +180,7 @@ jobs:
   # ============================================
   summary:
     name: SDK Test Summary
-    needs: [python-sdk, typescript-sdk, go-sdk, rust-sdk]
+    needs: [python-sdk, typescript-sdk, typescript-consumer-compat, go-sdk, rust-sdk]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -147,5 +189,6 @@ jobs:
           echo "=== SDK Test Results ==="
           echo "Python:     ${{ needs.python-sdk.result }}"
           echo "TypeScript: ${{ needs.typescript-sdk.result }}"
+          echo "TS-compat:  ${{ needs.typescript-consumer-compat.result }}"
           echo "Go:         ${{ needs.go-sdk.result }}"
           echo "Rust:       ${{ needs.rust-sdk.result }}"

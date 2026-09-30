@@ -196,10 +196,12 @@ const client = new QWEDClient({
 
 ## Building from source
 
-Working on the SDK itself needs a Node.js release covered by the range `eslint`
-10 and `@eslint/js` 10 declare: `^20.19.0 || ^22.13.0 || >=24`. That is Node 20
-from 20.19, Node 22 from 22.13, or Node 24 and above. Node 21, Node 23, and
-Node 22.0 to 22.12 are outside it.
+Working on the SDK itself needs Node 24. The dev toolchain declares
+`eslint` 10 (`^20.19.0 || ^22.13.0 || >=24`) and `vitest` 5
+(`^22.12.0 || ^24.0.0 || >=26.0.0`, peer `@types/node ^22 || >=24`):
+Node 24 satisfies both, and matches CI (`sdk-tests.yml`) and
+`@types/node ^24`. Node 21, Node 23, and Node 25 are outside the
+vitest range, so they are not supported for development.
 
 That is a build-tooling floor, not a runtime one. The published package keeps
 `engines.node: ">=18.0.0"`, because the APIs this client uses (`fetch`,
