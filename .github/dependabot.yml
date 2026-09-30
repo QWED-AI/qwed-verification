@@ -10,9 +10,11 @@
 #   merged security-update PRs, so nothing is set explicitly here.
 # - one group per ecosystem: at most ~6 small PRs a month, not per-dep noise.
 #   The only exceptions are in sdk-ts, where three deps are grouped alone: two
-#   (typescript, vitest) have majors that current CI cannot run, and one
-#   (@types/node) is deliberately held to the runtime the SDK targets. Without
-#   the split, one bad member denies the whole npm group a chance to land.
+#   (typescript, vitest) have majors that current CI cannot install or build, and
+#   one (@types/node) is deliberately held to the runtime the SDK targets. Without
+#   the split, one bad member denies the whole npm group a chance to land (this is
+#   what made #400 recur monthly). Confirmed by the first run after the split:
+#   #406 and #407 arrived as lone PRs instead of bundling with adoptable updates.
 # - monthly cadence runs on the 1st (Dependabot ignores `day` for monthly
 #   schedules): CVE-driven bumps still arrive immediately via security
 #   updates; these entries only cover non-vulnerable routine updates.
@@ -61,13 +63,20 @@ updates:
       typescript:
         patterns:
           - "typescript"
-      # vitest 5 is built on rolldown, whose native binding does not load on the
-      # Node 20 runner used by sdk-tests.yml: `vitest run` dies with "Cannot find
-      # module './rolldown-binding.wasi.cjs'". vitest 5 itself declares engines
-      # ^22.12.0 || ^24.0.0 || >=26.0.0. `npm ci` still succeeds, so a green SDK
-      # job says nothing about whether the test runner works. Same blind spot as
-      # the `|| true` lint step #403 removed. Becomes adoptable when CI
-      # moves to Node >=22.12 (and a test step actually runs it).
+      # vitest 5 does not install on the Node 20 runner used by sdk-tests.yml.
+      # Measured on #406 with CI's own Node (20.20.2): "Install Dependencies" fails
+      # with ERESOLVE and Typecheck/Build/Lint are skipped. vitest@5.0.2 declares
+      # peerOptional @types/node "^22.0.0 || >=24.0.0" and this package pins
+      # @types/node ^20.0.0, so npm cannot resolve. vitest 5 also declares engines
+      # "^22.12.0 || ^24.0.0 || >=26.0.0", so Node 20 is outside its supported
+      # range regardless of the peer conflict. (Locally, on Node 20.18.0, forcing
+      # the install past the peer conflict gets further and then dies at runtime:
+      # rolldown, which vitest 5 is built on, cannot load its native binding and
+      # `vitest run` fails with "Cannot find module './rolldown-binding.wasi.cjs'".)
+      # Adoptable only when all three hold: CI moves onto one of vitest 5's supported
+      # ranges (^22.12.0, ^24.0.0 or >=26.0.0, which excludes Node 23.x and 25.x),
+      # @types/node moves onto a range that satisfies its peerOptional, and a test
+      # step actually runs vitest.
       vitest:
         patterns:
           - "vitest"
@@ -77,6 +86,10 @@ updates:
       # SDK against APIs that exist on none of those runtimes, so a clean
       # `tsc --noEmit` would stop meaning anything. The right moment to raise it
       # is alongside `engines.node` and the CI Node version, not on its own.
+      # Do not treat this bump as unblocking vitest 5: 26.x does satisfy vitest
+      # 5's peerOptional @types/node range, so taking it would turn the vitest PR's
+      # ERESOLVE failure into a clean install on a Node 20 runner that vitest 5
+      # does not support. CI has no test step to notice, so the job would go green.
       # A group is not a version guard. This does not stop Dependabot offering
       # 26.x, it only stops that offer riding in with updates that are adoptable,
       # so the lone @types/node PR still arrives and a human declines it. There
