@@ -81,6 +81,11 @@ jobs:
         run: |
           cd sdk-ts
           npm run lint
+      
+      - name: Test runner smoke (vitest starts, no tests yet)
+        run: |
+          cd sdk-ts
+          npx vitest run --passWithNoTests
 
   # ============================================
   # Go SDK
