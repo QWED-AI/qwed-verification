@@ -52,8 +52,8 @@ Fail-closed fixes restoring intended behavior — no breaking wire changes:
 
 #### Bridge & Verifier Mappings (#310, #316)
 
-- **`verification_context_from_diagnostic_result()`** — converts `DiagnosticResult` → VC document; VERIFIED without attestation demotes to UNVERIFIABLE (fail-closed, consistent with the core contract).
-- **`to_verification_context()` on all 13 verifiers** — complete engine coverage: Math, Logic, Symbolic, SQL, Code, Schema, Fact, Image, Graph, Reasoning, Stats, Consensus, and SecureCodeExecutor.
+- **`verification_context_from_diagnostic_result()`** — converts `DiagnosticResult` → VC document; VERIFIED without attestation fails closed to BLOCKED via `enforce_trust_decision` (`trust_gate.mandatory_attestation_missing`, consistent with the core contract).
+- **`to_verification_context()` across the verifier classes** — implemented on `CodeVerifier`, `ConsensusVerifier`, `DSLLogicVerifier`, `FactVerifier`, `BatchFactVerifier`, `GraphFactVerifier`, `ImageVerifier`, `MultiVLMVerifier`, `LogicVerifier`, `ReasoningVerifier`, `SchemaVerifier`, `SQLVerifier`, `StatsVerifier`, and `SymbolicVerifier` (14 classes). Math and secure-code-execution results convert through `verification_context_from_diagnostic_result()` instead.
 
 #### Surface Exposure (#311, #313, #314, #315)
 
