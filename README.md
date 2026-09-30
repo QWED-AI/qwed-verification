@@ -670,7 +670,7 @@ We are building the **Universal Verification Standard** for the agentic web.
 - **✔ SymbolicVerifier migration** — First fully `DiagnosticResult`-conformant engine; serves as reference implementation (v5.3.0)
 - **✔ Trust Boundary Completion** — All verification API pathways return `DiagnosticResult` + route through `enforce_trust_decision`; mandatory attestation at the admission boundary; VERIFIED requires a non-empty, evidence-bound proof_ref (v6.0.0)
 - **✔ Full DiagnosticResult engine conformance** — All 13 engines return `DiagnosticResult`; execution is never conflated with verification; fail-closed batch verification (META #216, v7.0.0)
-- **✔ Verification Context v1.0 rollout** — All 13 engines expose `to_verification_context()`; schema-validated, canonically-encoded, tamper-evident VC documents across SDK / API / CLI / Docker action (v7.1.0)
+- **✔ Verification Context v1.0 rollout** — `to_verification_context()` on the verifier classes (Code, Consensus, DSL Logic, Fact, Graph Fact, Image, Logic, Reasoning, Schema, SQL, Stats, Symbolic, plus the batch fact and multi-VLM helpers) and VC documents reachable for every engine through the from-diagnostic endpoint; schema-validated, canonically-encoded, tamper-evident VC documents across SDK / API / CLI / Docker action (v7.1.0)
 
 ### In Progress
 
