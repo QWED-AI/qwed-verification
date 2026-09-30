@@ -73,8 +73,10 @@ updates:
       # the install past the peer conflict gets further and then dies at runtime:
       # rolldown, which vitest 5 is built on, cannot load its native binding and
       # `vitest run` fails with "Cannot find module './rolldown-binding.wasi.cjs'".)
-      # Adoptable only when CI moves to Node >=22.12, @types/node moves to a range
-      # that satisfies vitest 5's peer, and a test step actually runs vitest.
+      # Adoptable only when all three hold: CI moves onto one of vitest 5's supported
+      # ranges (^22.12.0, ^24.0.0 or >=26.0.0, which excludes Node 23.x and 25.x),
+      # @types/node moves onto a range that satisfies its peerOptional, and a test
+      # step actually runs vitest.
       vitest:
         patterns:
           - "vitest"
