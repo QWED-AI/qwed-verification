@@ -63,39 +63,26 @@ updates:
       typescript:
         patterns:
           - "typescript"
-      # vitest 5 does not install on the Node 20 runner used by sdk-tests.yml.
-      # Measured on #406 with CI's own Node (20.20.2): "Install Dependencies" fails
-      # with ERESOLVE and Typecheck/Build/Lint are skipped. vitest@5.0.2 declares
-      # peerOptional @types/node "^22.0.0 || >=24.0.0" and this package pins
-      # @types/node ^20.0.0, so npm cannot resolve. vitest 5 also declares engines
-      # "^22.12.0 || ^24.0.0 || >=26.0.0", so Node 20 is outside its supported
-      # range regardless of the peer conflict. (Locally, on Node 20.18.0, forcing
-      # the install past the peer conflict gets further and then dies at runtime:
-      # rolldown, which vitest 5 is built on, cannot load its native binding and
-      # `vitest run` fails with "Cannot find module './rolldown-binding.wasi.cjs'".)
-      # Adoptable only when all three hold: CI moves onto one of vitest 5's supported
-      # ranges (^22.12.0, ^24.0.0 or >=26.0.0, which excludes Node 23.x and 25.x),
-      # @types/node moves onto a range that satisfies its peerOptional, and a test
-      # step actually runs vitest.
+      # vitest 5 is adopted alongside the Node 24 bundle: CI runs Node 24,
+      # @types/node is ^24 (satisfies vitest 5's peerOptional
+      # "^22.0.0 || >=24.0.0"), and vitest 5's engines
+      # "^22.12.0 || ^24.0.0 || >=26.0.0" cover the CI runtime. Kept as its
+      # own group so a future vitest major that drops Node 24 fails alone
+      # instead of blocking the adoptable npm-deps group. Note: sdk-ts has
+      # no *.test.ts files yet, so CI gates vitest via install + typecheck /
+      # build / lint, not via a `vitest run` step.
       vitest:
         patterns:
           - "vitest"
-      # @types/node is not a "latest is better" dependency: it has to describe
-      # the runtime the SDK is built and tested against (CI runs Node 20, and
-      # package.json promises engines >=18.0.0). Taking 26.x would typecheck the
-      # SDK against APIs that exist on none of those runtimes, so a clean
-      # `tsc --noEmit` would stop meaning anything. The right moment to raise it
-      # is alongside `engines.node` and the CI Node version, not on its own.
-      # Do not treat this bump as unblocking vitest 5: 26.x does satisfy vitest
-      # 5's peerOptional @types/node range, so taking it would turn the vitest PR's
-      # ERESOLVE failure into a clean install on a Node 20 runner that vitest 5
-      # does not support. CI has no test step to notice, so the job would go green.
-      # A group is not a version guard. This does not stop Dependabot offering
-      # 26.x, it only stops that offer riding in with updates that are adoptable,
-      # so the lone @types/node PR still arrives and a human declines it. There
-      # is deliberately no `ignore` condition: GitHub applies ignore rules to
-      # security updates too, and suppressing a whole range would also silence a
-      # future CVE fix that only exists above it.
+      # @types/node tracks the runtime the SDK is built and tested against:
+      # CI runs Node 24 and package.json pins @types/node ^24. Taking 26.x
+      # would typecheck against APIs that exist on none of the supported
+      # runtimes, so the lone 26.x offer still arrives and a human declines
+      # it until CI + @types/node move to 26 together. A group is not a
+      # version guard. There is deliberately no `ignore` condition: GitHub
+      # applies ignore rules to security updates too, and suppressing a
+      # whole range would also silence a future CVE fix that only exists
+      # above it.
       types-node:
         patterns:
           - "@types/node"
