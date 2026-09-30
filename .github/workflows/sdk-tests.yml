@@ -118,9 +118,11 @@ jobs:
           node-version: '18'
 
       - name: Smoke-test built artifact on Node 18
+        # Empty options on purpose: the constructor only stores fields and makes
+        # no request, and a key-shaped literal here trips secret scanning.
         run: |
           cd sdk-ts
-          node -e "import('./dist/index.mjs').then(m => { new m.QWEDClient({apiKey:'qwed_smoke'}); console.log('consumer smoke OK'); })"
+          node -e "import('./dist/index.mjs').then(m => { new m.QWEDClient({}); console.log('consumer smoke OK'); })"
 
   # ============================================
   # Go SDK
