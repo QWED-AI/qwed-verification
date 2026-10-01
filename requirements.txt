@@ -61,9 +61,9 @@ sentry-sdk==2.70.0 \
     --hash=sha256:27e4b512f47be93136645dbe8f02d430473ee73a389ce430b2b7104baa66cf75 \
     --hash=sha256:89600e8bb5fc5239cad5c4434217f453204f2207ad29399ea58947460b37a62e
     # via -r requirements.in
-sqlglot==30.19.0 \
-    --hash=sha256:6fcfbe93c5ee76e07faadf0930dd119eebb545c4f317f8e4f205f177305d8b08 \
-    --hash=sha256:b4500fcced395359feea582f09d2d4433bf1f36362a3a9d0d6d5ebbc1f84242e
+sqlglot==30.20.0 \
+    --hash=sha256:8210b49131ac80cb3d4135edd3f64a50c95f2046305f4e6978fca59b39c82407 \
+    --hash=sha256:886fd92eba9bf944dee97164b16760f21576a7f55ef4a9211337903442e8aded
     # via -r requirements.in
 sympy==1.14.0 \
     --hash=sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517 \
