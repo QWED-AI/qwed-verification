@@ -28,8 +28,8 @@ import urllib.request
 MAX_REDIRECTS = 5
 
 #: Cloud metadata endpoints: never fetchable, even with allow_local.
-#: NOSONAR — these are IETF/cloud-reserved endpoints, not deployment
-#: config; there is nothing to externalize.
+#: (Suppression rationale for the hardcoded-address rule below: these are
+#: IETF/cloud-reserved endpoints, not deployment config.)
 _ALWAYS_BLOCKED_IPS = (
     ipaddress.ip_address("169.254.169.254"),  # NOSONAR
     ipaddress.ip_address("100.100.100.200"),  # NOSONAR
@@ -39,8 +39,8 @@ _ALWAYS_BLOCKED_IPS = (
 #: Ranges rejected unless allow_local=True (loopback, link-local, private,
 #: unspecified). Local-dev profiles that genuinely fetch from these ranges
 #: must opt in explicitly per call site.
-#: NOSONAR — IETF-reserved ranges (RFC 1122/3927/1918/6598), not deployment
-#: config; the allow_local flag is the intentional override mechanism.
+#: (Suppression rationale as above: IETF-reserved ranges per RFC
+#: 1122/3927/1918/6598; allow_local is the intentional override.)
 _LOCAL_NETWORKS = (
     ipaddress.ip_network("127.0.0.0/8"),  # NOSONAR
     ipaddress.ip_network("10.0.0.0/8"),  # NOSONAR
@@ -146,15 +146,19 @@ class _RedirectLimitHandler(urllib.request.HTTPRedirectHandler):
 
     max_redirects = MAX_REDIRECTS
 
+    def __init__(self, allow_local: bool = False):
+        self.allow_local = allow_local
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         count = getattr(req, "_qwed_redirects", 0) + 1
         if count > self.max_redirects:
             raise urllib.error.HTTPError(
                 newurl, code, "Too many redirects (QWED cap)", headers, fp
             )
-        # Re-validate every hop: a clean start URL must not launder a
-        # blocked literal-IP target through a redirect.
-        validate_fetch_url(newurl)
+        # Re-validate every hop with the caller's local policy: a clean
+        # start URL must not launder a blocked literal-IP target through
+        # a redirect.
+        validate_fetch_url(newurl, allow_local=self.allow_local)
         new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
         if new_req is not None:
             new_req._qwed_redirects = count
@@ -162,7 +166,7 @@ class _RedirectLimitHandler(urllib.request.HTTPRedirectHandler):
 
 
 @contextlib.contextmanager
-def limited_redirects():
+def limited_redirects(allow_local: bool = False):
     """Activate the redirect-limiting opener for one fetch only.
 
     Installs a process-global opener around the call and restores the
@@ -170,7 +174,7 @@ def limited_redirects():
     ``urllib.request.urlopen(...)`` call path — and the test mocks that
     patch it — keeps working unchanged. Single-threaded CLI use only.
     """
-    opener = urllib.request.build_opener(_RedirectLimitHandler())
+    opener = urllib.request.build_opener(_RedirectLimitHandler(allow_local))
     previous = urllib.request._opener
     urllib.request.install_opener(opener)
     try:

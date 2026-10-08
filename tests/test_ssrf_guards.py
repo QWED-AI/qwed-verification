@@ -134,9 +134,23 @@ class TestRedirectLimitHandler:
 
     def test_blocked_redirect_target_rejected(self):
         handler = _RedirectLimitHandler()
+        req = self._req()
         with pytest.raises(ValueError, match="[Mm]etadata|non-public"):
             handler.redirect_request(
-                self._req(), None, 302, "Found", {}, "http://169.254.169.254/"
+                req, None, 302, "Found", {}, "http://169.254.169.254/"
+            )
+
+    def test_redirect_policy_propagates_to_hops(self):
+        handler = _RedirectLimitHandler(allow_local=True)
+        req = self._req()
+        hopped = handler.redirect_request(
+            req, None, 302, "Found", {}, "http://192.168.1.20/x"
+        )
+        assert hopped is not None
+        blocked_req = self._req()
+        with pytest.raises(ValueError, match="[Mm]etadata"):
+            handler.redirect_request(
+                blocked_req, None, 302, "Found", {}, "http://169.254.169.254/"
             )
 
     def test_limited_redirects_restores_global_opener(self):
