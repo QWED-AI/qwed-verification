@@ -205,14 +205,19 @@ class AlertManager:
             })
         
         try:
-            # Redirect bound: requests caps redirect chains (TooManyRedirects
-            # after 30) so no hop loop runs forever; the URL itself was
-            # validated in __init__, blocking metadata/loopback targets.
+            # No redirects, ever: the validated webhook URL is the only
+            # permitted destination. A 3xx is a failure, not a forwarding
+            # instruction — following it would resend the alert body to an
+            # unvalidated target (redirects are how metadata/loopback
+            # targets would be reached despite __init__ validation).
             response = requests.post(
                 self.slack_webhook_url,
                 json=slack_message,
-                timeout=5
+                timeout=5,
+                allow_redirects=False,
             )
+            if 300 <= response.status_code < 400:
+                raise RuntimeError("Slack webhook redirect refused")
             response.raise_for_status()
             logger.info("Slack alert sent successfully")
         except Exception as e:

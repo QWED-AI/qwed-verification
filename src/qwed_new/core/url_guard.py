@@ -18,6 +18,7 @@ Design notes (read before weakening anything here):
 
 import contextlib
 import ipaddress
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -29,34 +30,48 @@ import urllib.request
 MAX_REDIRECTS = 5
 
 #: Cloud metadata endpoints: never fetchable, even with allow_local.
+#: NOSONAR — these are IETF/cloud-reserved endpoints, not deployment
+#: config; there is nothing to externalize.
 _ALWAYS_BLOCKED_IPS = (
-    ipaddress.ip_address("169.254.169.254"),
-    ipaddress.ip_address("100.100.100.200"),
+    ipaddress.ip_address("169.254.169.254"),  # NOSONAR
+    ipaddress.ip_address("100.100.100.200"),  # NOSONAR
+    ipaddress.ip_address("fd00:ec2::254"),  # NOSONAR AWS IPv6 metadata
 )
 
 #: Ranges rejected unless allow_local=True (loopback, link-local, private,
 #: unspecified). Local-dev profiles that genuinely fetch from these ranges
 #: must opt in explicitly per call site.
+#: NOSONAR — IETF-reserved ranges (RFC 1122/3927/1918/6598), not deployment
+#: config; the allow_local flag is the intentional override mechanism.
 _LOCAL_NETWORKS = (
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("0.0.0.0/8"),
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fe80::/10"),
-    ipaddress.ip_network("::/128"),
-    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("127.0.0.0/8"),  # NOSONAR
+    ipaddress.ip_network("10.0.0.0/8"),  # NOSONAR
+    ipaddress.ip_network("172.16.0.0/12"),  # NOSONAR
+    ipaddress.ip_network("192.168.0.0/16"),  # NOSONAR
+    ipaddress.ip_network("169.254.0.0/16"),  # NOSONAR
+    ipaddress.ip_network("0.0.0.0/8"),  # NOSONAR
+    ipaddress.ip_network("::1/128"),  # NOSONAR
+    ipaddress.ip_network("fe80::/10"),  # NOSONAR
+    ipaddress.ip_network("::/128"),  # NOSONAR
+    ipaddress.ip_network("fc00::/7"),  # NOSONAR
 )
 
 
 def _literal_ip(host: str):
-    """Parsed IP for literal-IP hosts, else None (no DNS is performed)."""
+    """Parsed IP for literal-IP hosts, else None (no DNS is performed).
+
+    Beyond dotted quads, resolvers accept decimal ("2852039166"),
+    hexadecimal ("0xa9fea9fe"), octal ("0251.0376.0251.0376"), and
+    shortened ("127.1", "169.254.43518") IPv4 forms — all of which must
+    be judged, or a blocked address slips through in disguise.
+    """
     try:
         addr = ipaddress.ip_address(host)
     except ValueError:
-        return None
+        try:
+            addr = ipaddress.IPv4Address(socket.inet_aton(host))
+        except (OSError, ValueError):
+            return None
     # Unwrap v4-mapped IPv6 so ::ffff:169.254.169.254 is judged as IPv4.
     mapped = getattr(addr, "ipv4_mapped", None)
     return mapped if mapped is not None else addr

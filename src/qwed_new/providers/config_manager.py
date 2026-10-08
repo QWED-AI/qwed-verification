@@ -147,9 +147,8 @@ class ProviderConfigManager:
 
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'QWED-CLI'})
-            with limited_redirects():
-                with urllib.request.urlopen(req, timeout=10) as response:
-                    content = response.read().decode('utf-8')
+            with limited_redirects(), urllib.request.urlopen(req, timeout=10) as response:
+                content = response.read().decode('utf-8')
                 
             data = yaml.safe_load(content)
             

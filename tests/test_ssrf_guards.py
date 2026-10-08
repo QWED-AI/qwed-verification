@@ -19,30 +19,56 @@ from qwed_new.core.url_guard import (
 
 
 class TestValidateFetchUrl:
-    def test_metadata_ips_rejected(self):
-        for url in (
+    @pytest.mark.parametrize(
+        "url",
+        [
             "http://169.254.169.254/",
             "http://169.254.169.254/latest/meta-data/",
             "http://100.100.100.200/",
             "http://[::ffff:169.254.169.254]/",
-        ):
-            with pytest.raises(ValueError, match="[Mm]etadata|non-public"):
-                validate_fetch_url(url)
+        ],
+    )
+    def test_metadata_ips_rejected(self, url):
+        with pytest.raises(ValueError, match="[Mm]etadata|non-public"):
+            validate_fetch_url(url)
 
     def test_metadata_rejected_even_when_local_allowed(self):
         with pytest.raises(ValueError, match="[Mm]etadata"):
             validate_fetch_url("http://169.254.169.254/", allow_local=True)
 
-    def test_loopback_and_private_rejected_by_default(self):
-        for url in (
+    def test_ipv6_metadata_rejected_even_when_local_allowed(self):
+        with pytest.raises(ValueError, match="[Mm]etadata"):
+            validate_fetch_url("http://[fd00:ec2::254]/")
+        with pytest.raises(ValueError, match="[Mm]etadata"):
+            validate_fetch_url("http://[fd00:ec2::254]/", allow_local=True)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://2852039166/",  # decimal for 169.254.169.254
+            "http://0xa9fea9fe/",  # hex
+            "http://0251.0376.0251.0376/",  # octal
+            "http://169.254.43518/",  # shortened last part
+            "http://127.1/",  # shortened loopback
+        ],
+    )
+    def test_disguised_ipv4_forms_rejected(self, url):
+        with pytest.raises(ValueError, match="[Mm]etadata|non-public"):
+            validate_fetch_url(url)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
             "http://127.0.0.1:8080/hook",
             "http://10.0.0.5/x",
             "http://172.16.9.9/x",
             "http://192.168.1.20/x",
             "http://[::1]/x",
-        ):
-            with pytest.raises(ValueError, match="non-public"):
-                validate_fetch_url(url)
+        ],
+    )
+    def test_loopback_and_private_rejected_by_default(self, url):
+        with pytest.raises(ValueError, match="non-public"):
+            validate_fetch_url(url)
 
     def test_allow_local_permits_private_but_not_metadata(self):
         assert (
@@ -97,7 +123,11 @@ class TestRedirectLimitHandler:
 
         before = urlrequest._opener
         with limited_redirects():
-            assert urlrequest._opener is not before or urlrequest._opener is not None
+            assert urlrequest._opener is not before
+            assert any(
+                isinstance(h, _RedirectLimitHandler)
+                for h in urlrequest._opener.handlers
+            )
         assert urlrequest._opener is before
 
 
@@ -137,3 +167,25 @@ class TestAlertingWebhookGuard:
 
         monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
         assert AlertManager().slack_webhook_url is None
+
+    def test_webhook_redirect_refused(self, monkeypatch):
+        from unittest.mock import MagicMock, patch
+
+        from qwed_new.core.alerting import AlertManager
+
+        monkeypatch.setenv(
+            "SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T/B/X"
+        )
+        manager = AlertManager()
+        redirect = MagicMock()
+        redirect.status_code = 307
+        with patch(
+            "qwed_new.core.alerting.requests.post", return_value=redirect
+        ) as fake_post:
+            manager._send_slack({"title": "t", "message": "m", "severity": "high",
+                                 "organization_id": None, "timestamp": "now",
+                                 "details": {}})
+            fake_post.assert_called_once()
+            called_with = fake_post.call_args
+            assert called_with.kwargs.get("allow_redirects") is False
+            redirect.raise_for_status.assert_not_called()
