@@ -139,11 +139,17 @@ class ProviderConfigManager:
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
             raise ValueError(f"Unsupported URL scheme '{parsed.scheme}'. Only http/https allowed.")
-            
+        # SSRF guard (#423): literal-IP metadata/loopback/private targets
+        # fail here, before any fetch; redirect hops re-validate inside
+        # the limited opener below.
+        from qwed_new.core.url_guard import limited_redirects, validate_fetch_url
+        validate_fetch_url(url)
+
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'QWED-CLI'})
-            with urllib.request.urlopen(req, timeout=10) as response:
-                content = response.read().decode('utf-8')
+            with limited_redirects():
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    content = response.read().decode('utf-8')
                 
             data = yaml.safe_load(content)
             

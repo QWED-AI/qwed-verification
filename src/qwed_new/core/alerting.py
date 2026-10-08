@@ -40,6 +40,17 @@ class AlertManager:
     def __init__(self):
         # Configuration (should be in environment variables)
         self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+        # SSRF guard (#423): fail the misconfiguration at construction so
+        # a metadata/loopback webhook can never be posted to. Soft-fail
+        # (warn + disable) matches this class's existing style for missing
+        # credentials — see _send_email below.
+        if self.slack_webhook_url is not None:
+            try:
+                from qwed_new.core.url_guard import validate_fetch_url
+                validate_fetch_url(self.slack_webhook_url)
+            except ValueError as e:
+                logger.warning("Ignoring unsafe SLACK_WEBHOOK_URL: %s", e)
+                self.slack_webhook_url = None
         self.smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
         self.smtp_port = int(os.getenv("SMTP_PORT", "587"))
         self.smtp_user = os.getenv("SMTP_USER")
@@ -194,6 +205,9 @@ class AlertManager:
             })
         
         try:
+            # Redirect bound: requests caps redirect chains (TooManyRedirects
+            # after 30) so no hop loop runs forever; the URL itself was
+            # validated in __init__, blocking metadata/loopback targets.
             response = requests.post(
                 self.slack_webhook_url,
                 json=slack_message,
