@@ -136,7 +136,11 @@ def validate_fetch_url(url: str, *, allow_local: bool = False) -> str:
         return url
     if addr in _ALWAYS_BLOCKED_IPS:
         raise ValueError(f"Refusing to fetch cloud metadata address '{host}'.")
-    if not allow_local and any(addr in net for net in _LOCAL_NETWORKS):
+    # Version-filtered: v4/v6 mismatches never match, and filtering states
+    # the invariant explicitly instead of relying on __contains__ to do so.
+    if not allow_local and any(
+        addr in net for net in _LOCAL_NETWORKS if net.version == addr.version
+    ):
         raise ValueError(f"Refusing to fetch non-public address '{host}'.")
     return url
 

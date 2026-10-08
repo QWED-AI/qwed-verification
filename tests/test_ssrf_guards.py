@@ -43,6 +43,15 @@ class TestValidateFetchUrl:
         with pytest.raises(ValueError, match="[Mm]etadata"):
             validate_fetch_url("http://[fd00:ec2::254]/", allow_local=True)
 
+    def test_mixed_version_membership_never_raises(self):
+        # Public addresses of either version must simply pass: v4/v6
+        # cross-checks never match and must never raise TypeError.
+        assert validate_fetch_url("http://8.8.8.8/") == "http://8.8.8.8/"
+        assert (
+            validate_fetch_url("http://[2001:4860:4860::8888]/")
+            == "http://[2001:4860:4860::8888]/"
+        )
+
     def test_shared_address_range_rejected_by_default(self):
         with pytest.raises(ValueError, match="non-public"):
             validate_fetch_url("http://100.64.0.1/")
