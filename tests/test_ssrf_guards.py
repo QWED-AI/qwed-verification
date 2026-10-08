@@ -6,6 +6,7 @@ residual), literal bad IPs raise before any fetch.
 """
 
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pytest
@@ -42,19 +43,39 @@ class TestValidateFetchUrl:
         with pytest.raises(ValueError, match="[Mm]etadata"):
             validate_fetch_url("http://[fd00:ec2::254]/", allow_local=True)
 
+    def test_shared_address_range_rejected_by_default(self):
+        with pytest.raises(ValueError, match="non-public"):
+            validate_fetch_url("http://100.64.0.1/")
+        assert (
+            validate_fetch_url("http://100.64.0.1/", allow_local=True)
+            == "http://100.64.0.1/"
+        )
+
     @pytest.mark.parametrize(
-        "url",
+        "url,expected",
         [
-            "http://2852039166/",  # decimal for 169.254.169.254
-            "http://0xa9fea9fe/",  # hex
-            "http://0251.0376.0251.0376/",  # octal
-            "http://169.254.43518/",  # shortened last part
-            "http://127.1/",  # shortened loopback
+            ("http://2852039166/", "169.254.169.254"),
+            ("http://0xa9fea9fe/", "169.254.169.254"),
+            ("http://0251.0376.0251.0376/", "169.254.169.254"),
+            ("http://169.254.43518/", "169.254.169.254"),
+            ("http://127.1/", "127.0.0.1"),
         ],
     )
-    def test_disguised_ipv4_forms_rejected(self, url):
+    def test_disguised_ipv4_forms_rejected(self, url, expected):
+        from qwed_new.core.url_guard import _literal_ip
+
+        assert str(_literal_ip(urllib.parse.urlparse(url).hostname)) == expected
         with pytest.raises(ValueError, match="[Mm]etadata|non-public"):
             validate_fetch_url(url)
+
+    @pytest.mark.parametrize("host", ["09", "1.2.3.4.5", "300.1.1.1", "0xzz"])
+    def test_non_literal_numeric_forms_pass_through(self, host):
+        # Not valid numeric literals anywhere (invalid octal, too many
+        # parts, out of range, bad hex): resolvers send these to DNS, so
+        # the guard does not judge them either.
+        from qwed_new.core.url_guard import _literal_ip
+
+        assert _literal_ip(host) is None
 
     @pytest.mark.parametrize(
         "url",

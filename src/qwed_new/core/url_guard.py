@@ -18,11 +18,9 @@ Design notes (read before weakening anything here):
 
 import contextlib
 import ipaddress
-import socket
 import urllib.error
 import urllib.parse
 import urllib.request
-
 
 #: Maximum redirects followed per fetch. urllib sets no bound itself, so an
 #: adversarial redirect loop would otherwise recurse until RecursionError
@@ -48,6 +46,7 @@ _LOCAL_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),  # NOSONAR
     ipaddress.ip_network("172.16.0.0/12"),  # NOSONAR
     ipaddress.ip_network("192.168.0.0/16"),  # NOSONAR
+    ipaddress.ip_network("100.64.0.0/10"),  # NOSONAR shared (CGNAT), not globally reachable
     ipaddress.ip_network("169.254.0.0/16"),  # NOSONAR
     ipaddress.ip_network("0.0.0.0/8"),  # NOSONAR
     ipaddress.ip_network("::1/128"),  # NOSONAR
@@ -63,18 +62,59 @@ def _literal_ip(host: str):
     Beyond dotted quads, resolvers accept decimal ("2852039166"),
     hexadecimal ("0xa9fea9fe"), octal ("0251.0376.0251.0376"), and
     shortened ("127.1", "169.254.43518") IPv4 forms — all of which must
-    be judged, or a blocked address slips through in disguise.
+    be judged, or a blocked address slips through in disguise. Parsed
+    manually (not via socket.inet_aton, whose accepted forms vary by
+    platform) so the guard behaves identically everywhere.
     """
     try:
         addr = ipaddress.ip_address(host)
     except ValueError:
-        try:
-            addr = ipaddress.IPv4Address(socket.inet_aton(host))
-        except (OSError, ValueError):
-            return None
+        addr = _alt_ipv4_literal(host)
+    if addr is None:
+        return None
     # Unwrap v4-mapped IPv6 so ::ffff:169.254.169.254 is judged as IPv4.
     mapped = getattr(addr, "ipv4_mapped", None)
     return mapped if mapped is not None else addr
+
+
+def _alt_ipv4_literal(host: str):
+    """Resolver-style IPv4 for disguise forms, else None.
+
+    One to four dot-separated parts; each part decimal, 0x-hex, or
+    0-octal; the last part fills all remaining bytes with C-style range
+    checks per part count. Anything else (including invalid octal like
+    "09" or out-of-range parts) is not a numeric literal — resolvers
+    send it to DNS, and so do we.
+    """
+    parts = host.split(".")
+    if not 1 <= len(parts) <= 4 or any(p == "" for p in parts):
+        return None
+    nums = []
+    for part in parts:
+        low = part.lower()
+        try:
+            if low.startswith("0x"):
+                nums.append(int(part, 16))
+            elif len(part) > 1 and part.startswith("0"):
+                nums.append(int(part, 8))
+            elif part.isdigit():
+                nums.append(int(part))
+            else:
+                return None
+        except ValueError:
+            return None
+    limits = {
+        1: (0xFFFFFFFF,),
+        2: (0xFF, 0xFFFFFF),
+        3: (0xFF, 0xFF, 0xFFFF),
+        4: (0xFF, 0xFF, 0xFF, 0xFF),
+    }[len(nums)]
+    if any(n < 0 or n > lim for n, lim in zip(nums, limits)):
+        return None
+    value = nums[-1]
+    for i, n in enumerate(nums[:-1]):
+        value |= n << (8 * (3 - i))
+    return ipaddress.IPv4Address(value)
 
 
 def validate_fetch_url(url: str, *, allow_local: bool = False) -> str:
