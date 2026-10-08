@@ -12,7 +12,9 @@ try:
     m1 = Money("100.00", "INR")
     m2 = Money("50.50", "INR")
     result = m1 + m2
-    assert str(result.amount) == "150.50", f"Math Error: Got {result.amount}"
+    if str(result.amount) != "150.50":
+        print(f"❌ FAILED: Math Error: Got {result.amount}")
+        sys.exit(1)
     print("✅ Valid Money Addition Passed")
 
     # Test 2: Unit Mismatch (The Beast Feature)

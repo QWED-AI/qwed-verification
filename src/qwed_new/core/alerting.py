@@ -40,6 +40,17 @@ class AlertManager:
     def __init__(self):
         # Configuration (should be in environment variables)
         self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+        # SSRF guard (#423): fail the misconfiguration at construction so
+        # a metadata/loopback webhook can never be posted to. Soft-fail
+        # (warn + disable) matches this class's existing style for missing
+        # credentials — see _send_email below.
+        if self.slack_webhook_url is not None:
+            try:
+                from qwed_new.core.url_guard import validate_fetch_url
+                validate_fetch_url(self.slack_webhook_url)
+            except ValueError as e:
+                logger.warning("Ignoring unsafe SLACK_WEBHOOK_URL: %s", e)
+                self.slack_webhook_url = None
         self.smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
         self.smtp_port = int(os.getenv("SMTP_PORT", "587"))
         self.smtp_user = os.getenv("SMTP_USER")
@@ -194,11 +205,19 @@ class AlertManager:
             })
         
         try:
+            # No redirects, ever: the validated webhook URL is the only
+            # permitted destination. A 3xx is a failure, not a forwarding
+            # instruction — following it would resend the alert body to an
+            # unvalidated target (redirects are how metadata/loopback
+            # targets would be reached despite __init__ validation).
             response = requests.post(
                 self.slack_webhook_url,
                 json=slack_message,
-                timeout=5
+                timeout=5,
+                allow_redirects=False,
             )
+            if 300 <= response.status_code < 400:
+                raise RuntimeError("Slack webhook redirect refused")
             response.raise_for_status()
             logger.info("Slack alert sent successfully")
         except Exception as e:
