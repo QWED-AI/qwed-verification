@@ -16,8 +16,10 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       
+        with:
+          persist-credentials: false
       - name: Scan for API keys and tokens
         uses: ./  # Use local action
         with:
@@ -30,8 +32,10 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       
+        with:
+          persist-credentials: false
       - name: Scan Python files for dangerous patterns
         uses: ./
         with:
@@ -45,8 +49,10 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       
+        with:
+          persist-credentials: false
       - name: Check shell scripts for RCE patterns
         uses: ./
         with:
@@ -59,8 +65,10 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       
+        with:
+          persist-credentials: false
       - name: Scan with SARIF output
         uses: ./
         with:
