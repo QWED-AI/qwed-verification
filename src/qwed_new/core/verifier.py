@@ -21,7 +21,7 @@ from sympy import (
 from qwed_new.core.safe_parser import safe_parse_expr, get_safe_symbol
 from sympy.parsing.sympy_parser import standard_transformations, implicit_multiplication_application
 from typing import Any, Dict, List, Optional
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, localcontext
 from dataclasses import dataclass
 import math
 
@@ -86,6 +86,41 @@ class VerificationEngine:
         magnitude = abs(calculated_value)
         dynamic_cap = magnitude * self.MAX_VERIFY_MATH_TOLERANCE_RATIO
         return max(self.MIN_VERIFY_MATH_TOLERANCE_CAP, dynamic_cap)
+
+    # Decimal places retained when comparing a computed value with a claim.
+    _VERIFY_MATH_QUANTUM = Decimal("0.000001")
+
+    def _quantize(self, value: Decimal) -> Decimal:
+        """Quantize to the comparison quantum in a context wide enough for the
+        value's magnitude (the default 28-digit context raises InvalidOperation
+        for large integers like 10**30)."""
+        int_digits = len(str(abs(int(value)))) if value else 1
+        with localcontext() as ctx:
+            ctx.prec = int_digits + 12
+            return value.quantize(self._VERIFY_MATH_QUANTUM, rounding=ROUND_HALF_UP)
+
+    def _calc_decimal(self, expr: Any) -> Decimal:
+        """Evaluate ``expr`` to a Decimal without losing precision on large values.
+
+        ``SymPy.evalf()`` defaults to 15 significant digits, so a value with
+        more than 15 significant digits was silently rounded *before* the
+        comparison — e.g. ``10000000000000001`` collapsed to
+        ``10000000000000000`` and an incorrect claim was marked VERIFIED
+        (GHSA-j622-qffp-rc27). Exact integers are converted exactly; every
+        other number is evaluated at a precision scaled to its own magnitude.
+        """
+        if getattr(expr, "is_Integer", False):
+            return self._quantize(Decimal(int(expr)))
+
+        # Significant digits needed = integer digits + fractional guard.
+        try:
+            int_part = int(abs(expr))
+        except (TypeError, ValueError):
+            int_part = 0
+        int_digits = len(str(int_part)) if int_part else 1
+        precision = max(30, int_digits + 15)
+        raw_value = expr.evalf(precision)
+        return self._quantize(Decimal(str(raw_value)))
     
     # =========================================================================
     # Core Math Verification
@@ -125,11 +160,7 @@ class VerificationEngine:
             
             # 2. Evaluate deterministically
             if use_decimal:
-                raw_value = expr.evalf()
-                calculated_value = Decimal(str(raw_value)).quantize(
-                    Decimal("0.000001"),
-                    rounding=ROUND_HALF_UP
-                )
+                calculated_value = self._calc_decimal(expr)
                 expected_decimal = Decimal(str(expected_value))
                 max_tolerance = self._max_verify_math_tolerance(calculated_value)
 
