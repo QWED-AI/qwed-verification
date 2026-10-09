@@ -39,6 +39,10 @@
 
 ---
 
+## Release Update: v7.2.2 — Verification Soundness & Safety Hardening
+
+`v7.2.2` is a fail-closed security release covering four coordinated advisories (published on the repository Security tab): a local-SDK SymPy allow-list bypass, logic-verification soundness fixes (boolean operators / chained comparisons on symbolic objects, and DSL string literals), large-number precision in `verify_math`, and computational-cost bounds in the math parser and logic/DSL engines. No new capability, no breaking wire changes — upgrade from any `>= 6.0.0, <= 7.2.1` deployment is recommended.
+
 ## Release Update: v7.2.1 — Math Answer Comparison Security Fix
 
 `v7.2.1` is a fail-closed security patch: the math answer comparison path now parses untrusted model answers only through the hardened `safe_parse_expr` (GHSA-xmm6-8r3x-j567), and the release boundary gate covers `qwed_sdk/` with raw `sympify` forbidden. No new capability, no breaking wire changes — upgrade from any `>= 6.0.0, <= 7.2.0` deployment is recommended.
