@@ -35,6 +35,11 @@ class SafeEvaluator:
             'Real': Real,
         }
 
+        # NOTE: Python boolean operators (and/or/not) and chained comparisons
+        # are deliberately NOT in this list. On Z3 objects they do not build a
+        # Z3 formula — Python evaluates them with bool()/structural ==, which
+        # silently changes the constraint and can prove false theorems
+        # (GHSA-mfh5-3c8f-975p). Callers must use the Z3 builders And/Or/Not.
         self._allowed_node_types = (
             ast.Expression,
             ast.Call,
@@ -43,13 +48,9 @@ class SafeEvaluator:
             ast.Constant,
             ast.List,
             ast.Tuple,
-            ast.BoolOp,
             ast.UnaryOp,
             ast.BinOp,
             ast.Compare,
-            ast.And,
-            ast.Or,
-            ast.Not,
             ast.UAdd,
             ast.USub,
             ast.Add,
@@ -73,6 +74,13 @@ class SafeEvaluator:
         for node in ast.walk(tree):
             if not isinstance(node, self._allowed_node_types):
                 raise ValueError(f"Unsafe expression node detected: {type(node).__name__}")
+
+            # Chained comparisons (e.g. ``0 < x < 5``) desugar to a Python
+            # ``and`` over Z3 relations, which Z3 cannot cast to bool. Require a
+            # single comparator so the constraint is an unambiguous Z3 relation;
+            # callers must split chains into And(0 < x, x < 5).
+            if isinstance(node, ast.Compare) and len(node.ops) != 1:
+                raise ValueError("Unsafe expression: chained comparison; use And(...) instead")
 
             if isinstance(node, ast.Name) and node.id not in allowed_names:
                 raise ValueError(f"Unsafe expression name detected: {node.id}")

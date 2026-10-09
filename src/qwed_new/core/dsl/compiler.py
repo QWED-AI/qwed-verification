@@ -24,6 +24,11 @@ except ImportError:
     SYMPY_AVAILABLE = False
 
 
+def _is_quoted_literal(token: str) -> bool:
+    """True if a token is a quoted string literal (parser keeps the quotes)."""
+    return len(token) >= 2 and token[0] in ("'", '"') and token[-1] == token[0]
+
+
 @dataclass
 class CompileResult:
     """Result of compiling DSL to Z3/SymPy."""
@@ -127,7 +132,17 @@ class Z3Compiler:
         if isinstance(node, (int, float)):
             return node
         if isinstance(node, str):
-            # Variable reference - create if not exists
+            # A quoted string literal is not a variable name. The parser keeps
+            # the surrounding quotes on such tokens, so ``"red"`` arrives here as
+            # the 4-char string '"red"'. Auto-creating an Int for it invented a
+            # fresh variable and made contradictory string constraints look SAT
+            # (e.g. (AND (EQ color "red") (EQ color "blue")) → SAT)
+            # (GHSA-mfh5-3c8f-975p). String literals are not a supported Z3 sort.
+            if _is_quoted_literal(node):
+                raise ValueError(
+                    f"String literals are not supported in logic constraints: {node}"
+                )
+            # Bare identifier: variable reference - create if not exists
             if node not in z3_vars:
                 # Auto-create as Int (fallback)
                 z3_vars[node] = Int(node)
