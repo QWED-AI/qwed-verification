@@ -24,6 +24,26 @@ except ImportError:
     SYMPY_AVAILABLE = False
 
 
+# Cost bounds for statically-known integer exponentiation. z3/Python compute
+# ``int ** int`` in full before the solver runs, so an unbounded POW in the DSL
+# (e.g. (EQ x (POW 9 (POW 9 9)))) expands a huge integer on the request thread.
+_MAX_POW_EXPONENT = 10_000
+_MAX_POW_EXPANSION_DIGITS = 100_000
+
+
+def _check_pow_cost(base: Any, exponent: Any) -> None:
+    """Reject a statically-known integer power beyond the expansion bounds."""
+    if not isinstance(exponent, int) or isinstance(exponent, bool):
+        return
+    if abs(exponent) > _MAX_POW_EXPONENT:
+        raise ValueError(
+            f"POW exponent exceeds the maximum magnitude of {_MAX_POW_EXPONENT}"
+        )
+    if isinstance(base, int) and not isinstance(base, bool) and base != 0:
+        if len(str(abs(base))) * abs(exponent) > _MAX_POW_EXPANSION_DIGITS:
+            raise ValueError("POW demands unbounded exact-integer expansion")
+
+
 def _is_quoted_literal(token: str) -> bool:
     """True if a token is a quoted string literal (parser keeps the quotes)."""
     return len(token) >= 2 and token[0] in ("'", '"') and token[-1] == token[0]
@@ -196,6 +216,7 @@ class Z3Compiler:
         elif operator == 'DIV':
             return compiled_args[0] / compiled_args[1]
         elif operator == 'POW':
+            _check_pow_cost(compiled_args[0], compiled_args[1])
             return compiled_args[0] ** compiled_args[1]
         elif operator == 'MOD':
             return compiled_args[0] % compiled_args[1]
