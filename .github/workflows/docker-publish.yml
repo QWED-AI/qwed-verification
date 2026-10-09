@@ -78,6 +78,11 @@ jobs:
           image: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
           format: spdx-json
           output-file: sbom.spdx.json
+          # On release events the action otherwise tries to attach the SBOM as a
+          # release asset, which needs `contents: write`. This job runs with the
+          # least-privilege `contents: read`, and the SBOM is already retained via
+          # the "Upload SBOM" workflow artifact below, so disable release upload.
+          upload-release-assets: false
 
       - name: Upload SBOM
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
