@@ -4,6 +4,32 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+## [7.2.2] - 2026-10-09
+
+### Security fixes
+
+This is a fail-closed security release. Publication of the four coordinated
+advisories is pending (they will appear on the repository Security tab); upgrade
+from any `>= 6.0.0, <= 7.2.1` deployment is recommended. No breaking wire changes.
+
+- **Local SDK math verification** — the SymPy expression validator now rejects
+  string literals nested inside container arguments, closing an allow-list
+  bypass that could route untrusted model output to SymPy's string-evaluation
+  path (`qwed_sdk/qwed_local.py`).
+- **Logic verification soundness** — the Z3 constraint evaluator no longer
+  accepts Python boolean operators (`and`/`or`/`not`) or chained comparisons on
+  symbolic objects, and the DSL compiler rejects string literals instead of
+  materialising them as variables. Both could otherwise yield a `VERIFIED`
+  verdict that did not follow from the input
+  (`core/safe_evaluator.py`, `core/dsl/compiler.py`).
+- **Large-number math verification** — `verify_math` now compares results at a
+  precision scaled to the operands, so values beyond 15 significant digits are
+  no longer rounded before the comparison (`core/verifier.py`).
+- **Computational cost bounds** — the math parser applies its cost gates to
+  implicit-multiplication input, and the logic/DSL engines bound
+  statically-known integer powers, preventing short requests from exhausting a
+  worker (`core/safe_parser.py`, `core/safe_evaluator.py`, `core/dsl/compiler.py`).
+
 ## [7.2.1] - 2026-09-14
 
 ### Security fix
