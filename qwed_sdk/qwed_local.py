@@ -325,17 +325,33 @@ def _math_answers_match(llm_answer: str, verified_result: Any) -> bool:
     except Exception:
         return False
 
+def _is_string_constant(node: ast.AST) -> bool:
+    """True for a string literal node (ast.Constant(str), or legacy ast.Str)."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return True
+    return bool(hasattr(ast, 'Str') and isinstance(node, ast.Str))
+
+
+def _iter_string_constants(node: ast.AST):
+    """Yield every string-literal node anywhere in the subtree rooted at node."""
+    for child in ast.walk(node):
+        if _is_string_constant(child):
+            yield child
+
+
 def _has_string_arg(node: ast.Call) -> bool:
-    """Check if a Call node has any string literal arguments."""
+    """True if ANY argument subtree contains a string literal.
+
+    Deep by design: a string nested inside a tuple/list/call argument (e.g.
+    ``simplify(("x",))``) reaches sympify() exactly like a direct string
+    argument would, so container-wrapped strings must be caught here too
+    (GHSA-4v5r-g7f4-vvgc — incomplete fix for GHSA-xmm6-8r3x-j567).
+    """
     for arg in node.args:
-        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-            return True
-        if hasattr(ast, 'Str') and isinstance(arg, ast.Str):
+        if next(_iter_string_constants(arg), None) is not None:
             return True
     for kw in node.keywords:
-        if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
-            return True
-        if hasattr(ast, 'Str') and isinstance(kw.value, ast.Str):
+        if next(_iter_string_constants(kw.value), None) is not None:
             return True
     return False
 
@@ -408,9 +424,45 @@ def _is_safe_sympy_node(node: ast.AST) -> bool:
     return False
 
 
+def _collect_allowed_string_nodes(tree: ast.AST) -> set:
+    """Return the id()s of string literals that are DIRECT arguments of a
+    safe-string sympy call (Symbol/symbols/Rational/Integer).
+
+    These constructors take a string without routing it through sympify()'s
+    eval sink, so they are the only place a string literal may legally appear.
+    Every other string node is rejected by _is_safe_sympy_node.
+    """
+    allowed = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+        if name in _SYMPY_SAFE_STRING_FUNCS:
+            for arg in node.args:
+                if _is_string_constant(arg):
+                    allowed.add(id(arg))
+            for kw in node.keywords:
+                if _is_string_constant(kw.value):
+                    allowed.add(id(kw.value))
+    return allowed
+
+
 def _is_safe_sympy_ast(tree: ast.AST) -> bool:
-    """Validate that an AST tree only contains allowed SymPy operations."""
-    return all(_is_safe_sympy_node(node) for node in ast.walk(tree))
+    """Validate that an AST tree only contains allowed SymPy operations.
+
+    A string literal is allowed ONLY as the direct argument of a safe-string
+    constructor; any other string node (nested in a container, passed to a
+    sympify-backed function, or standing alone) is rejected. This is the
+    authoritative string gate — _has_string_arg stays as defense in depth.
+    """
+    allowed_strings = _collect_allowed_string_nodes(tree)
+    for node in ast.walk(tree):
+        if _is_string_constant(node) and id(node) not in allowed_strings:
+            return False
+        if not _is_safe_sympy_node(node):
+            return False
+    return True
 
 
 def _is_safe_sympy_expr(expr_str: str) -> bool:
