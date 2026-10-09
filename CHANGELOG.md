@@ -8,9 +8,9 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Security fixes
 
-This is a fail-closed security release. Four coordinated advisories are published
-on the repository Security tab; upgrade from any `>= 6.0.0, <= 7.2.1` deployment
-is recommended. No breaking wire changes.
+This is a fail-closed security release. Publication of the four coordinated
+advisories is pending (they will appear on the repository Security tab); upgrade
+from any `>= 6.0.0, <= 7.2.1` deployment is recommended. No breaking wire changes.
 
 - **Local SDK math verification** — the SymPy expression validator now rejects
   string literals nested inside container arguments, closing an allow-list
