@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+message: "If you use QWED in your research or software, please cite it as below."
+type: software
+title: "QWED-AI/qwed-verification"
+abstract: "Open-source verification layer that checks claims in LLM and AI-agent output with deterministic engines and fails closed."
+authors:
+- family-names: "Dass"
+  given-names: "Rahul"
+  orcid: "https://orcid.org/0009-0000-2088-7487"
+- family-names: "Crocetti"
+  given-names: "Valerio"
+- family-names: "Ibrahim"
+  given-names: "Fares"
+# Concept DOI: resolves to the latest archived release.
+doi: 10.5281/zenodo.18111675
+url: "https://github.com/QWED-AI/qwed-verification"
+repository-code: "https://github.com/QWED-AI/qwed-verification"
+license: Apache-2.0
+keywords:
+  - ai-verification
+  - llm-safety
+  - formal-verification
+  - sympy
+  - z3-prover
+preferred-citation:
+  type: report
+  title: "QWED Protocol: Deterministic Verification for Large Language Models"
+  authors:
+  - family-names: "Dass"
+    given-names: "Rahul"
+    orcid: "https://orcid.org/0009-0000-2088-7487"
+  # Concept DOI of the technical note (all versions). v1.1.0 has errata: docs/WHITEPAPER.md
+  doi: "10.5281/zenodo.18075234"
+  year: 2025
+  publisher:
+    name: "Zenodo"
+  url: "https://doi.org/10.5281/zenodo.18075234"

@@ -4,8 +4,10 @@
 
 | Version | Supported |
 | ------- | --------- |
-| 7.2.x   | :white_check_mark: |
+| 7.2.x (latest release) | :white_check_mark: |
 | < 7.2   | :x: |
+
+Security fixes are released for the latest version only.
 
 ## Reporting a Vulnerability
 
@@ -18,7 +20,7 @@ Please do **not** report security vulnerabilities through public GitHub issues, 
 Instead, please report them privately via email to:  
 **rahul@qwedai.com**
 
-If GitHub private vulnerability reporting is enabled for this repository, you may use that channel as well.
+You can also report privately through [GitHub Security Advisories](https://github.com/QWED-AI/qwed-verification/security/advisories/new).
 
 Please include as much information as possible to help us reproduce and fix the issue, including:
 - Steps to reproduce the issue
@@ -31,7 +33,7 @@ Please include as much information as possible to help us reproduce and fix the 
 
 We are committed to addressing security issues promptly.
 
-- We will acknowledge your report within **24 hours**
+- We aim to acknowledge your report within **3 business days**. QWED has a single maintainer, so a response may occasionally take longer.
 - We will triage and validate the report as quickly as possible
 - We will keep you informed of progress during investigation and remediation
 - We will coordinate disclosure timing with you when appropriate
@@ -51,10 +53,14 @@ We value the security community and will publicly credit vulnerability reporters
 
 ### Acknowledgments
 
-We thank the following researchers for responsibly disclosed findings fixed in our releases (all credits accepted by the reporters; see the linked advisories):
+We thank the following people, credited in the published advisories, for responsibly disclosed findings:
 
-- **Sebastion Höpfl (@Sebastion, sebastiondev) via Foundation Machines** — authenticated RCE via SymPy expression injection (CWE-94, [CVE-2026-55585](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-q27q-98j4-9pfv)): initial mitigation in v5.1.2, bypass variant fully re-architected in v7.2.0 (#330, #344).
-- **EQSTLab (@EQSTLab)** — independent report and confirmation of the above.
+- **EQSTLab** ([@EQSTLab](https://github.com/EQSTLab)), reporter, and **2REBCat** ([@2REBCat](https://github.com/2REBCat)), analyst: SymPy expression injection, [GHSA-q27q-98j4-9pfv](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-q27q-98j4-9pfv) / CVE-2026-55585, fixed in 5.1.2.
+- **manus-pi** ([@manus-pi](https://github.com/manus-pi)) and **manus-use** ([@manus-use](https://github.com/manus-use)), reporters: unsanitized `sympify()` in the math verifier, [GHSA-xmm6-8r3x-j567](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-xmm6-8r3x-j567), fixed in 7.2.1.
+
+Thanks also to **andesyteoss** ([@andesyteoss](https://github.com/andesyteoss)) for contributing the expression-parsing fix in [#200](https://github.com/QWED-AI/qwed-verification/pull/200).
+
+The full list of published advisories, with affected and fixed versions, is on the [Security tab](https://github.com/QWED-AI/qwed-verification/security/advisories).
 
 ## Security Issue vs. Bug
 

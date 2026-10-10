@@ -1,40 +1,38 @@
-# QWED Public Roadmap (2026)
+# QWED Roadmap
 
-This roadmap outlines our strategic direction for the next 12 months. Note that timelines are estimates and subject to change based on community feedback and contributor availability.
+What is being worked on, grouped by priority rather than by date. Every item links to the issue where progress is tracked; the issues are the source of truth.
 
-## 🎯 Q1 2026: The Neurosymbolic Pivot & Security Layer
+## Now: verification correctness and security hardening
 
-**Status:** In Progress 🚧
+- [Verification correctness and engine hardening](https://github.com/QWED-AI/qwed-verification/issues/433) (tracker)
+- [External audit remediation](https://github.com/QWED-AI/qwed-verification/issues/342) (tracker) and [source-only audit, run 2](https://github.com/QWED-AI/qwed-verification/issues/394) (tracker)
+- [Fail-closed boundaries across execution, graph, reasoning and logic engines](https://github.com/QWED-AI/qwed-verification/issues/167) (tracker)
+- Attestations on every authoritative `VERIFIED` result: [#319](https://github.com/QWED-AI/qwed-verification/issues/319), [#320](https://github.com/QWED-AI/qwed-verification/issues/320)
+- SDK paths that still return two-state results: [#326](https://github.com/QWED-AI/qwed-verification/issues/326), [#327](https://github.com/QWED-AI/qwed-verification/issues/327)
 
-- [x] **Rebrand**: Document "Neurosymbolic Verification" architecture.
-- [ ] **PII Masking**: Integrate Presidio for privacy-first verification.
-- [ ] **Granular Confidence**: Move beyond binary pass/fail to nuanced confidence scores with visual indicators.
-- [ ] **OpenSSF Silver Badge**: Meet governance and security best practices.
+## Next: engines
 
-## 🚀 Q2 2026: Scale & Optimization
+- Deterministic statistical claims for the Stats engine: [#298](https://github.com/QWED-AI/qwed-verification/issues/298), [#299](https://github.com/QWED-AI/qwed-verification/issues/299)
+- CrossHair inside the secure sandbox: [#431](https://github.com/QWED-AI/qwed-verification/issues/431)
+- DSL operators with no Z3 implementation (IFF, FORALL, EXISTS): [#428](https://github.com/QWED-AI/qwed-verification/issues/428)
+- Bounded model checking for loops: [#16](https://github.com/QWED-AI/qwed-verification/issues/16)
 
-**Status:** Planned 📅
+## Later: protocol
 
-- [ ] **Cost Tracking**: Built-in token usage and cost analysis per query.
-- [ ] **Streaming Support**: Real-time feedback and progress indicators for long-running verifications.
-- [ ] **Performance Benchmarks**: Publish comprehensive benchmarks against leading LLMs (GPT-4 vs QWED+GPT-4o-mini).
+- Verification Context v1.1: attempt identity and retry provenance ([#381](https://github.com/QWED-AI/qwed-verification/issues/381), tracker [#385](https://github.com/QWED-AI/qwed-verification/issues/385))
+- Execution-outcome feedback for agents: [#382](https://github.com/QWED-AI/qwed-verification/issues/382)
 
-## 🔮 H2 2026: Enterprise & Expansion
+## Done
 
-**Status:** Proposed 💡
+Release history is in [CHANGELOG.md](CHANGELOG.md) and on [GitHub Releases](https://github.com/QWED-AI/qwed-verification/releases). Recent milestones:
 
-- [ ] **Multi-Language Support**: Expand beyond Python SDK to TypeScript/Go/Rust.
-- [ ] **Custom DSL Support**: Allow users to define custom verification logic.
-- [ ] **Enterprise Features**: 
-    - Audit Logging
-    - SSO Integration (Separate Enterprise Repo)
-    - Role-Based Access Control (RBAC)
+- `DiagnosticResult` on every engine API endpoint (v7.0.0)
+- Verification Context v1.0 (v7.1.0)
+- Security and soundness fixes (v7.2.0 to v7.2.2)
+- OpenSSF Best Practices: Gold
+- SDKs for TypeScript, Go and Rust
 
----
+## Get involved
 
-## Contributing to the Roadmap
-
-We welcome community input! If you have suggestions:
-1.  Check existing [Issues](https://github.com/QWED-AI/qwed-verification/issues).
-2.  Start a [Discussion](https://github.com/QWED-AI/qwed-verification/discussions).
-3.  Propose a new feature with a detailed use case.
+- Suggest features or report bugs in [Issues](https://github.com/QWED-AI/qwed-verification/issues)
+- Discuss ideas in [Discussions](https://github.com/QWED-AI/qwed-verification/discussions)

@@ -57,12 +57,12 @@ import re
 # CONFIGURATION
 # ============================================================================
 
-AZURE_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "https://rahul-0907-resource.cognitiveservices.azure.com/")
+AZURE_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "https://your-resource.cognitiveservices.azure.com/")
 AZURE_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
 AZURE_API_VERSION = "2024-12-01-preview"
 
 # Azure Anthropic endpoint
-AZURE_ANTHROPIC_ENDPOINT = os.getenv("AZURE_ANTHROPIC_ENDPOINT", "https://rahul-0907-resource.services.ai.azure.com/anthropic/v1/messages")
+AZURE_ANTHROPIC_ENDPOINT = os.getenv("AZURE_ANTHROPIC_ENDPOINT", "https://your-resource.services.ai.azure.com/anthropic/v1/messages")
 AZURE_ANTHROPIC_API_KEY = os.getenv("AZURE_ANTHROPIC_API_KEY", AZURE_API_KEY)
 
 # Models to test
@@ -591,7 +591,12 @@ def run_benchmark(models: List[str] = None, tests: List[str] = None):
 
 if __name__ == "__main__":
     import sys
-    
+
+    missing = [name for name in ("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY") if not os.getenv(name)]
+    if missing:
+        sys.exit(f"Set {', '.join(missing)} before running this benchmark "
+                 "(and AZURE_ANTHROPIC_ENDPOINT for the Claude models).")
+
     # Parse command line args
     models = ["gpt-4o"]  # Default
     tests = None  # All tests
