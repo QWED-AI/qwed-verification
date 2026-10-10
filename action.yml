@@ -1,4 +1,3 @@
-# Source: Matching the qwed-verification file list structure
 name: 'QWED Protocol Verification'
 description: 'Verify LLM outputs with Z3/SymPy. Scan secrets, code, and shell scripts. SARIF output for GitHub Security.'
 author: 'QWED-AI'

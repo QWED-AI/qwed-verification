@@ -8,9 +8,10 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Security fixes
 
-This is a fail-closed security release. Publication of the four coordinated
-advisories is pending (they will appear on the repository Security tab); upgrade
-from any `>= 6.0.0, <= 7.2.1` deployment is recommended. No breaking wire changes.
+This is a fail-closed security release covering four published advisories:
+GHSA-4v5r-g7f4-vvgc, GHSA-mfh5-3c8f-975p, GHSA-j622-qffp-rc27 and
+GHSA-mxwv-x5qm-mrmf. They affect all versions up to 7.2.1; upgrading is
+recommended. No breaking wire changes.
 
 - **Local SDK math verification** — the SymPy expression validator now rejects
   string literals nested inside container arguments, closing an allow-list
@@ -37,7 +38,7 @@ from any `>= 6.0.0, <= 7.2.1` deployment is recommended. No breaking wire change
 - **Math answer comparison hardening (GHSA-xmm6-8r3x-j567)** — `QWEDLocal._math_answers_match` fed the untrusted model answer to raw `sympy.sympify()`, whose eval sink executes dunder-traversal gadgets smuggled in the answer turn. The answer is now parsed only through the hardened `safe_parse_expr` (character allow-list, AST allow-list, builtins stripped, cost-bounded); unparseable input and a missing parser fail closed to `False`.
 - **Release boundary gate** — `scripts/check_boundary.py` now scans `qwed_sdk/` and forbids raw `sympify` outside approved wrappers (shell findings honor line-scoped `# noqa`).
 
-> **Semver:** patch release — security fix only, no new capability, no breaking wire changes. All supported install coordinates (`qwed` 7.2.1 on PyPI, `@qwed-ai/sdk` 7.2.1 on npm, `qwed` 7.2.1 on crates.io) carry the fix.
+> **Semver:** patch release — security fix only, no new capability, no breaking wire changes. `qwed` 7.2.1 on PyPI and crates.io carries the fix. (Correction: the npm publish of `@qwed-ai/sdk` 7.2.1 failed, so npm stayed at 7.2.0; the failure was hidden by `continue-on-error` in the publish workflow.)
 
 ## [7.2.0] - 2026-09-07
 

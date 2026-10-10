@@ -70,7 +70,7 @@ def seed_database():
         print(f"   Key Expires: {api_key_obj.expires_at}")
         print(f"   Tier: {demo_org.tier}")
         print(f"\n   Use this in your requests (replace <YOUR_API_KEY_HERE> with the full key you stored securely):")
-        print("   curl -H 'x-api-key: <YOUR_API_KEY_HERE>' http://13.71.22.94:8000/verify/natural_language")
+        print("   curl -H 'x-api-key: <YOUR_API_KEY_HERE>' http://localhost:8000/verify/natural_language")
 
 if __name__ == "__main__":
     seed_database()
