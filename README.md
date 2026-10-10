@@ -43,7 +43,7 @@ result = SQLVerifier().verify_sql(
 )
 print(result.status.value, admission_decision(result).value)
 # VERIFIED BLOCKED
-print(result.developer_fields["issues"])
+print([issue["type"] for issue in result.developer_fields["issues"]])
 # ['destructive_command', 'injection_tautology']
 ```
 
