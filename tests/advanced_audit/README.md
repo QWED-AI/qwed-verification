@@ -8,7 +8,7 @@ pip install -r requirements.txt
 ```
 
 2. **Configure API credentials:**
-Edit `config.yaml` and set your QWED API URL and key.
+Copy `config.example.yaml` to `config.yaml` (git-ignored) and set your QWED API URL and key.
 
 ## Running Tests
 
@@ -55,7 +55,7 @@ pytest test_suites/ -n auto
 ```
 advanced_audit/
 ├── run_complete_audit.py    # Main test runner
-├── config.yaml               # Configuration
+├── config.example.yaml       # Configuration template (copy to config.yaml)
 ├── conftest.py              # Pytest fixtures
 ├── api_client.py            # QWED API client
 ├── base_test.py             # Base test class

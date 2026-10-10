@@ -12,7 +12,7 @@ Thank you for your interest in contributing! Before you start, please read this 
 |------|----------------|
 | [README.md](./README.md) | Understand what QWED is |
 | [QWED_RULES.md](./QWED_RULES.md) | Canonical enforcement rules for contributors and tools |
-| [docs/architecture.md](./docs/architecture.md) | System design and engine architecture |
+| [Architecture](https://docs.qwedai.com/architecture) | System design and engine architecture |
 | [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) | Community standards |
 | [SECURITY.md](./SECURITY.md) | How to report vulnerabilities |
 
@@ -38,9 +38,10 @@ Sensitive operations must go through approved wrappers — never bare calls:
 
 | Dangerous Operation | Approved Path |
 |---------------------|---------------|
-| `eval()` / `exec()` | `code_engine.safe_eval()` / `code_engine.safe_exec()` |
-| `parse_expr()` | `safe_parser.safe_parse_expr()` |
-| `os.system()` / `subprocess.Popen()` | `code_engine.safe_shell()` |
+| `eval()` | `SafeEvaluator.safe_eval()` in `src/qwed_new/core/safe_evaluator.py` |
+| `exec()` / running generated code | `SecureCodeExecutor.execute()` in `src/qwed_new/core/secure_code_executor.py` |
+| `parse_expr()` / `sympify()` | `safe_parse_expr()` in `src/qwed_new/core/safe_parser.py` |
+| `os.system()` / `subprocess.*` | Not allowed outside the files listed in `APPROVED_WRAPPER_PATHS` in `scripts/check_boundary.py`. A shared shell wrapper does not exist yet. |
 
 Direct calls to these dangerous functions outside their approved wrappers will
 be caught by the CI boundary gate (see `scripts/check_boundary.py`).
@@ -69,8 +70,8 @@ cd qwed-verification
 python -m venv venv
 source venv/bin/activate  # or .\venv\Scripts\activate on Windows
 
-# Install in development mode
-pip install -e ".[dev]"
+# Install in development mode (CI installs the same extras)
+pip install -e ".[server,dev]"
 
 # Run tests
 pytest tests/ -v
@@ -78,17 +79,9 @@ pytest tests/ -v
 
 ---
 
-## 🎯 Current Focus (Phase 1: Logic Verification)
+## 🎯 Where to Start
 
-We are building **symbolic execution capabilities**. Here are the priority issues:
-
-| Priority | Issue | Description |
-|----------|-------|-------------|
-| 🔴 High | [#15 CrossHair Integration](https://github.com/QWED-AI/qwed-verification/issues/15) | Python-native symbolic execution |
-| 🟡 Medium | [#16 Bounded Model Checking](https://github.com/QWED-AI/qwed-verification/issues/16) | Loop depth limits for path explosion |
-| 🟢 Easy | Documentation improvements | Help improve docs |
-
-**Pick an issue labeled `good first issue` or `help wanted` to get started!**
+Current priorities are in [ROADMAP.md](./ROADMAP.md) and the [open issues](https://github.com/QWED-AI/qwed-verification/issues). Issues labelled [`good first issue`](https://github.com/QWED-AI/qwed-verification/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) and [`help wanted`](https://github.com/QWED-AI/qwed-verification/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22) are good places to begin.
 
 ---
 
@@ -133,18 +126,17 @@ git push origin feat/your-feature
 
 ### 4. Code Review Standards
 
-To maintain high code quality and security, all Pull Requests (PRs) must undergo a rigorous review process:
+QWED currently has a single maintainer (see [GOVERNANCE.md](./GOVERNANCE.md)), so reviews work like this:
 
-- **Two-Person Review**: All non-trivial changes (features, bug fixes, refactors) require validation from at least one maintainer other than the author.
-- **Automated Checks**: All CI checks (linting, testing, security scans) must pass.
+- **External PRs** are reviewed by the maintainer before merge.
+- **Maintainer PRs** are reviewed by automated reviewers (CodeQL, SonarCloud, CodeRabbit and similar) and merged by the maintainer. Independent human review of maintainer changes is not guaranteed.
+- **CI** (tests, the boundary check, CodeQL, SonarCloud) is expected to pass before merge.
 - **Review Checklist**:
     - [ ] Logic correctness and edge case handling
     - [ ] Test coverage (tests added for new features)
     - [ ] Security implications (no hardcoded secrets, safe input handling)
     - [ ] Documentation updates
     - [ ] Compliance with coding standards (PEP 8, type hints)
-
-Self-merging is restricted to documentation fixes, minor typos, or urgent hotfixes by the BDFL.
 
 ### Commit Message Format
 
@@ -180,15 +172,9 @@ qwed-verification/
 
 ## ⚠️ What NOT to Contribute
 
-These features are in a **separate enterprise repo** and not accepted here:
+Some enterprise features (such as SSO) are developed in a separate, private repository. This repository does include basic authentication, tenant isolation, audit logging and RBAC: bug fixes and security fixes for them are welcome here. Please open an issue before proposing new enterprise-scope features.
 
-- ❌ Audit logging / compliance exports
-- ❌ SSO / authentication systems
-- ❌ Multi-tenancy features
-- ❌ Telemetry / observability
-- ❌ Enterprise RBAC
-
-If you're interested in enterprise features, contact us at rahul@qwedai.com.
+For enterprise questions, contact support@qwedai.com.
 
 ---
 
@@ -202,17 +188,13 @@ By contributing, you agree that your contributions will be licensed under the [A
 
 ### Developer Certificate of Origin (DCO)
 
-To contribute to this project, you must sign off on your commits, certifying that you have the right to submit the code under the project's license. This is done by adding a `Signed-off-by` line to your commit messages.
+We ask contributors to sign off their commits, certifying under the [Developer Certificate of Origin](https://developercertificate.org/) that they have the right to submit the code under the project's license. Sign-off is not currently enforced by CI. It is done by adding a `Signed-off-by` line to your commit messages.
 
 ```
 Signed-off-by: Random J. Developer <random@developer.example.org>
 ```
 
-By signing off, you certify the following:
-
-> I certify that the contribution is original work, or I have the right to submit it under the  open source license. I understand that my contribution and personal information (including name and email) will be permanently recorded in the project's commit history.
-
-Build tools and bots may enforce this requirement. You can sign off commits automatically with `git commit -s`.
+By signing off, you certify the statements in [DCO 1.1](https://developercertificate.org/), including that your name and email will be permanently recorded in the project's commit history. You can sign off commits automatically with `git commit -s`.
 
 ### Project Governance
 
@@ -224,5 +206,5 @@ This project is governed under a BDFL model. See [GOVERNANCE.md](./GOVERNANCE.md
 
 - Open an issue with the `question` label
 - Join discussions in GitHub Discussions
-- Email: rahul@qwedai.com
+- Email: support@qwedai.com (security reports: see [SECURITY.md](./SECURITY.md))
 

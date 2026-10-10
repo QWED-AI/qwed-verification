@@ -122,6 +122,6 @@ This transparency is essential for production deployment.
 
 ---
 
-**Note:** These benchmarks validate the limitations documented in [`docs/SYMBOLIC_EXECUTION_LIMITS.md`](../docs/SYMBOLIC_EXECUTION_LIMITS.md).
+**Note:** These benchmarks validate the limitations documented in [symbolic execution limits](https://docs.qwedai.com/advanced/symbolic-limits).
 
 **Reddit Criticism Addressed:** *"My guess would be that technique falls apart at depths required in real world coding environments."* — **We agree**, and this benchmark proves it.

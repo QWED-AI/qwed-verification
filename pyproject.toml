@@ -3,7 +3,7 @@ name = "qwed"
 version = "7.2.2"
 description = "Open-source AI verification infrastructure for deterministic verification of LLM outputs, tool calls, code, schemas, and agent state before production execution."
 authors = [
-    {name = "QWED Team", email = "rahul@qwedai.com"},
+    {name = "Rahul Dass", email = "rahul@qwedai.com"}
 ]
 license = {text = "Apache-2.0"}
 keywords = [
@@ -30,7 +30,6 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Security",
     "Topic :: Software Development :: Quality Assurance",
@@ -119,7 +118,7 @@ packages = ["src/qwed_new", "qwed_sdk"]
 "src/qwed_new/core/data/verification-context.schema.json" = "qwed_new/core/data/verification-context.schema.json"
 
 [project.scripts]
-qwed = "qwed_sdk.cli:cli"  # Fixed: cli not main!
+qwed = "qwed_sdk.cli:cli"
 
 [tool.pytest.ini_options]
 minversion = "6.0"
