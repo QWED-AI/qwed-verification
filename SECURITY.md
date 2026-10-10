@@ -58,7 +58,7 @@ We thank the following people, credited in the published advisories, for respons
 - **EQSTLab** ([@EQSTLab](https://github.com/EQSTLab)), reporter, and **2REBCat** ([@2REBCat](https://github.com/2REBCat)), analyst: SymPy expression injection, [GHSA-q27q-98j4-9pfv](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-q27q-98j4-9pfv) / CVE-2026-55585, fixed in 5.1.2.
 - **manus-pi** ([@manus-pi](https://github.com/manus-pi)) and **manus-use** ([@manus-use](https://github.com/manus-use)), reporters: unsanitized `sympify()` in the math verifier, [GHSA-xmm6-8r3x-j567](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-xmm6-8r3x-j567), fixed in 7.2.1.
 
-Thanks also to **andesyteoss** ([@andesyteoss](https://github.com/andesyteoss)) for contributing the expression-parsing fix in [#200](https://github.com/QWED-AI/qwed-verification/pull/200).
+Thanks also to **Sebastian Höpfl** ([@Sebastion](https://github.com/Sebastion)), who wrote the original `safe_parse_expr` wrapper, the first fail-closed expression parser in QWED ([#200](https://github.com/QWED-AI/qwed-verification/pull/200), released in 5.1.2 and hardened in 7.2.0 by [#344](https://github.com/QWED-AI/qwed-verification/pull/344)).
 
 The full list of published advisories, with affected and fixed versions, is on the [Security tab](https://github.com/QWED-AI/qwed-verification/security/advisories).
 
