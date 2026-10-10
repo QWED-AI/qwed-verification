@@ -592,11 +592,6 @@ def run_benchmark(models: List[str] = None, tests: List[str] = None):
 if __name__ == "__main__":
     import sys
 
-    missing = [name for name in ("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY") if not os.getenv(name)]
-    if missing:
-        sys.exit(f"Set {', '.join(missing)} before running this benchmark "
-                 "(and AZURE_ANTHROPIC_ENDPOINT for the Claude models).")
-
     # Parse command line args
     models = ["gpt-4o"]  # Default
     tests = None  # All tests
@@ -616,5 +611,20 @@ if __name__ == "__main__":
             "Refusing to run benchmark: generated code execution requires "
             "--allow-unsafe-exec."
         )
+
+    # Require credentials only for the providers of the selected models.
+    required = {
+        "azure": [("AZURE_OPENAI_ENDPOINT",), ("AZURE_OPENAI_API_KEY",)],
+        "anthropic": [("AZURE_ANTHROPIC_ENDPOINT",), ("AZURE_ANTHROPIC_API_KEY", "AZURE_OPENAI_API_KEY")],
+    }
+    providers = {MODELS[m]["provider"] for m in models if m in MODELS}
+    missing = [
+        " or ".join(names)
+        for provider in sorted(providers)
+        for names in required[provider]
+        if not any(os.getenv(name) for name in names)
+    ]
+    if missing:
+        raise SystemExit(f"Set {', '.join(missing)} before running this benchmark.")
 
     run_benchmark(models, tests)

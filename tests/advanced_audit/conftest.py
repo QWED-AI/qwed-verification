@@ -19,6 +19,8 @@ from api_client import QWEDAPIClient
 def config() -> Dict[str, Any]:
     """Load test configuration (session-scoped)"""
     config_file = Path(__file__).parent / "config.yaml"
+    if not config_file.exists():
+        pytest.skip("tests/advanced_audit/config.yaml not found; copy config.example.yaml and set your API URL and key")
     with open(config_file, 'r') as f:
         return yaml.safe_load(f)
 
