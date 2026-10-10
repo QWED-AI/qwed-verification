@@ -591,7 +591,12 @@ def run_benchmark(models: List[str] = None, tests: List[str] = None):
 
 if __name__ == "__main__":
     import sys
-    
+
+    missing = [name for name in ("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY") if not os.getenv(name)]
+    if missing:
+        sys.exit(f"Set {', '.join(missing)} before running this benchmark "
+                 "(and AZURE_ANTHROPIC_ENDPOINT for the Claude models).")
+
     # Parse command line args
     models = ["gpt-4o"]  # Default
     tests = None  # All tests
