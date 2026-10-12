@@ -1,0 +1,52 @@
+name: Soundness eval
+
+# Runs evals/ on every release and attaches the report (eval-results.json) to
+# the release, so each published version carries its own numbers. The same
+# cases gate every pull request through tests/test_evals.py in ci.yml.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # gh release upload
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Run the eval
+        id: run
+        run: |
+          set +e
+          python -m evals.run --out eval-results.json
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+      - name: Keep the report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: eval-results
+          path: eval-results.json
+      - name: Attach the report to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" eval-results.json --clobber --repo "$GITHUB_REPOSITORY"
+      - name: Fail on a false accept
+        if: steps.run.outputs.code != '0'
+        run: |
+          echo "::error::A claim that does not hold was accepted. See eval-results.json."
+          exit 1

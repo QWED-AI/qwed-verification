@@ -21,7 +21,7 @@ These record how often **Claude Opus 4.5** (as recorded in five of the seven fil
 
 **What these numbers do not measure.** QWED's engines were not run on the model's answers. In the scripts, an error counts as "caught" whenever the model's answer differs from the reference answer: the same branch that increments `wrong` also increments `qwed_caught` (`scripts/benchmark_adversarial.py` lines 228-229, `scripts/benchmark_finance.py` lines 266-267). The `qwed_caught` fields therefore restate the model's error count; they are not a QWED detection rate. Earlier versions of the README and whitepaper described them as "100% error detection", which was wrong.
 
-A benchmark that runs QWED's engines on model output, and reports the verdict distribution (`VERIFIED` / `UNVERIFIABLE` / `BLOCKED`) including false `VERIFIED` results, has not been published yet.
+[`evals/`](../evals/) runs QWED's proof engines on claims with a known answer and reports the verdict distribution, including any claim that does not hold but was accepted; every pull request must pass it, and each release carries its report. A benchmark that runs the engines on real model output has not been published yet.
 
 Note: the scripts evaluate model-generated expressions without a sandbox; see [#418](https://github.com/QWED-AI/qwed-verification/issues/418) before running them.
 

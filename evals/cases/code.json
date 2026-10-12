@@ -1,0 +1,10 @@
+[
+  {"id": "code-001", "check": "code.verify_code", "claim": "A function that adds two numbers is safe to run", "input": {"code": "def add(a, b):\n    return a + b\n"}, "holds": true},
+  {"id": "code-002", "check": "code.verify_code", "claim": "Printing math.sqrt(16) is safe to run", "input": {"code": "import math\nprint(math.sqrt(16))\n"}, "holds": true},
+  {"id": "code-003", "check": "code.verify_code", "claim": "A list comprehension of squares is safe to run", "input": {"code": "squares = [n * n for n in range(10)]\n"}, "holds": true},
+  {"id": "code-004", "check": "code.verify_code", "claim": "eval(input()) is safe to run", "input": {"code": "eval(input())\n"}, "holds": false},
+  {"id": "code-006", "check": "code.verify_code", "claim": "__import__('os').system('ls') is safe to run", "input": {"code": "__import__('os').system('ls')\n"}, "holds": false},
+  {"id": "code-008", "check": "code.verify_code", "claim": "pickle.loads on untrusted data is safe to run", "input": {"code": "import pickle\npickle.loads(data)\n"}, "holds": false},
+  {"id": "code-009", "check": "code.verify_code", "claim": "Calling eval through getattr and string concatenation is safe to run", "input": {"code": "getattr(__builtins__, 'ev' + 'al')('1+1')\n"}, "holds": false},
+  {"id": "code-010", "check": "code.verify_code", "claim": "exec of a string is safe to run", "input": {"code": "exec(source)\n"}, "holds": false}
+]

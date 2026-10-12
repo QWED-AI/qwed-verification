@@ -1,0 +1,18 @@
+[
+  {"id": "logic-001", "check": "logic.prove_theorem", "claim": "For an integer x, x > 5 implies x > 3", "input": {"variables": {"x": "Int"}, "premises": ["x > 5"], "conclusion": "x > 3"}, "holds": true},
+  {"id": "logic-002", "check": "logic.prove_theorem", "claim": "For an integer x, x > 3 implies x > 5", "input": {"variables": {"x": "Int"}, "premises": ["x > 3"], "conclusion": "x > 5"}, "holds": false},
+  {"id": "logic-003", "check": "logic.prove_theorem", "claim": "For every integer x, x is not 5", "input": {"variables": {"x": "Int"}, "premises": [], "conclusion": "Not(x == 5)"}, "holds": false, "source": "GHSA-mfh5-3c8f-975p"},
+  {"id": "logic-004", "check": "logic.prove_theorem", "claim": "For every integer x, x is not 5 (Python not)", "input": {"variables": {"x": "Int"}, "premises": [], "conclusion": "not (x == 5)"}, "holds": false, "source": "GHSA-mfh5-3c8f-975p"},
+  {"id": "logic-005", "check": "logic.prove_theorem", "claim": "Modus ponens: from p implies q, and p, follows q", "input": {"variables": {"p": "Bool", "q": "Bool"}, "premises": ["Implies(p, q)", "p"], "conclusion": "q"}, "holds": true},
+  {"id": "logic-006", "check": "logic.prove_theorem", "claim": "Affirming the consequent: from p implies q, and q, follows p", "input": {"variables": {"p": "Bool", "q": "Bool"}, "premises": ["Implies(p, q)", "q"], "conclusion": "p"}, "holds": false},
+  {"id": "logic-007", "check": "logic.prove_theorem", "claim": "For integers with x > y and y > 0, x > 1", "input": {"variables": {"x": "Int", "y": "Int"}, "premises": ["x > y", "y > 0"], "conclusion": "x > 1"}, "holds": true},
+  {"id": "logic-008", "check": "logic.prove_theorem", "claim": "For integers with x > y and y > 0, x > 2", "input": {"variables": {"x": "Int", "y": "Int"}, "premises": ["x > y", "y > 0"], "conclusion": "x > 2"}, "holds": false},
+  {"id": "logic-009", "check": "logic.prove_theorem", "claim": "For a real x with x * x == 2, x > 0", "input": {"variables": {"x": "Real"}, "premises": ["x * x == 2"], "conclusion": "x > 0"}, "holds": false},
+  {"id": "logic-010", "check": "logic.prove_theorem", "claim": "For an integer x with x > 0, x * x > 0", "input": {"variables": {"x": "Int"}, "premises": ["x > 0"], "conclusion": "x * x > 0"}, "holds": true},
+  {"id": "logic-101", "check": "logic.check_equivalence", "claim": "De Morgan: not (p and q) is equivalent to (not p) or (not q)", "input": {"variables": {"p": "Bool", "q": "Bool"}, "formula1": "Not(And(p, q))", "formula2": "Or(Not(p), Not(q))"}, "holds": true},
+  {"id": "logic-102", "check": "logic.check_equivalence", "claim": "p implies q is equivalent to q implies p", "input": {"variables": {"p": "Bool", "q": "Bool"}, "formula1": "Implies(p, q)", "formula2": "Implies(q, p)"}, "holds": false},
+  {"id": "logic-103", "check": "logic.check_equivalence", "claim": "p implies q is equivalent to (not p) or q", "input": {"variables": {"p": "Bool", "q": "Bool"}, "formula1": "Implies(p, q)", "formula2": "Or(Not(p), q)"}, "holds": true},
+  {"id": "logic-104", "check": "logic.check_equivalence", "claim": "For an integer x, x > 2 is equivalent to x >= 3", "input": {"variables": {"x": "Int"}, "formula1": "x > 2", "formula2": "x >= 3"}, "holds": true},
+  {"id": "logic-105", "check": "logic.check_equivalence", "claim": "For an integer x, x > 2 is equivalent to x >= 2", "input": {"variables": {"x": "Int"}, "formula1": "x > 2", "formula2": "x >= 2"}, "holds": false},
+  {"id": "logic-106", "check": "logic.check_equivalence", "claim": "x == 1 and x == 2 (Python and) is equivalent to x == 1", "input": {"variables": {"x": "Int"}, "formula1": "x == 1 and x == 2", "formula2": "x == 1"}, "holds": false, "source": "GHSA-mfh5-3c8f-975p"}
+]
