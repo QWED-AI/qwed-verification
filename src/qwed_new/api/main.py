@@ -184,6 +184,8 @@ class _BodySizeLimitMiddleware:
 # excess rejected (413) before any parse work starts.
 # Wall-clock bound for a single code verification run on the event loop (#445).
 _CODE_VERIFY_TIMEOUT_SECONDS = float(os.environ.get("QWED_CODE_VERIFY_TIMEOUT", "10"))
+# Wall-clock bound for a blocking provider (LLM) call run off the loop (#390).
+_PROVIDER_CALL_TIMEOUT_SECONDS = float(os.environ.get("QWED_PROVIDER_TIMEOUT", "30"))
 _MAX_STATS_UPLOAD_BYTES = 10_000_000
 # #353 (CodeAnt on PR #354): the byte cap bounds transfer, not the expanded
 # in-memory frame — bound rows x columns after the parse as well.
@@ -812,8 +814,14 @@ async def verify_fact(
         verifier = FactVerifier()
         
         provider = request.get("provider")
-        
-        result = verifier.verify_fact(claim, context, provider=provider)
+
+        # The fact verifier makes a blocking provider (LLM) call; run it off the
+        # event loop under a wall-clock bound so a slow upstream cannot stall the
+        # worker for every co-tenant (#390).
+        result = await asyncio.wait_for(
+            asyncio.to_thread(verifier.verify_fact, claim, context, provider=provider),
+            timeout=_PROVIDER_CALL_TIMEOUT_SECONDS,
+        )
 
         if isinstance(result, DiagnosticResult):
             dr = result

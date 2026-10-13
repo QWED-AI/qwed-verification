@@ -5,7 +5,9 @@ This module orchestrates the entire request lifecycle:
 Request -> Policy Check -> Routing -> Translation -> Verification -> Response
 """
 
+import asyncio
 import hashlib
+import os
 import time
 import logging
 from typing import Dict, Any, Optional
@@ -22,6 +24,20 @@ from qwed_new.core.diagnostics import DiagnosticResult, enforce_trust_decision
 from qwed_new.core.attestation import create_verification_attestation, AttestationStatus
 
 logger = logging.getLogger(__name__)
+
+# A provider (LLM) call does blocking network I/O. It runs in a worker thread
+# under a wall-clock bound so a slow or hung upstream cannot tie up the shared
+# event loop and stall every co-tenant's request (#390).
+_PROVIDER_CALL_TIMEOUT_SECONDS = float(os.environ.get("QWED_PROVIDER_TIMEOUT", "30"))
+
+
+async def _run_provider_call(func, *args, **kwargs):
+    """Run a blocking provider call off the event loop, bounded by a timeout."""
+    return await asyncio.wait_for(
+        asyncio.to_thread(func, *args, **kwargs),
+        timeout=_PROVIDER_CALL_TIMEOUT_SECONDS,
+    )
+
 
 class ControlPlane:
     """
@@ -104,7 +120,9 @@ class ControlPlane:
             # 3. Translation (LLM Call)
             # Note: We currently assume it's a math query for the main endpoint.
             # Future: Router should also classify intent (Math vs Logic vs Fact).
-            task: MathVerificationTask = self.translator.translate(query, provider=provider)
+            task: MathVerificationTask = await _run_provider_call(
+                self.translator.translate, query, provider=provider
+            )
             
             # 3.5. Query Classification - Detect trivial/non-math expressions
             # If LLM returned a trivial expression (like "0" or "2+2"), it's likely not math
@@ -278,9 +296,10 @@ class ControlPlane:
         try:
             # Full Pipeline: NL -> DSL -> Verification
             # DSLLogicVerifier handles the translation internally via Azure/Anthropic
-            result = self.logic_verifier.verify_from_natural_language(
+            result = await _run_provider_call(
+                self.logic_verifier.verify_from_natural_language,
                 query=query,
-                provider=provider
+                provider=provider,
             )
             resolved_provider = result.provider_used or provider
             last_known_provider = resolved_provider
