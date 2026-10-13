@@ -5,8 +5,8 @@ one failure a verifier must not have: **accepting a claim that does not hold**.
 
 ```bash
 pip install -e .
-python -m evals.run                         # summary
-python -m evals.run --out eval-results.json # full report
+python -m evals.run          # summary
+python -m evals.run --json   # also writes eval-results.json
 ```
 
 No model, network or database is involved: the runner calls the engines
@@ -27,15 +27,16 @@ checks that is the same as `admission_decision(...)` returning `ADMIT`.
 | does not hold | **false accept** (a soundness failure) | caught |
 
 `false_accept` must be zero. `tests/test_evals.py` runs every case in CI and
-fails the build otherwise. "Not proved" is allowed: QWED fails closed, so a
+fails the build otherwise. An engine that raises is an `error`, never `caught`,
+and fails the build too. "Not proved" is allowed: QWED fails closed, so a
 true claim it cannot prove is held, not passed. The report shows how many.
 
 ## The report
 
-`python -m evals.run --out eval-results.json` writes:
+`python -m evals.run --json` writes `eval-results.json` with:
 
 - `qwed_version`, `commit`, `python`, `generated_at` and the `command` that made it
-- `totals` and `by_engine`: cases, how many hold, proved, not proved, caught, false accepts
+- `totals` and `by_engine`: cases, how many hold, proved, not proved, caught, false accepts, errors
 - `statuses`: how many `VERIFIED`, `UNVERIFIABLE` and `BLOCKED` results came back
 - `cases`: every claim with its status and outcome
 
@@ -60,6 +61,8 @@ Add an object to the file for its engine in `cases/`:
 - `check` is one of the engine calls in `run.py` (`_engines`).
 - `holds` is the true answer, worked out independently of QWED.
 - `source` names the advisory or issue a case comes from, when there is one.
+- Changing the `holds` of an existing case needs its reason in the pull
+  request: flipping an answer is the one way to hide a false accept.
 
 Every advisory that showed a false `VERIFIED` in these engines has its
 reproduction here, so the bug stays fixed. When a false accept is found,

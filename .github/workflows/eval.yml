@@ -32,7 +32,7 @@ jobs:
         id: run
         run: |
           set +e
-          python -m evals.run --out eval-results.json
+          python -m evals.run --json
           echo "code=$?" >> "$GITHUB_OUTPUT"
       - name: Keep the report
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -43,10 +43,10 @@ jobs:
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$TAG" eval-results.json --clobber --repo "$GITHUB_REPOSITORY"
-      - name: Fail on a false accept
+        # On a release event GITHUB_REF_NAME is the release tag.
+        run: gh release upload "$GITHUB_REF_NAME" eval-results.json --clobber --repo "$GITHUB_REPOSITORY"
+      - name: Fail on a false accept or an engine error
         if: steps.run.outputs.code != '0'
         run: |
-          echo "::error::A claim that does not hold was accepted. See eval-results.json."
+          echo "::error::A claim that does not hold was accepted, or an engine raised. See eval-results.json."
           exit 1

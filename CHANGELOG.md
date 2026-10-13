@@ -11,7 +11,7 @@ All notable changes to the QWED Protocol will be documented in this file.
   GHSA-j622-qffp-rc27 and GHSA-mfh5-3c8f-975p. `python -m evals.run` reports
   how many claims were proved, caught or wrongly accepted;
   `tests/test_evals.py` fails CI on any claim that does not hold but was
-  accepted, and `.github/workflows/eval.yml` attaches the report
+  accepted, or on any engine that raises, and `.github/workflows/eval.yml` attaches the report
   (`eval-results.json`) to every release.
 
 ## [7.2.2] - 2026-10-09

@@ -1,14 +1,15 @@
 """Soundness evaluation: run QWED's proof engines on claims with a known answer.
 
-    python -m evals.run                       # print a summary
-    python -m evals.run --out eval-results.json
+    python -m evals.run           # print a summary
+    python -m evals.run --json    # also write eval-results.json here
 
 Every case in ``evals/cases/*.json`` is a claim with a known answer
 (``holds``: true or false) and the engine call that checks it. The runner
 calls the engine directly, through the library API, with no model, network or
 database, and records what came back. The number that matters is
 ``false_accepts``: claims that do not hold but that QWED accepted. It must be
-zero; ``tests/test_evals.py`` fails the build otherwise.
+zero; ``tests/test_evals.py`` fails the build otherwise. An engine that raises
+counts as an error, never as caught, and also fails the run.
 
 "Accepted" means the engine said the claim holds: a ``VERIFIED`` result that
 is not marked invalid (``developer_fields.is_valid`` is not ``False``). For
@@ -21,7 +22,6 @@ import argparse
 import json
 import os
 import platform
-import subprocess
 import sys
 from datetime import datetime, timezone
 from importlib import metadata
@@ -31,6 +31,7 @@ from typing import Any, Callable, Dict, List, Tuple
 ROOT = Path(__file__).resolve().parent
 CASES = ROOT / "cases"
 SCHEMA = "qwed-eval/1"
+REPORT = "eval-results.json"
 
 # What a result means for the claim, by (holds, accepted).
 OUTCOMES = {
@@ -104,6 +105,8 @@ def run(cases: List[Dict[str, Any]]) -> Dict[str, Any]:
         except Exception as exc:  # an engine that raises has not accepted anything
             status, accepted, fields, error = "ERROR", False, {}, f"{type(exc).__name__}: {exc}"
         holds = bool(case["holds"])
+        # An engine that raised has checked nothing: report it, never count it as caught.
+        outcome = "error" if error else OUTCOMES[(holds, accepted)]
         rows.append({
             "id": case["id"],
             "engine": check.split(".")[0],
@@ -112,7 +115,7 @@ def run(cases: List[Dict[str, Any]]) -> Dict[str, Any]:
             "holds": holds,
             "status": status,
             "accepted": accepted,
-            "outcome": OUTCOMES[(holds, accepted)],
+            "outcome": outcome,
             "source": case.get("source"),
             "error": error,
         })
@@ -123,7 +126,7 @@ def summarise(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     def tally(subset: List[Dict[str, Any]]) -> Dict[str, int]:
         out = {"cases": len(subset), "holds": sum(r["holds"] for r in subset)}
         out["does_not_hold"] = out["cases"] - out["holds"]
-        for name in ("proved", "not_proved", "caught", "false_accept"):
+        for name in ("proved", "not_proved", "caught", "false_accept", "error"):
             out[name] = sum(r["outcome"] == name for r in subset)
         return out
 
@@ -139,12 +142,23 @@ def summarise(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _commit() -> str | None:
+    """The commit under test: GITHUB_SHA in CI, else read from .git without starting a process."""
     if os.environ.get("GITHUB_SHA"):
         return os.environ["GITHUB_SHA"]
+    git = ROOT.parent / ".git"
     try:
-        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        return None
+        head = (git / "HEAD").read_text(encoding="utf-8").strip()
+        if not head.startswith("ref: "):
+            return head
+        ref = head[5:]
+        if (git / ref).is_file():
+            return (git / ref).read_text(encoding="utf-8").strip()
+        for line in (git / "packed-refs").read_text(encoding="utf-8").splitlines():
+            if line.endswith(" " + ref):
+                return line.split(" ", 1)[0]
+    except OSError:
+        pass
+    return None
 
 
 def report(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -158,29 +172,31 @@ def report(result: Dict[str, Any]) -> Dict[str, Any]:
         "commit": _commit(),
         "python": platform.python_version(),
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "command": "python -m evals.run --out eval-results.json",
+        "command": "python -m evals.run --json",
         **result,
     }
 
 
 def main(argv: List[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--out", help="write the full JSON report to this path")
+    parser.add_argument("--json", action="store_true", help=f"also write the full report to ./{REPORT}")
     args = parser.parse_args(argv)
 
     data = report(run(load_cases()))
-    if args.out:
-        Path(args.out).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    if args.json:
+        Path(REPORT).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
     t = data["totals"]
     print(f"{t['cases']} claims: {t['holds']} hold, {t['does_not_hold']} do not.")
-    print(f"  proved {t['proved']}, not proved {t['not_proved']}, caught {t['caught']}, false accepts {t['false_accept']}")
+    print(f"  proved {t['proved']}, not proved {t['not_proved']}, caught {t['caught']}, false accepts {t['false_accept']}, errors {t['error']}")
     for engine, e in data["by_engine"].items():
         print(f"  {engine:<7} {e['cases']:>3} claims  proved {e['proved']}/{e['holds']}  caught {e['caught']}/{e['does_not_hold']}  false accepts {e['false_accept']}")
     for row in data["cases"]:
         if row["outcome"] == "false_accept":
             print(f"FALSE ACCEPT {row['id']}: {row['claim']}", file=sys.stderr)
-    return 1 if t["false_accept"] else 0
+        elif row["outcome"] == "error":
+            print(f"ERROR {row['id']}: {row['error']}", file=sys.stderr)
+    return 1 if t["false_accept"] or t["error"] else 0
 
 
 if __name__ == "__main__":
