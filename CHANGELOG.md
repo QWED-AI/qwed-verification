@@ -53,7 +53,9 @@ and the field `developer_fields.executable_comments_expanded`.
 - **Soundness eval** (`evals/`, in the repository, not the wheel): claims
   with a known answer run through the Math, Logic, SQL, Code and Schema
   engines, including the reproductions from GHSA-j622-qffp-rc27,
-  GHSA-mfh5-3c8f-975p and the three advisories above. `python -m evals.run`
+  GHSA-mfh5-3c8f-975p, GHSA-6rxr-gq43-694g and GHSA-q5g6-6cw2-cjm3
+  (GHSA-64xf-wffc-63fm is covered by `tests/test_openai_project_keys.py`,
+  not the eval). `python -m evals.run`
   reports how many claims were proved, caught or wrongly accepted;
   `tests/test_evals.py` fails CI on any claim that does not hold but was
   accepted, or on any engine that raises; and `.github/workflows/eval.yml`
