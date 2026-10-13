@@ -22,6 +22,10 @@ from qwed_new.core.attestation import create_verification_attestation, Attestati
 logger = logging.getLogger(__name__)
 
 
+class BatchCapacityError(RuntimeError):
+    """Raised when the job store is full of still-running jobs (#391)."""
+
+
 class BatchStatus(Enum):
     """Status of a batch verification job."""
     PENDING = "pending"
@@ -152,10 +156,20 @@ class BatchVerificationService:
             items=batch_items
         )
         
+        # Keep the store bounded, but never evict a job that is still running
+        # (its result would vanish mid-flight). Evict the oldest finished job;
+        # if the store is full of active jobs, reject the new one (#391 review).
+        active = (BatchStatus.PENDING, BatchStatus.PROCESSING)
+        while len(self._jobs) >= self._MAX_JOBS:
+            evictable = next(
+                (jid for jid, candidate in self._jobs.items() if candidate.status not in active),
+                None,
+            )
+            if evictable is None:
+                raise BatchCapacityError("Batch job capacity is full; retry shortly.")
+            del self._jobs[evictable]
+
         self._jobs[job_id] = job
-        # FIFO eviction keeps the store bounded regardless of how many jobs run.
-        while len(self._jobs) > self._MAX_JOBS:
-            self._jobs.popitem(last=False)
         return job
     
     async def process_job(self, job: BatchJob) -> BatchJob:

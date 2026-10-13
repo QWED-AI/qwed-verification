@@ -79,6 +79,12 @@ class _BodySizeLimitMiddleware:
 
     _max_concurrent = 8
     _in_flight = 0
+    # A separate, larger budget for the JSON routes: their bodies are capped
+    # small, but they are still buffered before authentication, so concurrent
+    # requests must not multiply memory without bound (CodeAnt on PR #447).
+    # Worst case stays ~ _json_max_concurrent x _JSON_BODY_LIMIT_BYTES.
+    _json_max_concurrent = 64
+    _json_in_flight = 0
 
     def __init__(self, app, max_bytes: int = None, path: str = None,
                  limits: dict = None, concurrency_paths=None,
@@ -112,23 +118,38 @@ class _BodySizeLimitMiddleware:
         if max_bytes is None:
             await self.app(scope, receive, send)
             return
+        cls = _BodySizeLimitMiddleware
         if norm not in self.concurrency_paths:
-            await self._buffer_and_forward(scope, receive, send, max_bytes)
+            # Capped JSON route: gate on the larger JSON budget so pre-auth
+            # buffering cannot multiply memory without bound.
+            if cls._json_in_flight >= cls._json_max_concurrent:
+                response = JSONResponse(
+                    status_code=503,
+                    content={"detail": "Server busy — retry shortly."},
+                )
+                await response(scope, receive, send)
+                return
+            cls._json_in_flight += 1
+            try:
+                await self._buffer_and_forward(scope, receive, send, max_bytes)
+            finally:
+                cls._json_in_flight -= 1
             return
+        # Large multipart upload: the tight slot bounds max_concurrent x max_bytes.
         # single-event-loop counter: increments happen synchronously between
         # awaits, so no lock is needed
-        if _BodySizeLimitMiddleware._in_flight >= _BodySizeLimitMiddleware._max_concurrent:
+        if cls._in_flight >= cls._max_concurrent:
             response = JSONResponse(
                 status_code=503,
                 content={"detail": "Upload capacity reached — retry shortly."},
             )
             await response(scope, receive, send)
             return
-        _BodySizeLimitMiddleware._in_flight += 1
+        cls._in_flight += 1
         try:
             await self._buffer_and_forward(scope, receive, send, max_bytes)
         finally:
-            _BodySizeLimitMiddleware._in_flight -= 1
+            cls._in_flight -= 1
 
     async def _buffer_and_forward(self, scope, receive, send, max_bytes):
         body = bytearray()
@@ -204,13 +225,16 @@ _STATS_BODY_LIMIT_BYTES = _MAX_STATS_UPLOAD_BYTES + 65_536
 # bounds). _JSON_BODY_LIMIT_BYTES is generous for verification requests, whose
 # bodies are a query plus a small schema or snippet.
 _JSON_BODY_LIMIT_BYTES = 1_000_000
-_IMAGE_BODY_LIMIT_BYTES = 10_000_000 + 65_536
+# The image handler accepts files up to 10 MiB (10 * 1024 * 1024); the multipart
+# envelope is larger, so the body cap is that file limit plus field headroom,
+# or a within-limit upload would be rejected before the handler ran.
+_IMAGE_BODY_LIMIT_BYTES = 10 * 1024 * 1024 + 65_536
 _VERIFY_JSON_PATHS = (
     "/verify/natural_language", "/verify/logic", "/verify/fact", "/verify/code",
     "/verify/math", "/verify/sql", "/verify/rag", "/verify/process",
     "/verify/consensus", "/verify/batch",
 )
-_BODY_LIMITS = {path: _JSON_BODY_LIMIT_BYTES for path in _VERIFY_JSON_PATHS}
+_BODY_LIMITS = dict.fromkeys(_VERIFY_JSON_PATHS, _JSON_BODY_LIMIT_BYTES)
 _BODY_LIMITS["/verify/stats"] = _STATS_BODY_LIMIT_BYTES
 _BODY_LIMITS["/verify/image"] = _IMAGE_BODY_LIMIT_BYTES
 
@@ -787,7 +811,7 @@ async def verify_stats(
         return _merge_response(dr)
 
 
-@app.post("/verify/fact")
+@app.post("/verify/fact", responses={503: {"description": "Fact verification timed out"}})
 async def verify_fact(
     request: dict,
     tenant: TenantContext = Depends(get_current_tenant),
@@ -817,11 +841,15 @@ async def verify_fact(
 
         # The fact verifier makes a blocking provider (LLM) call; run it off the
         # event loop under a wall-clock bound so a slow upstream cannot stall the
-        # worker for every co-tenant (#390).
-        result = await asyncio.wait_for(
-            asyncio.to_thread(verifier.verify_fact, claim, context, provider=provider),
-            timeout=_PROVIDER_CALL_TIMEOUT_SECONDS,
-        )
+        # worker for every co-tenant (#390). A timeout fails closed with 503,
+        # like /verify/code.
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(verifier.verify_fact, claim, context, provider=provider),
+                timeout=_PROVIDER_CALL_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=503, detail="Fact verification timed out.") from None
 
         if isinstance(result, DiagnosticResult):
             dr = result
@@ -873,7 +901,7 @@ async def verify_fact(
         return _merge_response(dr)
 
 
-@app.post("/verify/code")
+@app.post("/verify/code", responses={503: {"description": "Code verification timed out"}})
 async def verify_code(
     request: dict,
     tenant: TenantContext = Depends(get_current_tenant),
@@ -2120,7 +2148,7 @@ async def startup_security_tasks():
 # BATCH VERIFICATION ENDPOINTS (Phase 4)
 # ============================================================
 
-from qwed_new.core.batch import batch_service
+from qwed_new.core.batch import batch_service, BatchCapacityError
 from typing import List
 
 class BatchVerifyRequest(BaseModel):
@@ -2170,10 +2198,13 @@ async def batch_verify(
         )
     
     # Create and process job
-    job = batch_service.create_job(
-        organization_id=tenant.organization_id,
-        items=request.items
-    )
+    try:
+        job = batch_service.create_job(
+            organization_id=tenant.organization_id,
+            items=request.items
+        )
+    except BatchCapacityError:
+        raise HTTPException(status_code=503, detail="Batch capacity reached — retry shortly.") from None
     
     # Process synchronously (for simplicity)
     # For very large batches, return job_id and process async
