@@ -73,10 +73,16 @@ jobs:
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # A version already on npm is skipped; any other failure fails the job.
+        # (continue-on-error hid failed npm publishes from 7.2.1 to 7.2.3.)
         run: |
           cd sdk-ts
+          VERSION=$(node -p "require('./package.json').version")
+          if [ -n "$(npm view "@qwed-ai/sdk@$VERSION" version 2>/dev/null)" ]; then
+            echo "@qwed-ai/sdk@$VERSION is already on npm; nothing to publish."
+            exit 0
+          fi
           npm publish --access public
-        continue-on-error: true  # Don't fail on duplicate version
 
   # ============================================
   # Rust SDK → crates.io
@@ -95,10 +101,15 @@ jobs:
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        # A version already on crates.io is skipped; any other failure fails the job.
         run: |
           cd sdk-rust
+          VERSION=$(cargo metadata --no-deps --format-version 1 | python3 -c "import json, sys; print(json.load(sys.stdin)['packages'][0]['version'])")
+          if curl -fsS -A "qwed-verification publish workflow (https://github.com/QWED-AI/qwed-verification)" "https://crates.io/api/v1/crates/qwed/$VERSION" > /dev/null; then
+            echo "qwed $VERSION is already on crates.io; nothing to publish."
+            exit 0
+          fi
           cargo publish --allow-dirty
-        continue-on-error: true  # Don't fail on duplicate version
 
   # ============================================
   # Go SDK → Just needs tag (no publish step)
