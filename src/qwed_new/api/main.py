@@ -80,11 +80,20 @@ class _BodySizeLimitMiddleware:
     _max_concurrent = 8
     _in_flight = 0
 
-    def __init__(self, app, max_bytes: int, path: str,
+    def __init__(self, app, max_bytes: int = None, path: str = None,
+                 limits: dict = None, concurrency_paths=None,
                  read_deadline_seconds: float = 30.0):
         self.app = app
-        self.max_bytes = max_bytes
-        self.path = path
+        # Back-compat single-path mode: one capped, concurrency-gated path.
+        # Multi-path mode (#392): a per-path byte cap for every /verify route,
+        # with the global concurrency slot reserved only for the large
+        # multipart uploads (stats, image), since small JSON bodies cost little
+        # to buffer and should not be throttled to the upload slot count.
+        if limits is None:
+            limits = {path: max_bytes}
+            concurrency_paths = {path}
+        self.limits = {p.rstrip("/"): b for p, b in limits.items()}
+        self.concurrency_paths = {p.rstrip("/") for p in (concurrency_paths or ())}
         # Greptile P1 on PR #354: the capacity slot is reserved before
         # authentication, so slow-loris uploads must not hold it forever —
         # the whole body read is bounded by one wall-clock deadline.
@@ -95,8 +104,16 @@ class _BodySizeLimitMiddleware:
         # but the server still receives and spools the WHOLE body before
         # the redirect, so the guard must match both forms (Sentry on
         # PR #354)
-        if scope["type"] != "http" or scope["path"].rstrip("/") != self.path:
+        if scope["type"] != "http":
             await self.app(scope, receive, send)
+            return
+        norm = scope["path"].rstrip("/")
+        max_bytes = self.limits.get(norm)
+        if max_bytes is None:
+            await self.app(scope, receive, send)
+            return
+        if norm not in self.concurrency_paths:
+            await self._buffer_and_forward(scope, receive, send, max_bytes)
             return
         # single-event-loop counter: increments happen synchronously between
         # awaits, so no lock is needed
@@ -109,11 +126,11 @@ class _BodySizeLimitMiddleware:
             return
         _BodySizeLimitMiddleware._in_flight += 1
         try:
-            await self._buffer_and_forward(scope, receive, send)
+            await self._buffer_and_forward(scope, receive, send, max_bytes)
         finally:
             _BodySizeLimitMiddleware._in_flight -= 1
 
-    async def _buffer_and_forward(self, scope, receive, send):
+    async def _buffer_and_forward(self, scope, receive, send, max_bytes):
         body = bytearray()
         deadline = time.monotonic() + self.read_deadline_seconds
         while True:
@@ -137,10 +154,10 @@ class _BodySizeLimitMiddleware:
             if message["type"] == "http.disconnect":
                 return
             body.extend(message.get("body", b""))
-            if len(body) > self.max_bytes:
+            if len(body) > max_bytes:
                 response = JSONResponse(
                     status_code=413,
-                    content={"detail": f"Upload exceeds the {self.max_bytes} byte limit for statistical verification."},
+                    content={"detail": f"Request body exceeds the {max_bytes} byte limit for this endpoint."},
                 )
                 await response(scope, receive, send)
                 return
@@ -177,10 +194,32 @@ _MAX_STATS_CELL_COUNT = 1_000_000
 # cap stays the authoritative file-size boundary.
 _STATS_BODY_LIMIT_BYTES = _MAX_STATS_UPLOAD_BYTES + 65_536
 
+# #392: a transport-level body cap on EVERY /verify route, not only
+# /verify/stats. Oversized bodies are rejected (413) before the handler reads
+# them, so a large JSON or image payload cannot be spooled into memory first.
+# JSON routes get a small cap; the two multipart uploads keep their larger caps
+# and the global concurrency slot (buffering a big body is what that slot
+# bounds). _JSON_BODY_LIMIT_BYTES is generous for verification requests, whose
+# bodies are a query plus a small schema or snippet.
+_JSON_BODY_LIMIT_BYTES = 1_000_000
+_IMAGE_BODY_LIMIT_BYTES = 10_000_000 + 65_536
+_VERIFY_JSON_PATHS = (
+    "/verify/natural_language", "/verify/logic", "/verify/fact", "/verify/code",
+    "/verify/math", "/verify/sql", "/verify/rag", "/verify/process",
+    "/verify/consensus", "/verify/batch",
+)
+_BODY_LIMITS = {path: _JSON_BODY_LIMIT_BYTES for path in _VERIFY_JSON_PATHS}
+_BODY_LIMITS["/verify/stats"] = _STATS_BODY_LIMIT_BYTES
+_BODY_LIMITS["/verify/image"] = _IMAGE_BODY_LIMIT_BYTES
+
 # Registered BEFORE CORSMiddleware: add_middleware is LIFO, so CORS must be
 # added last to stay outermost and stamp its headers onto the 413s this
 # middleware short-circuits with (Sentry + Sonar on PR #354).
-app.add_middleware(_BodySizeLimitMiddleware, max_bytes=_STATS_BODY_LIMIT_BYTES, path="/verify/stats")
+app.add_middleware(
+    _BodySizeLimitMiddleware,
+    limits=_BODY_LIMITS,
+    concurrency_paths={"/verify/stats", "/verify/image"},
+)
 
 app.add_middleware(
     CORSMiddleware,
