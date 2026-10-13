@@ -141,23 +141,45 @@ def summarise(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _git_dirs(top: Path) -> List[Path]:
+    """The git directory of a checkout, then its common directory if it has one.
+
+    In a worktree or a submodule, .git is a file ("gitdir: <path>"); a
+    worktree's git directory names the shared one in its "commondir" file.
+    """
+    git = top / ".git"
+    if git.is_file():
+        pointer = git.read_text(encoding="utf-8").strip()
+        if pointer.startswith("gitdir: "):
+            git = (top / pointer[len("gitdir: "):]).resolve()
+    dirs = [git]
+    common = git / "commondir"
+    if common.is_file():
+        dirs.append((git / common.read_text(encoding="utf-8").strip()).resolve())
+    return dirs
+
+
 def _commit() -> str | None:
-    """The commit under test: GITHUB_SHA in CI, else read from .git without starting a process."""
+    """The commit under test: GITHUB_SHA in CI, else read from git's files without starting a process."""
     if os.environ.get("GITHUB_SHA"):
         return os.environ["GITHUB_SHA"]
-    git = ROOT.parent / ".git"
     try:
-        head = (git / "HEAD").read_text(encoding="utf-8").strip()
+        dirs = _git_dirs(ROOT.parent)
+        head = (dirs[0] / "HEAD").read_text(encoding="utf-8").strip()
         if not head.startswith("ref: "):
             return head
-        ref = head[5:]
-        if (git / ref).is_file():
-            return (git / ref).read_text(encoding="utf-8").strip()
-        for line in (git / "packed-refs").read_text(encoding="utf-8").splitlines():
-            if line.endswith(" " + ref):
-                return line.split(" ", 1)[0]
+        ref = head[len("ref: "):]
+        for d in dirs:
+            if (d / ref).is_file():
+                return (d / ref).read_text(encoding="utf-8").strip()
+            packed = d / "packed-refs"
+            if packed.is_file():
+                for line in packed.read_text(encoding="utf-8").splitlines():
+                    if line.endswith(" " + ref):
+                        return line.split(" ", 1)[0]
     except OSError:
-        pass
+        # Best effort: outside a readable git checkout the report has no commit.
+        return None
     return None
 
 
