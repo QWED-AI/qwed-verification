@@ -83,27 +83,17 @@ class CodeVerifier:
         "setattr": "Dynamic attribute modification",
     }
 
-    PYTHON_CRITICAL_REGEX: ClassVar[tuple[Dict[str, str], ...]] = (
-        {
-            "pattern": (
-                r"subprocess\.(?:run|Popen|call|check_output)\s*\(.*?"
-                r"(?:curl|wget).*?(?:\||;|&&).*?(?:bash|sh).*?shell\s*=\s*True"
-            ),
-            "issue_type": "remote_code_execution",
-            "description": "Remote code execution via shell=True with curl/wget pipe to shell.",
-            "recommendation": "Never execute remote pipe commands with shell=True.",
-        },
-        {
-            "pattern": (
-                r"subprocess\.(?:run|Popen|call|check_output)\s*\(.*?"
-                r"(?:curl|wget).*?(?:\||;|&&).*?(?:bash|sh)"
-            ),
-            "issue_type": "remote_code_execution",
-            "description": "Suspicious curl/wget pipe-to-shell pattern detected (heuristic).",
-            "recommendation": "Never pipe remote content directly into a shell.",
-        },
-    )
-    
+    # A subprocess call that pipes fetched content (curl/wget) into a shell is
+    # flagged as remote_code_execution. subprocess.* is already CRITICAL
+    # (process_execution, PYTHON_PROCESS_EXECUTION), but this keeps the more
+    # specific finding. The old detector chained several `.*?` groups under
+    # re.DOTALL and ran with re.finditer over the whole snippet, which
+    # backtracks catastrophically (~O(n^4)) on non-matching input and froze the
+    # single-worker API. The scan below is linear: each component is found once,
+    # left to right, with str.find.
+    _SUBPROC_CALL: ClassVar = re.compile(r"subprocess\.(?:run|Popen|call|check_output)\s*\(", re.IGNORECASE)
+    _SHELL_TRUE: ClassVar = re.compile(r"shell\s*=\s*True", re.IGNORECASE)
+
     # Shell and process execution is never admitted, whatever the argument
     # (GHSA-6rxr-gq43-694g): whether a command is safe depends on context this
     # verifier cannot see. Each entry is a prefix of the dotted name a call
@@ -452,6 +442,53 @@ class CodeVerifier:
     # Python Checks
     # =========================================================================
     
+    @staticmethod
+    def _ordered_index(haystack: str, needles: tuple, start: int) -> int:
+        """Lowest index >= start at which any needle occurs, or -1. O(n)."""
+        best = -1
+        for needle in needles:
+            i = haystack.find(needle, start)
+            if i != -1 and (best == -1 or i < best):
+                best = i
+        return best
+
+    def _check_remote_pipe_to_shell(self, code: str) -> List[SecurityIssue]:
+        """Flag `subprocess.*` calls that pipe curl/wget output into a shell.
+
+        Linear replacement for the old chained-`.*?` regex: find each subprocess
+        call, then require a fetch tool, a shell separator and a shell to appear
+        after it, in order. One finding per line.
+        """
+        issues: List[SecurityIssue] = []
+        lower = code.lower()
+        for match in self._SUBPROC_CALL.finditer(code):
+            tail = match.end()
+            fetch = self._ordered_index(lower, ("curl", "wget"), tail)
+            if fetch == -1:
+                continue
+            sep = self._ordered_index(lower, ("|", ";", "&&"), fetch)
+            if sep == -1:
+                continue
+            shell = self._ordered_index(lower, ("bash", "sh"), sep)
+            if shell == -1:
+                continue
+            line_num = code.count("\n", 0, match.start()) + 1
+            if self._SHELL_TRUE.search(code, match.start()):
+                description = "Remote code execution via shell=True with curl/wget pipe to shell."
+                recommendation = "Never execute remote pipe commands with shell=True."
+            else:
+                description = "Suspicious curl/wget pipe-to-shell pattern detected (heuristic)."
+                recommendation = "Never pipe remote content directly into a shell."
+            issues.append(SecurityIssue(
+                severity="CRITICAL",
+                issue_type="remote_code_execution",
+                pattern="subprocess + curl|wget pipe to shell",
+                description=description,
+                line_number=line_num,
+                recommendation=recommendation,
+            ))
+        return issues
+
     def _check_python(self, code: str) -> List[SecurityIssue]:
         """Check Python code for security issues."""
         issues = []
@@ -499,25 +536,15 @@ class CodeVerifier:
                         line_number=line_num
                     ))
 
-        # Critical subprocess regex checks over full code to catch multi-line invocations.
-        for rule in self.PYTHON_CRITICAL_REGEX:
-            for match in re.finditer(rule["pattern"], code, re.IGNORECASE | re.DOTALL):
-                line_num = code[:match.start()].count("\n") + 1
-                if any(
-                    i.issue_type == rule["issue_type"]
-                    and i.line_number == line_num
-                    for i in issues
-                ):
-                    continue
-
-                issues.append(SecurityIssue(
-                    severity="CRITICAL",
-                    issue_type=rule["issue_type"],
-                    pattern="subprocess + curl|wget pipe to shell",
-                    description=rule["description"],
-                    line_number=line_num,
-                    recommendation=rule["recommendation"],
-                ))
+        # A subprocess call that pipes curl/wget output into a shell, including
+        # across lines. Linear scan (no backtracking regex) over the full code.
+        for issue in self._check_remote_pipe_to_shell(code):
+            if any(
+                i.issue_type == issue.issue_type and i.line_number == issue.line_number
+                for i in issues
+            ):
+                continue
+            issues.append(issue)
 
         # Process execution reached through an alias, which the line scan cannot see.
         for issue in self._check_python_process_ast(code):

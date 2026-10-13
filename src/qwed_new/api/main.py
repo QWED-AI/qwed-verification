@@ -165,6 +165,8 @@ class _BodySizeLimitMiddleware:
 # #353: hard byte cap on the /verify/stats upload. read_csv is CPU- and
 # memory-bound on input size, so the upload is read under this cap and the
 # excess rejected (413) before any parse work starts.
+# Wall-clock bound for a single code verification run on the event loop (#445).
+_CODE_VERIFY_TIMEOUT_SECONDS = float(os.environ.get("QWED_CODE_VERIFY_TIMEOUT", "10"))
 _MAX_STATS_UPLOAD_BYTES = 10_000_000
 # #353 (CodeAnt on PR #354): the byte cap bounds transfer, not the expanded
 # in-memory frame — bound rows x columns after the parse as well.
@@ -842,7 +844,17 @@ async def verify_code(
         if not code:
             raise HTTPException(status_code=400, detail="Missing 'code'")
 
-        result = verifier.verify_code(code, language=language)
+        # Static analysis is CPU-bound and its cost grows with the snippet, so
+        # it runs in a worker thread under a wall-clock bound rather than inline
+        # on the shared event loop (#445). A timeout fails closed: a snippet the
+        # verifier could not finish is not admitted.
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(verifier.verify_code, code, language=language),
+                timeout=_CODE_VERIFY_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=503, detail="Code verification timed out.")
 
         # Verification truth is preserved unchanged: a proven-unsafe snippet is
         # VERIFIED-as-unsafe (developer_fields.is_valid False, proof_ref bound).
