@@ -79,12 +79,32 @@ class _BodySizeLimitMiddleware:
 
     _max_concurrent = 8
     _in_flight = 0
+    # A separate, larger budget for the JSON routes: their bodies are capped
+    # small, but they are still buffered before authentication, so concurrent
+    # requests must not multiply memory without bound (CodeAnt on PR #447).
+    # Worst case stays ~ _json_max_concurrent x _JSON_BODY_LIMIT_BYTES.
+    _json_max_concurrent = 64
+    _json_in_flight = 0
+    # JSON bodies are small and capped, so they get a much tighter read deadline
+    # than the large multipart uploads: a stalled JSON request frees its slot in
+    # seconds, which shrinks the window a slow client could hold slots pre-auth
+    # (Sentry on PR #447). Connection-level slow-loris remains an ingress concern.
+    _json_read_deadline_seconds = 10.0
 
-    def __init__(self, app, max_bytes: int, path: str,
+    def __init__(self, app, max_bytes: int = None, path: str = None,
+                 limits: dict = None, concurrency_paths=None,
                  read_deadline_seconds: float = 30.0):
         self.app = app
-        self.max_bytes = max_bytes
-        self.path = path
+        # Back-compat single-path mode: one capped, concurrency-gated path.
+        # Multi-path mode (#392): a per-path byte cap for every /verify route,
+        # with the global concurrency slot reserved only for the large
+        # multipart uploads (stats, image), since small JSON bodies cost little
+        # to buffer and should not be throttled to the upload slot count.
+        if limits is None:
+            limits = {path: max_bytes}
+            concurrency_paths = {path}
+        self.limits = {p.rstrip("/"): b for p, b in limits.items()}
+        self.concurrency_paths = {p.rstrip("/") for p in (concurrency_paths or ())}
         # Greptile P1 on PR #354: the capacity slot is reserved before
         # authentication, so slow-loris uploads must not hold it forever —
         # the whole body read is bounded by one wall-clock deadline.
@@ -95,61 +115,62 @@ class _BodySizeLimitMiddleware:
         # but the server still receives and spools the WHOLE body before
         # the redirect, so the guard must match both forms (Sentry on
         # PR #354)
-        if scope["type"] != "http" or scope["path"].rstrip("/") != self.path:
+        if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        # single-event-loop counter: increments happen synchronously between
-        # awaits, so no lock is needed
-        if _BodySizeLimitMiddleware._in_flight >= _BodySizeLimitMiddleware._max_concurrent:
-            response = JSONResponse(
+        norm = scope["path"].rstrip("/")
+        max_bytes = self.limits.get(norm)
+        if max_bytes is None:
+            await self.app(scope, receive, send)
+            return
+        cls = _BodySizeLimitMiddleware
+        if norm not in self.concurrency_paths:
+            # JSON route: small body, but the replay closure retains it until the
+            # handler reads it, so the slot is held for the whole request to keep
+            # _json_max_concurrent x cap a real memory bound (CodeRabbit/Greptile
+            # on PR #447). The large JSON budget and the short read deadline keep
+            # the saturation risk low; connection-level slow-loris is ingress's
+            # concern, as the upload path documents.
+            if cls._json_in_flight >= cls._json_max_concurrent:
+                await JSONResponse(
+                    status_code=503,
+                    content={"detail": "Server busy — retry shortly."},
+                )(scope, receive, send)
+                return
+            cls._json_in_flight += 1
+            try:
+                body = await self._read_body(
+                    scope, receive, send, max_bytes,
+                    deadline_seconds=self._json_read_deadline_seconds,
+                )
+                if body is not None:
+                    await self.app(scope, self._replay(body), send)
+            finally:
+                cls._json_in_flight -= 1
+            return
+
+        # Multipart upload: the body is large and is retained (by the replay
+        # closure) until the handler consumes it, so the slot is held for the
+        # whole request to keep max_concurrent x max_bytes a real memory bound
+        # (Greptile on PR #447).
+        if cls._in_flight >= cls._max_concurrent:
+            await JSONResponse(
                 status_code=503,
                 content={"detail": "Upload capacity reached — retry shortly."},
-            )
-            await response(scope, receive, send)
+            )(scope, receive, send)
             return
-        _BodySizeLimitMiddleware._in_flight += 1
+        cls._in_flight += 1
         try:
-            await self._buffer_and_forward(scope, receive, send)
+            body = await self._read_body(scope, receive, send, max_bytes)
+            if body is not None:
+                await self.app(scope, self._replay(body), send)
         finally:
-            _BodySizeLimitMiddleware._in_flight -= 1
+            cls._in_flight -= 1
 
-    async def _buffer_and_forward(self, scope, receive, send):
-        body = bytearray()
-        deadline = time.monotonic() + self.read_deadline_seconds
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                response = JSONResponse(
-                    status_code=408,
-                    content={"detail": "Request body not received in time."},
-                )
-                await response(scope, receive, send)
-                return
-            try:
-                message = await asyncio.wait_for(receive(), timeout=remaining)
-            except asyncio.TimeoutError:
-                response = JSONResponse(
-                    status_code=408,
-                    content={"detail": "Request body not received in time."},
-                )
-                await response(scope, receive, send)
-                return
-            if message["type"] == "http.disconnect":
-                return
-            body.extend(message.get("body", b""))
-            if len(body) > self.max_bytes:
-                response = JSONResponse(
-                    status_code=413,
-                    content={"detail": f"Upload exceeds the {self.max_bytes} byte limit for statistical verification."},
-                )
-                await response(scope, receive, send)
-                return
-            if not message.get("more_body", False):
-                break
-
+    @staticmethod
+    def _replay(body: bytes):
         # ASGI receive contract (Sentry on PR #354): the replayed body is
-        # delivered ONCE; later calls report disconnect. The coroutine shape
-        # is required by the ASGI protocol — suppressed on the def line.
+        # delivered ONCE; later calls report disconnect.
         replayed = False
 
         async def replay_receive():  # NOSONAR
@@ -157,7 +178,43 @@ class _BodySizeLimitMiddleware:
             if replayed:
                 return {"type": "http.disconnect"}
             replayed = True
-            return {"type": "http.request", "body": bytes(body), "more_body": False}
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        return replay_receive
+
+    async def _read_body(self, scope, receive, send, max_bytes, deadline_seconds=None):
+        """Read the whole body under the cap and deadline. Returns the bytes, or
+        None after sending a 413/408 or on client disconnect."""
+        body = bytearray()
+        deadline = time.monotonic() + (self.read_deadline_seconds if deadline_seconds is None else deadline_seconds)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                await JSONResponse(
+                    status_code=408,
+                    content={"detail": "Request body not received in time."},
+                )(scope, receive, send)
+                return None
+            try:
+                message = await asyncio.wait_for(receive(), timeout=remaining)
+            except asyncio.TimeoutError:
+                await JSONResponse(
+                    status_code=408,
+                    content={"detail": "Request body not received in time."},
+                )(scope, receive, send)
+                return None
+            if message["type"] == "http.disconnect":
+                return None
+            body.extend(message.get("body", b""))
+            if len(body) > max_bytes:
+                await JSONResponse(
+                    status_code=413,
+                    content={"detail": f"Request body exceeds the {max_bytes} byte limit for this endpoint."},
+                )(scope, receive, send)
+                return None
+            if not message.get("more_body", False):
+                break
+        return bytes(body)
 
         await self.app(scope, replay_receive, send)
 
@@ -165,6 +222,10 @@ class _BodySizeLimitMiddleware:
 # #353: hard byte cap on the /verify/stats upload. read_csv is CPU- and
 # memory-bound on input size, so the upload is read under this cap and the
 # excess rejected (413) before any parse work starts.
+# Wall-clock bound for a single code verification run on the event loop (#445).
+_CODE_VERIFY_TIMEOUT_SECONDS = float(os.environ.get("QWED_CODE_VERIFY_TIMEOUT", "10"))
+# Wall-clock bound for a blocking provider (LLM) call run off the loop (#390).
+_PROVIDER_CALL_TIMEOUT_SECONDS = float(os.environ.get("QWED_PROVIDER_TIMEOUT", "30"))
 _MAX_STATS_UPLOAD_BYTES = 10_000_000
 # #353 (CodeAnt on PR #354): the byte cap bounds transfer, not the expanded
 # in-memory frame — bound rows x columns after the parse as well.
@@ -175,10 +236,35 @@ _MAX_STATS_CELL_COUNT = 1_000_000
 # cap stays the authoritative file-size boundary.
 _STATS_BODY_LIMIT_BYTES = _MAX_STATS_UPLOAD_BYTES + 65_536
 
+# #392: a transport-level body cap on EVERY /verify route, not only
+# /verify/stats. Oversized bodies are rejected (413) before the handler reads
+# them, so a large JSON or image payload cannot be spooled into memory first.
+# JSON routes get a small cap; the two multipart uploads keep their larger caps
+# and the global concurrency slot (buffering a big body is what that slot
+# bounds). _JSON_BODY_LIMIT_BYTES is generous for verification requests, whose
+# bodies are a query plus a small schema or snippet.
+_JSON_BODY_LIMIT_BYTES = 1_000_000
+# The image handler accepts files up to 10 MiB (10 * 1024 * 1024); the multipart
+# envelope is larger, so the body cap is that file limit plus field headroom,
+# or a within-limit upload would be rejected before the handler ran.
+_IMAGE_BODY_LIMIT_BYTES = 10 * 1024 * 1024 + 65_536
+_VERIFY_JSON_PATHS = (
+    "/verify/natural_language", "/verify/logic", "/verify/fact", "/verify/code",
+    "/verify/math", "/verify/sql", "/verify/rag", "/verify/process",
+    "/verify/consensus", "/verify/batch",
+)
+_BODY_LIMITS = dict.fromkeys(_VERIFY_JSON_PATHS, _JSON_BODY_LIMIT_BYTES)
+_BODY_LIMITS["/verify/stats"] = _STATS_BODY_LIMIT_BYTES
+_BODY_LIMITS["/verify/image"] = _IMAGE_BODY_LIMIT_BYTES
+
 # Registered BEFORE CORSMiddleware: add_middleware is LIFO, so CORS must be
 # added last to stay outermost and stamp its headers onto the 413s this
 # middleware short-circuits with (Sentry + Sonar on PR #354).
-app.add_middleware(_BodySizeLimitMiddleware, max_bytes=_STATS_BODY_LIMIT_BYTES, path="/verify/stats")
+app.add_middleware(
+    _BodySizeLimitMiddleware,
+    limits=_BODY_LIMITS,
+    concurrency_paths={"/verify/stats", "/verify/image"},
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -744,7 +830,7 @@ async def verify_stats(
         return _merge_response(dr)
 
 
-@app.post("/verify/fact")
+@app.post("/verify/fact", responses={503: {"description": "Fact verification timed out"}})
 async def verify_fact(
     request: dict,
     tenant: TenantContext = Depends(get_current_tenant),
@@ -771,8 +857,18 @@ async def verify_fact(
         verifier = FactVerifier()
         
         provider = request.get("provider")
-        
-        result = verifier.verify_fact(claim, context, provider=provider)
+
+        # The fact verifier makes a blocking provider (LLM) call; run it off the
+        # event loop under a wall-clock bound so a slow upstream cannot stall the
+        # worker for every co-tenant (#390). A timeout fails closed with 503,
+        # like /verify/code.
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(verifier.verify_fact, claim, context, provider=provider),
+                timeout=_PROVIDER_CALL_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=503, detail="Fact verification timed out.") from None
 
         if isinstance(result, DiagnosticResult):
             dr = result
@@ -824,7 +920,7 @@ async def verify_fact(
         return _merge_response(dr)
 
 
-@app.post("/verify/code")
+@app.post("/verify/code", responses={503: {"description": "Code verification timed out"}})
 async def verify_code(
     request: dict,
     tenant: TenantContext = Depends(get_current_tenant),
@@ -842,7 +938,17 @@ async def verify_code(
         if not code:
             raise HTTPException(status_code=400, detail="Missing 'code'")
 
-        result = verifier.verify_code(code, language=language)
+        # Static analysis is CPU-bound and its cost grows with the snippet, so
+        # it runs in a worker thread under a wall-clock bound rather than inline
+        # on the shared event loop (#445). A timeout fails closed: a snippet the
+        # verifier could not finish is not admitted.
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(verifier.verify_code, code, language=language),
+                timeout=_CODE_VERIFY_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=503, detail="Code verification timed out.")
 
         # Verification truth is preserved unchanged: a proven-unsafe snippet is
         # VERIFIED-as-unsafe (developer_fields.is_valid False, proof_ref bound).
@@ -2061,7 +2167,7 @@ async def startup_security_tasks():
 # BATCH VERIFICATION ENDPOINTS (Phase 4)
 # ============================================================
 
-from qwed_new.core.batch import batch_service
+from qwed_new.core.batch import batch_service, BatchCapacityError
 from typing import List
 
 class BatchVerifyRequest(BaseModel):
@@ -2074,7 +2180,7 @@ class BatchVerifyItem(BaseModel):
     type: str = "natural_language"
     params: Optional[dict] = None
 
-@app.post("/verify/batch", tags=["Batch"])
+@app.post("/verify/batch", tags=["Batch"], responses={503: {"description": "Batch capacity reached"}})
 async def batch_verify(
     request: BatchVerifyRequest,
     tenant: TenantContext = Depends(get_current_tenant)
@@ -2111,10 +2217,13 @@ async def batch_verify(
         )
     
     # Create and process job
-    job = batch_service.create_job(
-        organization_id=tenant.organization_id,
-        items=request.items
-    )
+    try:
+        job = batch_service.create_job(
+            organization_id=tenant.organization_id,
+            items=request.items
+        )
+    except BatchCapacityError:
+        raise HTTPException(status_code=503, detail="Batch capacity reached — retry shortly.") from None
     
     # Process synchronously (for simplicity)
     # For very large batches, return job_id and process async

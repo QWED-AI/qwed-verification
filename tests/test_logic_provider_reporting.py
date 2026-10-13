@@ -45,15 +45,22 @@ async def test_control_plane_logic_metrics_use_resolved_provider(monkeypatch):
     monkeypatch.setattr(cp.policy, "check_policy", lambda _query, organization_id=None: (True, ""))
     monkeypatch.setattr(cp.router, "route", lambda _query, preferred_provider=None: "azure_openai")
     monkeypatch.setattr(cp.output_sanitizer, "sanitize_output", lambda result, output_type, organization_id: result)
+    # Translation resolves the provider; the z3 solve returns the verdict. The
+    # control plane stamps the resolved provider onto the result (PR #447 split).
     monkeypatch.setattr(
         cp.logic_verifier,
-        "verify_from_natural_language",
-        lambda query, provider: SimpleNamespace(
+        "translate_to_dsl",
+        lambda query, provider: ("(GT x 5)", [{"name": "x", "type": "Int"}], "openai_compat", None),
+    )
+    monkeypatch.setattr(
+        cp.logic_verifier,
+        "verify_from_dsl",
+        lambda dsl_code, variables: SimpleNamespace(
             status="SAT",
             model={"x": "6"},
             dsl_code="(GT x 5)",
             error=None,
-            provider_used="openai_compat",
+            provider_used=None,
         ),
     )
 
@@ -90,7 +97,7 @@ async def test_control_plane_logic_exception_keeps_last_known_provider(monkeypat
 
     monkeypatch.setattr(
         cp.logic_verifier,
-        "verify_from_natural_language",
+        "translate_to_dsl",
         _raise_runtime_error,
     )
 

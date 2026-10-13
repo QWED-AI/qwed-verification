@@ -86,3 +86,4 @@ deploy/kubernetes/secret.yaml
 # Local audit configuration (may contain API keys) and generated reports
 tests/advanced_audit/config.yaml
 tests/advanced_audit/test_results/
+.venv/

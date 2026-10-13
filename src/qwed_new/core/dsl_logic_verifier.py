@@ -502,11 +502,29 @@ class DSLLogicVerifier:
         Returns:
             DSLVerificationResult
         """
+        # Step 1 (provider translation) and step 2 (z3 solve) are separated so a
+        # caller can run them on different threads: translation does blocking
+        # provider I/O and can run concurrently, while the z3 solve must stay on
+        # one thread (z3py's default context is not thread safe). See
+        # control_plane.process_logic_query. This wrapper keeps the original
+        # synchronous behaviour for direct callers.
+        dsl_code, variables, resolved_provider, error = self.translate_to_dsl(query, provider)
+        if error is not None:
+            return error
+        verification_result = self.verify_from_dsl(dsl_code, variables)
+        verification_result.provider_used = resolved_provider
+        if not verification_result.dsl_code:
+            verification_result.dsl_code = dsl_code
+        return verification_result
+
+    def translate_to_dsl(self, query: str, provider: str = "azure_openai"):
+        """Provider translation step (no z3). Returns
+        (dsl_code, variables, resolved_provider, error_result); error_result is a
+        DSLVerificationResult on failure and None on success. Safe to run in a
+        worker thread concurrently — it performs no z3 work."""
         provider_label = self._provider_label(provider)
         resolved_provider = provider_label
         translator = TranslationLayer()
-
-        # 1. Translate to structured logic constraints
         try:
             logic_result = translator.translate_logic(query, provider=provider_label)
             resolved_provider = self._provider_label(
@@ -514,16 +532,17 @@ class DSLLogicVerifier:
             )
             dsl_code, variables = self._logic_task_to_dsl(logic_result)
             if not dsl_code:
-                return DSLVerificationResult(
+                return None, None, resolved_provider, DSLVerificationResult(
                     status="ERROR",
                     error="No constraints generated from natural language query",
                     provider_used=resolved_provider,
                 )
+            return dsl_code, variables, resolved_provider, None
         except ValueError as e:
             resolved_provider = self._provider_label(
                 getattr(translator, "last_resolved_provider", None) or resolved_provider
             )
-            return DSLVerificationResult(
+            return None, None, resolved_provider, DSLVerificationResult(
                 status="ERROR",
                 error=str(e) if str(e).startswith("Unsupported logic goal:") else "LLM translation failed",
                 provider_used=resolved_provider,
@@ -538,18 +557,11 @@ class DSLLogicVerifier:
             resolved_provider = self._provider_label(
                 getattr(translator, "last_resolved_provider", None) or resolved_provider
             )
-            return DSLVerificationResult(
+            return None, None, resolved_provider, DSLVerificationResult(
                 status="ERROR",
                 error="LLM translation failed",
                 provider_used=resolved_provider,
             )
-
-        # 2. Verify from DSL
-        verification_result = self.verify_from_dsl(dsl_code, variables)
-        verification_result.provider_used = resolved_provider
-        if not verification_result.dsl_code:
-            verification_result.dsl_code = dsl_code
-        return verification_result
 
     def to_verification_context(self, result: "DiagnosticResult", query: str, attestation_token: Optional[str] = None) -> "VerificationContextDocument":
         """Map a DiagnosticResult to a Verification Context v1.0 document."""

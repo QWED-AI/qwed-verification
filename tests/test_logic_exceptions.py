@@ -68,7 +68,7 @@ async def test_control_plane_logic_exception():
     with patch.object(cp.security_gateway, 'detect_advanced_injection', return_value=(True, "")), \
          patch.object(cp.policy, 'check_policy', return_value=(True, "")), \
          patch.object(cp.router, 'route', return_value="openai"), \
-         patch.object(cp.logic_verifier, 'verify_from_natural_language', side_effect=Exception("DEEP_INTERNAL_ERROR")):
+         patch.object(cp.logic_verifier, 'translate_to_dsl', side_effect=Exception("DEEP_INTERNAL_ERROR")):
              
         result = await cp.process_logic_query("test query", organization_id=123)
         

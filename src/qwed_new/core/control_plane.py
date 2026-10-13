@@ -5,7 +5,11 @@ This module orchestrates the entire request lifecycle:
 Request -> Policy Check -> Routing -> Translation -> Verification -> Response
 """
 
+import asyncio
+import concurrent.futures
+import functools
 import hashlib
+import os
 import time
 import logging
 from typing import Dict, Any, Optional
@@ -22,6 +26,39 @@ from qwed_new.core.diagnostics import DiagnosticResult, enforce_trust_decision
 from qwed_new.core.attestation import create_verification_attestation, AttestationStatus
 
 logger = logging.getLogger(__name__)
+
+# A provider (LLM) call does blocking network I/O. It runs in a worker thread
+# under a wall-clock bound so a slow or hung upstream cannot tie up the shared
+# event loop and stall every co-tenant's request (#390).
+_PROVIDER_CALL_TIMEOUT_SECONDS = float(os.environ.get("QWED_PROVIDER_TIMEOUT", "30"))
+
+
+async def _run_provider_call(func, *args, **kwargs):
+    """Run a blocking provider call off the event loop, bounded by a timeout."""
+    return await asyncio.wait_for(
+        asyncio.to_thread(func, *args, **kwargs),
+        timeout=_PROVIDER_CALL_TIMEOUT_SECONDS,
+    )
+
+
+# z3py's default context is not thread safe, and its objects must be created and
+# freed on the same thread. A single-worker executor keeps every z3 solve on one
+# dedicated thread: off the event loop, never concurrent with another solve, and
+# never finalising z3 objects on a foreign thread. Only the fast solve runs here
+# (the provider translation runs concurrently via _run_provider_call), so the
+# queue stays short.
+_Z3_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="qwed-z3")
+_Z3_CALL_TIMEOUT_SECONDS = float(os.environ.get("QWED_Z3_TIMEOUT", "15"))
+
+
+async def _run_z3_call(func, *args, **kwargs):
+    """Run a z3 solve on the single z3 thread, bounded by a timeout."""
+    loop = asyncio.get_running_loop()
+    return await asyncio.wait_for(
+        loop.run_in_executor(_Z3_EXECUTOR, functools.partial(func, *args, **kwargs)),
+        timeout=_Z3_CALL_TIMEOUT_SECONDS,
+    )
+
 
 class ControlPlane:
     """
@@ -104,7 +141,9 @@ class ControlPlane:
             # 3. Translation (LLM Call)
             # Note: We currently assume it's a math query for the main endpoint.
             # Future: Router should also classify intent (Math vs Logic vs Fact).
-            task: MathVerificationTask = self.translator.translate(query, provider=provider)
+            task: MathVerificationTask = await _run_provider_call(
+                self.translator.translate, query, provider=provider
+            )
             
             # 3.5. Query Classification - Detect trivial/non-math expressions
             # If LLM returned a trivial expression (like "0" or "2+2"), it's likely not math
@@ -278,10 +317,19 @@ class ControlPlane:
         try:
             # Full Pipeline: NL -> DSL -> Verification
             # DSLLogicVerifier handles the translation internally via Azure/Anthropic
-            result = self.logic_verifier.verify_from_natural_language(
-                query=query,
-                provider=provider
+            # Provider translation runs off the loop and concurrently; the z3
+            # solve runs on the single z3 thread. So the loop is never blocked,
+            # logic requests translate in parallel, and z3 stays thread-safe.
+            dsl_code, variables, resolved_provider, error = await _run_provider_call(
+                self.logic_verifier.translate_to_dsl, query, provider
             )
+            if error is not None:
+                result = error
+            else:
+                result = await _run_z3_call(self.logic_verifier.verify_from_dsl, dsl_code, variables)
+                result.provider_used = resolved_provider
+                if not result.dsl_code:
+                    result.dsl_code = dsl_code
             resolved_provider = result.provider_used or provider
             last_known_provider = resolved_provider
             
