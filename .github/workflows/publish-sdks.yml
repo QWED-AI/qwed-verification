@@ -14,7 +14,10 @@ jobs:
   # ============================================
   # The npm and crates.io jobs queue per version (see their concurrency keys):
   # two runs that would publish the same version wait for each other instead
-  # of racing, and runs for different versions never wait on or cancel each other.
+  # of racing (queue: max keeps every waiting run, not only the newest), and
+  # runs for different versions never wait on or cancel each other.
+  # Build metadata (1.2.3+build) is rejected: npm drops it on publish, so the
+  # "already published" check would compare different strings.
   versions:
     name: Read SDK versions
     runs-on: ubuntu-latest
@@ -83,6 +86,7 @@ jobs:
     concurrency:
       group: publish-sdks-npm-${{ needs.versions.outputs.npm }}
       cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       
@@ -136,6 +140,7 @@ jobs:
     concurrency:
       group: publish-sdks-crates-${{ needs.versions.outputs.crate }}
       cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       
