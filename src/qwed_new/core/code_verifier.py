@@ -250,7 +250,7 @@ class CodeVerifier:
         r'[a-zA-Z0-9+/]{40}': "Potential AWS Secret Key",
         r'ghp_[a-zA-Z0-9]{36}': "GitHub Personal Access Token",
         r'gho_[a-zA-Z0-9]{36}': "GitHub OAuth Token",
-        r'sk-[a-zA-Z0-9]{48}': "OpenAI API Key",
+        r'sk-(?:(?:proj|svcacct|admin)-[a-zA-Z0-9_-]{20,}|[a-zA-Z0-9]{48})': "OpenAI API Key",
         r'xox[baprs]-[0-9a-zA-Z-]+': "Slack Token",
         r'-----BEGIN (RSA |EC )?PRIVATE KEY-----': "Private Key",
         r'eyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+': "JWT Token",

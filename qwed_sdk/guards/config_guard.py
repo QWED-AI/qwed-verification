@@ -13,7 +13,10 @@ class ConfigGuard:
     
     # Regex patterns for common secret types
     DEFAULT_SECRET_PATTERNS = {
-        "OPENAI_API_KEY": r"sk-[a-zA-Z0-9]{20,}",
+        # Project, service-account and admin keys (sk-proj-, sk-svcacct-,
+        # sk-admin-) contain "-" and "_"; legacy keys are plain alphanumerics.
+        # sk-ant- (Anthropic) matches neither branch.
+        "OPENAI_API_KEY": r"sk-(?:(?:proj|svcacct|admin)-[a-zA-Z0-9_-]{20,}|[a-zA-Z0-9]{20,})",
         "ANTHROPIC_API_KEY": r"sk-ant-[a-zA-Z0-9-]+",
         "AWS_ACCESS_KEY": r"AKIA[0-9A-Z]{16}",
         "AWS_SECRET_KEY": r"[a-zA-Z0-9/+=]{40}",  # Needs context
