@@ -220,7 +220,7 @@ pip install -e ".[server,dev]"
 pytest tests/ -v
 ```
 
-GitHub Actions runs the test suite with coverage on Python 3.11 for pull requests to `main`, and CircleCI runs it on Python 3.10, 3.11 and 3.12. CodeQL, SonarCloud and Snyk scan the repository. `scripts/check_boundary.py` blocks raw `eval`, `exec`, `sympify` and shell calls outside approved wrappers. See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and the [good first issues](https://github.com/QWED-AI/qwed-verification/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+`python -m evals.run` runs the [soundness eval](evals/README.md): claims with a known answer, checked by the engines, with zero wrongly accepted claims required. GitHub Actions runs the test suite with coverage on Python 3.11 for pull requests to `main`, and CircleCI runs it on Python 3.10, 3.11 and 3.12. CodeQL, SonarCloud and Snyk scan the repository. `scripts/check_boundary.py` blocks raw `eval`, `exec`, `sympify` and shell calls outside approved wrappers. See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and the [good first issues](https://github.com/QWED-AI/qwed-verification/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
 
 ## Security
 
