@@ -10,6 +10,7 @@ Provides AST-based SQL analysis to prevent:
 """
 
 import hashlib
+import re
 
 import sqlglot
 from sqlglot import exp, parse_one
@@ -28,7 +29,20 @@ CONSTRAINT_SQL_VALID = "sql_verifier.sql_valid"
 CONSTRAINT_MALICIOUS = "sql_verifier.malicious"
 CONSTRAINT_COMPLEXITY_LIMIT_EXCEEDED = "sql_verifier.complexity_limit_exceeded"
 CONSTRAINT_SCHEMA_PARSE_ERROR = "sql_verifier.schema_parse_error"
+CONSTRAINT_SCHEMA_VIOLATION = "sql_verifier.schema_violation"
 CONSTRAINT_EMPTY_BATCH = "sql_verifier.empty_batch"
+
+# MySQL and MariaDB run the body of /*! ... */, /*!NNNNN ... */ and MariaDB's
+# /*M! ... */ comments; other engines, and SQLGlot, treat them as comments, so
+# SQL inside one escaped analysis (GHSA-q5g6-6cw2-cjm3). They are expanded
+# before analysis whatever the declared dialect: if the query reaches MySQL,
+# that body is what runs.
+_EXECUTABLE_COMMENT = re.compile(r"/\*M?!(?:\d{5,6})?(.*?)\*/", re.DOTALL)
+
+
+def expand_executable_comments(query: str) -> str:
+    """Replace each MySQL/MariaDB executable comment with the SQL inside it."""
+    return _EXECUTABLE_COMMENT.sub(lambda m: f" {m.group(1)} ", query)
 CONSTRAINT_BATCH_BLOCKED = "sql_verifier.batch_blocked"
 
 # Issue types that prove malice. Resource-limit violations (complexity_*) are CRITICAL
@@ -179,6 +193,7 @@ class SQLVerifier:
                           Malicious is the only unsafe case that retains a proof_ref — unless
                           the DDL schema also fails to parse, in which case the incomplete
                           analysis is BLOCKED (schema_parse_error takes precedence).
+        - Table outside the declared ``schema_ddl`` → BLOCKED (``sql_verifier.schema_violation``)
         - Complexity-limit violation → BLOCKED (``sql_verifier.complexity_limit_exceeded``)
         - DDL schema parse failure → BLOCKED (``sql_verifier.schema_parse_error``)
         - Parse error     → BLOCKED (``sql_verifier.parse_error``)
@@ -201,9 +216,11 @@ class SQLVerifier:
             >>> print(result.developer_fields.get("is_valid"))
             True
         """
-        # 1. Parse Query
+        # 1. Parse Query, with MySQL/MariaDB executable comments expanded.
+        executable_comments = bool(_EXECUTABLE_COMMENT.search(query))
+        analysed = expand_executable_comments(query) if executable_comments else query
         try:
-            parsed_query = parse_one(query, read=dialect)
+            parsed_query = parse_one(analysed, read=dialect)
         except Exception as exc:  # noqa: BLE001 — fail-closed by design
             return DiagnosticResult.blocked(
                 agent_message=(
@@ -225,7 +242,7 @@ class SQLVerifier:
 
             issues.extend(self._check_command_type(parsed_query))
             issues.extend(self._check_column_access(parsed_query))
-            issues.extend(self._check_injection_patterns(parsed_query, query))
+            issues.extend(self._check_injection_patterns(parsed_query, analysed))
 
             complexity = self._analyze_complexity(parsed_query)
 
@@ -259,6 +276,7 @@ class SQLVerifier:
             for i in issues
         )
         schema_parse_failed = any(i.issue_type == "schema_parse_error" for i in issues)
+        schema_violated = any(i.issue_type == "schema_table_missing" for i in issues)
 
         # A DDL schema parse failure means the analysis is incomplete: an authoritative
         # proof must never be generated from an incomplete analysis (fail-closed), so it
@@ -267,6 +285,8 @@ class SQLVerifier:
             constraint_id = CONSTRAINT_SCHEMA_PARSE_ERROR
         elif malicious:
             constraint_id = CONSTRAINT_MALICIOUS
+        elif schema_violated:
+            constraint_id = CONSTRAINT_SCHEMA_VIOLATION
         elif not is_valid:
             constraint_id = CONSTRAINT_COMPLEXITY_LIMIT_EXCEEDED
         else:
@@ -296,6 +316,7 @@ class SQLVerifier:
             },
             "critical_count": critical_count,
             "warning_count": warning_count,
+            "executable_comments_expanded": executable_comments,
             "engine": "SQLGlot-AST-Scanner",
         }
 
@@ -642,15 +663,19 @@ class SQLVerifier:
             ))
             return issues
         
-        # Check table existence
+        # Check table existence. A declared schema is the set of tables the query
+        # may touch, so a table outside it is an admission failure, not a warning
+        # (GHSA-q5g6-6cw2-cjm3). Names defined by the query itself (CTEs) are not
+        # tables of the database.
+        cte_names = {cte.alias_or_name.lower() for cte in parsed_query.find_all(exp.CTE)}
         for table in parsed_query.find_all(exp.Table):
             t_name = table.name.lower()
-            if t_name not in tables_in_schema:
+            if t_name not in tables_in_schema and t_name not in cte_names:
                 issues.append(SQLIssue(
-                    severity="WARNING",
+                    severity="CRITICAL",
                     issue_type="schema_table_missing",
                     description=f"Table '{t_name}' not found in schema.",
-                    recommendation="Verify table name or update schema."
+                    recommendation="Query only the tables in the declared schema, or add the table to it."
                 ))
         
         return issues

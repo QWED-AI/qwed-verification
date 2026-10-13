@@ -100,10 +100,11 @@ def test_sql_verifier_schema_validation():
     result = verifier.verify_sql("SELECT name FROM users", schema_ddl=schema)
     assert result.developer_fields.get("is_valid") is True
 
-    # Table does NOT exist in schema - this generates WARNING not CRITICAL
+    # Table does NOT exist in schema: the declared schema is the set of tables
+    # the query may touch, so this is an admission failure (GHSA-q5g6-6cw2-cjm3).
     result = verifier.verify_sql("SELECT name FROM passwords", schema_ddl=schema)
-    assert result.developer_fields.get("warning_count", 0) > 0
-    assert result.developer_fields.get("is_valid") is True
+    assert result.developer_fields.get("is_valid") is False
+    assert result.developer_fields.get("constraint_id") == "sql_verifier.schema_violation"
 
 
 def test_sql_verifier_parse_error_is_blocked():
