@@ -85,6 +85,11 @@ class _BodySizeLimitMiddleware:
     # Worst case stays ~ _json_max_concurrent x _JSON_BODY_LIMIT_BYTES.
     _json_max_concurrent = 64
     _json_in_flight = 0
+    # JSON bodies are small and capped, so they get a much tighter read deadline
+    # than the large multipart uploads: a stalled JSON request frees its slot in
+    # seconds, which shrinks the window a slow client could hold slots pre-auth
+    # (Sentry on PR #447). Connection-level slow-loris remains an ingress concern.
+    _json_read_deadline_seconds = 10.0
 
     def __init__(self, app, max_bytes: int = None, path: str = None,
                  limits: dict = None, concurrency_paths=None,
@@ -132,7 +137,10 @@ class _BodySizeLimitMiddleware:
                 return
             cls._json_in_flight += 1
             try:
-                body = await self._read_body(scope, receive, send, max_bytes)
+                body = await self._read_body(
+                    scope, receive, send, max_bytes,
+                    deadline_seconds=self._json_read_deadline_seconds,
+                )
             finally:
                 cls._json_in_flight -= 1
             if body is not None:
@@ -172,11 +180,11 @@ class _BodySizeLimitMiddleware:
 
         return replay_receive
 
-    async def _read_body(self, scope, receive, send, max_bytes):
+    async def _read_body(self, scope, receive, send, max_bytes, deadline_seconds=None):
         """Read the whole body under the cap and deadline. Returns the bytes, or
         None after sending a 413/408 or on client disconnect."""
         body = bytearray()
-        deadline = time.monotonic() + self.read_deadline_seconds
+        deadline = time.monotonic() + (self.read_deadline_seconds if deadline_seconds is None else deadline_seconds)
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:

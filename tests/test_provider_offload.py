@@ -4,8 +4,6 @@ timeout, and the logic path splits translation (concurrent) from the z3 solve
 import asyncio
 import threading
 
-import pytest
-
 from qwed_new.core import control_plane as cp
 
 
