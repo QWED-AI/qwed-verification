@@ -94,8 +94,10 @@ class CodeVerifier:
     # left to right, with str.find.
     _SUBPROC_CALL: ClassVar = re.compile(r"subprocess\.(?:run|Popen|call|check_output)\s*\(", re.IGNORECASE)
     _SHELL_TRUE: ClassVar = re.compile(r"shell\s*=\s*True", re.IGNORECASE)
-    # bash/sh as whole words, so "finish" or "wish" is not read as a shell.
-    _SHELL_TARGET: ClassVar = re.compile(r"\b(?:bash|sh)\b", re.IGNORECASE)
+    _FETCH_TOOL: ClassVar = re.compile(r"curl|wget", re.IGNORECASE)
+    # Shell names as whole words, so "finish"/"wish" are not read as a shell,
+    # but /bin/dash, zsh and friends still are.
+    _SHELL_TARGET: ClassVar = re.compile(r"\b(?:bash|dash|zsh|ksh|tcsh|csh|ash|sh|fish)\b", re.IGNORECASE)
 
     # Shell and process execution is never admitted, whatever the argument
     # (GHSA-6rxr-gq43-694g): whether a command is safe depends on context this
@@ -470,14 +472,16 @@ class CodeVerifier:
         backtracking. One finding per line.
         """
         issues: List[SecurityIssue] = []
-        lower = code.lower()
-        fetch_pos = self._positions(lower, ("curl", "wget"))
+        # All positions are computed against `code` (case-insensitive regexes),
+        # so offsets never drift the way `code.lower()` can for characters whose
+        # lowercase form changes length (Sentry on PR #447).
+        fetch_pos = [m.start() for m in self._FETCH_TOOL.finditer(code)]
         if not fetch_pos:
             return issues
         sep_pos = self._positions(code, ("|", ";", "&&"))
         if not sep_pos:
             return issues
-        shell_pos = [m.start() for m in self._SHELL_TARGET.finditer(lower)]
+        shell_pos = [m.start() for m in self._SHELL_TARGET.finditer(code)]
         if not shell_pos:
             return issues
         # Everything else is precomputed too, so each match is O(log n) and the
