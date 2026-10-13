@@ -119,13 +119,11 @@ class _BodySizeLimitMiddleware:
             await self.app(scope, receive, send)
             return
         cls = _BodySizeLimitMiddleware
-        gated_json = norm not in self.concurrency_paths
-        # The concurrency slot bounds *buffering* memory, so it is held only
-        # while the body is read, not for the whole request (auth, handler,
-        # response) — otherwise slow handlers would saturate it (Sentry on PR
-        # #447). JSON routes use a larger budget; the two multipart uploads use
-        # the tight slot that bounds max_concurrent x max_bytes.
-        if gated_json:
+        if norm not in self.concurrency_paths:
+            # JSON route: small body. The slot bounds concurrent buffering, so it
+            # is released once the body is read — the body is tiny and the handler
+            # reads it immediately, so holding the slot through a slow handler
+            # would needlessly saturate it (Sentry on PR #447).
             if cls._json_in_flight >= cls._json_max_concurrent:
                 await JSONResponse(
                     status_code=503,
@@ -133,27 +131,36 @@ class _BodySizeLimitMiddleware:
                 )(scope, receive, send)
                 return
             cls._json_in_flight += 1
-        else:
-            if cls._in_flight >= cls._max_concurrent:
-                await JSONResponse(
-                    status_code=503,
-                    content={"detail": "Upload capacity reached — retry shortly."},
-                )(scope, receive, send)
-                return
-            cls._in_flight += 1
+            try:
+                body = await self._read_body(scope, receive, send, max_bytes)
+            finally:
+                cls._json_in_flight -= 1
+            if body is not None:
+                await self.app(scope, self._replay(body), send)
+            return
+
+        # Multipart upload: the body is large and is retained (by the replay
+        # closure) until the handler consumes it, so the slot is held for the
+        # whole request to keep max_concurrent x max_bytes a real memory bound
+        # (Greptile on PR #447).
+        if cls._in_flight >= cls._max_concurrent:
+            await JSONResponse(
+                status_code=503,
+                content={"detail": "Upload capacity reached — retry shortly."},
+            )(scope, receive, send)
+            return
+        cls._in_flight += 1
         try:
             body = await self._read_body(scope, receive, send, max_bytes)
+            if body is not None:
+                await self.app(scope, self._replay(body), send)
         finally:
-            if gated_json:
-                cls._json_in_flight -= 1
-            else:
-                cls._in_flight -= 1
-        if body is None:
-            return  # an error response was already sent, or the client disconnected
+            cls._in_flight -= 1
 
+    @staticmethod
+    def _replay(body: bytes):
         # ASGI receive contract (Sentry on PR #354): the replayed body is
-        # delivered ONCE; later calls report disconnect. The coroutine shape
-        # is required by the ASGI protocol — suppressed on the def line.
+        # delivered ONCE; later calls report disconnect.
         replayed = False
 
         async def replay_receive():  # NOSONAR
@@ -163,7 +170,7 @@ class _BodySizeLimitMiddleware:
             replayed = True
             return {"type": "http.request", "body": body, "more_body": False}
 
-        await self.app(scope, replay_receive, send)
+        return replay_receive
 
     async def _read_body(self, scope, receive, send, max_bytes):
         """Read the whole body under the cap and deadline. Returns the bytes, or

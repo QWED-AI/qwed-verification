@@ -6,6 +6,8 @@ Request -> Policy Check -> Routing -> Translation -> Verification -> Response
 """
 
 import asyncio
+import concurrent.futures
+import functools
 import hashlib
 import os
 import time
@@ -36,6 +38,25 @@ async def _run_provider_call(func, *args, **kwargs):
     return await asyncio.wait_for(
         asyncio.to_thread(func, *args, **kwargs),
         timeout=_PROVIDER_CALL_TIMEOUT_SECONDS,
+    )
+
+
+# z3py's default context is not thread safe, and its objects must be created and
+# freed on the same thread. A single-worker executor keeps every z3 solve on one
+# dedicated thread: off the event loop, never concurrent with another solve, and
+# never finalising z3 objects on a foreign thread. Only the fast solve runs here
+# (the provider translation runs concurrently via _run_provider_call), so the
+# queue stays short.
+_Z3_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="qwed-z3")
+_Z3_CALL_TIMEOUT_SECONDS = float(os.environ.get("QWED_Z3_TIMEOUT", "15"))
+
+
+async def _run_z3_call(func, *args, **kwargs):
+    """Run a z3 solve on the single z3 thread, bounded by a timeout."""
+    loop = asyncio.get_running_loop()
+    return await asyncio.wait_for(
+        loop.run_in_executor(_Z3_EXECUTOR, functools.partial(func, *args, **kwargs)),
+        timeout=_Z3_CALL_TIMEOUT_SECONDS,
     )
 
 
@@ -296,17 +317,19 @@ class ControlPlane:
         try:
             # Full Pipeline: NL -> DSL -> Verification
             # DSLLogicVerifier handles the translation internally via Azure/Anthropic
-            # Kept on the event loop: this path's provider translation and the
-            # z3 solve are bundled in one call, and z3py's default context is
-            # not safe to run from a worker thread (even serialized — object
-            # finalizers would run cross-thread). Offloading it safely needs the
-            # translation (concurrent) split from the z3 solve (isolated), which
-            # is a separate change (relates to #431). natural_language and fact
-            # have no z3 and are offloaded.
-            result = self.logic_verifier.verify_from_natural_language(
-                query=query,
-                provider=provider,
+            # Provider translation runs off the loop and concurrently; the z3
+            # solve runs on the single z3 thread. So the loop is never blocked,
+            # logic requests translate in parallel, and z3 stays thread-safe.
+            dsl_code, variables, resolved_provider, error = await _run_provider_call(
+                self.logic_verifier.translate_to_dsl, query, provider
             )
+            if error is not None:
+                result = error
+            else:
+                result = await _run_z3_call(self.logic_verifier.verify_from_dsl, dsl_code, variables)
+                result.provider_used = resolved_provider
+                if not result.dsl_code:
+                    result.dsl_code = dsl_code
             resolved_provider = result.provider_used or provider
             last_known_provider = resolved_provider
             
