@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document explains why we believe QWED meets its security requirements, and where it does not yet. It covers the threat model, trust boundaries, design principles and countermeasures. Each control states its current status; known gaps link to the issue or advisory that tracks them. Last reviewed: October 2026 (v7.2.2).
+This document explains why we believe QWED meets its security requirements, and where it does not yet. It covers the threat model, trust boundaries, design principles and countermeasures. Each control states its current status; known gaps link to the issue or advisory that tracks them. Last reviewed: October 2026 (v7.2.3).
 
 ## 1. Threat Model
 
@@ -21,12 +21,17 @@ This document explains why we believe QWED meets its security requirements, and 
 2.  **Code injection**: model output that reaches an evaluator (`sympify`, `parse_expr`, `eval`) or executes code.
 3.  **Denial of service**: inputs that make an engine consume excessive CPU or memory.
 4.  **Data leakage**: sensitive data sent to an external LLM provider.
+5.  **Unsound verification**: a check that returns `VERIFIED` for a false or unsafe claim, so the integrator acts on it. For a verification library this is the most serious failure.
 
 ## 2. Secure Design Principles
 
 ### Least Privilege
 - Untrusted expressions are parsed only through `safe_parse_expr` (character and AST allow-lists, builtins stripped, cost-bounded); `scripts/check_boundary.py` blocks raw `eval`, `exec`, `sympify` and shell calls outside approved files in CI.
 - Generated code is executed only through `SecureCodeExecutor`. Sandbox hardening is still open: [#322](https://github.com/QWED-AI/qwed-verification/issues/322), [#431](https://github.com/QWED-AI/qwed-verification/issues/431).
+
+### Fail-Safe Defaults
+- An engine that cannot settle a claim returns a fail-closed status, never `VERIFIED`: `UNVERIFIABLE` when it cannot reach a verdict, `BLOCKED` when the input is rejected (for example a SQL parse failure or a code-analysis error). For SQL, code and schema checks, `admission_decision` admits only a `VERIFIED` result whose claim holds (`developer_fields.is_valid` is true) and denies everything else.
+- Four advisories so far are cases where an engine returned `VERIFIED` when it should not have: [GHSA-j622-qffp-rc27](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-j622-qffp-rc27) and [GHSA-mfh5-3c8f-975p](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-mfh5-3c8f-975p) (fixed in 7.2.2), [GHSA-6rxr-gq43-694g](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-6rxr-gq43-694g) and [GHSA-q5g6-6cw2-cjm3](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-q5g6-6cw2-cjm3) (fixed in 7.2.3). Each one is reproduced in the soundness eval (section 4).
 
 ### Complete Mediation
 - QWED is a library and API: it mediates only the outputs an integrator sends through it. Deployments must route model output through QWED before acting on it.
@@ -42,6 +47,8 @@ This document explains why we believe QWED meets its security requirements, and 
 | Weakness | Mitigation | Status |
 | :--- | :--- | :--- |
 | **Injection** | Untrusted expressions go through `safe_parse_expr`; raw evaluators are blocked by the CI boundary gate. | Implemented. Three code-injection advisories were fixed in 5.1.2, 7.2.1 and 7.2.2 ([GHSA-q27q-98j4-9pfv](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-q27q-98j4-9pfv), [GHSA-xmm6-8r3x-j567](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-xmm6-8r3x-j567), [GHSA-4v5r-g7f4-vvgc](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-4v5r-g7f4-vvgc)). |
+| **Unsound results** | Engines fail closed (section 2). Claims with a known answer, including reproductions of the four advisories above, run through the Math, Logic, SQL, Code and Schema engines in CI and at every release (`evals/`). | Partial: the Symbolic and Stats engines and the domain packages have no eval cases yet. In 7.2.3 the Python code verifier blocks shell and process execution ([GHSA-6rxr-gq43-694g](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-6rxr-gq43-694g)); the same classification for the other languages the verifier scans is not yet complete. The SQL verifier checks MySQL executable comments and denies tables outside a declared schema ([GHSA-q5g6-6cw2-cjm3](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-q5g6-6cw2-cjm3)). |
+| **Secrets in checked content** | `ConfigGuard`, `PIIGuard` and the code verifier match known API key formats. | Partial: pattern lists must follow providers' key formats. Project-scoped OpenAI keys (`sk-proj-`) were missed until 7.2.3 ([GHSA-64xf-wffc-63fm](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-64xf-wffc-63fm)). |
 | **Credentials** | Provider API keys come from environment variables; QWED API keys are stored hashed. | Partial: a Redis URL including its password is logged ([#228](https://github.com/QWED-AI/qwed-verification/issues/228)); expired API keys are still accepted ([#389](https://github.com/QWED-AI/qwed-verification/issues/389)). |
 | **XML exploits** | The server and SDK do not parse XML. | Not applicable |
 | **Insecure deserialization** | No `pickle` on untrusted data; JSON is the interchange format. | Implemented |
@@ -52,5 +59,6 @@ This document explains why we believe QWED meets its security requirements, and 
 Security controls are checked by:
 - **CI**: the test suite, `scripts/check_boundary.py`, CodeQL, SonarCloud and Snyk.
 - **Tests**: security-focused tests in `tests/security/` and across `tests/`.
+- **Soundness eval**: `evals/` runs claims with a known answer through the engines. `tests/test_evals.py` fails CI if any claim that does not hold is accepted, and `.github/workflows/eval.yml` attaches the report (`eval-results.json`) to every release. The 7.2.3 report: 76 claims, 0 accepted wrongly. The latest results are also shown at [qwedai.com/evidence](https://qwedai.com/evidence).
 - **External reports**: private vulnerability reporting; see [SECURITY.md](../SECURITY.md) and the published advisories.
 - **Open work**: the [security tracker issues](https://github.com/QWED-AI/qwed-verification/issues?q=is%3Aissue+is%3Aopen+label%3Asecurity).

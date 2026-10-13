@@ -51,7 +51,7 @@ print([issue["type"] for issue in result.developer_fields["issues"]])
 
 - **It does not check intent.** QWED verifies the formal statement it is given or extracts, not whether that statement is what the user meant.
 - **It does not cover every domain.** Claims outside a supported engine come back `UNVERIFIABLE`.
-- **It is only as sound as its engines.** Results depend on SymPy, Z3, SQLGlot, CrossHair and QWED's own rule sets. Past soundness bugs are listed in the [security advisories](https://github.com/QWED-AI/qwed-verification/security/advisories).
+- **It is only as sound as its engines.** Results depend on SymPy, Z3, SQLGlot, CrossHair and QWED's own rule sets. Past soundness bugs are listed in the [security advisories](https://github.com/QWED-AI/qwed-verification/security/advisories); each advisory in which an engine returned VERIFIED for a false claim is reproduced in the [soundness eval](evals/README.md), which runs at every release.
 - **Natural-language checks use an LLM to translate.** `/verify/natural_language` and `/verify/logic` ask the model you configure to turn text into a formal statement; that translation is not itself verified. Prompts go to that provider unless you run a local model (for example with Ollama).
 - **Advisory engines do not decide.** Fact, Graph, Image, Reasoning and Consensus produce signals for review. Heuristic results are never reported as `VERIFIED`.
 
