@@ -125,10 +125,12 @@ class _BodySizeLimitMiddleware:
             return
         cls = _BodySizeLimitMiddleware
         if norm not in self.concurrency_paths:
-            # JSON route: small body. The slot bounds concurrent buffering, so it
-            # is released once the body is read — the body is tiny and the handler
-            # reads it immediately, so holding the slot through a slow handler
-            # would needlessly saturate it (Sentry on PR #447).
+            # JSON route: small body, but the replay closure retains it until the
+            # handler reads it, so the slot is held for the whole request to keep
+            # _json_max_concurrent x cap a real memory bound (CodeRabbit/Greptile
+            # on PR #447). The large JSON budget and the short read deadline keep
+            # the saturation risk low; connection-level slow-loris is ingress's
+            # concern, as the upload path documents.
             if cls._json_in_flight >= cls._json_max_concurrent:
                 await JSONResponse(
                     status_code=503,
@@ -141,10 +143,10 @@ class _BodySizeLimitMiddleware:
                     scope, receive, send, max_bytes,
                     deadline_seconds=self._json_read_deadline_seconds,
                 )
+                if body is not None:
+                    await self.app(scope, self._replay(body), send)
             finally:
                 cls._json_in_flight -= 1
-            if body is not None:
-                await self.app(scope, self._replay(body), send)
             return
 
         # Multipart upload: the body is large and is retained (by the replay
