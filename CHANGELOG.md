@@ -4,15 +4,63 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+## [7.2.3] - 2026-10-13
+
+### Security fixes
+
+This is a fail-closed security release covering three advisories:
+GHSA-6rxr-gq43-694g, GHSA-64xf-wffc-63fm and GHSA-q5g6-6cw2-cjm3. They affect
+all versions up to 7.2.2; upgrading is recommended. Publication of the
+advisories on the repository Security tab is pending. No breaking wire changes.
+
+- **Code verification never admits shell or process execution** —
+  `os.system`, `os.popen`, the `os.exec*` and `os.spawn*` families,
+  `os.posix_spawn*`, `os.startfile`, `subprocess.*`, `pty.spawn` and
+  `asyncio.create_subprocess_*` are now blocking findings
+  (`process_execution`), including calls made through an aliased import
+  (`import subprocess as sp`, `from os import system as run_it`,
+  `from os import *`). Before, they were warnings and such code was admitted,
+  even when caller input reached the shell. `verify_code`,
+  `verify_python_deep` and `POST /verify/code` are covered
+  (`core/code_verifier.py`).
+- **Project-scoped OpenAI keys** — `ConfigGuard` and the code verifier now
+  detect `sk-proj-`, `sk-svcacct-` and `sk-admin-` keys as well as legacy
+  keys (`qwed_sdk/guards/config_guard.py`, `core/code_verifier.py`).
+- **SQL verification** — MySQL and MariaDB executable comments
+  (`/*! ... */`, `/*!NNNNN ... */`, `/*M! ... */`) are expanded before
+  analysis, so SQL inside them is checked; and with `schema_ddl`, a query on a
+  table outside the schema is BLOCKED with `sql_verifier.schema_violation`
+  instead of being admitted with a warning (`core/sql_verifier.py`).
+
+### Behaviour changes
+
+All three make the engines stricter. No response field is removed or
+renamed; the SQL verifier adds the constraint `sql_verifier.schema_violation`
+and the field `developer_fields.executable_comments_expanded`.
+
+- Code that runs a shell command or subprocess is no longer admitted by the
+  code verifier, even with a constant argument. Run such code through a
+  reviewed, sandboxed tool instead.
+- With `schema_ddl`, a reference to an undeclared table is an admission
+  failure (`is_valid: false`, constraint `sql_verifier.schema_violation`).
+  Names defined by the query itself (CTEs) are not tables. Without
+  `schema_ddl`, tables are not checked, as before.
+- Executable comments are analysed as SQL whatever the declared dialect;
+  `developer_fields.executable_comments_expanded` says when that happened.
+
 ### Added
 
-- **Soundness eval** (`evals/`): claims with a known answer run through the
-  Math, Logic, SQL, Code and Schema engines, including the reproductions from
-  GHSA-j622-qffp-rc27 and GHSA-mfh5-3c8f-975p. `python -m evals.run` reports
-  how many claims were proved, caught or wrongly accepted;
+- **Soundness eval** (`evals/`, in the repository, not the wheel): claims
+  with a known answer run through the Math, Logic, SQL, Code and Schema
+  engines, including the reproductions from GHSA-j622-qffp-rc27,
+  GHSA-mfh5-3c8f-975p and the three advisories above. `python -m evals.run`
+  reports how many claims were proved, caught or wrongly accepted;
   `tests/test_evals.py` fails CI on any claim that does not hold but was
-  accepted, or on any engine that raises, and `.github/workflows/eval.yml` attaches the report
-  (`eval-results.json`) to every release.
+  accepted, or on any engine that raises; and `.github/workflows/eval.yml`
+  attaches the report (`eval-results.json`) to every release.
+
+> **Semver:** patch release — security fixes that restore fail-closed
+> behaviour, plus repository tooling. No breaking wire changes.
 
 ## [7.2.2] - 2026-10-09
 
