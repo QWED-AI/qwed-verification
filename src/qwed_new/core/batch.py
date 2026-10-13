@@ -6,9 +6,11 @@ with progress tracking and result aggregation.
 """
 
 import asyncio
+import os
 import time
 import uuid
 import logging
+from collections import OrderedDict
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 from enum import Enum
@@ -98,9 +100,14 @@ class BatchVerificationService:
     - Job storage for status queries
     """
     
+    # Cap the in-process job store so completed jobs cannot grow the worker's
+    # heap without bound (#391). Oldest jobs are evicted first; their status
+    # queries 404 after eviction, as they would after a restart.
+    _MAX_JOBS = int(os.environ.get("QWED_BATCH_MAX_JOBS", "1000"))
+
     def __init__(self, max_concurrency: int = 10):
         self.max_concurrency = max_concurrency
-        self._jobs: Dict[str, BatchJob] = {}
+        self._jobs: "OrderedDict[str, BatchJob]" = OrderedDict()
         self._control_plane = None
     
     @property
@@ -146,6 +153,9 @@ class BatchVerificationService:
         )
         
         self._jobs[job_id] = job
+        # FIFO eviction keeps the store bounded regardless of how many jobs run.
+        while len(self._jobs) > self._MAX_JOBS:
+            self._jobs.popitem(last=False)
         return job
     
     async def process_job(self, job: BatchJob) -> BatchJob:
@@ -223,38 +233,52 @@ class BatchVerificationService:
             )
         
         elif item.verification_type == VerificationType.MATH:
-            return self._verify_batch_math(item)
-        
+            # sympy is CPU-bound; run it in a worker thread so a batch does not
+            # block the event loop per item (#391).
+            return await asyncio.to_thread(self._verify_batch_math, item)
+
         elif item.verification_type == VerificationType.CODE:
             from qwed_new.core.code_verifier import CodeVerifier
-            verifier = CodeVerifier()
-            result = verifier.verify_code(
-                item.query,
-                language=item.params.get("language", "python")
-            )
-            serialized = result.to_dict()
-            # Gate on admission like /verify/code: VERIFIED-as-unsafe code must
-            # never be admitted by authority-only consumers (#254).
-            serialized["admission"] = admission_decision(result).value
-            return serialized
-        
+
+            def _verify_code() -> Dict[str, Any]:
+                verifier = CodeVerifier()
+                result = verifier.verify_code(
+                    item.query,
+                    language=item.params.get("language", "python")
+                )
+                serialized = result.to_dict()
+                # Gate on admission like /verify/code: VERIFIED-as-unsafe code
+                # must never be admitted by authority-only consumers (#254).
+                serialized["admission"] = admission_decision(result).value
+                return serialized
+
+            return await asyncio.to_thread(_verify_code)
+
         elif item.verification_type == VerificationType.FACT:
             from qwed_new.core.fact_verifier import FactVerifier
-            verifier = FactVerifier()
-            result = verifier.verify_fact(
-                item.query,
-                item.params.get("context", "")
-            )
-            return result.to_dict()
-        
+
+            def _verify_fact() -> Dict[str, Any]:
+                verifier = FactVerifier()
+                result = verifier.verify_fact(
+                    item.query,
+                    item.params.get("context", "")
+                )
+                return result.to_dict()
+
+            return await asyncio.to_thread(_verify_fact)
+
         elif item.verification_type == VerificationType.SQL:
             from qwed_new.core.sql_verifier import SQLVerifier
-            verifier = SQLVerifier()
-            return verifier.verify_sql(
-                item.query,
-                item.params.get("schema_ddl", ""),
-                dialect=item.params.get("dialect", "sqlite")
-            ).to_dict()
+
+            def _verify_sql() -> Dict[str, Any]:
+                verifier = SQLVerifier()
+                return verifier.verify_sql(
+                    item.query,
+                    item.params.get("schema_ddl", ""),
+                    dialect=item.params.get("dialect", "sqlite")
+                ).to_dict()
+
+            return await asyncio.to_thread(_verify_sql)
         
         else:
             raise ValueError(f"Unknown verification type: {item.verification_type}")
