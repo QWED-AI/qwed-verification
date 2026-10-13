@@ -10,6 +10,39 @@ permissions:
 
 jobs:
   # ============================================
+  # Versions to publish, read once from the checked-out sources
+  # ============================================
+  # The npm and crates.io jobs queue per version (see their concurrency keys):
+  # two runs that would publish the same version wait for each other instead
+  # of racing (queue: max keeps every waiting run, not only the newest), and
+  # runs for different versions never wait on or cancel each other.
+  # Build metadata (1.2.3+build) is rejected: npm drops it on publish, so the
+  # "already published" check would compare different strings.
+  versions:
+    name: Read SDK versions
+    runs-on: ubuntu-latest
+    outputs:
+      npm: ${{ steps.read.outputs.npm }}
+      crate: ${{ steps.read.outputs.crate }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Read versions
+        id: read
+        run: |
+          NPM=$(node -p "require('./sdk-ts/package.json').version")
+          CRATE=$(python3 -c "import tomllib; print(tomllib.load(open('sdk-rust/Cargo.toml', 'rb'))['package']['version'])")
+          for v in "$NPM" "$CRATE"; do
+            if ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::Unexpected SDK version: $v"
+              exit 1
+            fi
+          done
+          echo "npm=$NPM" >> "$GITHUB_OUTPUT"
+          echo "crate=$CRATE" >> "$GITHUB_OUTPUT"
+
+  # ============================================
   # Python SDK → PyPI
   # ============================================
   publish-python:
@@ -49,6 +82,11 @@ jobs:
   publish-typescript:
     name: Publish TypeScript SDK
     runs-on: ubuntu-latest
+    needs: versions
+    concurrency:
+      group: publish-sdks-npm-${{ needs.versions.outputs.npm }}
+      cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       
@@ -73,10 +111,24 @@ jobs:
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.versions.outputs.npm }}
+        # A version already on npm is skipped; any other failure fails the job.
+        # (continue-on-error hid failed npm publishes from 7.2.1 to 7.2.3.)
+        # Only a 404 from the registry counts as "not published yet"; if the
+        # check itself fails, the job fails rather than guessing.
         run: |
           cd sdk-ts
+          if PUBLISHED=$(npm view "@qwed-ai/sdk@$VERSION" version 2>"$RUNNER_TEMP/npm-view.err"); then
+            if [ "$PUBLISHED" = "$VERSION" ]; then
+              echo "@qwed-ai/sdk@$VERSION is already on npm; nothing to publish."
+              exit 0
+            fi
+          elif ! grep -q 'code E404' "$RUNNER_TEMP/npm-view.err"; then
+            cat "$RUNNER_TEMP/npm-view.err"
+            echo "::error::Could not check npm for @qwed-ai/sdk@$VERSION."
+            exit 1
+          fi
           npm publish --access public
-        continue-on-error: true  # Don't fail on duplicate version
 
   # ============================================
   # Rust SDK → crates.io
@@ -84,6 +136,11 @@ jobs:
   publish-rust:
     name: Publish Rust SDK
     runs-on: ubuntu-latest
+    needs: versions
+    concurrency:
+      group: publish-sdks-crates-${{ needs.versions.outputs.crate }}
+      cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       
@@ -95,10 +152,25 @@ jobs:
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          VERSION: ${{ needs.versions.outputs.crate }}
+        # A version already on crates.io is skipped; any other failure fails the job.
+        # Only a 404 counts as "not published yet"; transient errors are retried,
+        # and if the check still fails, the job fails rather than guessing.
         run: |
           cd sdk-rust
+          STATUS=$(curl -sS --retry 3 -o /dev/null -w '%{http_code}' -A "qwed-verification publish workflow (https://github.com/QWED-AI/qwed-verification)" "https://crates.io/api/v1/crates/qwed/$VERSION" || true)
+          case "$STATUS" in
+            200)
+              echo "qwed $VERSION is already on crates.io; nothing to publish."
+              exit 0
+              ;;
+            404) ;;
+            *)
+              echo "::error::Could not check crates.io for qwed $VERSION (HTTP $STATUS)."
+              exit 1
+              ;;
+          esac
           cargo publish --allow-dirty
-        continue-on-error: true  # Don't fail on duplicate version
 
   # ============================================
   # Go SDK → Just needs tag (no publish step)
