@@ -6,8 +6,6 @@ Request -> Policy Check -> Routing -> Translation -> Verification -> Response
 """
 
 import asyncio
-import concurrent.futures
-import functools
 import hashlib
 import os
 import time
@@ -37,25 +35,6 @@ async def _run_provider_call(func, *args, **kwargs):
     """Run a blocking provider call off the event loop, bounded by a timeout."""
     return await asyncio.wait_for(
         asyncio.to_thread(func, *args, **kwargs),
-        timeout=_PROVIDER_CALL_TIMEOUT_SECONDS,
-    )
-
-
-# The logic path solves with z3py, whose default context is NOT thread safe. On
-# the event loop these calls were serialized; running them in the shared thread
-# pool (to_thread) would let two requests touch the global context at once
-# (Sentry on PR #447). A single-worker executor keeps every z3 call on one
-# dedicated thread — off the event loop, but never concurrent with each other.
-_LOGIC_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
-    max_workers=1, thread_name_prefix="qwed-logic-z3"
-)
-
-
-async def _run_logic_call(func, *args, **kwargs):
-    """Run a blocking logic (z3) call on the single logic thread, with a timeout."""
-    loop = asyncio.get_running_loop()
-    return await asyncio.wait_for(
-        loop.run_in_executor(_LOGIC_EXECUTOR, functools.partial(func, *args, **kwargs)),
         timeout=_PROVIDER_CALL_TIMEOUT_SECONDS,
     )
 
@@ -317,8 +296,14 @@ class ControlPlane:
         try:
             # Full Pipeline: NL -> DSL -> Verification
             # DSLLogicVerifier handles the translation internally via Azure/Anthropic
-            result = await _run_logic_call(
-                self.logic_verifier.verify_from_natural_language,
+            # Kept on the event loop: this path's provider translation and the
+            # z3 solve are bundled in one call, and z3py's default context is
+            # not safe to run from a worker thread (even serialized — object
+            # finalizers would run cross-thread). Offloading it safely needs the
+            # translation (concurrent) split from the z3 solve (isolated), which
+            # is a separate change (relates to #431). natural_language and fact
+            # have no z3 and are offloaded.
+            result = self.logic_verifier.verify_from_natural_language(
                 query=query,
                 provider=provider,
             )

@@ -119,71 +119,37 @@ class _BodySizeLimitMiddleware:
             await self.app(scope, receive, send)
             return
         cls = _BodySizeLimitMiddleware
-        if norm not in self.concurrency_paths:
-            # Capped JSON route: gate on the larger JSON budget so pre-auth
-            # buffering cannot multiply memory without bound.
+        gated_json = norm not in self.concurrency_paths
+        # The concurrency slot bounds *buffering* memory, so it is held only
+        # while the body is read, not for the whole request (auth, handler,
+        # response) — otherwise slow handlers would saturate it (Sentry on PR
+        # #447). JSON routes use a larger budget; the two multipart uploads use
+        # the tight slot that bounds max_concurrent x max_bytes.
+        if gated_json:
             if cls._json_in_flight >= cls._json_max_concurrent:
-                response = JSONResponse(
+                await JSONResponse(
                     status_code=503,
                     content={"detail": "Server busy — retry shortly."},
-                )
-                await response(scope, receive, send)
+                )(scope, receive, send)
                 return
             cls._json_in_flight += 1
-            try:
-                await self._buffer_and_forward(scope, receive, send, max_bytes)
-            finally:
-                cls._json_in_flight -= 1
-            return
-        # Large multipart upload: the tight slot bounds max_concurrent x max_bytes.
-        # single-event-loop counter: increments happen synchronously between
-        # awaits, so no lock is needed
-        if cls._in_flight >= cls._max_concurrent:
-            response = JSONResponse(
-                status_code=503,
-                content={"detail": "Upload capacity reached — retry shortly."},
-            )
-            await response(scope, receive, send)
-            return
-        cls._in_flight += 1
+        else:
+            if cls._in_flight >= cls._max_concurrent:
+                await JSONResponse(
+                    status_code=503,
+                    content={"detail": "Upload capacity reached — retry shortly."},
+                )(scope, receive, send)
+                return
+            cls._in_flight += 1
         try:
-            await self._buffer_and_forward(scope, receive, send, max_bytes)
+            body = await self._read_body(scope, receive, send, max_bytes)
         finally:
-            cls._in_flight -= 1
-
-    async def _buffer_and_forward(self, scope, receive, send, max_bytes):
-        body = bytearray()
-        deadline = time.monotonic() + self.read_deadline_seconds
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                response = JSONResponse(
-                    status_code=408,
-                    content={"detail": "Request body not received in time."},
-                )
-                await response(scope, receive, send)
-                return
-            try:
-                message = await asyncio.wait_for(receive(), timeout=remaining)
-            except asyncio.TimeoutError:
-                response = JSONResponse(
-                    status_code=408,
-                    content={"detail": "Request body not received in time."},
-                )
-                await response(scope, receive, send)
-                return
-            if message["type"] == "http.disconnect":
-                return
-            body.extend(message.get("body", b""))
-            if len(body) > max_bytes:
-                response = JSONResponse(
-                    status_code=413,
-                    content={"detail": f"Request body exceeds the {max_bytes} byte limit for this endpoint."},
-                )
-                await response(scope, receive, send)
-                return
-            if not message.get("more_body", False):
-                break
+            if gated_json:
+                cls._json_in_flight -= 1
+            else:
+                cls._in_flight -= 1
+        if body is None:
+            return  # an error response was already sent, or the client disconnected
 
         # ASGI receive contract (Sentry on PR #354): the replayed body is
         # delivered ONCE; later calls report disconnect. The coroutine shape
@@ -195,7 +161,43 @@ class _BodySizeLimitMiddleware:
             if replayed:
                 return {"type": "http.disconnect"}
             replayed = True
-            return {"type": "http.request", "body": bytes(body), "more_body": False}
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        await self.app(scope, replay_receive, send)
+
+    async def _read_body(self, scope, receive, send, max_bytes):
+        """Read the whole body under the cap and deadline. Returns the bytes, or
+        None after sending a 413/408 or on client disconnect."""
+        body = bytearray()
+        deadline = time.monotonic() + self.read_deadline_seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                await JSONResponse(
+                    status_code=408,
+                    content={"detail": "Request body not received in time."},
+                )(scope, receive, send)
+                return None
+            try:
+                message = await asyncio.wait_for(receive(), timeout=remaining)
+            except asyncio.TimeoutError:
+                await JSONResponse(
+                    status_code=408,
+                    content={"detail": "Request body not received in time."},
+                )(scope, receive, send)
+                return None
+            if message["type"] == "http.disconnect":
+                return None
+            body.extend(message.get("body", b""))
+            if len(body) > max_bytes:
+                await JSONResponse(
+                    status_code=413,
+                    content={"detail": f"Request body exceeds the {max_bytes} byte limit for this endpoint."},
+                )(scope, receive, send)
+                return None
+            if not message.get("more_body", False):
+                break
+        return bytes(body)
 
         await self.app(scope, replay_receive, send)
 
@@ -2161,7 +2163,7 @@ class BatchVerifyItem(BaseModel):
     type: str = "natural_language"
     params: Optional[dict] = None
 
-@app.post("/verify/batch", tags=["Batch"])
+@app.post("/verify/batch", tags=["Batch"], responses={503: {"description": "Batch capacity reached"}})
 async def batch_verify(
     request: BatchVerifyRequest,
     tenant: TenantContext = Depends(get_current_tenant)

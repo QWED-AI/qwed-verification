@@ -43,20 +43,30 @@ def test_provider_call_does_not_block_the_loop_and_times_out(monkeypatch):
     assert ticks > 5, "event loop was blocked during the provider call"
 
 
-def test_logic_call_runs_on_the_single_z3_thread(monkeypatch):
-    # z3 is not thread safe; every logic call must land on the one dedicated
-    # thread, never the shared pool, so two calls can never run concurrently.
-    seen = []
+def test_fact_verifier_call_is_offloaded(monkeypatch):
+    # The fact path has no z3 and is offloaded: a blocking verify_fact must not
+    # block the loop. (natural_language behaves the same via translate.)
+    monkeypatch.setattr(cp, "_PROVIDER_CALL_TIMEOUT_SECONDS", 0.3)
+    release = threading.Event()
 
-    def record():
-        seen.append(threading.current_thread().name)
-        return "ok"
+    def blocking(*a, **k):
+        release.wait(5)
 
     async def scenario():
-        await cp._run_logic_call(record)
-        await cp._run_logic_call(record)
+        progressed = 0
 
-    asyncio.run(scenario())
-    assert len(seen) == 2
-    assert seen[0] == seen[1]
-    assert seen[0].startswith("qwed-logic-z3")
+        async def heartbeat():
+            nonlocal progressed
+            for _ in range(20):
+                await asyncio.sleep(0.02)
+                progressed += 1
+
+        beat = asyncio.ensure_future(heartbeat())
+        with pytest.raises(asyncio.TimeoutError):
+            await cp._run_provider_call(blocking, "claim", "context")
+        release.set()
+        await beat
+        return progressed
+
+    progressed = asyncio.run(scenario())
+    assert progressed > 5, "event loop was blocked during the provider call"

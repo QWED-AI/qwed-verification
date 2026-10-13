@@ -108,6 +108,9 @@ class BatchVerificationService:
     # heap without bound (#391). Oldest jobs are evicted first; their status
     # queries 404 after eviction, as they would after a restart.
     _MAX_JOBS = int(os.environ.get("QWED_BATCH_MAX_JOBS", "1000"))
+    # Wall-clock bound per item, so a stalled verification is marked failed
+    # rather than keeping the job active forever (#447 review).
+    _ITEM_TIMEOUT_SECONDS = float(os.environ.get("QWED_BATCH_ITEM_TIMEOUT", "60"))
 
     def __init__(self, max_concurrency: int = 10):
         self.max_concurrency = max_concurrency
@@ -191,7 +194,13 @@ class BatchVerificationService:
             async with semaphore:
                 start_time = time.time()
                 try:
-                    result = await self._verify_item(item, job.organization_id)
+                    # Bound each item so a stalled verification cannot keep the
+                    # job active forever; the timeout is caught below and the
+                    # item is marked failed (#447 review).
+                    result = await asyncio.wait_for(
+                        self._verify_item(item, job.organization_id),
+                        timeout=self._ITEM_TIMEOUT_SECONDS,
+                    )
                     item.result = result
                     item.status = "completed"
                     job.completed_items += 1
