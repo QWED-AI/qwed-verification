@@ -10,8 +10,8 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 This is a fail-closed security release covering three advisories:
 GHSA-6rxr-gq43-694g, GHSA-64xf-wffc-63fm and GHSA-q5g6-6cw2-cjm3. They affect
-all versions up to 7.2.2; upgrading is recommended. Publication of the
-advisories on the repository Security tab is pending. No breaking wire changes.
+all versions up to 7.2.2; upgrading is recommended. The advisories were
+published on the repository Security tab on 2026-10-13. No breaking wire changes.
 
 - **Code verification never admits shell or process execution** —
   `os.system`, `os.popen`, the `os.exec*` and `os.spawn*` families,
