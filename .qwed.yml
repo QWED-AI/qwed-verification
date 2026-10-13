@@ -1,0 +1,11 @@
+# QWED Security policy for this repository. Read from the base branch, so a
+# pull request never weakens the scan that checks it.
+#
+# evals/cases/*.json are test inputs for the soundness eval: claims about
+# unsafe code that the Code engine must reject. The dangerous calls in them
+# are data, never run; tests/test_evals.py fails the build if one is ever
+# accepted.
+suppressions:
+  - pattern=eval-call reason=used-in-tests path=evals/cases/*.json
+  - pattern=exec-call reason=used-in-tests path=evals/cases/*.json
+  - pattern=pickle-load reason=used-in-tests path=evals/cases/*.json
