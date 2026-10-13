@@ -15,6 +15,7 @@ from docker.types import LogConfig
 import tempfile
 import json
 import os
+import threading
 import time
 import logging
 from typing import Any, Dict, Tuple, Optional
@@ -26,6 +27,18 @@ logger = logging.getLogger(__name__)
 
 # #341: hard bound on every Docker daemon API call (ping/create/start/kill)
 _DOCKER_API_TIMEOUT_SECONDS = 30
+
+# #446: a process-wide admission bound on how many sandbox containers run at
+# once. Without it, N concurrent requests start N containers and can exhaust
+# host memory/PIDs/CPU. The semaphore is shared across every SecureCodeExecutor
+# instance (consensus creates one per request), so the bound is global to the
+# worker process. A request that cannot get a slot within the acquire timeout is
+# rejected rather than spawning another container.
+_SANDBOX_MAX_CONCURRENT = max(1, int(os.environ.get("QWED_SANDBOX_MAX_CONCURRENT", "4")))
+_SANDBOX_ACQUIRE_TIMEOUT_SECONDS = float(os.environ.get("QWED_SANDBOX_ACQUIRE_TIMEOUT", "30"))
+_sandbox_slots = threading.BoundedSemaphore(_SANDBOX_MAX_CONCURRENT)
+SANDBOX_CAPACITY_REACHED = "Sandbox capacity reached — retry shortly."
+
 SECURE_RUNTIME_UNAVAILABLE = "SECURE_RUNTIME_UNAVAILABLE"
 CONSTRAINT_VERIFIER_UNAVAILABLE = "secure_code_executor.verifier_unavailable"
 CONSTRAINT_BASIC_SAFETY_ADVISORY = "secure_code_executor.basic_safety_advisory"
@@ -294,10 +307,20 @@ class SecureCodeExecutor:
                 
                 logger.debug(f"Context and code written to {tmpdir}")
                 
-                # 3. Run in Docker container
+                # 3. Run in Docker container, under the process-wide sandbox
+                # concurrency bound (#446). The slot covers the whole container
+                # lifetime (_run_in_container creates, runs and removes it) and
+                # is released before the result is parsed. A request that cannot
+                # get a slot in time is rejected instead of spawning a container.
                 try:
-                    self._run_in_container(tmpdir, execution_id)
-                    
+                    if not _sandbox_slots.acquire(timeout=_SANDBOX_ACQUIRE_TIMEOUT_SECONDS):
+                        logger.warning("Sandbox capacity reached, rejecting %s", execution_id)
+                        return False, SANDBOX_CAPACITY_REACHED, None
+                    try:
+                        self._run_in_container(tmpdir, execution_id)
+                    finally:
+                        _sandbox_slots.release()
+
                     # 4. Parse result
                     result_file = os.path.join(tmpdir, "result.json")
                     if os.path.exists(result_file):
