@@ -9,3 +9,5 @@ suppressions:
   - pattern=eval-call reason=used-in-tests path=evals/cases/*.json
   - pattern=exec-call reason=used-in-tests path=evals/cases/*.json
   - pattern=pickle-load reason=used-in-tests path=evals/cases/*.json
+  - pattern=os-system reason=used-in-tests path=evals/cases/*.json
+  - pattern=subprocess-call reason=used-in-tests path=evals/cases/*.json

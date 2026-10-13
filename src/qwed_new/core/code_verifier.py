@@ -104,13 +104,26 @@ class CodeVerifier:
         },
     )
     
+    # Shell and process execution is never admitted, whatever the argument
+    # (GHSA-6rxr-gq43-694g): whether a command is safe depends on context this
+    # verifier cannot see. Each entry is a prefix of the dotted name a call
+    # resolves to, so aliased imports are caught too (_check_python_process_ast).
+    PYTHON_PROCESS_EXECUTION: ClassVar[tuple[str, ...]] = (
+        "os.system",
+        "os.popen",
+        "os.exec",
+        "os.spawn",
+        "os.posix_spawn",
+        "os.startfile",
+        "subprocess.",
+        "pty.spawn",
+        "asyncio.create_subprocess_",
+        "commands.getoutput",
+        "commands.getstatusoutput",
+    )
+
     PYTHON_WARNING = {
         "open": "File operation (verify path source)",
-        "os.system": "Shell command execution",
-        "os.popen": "Shell command execution",
-        "subprocess.call": "Subprocess execution",
-        "subprocess.Popen": "Subprocess execution",
-        "subprocess.run": "Subprocess execution",
         "shutil.rmtree": "Recursive directory deletion",
         "requests.get": "HTTP request (verify URL source)",
         "requests.post": "HTTP request (verify URL source)",
@@ -457,6 +470,12 @@ class CodeVerifier:
                         recommendation="Remove or sandbox this operation"
                     ))
             
+            # Shell and process execution: one blocking finding per line.
+            for prefix in self.PYTHON_PROCESS_EXECUTION:
+                if prefix in line:
+                    issues.append(self._process_execution_issue(prefix.rstrip("._"), line_num))
+                    break
+
             # Warning functions
             for pattern, desc in self.PYTHON_WARNING.items():
                 if pattern in line:
@@ -500,6 +519,16 @@ class CodeVerifier:
                     recommendation=rule["recommendation"],
                 ))
 
+        # Process execution reached through an alias, which the line scan cannot see.
+        for issue in self._check_python_process_ast(code):
+            if any(
+                i.issue_type == issue.issue_type
+                and i.line_number == issue.line_number
+                for i in issues
+            ):
+                continue
+            issues.append(issue)
+
         # AST-based subprocess checks to catch nested expression forms that regex can miss.
         for issue in self._check_python_subprocess_ast(code):
             if any(
@@ -524,6 +553,79 @@ class CodeVerifier:
                         recommendation="Use bcrypt, argon2, or scrypt for passwords"
                     ))
         
+        return issues
+
+    def _process_execution_issue(self, pattern: str, line_number: Optional[int]) -> SecurityIssue:
+        return SecurityIssue(
+            severity="CRITICAL",
+            issue_type="process_execution",
+            pattern=pattern,
+            description="Shell or process execution",
+            line_number=line_number,
+            recommendation="Do not run commands from generated code; route them through a reviewed, sandboxed tool.",
+        )
+
+    def _is_process_execution(self, name: str) -> bool:
+        return any(name.startswith(prefix) for prefix in self.PYTHON_PROCESS_EXECUTION)
+
+    @staticmethod
+    def _dotted_name(node: ast.AST) -> Optional[str]:
+        """``a.b.c`` for a Name/Attribute chain, else None."""
+        parts: List[str] = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if not isinstance(node, ast.Name):
+            return None
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+
+    def _check_python_process_ast(self, code: str) -> List[SecurityIssue]:
+        """Flag calls that execute a process, resolving import aliases.
+
+        Catches what the line scan cannot: ``import subprocess as sp;
+        sp.run(...)``, ``from os import system as run_it; run_it(...)`` and
+        bare calls to names brought in by ``from os import *``.
+        """
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return []
+
+        aliases: Dict[str, str] = {}
+        star_modules: List[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.asname:
+                        aliases[alias.asname] = alias.name
+                    else:
+                        top = alias.name.split(".")[0]
+                        aliases[top] = top
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                for alias in node.names:
+                    if alias.name == "*":
+                        star_modules.append(node.module)
+                    else:
+                        aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+
+        issues: List[SecurityIssue] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = self._dotted_name(node.func)
+            if not name:
+                continue
+            head, _, rest = name.partition(".")
+            if head in aliases:
+                candidates = [aliases[head] + ("." + rest if rest else "")]
+            elif not rest:
+                candidates = [name] + [f"{module}.{name}" for module in star_modules]
+            else:
+                candidates = [name]
+            hit = next((c for c in candidates if self._is_process_execution(c)), None)
+            if hit:
+                issues.append(self._process_execution_issue(hit, getattr(node, "lineno", None)))
         return issues
 
     def _check_python_subprocess_ast(self, code: str) -> List[SecurityIssue]:

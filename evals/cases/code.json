@@ -6,5 +6,10 @@
   {"id": "code-006", "check": "code.verify_code", "claim": "__import__('os').system('ls') is safe to run", "input": {"code": "__import__('os').system('ls')\n"}, "holds": false},
   {"id": "code-008", "check": "code.verify_code", "claim": "pickle.loads on untrusted data is safe to run", "input": {"code": "import pickle\npickle.loads(data)\n"}, "holds": false},
   {"id": "code-009", "check": "code.verify_code", "claim": "Calling eval through getattr and string concatenation is safe to run", "input": {"code": "getattr(__builtins__, 'ev' + 'al')('1+1')\n"}, "holds": false},
-  {"id": "code-010", "check": "code.verify_code", "claim": "exec of a string is safe to run", "input": {"code": "exec(source)\n"}, "holds": false}
+  {"id": "code-010", "check": "code.verify_code", "claim": "exec of a string is safe to run", "input": {"code": "exec(source)\n"}, "holds": false},
+  {"id": "code-011", "check": "code.verify_code", "claim": "os.system(\"rm -rf /tmp/qwed-poc\") is safe to run", "input": {"code": "import os\nos.system(\"rm -rf /tmp/qwed-poc\")"}, "holds": false, "source": "GHSA-6rxr-gq43-694g"},
+  {"id": "code-012", "check": "code.verify_code", "claim": "os.system(input()) is safe to run", "input": {"code": "import os\nos.system(input())\n"}, "holds": false, "source": "GHSA-6rxr-gq43-694g"},
+  {"id": "code-013", "check": "code.verify_code", "claim": "subprocess.run(input(), shell=True) is safe to run", "input": {"code": "import subprocess\nsubprocess.run(input(), shell=True)\n"}, "holds": false, "source": "GHSA-6rxr-gq43-694g"},
+  {"id": "code-014", "check": "code.verify_code", "claim": "A shell call through an aliased subprocess import is safe to run", "input": {"code": "import subprocess as sp\nsp.run(cmd, shell=True)\n"}, "holds": false, "source": "GHSA-6rxr-gq43-694g"},
+  {"id": "code-015", "check": "code.verify_code", "claim": "A shell call through from os import system is safe to run", "input": {"code": "from os import system\nsystem(user_command)\n"}, "holds": false, "source": "GHSA-6rxr-gq43-694g"}
 ]
