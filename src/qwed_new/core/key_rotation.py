@@ -12,6 +12,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 
+from sqlalchemy import update
 from sqlmodel import Session, select
 
 from qwed_new.auth.security import generate_api_key, mask_api_key
@@ -73,29 +74,41 @@ class KeyManager:
 
     def rotate_key(self, old_key_id: int) -> Tuple[Optional[ApiKey], Optional[str]]:
         """
-        Rotate an existing key: create new one, mark old as revoked.
+        Rotate an existing key: mark the old one revoked and mint a replacement.
+
+        The revoke is an atomic conditional update (revoke only if the key is
+        still active), so two concurrent rotations of the same key cannot both
+        mint a replacement — only the one that flips is_active wins, and the
+        loser (or a request for an already inactive/revoked key) mints nothing
+        and returns (None, None) (#452).
         """
+        now = datetime.now(timezone.utc)
         with Session(engine) as session:
-            old_key = session.get(ApiKey, old_key_id)
-            if not old_key:
-                return None, None
-            
-            # Create new key with same ownership
-            new_key, raw_new_key = self.create_key(
-                organization_id=old_key.organization_id,
-                user_id=old_key.user_id,
-                name=f"{old_key.name} (Rotated)",
-                expires_in_days=KEY_EXPIRY_DAYS
+            # Claim the rotation. The WHERE is_active clause is the race guard:
+            # of two concurrent rotations, exactly one update matches a row.
+            result = session.execute(
+                update(ApiKey)
+                .where(ApiKey.id == old_key_id, ApiKey.is_active == True)
+                .values(is_active=False, revoked_at=now)
             )
-            
-            # Revoke old key
-            old_key.is_active = False
-            old_key.revoked_at = datetime.now(timezone.utc)
-            session.add(old_key)
             session.commit()
-            
-            logger.info("Rotated key %d -> %d", int(old_key_id), int(new_key.id))
-            return new_key, raw_new_key
+            if result.rowcount == 0:
+                # No such key, already inactive/revoked, or a concurrent rotation
+                # already claimed it.
+                return None, None
+            old_key = session.get(ApiKey, old_key_id)
+
+        # Mint the replacement only after winning the claim. create_key uses its
+        # own session/commit, so it must run after the revoke is committed.
+        new_key, raw_new_key = self.create_key(
+            organization_id=old_key.organization_id,
+            user_id=old_key.user_id,
+            name=f"{old_key.name} (Rotated)",
+            expires_in_days=KEY_EXPIRY_DAYS
+        )
+
+        logger.info("Rotated key %d -> %d", int(old_key_id), int(new_key.id))
+        return new_key, raw_new_key
 
     def check_expiring_keys(self):
         """
