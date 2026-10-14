@@ -55,6 +55,35 @@ def test_rotate_unknown_key_returns_none(seeded):
     assert kr.KeyManager().rotate_key(999999) == (None, None)
 
 
+def test_failed_mint_rolls_back_the_revoke(seeded, monkeypatch):
+    # If minting the replacement fails, the revoke must roll back so the account
+    # is never left with no active key.
+    km = kr.KeyManager()
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("mint failed")
+
+    monkeypatch.setattr(km, "_build_key", boom)
+    with pytest.raises(RuntimeError):
+        km.rotate_key(seeded.key_id)
+    # The original key is still active and not revoked.
+    with Session(seeded.engine) as s:
+        key = s.get(ApiKey, seeded.key_id)
+        assert key.is_active is True
+        assert key.revoked_at is None
+    assert len(_active_keys(seeded.engine)) == 1
+
+
+def test_rotate_refuses_a_key_already_marked_revoked(seeded):
+    # is_active=True but revoked_at set is an inconsistent/revoked state.
+    with Session(seeded.engine) as s:
+        key = s.get(ApiKey, seeded.key_id)
+        from datetime import datetime, timezone
+        key.revoked_at = datetime.now(timezone.utc)
+        s.add(key); s.commit()
+    assert kr.KeyManager().rotate_key(seeded.key_id) == (None, None)
+
+
 def test_concurrent_rotations_mint_exactly_one_replacement(seeded):
     km = kr.KeyManager()
     results = []
