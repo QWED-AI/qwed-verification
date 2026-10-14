@@ -14,6 +14,7 @@ import docker
 from docker.types import LogConfig
 import tempfile
 import json
+import math
 import os
 import threading
 import time
@@ -34,8 +35,27 @@ _DOCKER_API_TIMEOUT_SECONDS = 30
 # instance (consensus creates one per request), so the bound is global to the
 # worker process. A request that cannot get a slot within the acquire timeout is
 # rejected rather than spawning another container.
-_SANDBOX_MAX_CONCURRENT = max(1, int(os.environ.get("QWED_SANDBOX_MAX_CONCURRENT", "4")))
-_SANDBOX_ACQUIRE_TIMEOUT_SECONDS = float(os.environ.get("QWED_SANDBOX_ACQUIRE_TIMEOUT", "30"))
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 1 else default
+
+
+def _env_timeout(name: str, default: float) -> float:
+    # A finite, positive timeout only. A non-finite value (e.g. nan) would make
+    # semaphore.acquire(timeout=...) poll forever instead of rejecting, so an
+    # invalid value falls back to the default — fail closed on the bound.
+    try:
+        value = float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) and value > 0 else default
+
+
+_SANDBOX_MAX_CONCURRENT = _env_int("QWED_SANDBOX_MAX_CONCURRENT", 4)
+_SANDBOX_ACQUIRE_TIMEOUT_SECONDS = _env_timeout("QWED_SANDBOX_ACQUIRE_TIMEOUT", 30.0)
 _sandbox_slots = threading.BoundedSemaphore(_SANDBOX_MAX_CONCURRENT)
 SANDBOX_CAPACITY_REACHED = "Sandbox capacity reached — retry shortly."
 
@@ -309,17 +329,30 @@ class SecureCodeExecutor:
                 
                 # 3. Run in Docker container, under the process-wide sandbox
                 # concurrency bound (#446). The slot covers the whole container
-                # lifetime (_run_in_container creates, runs and removes it) and
-                # is released before the result is parsed. A request that cannot
-                # get a slot in time is rejected instead of spawning a container.
+                # lifetime (_run_in_container creates, runs and removes it). It
+                # is released once the container is confirmed removed; if removal
+                # failed, the slot is intentionally held, because a leaked
+                # container still consumes resources (fail closed on the bound).
+                # A request that cannot get a slot in time is rejected instead of
+                # spawning a container.
                 try:
                     if not _sandbox_slots.acquire(timeout=_SANDBOX_ACQUIRE_TIMEOUT_SECONDS):
                         logger.warning("Sandbox capacity reached, rejecting %s", execution_id)
                         return False, SANDBOX_CAPACITY_REACHED, None
+                    # Default: nothing leaked (released). Only a container that
+                    # was created and could not be removed sets leaked=True; a
+                    # failure before creation leaks nothing, so the slot frees.
+                    cleanup_status: Dict[str, Any] = {"leaked": False}
                     try:
-                        self._run_in_container(tmpdir, execution_id)
+                        self._run_in_container(tmpdir, execution_id, cleanup_status)
                     finally:
-                        _sandbox_slots.release()
+                        if cleanup_status["leaked"]:
+                            logger.error(
+                                "Holding sandbox slot for %s: container removal unconfirmed",
+                                execution_id,
+                            )
+                        else:
+                            _sandbox_slots.release()
 
                     # 4. Parse result
                     result_file = os.path.join(tmpdir, "result.json")
@@ -362,8 +395,29 @@ class SecureCodeExecutor:
             logger.exception("Failed to create temporary directory")
             return False, f"Setup error: {e!s}", None
     
-    def _run_in_container(self, tmpdir: str, execution_id: str) -> Any:
-        """Run code in Docker container with resource limits."""
+    def _remove_container(self, container, execution_id: str) -> bool:
+        """Force-remove the container, with one retry. Returns True if it is
+        confirmed gone, False if removal failed (the container may still run)."""
+        try:
+            container.remove(force=True)
+            return True
+        except Exception:
+            time.sleep(0.5)
+        try:
+            container.remove(force=True)
+            return True
+        except Exception:
+            logger.warning(
+                "Failed to remove sandbox container for %s", execution_id,
+                exc_info=True,
+            )
+            return False
+
+    def _run_in_container(self, tmpdir: str, execution_id: str, cleanup_status: Optional[Dict[str, Any]] = None) -> Any:
+        """Run code in Docker container with resource limits.
+
+        cleanup_status, if given, receives {'removed': bool} so the caller can
+        hold the concurrency slot when a container could not be removed (#446)."""
         logger.info(f"Launching container for {execution_id}")
         
         # Use pre-built pandas image
@@ -434,17 +488,14 @@ class SecureCodeExecutor:
             # the operator signal — alert on it; a daemon-side reaper
             # (label-filtered `docker container prune`) remains follow-up
             # material if leak accumulation is ever observed.
-            try:
-                try:
-                    container.remove(force=True)
-                except Exception:
-                    time.sleep(0.5)
-                    container.remove(force=True)
-            except Exception:
-                logger.warning(
-                    "Failed to remove sandbox container for %s", execution_id,
-                    exc_info=True,
-                )
+            #
+            # #446: the removal outcome is reported so the caller holds the
+            # concurrency slot when the container could not be confirmed gone —
+            # a leaked container still consumes host resources, so admitting a
+            # replacement would exceed the bound (fail closed on the slot).
+            removed = self._remove_container(container, execution_id)
+            if cleanup_status is not None and not removed:
+                cleanup_status["leaked"] = True
     
     def _is_safe_code(self, code: str) -> DiagnosticResult:
         """
