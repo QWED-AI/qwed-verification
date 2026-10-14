@@ -218,12 +218,13 @@ class QWEDClient:
             )
             data["latency_ms"] = (time.time() - start) * 1000
             return VerificationResult.from_dict(data)
-        except httpx.ConnectError:
+        except (httpx.ConnectError, httpx.TimeoutException):
             # The local PII check passed (or didn't run), but the verification
-            # service is unreachable, so the deterministic fact check never ran.
-            # Absence of verification must never read as success (#326): QWED
-            # fails closed, so this is UNVERIFIABLE, not VERIFIED. The local PII
-            # scan covers one guard, not the fact verification.
+            # service could not be reached or did not respond in time, so the
+            # deterministic fact check never completed. Absence of verification
+            # must never read as success (#326): QWED fails closed, so this is
+            # UNVERIFIABLE, not VERIFIED. The local PII scan covers one guard,
+            # not the fact verification.
             return VerificationResult(
                 status="UNVERIFIABLE",
                 is_verified=False,
