@@ -24,6 +24,13 @@ logger = logging.getLogger(__name__)
 KEY_EXPIRY_DAYS = 90
 ROTATION_WINDOW_DAYS = 7  # Warn 7 days before expiry
 
+
+def _as_utc(value: datetime) -> datetime:
+    """Interpret a naive timestamp as UTC. Older SQLModel/SQLite can read
+    expires_at back without a tzinfo, so arithmetic against a timezone-aware
+    now() would raise TypeError — normalise first."""
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
 class KeyManager:
     """
     Manages API key lifecycle, rotation, and security.
@@ -117,7 +124,7 @@ class KeyManager:
                     details={
                         "key_id": key.id,
                         "expires_at": str(key.expires_at),
-                        "days_remaining": (key.expires_at - datetime.now(timezone.utc)).days
+                        "days_remaining": (_as_utc(key.expires_at) - datetime.now(timezone.utc)).days
                     }
                 )
                 
