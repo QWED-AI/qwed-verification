@@ -2081,69 +2081,108 @@ async def verify_with_consensus(
 from qwed_new.core.compliance_exporter import ComplianceExporter
 from qwed_new.core.threat_detector import threat_detector
 from qwed_new.core.key_rotation import key_manager
-from qwed_new.core.rbac import require_role
 
 compliance_exporter = ComplianceExporter()
 
+
+class AdminContext:
+    """The authenticated principal for an admin endpoint: the API key, its owning
+    user (which carries the role) and the organization both are scoped to."""
+
+    def __init__(self, api_key: ApiKey, user: User):
+        self.api_key = api_key
+        self.user = user
+        self.organization_id = api_key.organization_id
+        self.role = user.role
+
+
+def require_admin_role(allowed_roles: list[str]):
+    """Dependency for admin endpoints (#222). get_api_key authenticates the key;
+    this authorizes it by the owning user's role. It replaces the old
+    @require_role decorator, which read request.state.user — never populated, so
+    every admin endpoint returned 401 (dead code). The returned AdminContext
+    carries organization_id so the handler can scope the action to the caller's
+    own org and never act on a caller-supplied id for another tenant (IDOR)."""
+
+    async def dependency(
+        api_key: ApiKey = Depends(get_api_key),
+        session: Session = Depends(get_session),
+    ) -> AdminContext:
+        user = session.get(User, api_key.user_id) if api_key.user_id else None
+        if user is None or not user.is_active:
+            raise HTTPException(status_code=403, detail="API key is not authorized for admin operations")
+        if user.role not in allowed_roles:
+            raise HTTPException(status_code=403, detail="Insufficient permissions for this operation")
+        return AdminContext(api_key, user)
+
+    return dependency
+
+
 @app.get("/admin/compliance/export/csv", tags=["Compliance"])
-@require_role(["admin"])
 async def export_audit_csv(
     organization_id: int,
-    request: Request,  # Required for RBAC
-    api_key: ApiKey = Depends(get_api_key)
+    ctx: AdminContext = Depends(require_admin_role(["owner", "admin"])),
 ):
-    """Export audit trail as CSV (Admin only)."""
+    """Export audit trail as CSV (admin, own organization only)."""
+    if organization_id != ctx.organization_id:
+        raise HTTPException(status_code=403, detail="Cannot access another organization's data")
     csv_data = compliance_exporter.export_audit_trail_csv(organization_id)
     return Response(content=csv_data, media_type="text/csv")
 
 @app.get("/admin/compliance/verify/{log_id}", tags=["Compliance"])
-@require_role(["admin"])
 async def verify_audit_log_entry(
     log_id: int,
-    request: Request,
-    api_key: ApiKey = Depends(get_api_key),
+    ctx: AdminContext = Depends(require_admin_role(["owner", "admin"])),
     session: Session = Depends(get_session)
 ):
     """
-    Cryptographically verify a specific audit log entry.
+    Cryptographically verify a specific audit log entry (own organization only).
     Checks HMAC signature and hash chain integrity.
     """
+    log = session.get(VerificationLog, log_id)
+    if log is None or log.organization_id != ctx.organization_id:
+        # Do not reveal whether a log in another org exists.
+        raise HTTPException(status_code=404, detail="Audit log entry not found")
     from qwed_new.core.audit_logger import AuditLogger
     verifier = AuditLogger()
     return verifier.verify_log_entry(log_id, session)
 
 @app.get("/admin/compliance/report/soc2/{org_id}", tags=["Compliance"])
-@require_role(["admin"])
 async def generate_soc2_report(
     org_id: int,
-    request: Request,
-    api_key: ApiKey = Depends(get_api_key)
+    ctx: AdminContext = Depends(require_admin_role(["owner", "admin"])),
 ):
-    """Generate SOC 2 Type II compliance report."""
+    """Generate SOC 2 Type II compliance report (own organization only)."""
+    if org_id != ctx.organization_id:
+        raise HTTPException(status_code=403, detail="Cannot access another organization's data")
     return compliance_exporter.generate_soc2_report(org_id)
 
 @app.get("/admin/security/threats/{org_id}", tags=["Security"])
-@require_role(["admin"])
 async def get_threat_summary(
     org_id: int,
-    request: Request,
-    api_key: ApiKey = Depends(get_api_key)
+    ctx: AdminContext = Depends(require_admin_role(["owner", "admin"])),
 ):
-    """Get real-time threat summary."""
+    """Get real-time threat summary (own organization only)."""
+    if org_id != ctx.organization_id:
+        raise HTTPException(status_code=403, detail="Cannot access another organization's data")
     return threat_detector.get_threat_summary(org_id)
 
 @app.post("/admin/keys/rotate", tags=["Security"])
-@require_role(["admin", "member"])
 async def rotate_api_key(
     key_id: int,
-    request: Request,
-    api_key: ApiKey = Depends(get_api_key)
+    ctx: AdminContext = Depends(require_admin_role(["owner", "admin", "member"])),
+    session: Session = Depends(get_session)
 ):
-    """Rotate an API key (invalidate old, create new)."""
+    """Rotate an API key (own organization only; returns the new secret once)."""
+    target = session.get(ApiKey, key_id)
+    if target is None or target.organization_id != ctx.organization_id:
+        # 404, not 403: do not confirm that a key id in another org exists.
+        raise HTTPException(status_code=404, detail="Key not found")
+
     new_key, raw_key = key_manager.rotate_key(key_id)
     if not new_key:
         raise HTTPException(status_code=404, detail="Key not found")
-    
+
     return {
         "status": "rotated",
         "old_key_id": key_id,
