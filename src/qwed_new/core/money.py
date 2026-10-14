@@ -7,7 +7,7 @@ Python's Decimal for exact arithmetic (no floating point errors).
 QWED uses this for invoice verification where 0.1 + 0.2 MUST equal 0.3.
 """
 
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, DecimalException, ROUND_HALF_UP
 from typing import Union
 
 
@@ -53,6 +53,7 @@ class Money:
         
         Raises:
             InvalidOperation: If amount cannot be converted to Decimal
+            ValueError: If amount is not finite (NaN or Infinity)
         """
         if isinstance(amount, float):
             # Convert float to string first to avoid precision loss
@@ -196,6 +197,8 @@ def verify_invoice_total(
         (True, "Invoice total is correct")
     """
     try:
+        if not isinstance(tolerance, Decimal) or not tolerance.is_finite() or tolerance < 0:
+            return False, f"Invalid tolerance: {tolerance!r} must be a finite, non-negative Decimal"
         calculated = subtotal + tax
         diff = abs(calculated.amount - claimed_total.amount)
         
@@ -208,5 +211,5 @@ def verify_invoice_total(
             )
     except UnitMismatchError as e:
         return False, f"Currency mismatch: {str(e)}"
-    except (InvalidOperation, ValueError, TypeError, AttributeError) as e:
+    except (DecimalException, ValueError, TypeError, AttributeError) as e:
         return False, f"Invalid invoice input: {str(e)}"
