@@ -32,7 +32,7 @@ INTERNAL_PROCESSING_ERROR = "Internal processing error"
 from qwed_new.core.control_plane import ControlPlane
 from qwed_new.core.tenant_context import get_current_tenant, TenantContext
 from qwed_new.core.database import create_db_and_tables, get_session
-from qwed_new.core.models import VerificationLog, ApiKey, User
+from qwed_new.core.models import VerificationLog, ApiKey, User, Organization
 from qwed_new.core.rate_limiter import check_rate_limit
 from qwed_new.core.json_bounding import bound_json_value
 
@@ -2081,69 +2081,167 @@ async def verify_with_consensus(
 from qwed_new.core.compliance_exporter import ComplianceExporter
 from qwed_new.core.threat_detector import threat_detector
 from qwed_new.core.key_rotation import key_manager
-from qwed_new.core.rbac import require_role
 
 compliance_exporter = ComplianceExporter()
 
-@app.get("/admin/compliance/export/csv", tags=["Compliance"])
-@require_role(["admin"])
+
+# Shared across the admin handlers so the message lives in one place.
+_FOREIGN_ORG_DETAIL = "Cannot access another organization's data"
+# Role hierarchy for admin operations (higher number = more privilege).
+_ROLE_RANK = {"viewer": 0, "member": 1, "admin": 2, "owner": 3}
+
+
+def _api_key_is_live(api_key: ApiKey) -> bool:
+    """A key is live only if it is active, not revoked and not expired. is_active
+    alone is not a liveness check (expired keys keep is_active=True). expires_at
+    is written naive-UTC by key_rotation, so interpret naive values as UTC."""
+    if not api_key.is_active or api_key.revoked_at is not None:
+        return False
+    if api_key.expires_at is not None:
+        expires_at = api_key.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= datetime.now(timezone.utc):
+            return False
+    return True
+
+
+class AdminContext:
+    """The authenticated principal for an admin endpoint: the API key, its owning
+    user (which carries the role) and the organization both are scoped to."""
+
+    def __init__(self, api_key: ApiKey, user: User):
+        self.api_key = api_key
+        self.user = user
+        self.organization_id = api_key.organization_id
+        self.role = user.role
+
+
+def require_admin_role(allowed_roles: list[str]):
+    """Dependency for admin endpoints (#222). get_api_key authenticates the key;
+    this authorizes it by the owning user's role. It replaces the old
+    @require_role decorator, which read request.state.user — never populated, so
+    every admin endpoint returned 401 (dead code). The returned AdminContext
+    carries organization_id so the handler can scope the action to the caller's
+    own org and never act on a caller-supplied id for another tenant (IDOR).
+
+    Fails closed before granting admin access: the key must be live (not expired
+    or revoked), the owning user must be active and in the key's own organization
+    (so a key cannot borrow a role from another tenant), the organization must be
+    active, and the role must be allowed."""
+
+    def dependency(
+        api_key: ApiKey = Depends(get_api_key),
+        session: Session = Depends(get_session),
+    ) -> AdminContext:
+        if not _api_key_is_live(api_key):
+            raise HTTPException(status_code=403, detail="API key is expired or revoked")
+        user = session.get(User, api_key.user_id) if api_key.user_id else None
+        if user is None or not user.is_active or user.organization_id != api_key.organization_id:
+            raise HTTPException(status_code=403, detail="API key is not authorized for admin operations")
+        org = session.get(Organization, api_key.organization_id)
+        if org is None or not org.is_active:
+            raise HTTPException(status_code=403, detail="Organization is not active")
+        if user.role not in allowed_roles:
+            raise HTTPException(status_code=403, detail="Insufficient permissions for this operation")
+        return AdminContext(api_key, user)
+
+    return dependency
+
+
+# Module-level dependency singletons (avoids calling require_admin_role in
+# argument defaults — Ruff B008 — and builds each dependency once).
+_REQUIRE_ADMIN = Depends(require_admin_role(["owner", "admin"]))
+_REQUIRE_ADMIN_OR_MEMBER = Depends(require_admin_role(["owner", "admin", "member"]))
+_FOREIGN_ORG_RESPONSE = {403: {"description": _FOREIGN_ORG_DETAIL}}
+
+
+@app.get("/admin/compliance/export/csv", tags=["Compliance"], responses=_FOREIGN_ORG_RESPONSE)
 async def export_audit_csv(
     organization_id: int,
-    request: Request,  # Required for RBAC
-    api_key: ApiKey = Depends(get_api_key)
+    ctx: AdminContext = _REQUIRE_ADMIN,
 ):
-    """Export audit trail as CSV (Admin only)."""
+    """Export audit trail as CSV (admin, own organization only)."""
+    if organization_id != ctx.organization_id:
+        raise HTTPException(status_code=403, detail=_FOREIGN_ORG_DETAIL)
     csv_data = compliance_exporter.export_audit_trail_csv(organization_id)
     return Response(content=csv_data, media_type="text/csv")
 
-@app.get("/admin/compliance/verify/{log_id}", tags=["Compliance"])
-@require_role(["admin"])
+@app.get("/admin/compliance/verify/{log_id}", tags=["Compliance"],
+         responses={404: {"description": "Audit log entry not found"}})
 async def verify_audit_log_entry(
     log_id: int,
-    request: Request,
-    api_key: ApiKey = Depends(get_api_key),
+    ctx: AdminContext = _REQUIRE_ADMIN,
     session: Session = Depends(get_session)
 ):
     """
-    Cryptographically verify a specific audit log entry.
+    Cryptographically verify a specific audit log entry (own organization only).
     Checks HMAC signature and hash chain integrity.
     """
+    log = session.get(VerificationLog, log_id)
+    if log is None or log.organization_id != ctx.organization_id:
+        # Do not reveal whether a log in another org exists.
+        raise HTTPException(status_code=404, detail="Audit log entry not found")
     from qwed_new.core.audit_logger import AuditLogger
     verifier = AuditLogger()
     return verifier.verify_log_entry(log_id, session)
 
-@app.get("/admin/compliance/report/soc2/{org_id}", tags=["Compliance"])
-@require_role(["admin"])
+@app.get("/admin/compliance/report/soc2/{org_id}", tags=["Compliance"], responses=_FOREIGN_ORG_RESPONSE)
 async def generate_soc2_report(
     org_id: int,
-    request: Request,
-    api_key: ApiKey = Depends(get_api_key)
+    ctx: AdminContext = _REQUIRE_ADMIN,
 ):
-    """Generate SOC 2 Type II compliance report."""
+    """Generate SOC 2 Type II compliance report (own organization only)."""
+    if org_id != ctx.organization_id:
+        raise HTTPException(status_code=403, detail=_FOREIGN_ORG_DETAIL)
     return compliance_exporter.generate_soc2_report(org_id)
 
-@app.get("/admin/security/threats/{org_id}", tags=["Security"])
-@require_role(["admin"])
+@app.get("/admin/security/threats/{org_id}", tags=["Security"], responses=_FOREIGN_ORG_RESPONSE)
 async def get_threat_summary(
     org_id: int,
-    request: Request,
-    api_key: ApiKey = Depends(get_api_key)
+    ctx: AdminContext = _REQUIRE_ADMIN,
 ):
-    """Get real-time threat summary."""
+    """Get real-time threat summary (own organization only)."""
+    if org_id != ctx.organization_id:
+        raise HTTPException(status_code=403, detail=_FOREIGN_ORG_DETAIL)
     return threat_detector.get_threat_summary(org_id)
 
-@app.post("/admin/keys/rotate", tags=["Security"])
-@require_role(["admin", "member"])
+@app.post("/admin/keys/rotate", tags=["Security"],
+          responses={403: {"description": "Not permitted to rotate this key"},
+                     404: {"description": "Key not found"}})
 async def rotate_api_key(
     key_id: int,
-    request: Request,
-    api_key: ApiKey = Depends(get_api_key)
+    ctx: AdminContext = _REQUIRE_ADMIN_OR_MEMBER,
+    session: Session = Depends(get_session)
 ):
-    """Rotate an API key (invalidate old, create new)."""
+    """Rotate an API key and return the new secret once.
+
+    Scoped to the caller's own organization, and to a key the caller is allowed
+    to rotate: anyone may rotate their own key; otherwise only an admin/owner
+    may rotate another user's key, and never a key owned by a higher-privileged
+    user — so a member cannot rotate an admin's or owner's key and inherit its
+    privileges, and an admin cannot take over an owner's key (Sentry on #450).
+    A revoked or inactive key is not rotated (it would mint a fresh live secret
+    from a dead credential)."""
+    target = session.get(ApiKey, key_id)
+    if (target is None or target.organization_id != ctx.organization_id
+            or not target.is_active or target.revoked_at is not None):
+        # 404, not 403: do not confirm that a key id in another org exists, and
+        # treat a revoked/inactive key as absent.
+        raise HTTPException(status_code=404, detail="Key not found")
+
+    is_own_key = target.user_id is not None and target.user_id == ctx.user.id
+    if not is_own_key:
+        if ctx.role not in ("owner", "admin"):
+            raise HTTPException(status_code=403, detail="Not permitted to rotate another user's key")
+        target_owner = session.get(User, target.user_id) if target.user_id else None
+        if target_owner and _ROLE_RANK.get(target_owner.role, 0) > _ROLE_RANK.get(ctx.role, 0):
+            raise HTTPException(status_code=403, detail="Cannot rotate a key owned by a higher-privileged user")
+
     new_key, raw_key = key_manager.rotate_key(key_id)
     if not new_key:
         raise HTTPException(status_code=404, detail="Key not found")
-    
+
     return {
         "status": "rotated",
         "old_key_id": key_id,
