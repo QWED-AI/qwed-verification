@@ -332,31 +332,11 @@ class SecureCodeExecutor:
                 logger.debug(f"Context and code written to {tmpdir}")
                 
                 # 3. Run in Docker container, under the process-wide sandbox
-                # concurrency bound (#446). The slot covers the whole container
-                # lifetime (_run_in_container creates, runs and removes it). It
-                # is released once the container is confirmed removed; if removal
-                # failed, the slot is intentionally held, because a leaked
-                # container still consumes resources (fail closed on the bound).
-                # A request that cannot get a slot in time is rejected instead of
-                # spawning a container.
+                # concurrency bound (#446).
                 try:
-                    if not _sandbox_slots.acquire(timeout=_SANDBOX_ACQUIRE_TIMEOUT_SECONDS):
+                    if not self._run_in_container_bounded(tmpdir, execution_id):
                         logger.warning("Sandbox capacity reached, rejecting %s", execution_id)
                         return False, SANDBOX_CAPACITY_REACHED, None
-                    # Default: nothing leaked (released). Only a container that
-                    # was created and could not be removed sets leaked=True; a
-                    # failure before creation leaks nothing, so the slot frees.
-                    cleanup_status: Dict[str, Any] = {"leaked": False}
-                    try:
-                        self._run_in_container(tmpdir, execution_id, cleanup_status)
-                    finally:
-                        if cleanup_status["leaked"]:
-                            logger.error(
-                                "Holding sandbox slot for %s: container removal unconfirmed",
-                                execution_id,
-                            )
-                        else:
-                            _sandbox_slots.release()
 
                     # 4. Parse result
                     result_file = os.path.join(tmpdir, "result.json")
@@ -399,6 +379,34 @@ class SecureCodeExecutor:
             logger.exception("Failed to create temporary directory")
             return False, f"Setup error: {e!s}", None
     
+    def _run_in_container_bounded(self, tmpdir: str, execution_id: str) -> bool:
+        """Run the container under the process-wide sandbox slot (#446).
+
+        Returns False if no slot was available within the acquire timeout (the
+        caller rejects the request). Otherwise runs the container and returns
+        True; container errors propagate to the caller. The slot covers the whole
+        container lifetime and is released once the container is confirmed
+        removed; if removal could not be confirmed the slot is intentionally held,
+        because a leaked container still consumes resources (fail closed).
+        """
+        if not _sandbox_slots.acquire(timeout=_SANDBOX_ACQUIRE_TIMEOUT_SECONDS):
+            return False
+        # Default: nothing leaked (released). Only a container that was created
+        # and could not be removed sets leaked=True; a failure before creation
+        # leaks nothing, so the slot frees.
+        cleanup_status: Dict[str, Any] = {"leaked": False}
+        try:
+            self._run_in_container(tmpdir, execution_id, cleanup_status)
+        finally:
+            if cleanup_status["leaked"]:
+                logger.error(
+                    "Holding sandbox slot for %s: container removal unconfirmed",
+                    execution_id,
+                )
+            else:
+                _sandbox_slots.release()
+        return True
+
     def _remove_container(self, container, execution_id: str) -> bool:
         """Force-remove the container, with one retry. Returns True if it is
         confirmed gone, False if removal failed (the container may still run).

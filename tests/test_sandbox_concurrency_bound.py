@@ -138,5 +138,5 @@ def test_invalid_acquire_timeout_falls_back_to_default(monkeypatch):
     for value in ("nan", "inf", "-5", "abc"):
         monkeypatch.setenv("QWED_SANDBOX_ACQUIRE_TIMEOUT", value)
         resolved = sce._env_timeout("QWED_SANDBOX_ACQUIRE_TIMEOUT", 30.0)
-        assert math.isfinite(resolved) and resolved > 0
+        assert math.isfinite(resolved)
         assert resolved == 30.0
