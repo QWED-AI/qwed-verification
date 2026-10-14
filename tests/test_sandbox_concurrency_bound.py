@@ -111,6 +111,29 @@ def test_leaked_container_keeps_its_slot(monkeypatch):
     assert error == sce.SANDBOX_CAPACITY_REACHED
 
 
+def test_remove_container_notfound_counts_as_removed(monkeypatch):
+    import docker
+    executor = SecureCodeExecutor()
+
+    class GoneOnFirst:
+        def remove(self, force=False):
+            raise docker.errors.NotFound("already gone")
+
+    # NotFound means the container is already absent, so removal is confirmed.
+    assert executor._remove_container(GoneOnFirst(), "exec_x") is True
+
+
+def test_remove_container_persistent_failure_is_not_confirmed(monkeypatch):
+    executor = SecureCodeExecutor()
+
+    class NeverRemovable:
+        def remove(self, force=False):
+            raise RuntimeError("daemon wedged")
+
+    # A non-NotFound failure on both attempts leaves the container unconfirmed.
+    assert executor._remove_container(NeverRemovable(), "exec_x") is False
+
+
 def test_invalid_acquire_timeout_falls_back_to_default(monkeypatch):
     for value in ("nan", "inf", "-5", "abc"):
         monkeypatch.setenv("QWED_SANDBOX_ACQUIRE_TIMEOUT", value)

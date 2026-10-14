@@ -55,7 +55,11 @@ def _env_timeout(name: str, default: float) -> float:
 
 
 _SANDBOX_MAX_CONCURRENT = _env_int("QWED_SANDBOX_MAX_CONCURRENT", 4)
-_SANDBOX_ACQUIRE_TIMEOUT_SECONDS = _env_timeout("QWED_SANDBOX_ACQUIRE_TIMEOUT", 30.0)
+# Default kept well under the ~30s request deadline on the consensus path, so
+# under capacity pressure a request is cleanly rejected (SANDBOX_CAPACITY_REACHED)
+# before the outer deadline fires (Sentry on PR #448). Passing the exact
+# remaining request budget down to acquire() is a larger change, deferred.
+_SANDBOX_ACQUIRE_TIMEOUT_SECONDS = _env_timeout("QWED_SANDBOX_ACQUIRE_TIMEOUT", 10.0)
 _sandbox_slots = threading.BoundedSemaphore(_SANDBOX_MAX_CONCURRENT)
 SANDBOX_CAPACITY_REACHED = "Sandbox capacity reached — retry shortly."
 
@@ -397,14 +401,22 @@ class SecureCodeExecutor:
     
     def _remove_container(self, container, execution_id: str) -> bool:
         """Force-remove the container, with one retry. Returns True if it is
-        confirmed gone, False if removal failed (the container may still run)."""
+        confirmed gone, False if removal failed (the container may still run).
+
+        A NotFound on either attempt counts as confirmed gone — the container is
+        already removed (for example the first call removed it but its response
+        timed out), so the slot is safe to release."""
         try:
             container.remove(force=True)
+            return True
+        except docker.errors.NotFound:
             return True
         except Exception:
             time.sleep(0.5)
         try:
             container.remove(force=True)
+            return True
+        except docker.errors.NotFound:
             return True
         except Exception:
             logger.warning(

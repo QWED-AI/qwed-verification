@@ -134,7 +134,7 @@ class TestHostReadbackCap:
         executor = _executor_with_mock_docker()
         executor.max_result_bytes = 100  # shrink cap for the test
 
-        def fake_run(tmpdir, execution_id):
+        def fake_run(tmpdir, execution_id, cleanup_status=None):
             with open(os.path.join(tmpdir, "result.json"), "w") as f:
                 f.write("A" * 200)
 
@@ -158,7 +158,7 @@ class TestHostReadbackCap:
 def _executor_with_docker_and_runner(payload):
     executor = _executor_with_mock_docker()
 
-    def fake_run(tmpdir, execution_id):
+    def fake_run(tmpdir, execution_id, cleanup_status=None):
         with open(os.path.join(tmpdir, "result.json"), "w") as f:
             json.dump(payload, f)
 
