@@ -71,8 +71,20 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(main.compliance_exporter, "export_audit_trail_csv", lambda org_id: "col\n1\n")
     monkeypatch.setattr(main.compliance_exporter, "generate_soc2_report", lambda org_id: {"org": org_id})
     monkeypatch.setattr(main.threat_detector, "get_threat_summary", lambda org_id: {"org": org_id})
-    monkeypatch.setattr(main.key_manager, "rotate_key",
-                        lambda kid: (SimpleNamespace(id=999, key_preview="qwed_new...9999"), "raw-new-secret"))
+
+    # Stateful stub: record which key was rotated and bind the new secret to that
+    # key's tenant, so the success test proves the route rotated the right key.
+    rotated_ids = []
+
+    def rotate_key(kid):
+        rotated_ids.append(kid)
+        t = session.get(ApiKey, kid)
+        assert t is not None
+        return (SimpleNamespace(id=999, key_preview="qwed_new...9999",
+                                organization_id=t.organization_id, user_id=t.user_id),
+                f"raw-new-secret-{t.organization_id}-{t.user_id}")
+
+    monkeypatch.setattr(main.key_manager, "rotate_key", rotate_key)
     monkeypatch.setattr("qwed_new.core.audit_logger.AuditLogger", _StubAuditLogger)
 
     main.app.dependency_overrides[main.get_session] = lambda: session
@@ -82,7 +94,7 @@ def env(tmp_path, monkeypatch):
         raw_a=raw_a, raw_b=raw_b, raw_member=raw_member, raw_owner=raw_owner,
         raw_crossorg=raw_crossorg, raw_expired=raw_expired, raw_dead=raw_dead,
         key_a=key_a, key_b=key_b, key_member=key_member, key_owner=key_owner, key_revoked=key_revoked,
-        log_a=log_a, log_b=log_b,
+        log_a=log_a, log_b=log_b, rotated_ids=rotated_ids,
     )
     main.app.dependency_overrides.clear()
     session.close()
@@ -128,7 +140,9 @@ def test_cannot_rotate_another_tenants_key(env):
 def test_admin_can_rotate_own_key_and_receive_new_secret(env):
     r = _rotate(env, env.raw_a, env.key_a.id)
     assert r.status_code == 200
-    assert r.json()["new_key_secret"] == "raw-new-secret"
+    # The route rotated exactly the requested key, and returned that key's secret.
+    assert env.rotated_ids == [env.key_a.id]
+    assert r.json()["new_key_secret"] == f"raw-new-secret-{env.org_a.id}-{env.key_a.user_id}"
 
 
 def test_member_cannot_rotate_an_admins_key(env):

@@ -9,7 +9,7 @@ Features:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 
 from sqlmodel import Session, select
@@ -45,7 +45,7 @@ class KeyManager:
         raw_key, key_hash = generate_api_key()
         key_preview = mask_api_key(raw_key)
         
-        expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
+        expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
         
         with Session(engine) as session:
             api_key = ApiKey(
@@ -83,7 +83,7 @@ class KeyManager:
             
             # Revoke old key
             old_key.is_active = False
-            old_key.revoked_at = datetime.utcnow()
+            old_key.revoked_at = datetime.now(timezone.utc)
             session.add(old_key)
             session.commit()
             
@@ -95,7 +95,7 @@ class KeyManager:
         Check for keys expiring soon and send alerts.
         Should be run as a background task.
         """
-        warning_threshold = datetime.utcnow() + timedelta(days=ROTATION_WINDOW_DAYS)
+        warning_threshold = datetime.now(timezone.utc) + timedelta(days=ROTATION_WINDOW_DAYS)
         
         with Session(engine) as session:
             # Find active keys expiring soon
@@ -103,7 +103,7 @@ class KeyManager:
                 select(ApiKey).where(
                     ApiKey.is_active == True,
                     ApiKey.expires_at <= warning_threshold,
-                    ApiKey.expires_at > datetime.utcnow()
+                    ApiKey.expires_at > datetime.now(timezone.utc)
                 )
             ).all()
             
@@ -117,7 +117,7 @@ class KeyManager:
                     details={
                         "key_id": key.id,
                         "expires_at": str(key.expires_at),
-                        "days_remaining": (key.expires_at - datetime.utcnow()).days
+                        "days_remaining": (key.expires_at - datetime.now(timezone.utc)).days
                     }
                 )
                 
