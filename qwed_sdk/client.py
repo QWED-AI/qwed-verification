@@ -218,14 +218,17 @@ class QWEDClient:
             )
             data["latency_ms"] = (time.time() - start) * 1000
             return VerificationResult.from_dict(data)
-        except httpx.ConnectError:
-            # If we reached here, local PII check passed (or didn't run),
-            # but we can't reach the server.
-            # In "Moltbot Standalone" mode, we treat this as "Pass" for safety checks.
+        except (httpx.ConnectError, httpx.TimeoutException):
+            # The local PII check passed (or didn't run), but the verification
+            # service could not be reached or did not respond in time, so the
+            # deterministic fact check never completed. Absence of verification
+            # must never read as success (#326): QWED fails closed, so this is
+            # UNVERIFIABLE, not VERIFIED. The local PII scan covers one guard,
+            # not the fact verification.
             return VerificationResult(
-                status="VERIFIED",
-                is_verified=True,
-                result={"message": "Local safety checks passed. Remote verification unavailable (Offline Mode)."},
+                status="UNVERIFIABLE",
+                is_verified=False,
+                result={"message": "Remote verification unavailable; the local PII check is not a fact check. Result is UNVERIFIABLE."},
                 latency_ms=(time.time() - start) * 1000
             )
     
