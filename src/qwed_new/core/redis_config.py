@@ -11,6 +11,8 @@ import os
 import logging
 from typing import Optional
 
+from qwed_new.core.url_safety import sanitize_url
+
 logger = logging.getLogger(__name__)
 
 # Redis connection settings from environment
@@ -54,7 +56,9 @@ def get_redis_client():
 
         _redis_client = client
         _redis_available = True
-        logger.info(f"Redis connection established: {REDIS_URL}")
+        # Never log the raw REDIS_URL: it may embed a password
+        # (redis://:pw@host) which would land in server logs (#228).
+        logger.info("Redis connection established: %s", sanitize_url(REDIS_URL))
         return _redis_client
 
     except ImportError:

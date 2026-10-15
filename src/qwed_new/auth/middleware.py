@@ -2,7 +2,7 @@ from fastapi import Depends, HTTPException, Security
 from fastapi.security import APIKeyHeader
 from sqlmodel import Session, select
 
-from qwed_new.auth.security import hash_api_key, validate_api_key_format
+from qwed_new.auth.security import hash_api_key, is_api_key_live, validate_api_key_format
 from qwed_new.core.database import get_session
 from qwed_new.core.models import ApiKey
 
@@ -37,14 +37,17 @@ async def get_api_key(
     # We store the hash of the full key string
     hashed_key = hash_api_key(api_key_header)
     
-    # Query database for the key
+    # Query database for the key. is_active is a cheap indexed pre-filter;
+    # is_api_key_live is the authoritative gate — an expired or revoked key is
+    # NOT a usable credential even though is_active stays True after expiry
+    # (#389, CWE-613).
     statement = select(ApiKey).where(
         ApiKey.key_hash == hashed_key,
-        ApiKey.is_active == True
+        ApiKey.is_active.is_(True)
     )
     api_key = session.exec(statement).first()
-    
-    if not api_key:
+
+    if not api_key or not is_api_key_live(api_key):
         raise HTTPException(
             status_code=403,
             detail="Invalid or revoked API Key"

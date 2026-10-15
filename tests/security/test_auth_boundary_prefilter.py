@@ -67,7 +67,11 @@ class TestMiddlewareGetApiKey:
     async def test_valid_v2_key_reaches_lookup(self):
         """Dual acceptance: a valid v2 key must pass the gate, not be blocked."""
         session = MagicMock()
-        session.exec.return_value.first.return_value = MagicMock()
+        # A live row (active, not revoked, no expiry) so it also clears the
+        # liveness gate (#389) and the test still exercises the format path.
+        session.exec.return_value.first.return_value = MagicMock(
+            is_active=True, revoked_at=None, expires_at=None
+        )
         with patch("qwed_new.auth.middleware.hash_api_key", return_value="digest") as mock_hash:
             result = await get_api_key(api_key_header=_fixed_v2_key(), session=session)
 
@@ -97,7 +101,9 @@ class TestTenantContextGetCurrentTenant:
     async def test_valid_v2_key_reaches_lookup(self):
         """Dual acceptance: valid v2 key passes the gate to the key + org lookup."""
         session = MagicMock()
-        api_key_row = MagicMock(organization_id=1)
+        # A live key row (active, not revoked, no expiry) so it clears the
+        # liveness gate (#389); the test still exercises the format path.
+        api_key_row = MagicMock(organization_id=1, is_active=True, revoked_at=None, expires_at=None)
         org_row = MagicMock(id=1, name="Org", tier="free")
         session.exec.return_value.first.side_effect = [api_key_row, org_row]
 
