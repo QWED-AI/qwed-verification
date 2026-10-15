@@ -5,9 +5,28 @@ This defines the interface that all providers (Azure OpenAI, Anthropic, etc.) mu
 This is the core of the "Model-Agnostic" architecture.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 from qwed_new.core.schemas import MathVerificationTask, LogicVerificationTask
+
+
+def sanitized_provider_error(logger: logging.Logger, summary: str, exc: Exception) -> ValueError:
+    """Log a provider SDK exception for operators and return a ValueError whose
+    message carries no internal detail to the caller (#225).
+
+    Provider SDK errors embed internal topology — endpoint URLs, deployment
+    names, request IDs, rate-limit headers. The full exception goes to the
+    server log, where operators need it to debug; the returned ValueError says
+    only what failed, so nothing internal rides a raised exception up to the API
+    layer or a client. Raise it with ``from exc`` so the cause chain stays in the
+    server traceback:
+
+        raise sanitized_provider_error(logger, "Azure OpenAI translation failed", exc) from exc
+    """
+    logger.warning("%s: %s", summary, exc)
+    return ValueError(f"{summary}.")
+
 
 class LLMProvider(ABC):
     """
