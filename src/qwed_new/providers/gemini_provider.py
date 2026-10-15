@@ -13,7 +13,7 @@ except ImportError:
     genai = None
 
 from qwed_new.core.schemas import MathVerificationTask, LogicVerificationTask
-from qwed_new.providers.base import LLMProvider
+from qwed_new.providers.base import LLMProvider, sanitized_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +81,7 @@ class GeminiProvider(LLMProvider):
             logger.debug("Gemini JSON parse error: %s", type(e).__name__)
             raise ValueError("Failed to parse JSON from Gemini endpoint.") from e
         except Exception as e:
-            logger.debug("Gemini generic error: %s", type(e).__name__)
-            raise ValueError(f"Gemini call failed: {e}") from e
+            raise sanitized_provider_error(logger, "Gemini call failed", e) from e
 
     def translate(self, user_query: str) -> MathVerificationTask:
         system = """You are a mathematical expression translator.

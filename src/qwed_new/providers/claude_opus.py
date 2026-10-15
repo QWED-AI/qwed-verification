@@ -2,10 +2,13 @@
 Claude Opus 4.5 Provider Implementation (Azure AI Foundry).
 """
 
+import logging
 import os
 from anthropic import AnthropicFoundry
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider
+from qwed_new.providers.base import LLMProvider, sanitized_provider_error
+
+logger = logging.getLogger(__name__)
 
 
 class ClaudeOpusProvider(LLMProvider):
@@ -70,7 +73,7 @@ You MUST use the submit_math_expression tool."""
             return MathVerificationTask(**tool_use.input)
             
         except Exception as e:
-            raise ValueError(f"Claude Opus translation failed: {str(e)}")
+            raise sanitized_provider_error(logger, "Claude Opus translation failed", e) from e
     
     def translate_logic(self, user_query: str) -> 'LogicVerificationTask':
         """Translate logic puzzle to Z3 constraints."""
@@ -137,7 +140,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return LogicVerificationTask(**args_dict)
             
         except Exception as e:
-            raise ValueError(f"Claude Opus logic translation failed: {str(e)}")
+            raise sanitized_provider_error(logger, "Claude Opus logic translation failed", e) from e
 
     def refine_logic(self, user_query: str, previous_error: str) -> 'LogicVerificationTask':
         """Refine logic translation based on previous error."""
@@ -206,7 +209,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return LogicVerificationTask(**args_dict)
             
         except Exception as e:
-            raise ValueError(f"Claude Opus logic refinement failed: {str(e)}")
+            raise sanitized_provider_error(logger, "Claude Opus logic refinement failed", e) from e
 
     def translate_stats(self, query: str, columns: list[str]) -> str:
         """Generate Python code for statistical verification."""
@@ -254,7 +257,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return content
             
         except Exception as e:
-            print(f"Stats Translation Error: {e}")
+            logger.warning("Stats translation error: %s", e)
             raise
 
     def verify_fact(self, claim: str, context: str) -> dict:
@@ -313,7 +316,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return tool_use.input
             
         except Exception as e:
-            raise ValueError(f"Claude Opus fact verification failed: {str(e)}")
+            raise sanitized_provider_error(logger, "Claude Opus fact verification failed", e) from e
 
     def verify_image(self, image_bytes: bytes, claim: str) -> dict:
         """Verify a claim against an image using Claude Opus Vision."""
@@ -385,5 +388,5 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return tool_use.input
             
         except Exception as e:
-            print(f"Error in verify_image: {e}")
-            return {"verdict": "ERROR", "reasoning": str(e), "confidence": 0.0}
+            logger.warning("Error in verify_image: %s", e)
+            return {"verdict": "ERROR", "reasoning": "Image verification failed.", "confidence": 0.0}

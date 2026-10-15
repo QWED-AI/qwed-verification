@@ -2,12 +2,15 @@
 Azure OpenAI Provider Implementation.
 """
 
+import logging
 import os
 import json
 from typing import Dict, Any
 from openai import AzureOpenAI
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider
+from qwed_new.providers.base import LLMProvider, sanitized_provider_error
+
+logger = logging.getLogger(__name__)
 
 def _detect_image_mime(image_bytes: bytes) -> str:
     """Magic-byte MIME detection for vision data URIs, mirroring
@@ -91,7 +94,7 @@ You MUST call the submit_math_expression function."""
             return MathVerificationTask(**args_dict)
             
         except Exception as e:
-            raise ValueError(f"Azure OpenAI translation failed: {str(e)}")
+            raise sanitized_provider_error(logger, "Azure OpenAI translation failed", e) from e
 
     def translate_logic_dsl(self, user_query: str) -> Dict[str, Any]:
         """
@@ -187,7 +190,7 @@ BEGIN TRANSLATION.
                 raise ValueError("LLM did not call the required function")
             
             function_args = message.tool_calls[0].function.arguments
-            print(f"DEBUG: DSL LLM Args: {function_args}")
+            logger.debug("DSL LLM args: %s", function_args)
             args_dict = json.loads(function_args)
             
             return {
@@ -196,7 +199,7 @@ BEGIN TRANSLATION.
             }
             
         except Exception as e:
-            raise ValueError(f"Azure OpenAI DSL translation failed: {str(e)}")
+            raise sanitized_provider_error(logger, "Azure OpenAI DSL translation failed", e) from e
 
     def translate_logic(self, user_query: str) -> 'LogicVerificationTask':
         """
@@ -264,7 +267,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
                 raise ValueError("LLM did not call the required function")
             
             function_args = message.tool_calls[0].function.arguments
-            print(f"DEBUG: Raw LLM Args: {function_args}") # Debugging line
+            logger.debug("Raw LLM args: %s", function_args)
             args_dict = json.loads(function_args)
             
             # Map back to Pydantic model
@@ -274,7 +277,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return LogicVerificationTask(**args_dict)
 
         except Exception as e:
-            raise ValueError(f"Azure OpenAI logic translation failed: {str(e)}")
+            raise sanitized_provider_error(logger, "Azure OpenAI logic translation failed", e) from e
 
     def refine_logic(self, user_query: str, previous_error: str) -> 'LogicVerificationTask':
         """
@@ -344,7 +347,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
                 raise ValueError("LLM did not call the required function during refinement")
             
             function_args = message.tool_calls[0].function.arguments
-            print(f"DEBUG: Refined LLM Args: {function_args}")
+            logger.debug("Refined LLM args: %s", function_args)
             args_dict = json.loads(function_args)
             
             if 'vars_map' in args_dict:
@@ -353,7 +356,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return LogicVerificationTask(**args_dict)
             
         except Exception as e:
-            raise ValueError(f"Azure OpenAI logic refinement failed: {str(e)}")
+            raise sanitized_provider_error(logger, "Azure OpenAI logic refinement failed", e) from e
 
     def translate_stats(self, query: str, columns: list[str]) -> str:
         """
@@ -402,7 +405,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return content
             
         except Exception as e:
-            print(f"Stats Translation Error: {e}")
+            logger.warning("Stats translation error: %s", e)
             raise
 
 
@@ -445,8 +448,8 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return json.loads(content)
             
         except Exception as e:
-            print(f"Error in verify_fact: {e}")
-            return {"verdict": "ERROR", "reasoning": str(e), "citation": None}
+            logger.warning("Error in verify_fact: %s", e)
+            return {"verdict": "ERROR", "reasoning": "Fact verification failed.", "citation": None}
 
     def verify_image(self, image_bytes: bytes, claim: str) -> Dict[str, Any]:
         """
@@ -501,5 +504,5 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return json.loads(content)
             
         except Exception as e:
-            print(f"Error in verify_image: {e}")
-            return {"verdict": "ERROR", "reasoning": str(e), "confidence": 0.0}
+            logger.warning("Error in verify_image: %s", e)
+            return {"verdict": "ERROR", "reasoning": "Image verification failed.", "confidence": 0.0}

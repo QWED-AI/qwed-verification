@@ -2,11 +2,14 @@
 Anthropic Provider Implementation.
 """
 
+import logging
 import os
 from typing import Dict, Any
 from anthropic import AnthropicFoundry
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider
+from qwed_new.providers.base import LLMProvider, sanitized_provider_error
+
+logger = logging.getLogger(__name__)
 
 class AnthropicProvider(LLMProvider):
     """
@@ -71,7 +74,7 @@ You MUST use the submit_math_expression tool."""
             return MathVerificationTask(**tool_use.input)
             
         except Exception as e:
-            raise ValueError(f"Anthropic translation failed: {str(e)}")
+            raise sanitized_provider_error(logger, "Anthropic translation failed", e) from e
 
     def translate_logic_dsl(self, user_query: str) -> Dict[str, Any]:
         """
@@ -163,7 +166,7 @@ BEGIN TRANSLATION.
                 raise ValueError("Claude did not use the required tool")
             
             args_dict = tool_use.input
-            print(f"DEBUG: Claude DSL Args: {args_dict}")
+            logger.debug("Claude DSL args: %s", args_dict)
             
             return {
                 "dsl_code": args_dict.get("dsl_code", ""),
@@ -171,7 +174,7 @@ BEGIN TRANSLATION.
             }
             
         except Exception as e:
-            raise ValueError(f"Anthropic DSL translation failed: {str(e)}")
+            raise sanitized_provider_error(logger, "Anthropic DSL translation failed", e) from e
 
     def translate_logic(self, user_query: str) -> 'LogicVerificationTask':
         from qwed_new.core.schemas import LogicVerificationTask
@@ -231,7 +234,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             if 'vars_map' in args_dict:
                 args_dict['variables'] = args_dict.pop('vars_map')
         except Exception as e:
-            raise ValueError(f"Anthropic logic translation failed: {str(e)}")
+            raise sanitized_provider_error(logger, "Anthropic logic translation failed", e) from e
 
     def refine_logic(self, user_query: str, previous_error: str) -> 'LogicVerificationTask':
         from qwed_new.core.schemas import LogicVerificationTask
@@ -299,7 +302,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return LogicVerificationTask(**args_dict)
             
         except Exception as e:
-            raise ValueError(f"Anthropic logic refinement failed: {str(e)}")
+            raise sanitized_provider_error(logger, "Anthropic logic refinement failed", e) from e
 
     def translate_stats(self, query: str, columns: list[str]) -> str:
         """
@@ -349,7 +352,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return content
             
         except Exception as e:
-            print(f"Stats Translation Error: {e}")
+            logger.warning("Stats translation error: %s", e)
             raise
 
     def verify_fact(self, claim: str, context: str) -> dict:
@@ -410,7 +413,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return tool_use.input
             
         except Exception as e:
-            raise ValueError(f"Anthropic fact verification failed: {str(e)}")
+            raise sanitized_provider_error(logger, "Anthropic fact verification failed", e) from e
 
     def verify_image(self, image_bytes: bytes, claim: str) -> dict:
         """
@@ -484,5 +487,5 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return tool_use.input
             
         except Exception as e:
-            print(f"Error in verify_image: {e}")
-            return {"verdict": "ERROR", "reasoning": str(e), "confidence": 0.0}
+            logger.warning("Error in verify_image: %s", e)
+            return {"verdict": "ERROR", "reasoning": "Image verification failed.", "confidence": 0.0}
