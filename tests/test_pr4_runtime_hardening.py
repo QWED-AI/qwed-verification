@@ -504,6 +504,23 @@ def test_get_optional_api_key_record_rejects_malformed_key_before_lookup():
     mock_session.execute.assert_not_called()
 
 
+def test_get_optional_api_key_record_returns_none_for_unknown_key():
+    """CodeAnt on PR #454: a revoked key (is_active=False) is filtered out by the
+    lookup, so the row is absent. An absent key must resolve to None, not raise,
+    so a valid operator JWT in the same request is not preempted — consistent
+    with the expired/revoked-row cases. require_metrics_access makes the final
+    allow/deny on the remaining credentials."""
+    mock_session = MagicMock()
+    mock_session.execute.return_value.scalars.return_value.first.return_value = None
+
+    valid_key = _fixed_v2_key()
+    with patch("qwed_new.api.main.hash_api_key", return_value="h"):
+        result = get_optional_api_key_record(x_api_key=valid_key, session=mock_session)
+
+    assert result is None
+    mock_session.execute.assert_called_once()
+
+
 def test_metrics_allows_operator_jwt_when_api_key_expired(client, monkeypatch):
     """Sentry on PR #349 (MEDIUM): an expired X-Api-Key header must not
     preempt a valid operator JWT — the key resolves to None and the JWT

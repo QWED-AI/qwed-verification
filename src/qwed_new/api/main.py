@@ -41,7 +41,7 @@ from qwed_new.auth import auth_router
 from qwed_new.auth.audit_routes import router as audit_router
 from qwed_new.auth.middleware import get_api_key
 from qwed_new.auth.routes import get_current_user_token
-from qwed_new.auth.security import hash_api_key, validate_api_key_format
+from qwed_new.auth.security import hash_api_key, is_api_key_live, validate_api_key_format
 from qwed_new.api.secret_scanning_routes import router as secret_scanning_router
 
 TenantDependency = Annotated[TenantContext, Depends(get_current_tenant)]
@@ -422,26 +422,16 @@ def get_optional_api_key_record(
     statement = select(ApiKey).where(ApiKey.key_hash == hashed_key, ApiKey.is_active)
     api_key = session.execute(statement).scalars().first()
 
-    if not api_key:
-        raise HTTPException(status_code=403, detail="Invalid or revoked API Key")
-
-    # is_active alone is not a liveness check: an expired key linked to an
-    # allowlisted operator kept reading all-tenant metrics indefinitely
-    # (CodeAnt on PR #349). An expired or revoked key is not a usable
-    # credential — resolve to None instead of raising so a request that also
-    # carries a valid operator JWT is not preempted at the dependency layer
-    # (Sentry on PR #349); require_metrics_access re-decides on the remaining
-    # credentials and still denies key-only callers. expires_at is written
-    # naive-UTC (key_rotation's convention), so interpret naive values as UTC
-    # for the timezone-aware comparison (Sonar: no naive utcnow()).
-    if api_key.revoked_at is not None:
+    # Any x-api-key that is not a usable credential resolves to None, never a
+    # raise, so a request that also carries a valid operator JWT is not
+    # preempted at the dependency layer (Sentry on PR #349). That covers an
+    # unknown or revoked key (is_active=False, filtered out by the query above
+    # — CodeAnt on PR #454) as well as an expired/revoked row that reaches the
+    # liveness check: is_active alone is not liveness, since an expired key
+    # keeps is_active=True (CodeAnt on PR #349). require_metrics_access
+    # re-decides on the remaining credentials and still denies key-only callers.
+    if not api_key or not is_api_key_live(api_key):
         return None
-    if api_key.expires_at is not None:
-        expires_at = api_key.expires_at
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-        if expires_at <= datetime.now(timezone.utc):
-            return None
 
     return api_key
 
@@ -1488,7 +1478,6 @@ from qwed_new.core.observability import (
     get_prometheus_metrics,
     metrics_collector,
 )
-from datetime import datetime, timezone
 from sqlmodel import select
 
 @app.get("/health")
@@ -2091,19 +2080,10 @@ _FOREIGN_ORG_DETAIL = "Cannot access another organization's data"
 _ROLE_RANK = {"viewer": 0, "member": 1, "admin": 2, "owner": 3}
 
 
-def _api_key_is_live(api_key: ApiKey) -> bool:
-    """A key is live only if it is active, not revoked and not expired. is_active
-    alone is not a liveness check (expired keys keep is_active=True). expires_at
-    is written naive-UTC by key_rotation, so interpret naive values as UTC."""
-    if not api_key.is_active or api_key.revoked_at is not None:
-        return False
-    if api_key.expires_at is not None:
-        expires_at = api_key.expires_at
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-        if expires_at <= datetime.now(timezone.utc):
-            return False
-    return True
+# Liveness for admin endpoints is the same rule the tenant boundary enforces;
+# import the one shared implementation (qwed_new.auth.security.is_api_key_live)
+# rather than keeping a second copy here (#389).
+_api_key_is_live = is_api_key_live
 
 
 class AdminContext:

@@ -59,7 +59,7 @@ def test_import_provider_from_url():
         mock_response.__exit__.return_value = False
         
         with patch('urllib.request.urlopen', return_value=mock_response):
-            slug = manager.import_provider_from_url("http://fake-github.com/do.yaml")
+            slug = manager.import_provider_from_url("https://fake-github.com/do.yaml")
         
         # Raw name is normalized to a safe slug
         assert slug == "testingdo"
@@ -83,4 +83,4 @@ def test_import_invalid_yaml():
         
         with patch('urllib.request.urlopen', return_value=mock_response):
             with pytest.raises(ValueError, match="Invalid YAML"):
-                manager.import_provider_from_url("http://fake")
+                manager.import_provider_from_url("https://fake")

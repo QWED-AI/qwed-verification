@@ -6,6 +6,8 @@ from sqlalchemy.exc import ArgumentError
 from sqlalchemy.engine.url import make_url
 from sqlmodel import SQLModel, create_engine, Session
 
+from qwed_new.core.url_safety import sanitize_url
+
 logger = logging.getLogger(__name__)
 
 # SQLite for Dev, Postgres for Prod
@@ -18,10 +20,11 @@ parsed_db_url = None
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
 try:
     parsed_db_url = make_url(DATABASE_URL)
-    safe_db_url = parsed_db_url.render_as_string(hide_password=True)
 except (ArgumentError, ValueError, TypeError):
-    safe_db_url = "<invalid DATABASE_URL>"
-logger.debug("DATABASE_URL=%s", safe_db_url)
+    parsed_db_url = None
+# Redact the password before logging (#228): shared with redis_config so the
+# rule lives in one place.
+logger.debug("DATABASE_URL=%s", sanitize_url(DATABASE_URL))
 if parsed_db_url is not None and parsed_db_url.drivername.startswith("sqlite"):
     logger.debug("SQLite database file=%s", Path(parsed_db_url.database or "").name)
 

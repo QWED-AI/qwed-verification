@@ -267,6 +267,40 @@ def hash_api_key(api_key: str) -> str:
     mac = hmac.digest(_api_key_lookup_secret() + b":qwed_api_key_lookup", api_key.encode("utf-8"), "sha256")
     return mac.hex()
 
+def is_api_key_live(api_key, now: Optional[datetime] = None) -> bool:
+    """Return True only if an API-key row is still a usable credential.
+
+    A key authenticates only when it is active, not revoked and not expired.
+    ``is_active`` alone is NOT a liveness check (#389, CWE-613): key_rotation
+    issues keys with a finite ``expires_at`` (90 days) and nothing flips
+    ``is_active`` when they lapse, so an expired key keeps ``is_active=True``.
+    The authorization boundaries must therefore consult ``revoked_at`` and
+    ``expires_at`` as well, not just the active flag.
+
+    This is a point-in-time authorization check, not a verification verdict, so
+    expiry is evaluated against the current instant. ``now`` lets a caller inject
+    a server-controlled UTC timestamp (for tests, or so several checks in one
+    request share one instant); it defaults to the wall clock. A client-supplied
+    time must never be passed here.
+
+    ``expires_at`` is written naive-UTC (key_rotation's convention; older
+    SQLModel/SQLite reads it back without tzinfo), so a naive value is
+    interpreted as UTC before the timezone-aware comparison. Duck-typed on the
+    ApiKey row's attributes so this stays free of a model import and usable on
+    every auth path.
+    """
+    if not api_key.is_active or api_key.revoked_at is not None:
+        return False
+    expires_at = api_key.expires_at
+    if expires_at is not None:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        reference = now if now is not None else datetime.now(timezone.utc)
+        if expires_at <= reference:
+            return False
+    return True
+
+
 def mask_api_key(api_key: str) -> str:
     """
     Mask an API key for display.

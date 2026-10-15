@@ -126,6 +126,16 @@ class TestValidateFetchUrl:
         )
         assert validate_fetch_url("http://fake") == "http://fake"
 
+    def test_require_https_rejects_http(self):
+        with pytest.raises(ValueError, match="https"):
+            validate_fetch_url("http://example.com/provider.yaml", require_https=True)
+
+    def test_require_https_accepts_https(self):
+        assert (
+            validate_fetch_url("https://example.com/provider.yaml", require_https=True)
+            == "https://example.com/provider.yaml"
+        )
+
 
 class TestRedirectLimitHandler:
     def _req(self, url="http://example.com/"):
@@ -161,6 +171,24 @@ class TestRedirectLimitHandler:
             handler.redirect_request(
                 blocked_req, None, 302, "Found", {}, "http://169.254.169.254/"
             )
+
+    def test_require_https_rejects_http_downgrade_redirect(self):
+        # #229 across redirects: an https start URL must not be laundered down
+        # to http:// by a 3xx hop, which would expose the fetch to MITM.
+        handler = _RedirectLimitHandler(require_https=True)
+        req = self._req(url="https://example.com/provider.yaml")
+        with pytest.raises(ValueError, match="https"):
+            handler.redirect_request(
+                req, None, 302, "Found", {}, "http://example.com/provider.yaml"
+            )
+
+    def test_require_https_allows_https_redirect(self):
+        handler = _RedirectLimitHandler(require_https=True)
+        req = self._req(url="https://example.com/a")
+        hopped = handler.redirect_request(
+            req, None, 302, "Found", {}, "https://example.com/b"
+        )
+        assert hopped is not None
 
     def test_limited_redirects_restores_global_opener(self):
         import urllib.request as urlrequest

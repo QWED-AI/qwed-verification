@@ -137,17 +137,26 @@ class ProviderConfigManager:
         """
         from urllib.parse import urlparse
         parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            raise ValueError(f"Unsupported URL scheme '{parsed.scheme}'. Only http/https allowed.")
+        # https only (#229): provider YAML is executable config (endpoints,
+        # auth, processing logic). Over http:// a network MITM can substitute a
+        # malicious config — including a credential-exfiltrating CUSTOM_API_KEY
+        # — so cleartext import is rejected outright, not merely discouraged.
+        if parsed.scheme != "https":
+            raise ValueError(
+                f"Unsupported URL scheme '{parsed.scheme}'. Provider import "
+                "requires https:// (http:// is rejected to prevent MITM "
+                "substitution of provider config)."
+            )
         # SSRF guard (#423): literal-IP metadata/loopback/private targets
-        # fail here, before any fetch; redirect hops re-validate inside
-        # the limited opener below.
+        # fail here, before any fetch. require_https carries the #229 https-only
+        # rule into every redirect hop, so an initial https URL cannot be
+        # 3xx-redirected down to http:// and fetched in cleartext.
         from qwed_new.core.url_guard import limited_redirects, validate_fetch_url
-        validate_fetch_url(url)
+        validate_fetch_url(url, require_https=True)
 
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'QWED-CLI'})
-            with limited_redirects(), urllib.request.urlopen(req, timeout=10) as response:
+            with limited_redirects(require_https=True), urllib.request.urlopen(req, timeout=10) as response:
                 content = response.read().decode('utf-8')
                 
             data = yaml.safe_load(content)

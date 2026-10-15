@@ -330,7 +330,10 @@ def test_database_logging_handles_invalid_database_url(monkeypatch):
     ):
         _load_module("database_invalid_url_test", "src/qwed_new/core/database.py")
 
-    logger.debug.assert_any_call("DATABASE_URL=%s", "<invalid DATABASE_URL>")
+    # Password-redaction + unparseable handling now lives in the shared
+    # sanitize_url helper (#228), which returns this placeholder for a URL it
+    # cannot parse — database logging still never crashes or leaks the raw URL.
+    logger.debug.assert_any_call("DATABASE_URL=%s", "<unparseable URL>")
 
 
 def test_telemetry_init_logs_when_disabled(monkeypatch):

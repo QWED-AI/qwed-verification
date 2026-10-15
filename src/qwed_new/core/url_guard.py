@@ -117,16 +117,28 @@ def _alt_ipv4_literal(host: str):
     return ipaddress.IPv4Address(value)
 
 
-def validate_fetch_url(url: str, *, allow_local: bool = False) -> str:
+def validate_fetch_url(url: str, *, allow_local: bool = False, require_https: bool = False) -> str:
     """Reject fetch URLs that must never be retrieved. Returns url unchanged.
 
     Raises:
-        ValueError: non-http(s) scheme, or a literal-IP host in a blocked
+        ValueError: a scheme that is not allowed (non-http(s) always; also
+            http:// when require_https=True), or a literal-IP host in a blocked
             range (metadata endpoints always; loopback/link-local/private
             unless allow_local=True).
+
+    require_https rejects http:// as well. It must be threaded through every
+    redirect hop, not just the initial URL: an https start URL that 3xx-redirects
+    to http:// would otherwise be fetched in cleartext, re-opening the MITM the
+    https requirement exists to close (#229).
     """
     parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in ("http", "https"):
+    if require_https:
+        if parsed.scheme != "https":
+            raise ValueError(
+                f"Refusing non-https fetch URL (scheme '{parsed.scheme}'): https "
+                "is required, including across redirects, to prevent MITM."
+            )
+    elif parsed.scheme not in ("http", "https"):
         raise ValueError(
             f"Unsupported URL scheme '{parsed.scheme}'. Only http/https allowed."
         )
@@ -150,8 +162,9 @@ class _RedirectLimitHandler(urllib.request.HTTPRedirectHandler):
 
     max_redirects = MAX_REDIRECTS
 
-    def __init__(self, allow_local: bool = False):
+    def __init__(self, allow_local: bool = False, require_https: bool = False):
         self.allow_local = allow_local
+        self.require_https = require_https
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         count = getattr(req, "_qwed_redirects", 0) + 1
@@ -159,10 +172,10 @@ class _RedirectLimitHandler(urllib.request.HTTPRedirectHandler):
             raise urllib.error.HTTPError(
                 newurl, code, "Too many redirects (QWED cap)", headers, fp
             )
-        # Re-validate every hop with the caller's local policy: a clean
-        # start URL must not launder a blocked literal-IP target through
-        # a redirect.
-        validate_fetch_url(newurl, allow_local=self.allow_local)
+        # Re-validate every hop with the caller's policy: a clean start URL
+        # must not launder a blocked literal-IP target — or, when
+        # require_https is set, an http:// downgrade — through a redirect.
+        validate_fetch_url(newurl, allow_local=self.allow_local, require_https=self.require_https)
         new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
         if new_req is not None:
             new_req._qwed_redirects = count
@@ -170,15 +183,18 @@ class _RedirectLimitHandler(urllib.request.HTTPRedirectHandler):
 
 
 @contextlib.contextmanager
-def limited_redirects(allow_local: bool = False):
+def limited_redirects(allow_local: bool = False, require_https: bool = False):
     """Activate the redirect-limiting opener for one fetch only.
 
     Installs a process-global opener around the call and restores the
     previous one afterwards, so the standard
     ``urllib.request.urlopen(...)`` call path — and the test mocks that
     patch it — keeps working unchanged. Single-threaded CLI use only.
+
+    Pass require_https=True to reject any redirect hop that downgrades to
+    http:// (see validate_fetch_url).
     """
-    opener = urllib.request.build_opener(_RedirectLimitHandler(allow_local))
+    opener = urllib.request.build_opener(_RedirectLimitHandler(allow_local, require_https))
     previous = urllib.request._opener
     urllib.request.install_opener(opener)
     try:
