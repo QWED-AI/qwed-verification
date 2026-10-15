@@ -232,6 +232,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             args_dict = tool_use.input
             if 'vars_map' in args_dict:
                 args_dict['variables'] = args_dict.pop('vars_map')
+            return LogicVerificationTask(**args_dict)
         except Exception as e:
             raise sanitized_provider_error(logger, "Anthropic logic translation failed", e) from e
 
