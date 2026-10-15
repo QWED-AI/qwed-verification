@@ -190,7 +190,6 @@ BEGIN TRANSLATION.
                 raise ValueError("LLM did not call the required function")
             
             function_args = message.tool_calls[0].function.arguments
-            logger.debug("DSL LLM args: %s", function_args)
             args_dict = json.loads(function_args)
             
             return {
@@ -267,7 +266,6 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
                 raise ValueError("LLM did not call the required function")
             
             function_args = message.tool_calls[0].function.arguments
-            logger.debug("Raw LLM args: %s", function_args)
             args_dict = json.loads(function_args)
             
             # Map back to Pydantic model
@@ -347,7 +345,6 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
                 raise ValueError("LLM did not call the required function during refinement")
             
             function_args = message.tool_calls[0].function.arguments
-            logger.debug("Refined LLM args: %s", function_args)
             args_dict = json.loads(function_args)
             
             if 'vars_map' in args_dict:
@@ -405,8 +402,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return content
             
         except Exception as e:
-            logger.warning("Stats translation error: %s", e)
-            raise
+            raise sanitized_provider_error(logger, "Azure OpenAI stats translation failed", e) from e
 
 
     def verify_fact(self, claim: str, context: str) -> Dict[str, Any]:

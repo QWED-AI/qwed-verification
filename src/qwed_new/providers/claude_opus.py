@@ -257,8 +257,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return content
             
         except Exception as e:
-            logger.warning("Stats translation error: %s", e)
-            raise
+            raise sanitized_provider_error(logger, "Claude Opus stats translation failed", e) from e
 
     def verify_fact(self, claim: str, context: str) -> dict:
         """Verify a claim against context using citation-based checking."""

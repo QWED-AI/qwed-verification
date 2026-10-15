@@ -166,7 +166,6 @@ BEGIN TRANSLATION.
                 raise ValueError("Claude did not use the required tool")
             
             args_dict = tool_use.input
-            logger.debug("Claude DSL args: %s", args_dict)
             
             return {
                 "dsl_code": args_dict.get("dsl_code", ""),
@@ -352,8 +351,7 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             return content
             
         except Exception as e:
-            logger.warning("Stats translation error: %s", e)
-            raise
+            raise sanitized_provider_error(logger, "Anthropic stats translation failed", e) from e
 
     def verify_fact(self, claim: str, context: str) -> dict:
         """
