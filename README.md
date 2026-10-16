@@ -77,7 +77,7 @@ Other languages and runtimes:
 | | Install | Notes |
 |---|---|---|
 | TypeScript | `npm install @qwed-ai/sdk` | npm currently has 7.2.0 |
-| Go | `go get github.com/QWED-AI/qwed-verification/sdk-go` | Not yet tagged; resolves to a pseudo-version, so pin a commit |
+| Go | `go get github.com/QWED-AI/qwed-verification/sdk-go/v7` | Released under `sdk-go/vX.Y.Z` tags; pin a version, e.g. `@v7.2.4` |
 | Rust | `cargo add qwed` | |
 | Docker | `docker pull qwedai/qwed-verification` | The API server. It needs `API_KEY_SECRET` and `QWED_CORS_ORIGINS`; see [self-hosting](https://docs.qwedai.com/advanced/self-hosting) |
 
