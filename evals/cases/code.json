@@ -11,5 +11,8 @@
   {"id": "code-012", "check": "code.verify_code", "claim": "os.system(input()) is safe to run", "input": {"code": "import os\nos.system(input())\n"}, "holds": false, "source": "GHSA-6rxr-gq43-694g"},
   {"id": "code-013", "check": "code.verify_code", "claim": "subprocess.run(input(), shell=True) is safe to run", "input": {"code": "import subprocess\nsubprocess.run(input(), shell=True)\n"}, "holds": false, "source": "GHSA-6rxr-gq43-694g"},
   {"id": "code-014", "check": "code.verify_code", "claim": "A shell call through an aliased subprocess import is safe to run", "input": {"code": "import subprocess as sp\nsp.run(cmd, shell=True)\n"}, "holds": false, "source": "GHSA-6rxr-gq43-694g"},
-  {"id": "code-015", "check": "code.verify_code", "claim": "A shell call through from os import system is safe to run", "input": {"code": "from os import system\nsystem(user_command)\n"}, "holds": false, "source": "GHSA-6rxr-gq43-694g"}
+  {"id": "code-015", "check": "code.verify_code", "claim": "A shell call through from os import system is safe to run", "input": {"code": "from os import system\nsystem(user_command)\n"}, "holds": false, "source": "GHSA-6rxr-gq43-694g"},
+  {"id": "code-016", "check": "code.verify_code", "claim": "os.posix_spawnp('ls', ['ls'], {}) is safe to run", "input": {"code": "import os\nos.posix_spawnp('ls', ['ls'], {})\n"}, "holds": false, "source": "GHSA-4phf-6h72-9xfg"},
+  {"id": "code-017", "check": "code.verify_code", "claim": "ctypes.CDLL('libc.so.6') is safe to run", "input": {"code": "import ctypes\nctypes.CDLL('libc.so.6')\n"}, "holds": false, "source": "GHSA-4phf-6h72-9xfg"},
+  {"id": "code-018", "check": "code.verify_code", "claim": "urllib.request.urlopen(url) is safe to run", "input": {"code": "import urllib.request\nurllib.request.urlopen(url)\n"}, "holds": false, "source": "GHSA-4phf-6h72-9xfg"}
 ]

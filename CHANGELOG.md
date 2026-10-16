@@ -11,20 +11,24 @@ A fail-closed security and soundness release. It ships five private advisories
 denial-of-service hardening tracked since 7.2.3, credential-handling fixes, and
 a versioned Go module path. All engine changes make verification stricter and
 fail closed; no response field is removed or renamed. The soundness eval grew
-to 78 known-answer claims, 0 accepted wrongly.
+to 84 known-answer claims, 0 accepted wrongly.
 
 ### Security fixes (advisories)
 
 Five advisories, published on the repository Security tab. They affect all
-versions up to 7.2.3; upgrading is recommended. Each is reproduced in the
-soundness eval.
+versions up to 7.2.3; upgrading is recommended. All five have regression tests
+in `tests/`; the SQL, code and logic advisories (GHSA-6p94, GHSA-6cpx,
+GHSA-4phf, GHSA-g25v) also have reproductions in the soundness eval (`evals/`).
+The sandbox advisory (GHSA-j3x4) is exercised by its subprocess test, which the
+eval runner does not cover.
 
 - **SQL commands are classified across the whole statement tree**
   (GHSA-6p94-4f75-g2wq, high) — destructive DML (`DELETE`/`UPDATE`/`INSERT`/…)
-  hidden inside a CTE or subquery, and administrative statements
-  (`COPY`, `ATTACH`, `PRAGMA`, `CALL`, …), are now BLOCKED wherever they appear,
-  and any statement whose root is not a read-only `SELECT`/`UNION`/… fails
-  closed. Before, the command-type check only inspected the top level, so
+  hidden inside a CTE or subquery, administrative statements
+  (`COPY`, `ATTACH`, `PRAGMA`, `CALL`, …), and any statement whose root is not a
+  read-only `SELECT`/`UNION`/… are now reported invalid
+  (`developer_fields.is_valid = false`, denied by `admission_decision`) wherever
+  they appear. Before, the command-type check only inspected the top level, so
   `WITH x AS (DELETE …)` and non-`SELECT` statement families were admitted
   (`core/sql_verifier.py`).
 - **Code verification never admits alternate process-execution routes or
@@ -99,9 +103,11 @@ soundness eval.
 Every engine change is stricter and fails closed; no response field is removed
 or renamed. The code-execution sandbox now admits only an allowlist of modules
 and builtins, so sandboxed user code that imported other modules will need them
-added to the allowlist. The SQL verifier may now BLOCK statements it previously
-admitted (non-`SELECT` roots, DML in CTEs, `*` over blocked columns); the logic
-NL bridge returns `UNVERIFIABLE`/error for categorical string constants.
+added to the allowlist. The SQL verifier now denies statements it previously
+admitted (non-`SELECT` roots, DML in CTEs, `*` over blocked columns, value-level
+tautologies) by returning `VERIFIED` with `developer_fields.is_valid = false`,
+which `admission_decision` rejects; the logic NL bridge returns
+`UNVERIFIABLE`/error for categorical string constants.
 
 [#222]: https://github.com/QWED-AI/qwed-verification/issues/222
 [#225]: https://github.com/QWED-AI/qwed-verification/issues/225
