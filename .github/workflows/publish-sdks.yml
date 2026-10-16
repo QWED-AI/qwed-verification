@@ -186,7 +186,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          persist-credentials: false
+          # This job's only purpose is to push the sdk-go/ tag, so it keeps the
+          # checkout's GITHUB_TOKEN credential (git push origin uses it). The
+          # other jobs still check out with persist-credentials: false.
+          persist-credentials: true
       - name: Verify Go module
         run: |
           cd sdk-go
@@ -195,7 +198,6 @@ jobs:
       - name: Tag the Go SDK for the module proxy
         if: github.event_name == 'release'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Pass these through env, not inline ${{ }}: GitHub expands template
           # expressions into the script source before the shell runs, so an
           # attacker-crafted release tag (e.g. v7.2.4-$(id)) would execute as
@@ -203,7 +205,6 @@ jobs:
           # data, validated below.
           VERSION: ${{ github.ref_name }}
           RELEASE_SHA: ${{ github.sha }}
-          REPO: ${{ github.repository }}
         run: |
           # Only ever derive the Go tag from a real release tag (vX.Y.Z); never
           # from a branch name on a manual/workflow_dispatch run.
@@ -225,10 +226,11 @@ jobs:
           if git ls-remote --exit-code --tags origin "refs/tags/${GO_TAG}" >/dev/null 2>&1; then
             echo "Tag ${GO_TAG} already exists; nothing to do."
           else
-            # Lightweight tag on the released commit; GITHUB_TOKEN pushes do not
-            # re-trigger workflows, so this cannot recurse.
+            # Lightweight tag on the released commit, pushed with the checkout's
+            # persisted GITHUB_TOKEN. GITHUB_TOKEN pushes do not re-trigger
+            # workflows, so this cannot recurse.
             git tag "${GO_TAG}" "${RELEASE_SHA}"
-            git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "${GO_TAG}"
+            git push origin "${GO_TAG}"
             echo "Created ${GO_TAG}"
           fi
           echo "✅ go get github.com/QWED-AI/qwed-verification/sdk-go/v${MOD_MAJOR}@${VERSION}"
