@@ -185,7 +185,7 @@ The Stats engine executes statistical code in a sandbox and returns `UNVERIFIABL
 ## GitHub Action
 
 ```yaml
-- uses: QWED-AI/qwed-verification@v7.2.3
+- uses: QWED-AI/qwed-verification@v7.3.0
   with:
     action: scan-secrets        # or scan-code, verify-shell
     paths: "**/*.py,**/*.env"

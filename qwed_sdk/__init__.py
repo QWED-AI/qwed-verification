@@ -56,7 +56,7 @@ from qwed_new.core.verification_context import (
     is_valid_document,
 )
 
-__version__ = "7.2.3"
+__version__ = "7.3.0"
 __all__ = [
     "QWEDClient",
     "QWEDAsyncClient",

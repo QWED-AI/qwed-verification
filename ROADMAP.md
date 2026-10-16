@@ -28,7 +28,7 @@ Release history is in [CHANGELOG.md](CHANGELOG.md) and on [GitHub Releases](http
 
 - `DiagnosticResult` on every engine API endpoint (v7.0.0)
 - Verification Context v1.0 (v7.1.0)
-- Security and soundness fixes (v7.2.0 to v7.2.3)
+- Security and soundness fixes (v7.2.0 to v7.3.0)
 - OpenSSF Best Practices: Gold
 - SDKs for TypeScript, Go and Rust
 
