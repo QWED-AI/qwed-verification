@@ -17,7 +17,9 @@ from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
 def client():
     from qwed_new.api.main import app, get_current_tenant, get_session
 
-    mock_tenant = MagicMock(organization_id=1, api_key=os.environ.get("QWED_TEST_API_KEY", "sentinel"), organization_name="Test Org")
+    # user_id set explicitly: the audit row is written to a real (test)
+    # database, which cannot bind a MagicMock attribute.
+    mock_tenant = MagicMock(organization_id=1, user_id=None, api_key=os.environ.get("QWED_TEST_API_KEY", "sentinel"), organization_name="Test Org")
     mock_session = MagicMock(add=MagicMock(), commit=MagicMock())
 
     app.dependency_overrides[get_current_tenant] = lambda: mock_tenant

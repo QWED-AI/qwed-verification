@@ -5,11 +5,12 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Optional
 import csv
 import io
-from datetime import datetime, timedelta
 from fastapi.responses import StreamingResponse
+from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, select
 
 from qwed_new.core.database import get_session
+from qwed_new.core.audit_logger import SecurityError, get_audit_logger
 from qwed_new.core.models import VerificationLog, User
 from .routes import get_current_user
 
@@ -123,7 +124,13 @@ async def seed_sample_data(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
-    """Seed sample audit logs for testing (dev only)."""
+    """Seed sample audit logs for testing (dev only).
+
+    Sample rows go through the signed audit chain like any other row, marked
+    ``{"sample": true}`` in their result and timestamped when written. A row
+    added outside the chain would become an unverifiable head and stop every
+    later append for the organisation.
+    """
     import random
     
     queries = [
@@ -134,20 +141,17 @@ async def seed_sample_data(
         "Analyze quantum coherence state"
     ]
     
-    for _ in range(10):
-        query = random.choice(queries)
-        is_verified = random.choice([True, False])
-        
-        log = VerificationLog(
-            organization_id=current_user.organization_id,
-            user_id=current_user.id,
-            query=query,
-            result="Sample result data",
-            is_verified=is_verified,
-            domain=random.choice(["MATH", "LOGIC", "PHYSICS"]),
-            timestamp=datetime.utcnow() - timedelta(minutes=random.randint(1, 1000))
-        )
-        session.add(log)
-    
-    session.commit()
+    try:
+        audit_logger = get_audit_logger()
+        for _ in range(10):
+            audit_logger.log_verification(
+                organization_id=current_user.organization_id,
+                user_id=current_user.id,
+                query=random.choice(queries),
+                result={"sample": True},
+                is_verified=random.choice([True, False]),
+                domain=random.choice(["MATH", "LOGIC", "PHYSICS"]),
+            )
+    except (SecurityError, SQLAlchemyError):
+        raise HTTPException(status_code=500, detail="audit persistence failed") from None
     return {"message": "Sample logs seeded successfully"}
