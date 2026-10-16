@@ -70,9 +70,11 @@ jobs:
         DUMMY_API=$(python -c "import secrets; print(secrets.token_hex(32))")
         DUMMY_JWT=$(python -c "import secrets; print(secrets.token_hex(32))")
         DUMMY_LOOKUP=$(python -c "import secrets; print(secrets.token_hex(32))")
+        DUMMY_AUDIT=$(python -c "import secrets; print(secrets.token_hex(32))")
         echo "API_KEY_SECRET=${DUMMY_API}" >> $GITHUB_ENV
         echo "QWED_JWT_SECRET_KEY=${DUMMY_JWT}" >> $GITHUB_ENV
         echo "DUMMY_LOOKUP=${DUMMY_LOOKUP}" >> $GITHUB_ENV
+        echo "DUMMY_AUDIT=${DUMMY_AUDIT}" >> $GITHUB_ENV
         echo "API_KEY_SECRET=${DUMMY_API}" >> .env
         echo "QWED_JWT_SECRET_KEY=${DUMMY_JWT}" >> .env
         # Write the lookup secret to .env without a static "SECRET=" literal
@@ -90,6 +92,8 @@ jobs:
         API_KEY_SECRET: ${{ env.API_KEY_SECRET }}
         QWED_JWT_SECRET_KEY: ${{ env.QWED_JWT_SECRET_KEY }}
         QWED_API_KEY_LOOKUP_SECRET: ${{ env.DUMMY_LOOKUP }}
+        # The server refuses to boot without the audit-chain signing key.
+        QWED_AUDIT_SECRET_KEY: ${{ env.DUMMY_AUDIT }}
         QWED_SKIP_ENV_INTEGRITY_CHECK: "true"
       run: |
         # Start API server in background

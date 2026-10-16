@@ -2218,3 +2218,51 @@ def test_init_interactive_retries_connection_until_success(
     assert mock_test_connection.call_count == 2
     assert _mock_gitignore_interactive.called
     assert not _mock_gitignore.called
+
+
+def test_persist_onboarding_env_stores_and_retains_audit_secret(monkeypatch, tmp_path):
+    """The server refuses to boot without QWED_AUDIT_SECRET_KEY, so init must
+    persist one; re-running must retain it (a new key would invalidate every
+    existing audit signature)."""
+    monkeypatch.delenv("QWED_AUDIT_SECRET_KEY", raising=False)
+    monkeypatch.setenv("QWED_JWT_SECRET_KEY", "jwt-secret-value")
+    profile = _provider_map()["openai"]
+    written = {}
+
+    def _persist(sink):
+        return _persist_onboarding_env(
+            profile=profile,
+            resolved_key="sk-test-key",
+            resolved_base_url="",
+            resolved_model="gpt-4o-mini",
+            ensure_jwt_secret=lambda: "jwt-secret-value",
+            ensure_lookup_secret=_REAL_ENSURE_LOOKUP_SECRET,
+            verify_gitignore=lambda: True,
+            add_env_to_gitignore=lambda: True,
+            write_env_file=lambda vars, active_provider=None: sink.update(vars) or str(tmp_path / ".env"),
+            non_interactive=True,
+        )
+
+    _persist(written)
+    stored = written["QWED_AUDIT_SECRET_KEY"]
+    assert stored
+    assert os.environ["QWED_AUDIT_SECRET_KEY"] == stored
+
+    rewritten = {}
+    _persist(rewritten)
+    assert rewritten["QWED_AUDIT_SECRET_KEY"] == stored
+
+
+def test_seed_server_secrets_retains_root_audit_secret(monkeypatch, tmp_path):
+    """A root .env audit key is seeded, not regenerated over."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname = 'proj'\n", encoding="utf-8")
+    (root / ".env").write_text("QWED_AUDIT_SECRET_KEY=root-audit\n", encoding="utf-8")
+    monkeypatch.chdir(root)
+    monkeypatch.delenv("QWED_AUDIT_SECRET_KEY", raising=False)
+
+    filled = _REAL_SEED_FROM_ROOT()
+
+    assert os.getenv("QWED_AUDIT_SECRET_KEY") == "root-audit"
+    assert "QWED_AUDIT_SECRET_KEY" in filled
