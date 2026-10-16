@@ -82,6 +82,9 @@ class CodeVerifier:
         "yaml.load": "Potential insecure YAML (use safe_load)",
         "getattr": "Dynamic attribute access",
         "setattr": "Dynamic attribute modification",
+        # Runtime module acquisition — grabbing a module object out of the
+        # interpreter instead of importing it, then calling on it (GHSA-4phf).
+        "sys.modules[": "Runtime module acquisition via sys.modules",
     }
 
     # A subprocess call that pipes fetched content (curl/wget) into a shell is
@@ -109,21 +112,68 @@ class CodeVerifier:
         "os.exec",
         "os.spawn",
         "os.posix_spawn",
+        "os.posix_spawnp",
         "os.startfile",
+        "os.fork",  # also os.forkpty
         "subprocess.",
         "pty.spawn",
+        "pty.fork",
         "asyncio.create_subprocess_",
         "commands.getoutput",
         "commands.getstatusoutput",
+        # Process execution reached WITHOUT importing os/subprocess directly
+        # (GHSA-4phf, incomplete fix of GHSA-6rxr). These acquire a module or
+        # native library at runtime; the call on the result can't be resolved
+        # statically, so the acquisition primitive itself is treated as process
+        # execution. posix/nt (the raw os backends) are handled in the AST pass
+        # by module head, since "nt." as a substring collides with words like
+        # "environment.".
+        "importlib.import_module",
+        "importlib.__import__",
+        "runpy.run_module",
+        "runpy.run_path",
+        "ctypes.CDLL",
+        "ctypes.cdll",
+        "ctypes.WinDLL",
+        "ctypes.windll",
+        "ctypes.OleDLL",
+        "ctypes.oledll",
+        "ctypes.PyDLL",
     )
 
-    PYTHON_WARNING = {
-        "open": "File operation (verify path source)",
-        "shutil.rmtree": "Recursive directory deletion",
-        "requests.get": "HTTP request (verify URL source)",
-        "requests.post": "HTTP request (verify URL source)",
-        "socket.socket": "Raw socket access",
-    }
+    # Raw OS backend modules (not normally imported directly); any call on them
+    # is treated as process execution. Matched by module head in the AST pass.
+    PYTHON_RAW_OS_MODULES: ClassVar[tuple[str, ...]] = ("posix", "nt")
+
+    # File and network access. For a firewall that certifies code "safe to
+    # execute", code that reads/writes files or does network I/O must not be
+    # admitted — these are the impact and exfiltration sinks (GHSA-4phf). Policy:
+    # CRITICAL (they were WARNING, which admitted them). Matched by dotted-name
+    # prefix in the line scan and the AST pass (alias-resolved). os.path.* is NOT
+    # here — it is pure path-string manipulation, not I/O.
+    PYTHON_FILE_NETWORK: ClassVar[tuple[str, ...]] = (
+        # File system
+        "io.open",
+        "shutil.",
+        "os.remove", "os.unlink", "os.rename", "os.replace", "os.mkdir",
+        "os.makedirs", "os.rmdir", "os.removedirs", "os.chmod", "os.chown",
+        "os.open", "os.truncate", "os.link", "os.symlink", "os.rmtree",
+        "pathlib.Path",
+        # Network
+        "socket.socket", "socket.create_connection", "socket.create_server",
+        "urllib.request", "urllib.urlopen",
+        "http.client", "httplib.",
+        "requests.", "httpx.", "aiohttp.",
+        "ftplib.", "smtplib.", "telnetlib.", "poplib.", "imaplib.",
+        "asyncio.open_connection",
+    )
+    # The builtin file opener is a bare name, not a dotted call; matched in the
+    # AST pass as a call to Name("open").
+    PYTHON_FILE_BUILTINS: ClassVar[tuple[str, ...]] = ("open",)
+
+    # Retained (now empty): file/network context-dependent findings were promoted
+    # to CRITICAL above (GHSA-4phf). Kept as an attribute for compatibility.
+    PYTHON_WARNING: ClassVar[dict] = {}
     
     PYTHON_WEAK_CRYPTO = {
         "hashlib.md5": "MD5 is cryptographically broken",
@@ -150,12 +200,19 @@ class CodeVerifier:
         ".outerHTML": "XSS vulnerability",
         "document.write": "XSS vulnerability",
         "document.writeln": "XSS vulnerability",
+        # Process execution is never admitted, whatever the argument (GHSA-4phf,
+        # parallel to the Python PYTHON_PROCESS_EXECUTION policy).
+        "child_process.exec": "Command execution",
+        "child_process.execSync": "Command execution",
+        "child_process.spawn": "Command execution",
+        "child_process.spawnSync": "Command execution",
+        "child_process.execFile": "Command execution",
+        "child_process.execFileSync": "Command execution",
+        "child_process.fork": "Child process execution",
     }
-    
+
     JS_WARNING = {
         "dangerouslySetInnerHTML": "React XSS risk (intentional bypass)",
-        "child_process.exec": "Command injection risk",
-        "child_process.spawn": "Command execution (verify args)",
         "fs.readFile": "File read (verify path source)",
         "fs.writeFile": "File write (verify path source)",
         "fs.unlink": "File deletion (verify path source)",
@@ -216,7 +273,11 @@ class CodeVerifier:
     GO_CRITICAL = {
         "os/exec": "Command execution",
         "exec.Command": "Command injection risk",
+        "exec.CommandContext": "Command execution",
         "syscall.Exec": "System call execution",
+        "syscall.ForkExec": "Process creation via syscall",
+        "syscall.StartProcess": "Process creation via syscall",
+        "os.StartProcess": "Process creation",
         "unsafe.Pointer": "Unsafe memory operation",
     }
     
@@ -544,6 +605,12 @@ class CodeVerifier:
                     issues.append(self._process_execution_issue(prefix.rstrip("._"), line_num))
                     break
 
+            # File / network access: one blocking finding per line (GHSA-4phf).
+            for prefix in self.PYTHON_FILE_NETWORK:
+                if prefix in line:
+                    issues.append(self._file_network_issue(prefix.rstrip("."), line_num))
+                    break
+
             # Warning functions
             for pattern, desc in self.PYTHON_WARNING.items():
                 if pattern in line:
@@ -626,6 +693,19 @@ class CodeVerifier:
     def _is_process_execution(self, name: str) -> bool:
         return any(name.startswith(prefix) for prefix in self.PYTHON_PROCESS_EXECUTION)
 
+    def _file_network_issue(self, pattern: str, line_number: Optional[int]) -> SecurityIssue:
+        return SecurityIssue(
+            severity="CRITICAL",
+            issue_type="file_or_network_access",
+            pattern=pattern,
+            description="File system or network access",
+            line_number=line_number,
+            recommendation="Generated code must not read/write files or perform network I/O; route any I/O through a reviewed, sandboxed tool.",
+        )
+
+    def _is_file_network(self, name: str) -> bool:
+        return any(name.startswith(prefix) for prefix in self.PYTHON_FILE_NETWORK)
+
     @staticmethod
     def _dotted_name(node: ast.AST) -> Optional[str]:
         """``a.b.c`` for a Name/Attribute chain, else None."""
@@ -639,11 +719,13 @@ class CodeVerifier:
         return ".".join(reversed(parts))
 
     def _check_python_process_ast(self, code: str) -> List[SecurityIssue]:
-        """Flag calls that execute a process, resolving import aliases.
+        """Flag process-execution and file/network calls, resolving import aliases.
 
         Catches what the line scan cannot: ``import subprocess as sp;
-        sp.run(...)``, ``from os import system as run_it; run_it(...)`` and
-        bare calls to names brought in by ``from os import *``.
+        sp.run(...)``, ``from os import system as run_it; run_it(...)``, bare
+        calls to names brought in by ``from os import *``, calls on the raw-OS
+        backend modules ``posix``/``nt``, the builtin ``open``, and file/network
+        sinks reached through an alias (GHSA-4phf).
         """
         try:
             tree = ast.parse(code)
@@ -681,9 +763,31 @@ class CodeVerifier:
                 candidates = [name] + [f"{module}.{name}" for module in star_modules]
             else:
                 candidates = [name]
+            lineno = getattr(node, "lineno", None)
+
+            # Process execution, incl. the raw-OS backend modules posix/nt
+            # (matched by module head, so "nt." doesn't collide with words).
             hit = next((c for c in candidates if self._is_process_execution(c)), None)
+            if hit is None:
+                hit = next(
+                    (c for c in candidates
+                     if "." in c and c.partition(".")[0] in self.PYTHON_RAW_OS_MODULES),
+                    None,
+                )
             if hit:
-                issues.append(self._process_execution_issue(hit, getattr(node, "lineno", None)))
+                issues.append(self._process_execution_issue(hit, lineno))
+                continue
+
+            # Builtin open(): a bare call with no module, not shadowed by an
+            # import that re-points the name elsewhere.
+            if name in self.PYTHON_FILE_BUILTINS and name not in aliases:
+                issues.append(self._file_network_issue(name, lineno))
+                continue
+
+            # File system / network sinks.
+            fn_hit = next((c for c in candidates if self._is_file_network(c)), None)
+            if fn_hit:
+                issues.append(self._file_network_issue(fn_hit, lineno))
         return issues
 
     def _check_python_subprocess_ast(self, code: str) -> List[SecurityIssue]:
