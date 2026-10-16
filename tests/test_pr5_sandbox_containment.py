@@ -176,13 +176,21 @@ class TestWrapperCap:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # the wrapper hardcodes /workspace; retarget to a portable dir and
-            # run it as a real subprocess — same shape as the container run
+            # run it as a real subprocess — same shape as the container run.
+            # The isolated-namespace wrapper never inlines user code: execute()
+            # writes it to user_code.py and the wrapper reads it back, so the
+            # test has to lay the workspace out the same way. Write/read every
+            # file as UTF-8 so the harness matches the container (Linux UTF-8)
+            # on any host locale, rather than the platform default (cp1252 on
+            # Windows, which corrupts the wrapper's non-ASCII comments).
             workspace = tmpdir.replace("\\", "/")
-            with open(os.path.join(tmpdir, "context.json"), "w") as f:
+            with open(os.path.join(tmpdir, "context.json"), "w", encoding="utf-8") as f:
                 json.dump({}, f)
+            with open(os.path.join(tmpdir, "user_code.py"), "w", encoding="utf-8") as f:
+                f.write(user_code)
             wrapped = executor._wrap_code(user_code).replace("/workspace", workspace)
             script = os.path.join(tmpdir, "script.py")
-            with open(script, "w") as f:
+            with open(script, "w", encoding="utf-8") as f:
                 f.write(wrapped)
             proc = subprocess.run(
                 [sys.executable, script],
@@ -190,7 +198,7 @@ class TestWrapperCap:
                 text=True,
                 timeout=60,
             )
-            with open(os.path.join(tmpdir, "result.json")) as f:
+            with open(os.path.join(tmpdir, "result.json"), encoding="utf-8") as f:
                 return json.load(f), proc.returncode
 
     def test_oversized_result_rejected_inside_container(self):

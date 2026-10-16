@@ -90,7 +90,12 @@ _DANGEROUS_OS_CALLS = {
     "execl", "execle", "execlp", "execlpe",
     "spawnv", "spawnve", "spawnvp", "spawnvpe",
     "spawnl", "spawnle", "spawnlp", "spawnlpe",
+    # Stopgap for the call-name gap (GHSA-j3x4). The structural fix is the
+    # isolated execution namespace in SecureCodeExecutor._wrap_code; these just
+    # close the obvious holes in the static gate too.
+    "posix_spawn", "posix_spawnp",
     "fork", "forkpty",
+    "Popen",
 }
 _DANGEROUS_CALL_TARGETS = frozenset(_DANGEROUS_BUILTINS | _DANGEROUS_OS_CALLS)
 
@@ -316,16 +321,28 @@ class SecureCodeExecutor:
         # 2. Create temporary directory for data exchange
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
+                # All three files are read by python3 inside the container, which
+                # decodes source as UTF-8 (PEP 263 default). Write UTF-8 here so a
+                # non-UTF-8 host locale can't corrupt a non-ASCII byte on the way
+                # in.
                 # Write context data
                 context_file = os.path.join(tmpdir, "context.json")
-                with open(context_file, 'w') as f:
+                with open(context_file, 'w', encoding='utf-8') as f:
                     # Serialize context (handle DataFrames if present)
                     serializable_context = self._serialize_context(context)
                     json.dump(serializable_context, f)
-                
-                # Write code to execute
+
+                # The untrusted user code runs in an ISOLATED namespace, not
+                # inline in the harness module scope (GHSA-j3x4). Write it to its
+                # own file so the harness can exec it with a restricted builtins
+                # set and a module allowlist; the harness (script.py) keeps full
+                # builtins to load context and serialize the result.
+                with open(os.path.join(tmpdir, "user_code.py"), 'w', encoding='utf-8') as f:
+                    f.write(code)
+
+                # Write the trusted harness.
                 code_file = os.path.join(tmpdir, "script.py")
-                with open(code_file, 'w') as f:
+                with open(code_file, 'w', encoding='utf-8') as f:
                     wrapped_code = self._wrap_code(code)
                     f.write(wrapped_code)
                 
@@ -610,22 +627,32 @@ class SecureCodeExecutor:
         return serialized
     
     def _wrap_code(self, user_code: str) -> str:
-        """
-        Wrap user code with safety harness and I/O handling.
-        
-        This wrapper:
-        1. Loads context from JSON
-        2. Reconstructs DataFrames if present
-        3. Executes user code
-        4. Saves result to JSON
-        5. Catches all exceptions
+        """Build the trusted harness that runs the untrusted user code in an
+        ISOLATED namespace (GHSA-j3x4).
+
+        The harness keeps full builtins (it loads context and serializes the
+        result), but the user code — read from user_code.py — is exec'd in a
+        namespace whose ``__builtins__`` is a capability allowlist and whose
+        ``__import__`` permits only a safe set of modules. The static gates key
+        on identifier syntax and can be defeated (names assembled from string
+        literals, ``getattr`` with string constants, ``sys.modules``
+        re-acquisition, stored references); once ``eval``/``exec``/``getattr``/
+        ``vars``/``__import__``/``sys.modules`` and the os/subprocess/socket/…
+        modules are simply absent at runtime, those bypasses reach nothing.
+
+        ``user_code`` is accepted for signature compatibility but is NOT inlined;
+        it is written to user_code.py by the caller and read back here.
         """
         return f'''
 import json
 import sys
+import builtins as _builtins
 import numpy as np
+try:
+    import pandas as pd
+except Exception:
+    pd = None
 
-# Custom encoder for NumPy types
 class QwedEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, np.integer): return int(obj)
@@ -633,30 +660,76 @@ class QwedEncoder(json.JSONEncoder):
         if isinstance(obj, np.ndarray): return obj.tolist()
         return super().default(obj)
 
-# Load context
+# --- capability allowlist (GHSA-j3x4) -------------------------------------
+# Only these modules may be imported by the executed code; everything that
+# reaches a process/file/network/reflection primitive is absent.
+_ALLOWED_MODULES = {{
+    "numpy", "pandas", "scipy", "sklearn", "statsmodels", "patsy",
+    "math", "cmath", "statistics", "decimal", "fractions", "random",
+    "datetime", "json", "re", "collections", "itertools", "functools",
+    "operator", "array", "bisect", "heapq", "string", "typing",
+}}
+# Safe builtins only. Absent on purpose: eval, exec, compile, __import__
+# (replaced by a guarded import below), getattr, setattr, delattr, vars,
+# globals, locals, open, input, memoryview — the reflection and
+# code/module-acquisition capabilities the bypasses depend on.
+_SAFE_BUILTIN_NAMES = (
+    "abs", "all", "any", "ascii", "bin", "bool", "bytearray", "bytes",
+    "callable", "chr", "complex", "dict", "divmod", "enumerate", "filter",
+    "float", "format", "frozenset", "hash", "hex", "int", "isinstance",
+    "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
+    "ord", "pow", "print", "range", "repr", "reversed", "round", "set",
+    "slice", "sorted", "str", "sum", "tuple", "type", "zip",
+    "True", "False", "None",
+    "Exception", "ArithmeticError", "ZeroDivisionError", "OverflowError",
+    "ValueError", "TypeError", "KeyError", "IndexError", "AttributeError",
+    "RuntimeError", "StopIteration", "NotImplementedError", "FloatingPointError",
+)
+_safe_builtins = {{}}
+for _n in _SAFE_BUILTIN_NAMES:
+    if hasattr(_builtins, _n):
+        _safe_builtins[_n] = getattr(_builtins, _n)
+
+_real_import = _builtins.__import__
+def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    root = name.split(".")[0] if name else name
+    if level != 0 or root not in _ALLOWED_MODULES:
+        raise ImportError("import of %r is not permitted in the sandbox (GHSA-j3x4)" % (name,))
+    return _real_import(name, globals, locals, fromlist, level)
+_safe_builtins["__import__"] = _guarded_import
+
+# Isolated namespace for the executed code. Pre-bind the scientific modules the
+# generated code uses (np/pd) so it need not import them; nothing dangerous.
+_sandbox = {{"__builtins__": _safe_builtins, "np": np, "numpy": np}}
+if pd is not None:
+    _sandbox["pd"] = pd
+    _sandbox["pandas"] = pd
+
+# Load context (trusted harness, full builtins) into the sandbox namespace.
 with open('/workspace/context.json', 'r') as f:
     context = json.load(f)
-
-# Reconstruct DataFrames if present
 for key, value in context.items():
     if isinstance(value, dict) and value.get('_type') == 'dataframe':
+        if pd is None:
+            print("pandas unavailable; cannot reconstruct DataFrame", file=sys.stderr)
+            continue
         try:
-            import pandas as pd
-            df = pd.DataFrame(value['data'])
-            globals()[key] = df
+            _sandbox[key] = pd.DataFrame(value['data'])
         except Exception as e:
             print(f"Failed to reconstruct DataFrame: {{e}}", file=sys.stderr)
     else:
-        globals()[key] = value
+        _sandbox[key] = value
+
+# Read and run the untrusted user code in the isolated namespace.
+with open('/workspace/user_code.py', 'r') as f:
+    _user_src = f.read()
 
 try:
-    # User code executes here
-{self._indent_code(user_code, spaces=4)}
+    exec(compile(_user_src, 'user_code.py', 'exec'), _sandbox)
 
-    # Save result (user code should set 'result' variable)
-    if 'result' in globals():
-        res = globals()['result']
-        # Handle DataFrame results
+    # Save result (user code should set 'result').
+    if 'result' in _sandbox:
+        res = _sandbox['result']
         if hasattr(res, 'to_dict'):
             payload = {{'result': res.to_dict(orient='records')}}
         else:
@@ -685,7 +758,7 @@ try:
         with open('/workspace/result.json', 'w') as f:
             json.dump({{'error': 'Code did not set result variable'}}, f)
         sys.exit(1)
-        
+
 except Exception as e:
     # Save error
     with open('/workspace/result.json', 'w') as f:
