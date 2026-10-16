@@ -4,6 +4,126 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+## [7.3.0] - 2026-10-16
+
+A fail-closed security and soundness release. It ships five private advisories
+(three of them completing earlier incomplete fixes), the tenant-scoping and
+denial-of-service hardening tracked since 7.2.3, credential-handling fixes, and
+a versioned Go module path. All engine changes make verification stricter and
+fail closed; no response field is removed or renamed. The soundness eval grew
+to 84 known-answer claims, 0 accepted wrongly.
+
+### Security fixes (advisories)
+
+Five advisories, published on the repository Security tab. They affect all
+versions up to 7.2.3; upgrading is recommended. All five have regression tests
+in `tests/`; the SQL, code and logic advisories (GHSA-6p94, GHSA-6cpx,
+GHSA-4phf, GHSA-g25v) also have reproductions in the soundness eval (`evals/`).
+The sandbox advisory (GHSA-j3x4) is exercised by its subprocess test, which the
+eval runner does not cover.
+
+- **SQL commands are classified across the whole statement tree**
+  (GHSA-6p94-4f75-g2wq, high) — destructive DML (`DELETE`/`UPDATE`/`INSERT`/…)
+  hidden inside a CTE or subquery, administrative statements
+  (`COPY`, `ATTACH`, `PRAGMA`, `CALL`, …), and any statement whose root is not a
+  read-only `SELECT`/`UNION`/… are now reported invalid
+  (`developer_fields.is_valid = false`, denied by `admission_decision`) wherever
+  they appear. Before, the command-type check only inspected the top level, so
+  `WITH x AS (DELETE …)` and non-`SELECT` statement families were admitted
+  (`core/sql_verifier.py`).
+- **Code verification never admits alternate process-execution routes or
+  file/network sinks** (GHSA-4phf-6h72-9xfg, high; completes
+  GHSA-6rxr-gq43-694g) — `os.posix_spawn*`, `os.fork`, `pty.fork`,
+  `importlib`/`runpy` dynamic import and execution, `ctypes` library loaders,
+  and reads/writes through `io.open`/`shutil`/`pathlib`/`socket`/`urllib`/
+  `requests`/… are now blocking findings, including the bare `open` builtin and
+  the raw `posix`/`nt` modules (`core/code_verifier.py`).
+- **The code-execution sandbox isolates its namespace**
+  (GHSA-j3x4-v3p2-4mq3, high; completes GHSA-6rxr-gq43-694g) — user code runs
+  under a capability allowlist (`__builtins__` reduced to safe names, a guarded
+  `__import__` that admits only an allowlist of analysis modules such as
+  numpy/pandas/scipy) instead of a static denylist that could be bypassed
+  through package-internal re-exports and reflection. User code is read from a
+  separate file and never inlined into the harness
+  (`core/secure_code_executor.py`).
+- **SQL `SELECT *` is expanded against the schema and tautologies are folded at
+  the value level** (GHSA-6cpx-8jrq-r7h3, moderate) — with `schema_ddl`, a `*`
+  (qualified or not) that resolves to a blocked column is rejected instead of
+  slipping past the sensitive-column denylist; always-true predicates
+  (`OR 1=1`, `OR 'a'='a'`, arithmetic tautologies) are detected by
+  constant-folding the comparison rather than matching text shapes
+  (`core/sql_verifier.py`).
+- **The logic natural-language bridge rejects string constants**
+  (GHSA-g25v-44j8-gg7x, moderate; completes GHSA-mfh5-3c8f-975p) —
+  `_constant_to_dsl` no longer mangles a categorical string into a bare token
+  the compiler turned into a free integer, which had made contradictory claims
+  (`tier == 'gold' AND tier == 'silver'`) satisfiable and VERIFIED. String
+  literals now fail closed; encode categories as explicit integers
+  (`core/dsl_logic_verifier.py`).
+
+### Soundness and access control
+
+- **Admin endpoints are scoped to the caller's tenant** and RBAC is enforced,
+  closing a cross-tenant access gap ([#222], #450).
+- **The money verifier rejects non-finite amounts** (`NaN`/`inf`) and
+  `verify_invoice_total` never raises ([#451]).
+- **The SDK's `verify_fact` fails closed** when the service is unreachable
+  instead of returning a permissive result ([#326], #449).
+
+### Hardening and resource limits
+
+- **Blocking work is kept off the event loop and request bodies are capped**,
+  closing denial-of-service paths ([#390], [#391], [#392], [#445], #447).
+- **Concurrent sandbox containers are bounded** so a burst cannot exhaust the
+  host ([#446], #448).
+- **API-key rotation is atomic**, so concurrent rotations mint a single key
+  ([#452], #453).
+
+### Credential handling
+
+- **Connection URLs (Redis, Postgres) are redacted before logging**, so an
+  embedded password is not written to logs ([#228]); the **auth boundary
+  rejects expired API keys** ([#389]); **provider imports are https-only**
+  ([#229]) (#454).
+- **SDK error detail is sanitized** — full detail is logged for operators and a
+  generic error is raised to callers ([#225], #455).
+
+### SDKs and tooling
+
+- **Go module path is versioned** (`.../sdk-go/v7`) and release tagging emits
+  `sdk-go/vX.Y.Z`, so `go get` resolves the module ([#443], #457).
+
+### Docs
+
+- Whitepaper errata item 8 corrected (the LangChain example) (#456).
+- Assurance case and README updated for the 7.3.0 advisories and eval count.
+
+### Behaviour changes
+
+Every engine change is stricter and fails closed; no response field is removed
+or renamed. The code-execution sandbox now admits only an allowlist of modules
+and builtins, so sandboxed user code that imported other modules will need them
+added to the allowlist. The SQL verifier now denies statements it previously
+admitted (non-`SELECT` roots, DML in CTEs, `*` over blocked columns, value-level
+tautologies) by returning `VERIFIED` with `developer_fields.is_valid = false`,
+which `admission_decision` rejects; the logic NL bridge returns
+`UNVERIFIABLE`/error for categorical string constants.
+
+[#222]: https://github.com/QWED-AI/qwed-verification/issues/222
+[#225]: https://github.com/QWED-AI/qwed-verification/issues/225
+[#228]: https://github.com/QWED-AI/qwed-verification/issues/228
+[#229]: https://github.com/QWED-AI/qwed-verification/issues/229
+[#326]: https://github.com/QWED-AI/qwed-verification/issues/326
+[#389]: https://github.com/QWED-AI/qwed-verification/issues/389
+[#390]: https://github.com/QWED-AI/qwed-verification/issues/390
+[#391]: https://github.com/QWED-AI/qwed-verification/issues/391
+[#392]: https://github.com/QWED-AI/qwed-verification/issues/392
+[#443]: https://github.com/QWED-AI/qwed-verification/issues/443
+[#445]: https://github.com/QWED-AI/qwed-verification/issues/445
+[#446]: https://github.com/QWED-AI/qwed-verification/issues/446
+[#451]: https://github.com/QWED-AI/qwed-verification/issues/451
+[#452]: https://github.com/QWED-AI/qwed-verification/issues/452
+
 ## [7.2.3] - 2026-10-13
 
 ### Security fixes
