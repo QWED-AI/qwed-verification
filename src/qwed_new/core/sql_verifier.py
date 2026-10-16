@@ -67,6 +67,77 @@ def _available_expression_types(*names: str) -> Set[type]:
     }
 
 
+class _NotConstant(Exception):
+    """A node could not be folded to a column-free constant value."""
+
+
+def _const_eval(node: exp.Expression):
+    """Fold a column-free boolean/numeric/string expression to a Python value.
+
+    Raises :class:`_NotConstant` for anything that references a column or that is
+    not a fold-able literal/operator. Used to detect always-true predicates by
+    VALUE rather than by matching a fixed list of AST shapes (GHSA-6cpx): ``OR 1``,
+    ``OR NOT FALSE``, ``1 = 1.0`` and ``2 > 1`` all fold to a truthy constant.
+    """
+    if isinstance(node, exp.Paren):
+        return _const_eval(node.this)
+    if isinstance(node, exp.Boolean):
+        return bool(node.this)
+    if isinstance(node, exp.Null):
+        return None
+    if isinstance(node, exp.Literal):
+        if node.is_string:
+            return node.this
+        try:
+            return int(node.this)
+        except (TypeError, ValueError):
+            return float(node.this)
+    if isinstance(node, exp.Neg):
+        return -_const_eval(node.this)
+    if isinstance(node, exp.Not):
+        return not _const_eval(node.this)
+    if isinstance(node, exp.And):
+        return bool(_const_eval(node.left) and _const_eval(node.right))
+    if isinstance(node, exp.Or):
+        return bool(_const_eval(node.left) or _const_eval(node.right))
+    comparisons = {
+        exp.EQ: lambda a, b: a == b,
+        exp.NEQ: lambda a, b: a != b,
+        exp.GT: lambda a, b: a > b,
+        exp.GTE: lambda a, b: a >= b,
+        exp.LT: lambda a, b: a < b,
+        exp.LTE: lambda a, b: a <= b,
+    }
+    arithmetic = {
+        exp.Add: lambda a, b: a + b,
+        exp.Sub: lambda a, b: a - b,
+        exp.Mul: lambda a, b: a * b,
+    }
+    for cls, op in {**comparisons, **arithmetic}.items():
+        if cls is not None and isinstance(node, cls):
+            return op(_const_eval(node.left), _const_eval(node.right))
+    raise _NotConstant()
+
+
+def _is_always_true(node: Optional[exp.Expression]) -> bool:
+    """True iff *node* is a column-free predicate that evaluates to a truthy
+    constant (a tautology), False for anything referencing data or not fold-able."""
+    if node is None:
+        return False
+    try:
+        return bool(_const_eval(node))
+    except (_NotConstant, TypeError, ValueError, ZeroDivisionError, ArithmeticError):
+        return False
+
+
+def _enclosing_select(node: exp.Expression) -> Optional[exp.Expression]:
+    """The nearest ancestor Select of *node*, or None."""
+    parent = node.parent
+    while parent is not None and not isinstance(parent, exp.Select):
+        parent = parent.parent
+    return parent
+
+
 @dataclass
 class SQLIssue:
     """A detected SQL security issue."""
@@ -505,29 +576,41 @@ class SQLVerifier:
         """Detect SQL injection patterns."""
         issues = []
         
-        # Tautology detection (1=1, 'a'='a')
-        for condition in parsed_query.find_all(exp.EQ):
-            left_sql = condition.left.sql() if hasattr(condition.left, 'sql') else str(condition.left)
-            right_sql = condition.right.sql() if hasattr(condition.right, 'sql') else str(condition.right)
-            
-            if left_sql == right_sql:
+        # Tautology detection by VALUE, not by matching a fixed set of AST
+        # shapes (GHSA-6cpx). A column-free comparison that folds to true
+        # (1=1, 1=1.0, 'a'='a', 2>1), or a WHERE/HAVING whose whole predicate
+        # folds to true (WHERE 1, WHERE 2>1), is a tautology.
+        _COMPARISONS = tuple(
+            c for c in (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE) if c is not None
+        )
+        for condition in parsed_query.find_all(*_COMPARISONS):
+            if _is_always_true(condition):
                 issues.append(SQLIssue(
                     severity="CRITICAL",
                     issue_type="injection_tautology",
                     description=f"Tautology detected: {condition.sql()}. Likely injection attempt.",
                     recommendation="Validate input before constructing SQL."
                 ))
-        
-        # OR TRUE pattern
+        for clause in parsed_query.find_all(exp.Where, exp.Having):
+            if _is_always_true(clause.this):
+                issues.append(SQLIssue(
+                    severity="CRITICAL",
+                    issue_type="injection_tautology",
+                    description="Always-true filter predicate detected. Likely injection attempt.",
+                    recommendation="Validate input before constructing SQL."
+                ))
+
+        # OR with a constant always-true operand (OR TRUE, OR 1, OR NOT FALSE,
+        # OR 2>1): the OR as a whole isn't constant (the other side reads data),
+        # so each operand is tested on its own.
         for condition in parsed_query.find_all(exp.Or):
-            if hasattr(condition, 'right') and isinstance(condition.right, exp.Boolean):
-                if condition.right.this:
-                    issues.append(SQLIssue(
-                        severity="CRITICAL",
-                        issue_type="injection_or_true",
-                        description="'OR TRUE' pattern detected. Likely injection attempt."
-                    ))
-        
+            if _is_always_true(condition.left) or _is_always_true(condition.right):
+                issues.append(SQLIssue(
+                    severity="CRITICAL",
+                    issue_type="injection_or_true",
+                    description="Always-true OR operand detected. Likely injection attempt."
+                ))
+
         # UNION injection
         if parsed_query.find(exp.Union):
             issues.append(SQLIssue(
@@ -741,7 +824,59 @@ class SQLVerifier:
                     description=f"Table '{t_name}' not found in schema.",
                     recommendation="Query only the tables in the declared schema, or add the table to it."
                 ))
-        
+
+        issues.extend(self._check_star_sensitive_columns(parsed_query, tables_in_schema))
+
+        return issues
+
+    def _check_star_sensitive_columns(
+        self, parsed_query: exp.Expression, tables_in_schema: Dict[str, Set[str]]
+    ) -> List[SQLIssue]:
+        """Expand ``SELECT *`` / ``t.*`` against the declared schema and apply the
+        sensitive-column denylist to the expansion (GHSA-6cpx).
+
+        The named-column check never sees a star, so ``SELECT * FROM users`` was
+        admitted even when the schema declares a sensitive column like
+        ``password``. Resolve each star to the columns of the table(s) it covers
+        and block it when any of those columns is sensitive.
+        """
+        issues: List[SQLIssue] = []
+
+        # alias (and bare name) -> real table name, for resolving qualified stars.
+        alias_to_table: Dict[str, str] = {}
+        for tbl in parsed_query.find_all(exp.Table):
+            real = tbl.name.lower()
+            alias_to_table[real] = real
+            if tbl.alias:
+                alias_to_table[tbl.alias.lower()] = real
+
+        for star in parsed_query.find_all(exp.Star):
+            parent = star.parent
+            if isinstance(parent, exp.Column) and parent.table:
+                covered = [alias_to_table.get(parent.table.lower())]
+            else:
+                select = _enclosing_select(star)
+                scope = select if select is not None else parsed_query
+                covered = [
+                    alias_to_table.get((t.alias or t.name).lower(), t.name.lower())
+                    for t in scope.find_all(exp.Table)
+                    if select is None or _enclosing_select(t) is select
+                ]
+
+            for t_name in covered:
+                if not t_name:
+                    continue
+                schema_cols = tables_in_schema.get(t_name)
+                if schema_cols is None:
+                    continue  # unknown table is handled by the existence check
+                for col in sorted(schema_cols & self.blocked_columns):
+                    issues.append(SQLIssue(
+                        severity="CRITICAL",
+                        issue_type="sensitive_column_access",
+                        description=f"Star selection over '{t_name}' exposes sensitive column '{col}'.",
+                        recommendation="Select only the non-sensitive columns you need; do not use '*' on tables with restricted columns."
+                    ))
+
         return issues
     
     # =========================================================================
