@@ -196,12 +196,29 @@ jobs:
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pass these through env, not inline ${{ }}: GitHub expands template
+          # expressions into the script source before the shell runs, so an
+          # attacker-crafted release tag (e.g. v7.2.4-$(id)) would execute as
+          # shell in this write-permissioned job. As env values they are plain
+          # data, validated below.
+          VERSION: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
         run: |
-          VERSION="${{ github.ref_name }}"
           # Only ever derive the Go tag from a real release tag (vX.Y.Z); never
           # from a branch name on a manual/workflow_dispatch run.
           if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::Unexpected release tag for Go SDK: $VERSION"
+            exit 1
+          fi
+          # The module path pins the major version (.../sdk-go/vN). Refuse to tag
+          # a release whose major doesn't match it: a vN+1 release before go.mod
+          # is bumped would otherwise push a tag the proxy rejects and caches,
+          # which can't be cleanly retracted. Fail closed; bump go.mod first.
+          MOD_MAJOR=$(sed -n 's#^module .*/sdk-go/v\([0-9]\+\)$#\1#p' sdk-go/go.mod)
+          TAG_MAJOR="${VERSION#v}"; TAG_MAJOR="${TAG_MAJOR%%.*}"
+          if [ -z "$MOD_MAJOR" ] || [ "$MOD_MAJOR" != "$TAG_MAJOR" ]; then
+            echo "::error::Release $VERSION does not match sdk-go module major v$MOD_MAJOR — bump sdk-go/go.mod first"
             exit 1
           fi
           GO_TAG="sdk-go/${VERSION}"
@@ -210,11 +227,11 @@ jobs:
           else
             # Lightweight tag on the released commit; GITHUB_TOKEN pushes do not
             # re-trigger workflows, so this cannot recurse.
-            git tag "${GO_TAG}" "${{ github.sha }}"
-            git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "${GO_TAG}"
+            git tag "${GO_TAG}" "${RELEASE_SHA}"
+            git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "${GO_TAG}"
             echo "Created ${GO_TAG}"
           fi
-          echo "✅ go get github.com/QWED-AI/qwed-verification/sdk-go/v7@${VERSION}"
+          echo "✅ go get github.com/QWED-AI/qwed-verification/sdk-go/v${MOD_MAJOR}@${VERSION}"
 
   # ============================================
   # Summary
