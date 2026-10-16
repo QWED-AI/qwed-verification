@@ -178,20 +178,62 @@ jobs:
   tag-go:
     name: Tag Go SDK
     runs-on: ubuntu-latest
+    # Scoped to this job only (the global default stays contents: read): the Go
+    # module lives in sdk-go/ with path .../sdk-go/v7, so the proxy resolves it
+    # from a tag named sdk-go/vX.Y.Z — which this job has to push (#443).
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      
         with:
-          persist-credentials: false
+          # This job's only purpose is to push the sdk-go/ tag, so it keeps the
+          # checkout's GITHUB_TOKEN credential (git push origin uses it). The
+          # other jobs still check out with persist-credentials: false.
+          persist-credentials: true
       - name: Verify Go module
         run: |
           cd sdk-go
           go mod verify || true
-      
-      - name: Print install command
+
+      - name: Tag the Go SDK for the module proxy
+        if: github.event_name == 'release'
+        env:
+          # Pass these through env, not inline ${{ }}: GitHub expands template
+          # expressions into the script source before the shell runs, so an
+          # attacker-crafted release tag (e.g. v7.2.4-$(id)) would execute as
+          # shell in this write-permissioned job. As env values they are plain
+          # data, validated below.
+          VERSION: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
         run: |
-          echo "✅ Go SDK available at:"
-          echo "go get github.com/QWED-AI/qwed-verification/sdk-go@${{ github.ref_name }}"
+          # Only ever derive the Go tag from a real release tag (vX.Y.Z); never
+          # from a branch name on a manual/workflow_dispatch run.
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Unexpected release tag for Go SDK: $VERSION"
+            exit 1
+          fi
+          # The module path pins the major version (.../sdk-go/vN). Refuse to tag
+          # a release whose major doesn't match it: a vN+1 release before go.mod
+          # is bumped would otherwise push a tag the proxy rejects and caches,
+          # which can't be cleanly retracted. Fail closed; bump go.mod first.
+          MOD_MAJOR=$(sed -n 's#^module .*/sdk-go/v\([0-9]\+\)$#\1#p' sdk-go/go.mod)
+          TAG_MAJOR="${VERSION#v}"; TAG_MAJOR="${TAG_MAJOR%%.*}"
+          if [ -z "$MOD_MAJOR" ] || [ "$MOD_MAJOR" != "$TAG_MAJOR" ]; then
+            echo "::error::Release $VERSION does not match sdk-go module major v$MOD_MAJOR — bump sdk-go/go.mod first"
+            exit 1
+          fi
+          GO_TAG="sdk-go/${VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${GO_TAG}" >/dev/null 2>&1; then
+            echo "Tag ${GO_TAG} already exists; nothing to do."
+          else
+            # Lightweight tag on the released commit, pushed with the checkout's
+            # persisted GITHUB_TOKEN. GITHUB_TOKEN pushes do not re-trigger
+            # workflows, so this cannot recurse.
+            git tag "${GO_TAG}" "${RELEASE_SHA}"
+            git push origin "${GO_TAG}"
+            echo "Created ${GO_TAG}"
+          fi
+          echo "✅ go get github.com/QWED-AI/qwed-verification/sdk-go/v${MOD_MAJOR}@${VERSION}"
 
   # ============================================
   # Summary
