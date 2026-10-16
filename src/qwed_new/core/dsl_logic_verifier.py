@@ -400,8 +400,19 @@ class DSLLogicVerifier:
                 "Floating-point literals are not allowed in verification logic; use exact integer input."
             )
         if isinstance(value, str):
-            token = re.sub(r"\W+", "_", value).strip("_")
-            return token or "value"
+            # Reject string/categorical literals instead of mangling them into
+            # bare tokens (GHSA-g25v, incomplete fix of GHSA-mfh5). The compiler's
+            # quote-guard only fires on tokens that still carry quotes; a mangled
+            # token auto-created a fresh Int variable, so distinct strings became
+            # free integers and contradictory categorical constraints
+            # (tier == 'gold' AND tier == 'silver') came back SAT/VERIFIED. There
+            # is no Z3 string sort here, so fail closed (-> UNVERIFIABLE) like the
+            # float case rather than invent an unsound encoding.
+            raise ValueError(
+                "String literals are not allowed in verification logic; the "
+                "natural-language bridge cannot soundly model categorical string "
+                "constants. Encode categories as explicit integers."
+            )
         return str(value)
 
     def _name_to_dsl(self, node: ast.Name) -> str:

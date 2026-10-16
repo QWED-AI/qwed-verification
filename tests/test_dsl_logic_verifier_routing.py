@@ -114,6 +114,37 @@ def test_constraint_to_dsl_rejects_float_literals():
         verifier._constraint_to_dsl("x > -0.1")
 
 
+def test_constraint_to_dsl_rejects_string_literals():
+    """GHSA-g25v: string/categorical constants were mangled into bare tokens the
+    compiler auto-created as free Int variables. Reject them instead, so the NL
+    bridge can't make categorical claims satisfiable."""
+    verifier = DSLLogicVerifier()
+
+    with pytest.raises(ValueError, match="String literals"):
+        verifier._constraint_to_dsl("tier == 'gold'")
+    with pytest.raises(ValueError, match="String literals"):
+        verifier._constraint_to_dsl("status == 'approval required'")
+
+
+def test_contradictory_categorical_claim_is_not_verified(monkeypatch):
+    """The exposed surface of GHSA-g25v is the authoritative VERIFIED verdict:
+    `tier == 'gold' AND tier == 'silver'` must NOT come back VERIFIED. With string
+    constants rejected it fails closed to ERROR rather than SAT."""
+    task = LogicVerificationTask(
+        variables={"tier": "Int"},
+        constraints=["tier == 'gold'", "tier == 'silver'"],
+        goal="SATISFIABILITY",
+    )
+    stub = _StubTranslator(task=task, resolved_provider="openai_compat")
+    monkeypatch.setattr("qwed_new.core.dsl_logic_verifier.TranslationLayer", lambda: stub)
+
+    verifier = DSLLogicVerifier()
+    result = verifier.verify_from_natural_language(query="tier is gold and silver", provider="openai_compat")
+
+    assert result.status != "VERIFIED"
+    assert result.status == "ERROR"
+
+
 def test_verify_from_natural_language_uses_resolved_provider(monkeypatch):
     task = LogicVerificationTask(
         variables={"x": "Int"},
@@ -204,7 +235,7 @@ def test_ast_to_dsl_handles_bool_ops_calls_and_not():
     assert verifier._ast_to_dsl(not_expr) == "(NOT (GT x 1))"
 
 
-def test_ast_to_dsl_handles_unary_minus_and_string_constant():
+def test_ast_to_dsl_handles_unary_minus_and_rejects_string_constant():
     verifier = DSLLogicVerifier()
 
     minus_expr = ast.parse("-7", mode="eval").body
@@ -213,8 +244,11 @@ def test_ast_to_dsl_handles_unary_minus_and_string_constant():
     complex_minus_expr = ast.parse("-(x + 1)", mode="eval").body
     assert verifier._ast_to_dsl(complex_minus_expr) == "(MINUS 0 (PLUS x 1))"
 
+    # GHSA-g25v: string constants are rejected, not mangled into bare tokens that
+    # the compiler would auto-create as free integer variables.
     string_expr = ast.parse("'approval required'", mode="eval").body
-    assert verifier._ast_to_dsl(string_expr) == "approval_required"
+    with pytest.raises(ValueError, match="String literals"):
+        verifier._ast_to_dsl(string_expr)
 
 
 def test_ast_to_dsl_not_call_requires_one_argument():
