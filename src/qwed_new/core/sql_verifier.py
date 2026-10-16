@@ -126,13 +126,47 @@ class SQLVerifier:
         "Merge",
     )
 
-    # Administrative / Permission commands
+    # Administrative / permission / side-effecting statement families. Blocked
+    # anywhere in the parse tree (not just at the root). Beyond GRANT/SET/etc.
+    # this covers COPY ... FROM PROGRAM / COPY ... FROM|TO <file>, ATTACH/DETACH,
+    # PRAGMA, LOAD DATA and friends, plus the generic ``Command`` node sqlglot
+    # emits for statements it does not model (GHSA-6p94).
     ADMIN_COMMANDS = _available_expression_types(
         "Grant",
         "Revoke",
         "Set",
         "Transaction",
         "Command",
+        "Use",
+        "Copy",
+        "Attach",
+        "Detach",
+        "Pragma",
+        "Load",
+        "LoadData",
+        "Analyze",
+        "Cache",
+        "Uncache",
+        "Vacuum",
+        "Export",
+        "Import",
+        "Call",
+        "Execute",
+    )
+
+    # Read-only statement types permitted as the top-level query. Anything else
+    # is blocked (fail closed) when destructive ops are not allowed: a statement
+    # type not recognized as a read-only query is treated as unsafe rather than
+    # waved through. sqlglot parses ``WITH ... SELECT`` with a ``Select`` root,
+    # so the With/CTE wrapper is a descendant and need not be a root type here.
+    READ_ONLY_ROOT_TYPES = _available_expression_types(
+        "Select",
+        "Union",
+        "Intersect",
+        "Except",
+        "Subquery",
+        "With",
+        "Paren",
     )
 
     # Sensitive columns (Forbidden in SELECT/WHERE by default)
@@ -390,27 +424,57 @@ class SQLVerifier:
     # =========================================================================
     
     def _check_command_type(self, parsed_query: exp.Expression) -> List[SQLIssue]:
-        """Check for blocked command types."""
+        """Check for blocked command types across the WHOLE parse tree.
+
+        Classifying by the root node alone let a data-modifying or administrative
+        statement hide in a CTE or subquery — ``WITH d AS (DELETE FROM t
+        RETURNING *) SELECT * FROM d`` has a ``Select`` root yet runs the DELETE —
+        and let whole statement families (COPY/ATTACH/PRAGMA/…) that sit in
+        neither deny set pass as safe (GHSA-6p94). This walks every node and,
+        when destructive ops are not allowed, also fails closed on any top-level
+        statement that is not a recognized read-only query type.
+        """
         issues = []
-        query_type = type(parsed_query)
-        
-        if query_type in self.DESTRUCTIVE_COMMANDS:
-            if not self.allow_destructive:
+
+        node_types = set()
+        for item in parsed_query.walk():
+            node = item[0] if isinstance(item, tuple) else item
+            node_types.add(type(node))
+
+        if not self.allow_destructive:
+            for query_type in sorted(node_types & self.DESTRUCTIVE_COMMANDS, key=lambda c: c.__name__):
                 issues.append(SQLIssue(
                     severity="CRITICAL",
                     issue_type="destructive_command",
                     description=f"Destructive command '{query_type.__name__}' blocked. Only SELECT is allowed.",
                     recommendation="Use parameterized API endpoints for data modification."
                 ))
-        
-        if query_type in self.ADMIN_COMMANDS:
+
+        for query_type in sorted(node_types & self.ADMIN_COMMANDS, key=lambda c: c.__name__):
             issues.append(SQLIssue(
                 severity="CRITICAL",
                 issue_type="admin_command",
                 description=f"Administrative command '{query_type.__name__}' blocked.",
                 recommendation="Administrative operations must be performed through secure channels."
             ))
-        
+
+        # Fail closed: when destructive ops are not allowed, the top-level
+        # statement must be a recognized read-only query type. A COPY/ATTACH/
+        # PRAGMA or any statement type we do not model is blocked here rather than
+        # waved through — unless it was already flagged above (GHSA-6p94).
+        root_type = type(parsed_query)
+        already_flagged = root_type in self.DESTRUCTIVE_COMMANDS or root_type in self.ADMIN_COMMANDS
+        if (not self.allow_destructive
+                and root_type not in self.READ_ONLY_ROOT_TYPES
+                and not already_flagged):
+            issues.append(SQLIssue(
+                severity="CRITICAL",
+                issue_type="non_read_only_statement",
+                description=f"Only read-only SELECT-style queries are permitted; "
+                            f"'{root_type.__name__}' is not allowed.",
+                recommendation="Submit a read-only SELECT query."
+            ))
+
         return issues
     
     # =========================================================================
