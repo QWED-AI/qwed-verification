@@ -13,7 +13,7 @@ import csv
 import io
 import logging
 from typing import Dict, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlmodel import Session, select
 
 from qwed_new.core.models import (
@@ -46,9 +46,9 @@ class ComplianceExporter:
             CSV string
         """
         if not start_date:
-            start_date = datetime.utcnow() - timedelta(days=30)
+            start_date = datetime.now(timezone.utc) - timedelta(days=30)
         if not end_date:
-            end_date = datetime.utcnow()
+            end_date = datetime.now(timezone.utc)
         
         with Session(engine) as session:
             query = select(VerificationLog).where(
@@ -99,9 +99,9 @@ class ComplianceExporter:
             CSV string
         """
         if not start_date:
-            start_date = datetime.utcnow() - timedelta(days=30)
+            start_date = datetime.now(timezone.utc) - timedelta(days=30)
         if not end_date:
-            end_date = datetime.utcnow()
+            end_date = datetime.now(timezone.utc)
         
         with Session(engine) as session:
             query = select(SecurityEvent).where(
@@ -147,7 +147,7 @@ class ComplianceExporter:
         Returns:
             Dictionary with metrics and compliance status
         """
-        end_date = datetime.utcnow()
+        end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=period_days)
         
         with Session(engine) as session:
@@ -221,7 +221,7 @@ class ComplianceExporter:
                     "encryption_in_transit": "HTTPS Required",
                     "security_monitoring": "ACTIVE"
                 },
-                "generated_at": datetime.utcnow().isoformat(),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
                 "report_version": "1.0"
             }
     
@@ -312,6 +312,6 @@ class ComplianceExporter:
                         "is_active": k.is_active
                     } for k in api_keys
                 ],
-                "export_date": datetime.utcnow().isoformat(),
+                "export_date": datetime.now(timezone.utc).isoformat(),
                 "retention_notice": "Data retained per GDPR requirements"
             }

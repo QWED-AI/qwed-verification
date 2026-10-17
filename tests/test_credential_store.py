@@ -206,3 +206,20 @@ class TestAddEnvToGitignore:
         (tmp_path / "pyproject.toml").touch()
         assert add_env_to_gitignore(tmp_path) is True
         assert (tmp_path / ".gitignore").exists()
+
+
+def test_env_values_round_trip_through_dotenv(tmp_path):
+    """A secret with a space and a hash survives being written and read back."""
+    import io as _io
+
+    from dotenv import dotenv_values
+
+    from qwed_new.providers.credential_store import _build_env_content
+
+    values = {"QWED_AUDIT_SECRET_KEY": "existing # key", "PLAIN": "abc-123", "QUOTE": 'a"b\\c'}
+    content = _build_env_content(values)
+    read_back = dotenv_values(stream=_io.StringIO(content))
+    assert read_back["QWED_AUDIT_SECRET_KEY"] == "existing # key"
+    assert read_back["PLAIN"] == "abc-123"
+    assert read_back["QUOTE"] == 'a"b\\c'
+    assert "PLAIN=abc-123" in content

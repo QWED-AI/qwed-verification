@@ -11,6 +11,7 @@ Security guarantees:
 """
 
 import os
+import re
 import stat
 import logging
 import tempfile
@@ -29,6 +30,26 @@ def _find_project_root(start: Optional[Path] = None) -> Path:
     return current
 
 
+_PLAIN_ENV_VALUE = re.compile(r"[A-Za-z0-9_./:@+,=%-]*")
+
+
+def _format_env_value(value: str) -> str:
+    """Write a value so python-dotenv reads it back unchanged.
+
+    Plain values are written as they are. A value that is already quoted
+    was read raw from the existing file and is kept as written. Anything
+    else (spaces, ``#``, quotes, backslashes) is double-quoted with escapes:
+    unquoted, ``key=a # b`` would read back as ``a``, and a signing key that
+    changes on restart invalidates every signature made with it.
+    """
+    if _PLAIN_ENV_VALUE.fullmatch(value):
+        return value
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def _build_env_content(merged: Dict[str, str]) -> str:
     """Build the .env file content string from merged vars."""
     merged = merged.copy()  # Avoid mutating caller's dict
@@ -45,7 +66,7 @@ def _build_env_content(merged: Dict[str, str]) -> str:
         lines.append("")
 
     for key, value in sorted(merged.items()):
-        lines.append(f"{key}={value}")
+        lines.append(f"{key}={_format_env_value(value)}")
 
     lines.append("")  # trailing newline
     return "\n".join(lines)

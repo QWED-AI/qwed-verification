@@ -382,3 +382,24 @@ def test_audit_appends_use_their_own_pool(monkeypatch):
 
     monkeypatch.setattr(database_module, "DATABASE_URL", "sqlite:///:memory:")
     assert audit_module._make_audit_engine() is database_module.engine
+
+
+def test_transient_audit_failure_is_a_500_not_a_replaced_result(client, isolated_audit_chain, monkeypatch):
+    """A failed append must not be caught by the endpoint and retried with a
+    BLOCKED stand-in: the client gets the 500, and nothing is recorded."""
+    real = AuditLogger.log_verification
+    calls = []
+
+    def _flaky(self, *args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise SecurityError("transient")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(AuditLogger, "log_verification", _flaky)
+    response = client.post("/verify/math", json={"expression": "2+2=4"})
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "audit persistence failed"
+    assert len(calls) == 1
+    assert _rows(isolated_audit_chain) == []

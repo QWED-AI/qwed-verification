@@ -361,16 +361,19 @@ def _enforce_trust(
 _merge_response = merge_diagnostic_result  # shared merge helper (#271)
 
 
-class AuditPersistenceError(RuntimeError):
-    """An audit row could not be appended to its organisation's chain."""
+class AuditPersistenceError(HTTPException):
+    """An audit row could not be appended to its organisation's chain.
 
+    An HTTPException on purpose: every verify endpoint re-raises
+    HTTPException ahead of its generic ``except Exception`` handler, so an
+    audit failure ends the request as a 500. As a plain exception, the
+    generic handler would replace the real result with a BLOCKED one and
+    try the append again, and a retry that succeeded would return 200 with
+    a record of the replacement instead of the result.
+    """
 
-async def _audit_persistence_error_handler(request: Request, exc: AuditPersistenceError):
-    # Every endpoint that writes an audit row fails closed the same way.
-    return JSONResponse(status_code=500, content={"detail": "audit persistence failed"})
-
-
-app.add_exception_handler(AuditPersistenceError, _audit_persistence_error_handler)
+    def __init__(self) -> None:
+        super().__init__(status_code=500, detail="audit persistence failed")
 
 
 def _safe_commit_log(log):
@@ -395,7 +398,7 @@ def _safe_commit_log(log):
         )
     except Exception as exc:
         logger.error("Audit persistence failed: %s", type(exc).__name__)
-        raise AuditPersistenceError("audit persistence failed") from None
+        raise AuditPersistenceError() from None
 
 
 class VerifyRequest(BaseModel):
