@@ -66,7 +66,7 @@ class ComplianceExporter:
             # Header
             writer.writerow([
                 'ID', 'Timestamp', 'User ID', 'Query', 'Domain',
-                'Is Verified', 'HMAC Signature', 'Hash Chain Valid'
+                'Is Verified', 'HMAC Signature', 'Chain Status'
             ])
             
             # Data rows
@@ -79,7 +79,9 @@ class ComplianceExporter:
                     log.domain,
                     'Yes' if log.is_verified else 'No',
                     log.hmac_signature[:16] + '...' if log.hmac_signature else 'N/A',
-                    'Verified' if log.entry_hash else 'Legacy'
+                    # Presence of a hash only: the export does not re-check
+                    # integrity. Use /admin/compliance/verify for that.
+                    'Chained' if log.entry_hash else 'Legacy'
                 ])
             
             return output.getvalue()

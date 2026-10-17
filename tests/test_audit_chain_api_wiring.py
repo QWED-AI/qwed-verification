@@ -10,6 +10,7 @@ own chain database and a fresh process-wide AuditLogger.
 """
 
 import asyncio
+import json
 import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -35,13 +36,19 @@ from qwed_new.core.tenant_context import TenantContext
 ORG_ID = 1
 
 
+def _mock_session():
+    # A plain function, not MagicMock itself: FastAPI would read MagicMock's
+    # constructor parameters as query parameters and reject the request.
+    return MagicMock()
+
+
 @pytest.fixture
 def client():
     tenant = TenantContext(
         organization_id=ORG_ID, organization_name="Org", tier="free", api_key="k"
     )
     api_main.app.dependency_overrides[api_main.get_current_tenant] = lambda: tenant
-    api_main.app.dependency_overrides[api_main.get_session] = lambda: MagicMock()
+    api_main.app.dependency_overrides[api_main.get_session] = _mock_session
     try:
         with patch("qwed_new.api.main.check_rate_limit"):
             yield TestClient(api_main.app)
@@ -75,12 +82,14 @@ def _insert_unchained(engine, **overrides):
 def test_verify_endpoint_writes_a_verifiable_chained_row(client, isolated_audit_chain):
     first = client.post("/verify/math", json={"expression": "2+2=4"})
     second = client.post("/verify/math", json={"expression": "3+3=6"})
-    assert first.status_code == 200 and second.status_code == 200
+    assert first.status_code == 200
+    assert second.status_code == 200
 
     rows = _rows(isolated_audit_chain)
     assert len(rows) == 2
     for row in rows:
-        assert row.entry_hash and row.hmac_signature
+        assert row.entry_hash
+        assert row.hmac_signature
     assert rows[0].previous_hash is None
     assert rows[1].previous_hash == rows[0].entry_hash
 
@@ -236,6 +245,20 @@ def test_second_writer_is_refused_rather_than_forking(isolated_audit_chain):
     assert AuditLogger().verify_audit_trail(organization_id=ORG_ID)["valid"] is True
 
 
+def test_removed_last_written_head_still_fails_closed(isolated_audit_chain):
+    """If the row this process last wrote disappears, appends stop."""
+    ours = get_audit_logger()
+    ours.log_verification(ORG_ID, None, "a", {"v": 1}, True, "MATH")
+    ours.log_verification(ORG_ID, None, "b", {"v": 2}, True, "MATH")
+    with Session(isolated_audit_chain) as session:
+        newest = session.get(VerificationLog, _rows(isolated_audit_chain)[-1].id)
+        session.delete(newest)
+        session.commit()
+
+    with pytest.raises(SecurityError, match="continuity mismatch"):
+        ours.log_verification(ORG_ID, None, "c", {"v": 3}, True, "MATH")
+
+
 def test_verification_context_log_is_chained(isolated_audit_chain):
     tenant = TenantContext(organization_id=ORG_ID, organization_name="Org", tier="free")
     verification_context_routes._safe_commit_context_log(
@@ -259,7 +282,18 @@ def test_verification_context_log_fails_closed_without_key(isolated_audit_chain,
     assert _rows(isolated_audit_chain) == []
 
 
-def test_seeded_sample_rows_are_chained(isolated_audit_chain):
+def test_seed_is_disabled_by_default(isolated_audit_chain, monkeypatch):
+    monkeypatch.delenv(audit_routes.SEED_ENABLED_ENV_VAR, raising=False)
+    user = SimpleNamespace(organization_id=ORG_ID, id=None)
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(audit_routes.seed_sample_data(current_user=user, session=None))
+    assert excinfo.value.status_code == 404
+    assert _rows(isolated_audit_chain) == []
+
+
+def test_seeded_sample_rows_are_chained(isolated_audit_chain, monkeypatch):
+    monkeypatch.setenv(audit_routes.SEED_ENABLED_ENV_VAR, "1")
     user = SimpleNamespace(organization_id=ORG_ID, id=None)
 
     asyncio.run(audit_routes.seed_sample_data(current_user=user, session=None))
@@ -275,3 +309,76 @@ def test_seeded_sample_rows_are_chained(isolated_audit_chain):
 def test_process_wide_logger_is_reused():
     assert get_audit_logger() is get_audit_logger()
     assert audit_module._default_logger is get_audit_logger()
+
+
+def test_context_log_keeps_json_valid_with_ten_digit_numbers(isolated_audit_chain):
+    """A bare ten-digit number must not be redacted into an unquoted token."""
+    tenant = TenantContext(organization_id=ORG_ID, organization_name="Org", tier="free")
+    verification_context_routes._safe_commit_context_log(
+        object(), tenant, "query", {"timestamp": 1730000000, "note": "call 555-123-4567"}, True
+    )
+
+    (row,) = _rows(isolated_audit_chain)
+    stored = json.loads(row.result)
+    assert stored["timestamp"] == 1730000000
+    assert "555-123-4567" not in stored["note"]
+    assert _verify(isolated_audit_chain, row.id)["valid"] is True
+
+
+def test_seed_runs_off_the_event_loop_with_fixed_samples(isolated_audit_chain, monkeypatch):
+    monkeypatch.setenv(audit_routes.SEED_ENABLED_ENV_VAR, "1")
+    calls = []
+    real_to_thread = asyncio.to_thread
+
+    async def _spy(func, *args, **kwargs):
+        calls.append(func)
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(audit_routes.asyncio, "to_thread", _spy)
+    user = SimpleNamespace(organization_id=ORG_ID, id=None)
+    asyncio.run(audit_routes.seed_sample_data(current_user=user, session=None))
+    first = [r.query for r in _rows(isolated_audit_chain)]
+
+    assert len(calls) == 1
+    assert len(first) == 10
+    assert [r.is_verified for r in _rows(isolated_audit_chain)][:2] == [True, False]
+
+
+def test_postgres_appends_take_a_per_organisation_advisory_lock():
+    """On PostgreSQL the head is read under an advisory lock, not a row lock."""
+    session = MagicMock()
+    session.get_bind.return_value.dialect.name = "postgresql"
+
+    AuditLogger()._prepare_append_session(session, 42)
+
+    (call,) = session.connection.return_value.execute.call_args_list
+    statement, params = call.args
+    assert "pg_advisory_xact_lock" in str(statement)
+    assert params["org"] == 42
+
+
+def test_csv_export_labels_rows_chained_not_verified(isolated_audit_chain, monkeypatch):
+    """The export only sees that a hash is present; it must not claim verification."""
+    from qwed_new.core import compliance_exporter as exporter_module
+
+    monkeypatch.setattr(exporter_module, "engine", isolated_audit_chain)
+    get_audit_logger().log_verification(ORG_ID, None, "a", {"v": 1}, True, "MATH")
+
+    csv_text = exporter_module.ComplianceExporter().export_audit_trail_csv(ORG_ID)
+    header, row = csv_text.strip().splitlines()[:2]
+    assert header.endswith("Chain Status")
+    assert row.endswith("Chained")
+    assert "Verified" not in row.split(",")[-1]
+
+
+def test_audit_appends_use_their_own_pool(monkeypatch):
+    """Audit appends must not wait on the request pool, which open sessions hold."""
+    from qwed_new.core import database as database_module
+
+    monkeypatch.setattr(database_module, "DATABASE_URL", "sqlite:///./pool-check.db")
+    own = audit_module._make_audit_engine()
+    assert own is not database_module.engine
+    own.dispose()
+
+    monkeypatch.setattr(database_module, "DATABASE_URL", "sqlite:///:memory:")
+    assert audit_module._make_audit_engine() is database_module.engine

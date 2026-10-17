@@ -2223,7 +2223,12 @@ def test_init_interactive_retries_connection_until_success(
 def test_persist_onboarding_env_stores_and_retains_audit_secret(monkeypatch, tmp_path):
     """The server refuses to boot without QWED_AUDIT_SECRET_KEY, so init must
     persist one; re-running must retain it (a new key would invalidate every
-    existing audit signature)."""
+    existing audit signature). The rerun starts from the saved .env with the
+    variable cleared, as after a restart, so retention comes from the file."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname = 'proj'\n", encoding="utf-8")
+    monkeypatch.chdir(root)
     monkeypatch.delenv("QWED_AUDIT_SECRET_KEY", raising=False)
     monkeypatch.setenv("QWED_JWT_SECRET_KEY", "jwt-secret-value")
     profile = _provider_map()["openai"]
@@ -2247,7 +2252,10 @@ def test_persist_onboarding_env_stores_and_retains_audit_secret(monkeypatch, tmp
     stored = written["QWED_AUDIT_SECRET_KEY"]
     assert stored
     assert os.environ["QWED_AUDIT_SECRET_KEY"] == stored
+    (root / ".env").write_text(f"QWED_AUDIT_SECRET_KEY={stored}\n", encoding="utf-8")
 
+    monkeypatch.delenv("QWED_AUDIT_SECRET_KEY", raising=False)
+    _REAL_SEED_FROM_ROOT()
     rewritten = {}
     _persist(rewritten)
     assert rewritten["QWED_AUDIT_SECRET_KEY"] == stored
@@ -2266,3 +2274,18 @@ def test_seed_server_secrets_retains_root_audit_secret(monkeypatch, tmp_path):
 
     assert os.getenv("QWED_AUDIT_SECRET_KEY") == "root-audit"
     assert "QWED_AUDIT_SECRET_KEY" in filled
+
+
+def test_seed_server_secrets_decodes_quoted_values(monkeypatch, tmp_path):
+    """A quoted value is seeded as python-dotenv reads it, without the quotes,
+    so the key matches what a server loading the same .env uses."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname = 'proj'\n", encoding="utf-8")
+    (root / ".env").write_text('QWED_AUDIT_SECRET_KEY="existing-key"\n', encoding="utf-8")
+    monkeypatch.chdir(root)
+    monkeypatch.delenv("QWED_AUDIT_SECRET_KEY", raising=False)
+
+    _REAL_SEED_FROM_ROOT()
+
+    assert os.environ["QWED_AUDIT_SECRET_KEY"] == "existing-key"

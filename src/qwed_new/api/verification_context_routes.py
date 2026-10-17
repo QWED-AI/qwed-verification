@@ -68,6 +68,22 @@ def _diagnostic_result_from_payload(diagnostic: Any) -> DiagnosticResult:
         return _malformed_diagnostic_result()
 
 
+def _redact_strings(value: Any) -> Any:
+    """Redact PII in every string of a JSON-like value, leaving its structure intact.
+
+    Redacting the serialised text instead would also rewrite bare numbers
+    (a ten-digit integer matches the phone pattern) into unquoted tokens and
+    leave invalid JSON, which the audit chain refuses to store.
+    """
+    if isinstance(value, str):
+        return redact_pii(value)
+    if isinstance(value, dict):
+        return {redact_pii(str(k)): _redact_strings(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_strings(v) for v in value]
+    return value
+
+
 def _safe_commit_context_log(
     session: Optional[Session],
     tenant: TenantContext,
@@ -85,7 +101,7 @@ def _safe_commit_context_log(
             organization_id=tenant.organization_id,
             user_id=getattr(tenant, "user_id", None),
             query=redact_pii(query),
-            result=redact_pii(json.dumps(result)),
+            result=json.dumps(_redact_strings(result)),
             is_verified=is_verified,
             domain="VERIFICATION_CONTEXT",
         )

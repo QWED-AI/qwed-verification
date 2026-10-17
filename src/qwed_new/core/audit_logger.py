@@ -24,16 +24,38 @@ import logging
 import os
 import threading
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 
-from sqlmodel import Session, select
+from sqlalchemy import text
+from sqlmodel import Session, create_engine, select
 
-from qwed_new.core.database import engine
-from qwed_new.core.models import VerificationLog
+from qwed_new.core import database as _database
+from qwed_new.core.models import Organization, VerificationLog
 
 logger = logging.getLogger(__name__)
 
 AUDIT_SECRET_ENV_VAR = "QWED_AUDIT_SECRET_KEY"
+
+# Namespace for the per-organisation PostgreSQL advisory lock ("QWED").
+_ADVISORY_LOCK_NAMESPACE = 0x51574544
+
+
+def _make_audit_engine():
+    """A connection pool of its own for audit appends.
+
+    Each request already holds a connection from the shared pool for its
+    session, so drawing the audit append from that same pool can exhaust it
+    under load (every request waiting on a connection none of them release).
+    An in-memory SQLite database exists only on its own connection, so it
+    keeps the shared engine.
+    """
+    url = _database.DATABASE_URL
+    if url.startswith("sqlite") and (":memory:" in url or url.rstrip("/") in ("sqlite:", "sqlite:/")):
+        return _database.engine
+    return create_engine(url, connect_args=_database.connect_args)
+
+
+engine = _make_audit_engine()
 
 
 def _naive_ts(value: datetime) -> datetime:
@@ -98,7 +120,7 @@ class AuditLogger:
         organization_id: int,
         user_id: Optional[int],
         query: str,
-        result: Union[Dict[str, Any], str],
+        result: Dict[str, Any] | str,
         is_verified: bool,
         domain: str,
         raw_llm_output: Optional[str] = None,
@@ -155,7 +177,7 @@ class AuditLogger:
         timestamp = datetime.now(timezone.utc)
 
         with Session(engine) as session:
-            self._prepare_append_session(session)
+            self._prepare_append_session(session, organization_id)
             latest_log = self._get_latest_log(
                 session,
                 organization_id=organization_id,
@@ -164,6 +186,9 @@ class AuditLogger:
             self._assert_appendable_head(latest_log, session)
             previous_hash = self._extract_persisted_hash(latest_log, session)
             known_hash = self._last_hash_by_org.get(organization_id, previous_hash)
+            # Single writer per database: a head this process did not write
+            # (another process appended, or rows were removed) stops the
+            # append rather than being trusted.
             if known_hash != previous_hash:
                 raise SecurityError(
                     "Audit chain continuity mismatch: in-memory chain head does not match persisted audit trail"
@@ -229,11 +254,32 @@ class AuditLogger:
             )
         return configured_secret.encode("utf-8")
 
-    def _prepare_append_session(self, session: Session) -> None:
-        """Prepare a write session so chain-head validation and append stay serialized."""
+    def _prepare_append_session(self, session: Session, organization_id: int) -> None:
+        """Take a database lock for the organisation before its head is read.
+
+        The supported deployment is one writer process per database; a second
+        writer is detected by the continuity check and refused. This lock is
+        defence in depth so that, even then, two transactions cannot both read
+        the same head and fork the chain: a row lock on the head is not enough
+        on PostgreSQL, where a waiting writer gets the old head row back once
+        the lock is released. It is not a claim of multi-writer support.
+        """
         bind = session.get_bind()
-        if bind is not None and bind.dialect.name == "sqlite":
+        dialect = bind.dialect.name if bind is not None else ""
+        if dialect == "sqlite":
             session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        elif dialect == "postgresql":
+            session.connection().execute(
+                text("SELECT pg_advisory_xact_lock(:ns, :org)"),
+                {"ns": _ADVISORY_LOCK_NAMESPACE, "org": int(organization_id)},
+            )
+        elif bind is not None:
+            # Other databases: lock the organisation's row for the transaction.
+            self._run_select(
+                session,
+                select(Organization.id).where(Organization.id == organization_id).with_for_update(),
+            ).first()
+
 
     def _get_latest_log(
         self,
@@ -296,6 +342,10 @@ class AuditLogger:
             .where(VerificationLog.id < log_id)
             .where(VerificationLog.entry_hash.is_not(None))
             .where(VerificationLog.entry_hash != "")
+            # Newest first: after an upgrade the rows just below the head are
+            # the chained ones, so the scan stops early instead of walking the
+            # hashless legacy prefix on every append.
+            .order_by(VerificationLog.id.desc())
             .limit(1)
         )
         return self._run_select(session, statement).first() is not None

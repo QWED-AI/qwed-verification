@@ -14,6 +14,7 @@ round trip, mismatches, and replay rejection are all exercised for real.
 import asyncio
 import hashlib
 import hmac
+import os
 
 import pytest
 from fastapi import HTTPException
@@ -41,6 +42,7 @@ def test_proof_is_domain_separated_hmac():
 def test_endpoint_proves_requested_nonce(monkeypatch):
     monkeypatch.setenv("QWED_JWT_SECRET_KEY", "local-jwt-secret")
     monkeypatch.setenv("QWED_API_KEY_LOOKUP_SECRET", "local-lookup-secret")
+    monkeypatch.setenv("QWED_AUDIT_SECRET_KEY", "local-audit-secret")
 
     body = asyncio.run(server_identity(nonce="caller-nonce-123"))
 
@@ -48,11 +50,23 @@ def test_endpoint_proves_requested_nonce(monkeypatch):
         "identity": {
             "jwt_hmac": _proof("local-jwt-secret", "jwt", "caller-nonce-123"),
             "lookup_hmac": _proof("local-lookup-secret", "lookup", "caller-nonce-123"),
+            "audit_hmac": _proof("local-audit-secret", "audit", "caller-nonce-123"),
         }
     }
     rendered = repr(body)
     assert "local-jwt-secret" not in rendered
     assert "local-lookup-secret" not in rendered
+    assert "local-audit-secret" not in rendered
+
+
+def test_endpoint_fails_closed_without_audit_secret(monkeypatch):
+    monkeypatch.setenv("QWED_JWT_SECRET_KEY", "local-jwt-secret")
+    monkeypatch.setenv("QWED_API_KEY_LOOKUP_SECRET", "local-lookup-secret")
+    monkeypatch.delenv("QWED_AUDIT_SECRET_KEY", raising=False)
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(server_identity(nonce="caller-nonce-123"))
+    assert excinfo.value.status_code == 503
 
 
 def test_endpoint_rejects_missing_or_wild_nonce():
@@ -90,7 +104,7 @@ class _FakeResponse:
         return self._payload
 
 
-def _honest_server(monkeypatch, jwt_secret="s3cr3t-jwt", lookup_secret="s3cr3t-lookup"):
+def _honest_server(monkeypatch, jwt_secret="s3cr3t-jwt", lookup_secret="s3cr3t-lookup", audit_secret=None):
     """Stub httpx.get with a server that honestly proves whatever nonce the
     CLI sends — mismatches then come only from genuinely different secrets."""
 
@@ -102,6 +116,11 @@ def _honest_server(monkeypatch, jwt_secret="s3cr3t-jwt", lookup_secret="s3cr3t-l
                 "identity": {
                     "jwt_hmac": cli_module._identity_proof(jwt_secret, "jwt", nonce),
                     "lookup_hmac": cli_module._identity_proof(lookup_secret, "lookup", nonce),
+                    "audit_hmac": cli_module._identity_proof(
+                        audit_secret if audit_secret is not None else os.environ["QWED_AUDIT_SECRET_KEY"],
+                        "audit",
+                        nonce,
+                    ),
                 }
             }
         )
@@ -244,3 +263,25 @@ def test_bootstrap_blocked_on_identity_mismatch(monkeypatch):
 
     assert bootstrapped == []
 
+
+def test_bootstrap_blocked_when_server_holds_another_audit_key(monkeypatch):
+    """Matching JWT and lookup secrets are not enough: a server on another
+    audit key would sign rows this project's server cannot verify."""
+    bootstrapped = []
+    monkeypatch.setattr(
+        cli_module, "_ensure_local_server_running", lambda *args: (True, False)
+    )
+    monkeypatch.setattr(
+        cli_module, "_bootstrap_api_key", lambda *args: bootstrapped.append(1)
+    )
+    _honest_server(monkeypatch, audit_secret="foreign-audit-key")
+
+    with pytest.raises(SystemExit):
+        cli_module._start_server_and_bootstrap(
+            normalized_server_url="http://localhost:8000",
+            jwt_secret="s3cr3t-jwt",
+            lookup_secret="s3cr3t-lookup",
+            organization_name="demo-org",
+            secrets_fresh=False,
+        )
+    assert bootstrapped == []

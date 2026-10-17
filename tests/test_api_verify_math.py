@@ -42,6 +42,7 @@ def test_verify_math_ambiguous_expression_fails_closed_and_logs_unverified(isola
         assert logged.is_verified is False
         assert logged.domain == "MATH"
         assert logged.organization_id == 123
-        assert logged.entry_hash and logged.hmac_signature
+        assert logged.entry_hash
+        assert logged.hmac_signature
     finally:
         app.dependency_overrides.clear()

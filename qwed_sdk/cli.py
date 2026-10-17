@@ -974,10 +974,7 @@ def _seed_server_secrets_from_project_root() -> set:
     """
     filled: set = set()
     try:
-        from qwed_new.providers.credential_store import (
-            _find_project_root,
-            _read_existing_env,
-        )
+        from qwed_new.providers.credential_store import _find_project_root
     except ImportError:
         return filled
     try:
@@ -992,7 +989,16 @@ def _seed_server_secrets_from_project_root() -> set:
     if not env_path.exists():
         return filled
     try:
-        stored = _read_existing_env(env_path)
+        # Decoded the way python-dotenv decodes it (quotes, escapes, inline
+        # comments), so a seeded secret is byte-for-byte what a server loading
+        # the same .env sees. A quoted signing key kept raw would differ, and
+        # every audit signature would stop verifying.
+        import io as _io
+
+        from dotenv import dotenv_values
+
+        raw = env_path.read_text(encoding="utf-8")
+        stored = {k: v for k, v in dotenv_values(stream=_io.StringIO(raw)).items() if v is not None}
     except (OSError, UnicodeDecodeError) as exc:
         # An EXISTING file that cannot be read or decoded must fail closed:
         # silently proceeding could overwrite secrets it holds (CodeRabbit
@@ -1096,7 +1102,13 @@ def _identity_proof(secret: str, domain: str, nonce: str) -> str:
     ).hexdigest()
 
 
-def _verify_server_identity(server_url: str, jwt_secret: str, lookup_secret: str, nonce: str) -> None:
+def _verify_server_identity(
+    server_url: str,
+    jwt_secret: str,
+    lookup_secret: str,
+    nonce: str,
+    audit_secret: str | None = None,
+) -> None:
     """Prove the healthy server holds our secret set before bootstrap (issue #376).
 
     A healthy `/health` only proves SOMETHING answers on the port — a foreign
@@ -1152,19 +1164,34 @@ def _verify_server_identity(server_url: str, jwt_secret: str, lookup_secret: str
         )
     try:
         identity = response.json().get("identity", {})
-        remote = (identity.get("jwt_hmac", ""), identity.get("lookup_hmac", ""))
+        remote = (
+            identity.get("jwt_hmac", ""),
+            identity.get("lookup_hmac", ""),
+            identity.get("audit_hmac", ""),
+        )
     except (ValueError, AttributeError) as exc:
         raise RuntimeError(
             "server identity check failed: unreadable identity response. "
             "Restart the local server, then re-run init."
         ) from exc
-    expected = (
+    names = ["jwt", "lookup"]
+    expected = [
         _identity_proof(jwt_secret, "jwt", nonce),
         _identity_proof(lookup_secret, "lookup", nonce),
-    )
+    ]
+    if audit_secret is not None:
+        # The audit key signs every audit row: a server on another key would
+        # write rows this project's server cannot verify after a restart.
+        if not audit_secret:
+            raise RuntimeError(
+                "server identity check failed: the local audit secret is missing. "
+                "Re-run init so it is generated and persisted."
+            )
+        names.append("audit")
+        expected.append(_identity_proof(audit_secret, "audit", nonce))
     mismatched = [
         name
-        for name, got, want in zip(("jwt", "lookup"), remote, expected)
+        for name, got, want in zip(names, remote, expected)
         if not hmac.compare_digest(str(got), str(want))
     ]
     if mismatched:
@@ -1227,7 +1254,13 @@ def _start_server_and_bootstrap(
     # deterministic and testable (CodeRabbit on #388).
     nonce = secrets.token_urlsafe(24)
     try:
-        _verify_server_identity(normalized_server_url, jwt_secret, lookup_secret, nonce)
+        _verify_server_identity(
+            normalized_server_url,
+            jwt_secret,
+            lookup_secret,
+            nonce,
+            audit_secret=os.getenv("QWED_AUDIT_SECRET_KEY", "").strip(),
+        )
     except Exception as exc:
         logger.exception("Server identity verification failed")
         click.echo(f"  [x] Server identity check failed: {exc}", err=True)

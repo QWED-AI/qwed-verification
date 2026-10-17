@@ -1,6 +1,9 @@
 """
 Audit log routes for QWED Enterprise Portal.
 """
+import asyncio
+import os
+
 from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Optional
 import csv
@@ -119,20 +122,34 @@ async def export_logs(
         headers={"Content-Disposition": "attachment; filename=qwed_audit_logs.csv"}
     )
 
-@router.post("/seed")
+SEED_ENABLED_ENV_VAR = "QWED_ENABLE_AUDIT_SEED"
+
+
+@router.post(
+    "/seed",
+    responses={
+        404: {"description": "Sample seeding is disabled"},
+        500: {"description": "Audit persistence failed"},
+    },
+)
 async def seed_sample_data(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
-    """Seed sample audit logs for testing (dev only).
+    """Seed sample audit logs for testing (development only).
+
+    Disabled unless QWED_ENABLE_AUDIT_SEED is set to 1: a production audit
+    trail must hold genuine decisions only, so the route answers 404 by
+    default and writes nothing.
 
     Sample rows go through the signed audit chain like any other row, marked
     ``{"sample": true}`` in their result and timestamped when written. A row
     added outside the chain would become an unverifiable head and stop every
     later append for the organisation.
     """
-    import random
-    
+    if os.getenv(SEED_ENABLED_ENV_VAR, "").strip() != "1":
+        raise HTTPException(status_code=404, detail="Not found")
+
     queries = [
         "Is P=NP?",
         "Verify the Riemann Hypothesis",
@@ -141,17 +158,26 @@ async def seed_sample_data(
         "Analyze quantum coherence state"
     ]
     
-    try:
+    domains = ["MATH", "LOGIC", "PHYSICS"]
+
+    # Sample rows are a fixed, repeatable sequence: no randomness is needed
+    # for fixture data, and none reaches a signed audit row.
+    def _append_samples() -> None:
         audit_logger = get_audit_logger()
-        for _ in range(10):
+        for i in range(10):
             audit_logger.log_verification(
                 organization_id=current_user.organization_id,
                 user_id=current_user.id,
-                query=random.choice(queries),
+                query=queries[i % len(queries)],
                 result={"sample": True},
-                is_verified=random.choice([True, False]),
-                domain=random.choice(["MATH", "LOGIC", "PHYSICS"]),
+                is_verified=i % 2 == 0,
+                domain=domains[i % len(domains)],
             )
+
+    # The appends are blocking database transactions: run them in a worker
+    # thread so the event loop keeps serving other requests.
+    try:
+        await asyncio.to_thread(_append_samples)
     except (SecurityError, SQLAlchemyError):
         raise HTTPException(status_code=500, detail="audit persistence failed") from None
     return {"message": "Sample logs seeded successfully"}

@@ -360,6 +360,19 @@ def _enforce_trust(
 
 _merge_response = merge_diagnostic_result  # shared merge helper (#271)
 
+
+class AuditPersistenceError(RuntimeError):
+    """An audit row could not be appended to its organisation's chain."""
+
+
+async def _audit_persistence_error_handler(request: Request, exc: AuditPersistenceError):
+    # Every endpoint that writes an audit row fails closed the same way.
+    return JSONResponse(status_code=500, content={"detail": "audit persistence failed"})
+
+
+app.add_exception_handler(AuditPersistenceError, _audit_persistence_error_handler)
+
+
 def _safe_commit_log(log):
     """Append a VerificationLog row to its organisation's audit chain, or fail closed.
 
@@ -382,7 +395,7 @@ def _safe_commit_log(log):
         )
     except Exception as exc:
         logger.error("Audit persistence failed: %s", type(exc).__name__)
-        raise HTTPException(status_code=500, detail="audit persistence failed") from None
+        raise AuditPersistenceError("audit persistence failed") from None
 
 
 class VerifyRequest(BaseModel):
@@ -1539,7 +1552,8 @@ async def server_identity(nonce: str = ""):
         raise HTTPException(status_code=400, detail="nonce is required (max 128 characters)")
     jwt_secret = os.getenv("QWED_JWT_SECRET_KEY", "")
     lookup_secret = os.getenv("QWED_API_KEY_LOOKUP_SECRET", "")
-    if not jwt_secret or not lookup_secret:
+    audit_secret = os.getenv("QWED_AUDIT_SECRET_KEY", "")
+    if not jwt_secret or not lookup_secret or not audit_secret:
         raise HTTPException(status_code=503, detail="server secrets not configured")
 
     def _prove(secret: str, domain: str) -> str:
@@ -1553,6 +1567,7 @@ async def server_identity(nonce: str = ""):
         "identity": {
             "jwt_hmac": _prove(jwt_secret, "jwt"),
             "lookup_hmac": _prove(lookup_secret, "lookup"),
+            "audit_hmac": _prove(audit_secret, "audit"),
         }
     }
 
