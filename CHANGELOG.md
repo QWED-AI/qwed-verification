@@ -30,6 +30,10 @@ All notable changes to the QWED Protocol will be documented in this file.
     leaves 5.55e-17) is `INCONCLUSIVE`, not `DISPROVEN`. A numeric mismatch
     involving a non-finite value (an overflowed sum, a NaN claim) is also
     `INCONCLUSIVE`.
+  - Matrix results with float entries are compared entry by entry against
+    the same 1e-6 tolerance the determinant and eigenvalue checks use, so
+    `[[0.1]] + [[0.2]]` vs `[[0.3]]` is `VERIFIED`, not a false disproof. A
+    claimed matrix of the wrong shape is `DISPROVEN`.
   - The control plane signs and attests `DISPROVEN` like `VERIFIED`, with
     `verified=False` in the attestation and `is_valid: false` in the result.
   - New `DiagnosticResult.disproven()` builds a `VERIFIED` result with

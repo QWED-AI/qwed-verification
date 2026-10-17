@@ -75,6 +75,41 @@ def _numeric_status(is_correct: bool, *values: Any) -> str:
     return DISPROVEN_STATUS
 
 
+# Absolute tolerance for comparing matrix entries that are binary floats, the
+# same bound the determinant and eigenvalue checks use.
+_MATRIX_FLOAT_TOLERANCE = Decimal("0.000001")
+
+
+def _matrix_comparison_status(result: Any, expected: Any) -> str:
+    """Status for comparing a computed matrix with the claimed one.
+
+    - A shape mismatch is a decided disproof.
+    - Float entries carry binary rounding residue (0.1 + 0.2 is not 0.3), so
+      when either side has one, entries are compared through
+      ``Decimal(str(...))`` against an explicit tolerance instead of exactly.
+    - Otherwise entries are exact and ``Matrix.equals`` decides; its None
+      ("cannot decide") is not a disproof, so it stays INCONCLUSIVE.
+    """
+    if result.shape != expected.shape:
+        return DISPROVEN_STATUS
+    if result.has(Float) or expected.has(Float):
+        computed = [complex(entry.evalf()) for entry in result]
+        claimed = [complex(entry.evalf()) for entry in expected]
+        values = [part for z in computed + claimed for part in (z.real, z.imag)]
+        if not all(math.isfinite(value) for value in values):
+            return INCONCLUSIVE_STATUS
+        is_correct = all(
+            abs(Decimal(str(a.real)) - Decimal(str(b.real))) <= _MATRIX_FLOAT_TOLERANCE
+            and abs(Decimal(str(a.imag)) - Decimal(str(b.imag))) <= _MATRIX_FLOAT_TOLERANCE
+            for a, b in zip(computed, claimed)
+        )
+        return _numeric_status(is_correct)
+    equal = result.equals(expected)
+    if equal is None:
+        return INCONCLUSIVE_STATUS
+    return _numeric_status(equal is True)
+
+
 # Exact points tried, in order, when looking for a counterexample to a
 # symbolic claim. Integers and rationals keep the evaluation exact.
 _WITNESS_POINTS = (Integer(1), Integer(2), Integer(-1), Integer(3), Rational(1, 2), Integer(0))
@@ -693,15 +728,8 @@ class VerificationEngine:
             else:
                 return {"is_correct": False, "status": "ERROR", "error": f"Unknown operation: {operation}"}
             
-            # Compare matrices
-            # Matrix.equals returns None when it cannot decide; that is not a
-            # disproof, so it stays INCONCLUSIVE.
-            equal = result.equals(expected_mat)
-            is_correct = equal is True
-            if equal is None:
-                status = INCONCLUSIVE_STATUS
-            else:
-                status = _numeric_status(is_correct)
+            status = _matrix_comparison_status(result, expected_mat)
+            is_correct = status == "VERIFIED"
             
             return {
                 "is_correct": is_correct,

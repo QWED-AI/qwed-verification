@@ -554,3 +554,28 @@ async def test_control_plane_undecided_engine_result_is_not_admitted(monkeypatch
     assert result["status"] == "UNVERIFIABLE"
     assert result["diagnostic"]["proof_ref"] is None
     assert result["admission"] == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# Matrix comparison with float entries
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "operation, matrices, claimed, expected",
+    [
+        # 0.1 + 0.2 is 0.30000000000000004 in binary floating point.
+        ("add", {"A": [[0.1]], "B": [[0.2]]}, [[0.3]], "VERIFIED"),
+        ("add", {"A": [[0.1]], "B": [[0.2]]}, [[0.9]], DISPROVEN_STATUS),
+        ("inverse", {"A": [[2, 0], [0, 4]]}, [[0.5, 0], [0, 0.25]], "VERIFIED"),
+        ("add", {"A": [[1, 2]], "B": [[3, 4]]}, [[4, 6]], "VERIFIED"),
+        ("add", {"A": [[1, 2]], "B": [[3, 4]]}, [[4, 7]], DISPROVEN_STATUS),
+        # A claimed matrix of the wrong shape is a decided disproof.
+        ("add", {"A": [[1, 2]], "B": [[3, 4]]}, [[4, 6, 0]], DISPROVEN_STATUS),
+        # An entry that overflows a binary float is not a counterexample.
+        ("add", {"A": [[1e308]], "B": [[1e308]]}, [[1.0]], INCONCLUSIVE_STATUS),
+    ],
+)
+def test_matrix_comparison_handles_float_residue(operation, matrices, claimed, expected):
+    result = VerificationEngine().verify_matrix_operation(operation, matrices, claimed)
+    assert result["status"] == expected
+    assert result["is_correct"] is (expected == "VERIFIED")
