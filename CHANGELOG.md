@@ -34,8 +34,23 @@ All notable changes to the QWED Protocol will be documented in this file.
 - **`/verify/consensus` audit rows store the result JSON** like every other
   endpoint, instead of a `Consensus: …` summary string that could never be
   verified.
-- **`POST /audit/seed` rows are timestamped when written**, not backdated, and
-  marked `{"sample": true}`.
+- **`POST /audit/seed` is off by default.** It answers 404 and writes nothing
+  unless `QWED_ENABLE_AUDIT_SEED=1`, so sample rows never mix with a production
+  trail. When enabled, its rows are timestamped when written, not backdated,
+  marked `{"sample": true}`, and use a fixed sequence instead of `random`.
+- **The CSV export says `Chained`, not `Verified`.** The column is now
+  `Chain Status`: a present hash is not a verified chain. Use
+  `/admin/compliance/verify/{log_id}` to verify a row.
+- **`qwed init` also proves the audit key.** `/health/identity` returns an
+  `audit_hmac` (503 without a key), and init refuses a running server on a
+  different audit key. An older server without the audit proof is refused
+  too: restart it on this release, then re-run init.
+- **Audit appends use their own connection pool**, take a per-organisation
+  database lock before reading the chain head (a PostgreSQL advisory lock, or
+  `BEGIN IMMEDIATE` on SQLite) as defence in depth, and redact PII per string so
+  stored results stay valid JSON.
+- **`.env` writes keep retained settings verbatim** and quote new values that
+  python-dotenv would otherwise change, so a signing key reads back unchanged.
 
 Verification still does not detect removal of the newest entries; that needs an
 externally stored checkpoint of the latest hash.
