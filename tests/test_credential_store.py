@@ -223,3 +223,26 @@ def test_env_values_round_trip_through_dotenv(tmp_path):
     assert read_back["PLAIN"] == "abc-123"
     assert read_back["QUOTE"] == 'a"b\\c'
     assert "PLAIN=abc-123" in content
+
+
+def test_untouched_settings_keep_their_original_spelling(tmp_path):
+    """A retained setting with an inline comment is written back as it was,
+    so it still means the same thing after the file is rewritten."""
+    from dotenv import dotenv_values
+
+    from qwed_new.providers.credential_store import write_env_file
+
+    env = tmp_path / ".env"
+    env.write_text(
+        'DATABASE_URL=postgresql://localhost/qwed # production\nQUOTED="kept" # note\n',
+        encoding="utf-8",
+    )
+
+    write_env_file({"QWED_AUDIT_SECRET_KEY": "new # value"}, project_root=tmp_path)
+
+    content = env.read_text(encoding="utf-8")
+    assert "DATABASE_URL=postgresql://localhost/qwed # production" in content
+    read_back = dotenv_values(env)
+    assert read_back["DATABASE_URL"] == "postgresql://localhost/qwed"
+    assert read_back["QUOTED"] == "kept"
+    assert read_back["QWED_AUDIT_SECRET_KEY"] == "new # value"

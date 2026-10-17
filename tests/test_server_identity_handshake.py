@@ -64,8 +64,9 @@ def test_endpoint_fails_closed_without_audit_secret(monkeypatch):
     monkeypatch.setenv("QWED_API_KEY_LOOKUP_SECRET", "local-lookup-secret")
     monkeypatch.delenv("QWED_AUDIT_SECRET_KEY", raising=False)
 
+    probe = server_identity(nonce="caller-nonce-123")
     with pytest.raises(HTTPException) as excinfo:
-        asyncio.run(server_identity(nonce="caller-nonce-123"))
+        asyncio.run(probe)
     assert excinfo.value.status_code == 503
 
 

@@ -286,8 +286,9 @@ def test_seed_is_disabled_by_default(isolated_audit_chain, monkeypatch):
     monkeypatch.delenv(audit_routes.SEED_ENABLED_ENV_VAR, raising=False)
     user = SimpleNamespace(organization_id=ORG_ID, id=None)
 
+    seed = audit_routes.seed_sample_data(current_user=user, session=None)
     with pytest.raises(HTTPException) as excinfo:
-        asyncio.run(audit_routes.seed_sample_data(current_user=user, session=None))
+        asyncio.run(seed)
     assert excinfo.value.status_code == 404
     assert _rows(isolated_audit_chain) == []
 
