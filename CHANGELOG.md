@@ -15,9 +15,19 @@ All notable changes to the QWED Protocol will be documented in this file.
     by a concrete computation returns the legacy status `DISPROVEN`.
   - Symbolic checks (derivative, indefinite integral, limit, `/verify/math`
     identities) return `DISPROVEN` only when SymPy decides the difference is
-    non-zero, either outright or at an exact witness point. A difference
-    `simplify` cannot decide returns `INCONCLUSIVE`, which maps to
-    `UNVERIFIABLE`. An undecided `Matrix.equals` is also `INCONCLUSIVE`.
+    non-zero: outright, by exact expansion of a bounded polynomial, or at an
+    exact witness point. A difference `simplify` cannot decide returns
+    `INCONCLUSIVE`, which maps to `UNVERIFIABLE`. An undecided `Matrix.equals`
+    is also `INCONCLUSIVE`.
+  - A witness point is used only when it satisfies the symbol's declared
+    domain (`n` is a positive integer, so `-1`, `0` and `1/2` are skipped).
+    It is substituted without evaluation and checked by the new
+    `safe_parser.check_closed_expression_cost` first, so a lazy power tower
+    such as `9**9**9**x` is never expanded at a witness.
+  - A non-zero difference containing a Float literal (`0.1 + 0.2 = 0.3`
+    leaves 5.55e-17) is `INCONCLUSIVE`, not `DISPROVEN`. A numeric mismatch
+    involving a non-finite value (an overflowed sum, a NaN claim) is also
+    `INCONCLUSIVE`.
   - The control plane signs and attests `DISPROVEN` like `VERIFIED`, with
     `verified=False` in the attestation and `is_valid: false` in the result.
   - New `DiagnosticResult.disproven()` builds a `VERIFIED` result with
@@ -26,6 +36,12 @@ All notable changes to the QWED Protocol will be documented in this file.
   - The control-plane math response and `/verify/math` now include
     `admission`. `/verify/math` logs `is_verified` from `is_valid`, so a
     proven-false identity is no longer logged as verified.
+  - `/verify/natural_language` now returns the verdict the control plane
+    enforced (attached as `diagnostic`) together with `admission`, instead of
+    re-deriving it from the legacy engine dict, which turned every decided
+    claim into `UNVERIFIABLE`. A malformed diagnostic is `BLOCKED`, and if the
+    output sanitizer rejects the translated expression the verdict is
+    `BLOCKED` too.
 - **`qwed init` and `qwed test` print the verdict with its admission (#438).**
   Decided cases no longer print `BLOCKED`, and `VERIFIED` never appears alone:
   `2+2=5 -> VERIFIED (false) | DENY`. A failed self-check prints `FAILED`. The

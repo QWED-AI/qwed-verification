@@ -14,11 +14,17 @@ Enterprise Features:
 """
 
 from sympy import (
-    Symbol, Matrix, Integer, Rational,
+    Symbol, Matrix, Integer, Rational, Float,
     diff, integrate, limit, oo,
-    simplify, expand
+    simplify, expand, evaluate
 )
-from qwed_new.core.safe_parser import safe_parse_expr, get_safe_symbol
+from sympy.core.assumptions import check_assumptions
+from qwed_new.core.safe_parser import (
+    SafeParserError,
+    check_closed_expression_cost,
+    get_safe_symbol,
+    safe_parse_expr,
+)
 from sympy.parsing.sympy_parser import standard_transformations, implicit_multiplication_application
 from typing import Any, Dict, List, Optional
 from decimal import Decimal, ROUND_HALF_UP, localcontext
@@ -41,18 +47,78 @@ DISPROVEN_STATUS = "DISPROVEN"
 INCONCLUSIVE_STATUS = "INCONCLUSIVE"
 
 
-def _numeric_status(is_correct: bool) -> str:
+def _is_finite_value(value: Any) -> bool:
+    """True when a computed or claimed value is a finite number."""
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, int):
+        return True  # exact; math.isfinite would overflow on huge ints
+    if isinstance(value, Decimal):
+        return value.is_finite()
+    if isinstance(value, float):
+        return math.isfinite(value)
+    return getattr(value, "is_finite", None) is True
+
+
+def _numeric_status(is_correct: bool, *values: Any) -> str:
     """Status for a claim decided by a concrete computation.
 
     The computation that would justify VERIFIED on a match equally justifies
-    DISPROVEN on a mismatch, so a mismatch is a decided verdict.
+    DISPROVEN on a mismatch, so a mismatch is a decided verdict. A mismatch
+    involving a non-finite value (an overflowed sum, a NaN claim) is a failed
+    computation, not a counter-proof, so it stays INCONCLUSIVE.
     """
-    return "VERIFIED" if is_correct else DISPROVEN_STATUS
+    if is_correct:
+        return "VERIFIED"
+    if not all(_is_finite_value(value) for value in values):
+        return INCONCLUSIVE_STATUS
+    return DISPROVEN_STATUS
 
 
 # Exact points tried, in order, when looking for a counterexample to a
 # symbolic claim. Integers and rationals keep the evaluation exact.
 _WITNESS_POINTS = (Integer(1), Integer(2), Integer(-1), Integer(3), Rational(1, 2), Integer(0))
+
+# Bounds for deciding a polynomial difference by full expansion. Past them the
+# expansion is itself unbounded work, so the witness search decides instead.
+_MAX_POLYNOMIAL_DEGREE = 64
+_MAX_POLYNOMIAL_TERMS = 2_000
+
+
+def _polynomial_degree_bound(expr: Any, symbols: Any) -> Optional[int]:
+    """Upper bound on the total degree of ``expr`` in ``symbols``, read from
+    the tree without expanding it; None when it cannot be bounded."""
+    if expr in symbols:
+        return 1
+    if not expr.has(*symbols):
+        return 0
+    if expr.is_Add or expr.is_Mul:
+        degrees = [_polynomial_degree_bound(arg, symbols) for arg in expr.args]
+        if any(degree is None for degree in degrees):
+            return None
+        return max(degrees) if expr.is_Add else sum(degrees)
+    if expr.is_Pow and expr.exp.is_Integer and expr.exp >= 0:
+        base = _polynomial_degree_bound(expr.base, symbols)
+        return None if base is None else base * int(expr.exp)
+    return None
+
+
+def _polynomial_status(difference: Any, symbols: Any) -> Optional[str]:
+    """Decide a polynomial difference exactly, or None if it is not one.
+
+    Polynomial equality is decidable: the difference is identically zero iff
+    its expanded form is 0. A non-zero polynomial has finitely many roots, so
+    it is non-zero somewhere in every infinite domain, including the positive
+    integers ``n`` ranges over.
+    """
+    if not difference.is_polynomial(*symbols):
+        return None
+    degree = _polynomial_degree_bound(difference, symbols)
+    if degree is None or degree > _MAX_POLYNOMIAL_DEGREE:
+        return None
+    if math.comb(degree + len(symbols), len(symbols)) > _MAX_POLYNOMIAL_TERMS:
+        return None
+    return "VERIFIED" if expand(difference) == 0 else DISPROVEN_STATUS
 
 
 def symbolic_difference_status(difference: Any) -> str:
@@ -60,20 +126,46 @@ def symbolic_difference_status(difference: Any) -> str:
 
     ``simplify`` is incomplete: a non-zero result does not prove the two sides
     differ. The claim is DISPROVEN only when SymPy decides the difference is
-    non-zero, either outright (``is_zero is False``) or at an exact witness
-    point where it evaluates to a finite non-zero number. Anything undecided
-    is INCONCLUSIVE.
+    non-zero: outright (``is_zero is False``), by exact polynomial expansion,
+    or at an exact witness point where it evaluates to a finite non-zero
+    number. Anything undecided is INCONCLUSIVE.
+
+    - Float literals carry binary rounding residue (``0.1 + 0.2 - 0.3`` is
+      5.55e-17), so a non-zero difference containing a Float proves nothing.
+    - A witness outside a symbol's declared domain (``n`` is a positive
+      integer) is not a counterexample, so it is skipped.
+    - A witness can turn a lazy symbolic power into an exact one SymPy expands
+      eagerly (``9**9**9**x`` at x=1 is a ~370M-digit integer). Each witness
+      is substituted WITHOUT evaluation and held to safe_parser's expansion
+      budget first; a witness over budget is skipped, never expanded.
+
+    Skipping a witness only loses a possible disproof, so the result stays
+    fail-closed.
     """
     if difference == 0:
         return "VERIFIED"
+    if difference.has(Float):
+        return INCONCLUSIVE_STATUS
     if getattr(difference, "is_zero", None) is False:
         return DISPROVEN_STATUS
     symbols = getattr(difference, "free_symbols", set())
-    if symbols:
-        for point in _WITNESS_POINTS:
-            value = difference.subs({sym: point for sym in symbols})
-            if value.is_number and value.is_finite and value.is_zero is False:
-                return DISPROVEN_STATUS
+    if not symbols:
+        return INCONCLUSIVE_STATUS
+    polynomial_status = _polynomial_status(difference, symbols)
+    if polynomial_status is not None:
+        return polynomial_status
+    for point in _WITNESS_POINTS:
+        if not all(check_assumptions(point, sym) is True for sym in symbols):
+            continue
+        with evaluate(False):
+            candidate = difference.xreplace(dict.fromkeys(symbols, point))
+        try:
+            check_closed_expression_cost(candidate)
+        except SafeParserError:
+            continue
+        value = candidate.doit()
+        if value.is_number and value.is_finite and value.is_zero is False:
+            return DISPROVEN_STATUS
     return INCONCLUSIVE_STATUS
 
 
@@ -229,7 +321,7 @@ class VerificationEngine:
                     "claimed_value": expected_value,
                     "diff": float(diff),
                     "precision_mode": "decimal",
-                    "status": _numeric_status(is_correct)
+                    "status": _numeric_status(is_correct, calculated_value, expected_decimal)
                 }
 
             calculated_value = float(expr.evalf())
@@ -255,7 +347,7 @@ class VerificationEngine:
                 "claimed_value": expected_value,
                 "diff": diff,
                 "precision_mode": "float",
-                "status": _numeric_status(is_correct)
+                "status": _numeric_status(is_correct, calculated_value, expected_value)
             }
         except Exception as e:
             return {
@@ -419,7 +511,7 @@ class VerificationEngine:
                 actual_val = float(actual_integral.evalf())
                 expected_val = float(expected_expr.evalf())
                 is_correct = abs(actual_val - expected_val) < 1e-6
-                status = _numeric_status(is_correct)
+                status = _numeric_status(is_correct, actual_val, expected_val)
             else:
                 # Indefinite integral
                 actual_integral = integrate(expr, var)
@@ -541,7 +633,7 @@ class VerificationEngine:
                 is_correct = abs(float(result) - float(expected)) < 1e-6
                 return {
                     "is_correct": is_correct,
-                    "status": _numeric_status(is_correct),
+                    "status": _numeric_status(is_correct, result, expected),
                     "calculated_determinant": float(result),
                     "claimed_determinant": expected
                 }
@@ -586,7 +678,7 @@ class VerificationEngine:
                 )
                 return {
                     "is_correct": is_correct,
-                    "status": _numeric_status(is_correct),
+                    "status": _numeric_status(is_correct, *eigenvals_float, *expected_sorted),
                     "calculated_eigenvalues": eigenvals_float,
                     "claimed_eigenvalues": list(expected)
                 }
@@ -651,7 +743,7 @@ class VerificationEngine:
             
             return {
                 "is_correct": is_correct,
-                "status": _numeric_status(is_correct),
+                "status": _numeric_status(is_correct, A, expected),
                 "calculated_amount": A,
                 "claimed_amount": expected,
                 "principal": principal,
@@ -689,7 +781,7 @@ class VerificationEngine:
             
             return {
                 "is_correct": is_correct,
-                "status": _numeric_status(is_correct),
+                "status": _numeric_status(is_correct, npv, expected),
                 "calculated_npv": npv,
                 "claimed_npv": expected,
                 "discount_rate": rate,
@@ -833,7 +925,7 @@ class VerificationEngine:
             
             return {
                 "is_correct": is_correct,
-                "status": _numeric_status(is_correct),
+                "status": _numeric_status(is_correct, irr, expected),
                 "calculated_irr": irr,
                 "claimed_irr": expected,
                 "converged": True,
@@ -878,7 +970,7 @@ class VerificationEngine:
                 is_correct = abs(calculated - percentage) <= tolerance
                 return {
                     "is_correct": is_correct,
-                    "status": _numeric_status(is_correct),
+                    "status": _numeric_status(is_correct, calculated, percentage),
                     "calculated_percentage_change": calculated,
                     "claimed_percentage_change": percentage,
                     "from_value": value,
@@ -891,7 +983,7 @@ class VerificationEngine:
             
             return {
                 "is_correct": is_correct,
-                "status": _numeric_status(is_correct),
+                "status": _numeric_status(is_correct, calculated, expected),
                 "calculated_result": round(calculated, 2),
                 "claimed_result": expected,
                 "value": value,
@@ -989,7 +1081,7 @@ class VerificationEngine:
             
             return {
                 "is_correct": is_correct,
-                "status": _numeric_status(is_correct),
+                "status": _numeric_status(is_correct, calculated, expected),
                 "calculated_value": round(calculated, 6),
                 "claimed_value": expected,
                 "statistic": statistic,
@@ -1032,7 +1124,7 @@ class VerificationEngine:
             
             return {
                 "is_correct": is_correct,
-                "status": _numeric_status(is_correct),
+                "status": _numeric_status(is_correct, r, expected),
                 "calculated_correlation": round(r, 6),
                 "claimed_correlation": expected,
                 "data_points": n
@@ -1114,7 +1206,7 @@ class VerificationEngine:
             
             return {
                 "is_correct": is_correct,
-                "status": _numeric_status(is_correct),
+                "status": _numeric_status(is_correct, calculated, expected),
                 "calculated_value": round(calculated, 6),
                 "claimed_value": expected,
                 "from_unit": from_unit,
@@ -1162,7 +1254,7 @@ class VerificationEngine:
         
         return {
             "is_correct": is_correct,
-            "status": _numeric_status(is_correct),
+            "status": _numeric_status(is_correct, calculated, expected),
             "calculated_value": round(calculated, 2),
             "claimed_value": expected,
             "from_unit": from_unit,

@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File, F
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
-from typing import Optional, Annotated
+from typing import Any, Optional, Annotated
 from sqlmodel import Session, select
 from datetime import datetime, timezone
 import asyncio
@@ -605,27 +605,51 @@ async def verify_natural_language(
         )
 
     if dr is None:
-        verification_result = result.get("verification", {}) if isinstance(result, dict) else {}
-        try:
-            dr = DiagnosticResult.from_legacy_dict(verification_result, engine="math")
-        except ValueError:
-            dr = DiagnosticResult.unverifiable(
-                "Verification result unavailable — legacy engine did not retain proof artifacts",
-                {"constraint_id": "api.natural_language.legacy_conversion_failed", "legacy_status": verification_result.get("status")},
-            )
+        dr = _natural_language_diagnostic(result)
     dr = _enforce_trust(dr, query=request.query)
+    # A proven-false claim is VERIFIED too: admission is the separate
+    # safe-to-use decision (QWED #15).
+    admission = admission_decision(dr)
 
     log = VerificationLog(
         organization_id=tenant.organization_id,
         user_id=tenant.user_id if hasattr(tenant, 'user_id') else None,
         query=request.query,
         result=_cap_log_result(dr.to_dict()),
-        is_verified=dr.is_authoritative,
+        is_verified=dr.developer_fields.get("is_valid") is True,
         domain="MATH"
     )
     _safe_commit_log(log)
 
-    return _merge_response(dr)
+    response = _merge_response(dr)
+    response["admission"] = admission.value
+    return response
+
+
+def _natural_language_diagnostic(result: Any) -> DiagnosticResult:
+    """The verdict for a control-plane result.
+
+    The control plane attaches the DiagnosticResult it enforced (signed and
+    attested for decided verdicts, #437), so it is used as produced. Results
+    without one (security or policy blocks, non-math queries, errors) fall back
+    to the fail-closed legacy mapping, which can never yield VERIFIED.
+    """
+    if isinstance(result, dict) and "diagnostic" in result:
+        try:
+            return DiagnosticResult.from_dict(result["diagnostic"])
+        except (TypeError, ValueError, KeyError, AttributeError):
+            return DiagnosticResult.blocked(
+                "Verification blocked — control plane returned a malformed diagnostic",
+                {"constraint_id": "api.natural_language.malformed_diagnostic"},
+            )
+    verification_result = result.get("verification", {}) if isinstance(result, dict) else {}
+    try:
+        return DiagnosticResult.from_legacy_dict(verification_result, engine="math")
+    except ValueError:
+        return DiagnosticResult.unverifiable(
+            "Verification result unavailable — legacy engine did not retain proof artifacts",
+            {"constraint_id": "api.natural_language.legacy_conversion_failed", "legacy_status": verification_result.get("status")},
+        )
 
 @app.post(
     "/verify/logic",
