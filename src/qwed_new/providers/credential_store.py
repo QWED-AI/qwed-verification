@@ -11,6 +11,7 @@ Security guarantees:
 """
 
 import os
+import re
 import stat
 import logging
 import tempfile
@@ -29,8 +30,33 @@ def _find_project_root(start: Optional[Path] = None) -> Path:
     return current
 
 
-def _build_env_content(merged: Dict[str, str]) -> str:
-    """Build the .env file content string from merged vars."""
+_PLAIN_ENV_VALUE = re.compile(r"[A-Za-z0-9_./:@+,=%-]*")
+
+
+def _format_env_value(value: str) -> str:
+    """Write a new value so python-dotenv reads it back unchanged.
+
+    Plain values are written as they are. Anything else (spaces, ``#``,
+    quotes, backslashes) is double-quoted with escapes: unquoted,
+    ``key=a # b`` would read back as ``a``, and a signing key that changes on
+    restart invalidates every signature made with it. Values kept from the
+    existing file are not passed through here (see _build_env_content).
+    """
+    if _PLAIN_ENV_VALUE.fullmatch(value):
+        return value
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _build_env_content(merged: Dict[str, str], verbatim: frozenset = frozenset()) -> str:
+    """Build the .env file content string from merged vars.
+
+    Keys in ``verbatim`` are settings kept from the existing file, held in
+    their original spelling (quotes and inline comments included). They are
+    written back exactly as they were, so an untouched setting such as
+    ``DATABASE_URL=... # production`` keeps its meaning. Every other value is
+    new and is formatted for dotenv.
+    """
     merged = merged.copy()  # Avoid mutating caller's dict
     lines = [
         "# QWED Environment Configuration",
@@ -41,11 +67,13 @@ def _build_env_content(merged: Dict[str, str]) -> str:
 
     if "ACTIVE_PROVIDER" in merged:
         lines.append("# Active LLM Provider")
-        lines.append(f"ACTIVE_PROVIDER={merged.pop('ACTIVE_PROVIDER')}")
+        provider = merged.pop("ACTIVE_PROVIDER")
+        written = provider if "ACTIVE_PROVIDER" in verbatim else _format_env_value(provider)
+        lines.append(f"ACTIVE_PROVIDER={written}")
         lines.append("")
 
     for key, value in sorted(merged.items()):
-        lines.append(f"{key}={value}")
+        lines.append(f"{key}={value if key in verbatim else _format_env_value(value)}")
 
     lines.append("")  # trailing newline
     return "\n".join(lines)
@@ -138,7 +166,10 @@ def write_env_file(
     if active_provider:
         merged["ACTIVE_PROVIDER"] = active_provider
 
-    content = _build_env_content(merged)
+    retained = set(existing_vars) - set(env_vars)
+    if active_provider:
+        retained.discard("ACTIVE_PROVIDER")
+    content = _build_env_content(merged, verbatim=frozenset(retained))
     _write_secure(env_path, content)
 
     return env_path

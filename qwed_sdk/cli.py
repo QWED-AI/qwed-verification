@@ -943,6 +943,16 @@ def _prompt_retry_credentials(
     return updated_key, updated_base_url, updated_model
 
 
+# Server secrets persisted by init and retained from the project-root .env.
+# QWED_AUDIT_SECRET_KEY signs the audit chain: the server refuses to boot
+# without it, and regenerating it invalidates every existing signature.
+_SERVER_SECRET_VARS = (
+    "QWED_JWT_SECRET_KEY",
+    "QWED_API_KEY_LOOKUP_SECRET",
+    "QWED_AUDIT_SECRET_KEY",
+)
+
+
 def _seed_server_secrets_from_project_root() -> set:
     """Seed server secrets from the project-root .env without overriding env.
 
@@ -951,7 +961,7 @@ def _seed_server_secrets_from_project_root() -> set:
     fresh value would then be generated and persisted OVER the root one,
     invalidating every issued key's lookup digest. Seeding with setdefault
     keeps explicit environment winning while letting ensure_* retain root
-    values. Scoped to the two server secrets only.
+    values. Scoped to the server secrets only (_SERVER_SECRET_VARS).
 
     Returns the names actually filled, so callers can distinguish retained
     (disk or env) from freshly generated values without re-reading files.
@@ -964,10 +974,7 @@ def _seed_server_secrets_from_project_root() -> set:
     """
     filled: set = set()
     try:
-        from qwed_new.providers.credential_store import (
-            _find_project_root,
-            _read_existing_env,
-        )
+        from qwed_new.providers.credential_store import _find_project_root
     except ImportError:
         return filled
     try:
@@ -982,7 +989,16 @@ def _seed_server_secrets_from_project_root() -> set:
     if not env_path.exists():
         return filled
     try:
-        stored = _read_existing_env(env_path)
+        # Decoded the way python-dotenv decodes it (quotes, escapes, inline
+        # comments), so a seeded secret is byte-for-byte what a server loading
+        # the same .env sees. A quoted signing key kept raw would differ, and
+        # every audit signature would stop verifying.
+        import io as _io
+
+        from dotenv import dotenv_values
+
+        raw = env_path.read_text(encoding="utf-8")
+        stored = {k: v for k, v in dotenv_values(stream=_io.StringIO(raw)).items() if v is not None}
     except (OSError, UnicodeDecodeError) as exc:
         # An EXISTING file that cannot be read or decoded must fail closed:
         # silently proceeding could overwrite secrets it holds (CodeRabbit
@@ -990,7 +1006,7 @@ def _seed_server_secrets_from_project_root() -> set:
         raise RuntimeError(
             f"project root .env exists but cannot be read: {env_path}"
         ) from exc
-    for var in ("QWED_JWT_SECRET_KEY", "QWED_API_KEY_LOOKUP_SECRET"):
+    for var in _SERVER_SECRET_VARS:
         value = stored.get(var, "").strip()
         if value and var not in os.environ:
             os.environ[var] = value
@@ -1036,6 +1052,16 @@ def _persist_onboarding_env(
     env_vars["QWED_API_KEY_LOOKUP_SECRET"] = lookup_secret
 
     try:
+        # Retained when present, generated only when missing: rotating it
+        # would invalidate the signature on every audit row already written.
+        from qwed_new.config import ensure_audit_secret
+
+        env_vars["QWED_AUDIT_SECRET_KEY"] = ensure_audit_secret()
+    except Exception as exc:
+        logger.exception("Audit secret preparation failed")
+        raise RuntimeError(f"Failed to prepare audit secret: {type(exc).__name__}") from exc
+
+    try:
         if non_interactive:
             _ensure_gitignore_protection_noninteractive(verify_gitignore, add_env_to_gitignore)
         else:
@@ -1076,7 +1102,13 @@ def _identity_proof(secret: str, domain: str, nonce: str) -> str:
     ).hexdigest()
 
 
-def _verify_server_identity(server_url: str, jwt_secret: str, lookup_secret: str, nonce: str) -> None:
+def _verify_server_identity(
+    server_url: str,
+    jwt_secret: str,
+    lookup_secret: str,
+    nonce: str,
+    audit_secret: str | None = None,
+) -> None:
     """Prove the healthy server holds our secret set before bootstrap (issue #376).
 
     A healthy `/health` only proves SOMETHING answers on the port — a foreign
@@ -1132,19 +1164,34 @@ def _verify_server_identity(server_url: str, jwt_secret: str, lookup_secret: str
         )
     try:
         identity = response.json().get("identity", {})
-        remote = (identity.get("jwt_hmac", ""), identity.get("lookup_hmac", ""))
+        remote = (
+            identity.get("jwt_hmac", ""),
+            identity.get("lookup_hmac", ""),
+            identity.get("audit_hmac", ""),
+        )
     except (ValueError, AttributeError) as exc:
         raise RuntimeError(
             "server identity check failed: unreadable identity response. "
             "Restart the local server, then re-run init."
         ) from exc
-    expected = (
+    names = ["jwt", "lookup"]
+    expected = [
         _identity_proof(jwt_secret, "jwt", nonce),
         _identity_proof(lookup_secret, "lookup", nonce),
-    )
+    ]
+    if audit_secret is not None:
+        # The audit key signs every audit row: a server on another key would
+        # write rows this project's server cannot verify after a restart.
+        if not audit_secret:
+            raise RuntimeError(
+                "server identity check failed: the local audit secret is missing. "
+                "Re-run init so it is generated and persisted."
+            )
+        names.append("audit")
+        expected.append(_identity_proof(audit_secret, "audit", nonce))
     mismatched = [
         name
-        for name, got, want in zip(("jwt", "lookup"), remote, expected)
+        for name, got, want in zip(names, remote, expected)
         if not hmac.compare_digest(str(got), str(want))
     ]
     if mismatched:
@@ -1207,7 +1254,13 @@ def _start_server_and_bootstrap(
     # deterministic and testable (CodeRabbit on #388).
     nonce = secrets.token_urlsafe(24)
     try:
-        _verify_server_identity(normalized_server_url, jwt_secret, lookup_secret, nonce)
+        _verify_server_identity(
+            normalized_server_url,
+            jwt_secret,
+            lookup_secret,
+            nonce,
+            audit_secret=os.getenv("QWED_AUDIT_SECRET_KEY", "").strip(),
+        )
     except Exception as exc:
         logger.exception("Server identity verification failed")
         click.echo(f"  [x] Server identity check failed: {exc}", err=True)
@@ -1269,7 +1322,7 @@ def init(
     # generated fresh below) may stop a healthy server.
     had_secrets_before_init = {
         var: bool(os.getenv(var, "").strip())
-        for var in ("QWED_JWT_SECRET_KEY", "QWED_API_KEY_LOOKUP_SECRET")
+        for var in _SERVER_SECRET_VARS
     }
 
     try:
@@ -1338,8 +1391,6 @@ def init(
             non_interactive=non_interactive,
             test_connection=test_connection,
         )
-        had_jwt_before = had_secrets_before_init["QWED_JWT_SECRET_KEY"]
-        had_lookup_before = had_secrets_before_init["QWED_API_KEY_LOOKUP_SECRET"]
         jwt_secret, lookup_secret, env_path = _persist_onboarding_env(
             profile=profile,
             resolved_key=resolved_key,
@@ -1376,7 +1427,7 @@ def init(
         jwt_secret=jwt_secret,
         lookup_secret=lookup_secret,
         organization_name=organization_name,
-        secrets_fresh=not had_jwt_before or not had_lookup_before,
+        secrets_fresh=not all(had_secrets_before_init.values()),
     )
 
     click.echo(f"\n  Your API key: {qwed_api_key}")

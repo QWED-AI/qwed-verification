@@ -1,11 +1,13 @@
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
+from sqlmodel import Session, select
 
 from qwed_new.api.main import app, get_current_tenant, get_session
+from qwed_new.core.models import VerificationLog
 
 
-def test_verify_math_ambiguous_expression_fails_closed_and_logs_unverified():
+def test_verify_math_ambiguous_expression_fails_closed_and_logs_unverified(isolated_audit_chain):
     mock_tenant = MagicMock(
         organization_id=123,
         api_key=MagicMock(name="tenant_api_key"),
@@ -33,8 +35,14 @@ def test_verify_math_ambiguous_expression_fails_closed_and_logs_unverified():
         assert data["warning"] == "ambiguous"
         assert "implicit multiplication after division" in data["agent_message"]
 
-        logged = mock_session.add.call_args[0][0]
+        # The row goes to the signed audit chain, not the request session.
+        mock_session.add.assert_not_called()
+        with Session(isolated_audit_chain) as session:
+            (logged,) = session.exec(select(VerificationLog)).all()
         assert logged.is_verified is False
         assert logged.domain == "MATH"
+        assert logged.organization_id == 123
+        assert logged.entry_hash
+        assert logged.hmac_signature
     finally:
         app.dependency_overrides.clear()

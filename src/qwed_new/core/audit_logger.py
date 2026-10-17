@@ -1,12 +1,20 @@
 """
 Cryptographic Audit Logger for QWED.
-Provides tamper-proof audit logging with HMAC signatures and hash chains.
+Appends VerificationLog rows to a per-organisation hash chain, each entry
+HMAC-signed with QWED_AUDIT_SECRET_KEY.
 
-SOC 2 / GDPR Compliance Features:
-- Immutable audit trail
-- Cryptographic integrity verification
-- Raw LLM output preservation
-- Timestamp verification
+What verification detects: an edited entry, a reordered entry, and a removed
+entry that breaks a link between the entries that remain. What it does not
+detect: removal of the newest entries (the shorter chain is still valid), so
+completeness needs an externally stored checkpoint of the latest hash; and a
+rewrite by anyone holding both the signing key and database write access.
+
+Rows written before the API was wired into the chain carry no hash. They stay
+unverified, and the first chained row after them opens a new segment.
+
+Single writer: the in-memory per-organisation chain head assumes one process
+appends to a given database. A second writer makes the next append fail with a
+continuity SecurityError rather than fork the chain.
 """
 
 import hashlib
@@ -14,17 +22,40 @@ import hmac
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from sqlmodel import Session, select
+from sqlalchemy import text
+from sqlmodel import Session, create_engine, select
 
-from qwed_new.core.database import engine
-from qwed_new.core.models import VerificationLog
+from qwed_new.core import database as _database
+from qwed_new.core.models import Organization, VerificationLog
 
 logger = logging.getLogger(__name__)
 
 AUDIT_SECRET_ENV_VAR = "QWED_AUDIT_SECRET_KEY"
+
+# Namespace for the per-organisation PostgreSQL advisory lock ("QWED").
+_ADVISORY_LOCK_NAMESPACE = 0x51574544
+
+
+def _make_audit_engine():
+    """A connection pool of its own for audit appends.
+
+    Each request already holds a connection from the shared pool for its
+    session, so drawing the audit append from that same pool can exhaust it
+    under load (every request waiting on a connection none of them release).
+    An in-memory SQLite database exists only on its own connection, so it
+    keeps the shared engine.
+    """
+    url = _database.DATABASE_URL
+    if url.startswith("sqlite") and (":memory:" in url or url.rstrip("/") in ("sqlite:", "sqlite:/")):
+        return _database.engine
+    return create_engine(url, connect_args=_database.connect_args)
+
+
+engine = _make_audit_engine()
 
 
 def _naive_ts(value: datetime) -> datetime:
@@ -55,9 +86,18 @@ def _canonical_ts(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def _is_unchained(log_entry: VerificationLog) -> bool:
+    """True when a row carries none of the chain fields (written outside the chain)."""
+    return (
+        not log_entry.entry_hash
+        and not log_entry.hmac_signature
+        and log_entry.previous_hash is None
+    )
+
+
 class AuditLogger:
     """
-    Cryptographic audit logger with tamper-proof guarantees.
+    Cryptographic audit logger: hash-chained, HMAC-signed entries per organisation.
 
     Features:
     - HMAC-SHA256 signatures for each log entry
@@ -70,13 +110,17 @@ class AuditLogger:
         self.secret_key = self._resolve_secret_key(secret_key)
         self.last_hash = None
         self._last_hash_by_org: Dict[int, Optional[str]] = {}
+        # Serialises appends within this process, so the in-memory head is
+        # updated before the next append reads the persisted one. The
+        # database lock alone leaves a window between commit and that update.
+        self._append_lock = threading.Lock()
 
     def log_verification(
         self,
         organization_id: int,
         user_id: Optional[int],
         query: str,
-        result: Dict[str, Any],
+        result: Dict[str, Any] | str,
         is_verified: bool,
         domain: str,
         raw_llm_output: Optional[str] = None,
@@ -84,21 +128,67 @@ class AuditLogger:
         """
         Log a verification event with cryptographic signature.
 
+        ``result`` is either a dict, serialised here, or an already-serialised
+        JSON string, stored as given so a caller's size cap holds. The hash
+        covers the decoded value either way, which is what verification
+        recomputes from the stored row. A string that is not valid JSON fails
+        closed with SecurityError, since it could never be verified.
+
         Returns:
             log_id: The ID of the created log entry
         """
+        if isinstance(result, str):
+            stored_result = result
+            try:
+                hashed_result = json.loads(result)
+            except json.JSONDecodeError as exc:
+                raise SecurityError(
+                    "Audit entry result is not valid JSON; refusing to append an unverifiable entry"
+                ) from exc
+        else:
+            stored_result = json.dumps(result)
+            hashed_result = result
+
+        with self._append_lock:
+            return self._append(
+                organization_id=organization_id,
+                user_id=user_id,
+                query=query,
+                stored_result=stored_result,
+                hashed_result=hashed_result,
+                is_verified=is_verified,
+                domain=domain,
+                raw_llm_output=raw_llm_output,
+            )
+
+    def _append(
+        self,
+        *,
+        organization_id: int,
+        user_id: Optional[int],
+        query: str,
+        stored_result: str,
+        hashed_result: Any,
+        is_verified: bool,
+        domain: str,
+        raw_llm_output: Optional[str],
+    ) -> str:
+        """Append one entry under the chain lock (see log_verification)."""
         timestamp = datetime.now(timezone.utc)
 
         with Session(engine) as session:
-            self._prepare_append_session(session)
+            self._prepare_append_session(session, organization_id)
             latest_log = self._get_latest_log(
                 session,
                 organization_id=organization_id,
                 for_update=True,
             )
             self._assert_appendable_head(latest_log, session)
-            previous_hash = self._extract_persisted_hash(latest_log)
+            previous_hash = self._extract_persisted_hash(latest_log, session)
             known_hash = self._last_hash_by_org.get(organization_id, previous_hash)
+            # Single writer per database: a head this process did not write
+            # (another process appended, or rows were removed) stops the
+            # append rather than being trusted.
             if known_hash != previous_hash:
                 raise SecurityError(
                     "Audit chain continuity mismatch: in-memory chain head does not match persisted audit trail"
@@ -108,7 +198,7 @@ class AuditLogger:
                 "organization_id": organization_id,
                 "user_id": user_id,
                 "query": query,
-                "result": result,
+                "result": hashed_result,
                 "is_verified": is_verified,
                 "domain": domain,
                 "timestamp": timestamp.isoformat(),
@@ -123,7 +213,7 @@ class AuditLogger:
                 organization_id=organization_id,
                 user_id=user_id,
                 query=query,
-                result=json.dumps(result),
+                result=stored_result,
                 is_verified=is_verified,
                 domain=domain,
                 timestamp=timestamp,
@@ -164,11 +254,32 @@ class AuditLogger:
             )
         return configured_secret.encode("utf-8")
 
-    def _prepare_append_session(self, session: Session) -> None:
-        """Prepare a write session so chain-head validation and append stay serialized."""
+    def _prepare_append_session(self, session: Session, organization_id: int) -> None:
+        """Take a database lock for the organisation before its head is read.
+
+        The supported deployment is one writer process per database; a second
+        writer is detected by the continuity check and refused. This lock is
+        defence in depth so that, even then, two transactions cannot both read
+        the same head and fork the chain: a row lock on the head is not enough
+        on PostgreSQL, where a waiting writer gets the old head row back once
+        the lock is released. It is not a claim of multi-writer support.
+        """
         bind = session.get_bind()
-        if bind is not None and bind.dialect.name == "sqlite":
+        dialect = bind.dialect.name if bind is not None else ""
+        if dialect == "sqlite":
             session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        elif dialect == "postgresql":
+            session.connection().execute(
+                text("SELECT pg_advisory_xact_lock(:ns, :org)"),
+                {"ns": _ADVISORY_LOCK_NAMESPACE, "org": int(organization_id)},
+            )
+        elif bind is not None:
+            # Other databases: lock the organisation's row for the transaction.
+            self._run_select(
+                session,
+                select(Organization.id).where(Organization.id == organization_id).with_for_update(),
+            ).first()
+
 
     def _get_latest_log(
         self,
@@ -198,8 +309,14 @@ class AuditLogger:
         latest_log: Optional[VerificationLog],
         session: Session,
     ) -> None:
-        """Fail closed if the persisted chain head cannot be verified."""
-        if latest_log is None:
+        """Fail closed if the persisted chain head cannot be verified.
+
+        A legacy head (an unchained row with no chained row before it) has
+        nothing to verify; the next entry opens a new segment instead. An
+        unchained row AFTER a chained row is not legacy: it was written or
+        blanked out of band, and verification rejects it here.
+        """
+        if latest_log is None or self._is_legacy_entry(latest_log, session):
             return
 
         head_check = self.verify_log_entry(latest_log.id, session)
@@ -212,12 +329,47 @@ class AuditLogger:
         """Execute a SQLModel select statement."""
         return getattr(session, "exec")(statement)
 
+    def _has_chained_entry_before(
+        self,
+        session: Session,
+        organization_id: int,
+        log_id: int,
+    ) -> bool:
+        """True when the organisation has a chained row with an id below ``log_id``."""
+        statement = (
+            select(VerificationLog.id)
+            .where(VerificationLog.organization_id == organization_id)
+            .where(VerificationLog.id < log_id)
+            .where(VerificationLog.entry_hash.is_not(None))
+            .where(VerificationLog.entry_hash != "")
+            # Newest first: after an upgrade the rows just below the head are
+            # the chained ones, so the scan stops early instead of walking the
+            # hashless legacy prefix on every append.
+            .order_by(VerificationLog.id.desc())
+            .limit(1)
+        )
+        return self._run_select(session, statement).first() is not None
+
+    def _is_legacy_entry(self, log_entry: VerificationLog, session: Session) -> bool:
+        """An unchained row that no chained row precedes, i.e. one written before the chain."""
+        return _is_unchained(log_entry) and not self._has_chained_entry_before(
+            session, log_entry.organization_id, log_entry.id
+        )
+
     def _extract_persisted_hash(
         self,
         latest_log: Optional[VerificationLog],
+        session: Optional[Session] = None,
     ) -> Optional[str]:
-        """Return the latest persisted hash or fail if chain continuity is invalid."""
+        """Return the latest persisted hash or fail if chain continuity is invalid.
+
+        A legacy head returns None, so the next entry opens a new segment.
+        Without a session the legacy check cannot run, and a hashless head
+        fails closed as before.
+        """
         if latest_log is None:
+            return None
+        if session is not None and self._is_legacy_entry(latest_log, session):
             return None
         if not latest_log.entry_hash:
             raise SecurityError(
@@ -248,6 +400,27 @@ class AuditLogger:
                 "errors": ["Log entry not found"],
             }
 
+        chained_before = self._has_chained_entry_before(
+            session, log_entry.organization_id, log_id
+        )
+        if _is_unchained(log_entry) and not chained_before:
+            # Written before the chain was wired in: nothing to verify, and
+            # never reported valid.
+            return {
+                "valid": False,
+                "legacy": True,
+                "checks": {
+                    "hash_valid": False,
+                    "signature_valid": False,
+                    "chain_valid": False,
+                },
+                "errors": [
+                    "Entry predates the audit chain (no hash or signature); it cannot be verified"
+                ],
+                "log_id": log_id,
+                "timestamp": _canonical_ts(log_entry.timestamp).isoformat(),
+            }
+
         errors = []
         hash_valid, signature_valid = self._verify_hash_and_signature(log_entry, errors)
         prev_log = self._run_select(
@@ -257,12 +430,15 @@ class AuditLogger:
             .where(VerificationLog.id < log_id)
             .order_by(VerificationLog.id.desc()),
         ).first()
-        chain_valid = self._verify_chain_link(log_entry, prev_log, errors)
+        chain_valid = self._verify_chain_link(
+            log_entry, prev_log, errors, chained_before=chained_before
+        )
 
         is_valid = hash_valid and signature_valid and chain_valid
 
         return {
             "valid": is_valid,
+            "legacy": False,
             "checks": {
                 "hash_valid": hash_valid,
                 "signature_valid": signature_valid,
@@ -370,8 +546,21 @@ class AuditLogger:
         log_entry: VerificationLog,
         prev_log: Optional[VerificationLog],
         errors: list[str],
+        *,
+        chained_before: Optional[bool] = None,
     ) -> bool:
-        """Verify that one audit entry links to the correct previous entry."""
+        """Verify that one audit entry links to the correct previous entry.
+
+        ``chained_before`` says whether the organisation has any chained row
+        before this one. When it has none, an entry with no previous_hash is
+        the start of the chain, whether it is the first row or the first after
+        legacy rows. Left as None it falls back to "any previous row".
+        """
+        if chained_before is None:
+            chained_before = prev_log is not None
+        if log_entry.previous_hash is None and not chained_before:
+            return True
+
         if prev_log is None:
             if log_entry.previous_hash is not None:
                 errors.append("Hash chain broken: genesis entry must not reference a previous hash")
@@ -421,21 +610,32 @@ class AuditLogger:
             total = len(logs)
             verified = 0
             failed = []
+            legacy = []
             errors = []
 
             for log in logs:
                 result = self.verify_log_entry(log.id, session)
                 if result["valid"]:
                     verified += 1
+                elif result.get("legacy"):
+                    legacy.append(log.id)
                 else:
                     failed.append(log.id)
                     errors.extend(result["errors"])
+
+            if legacy:
+                # Unverified, not failed: they predate the chain. The trail is
+                # still not reported valid while they are in range.
+                errors.append(
+                    f"{len(legacy)} entries predate the audit chain and cannot be verified"
+                )
 
             return {
                 "valid": verified == total,
                 "total_entries": total,
                 "verified_entries": verified,
                 "failed_entries": failed,
+                "legacy_entries": legacy,
                 "errors": errors,
                 "organization_id": organization_id,
             }
@@ -443,3 +643,23 @@ class AuditLogger:
 
 class SecurityError(Exception):
     """Raised when cryptographic verification fails."""
+
+
+_default_logger: Optional[AuditLogger] = None
+_default_logger_lock = threading.Lock()
+
+
+def get_audit_logger() -> AuditLogger:
+    """Return the process-wide AuditLogger, creating it on first use.
+
+    One instance per process, so its in-memory per-organisation chain head
+    persists between requests and an out-of-band change to the newest row is
+    caught at the next append. Raises SecurityError, uncached, while
+    QWED_AUDIT_SECRET_KEY is unset.
+    """
+    global _default_logger
+    if _default_logger is None:
+        with _default_logger_lock:
+            if _default_logger is None:
+                _default_logger = AuditLogger()
+    return _default_logger

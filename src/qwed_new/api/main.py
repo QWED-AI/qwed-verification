@@ -32,6 +32,7 @@ INTERNAL_PROCESSING_ERROR = "Internal processing error"
 from qwed_new.core.control_plane import ControlPlane
 from qwed_new.core.tenant_context import get_current_tenant, TenantContext
 from qwed_new.core.database import create_db_and_tables, get_session
+from qwed_new.core.audit_logger import get_audit_logger
 from qwed_new.core.models import VerificationLog, ApiKey, User, Organization
 from qwed_new.core.rate_limiter import check_rate_limit
 from qwed_new.core.json_bounding import bound_json_value
@@ -337,6 +338,9 @@ def _enforce_environment_integrity() -> None:
 def on_startup():
     _enforce_environment_integrity()
     create_db_and_tables()
+    # Fail closed at boot: every verify endpoint appends to the signed audit
+    # chain, so the server does not start without QWED_AUDIT_SECRET_KEY.
+    get_audit_logger()
 
 # Initialize Kernel (Control Plane)
 control_plane = ControlPlane()
@@ -356,16 +360,45 @@ def _enforce_trust(
 
 _merge_response = merge_diagnostic_result  # shared merge helper (#271)
 
-def _safe_commit_log(session, log):
-    """Write a VerificationLog safely, rolling back on failure."""
+
+class AuditPersistenceError(HTTPException):
+    """An audit row could not be appended to its organisation's chain.
+
+    An HTTPException on purpose: every verify endpoint re-raises
+    HTTPException ahead of its generic ``except Exception`` handler, so an
+    audit failure ends the request as a 500. As a plain exception, the
+    generic handler would replace the real result with a BLOCKED one and
+    try the append again, and a retry that succeeded would return 200 with
+    a record of the replacement instead of the result.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(status_code=500, detail="audit persistence failed")
+
+
+def _safe_commit_log(log):
+    """Append a VerificationLog row to its organisation's audit chain, or fail closed.
+
+    The row is written by the process-wide AuditLogger (hash-chained and
+    HMAC-signed), not through the request session, so /admin/compliance/verify
+    and verify_audit_trail can check it. Any failure (QWED_AUDIT_SECRET_KEY
+    unset, a persisted chain head that fails verification, a continuity
+    mismatch, a database error) raises a 500: a verification result is never
+    returned without its audit record.
+    """
     try:
-        session.add(log)
-        session.commit()
-    except Exception:
-        try:
-            session.rollback()
-        except Exception:
-            logger.exception("Rollback failed while handling commit/log failure")
+        get_audit_logger().log_verification(
+            organization_id=log.organization_id,
+            user_id=log.user_id,
+            query=log.query,
+            result=log.result,
+            is_verified=log.is_verified,
+            domain=log.domain,
+            raw_llm_output=log.raw_llm_output,
+        )
+    except Exception as exc:
+        logger.error("Audit persistence failed: %s", type(exc).__name__)
+        raise AuditPersistenceError() from None
 
 
 class VerifyRequest(BaseModel):
@@ -589,7 +622,7 @@ async def verify_natural_language(
         is_verified=dr.is_authoritative,
         domain="MATH"
     )
-    _safe_commit_log(session, log)
+    _safe_commit_log(log)
 
     return _merge_response(dr)
 
@@ -639,7 +672,7 @@ async def verify_logic(
             is_verified=dr.is_authoritative,
             domain="LOGIC"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
 
         return _merge_response(dr)
 
@@ -665,7 +698,7 @@ async def verify_logic(
             is_verified=False,
             domain="LOGIC"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
         return _merge_response(dr)
 
 # #353 (CodeAnt + CodeRabbit on PR #354): the byte cap bounds TRANSFER,
@@ -796,7 +829,7 @@ async def verify_stats(
             and dr.developer_fields.get("is_valid") is True,
             domain="STATS"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
 
         return _merge_response(dr)
     except HTTPException:
@@ -816,7 +849,7 @@ async def verify_stats(
             is_verified=False,
             domain="STATS"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
         return _merge_response(dr)
 
 
@@ -886,7 +919,7 @@ async def verify_fact(
             is_verified=dr.is_authoritative,
             domain="FACT"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
 
         return _merge_response(dr)
 
@@ -906,7 +939,7 @@ async def verify_fact(
             is_verified=False,
             domain="FACT"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
         return _merge_response(dr)
 
 
@@ -957,7 +990,7 @@ async def verify_code(
             is_verified=dr.developer_fields.get("is_valid") is True,
             domain="CODE"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
 
         response = _merge_response(dr)
         response["admission"] = admission.value
@@ -979,7 +1012,7 @@ async def verify_code(
             is_verified=False,
             domain="CODE"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
         response = _merge_response(dr)
         response["admission"] = admission_decision(dr).value
         return response
@@ -1099,7 +1132,7 @@ async def verify_math(
             is_verified=dr.is_authoritative,
             domain="MATH"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
 
         return _merge_response(dr)
 
@@ -1119,7 +1152,7 @@ async def verify_math(
             is_verified=False,
             domain="MATH"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
         return _merge_response(dr)
 
 
@@ -1164,7 +1197,7 @@ async def verify_sql(
             is_verified=dr.is_authoritative,
             domain="SQL"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
 
         response = _merge_response(dr)
         response["admission"] = admission.value
@@ -1186,7 +1219,7 @@ async def verify_sql(
             is_verified=False,
             domain="SQL"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
         response = _merge_response(dr)
         response["admission"] = admission_decision(dr).value
         return response
@@ -1240,7 +1273,7 @@ async def verify_image(
             is_verified=dr.is_authoritative,
             domain="IMAGE"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
 
         return _merge_response(dr)
 
@@ -1260,7 +1293,7 @@ async def verify_image(
             is_verified=False,
             domain="IMAGE"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
         return _merge_response(dr)
 
 class RAGVerifyRequest(BaseModel):
@@ -1336,7 +1369,7 @@ async def verify_rag(
                 is_verified=False,
                 domain="RAG"
             )
-            _safe_commit_log(session, log)
+            _safe_commit_log(log)
             return _merge_response(dr)
         
         is_verified = result.get("verified", False)
@@ -1360,7 +1393,7 @@ async def verify_rag(
             is_verified=dr.is_authoritative,
             domain="RAG"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
         
         return _merge_response(dr)
         
@@ -1381,7 +1414,7 @@ async def verify_rag(
             is_verified=False,
             domain="RAG"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
         return _merge_response(dr)
 
 class ProcessVerifyRequest(BaseModel):
@@ -1445,7 +1478,7 @@ async def verify_process(
             is_verified=dr.is_authoritative,
             domain="PROCESS"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
         
         return _merge_response(dr)
         
@@ -1465,7 +1498,7 @@ async def verify_process(
             is_verified=False,
             domain="PROCESS"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
         return _merge_response(dr)
 
 
@@ -1522,7 +1555,8 @@ async def server_identity(nonce: str = ""):
         raise HTTPException(status_code=400, detail="nonce is required (max 128 characters)")
     jwt_secret = os.getenv("QWED_JWT_SECRET_KEY", "")
     lookup_secret = os.getenv("QWED_API_KEY_LOOKUP_SECRET", "")
-    if not jwt_secret or not lookup_secret:
+    audit_secret = os.getenv("QWED_AUDIT_SECRET_KEY", "")
+    if not jwt_secret or not lookup_secret or not audit_secret:
         raise HTTPException(status_code=503, detail="server secrets not configured")
 
     def _prove(secret: str, domain: str) -> str:
@@ -1536,6 +1570,7 @@ async def server_identity(nonce: str = ""):
         "identity": {
             "jwt_hmac": _prove(jwt_secret, "jwt"),
             "lookup_hmac": _prove(lookup_secret, "lookup"),
+            "audit_hmac": _prove(audit_secret, "audit"),
         }
     }
 
@@ -1987,11 +2022,11 @@ async def verify_with_consensus(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=request.query,
-            result=f"Consensus: {result.agreement_status}",
+            result=_cap_log_result(dr.to_dict()),
             is_verified=dr.is_authoritative,
             domain="CONSENSUS"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
         return _merge_response(dr)
 
     # All engines blocked — preserve BLOCKED status (fail-closed)
@@ -2004,11 +2039,11 @@ async def verify_with_consensus(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=request.query,
-            result=f"Consensus: {result.agreement_status}",
+            result=_cap_log_result(dr.to_dict()),
             is_verified=dr.is_authoritative,
             domain="CONSENSUS"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
         return _merge_response(dr)
 
     if result.confidence < request.min_confidence:
@@ -2020,11 +2055,11 @@ async def verify_with_consensus(
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=request.query,
-            result=f"Consensus: {result.agreement_status}, Confidence: {result.confidence:.1%}",
+            result=_cap_log_result(dr.to_dict()),
             is_verified=dr.is_authoritative,
             domain="CONSENSUS"
         )
-        _safe_commit_log(session, log)
+        _safe_commit_log(log)
         return _merge_response(dr)
 
     # Convert consensus result via its own to_diagnostic_result() method —
@@ -2035,11 +2070,11 @@ async def verify_with_consensus(
     log = VerificationLog(
         organization_id=tenant.organization_id,
         query=request.query,
-        result=f"Consensus: {result.agreement_status}, Confidence: {result.confidence:.1%}",
+        result=_cap_log_result(dr.to_dict()),
         is_verified=dr.is_authoritative,
         domain="CONSENSUS"
     )
-    _safe_commit_log(session, log)
+    _safe_commit_log(log)
 
     # Format response
     response = {

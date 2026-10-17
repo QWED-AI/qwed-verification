@@ -7,7 +7,7 @@ import json
 
 from qwed_new.core.database import get_session
 from qwed_new.core.diagnostics import DiagnosticResult
-from qwed_new.core.models import VerificationLog
+from qwed_new.core.audit_logger import SecurityError, get_audit_logger
 from qwed_new.core.rate_limiter import check_rate_limit
 from qwed_new.core.security import redact_pii
 from qwed_new.core.tenant_context import TenantContext, get_current_tenant
@@ -68,6 +68,22 @@ def _diagnostic_result_from_payload(diagnostic: Any) -> DiagnosticResult:
         return _malformed_diagnostic_result()
 
 
+def _redact_strings(value: Any) -> Any:
+    """Redact PII in every string of a JSON-like value, leaving its structure intact.
+
+    Redacting the serialised text instead would also rewrite bare numbers
+    (a ten-digit integer matches the phone pattern) into unquoted tokens and
+    leave invalid JSON, which the audit chain refuses to store.
+    """
+    if isinstance(value, str):
+        return redact_pii(value)
+    if isinstance(value, dict):
+        return {redact_pii(str(k)): _redact_strings(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_strings(v) for v in value]
+    return value
+
+
 def _safe_commit_context_log(
     session: Optional[Session],
     tenant: TenantContext,
@@ -77,20 +93,19 @@ def _safe_commit_context_log(
 ) -> None:
     if session is None:
         return
+    # Appended to the organisation's signed audit chain (core.audit_logger),
+    # not through the request session. Any failure, including an unset
+    # QWED_AUDIT_SECRET_KEY, fails closed with a 500.
     try:
-        session.add(
-            VerificationLog(
-                organization_id=tenant.organization_id,
-                user_id=getattr(tenant, "user_id", None),
-                query=redact_pii(query),
-                result=redact_pii(json.dumps(result)),
-                is_verified=is_verified,
-                domain="VERIFICATION_CONTEXT",
-            )
+        get_audit_logger().log_verification(
+            organization_id=tenant.organization_id,
+            user_id=getattr(tenant, "user_id", None),
+            query=redact_pii(query),
+            result=json.dumps(_redact_strings(result)),
+            is_verified=is_verified,
+            domain="VERIFICATION_CONTEXT",
         )
-        session.commit()
-    except (TypeError, ValueError, SQLAlchemyError):
-        session.rollback()
+    except (TypeError, ValueError, SQLAlchemyError, SecurityError):
         raise HTTPException(
             status_code=500,
             detail="audit persistence failed",

@@ -4,6 +4,57 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **The API now writes its audit rows through the signed hash chain.** Every
+  `/verify/*` endpoint, the Verification Context routes and `POST /audit/seed`
+  used to write `VerificationLog` rows directly, so `entry_hash`,
+  `hmac_signature` and `previous_hash` stayed empty. `/admin/compliance/verify/{log_id}`
+  and `verify_audit_trail` could not verify those rows, and the CSV export
+  marked them `Legacy`. They now append through `AuditLogger`, so new rows are
+  HMAC-signed and chained per organisation.
+- **Breaking: `QWED_AUDIT_SECRET_KEY` is required.** The server refuses to start
+  without it. If an audit append fails at request time (key unset, a chain head
+  that fails verification, a continuity mismatch, a database error), the request
+  returns 500 `audit persistence failed` rather than a result with no audit row.
+  `qwed init` now persists a key alongside the JWT and lookup secrets and never
+  rotates an existing one. Projects onboarded earlier have none in `.env`:
+  re-run `qwed init` (existing secrets are kept) or set it yourself.
+- **Existing rows stay unverified.** Rows written before this change have no
+  hash. `verify_log_entry` reports them as `legacy: true` and never `valid`. The
+  first chained row after them opens a new segment with no `previous_hash`.
+  `verify_audit_trail` lists them under `legacy_entries` and stays
+  `valid: false` while any are in range; pass `start_date` to verify from the
+  upgrade onwards. An unchained row after a chained row is not legacy: appends
+  stop and verification fails.
+- **Single writer.** The audit logger keeps each organisation's chain head in
+  memory, so one process should append to a given database. A second writer
+  makes the next append fail with a continuity error (500) rather than fork the
+  chain. The shipped Dockerfile runs one uvicorn worker.
+- **`/verify/consensus` audit rows store the result JSON** like every other
+  endpoint, instead of a `Consensus: …` summary string that could never be
+  verified.
+- **`POST /audit/seed` is off by default.** It answers 404 and writes nothing
+  unless `QWED_ENABLE_AUDIT_SEED=1`, so sample rows never mix with a production
+  trail. When enabled, its rows are timestamped when written, not backdated,
+  marked `{"sample": true}`, and use a fixed sequence instead of `random`.
+- **The CSV export says `Chained`, not `Verified`.** The column is now
+  `Chain Status`: a present hash is not a verified chain. Use
+  `/admin/compliance/verify/{log_id}` to verify a row.
+- **`qwed init` also proves the audit key.** `/health/identity` returns an
+  `audit_hmac` (503 without a key), and init refuses a running server on a
+  different audit key. An older server without the audit proof is refused
+  too: restart it on this release, then re-run init.
+- **Audit appends use their own connection pool**, take a per-organisation
+  database lock before reading the chain head (a PostgreSQL advisory lock, or
+  `BEGIN IMMEDIATE` on SQLite) as defence in depth, and redact PII per string so
+  stored results stay valid JSON.
+- **`.env` writes keep retained settings verbatim** and quote new values that
+  python-dotenv would otherwise change, so a signing key reads back unchanged.
+
+Verification still does not detect removal of the newest entries; that needs an
+externally stored checkpoint of the latest hash.
+
 ## [7.3.0] - 2026-10-16
 
 A fail-closed security and soundness release. It ships five private advisories

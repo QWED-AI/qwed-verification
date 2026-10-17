@@ -136,4 +136,20 @@ def ensure_lookup_secret(min_bytes: int = 32) -> str:
     os.environ["QWED_API_KEY_LOOKUP_SECRET"] = secret
     return secret
 
+def ensure_audit_secret(min_bytes: int = 32) -> str:
+    """
+    Ensure QWED_AUDIT_SECRET_KEY exists for the signed audit chain.
+
+    The server refuses to start without it. An existing value is ALWAYS
+    returned untouched: a new key would invalidate the HMAC signature on every
+    audit row already written. Only a missing value is generated.
+    """
+    existing = os.getenv("QWED_AUDIT_SECRET_KEY", "").strip()
+    if existing:
+        return existing
+
+    secret = secrets.token_urlsafe(max(min_bytes, 48))
+    os.environ["QWED_AUDIT_SECRET_KEY"] = secret
+    return secret
+
 settings = Settings()
