@@ -14,7 +14,7 @@ Enterprise Features:
 """
 
 from sympy import (
-    Symbol, Matrix, Integer, Rational, Float,
+    Symbol, Matrix, Integer, Rational, Float, Poly,
     diff, integrate, limit, oo,
     simplify, expand, evaluate
 )
@@ -104,12 +104,15 @@ def _polynomial_degree_bound(expr: Any, symbols: Any) -> Optional[int]:
 
 
 def _polynomial_status(difference: Any, symbols: Any) -> Optional[str]:
-    """Decide a polynomial difference exactly, or None if it is not one.
+    """Decide a polynomial difference through its coefficients, or None.
 
-    Polynomial equality is decidable: the difference is identically zero iff
-    its expanded form is 0. A non-zero polynomial has finitely many roots, so
-    it is non-zero somewhere in every infinite domain, including the positive
-    integers ``n`` ranges over.
+    The difference is identically zero iff every coefficient is zero. A
+    non-zero polynomial has finitely many roots, so it is non-zero somewhere
+    in every infinite domain, including the positive integers ``n`` ranges
+    over. Coefficients may be irrational constants (``sqrt(2) + sqrt(3) -
+    sqrt(5 + 2*sqrt(6))`` is 0), and expansion cannot see that, so a
+    coefficient counts as non-zero only when SymPy decides ``is_zero is
+    False``. Anything undecided returns None for the witness search.
     """
     if not difference.is_polynomial(*symbols):
         return None
@@ -118,7 +121,12 @@ def _polynomial_status(difference: Any, symbols: Any) -> Optional[str]:
         return None
     if math.comb(degree + len(symbols), len(symbols)) > _MAX_POLYNOMIAL_TERMS:
         return None
-    return "VERIFIED" if expand(difference) == 0 else DISPROVEN_STATUS
+    coefficients = Poly(expand(difference), *symbols).coeffs()
+    if all(coefficient == 0 for coefficient in coefficients):
+        return "VERIFIED"
+    if any(coefficient.is_zero is False for coefficient in coefficients):
+        return DISPROVEN_STATUS
+    return None
 
 
 def symbolic_difference_status(difference: Any) -> str:

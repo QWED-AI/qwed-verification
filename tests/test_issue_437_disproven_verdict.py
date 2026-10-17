@@ -249,8 +249,9 @@ def _substituted(expression, point):
     ],
 )
 def test_closed_expression_gate_rejects_unaffordable_witnesses(expression, point):
+    candidate = _substituted(expression, sympy.Integer(point))
     with pytest.raises(SafeParserError):
-        check_closed_expression_cost(_substituted(expression, sympy.Integer(point)))
+        check_closed_expression_cost(candidate)
 
 
 @pytest.mark.parametrize("expression", ["x**2 + 3*x", "sin(x)**2", "sqrt(x) + exp(x)", "factorial(x) / x"])
@@ -259,8 +260,9 @@ def test_closed_expression_gate_accepts_cheap_witnesses(expression):
 
 
 def test_closed_expression_gate_rejects_free_symbols():
+    open_expression = safe_parse_expr("x + 1")
     with pytest.raises(SafeParserError, match="free symbols"):
-        check_closed_expression_cost(safe_parse_expr("x + 1"))
+        check_closed_expression_cost(open_expression)
 
 
 def test_api_identity_bomb_is_unverifiable_not_expanded(client, isolated_audit_chain):
@@ -273,8 +275,9 @@ def test_api_identity_bomb_is_unverifiable_not_expanded(client, isolated_audit_c
 def test_closed_expression_gate_rejects_product_over_digit_budget():
     # Each factor fits the budget on its own; their product does not.
     expression = " * ".join(f"(x + {k})**9999" for k in range(11))
+    candidate = _substituted(expression, sympy.Integer(9))
     with pytest.raises(SafeParserError, match="unbounded"):
-        check_closed_expression_cost(_substituted(expression, sympy.Integer(9)))
+        check_closed_expression_cost(candidate)
 
 
 def test_witness_at_a_pole_is_skipped_not_raised():
@@ -465,3 +468,89 @@ def test_translated_disproof_is_not_a_user_query_verdict():
     from qwed_new.core.control_plane import ControlPlane
 
     assert ControlPlane._determine_math_response_status({"status": DISPROVEN_STATUS}) == "INCONCLUSIVE"
+
+
+# ---------------------------------------------------------------------------
+# Polynomial coefficients may be irrational constants
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "lhs, rhs",
+    [
+        # sqrt(5 + 2*sqrt(6)) == sqrt(2) + sqrt(3)
+        ("x*(sqrt(2) + sqrt(3))", "x*sqrt(5 + 2*sqrt(6))"),
+        # cos(pi/7) - cos(2*pi/7) + cos(3*pi/7) == 1/2
+        ("x*(cos(pi/7) - cos(2*pi/7) + cos(3*pi/7))", "x/2"),
+        ("x*sin(2)", "2*x*sin(1)*cos(1)"),
+    ],
+)
+def test_true_identity_with_irrational_coefficient_is_never_disproven(lhs, rhs):
+    assert symbolic_difference_status(_diff(lhs, rhs)) in ("VERIFIED", INCONCLUSIVE_STATUS)
+
+
+def test_decided_irrational_coefficient_still_disproves():
+    assert symbolic_difference_status(_diff("x*sqrt(2)", "x")) == DISPROVEN_STATUS
+
+
+def test_api_true_identity_with_undecided_coefficient_is_unverifiable(client, isolated_audit_chain):
+    expression = "x*(cos(pi/7) - cos(2*pi/7) + cos(3*pi/7)) = x/2"
+    data = client.post("/verify/math", json={"expression": expression}).json()
+
+    assert data["status"] == "UNVERIFIABLE"
+    assert data["admission"] == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# The natural-language verdict says what the engine actually checked
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("claimed, holds", [(30.0, True), (40.0, False)])
+async def test_control_plane_verdict_carries_translated_scope(monkeypatch, claimed, holds):
+    from tests.test_pr5_determinism_alignment import _build_cp
+
+    cp = _build_cp(monkeypatch, claimed_answer=claimed)
+    result = await cp.process_natural_language("What is 15% of 200?", organization_id=None)
+
+    fields = result["diagnostic"]["developer_fields"]
+    assert result["diagnostic"]["status"] == "VERIFIED"
+    assert fields["is_valid"] is holds
+    assert fields["translated_expression"] == "0.15 * 200"
+    assert fields["verification_scope"] == "translated_expression_only"
+    assert fields["query_semantics_verified"] is False
+
+
+def test_natural_language_response_exposes_translated_scope(client, isolated_audit_chain):
+    diagnostic = DiagnosticResult.verified(
+        "Expression verified successfully",
+        developer_fields={
+            "is_valid": True,
+            "translated_expression": "0.15 * 200",
+            "verification_scope": "translated_expression_only",
+            "query_semantics_verified": False,
+        },
+        evidence={"expression": "0.15 * 200", "calculated_value": 30.0},
+    ).to_dict()
+    data = _nl_post(client, {"status": "VERIFIED", "diagnostic": diagnostic})
+
+    assert data["admission"] == "ADMIT"
+    assert data["translated_expression"] == "0.15 * 200"
+    assert data["verification_scope"] == "translated_expression_only"
+    assert data["query_semantics_verified"] is False
+
+
+@pytest.mark.asyncio
+async def test_control_plane_undecided_engine_result_is_not_admitted(monkeypatch):
+    from tests.test_pr5_determinism_alignment import _build_cp
+
+    cp = _build_cp(monkeypatch, claimed_answer=30.0)
+    monkeypatch.setattr(
+        cp.math_verifier,
+        "verify_math",
+        lambda expression, expected_value: {"status": INCONCLUSIVE_STATUS, "is_correct": False},
+    )
+    result = await cp.process_natural_language("What is 15% of 200?", organization_id=None)
+
+    assert result["status"] == "UNVERIFIABLE"
+    assert result["diagnostic"]["proof_ref"] is None
+    assert result["admission"] == "BLOCKED"

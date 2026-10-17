@@ -148,7 +148,18 @@ class ControlPlane:
         Attestation is always required — advisory mode was a temporary
         migration measure (#265). Decided verdicts (VERIFIED / DISPROVEN) are
         signed; anything else goes through the fail-closed legacy mapping.
+
+        The engine checked only the LLM's translated expression, never the
+        user's question, so the verdict carries that expression and its scope:
+        a consumer reading only the diagnostic cannot mistake it for proof of
+        the question itself.
         """
+        verification_result = {
+            **verification_result,
+            "translated_expression": expression,
+            "verification_scope": "translated_expression_only",
+            "query_semantics_verified": False,
+        }
         if verification_result.get("status", "ERROR") not in ("VERIFIED", DISPROVEN_STATUS):
             # from_legacy_dict raises only for VERIFIED / DISPROVEN without
             # proof_ref, which never reach this branch.

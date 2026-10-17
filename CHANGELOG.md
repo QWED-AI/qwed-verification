@@ -15,8 +15,10 @@ All notable changes to the QWED Protocol will be documented in this file.
     by a concrete computation returns the legacy status `DISPROVEN`.
   - Symbolic checks (derivative, indefinite integral, limit, `/verify/math`
     identities) return `DISPROVEN` only when SymPy decides the difference is
-    non-zero: outright, by exact expansion of a bounded polynomial, or at an
-    exact witness point. A difference `simplify` cannot decide returns
+    non-zero: outright, by the coefficients of a bounded polynomial (a
+    coefficient counts as non-zero only when SymPy decides it, so a true
+    identity with an irrational coefficient like `cos(pi/7) - cos(2*pi/7) +
+    cos(3*pi/7) - 1/2` is never disproven), or at an exact witness point. A difference `simplify` cannot decide returns
     `INCONCLUSIVE`, which maps to `UNVERIFIABLE`. An undecided `Matrix.equals`
     is also `INCONCLUSIVE`.
   - A witness point is used only when it satisfies the symbol's declared
@@ -41,7 +43,10 @@ All notable changes to the QWED Protocol will be documented in this file.
     re-deriving it from the legacy engine dict, which turned every decided
     claim into `UNVERIFIABLE`. A malformed diagnostic is `BLOCKED`, and if the
     output sanitizer rejects the translated expression the verdict is
-    `BLOCKED` too.
+    `BLOCKED` too. The verdict carries `translated_expression`,
+    `verification_scope: translated_expression_only` and
+    `query_semantics_verified: false`, so it is not mistaken for proof of the
+    user's question.
 - **`qwed init` and `qwed test` print the verdict with its admission (#438).**
   Decided cases no longer print `BLOCKED`, and `VERIFIED` never appears alone:
   `2+2=5 -> VERIFIED (false) | DENY`. A failed self-check prints `FAILED`. The

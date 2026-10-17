@@ -291,43 +291,51 @@ def _fold_exact(node: Any):
     gate exists to prevent. Powers are handled structurally via base/exp.
     """
     if isinstance(node, sympy.Pow):
-        base = _fold_exact(node.base)
-        exponent = _fold_exact(node.exp)
-        if exponent is not None and abs(exponent) > _MAX_EXPONENT_MAGNITUDE:
-            # Whatever the base (Integer, Rational, sqrt(2), ...), SymPy
-            # expands an exact power with an exponent this large eagerly.
-            raise SafeParserError(
-                f"Exponent exceeds the maximum magnitude of {_MAX_EXPONENT_MAGNITUDE}"
-            )
-        if base is None or exponent is None:
-            return None
-        if base != 0 and _exact_digits(base) * abs(exponent) > _MAX_EXPANSION_DIGITS:
-            raise SafeParserError(
-                "Expression demands unbounded exact-integer expansion"
-            )
-        if not isinstance(exponent, int):
-            return None  # irrational result (e.g. 9**(1/2)): not an exact number
-        if base == 0 and exponent < 0:
-            return None
-        return Fraction(base) ** exponent if exponent < 0 else base ** exponent
+        return _fold_exact_pow(node)
     if node.is_Integer:
         return int(node)
     if node.is_Rational:
         return Fraction(int(node.p), int(node.q))
     if isinstance(node, (sympy.Add, sympy.Mul)):
-        is_add = isinstance(node, sympy.Add)
-        acc = 0 if is_add else 1
-        for arg in node.args:
-            val = _fold_exact(arg)
-            if val is None:
-                return None
-            acc = acc + val if is_add else acc * val
-            if acc != 0 and _exact_digits(acc) > _MAX_EXPANSION_DIGITS:
-                raise SafeParserError(
-                    "Expression demands unbounded exact-integer expansion"
-                )
-        return acc
+        return _fold_exact_sum_or_product(node)
     return None
+
+
+def _check_expansion_digits(value) -> None:
+    if value != 0 and _exact_digits(value) > _MAX_EXPANSION_DIGITS:
+        raise SafeParserError("Expression demands unbounded exact-integer expansion")
+
+
+def _fold_exact_pow(node: Any):
+    base = _fold_exact(node.base)
+    exponent = _fold_exact(node.exp)
+    if exponent is not None and abs(exponent) > _MAX_EXPONENT_MAGNITUDE:
+        # Whatever the base (Integer, Rational, sqrt(2), ...), SymPy
+        # expands an exact power with an exponent this large eagerly.
+        raise SafeParserError(
+            f"Exponent exceeds the maximum magnitude of {_MAX_EXPONENT_MAGNITUDE}"
+        )
+    if base is None or exponent is None:
+        return None
+    if base != 0 and _exact_digits(base) * abs(exponent) > _MAX_EXPANSION_DIGITS:
+        raise SafeParserError("Expression demands unbounded exact-integer expansion")
+    if not isinstance(exponent, int):
+        return None  # irrational result (e.g. 9**(1/2)): not an exact number
+    if exponent >= 0:
+        return base ** exponent
+    return None if base == 0 else Fraction(base) ** exponent
+
+
+def _fold_exact_sum_or_product(node: Any):
+    is_add = isinstance(node, sympy.Add)
+    acc = 0 if is_add else 1
+    for arg in node.args:
+        value = _fold_exact(arg)
+        if value is None:
+            return None
+        acc = acc + value if is_add else acc * value
+        _check_expansion_digits(acc)
+    return acc
 
 
 def _exact_digits(value) -> int:
