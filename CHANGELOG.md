@@ -4,6 +4,33 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A math claim proven false is now `VERIFIED` with admission `DENY`, not
+  `UNVERIFIABLE` (#437).** `2+2=5` used to come back as "Verification
+  inconclusive", which recorded a definite counter-proof as "could not be
+  proven". Admission was `DENY` either way, so nothing unsafe passed, but audit
+  rows and Verification Context documents carried the wrong meaning.
+  - `VerificationEngine` no longer emits `CORRECTION_NEEDED`. A mismatch decided
+    by a concrete computation returns the legacy status `DISPROVEN`.
+  - Symbolic checks (derivative, indefinite integral, limit, `/verify/math`
+    identities) return `DISPROVEN` only when SymPy decides the difference is
+    non-zero, either outright or at an exact witness point. A difference
+    `simplify` cannot decide returns `INCONCLUSIVE`, which maps to
+    `UNVERIFIABLE`. An undecided `Matrix.equals` is also `INCONCLUSIVE`.
+  - The control plane signs and attests `DISPROVEN` like `VERIFIED`, with
+    `verified=False` in the attestation and `is_valid: false` in the result.
+  - New `DiagnosticResult.disproven()` builds a `VERIFIED` result with
+    `is_valid` forced to `False`. `from_legacy_dict` raises for `DISPROVEN`,
+    because a counter-proof needs a `proof_ref`.
+  - The control-plane math response and `/verify/math` now include
+    `admission`. `/verify/math` logs `is_verified` from `is_valid`, so a
+    proven-false identity is no longer logged as verified.
+- **`qwed init` and `qwed test` print the verdict with its admission (#438).**
+  Decided cases no longer print `BLOCKED`, and `VERIFIED` never appears alone:
+  `2+2=5 -> VERIFIED (false) | DENY`. A failed self-check prints `FAILED`. The
+  closing lines say `All engines ready.` instead of "All engines verified".
+
 ### Changed
 
 - **The API now writes its audit rows through the signed hash chain.** Every

@@ -14,7 +14,7 @@ Enterprise Features:
 """
 
 from sympy import (
-    Symbol, Matrix,
+    Symbol, Matrix, Integer, Rational,
     diff, integrate, limit, oo,
     simplify, expand
 )
@@ -31,6 +31,50 @@ TOLERANCE_POLICY_ERROR = "Tolerance exceeds deterministic verification bound"
 VERIFY_LOGIC_RULE_DEPRECATED_ERROR = (
     "verify_logic_rule is deprecated and fail-closed; use LogicVerifier instead"
 )
+
+# Legacy status for a claim the engine deterministically proved FALSE (#437).
+# It is a decided verdict, not an inconclusive one: consumers map it to
+# DiagnosticStatus.VERIFIED with is_valid False, so admission is DENY.
+DISPROVEN_STATUS = "DISPROVEN"
+# Legacy status when the engine could neither prove nor disprove the claim
+# (e.g. simplify() did not reduce a symbolic difference to a decided value).
+INCONCLUSIVE_STATUS = "INCONCLUSIVE"
+
+
+def _numeric_status(is_correct: bool) -> str:
+    """Status for a claim decided by a concrete computation.
+
+    The computation that would justify VERIFIED on a match equally justifies
+    DISPROVEN on a mismatch, so a mismatch is a decided verdict.
+    """
+    return "VERIFIED" if is_correct else DISPROVEN_STATUS
+
+
+# Exact points tried, in order, when looking for a counterexample to a
+# symbolic claim. Integers and rationals keep the evaluation exact.
+_WITNESS_POINTS = (Integer(1), Integer(2), Integer(-1), Integer(3), Rational(1, 2), Integer(0))
+
+
+def symbolic_difference_status(difference: Any) -> str:
+    """Status for a claim decided by ``simplify(actual - claimed)``.
+
+    ``simplify`` is incomplete: a non-zero result does not prove the two sides
+    differ. The claim is DISPROVEN only when SymPy decides the difference is
+    non-zero, either outright (``is_zero is False``) or at an exact witness
+    point where it evaluates to a finite non-zero number. Anything undecided
+    is INCONCLUSIVE.
+    """
+    if difference == 0:
+        return "VERIFIED"
+    if getattr(difference, "is_zero", None) is False:
+        return DISPROVEN_STATUS
+    symbols = getattr(difference, "free_symbols", set())
+    if symbols:
+        for point in _WITNESS_POINTS:
+            value = difference.subs({sym: point for sym in symbols})
+            if value.is_number and value.is_finite and value.is_zero is False:
+                return DISPROVEN_STATUS
+    return INCONCLUSIVE_STATUS
 
 
 @dataclass
@@ -185,7 +229,7 @@ class VerificationEngine:
                     "claimed_value": expected_value,
                     "diff": float(diff),
                     "precision_mode": "decimal",
-                    "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED"
+                    "status": _numeric_status(is_correct)
                 }
 
             calculated_value = float(expr.evalf())
@@ -211,7 +255,7 @@ class VerificationEngine:
                 "claimed_value": expected_value,
                 "diff": diff,
                 "precision_mode": "float",
-                "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED"
+                "status": _numeric_status(is_correct)
             }
         except Exception as e:
             return {
@@ -322,11 +366,12 @@ class VerificationEngine:
             
             # Compare
             difference = simplify(actual_derivative - expected_expr)
-            is_correct = difference == 0
+            status = symbolic_difference_status(difference)
+            is_correct = status == "VERIFIED"
             
             return {
                 "is_correct": is_correct,
-                "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
+                "status": status,
                 "calculated_derivative": str(actual_derivative),
                 "claimed_derivative": expected,
                 "expression": expression,
@@ -374,6 +419,7 @@ class VerificationEngine:
                 actual_val = float(actual_integral.evalf())
                 expected_val = float(expected_expr.evalf())
                 is_correct = abs(actual_val - expected_val) < 1e-6
+                status = _numeric_status(is_correct)
             else:
                 # Indefinite integral
                 actual_integral = integrate(expr, var)
@@ -381,11 +427,12 @@ class VerificationEngine:
                 # For indefinite, derivatives should match (accounts for +C)
                 deriv_actual = diff(actual_integral, var)
                 deriv_expected = diff(expected_expr, var)
-                is_correct = simplify(deriv_actual - deriv_expected) == 0
+                status = symbolic_difference_status(simplify(deriv_actual - deriv_expected))
+                is_correct = status == "VERIFIED"
             
             return {
                 "is_correct": is_correct,
-                "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
+                "status": status,
                 "calculated_integral": str(actual_integral),
                 "claimed_integral": expected,
                 "integral_type": "definite" if lower_bound else "indefinite"
@@ -433,11 +480,12 @@ class VerificationEngine:
             actual_limit = limit(expr, var, pt, dir=direction)
             
             # Compare
-            is_correct = simplify(actual_limit - expected_expr) == 0
+            status = symbolic_difference_status(simplify(actual_limit - expected_expr))
+            is_correct = status == "VERIFIED"
             
             return {
                 "is_correct": is_correct,
-                "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
+                "status": status,
                 "calculated_limit": str(actual_limit),
                 "claimed_limit": expected,
                 "expression": expression,
@@ -493,7 +541,7 @@ class VerificationEngine:
                 is_correct = abs(float(result) - float(expected)) < 1e-6
                 return {
                     "is_correct": is_correct,
-                    "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
+                    "status": _numeric_status(is_correct),
                     "calculated_determinant": float(result),
                     "claimed_determinant": expected
                 }
@@ -519,7 +567,7 @@ class VerificationEngine:
                 if len(eigenvals_float) != len(expected_sorted):
                     return {
                         "is_correct": False,
-                        "status": "CORRECTION_NEEDED",
+                        "status": DISPROVEN_STATUS,
                         "error": (
                             f"Eigenvalue cardinality mismatch: matrix has "
                             f"{len(eigenvals_float)} eigenvalue(s) (counting "
@@ -538,7 +586,7 @@ class VerificationEngine:
                 )
                 return {
                     "is_correct": is_correct,
-                    "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
+                    "status": _numeric_status(is_correct),
                     "calculated_eigenvalues": eigenvals_float,
                     "claimed_eigenvalues": list(expected)
                 }
@@ -546,11 +594,18 @@ class VerificationEngine:
                 return {"is_correct": False, "status": "ERROR", "error": f"Unknown operation: {operation}"}
             
             # Compare matrices
-            is_correct = result.equals(expected_mat)
+            # Matrix.equals returns None when it cannot decide; that is not a
+            # disproof, so it stays INCONCLUSIVE.
+            equal = result.equals(expected_mat)
+            is_correct = equal is True
+            if equal is None:
+                status = INCONCLUSIVE_STATUS
+            else:
+                status = _numeric_status(is_correct)
             
             return {
                 "is_correct": is_correct,
-                "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
+                "status": status,
                 "calculated_result": result.tolist(),
                 "claimed_result": expected,
                 "operation": operation
@@ -596,7 +651,7 @@ class VerificationEngine:
             
             return {
                 "is_correct": is_correct,
-                "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
+                "status": _numeric_status(is_correct),
                 "calculated_amount": A,
                 "claimed_amount": expected,
                 "principal": principal,
@@ -634,7 +689,7 @@ class VerificationEngine:
             
             return {
                 "is_correct": is_correct,
-                "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
+                "status": _numeric_status(is_correct),
                 "calculated_npv": npv,
                 "claimed_npv": expected,
                 "discount_rate": rate,
@@ -778,7 +833,7 @@ class VerificationEngine:
             
             return {
                 "is_correct": is_correct,
-                "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
+                "status": _numeric_status(is_correct),
                 "calculated_irr": irr,
                 "claimed_irr": expected,
                 "converged": True,
@@ -823,7 +878,7 @@ class VerificationEngine:
                 is_correct = abs(calculated - percentage) <= tolerance
                 return {
                     "is_correct": is_correct,
-                    "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
+                    "status": _numeric_status(is_correct),
                     "calculated_percentage_change": calculated,
                     "claimed_percentage_change": percentage,
                     "from_value": value,
@@ -836,7 +891,7 @@ class VerificationEngine:
             
             return {
                 "is_correct": is_correct,
-                "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
+                "status": _numeric_status(is_correct),
                 "calculated_result": round(calculated, 2),
                 "claimed_result": expected,
                 "value": value,
@@ -934,7 +989,7 @@ class VerificationEngine:
             
             return {
                 "is_correct": is_correct,
-                "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
+                "status": _numeric_status(is_correct),
                 "calculated_value": round(calculated, 6),
                 "claimed_value": expected,
                 "statistic": statistic,
@@ -977,7 +1032,7 @@ class VerificationEngine:
             
             return {
                 "is_correct": is_correct,
-                "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
+                "status": _numeric_status(is_correct),
                 "calculated_correlation": round(r, 6),
                 "claimed_correlation": expected,
                 "data_points": n
@@ -1059,7 +1114,7 @@ class VerificationEngine:
             
             return {
                 "is_correct": is_correct,
-                "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
+                "status": _numeric_status(is_correct),
                 "calculated_value": round(calculated, 6),
                 "claimed_value": expected,
                 "from_unit": from_unit,
@@ -1107,7 +1162,7 @@ class VerificationEngine:
         
         return {
             "is_correct": is_correct,
-            "status": "VERIFIED" if is_correct else "CORRECTION_NEEDED",
+            "status": _numeric_status(is_correct),
             "calculated_value": round(calculated, 2),
             "claimed_value": expected,
             "from_unit": from_unit,

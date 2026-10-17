@@ -35,7 +35,7 @@ class TestMathEngineBasics:
         """Test detection of incorrect value."""
         result = engine.verify_math("2 + 2", 5)
         assert result["is_correct"] is False
-        assert result["status"] == "CORRECTION_NEEDED"
+        assert result["status"] == "DISPROVEN"
     
     def test_percentage(self, engine):
         """Test percentage calculation."""

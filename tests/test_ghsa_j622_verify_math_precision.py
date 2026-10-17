@@ -20,15 +20,15 @@ def engine():
     "expression,claimed,expected_status",
     [
         # 17-significant-digit integer: off-by-one must be rejected...
-        ("10000000000000001", 10000000000000000, "CORRECTION_NEEDED"),
+        ("10000000000000001", 10000000000000000, "DISPROVEN"),
         # ...and the exact claim verified.
         ("10000000000000001", 10000000000000001, "VERIFIED"),
         # 2**64 has 20 digits.
         ("2**64", 18446744073709551616, "VERIFIED"),
-        ("2**64", 18446744073709551615, "CORRECTION_NEEDED"),
+        ("2**64", 18446744073709551615, "DISPROVEN"),
         # A larger power, still exact.
         ("10**30", 10 ** 30, "VERIFIED"),
-        ("10**30", 10 ** 30 + 1, "CORRECTION_NEEDED"),
+        ("10**30", 10 ** 30 + 1, "DISPROVEN"),
     ],
 )
 def test_large_integer_precision(engine, expression, claimed, expected_status):
@@ -49,7 +49,7 @@ def test_large_integer_is_compared_exactly(engine):
         ("1/3", "0.333333", "VERIFIED"),
         ("0.1 + 0.2", "0.3", "VERIFIED"),
         ("sqrt(2)", "1.414214", "VERIFIED"),
-        ("100 - 1", 98, "CORRECTION_NEEDED"),
+        ("100 - 1", 98, "DISPROVEN"),
     ],
 )
 def test_small_values_unchanged(engine, expression, claimed, expected_status):

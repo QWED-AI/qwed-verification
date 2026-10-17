@@ -114,17 +114,53 @@ async def test_control_plane_marks_translated_math_as_verified(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_control_plane_returns_unverifiable_when_translation_claim_is_wrong(monkeypatch):
+async def test_control_plane_reports_disproven_claim_as_verified_deny(monkeypatch):
+    """A translated claim the engine proves false is a decided verdict:
+    VERIFIED (attested, proof_ref bound) with admission DENY — not
+    UNVERIFIABLE / "inconclusive" (#437)."""
     cp = _build_cp(monkeypatch, claimed_answer=40.0)
 
     result = await cp.process_natural_language("What is 15% of 200?", organization_id=42)
 
-    assert result["status"] == "UNVERIFIABLE"
+    assert result["verification"]["status"] == "DISPROVEN"
+    assert result["status"] == "VERIFIED"
+    assert result["admission"] == "BLOCKED"
     assert result["final_answer"] == 30.0
-    assert result["verification"]["status"] == "CORRECTION_NEEDED"
     assert result["trust_boundary"]["translation_claim_self_consistent"] is False
-    assert result["trust_boundary"]["trust_enforced"] == "UNVERIFIABLE"
+    assert result["trust_boundary"]["deterministic_expression_evaluation"] is True
+    assert result["trust_boundary"]["trust_enforced"] == "VERIFIED"
     assert result["trust_boundary"]["attestation_policy"] == "mandatory"
+
+
+@pytest.mark.asyncio
+async def test_control_plane_attests_disproven_claim_as_not_verified(monkeypatch):
+    """The attestation for a counter-proof carries verified=False."""
+    cp = _build_cp(monkeypatch, claimed_answer=40.0)
+
+    from qwed_new.core.attestation import AttestationResult, AttestationStatus
+    captured: dict = {}
+
+    def _mock_create_attestation(**kwargs):
+        captured.update(kwargs)
+        return AttestationResult(
+            status=AttestationStatus.UNVERIFIABLE,
+            token=None,
+            error_code="CRYPTO_UNAVAILABLE",
+            error="not installed",
+        )
+
+    monkeypatch.setattr(
+        "qwed_new.core.control_plane.create_verification_attestation",
+        _mock_create_attestation,
+    )
+
+    result = await cp.process_natural_language("What is 15% of 200?", organization_id=42)
+
+    assert captured["status"] == "VERIFIED"
+    assert captured["verified"] is False
+    # Attestation failure still fails closed.
+    assert result["status"] == "BLOCKED"
+    assert result["admission"] == "BLOCKED"
 
 
 @pytest.mark.asyncio

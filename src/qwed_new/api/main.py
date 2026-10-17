@@ -21,6 +21,7 @@ from qwed_new.core.diagnostics import (
     enforce_trust_decision,
     merge_diagnostic_result,
 )
+from qwed_new.core.verifier import DISPROVEN_STATUS, symbolic_difference_status
 from qwed_new.api.verification_context_routes import router as verification_context_router
 
 # Configure logging
@@ -1041,23 +1042,31 @@ async def verify_math(
             left = safe_parse_expr(left_str)
             right = safe_parse_expr(right_str)
             difference = simplify(left - right)
-            is_valid = difference == 0
+            identity_status = symbolic_difference_status(difference)
 
             fields = {
                 "left_side": str(left),
                 "right_side": str(right),
                 "simplified_difference": str(difference),
             }
-            if is_valid:
+            if identity_status == "VERIFIED":
                 dr = DiagnosticResult.verified(
                     "Identity is true",
                     developer_fields={"is_valid": True, "result": True, **fields},
                     evidence=fields,
                 )
+            elif identity_status == DISPROVEN_STATUS:
+                # Proven false is a decided verdict: VERIFIED with is_valid
+                # False, admission DENY — never "inconclusive" (#437).
+                dr = DiagnosticResult.disproven(
+                    "Identity is false",
+                    developer_fields={"result": False, **fields},
+                    evidence={**fields, "verdict": "disproven"},
+                )
             else:
                 dr = DiagnosticResult.unverifiable(
-                    "Identity is false",
-                    developer_fields={"is_valid": False, "result": False, **fields},
+                    "Identity could not be proven or disproven",
+                    developer_fields={"is_valid": False, "result": None, **fields},
                 )
         else:
             import re
@@ -1124,17 +1133,22 @@ async def verify_math(
             dr.developer_fields.setdefault("advisory_checks", []).append(float_advisory)
 
         dr = _enforce_trust(dr, query=expression)
+        # A proven-false identity is VERIFIED too, so the verdict alone is
+        # not "safe to use": expose admission separately (QWED #15).
+        admission = admission_decision(dr)
 
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=expression,
             result=_cap_log_result(dr.to_dict()),
-            is_verified=dr.is_authoritative,
+            is_verified=dr.developer_fields.get("is_valid") is True,
             domain="MATH"
         )
         _safe_commit_log(log)
 
-        return _merge_response(dr)
+        response = _merge_response(dr)
+        response["admission"] = admission.value
+        return response
 
     except HTTPException:
         raise
@@ -1153,7 +1167,9 @@ async def verify_math(
             domain="MATH"
         )
         _safe_commit_log(log)
-        return _merge_response(dr)
+        response = _merge_response(dr)
+        response["admission"] = admission_decision(dr).value
+        return response
 
 
 @app.post(

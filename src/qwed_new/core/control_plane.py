@@ -16,13 +16,13 @@ from typing import Dict, Any, Optional
 from qwed_new.core.router import Router
 from qwed_new.core.policy import PolicyEngine
 from qwed_new.core.translator import TranslationLayer
-from qwed_new.core.verifier import VerificationEngine
+from qwed_new.core.verifier import VerificationEngine, DISPROVEN_STATUS
 from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
 from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.core.observability import metrics_collector
 from qwed_new.core.security import EnhancedSecurityGateway, redact_pii
 from qwed_new.core.output_sanitizer import OutputSanitizer
-from qwed_new.core.diagnostics import DiagnosticResult, enforce_trust_decision
+from qwed_new.core.diagnostics import DiagnosticResult, admission_decision, enforce_trust_decision
 from qwed_new.core.attestation import create_verification_attestation, AttestationStatus
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ class ControlPlane:
     ) -> Dict[str, Any]:
         """Describe exactly what the math pipeline did and did not prove."""
         expression_status = verification_result.get("status")
-        deterministic_evaluation = expression_status in {"VERIFIED", "CORRECTION_NEEDED"}
+        deterministic_evaluation = expression_status in {"VERIFIED", DISPROVEN_STATUS}
         return {
             "query_interpretation_source": "llm_translation",
             "query_semantics_verified": False,
@@ -98,7 +98,7 @@ class ControlPlane:
     def _determine_math_response_status(verification_result: Dict[str, Any]) -> str:
         """Avoid representing translated-query evaluation as a proven user-query verdict."""
         expression_status = verification_result.get("status")
-        if expression_status in {"VERIFIED", "CORRECTION_NEEDED"}:
+        if expression_status in {"VERIFIED", DISPROVEN_STATUS}:
             return "INCONCLUSIVE"
         if expression_status == "SYNTAX_ERROR":
             return "ERROR"
@@ -175,30 +175,40 @@ class ControlPlane:
             # Attestation is always required — advisory mode was a
             # temporary migration measure (#265).
             legacy_status = verification_result.get("status", "ERROR")
-            if legacy_status == "VERIFIED":
-                # VERIFIED requires proof_ref. Build DiagnosticResult.verified()
-                # from the computation evidence and issue an attestation.
+            if legacy_status in ("VERIFIED", DISPROVEN_STATUS):
+                # Both are decided verdicts and need proof_ref. A proven-false
+                # claim (#437) is VERIFIED with is_valid False, so admission is
+                # DENY; it is never reported as UNVERIFIABLE ("inconclusive").
+                claim_holds = legacy_status == "VERIFIED"
                 evidence = {
                     "expression": task.expression,
                     "calculated_value": verification_result.get("calculated_value"),
                     "claimed_value": verification_result.get("claimed_value"),
                     "diff": verification_result.get("diff"),
                     "precision_mode": verification_result.get("precision_mode"),
-                    "status": "VERIFIED",
+                    "status": legacy_status,
                 }
-                dr = DiagnosticResult.verified(
-                    "Expression verified successfully",
-                    developer_fields=verification_result,
-                    evidence=evidence,
-                    proof_data=str(evidence),
-                )
+                if claim_holds:
+                    dr = DiagnosticResult.verified(
+                        "Expression verified successfully",
+                        developer_fields={**verification_result, "is_valid": True},
+                        evidence=evidence,
+                        proof_data=str(evidence),
+                    )
+                else:
+                    dr = DiagnosticResult.disproven(
+                        "Claimed value is proven false",
+                        developer_fields=verification_result,
+                        evidence=evidence,
+                        proof_data=str(evidence),
+                    )
                 # Issue attestation for the VERIFIED result.
                 # (#279) Attest the translated formula — not the natural-language
                 # query — so qwed.query_hash binds to task.expression (what the
                 # deterministic engine actually verified), not the user's prose.
                 att_result = create_verification_attestation(
                     status="VERIFIED",
-                    verified=True,
+                    verified=claim_holds,
                     engine="math",
                     query=task.expression,
                     confidence=1.0,
@@ -224,9 +234,9 @@ class ControlPlane:
                         query=task.expression,  # #279 — must match qwed.query_hash in the attestation
                     )
             else:
-                # Non-VERIFIED path: convert legacy dict and enforce.
-                # from_legacy_dict raises only for VERIFIED without proof_ref,
-                # which is already handled above.
+                # Undecided path: convert legacy dict and enforce.
+                # from_legacy_dict raises only for VERIFIED / DISPROVEN without
+                # proof_ref, which are already handled above.
                 dr = DiagnosticResult.from_legacy_dict(verification_result, engine="math")
                 enforced = enforce_trust_decision(
                     dr,
@@ -239,8 +249,11 @@ class ControlPlane:
             trust_boundary["overall_status"] = enforced.status.value
 
             # 5. Response Construction
+            # Admission is a separate decision from the verdict (QWED #15):
+            # VERIFIED alone does not mean the claim holds.
             response = {
                 "status": response_status,
+                "admission": admission_decision(enforced).value,
                 "final_answer": verification_result.get("calculated_value"),
                 "user_query": query,
                 "translation": task.dict(),

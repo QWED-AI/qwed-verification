@@ -56,6 +56,9 @@ def _legacy(result: Dict[str, Any], engine: str) -> Tuple[str, bool, Dict[str, A
 
     if result.get("status") == "VERIFIED":
         return "VERIFIED", bool(result.get("is_correct", result.get("is_equivalent", True))), result
+    # A counter-proof is a decided verdict: VERIFIED, never accepted (#437).
+    if result.get("status") == "DISPROVEN":
+        return "VERIFIED", False, result
     status = DiagnosticResult.from_legacy_dict(result, engine=engine).status.value
     return status, False, result
 
