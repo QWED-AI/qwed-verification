@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File, F
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
-from typing import Optional, Annotated
+from typing import Any, Optional, Annotated
 from sqlmodel import Session, select
 from datetime import datetime, timezone
 import asyncio
@@ -21,6 +21,7 @@ from qwed_new.core.diagnostics import (
     enforce_trust_decision,
     merge_diagnostic_result,
 )
+from qwed_new.core.verifier import DISPROVEN_STATUS, symbolic_difference_status
 from qwed_new.api.verification_context_routes import router as verification_context_router
 
 # Configure logging
@@ -604,27 +605,51 @@ async def verify_natural_language(
         )
 
     if dr is None:
-        verification_result = result.get("verification", {}) if isinstance(result, dict) else {}
-        try:
-            dr = DiagnosticResult.from_legacy_dict(verification_result, engine="math")
-        except ValueError:
-            dr = DiagnosticResult.unverifiable(
-                "Verification result unavailable — legacy engine did not retain proof artifacts",
-                {"constraint_id": "api.natural_language.legacy_conversion_failed", "legacy_status": verification_result.get("status")},
-            )
+        dr = _natural_language_diagnostic(result)
     dr = _enforce_trust(dr, query=request.query)
+    # A proven-false claim is VERIFIED too: admission is the separate
+    # safe-to-use decision (QWED #15).
+    admission = admission_decision(dr)
 
     log = VerificationLog(
         organization_id=tenant.organization_id,
         user_id=tenant.user_id if hasattr(tenant, 'user_id') else None,
         query=request.query,
         result=_cap_log_result(dr.to_dict()),
-        is_verified=dr.is_authoritative,
+        is_verified=dr.developer_fields.get("is_valid") is True,
         domain="MATH"
     )
     _safe_commit_log(log)
 
-    return _merge_response(dr)
+    response = _merge_response(dr)
+    response["admission"] = admission.value
+    return response
+
+
+def _natural_language_diagnostic(result: Any) -> DiagnosticResult:
+    """The verdict for a control-plane result.
+
+    The control plane attaches the DiagnosticResult it enforced (signed and
+    attested for decided verdicts, #437), so it is used as produced. Results
+    without one (security or policy blocks, non-math queries, errors) fall back
+    to the fail-closed legacy mapping, which can never yield VERIFIED.
+    """
+    if isinstance(result, dict) and "diagnostic" in result:
+        try:
+            return DiagnosticResult.from_dict(result["diagnostic"])
+        except (TypeError, ValueError, KeyError, AttributeError):
+            return DiagnosticResult.blocked(
+                "Verification blocked — control plane returned a malformed diagnostic",
+                {"constraint_id": "api.natural_language.malformed_diagnostic"},
+            )
+    verification_result = result.get("verification", {}) if isinstance(result, dict) else {}
+    try:
+        return DiagnosticResult.from_legacy_dict(verification_result, engine="math")
+    except ValueError:
+        return DiagnosticResult.unverifiable(
+            "Verification result unavailable — legacy engine did not retain proof artifacts",
+            {"constraint_id": "api.natural_language.legacy_conversion_failed", "legacy_status": verification_result.get("status")},
+        )
 
 @app.post(
     "/verify/logic",
@@ -1041,23 +1066,31 @@ async def verify_math(
             left = safe_parse_expr(left_str)
             right = safe_parse_expr(right_str)
             difference = simplify(left - right)
-            is_valid = difference == 0
+            identity_status = symbolic_difference_status(difference)
 
             fields = {
                 "left_side": str(left),
                 "right_side": str(right),
                 "simplified_difference": str(difference),
             }
-            if is_valid:
+            if identity_status == "VERIFIED":
                 dr = DiagnosticResult.verified(
                     "Identity is true",
                     developer_fields={"is_valid": True, "result": True, **fields},
                     evidence=fields,
                 )
+            elif identity_status == DISPROVEN_STATUS:
+                # Proven false is a decided verdict: VERIFIED with is_valid
+                # False, admission DENY — never "inconclusive" (#437).
+                dr = DiagnosticResult.disproven(
+                    "Identity is false",
+                    developer_fields={"result": False, **fields},
+                    evidence={**fields, "verdict": "disproven"},
+                )
             else:
                 dr = DiagnosticResult.unverifiable(
-                    "Identity is false",
-                    developer_fields={"is_valid": False, "result": False, **fields},
+                    "Identity could not be proven or disproven",
+                    developer_fields={"is_valid": False, "result": None, **fields},
                 )
         else:
             import re
@@ -1124,17 +1157,22 @@ async def verify_math(
             dr.developer_fields.setdefault("advisory_checks", []).append(float_advisory)
 
         dr = _enforce_trust(dr, query=expression)
+        # A proven-false identity is VERIFIED too, so the verdict alone is
+        # not "safe to use": expose admission separately (QWED #15).
+        admission = admission_decision(dr)
 
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=expression,
             result=_cap_log_result(dr.to_dict()),
-            is_verified=dr.is_authoritative,
+            is_verified=dr.developer_fields.get("is_valid") is True,
             domain="MATH"
         )
         _safe_commit_log(log)
 
-        return _merge_response(dr)
+        response = _merge_response(dr)
+        response["admission"] = admission.value
+        return response
 
     except HTTPException:
         raise
@@ -1153,7 +1191,9 @@ async def verify_math(
             domain="MATH"
         )
         _safe_commit_log(log)
-        return _merge_response(dr)
+        response = _merge_response(dr)
+        response["admission"] = admission_decision(dr).value
+        return response
 
 
 @app.post(

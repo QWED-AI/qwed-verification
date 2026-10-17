@@ -4,6 +4,58 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A math claim proven false is now `VERIFIED` with admission `DENY`, not
+  `UNVERIFIABLE` (#437).** `2+2=5` used to come back as "Verification
+  inconclusive", which recorded a definite counter-proof as "could not be
+  proven". Admission was `DENY` either way, so nothing unsafe passed, but audit
+  rows and Verification Context documents carried the wrong meaning.
+  - `VerificationEngine` no longer emits `CORRECTION_NEEDED`. A mismatch decided
+    by a concrete computation returns the legacy status `DISPROVEN`.
+  - Symbolic checks (derivative, indefinite integral, limit, `/verify/math`
+    identities) return `DISPROVEN` only when SymPy decides the difference is
+    non-zero: outright, by the coefficients of a bounded polynomial (a
+    coefficient counts as non-zero only when SymPy decides it, so a true
+    identity with an irrational coefficient like `cos(pi/7) - cos(2*pi/7) +
+    cos(3*pi/7) - 1/2` is never disproven), or at an exact witness point. A difference `simplify` cannot decide returns
+    `INCONCLUSIVE`, which maps to `UNVERIFIABLE`. An undecided `Matrix.equals`
+    is also `INCONCLUSIVE`.
+  - A witness point is used only when it satisfies the symbol's declared
+    domain (`n` is a positive integer, so `-1`, `0` and `1/2` are skipped).
+    It is substituted without evaluation and checked by the new
+    `safe_parser.check_closed_expression_cost` first, so a lazy power tower
+    such as `9**9**9**x` is never expanded at a witness.
+  - A non-zero difference containing a Float literal (`0.1 + 0.2 = 0.3`
+    leaves 5.55e-17) is `INCONCLUSIVE`, not `DISPROVEN`. A numeric mismatch
+    involving a non-finite value (an overflowed sum, a NaN claim) is also
+    `INCONCLUSIVE`.
+  - Matrix results with float entries are compared entry by entry against
+    the same 1e-6 tolerance the determinant and eigenvalue checks use, so
+    `[[0.1]] + [[0.2]]` vs `[[0.3]]` is `VERIFIED`, not a false disproof. A
+    claimed matrix of the wrong shape is `DISPROVEN`.
+  - The control plane signs and attests `DISPROVEN` like `VERIFIED`, with
+    `verified=False` in the attestation and `is_valid: false` in the result.
+  - New `DiagnosticResult.disproven()` builds a `VERIFIED` result with
+    `is_valid` forced to `False`. `from_legacy_dict` raises for `DISPROVEN`,
+    because a counter-proof needs a `proof_ref`.
+  - The control-plane math response and `/verify/math` now include
+    `admission`. `/verify/math` logs `is_verified` from `is_valid`, so a
+    proven-false identity is no longer logged as verified.
+  - `/verify/natural_language` now returns the verdict the control plane
+    enforced (attached as `diagnostic`) together with `admission`, instead of
+    re-deriving it from the legacy engine dict, which turned every decided
+    claim into `UNVERIFIABLE`. A malformed diagnostic is `BLOCKED`, and if the
+    output sanitizer rejects the translated expression the verdict is
+    `BLOCKED` too. The verdict carries `translated_expression`,
+    `verification_scope: translated_expression_only` and
+    `query_semantics_verified: false`, so it is not mistaken for proof of the
+    user's question.
+- **`qwed init` and `qwed test` print the verdict with its admission (#438).**
+  Decided cases no longer print `BLOCKED`, and `VERIFIED` never appears alone:
+  `2+2=5 -> VERIFIED (false) | DENY`. A failed self-check prints `FAILED`. The
+  closing lines say `All engines ready.` instead of "All engines verified".
+
 ### Changed
 
 - **The API now writes its audit rows through the signed hash chain.** Every

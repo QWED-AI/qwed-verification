@@ -57,7 +57,7 @@ def test_run_full_engine_tests_returns_expected_shape(
 
     mock_math.verify_math.side_effect = [
         {"status": "VERIFIED", "calculated_value": 4.0},
-        {"status": "CORRECTION_NEEDED", "calculated_value": 4.0},
+        {"status": "DISPROVEN", "calculated_value": 4.0},
         {"status": "VERIFIED", "calculated_value": 994010994.0},
     ]
     from qwed_new.core.diagnostics import DiagnosticResult
@@ -144,3 +144,58 @@ def test_run_full_engine_tests_engine_construction_failures(
     assert all(item["result"] == "ERROR" for item in results)
     assert all(item["passed"] is False for item in results)
     assert all(item["detail"] for item in results)
+
+
+def test_run_full_engine_tests_prints_verdict_with_admission():
+    """#438: every decided case shows its verdict and admission; VERIFIED is
+    never printed alone and BLOCKED is never printed for a decided case."""
+    results = _run_full_engine_tests()
+
+    assert all(item["passed"] for item in results)
+    by_label = {item["label"]: item["result"] for item in results}
+    assert by_label["2+2=4"] == "VERIFIED | ADMIT"
+    assert by_label["2+2=5"] == "VERIFIED (false) | DENY"
+    assert by_label["OR 1=1 injection"] == "VERIFIED (unsafe) | DENY"
+    assert by_label["eval(input)"] == "VERIFIED (unsafe, critical) | DENY"
+    for item in results:
+        assert not item["result"].startswith("BLOCKED")
+        if "VERIFIED" in item["result"]:
+            assert item["result"].endswith(("| ADMIT", "| DENY"))
+
+
+@patch("qwed_new.core.verifier.VerificationEngine")
+def test_failed_check_prints_failed_not_blocked(mock_math_cls):
+    """A self-check whose engine answer does not match is reported FAILED,
+    and the engine's own status is kept in the detail for diagnosis."""
+    mock_math_cls.return_value.verify_math.return_value = {
+        "status": "BLOCKED",
+        "calculated_value": None,
+    }
+
+    results = {item["label"]: item for item in _run_full_engine_tests() if item["group"] == "Math"}
+
+    # The engine was really driven with each self-check input.
+    calls = [c.args for c in mock_math_cls.return_value.verify_math.call_args_list]
+    assert calls == [("2+2", 4), ("2+2", 5), ("997*998*999", 994010994)]
+    # Each Math branch failed with FAILED, never with a verdict word.
+    assert {label: item["passed"] for label, item in results.items()} == {
+        "2+2=4": False,
+        "2+2=5": False,
+        "997*998*999": False,
+    }
+    assert {item["result"] for item in results.values()} == {"FAILED"}
+    # Branch-specific detail fields carry what the engine actually returned.
+    assert results["2+2=4"]["detail"] == "computed=None"
+    assert results["2+2=5"]["detail"] == "computed=None"
+    assert results["997*998*999"]["detail"] == "status=BLOCKED"
+
+
+@patch(
+    "qwed_sdk.cli._run_full_engine_tests",
+    return_value=[{"group": "Math", "label": "2+2=4", "passed": True, "result": "VERIFIED | ADMIT"}],
+)
+def test_test_command_success_says_ready(_mock_results):
+    result = CliRunner().invoke(cli, ["test"])
+
+    assert result.exit_code == 0
+    assert "All engines ready." in result.output
