@@ -415,6 +415,11 @@ _DOMAIN_RESTRICTED_FUNCTIONS = frozenset({
     "tan", "cot", "sec", "csc", "asin", "acos", "atan", "atan2", "tanh",
     "log", "ln", "factorial", "binomial",
 })
+# Every parser name that is not a symbol: functions, constructors, constants.
+_NON_SYMBOL_NAMES = _DOMAIN_RESTRICTED_FUNCTIONS | frozenset({
+    "sin", "cos", "exp", "sinh", "cosh", "sqrt", "cbrt", "abs", "Abs",
+    "Integer", "Float", "Rational", "pi", "E", "I", "oo",
+})
 
 
 def _singular_factors(expression: str) -> Optional[frozenset]:
@@ -424,7 +429,10 @@ def _singular_factors(expression: str) -> Optional[frozenset]:
     # a fullwidth "x／x" parses as x/x (issue #330).
     expression = unicodedata.normalize("NFKC", expression).strip()
     names = set(re.findall(r"[A-Za-z_]\w*", expression))
-    if names & _DOMAIN_RESTRICTED_FUNCTIONS:
+    # A closed constant (factorial(5), log(1), tan(pi/4)) has no domain to
+    # restrict. Symbols are read from the text too, since the parsed tree of
+    # "tan(x) - tan(x) + 1" no longer contains x.
+    if names & _DOMAIN_RESTRICTED_FUNCTIONS and names - _NON_SYMBOL_NAMES:
         return None
     sources = _denominator_sources(expression)
     if sources is None:

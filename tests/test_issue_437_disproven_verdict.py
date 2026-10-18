@@ -1034,6 +1034,11 @@ def test_verify_identity_keeps_non_identities_not_equivalent():
         ("tan(x) - tan(x) + 1", "1", False),
         # Entire functions stay matched.
         ("exp(x)*exp(y)", "exp(x+y)", True),
+        # A closed constant has no domain to restrict.
+        ("factorial(5)", "120", True),
+        ("log(1)", "0", True),
+        ("tan(pi/4)", "1", True),
+        ("binomial(5, 2)", "10", True),
     ],
 )
 def test_identity_domains_match(lhs, rhs, expected):
@@ -1074,3 +1079,12 @@ def test_api_fullwidth_and_pole_identities_are_unverifiable(client, expression, 
 
     assert data["status"] == "UNVERIFIABLE"
     assert data["admission"] == "BLOCKED"
+
+
+
+@pytest.mark.parametrize("expression", ["factorial(5) = 120", "log(1) = 0", "tan(pi/4) = 1"])
+def test_api_closed_constant_identities_with_restricted_functions_are_verified(client, expression, isolated_audit_chain):
+    data = client.post("/verify/math", json={"expression": expression}).json()
+
+    assert data["status"] == "VERIFIED"
+    assert data["admission"] == "ADMIT"

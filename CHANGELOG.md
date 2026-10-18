@@ -29,7 +29,8 @@ All notable changes to the QWED Protocol will be documented in this file.
     it (after the same NFKC normalization, so fullwidth operators count);
     an identity is VERIFIED only when both sides have the same singular
     factors. An identity using a function with poles or a singular point
-    (`tan`, `sec`, `log`, `factorial`, ...) is never VERIFIED this way.
+    (`tan`, `sec`, `log`, `factorial`, ...) and a free symbol is never
+    VERIFIED this way; closed constants such as `factorial(5) = 120` are.
   - A witness point is used only when it satisfies the symbol's declared
     domain (`n` is a positive integer, so `-1`, `0` and `1/2` are skipped).
     It is substituted without evaluation and checked by the new
