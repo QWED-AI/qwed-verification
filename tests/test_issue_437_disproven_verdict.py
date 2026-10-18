@@ -1039,6 +1039,12 @@ def test_verify_identity_keeps_non_identities_not_equivalent():
         ("log(1)", "0", True),
         ("tan(pi/4)", "1", True),
         ("binomial(5, 2)", "10", True),
+        # Undefined parts that SymPy evaluates away (zoo**0 is 1).
+        ("log(0)**0", "1", False),
+        ("tan(pi/2)**0", "1", False),
+        ("(1/(x-x))**0", "1", False),
+        # A closed part the parser refuses is not trusted.
+        ("factorial(100000)*0 + 1", "1", False),
     ],
 )
 def test_identity_domains_match(lhs, rhs, expected):
@@ -1088,3 +1094,19 @@ def test_api_closed_constant_identities_with_restricted_functions_are_verified(c
 
     assert data["status"] == "VERIFIED"
     assert data["admission"] == "ADMIT"
+
+
+
+def test_identity_domain_scan_has_a_node_budget():
+    from qwed_new.core.verifier import identity_domains_match
+
+    long_sum = " + ".join(["1"] * 450)
+    assert identity_domains_match(long_sum, "450") is False
+
+
+@pytest.mark.parametrize("expression", ["log(0)**0 = 1", "tan(pi/2)**0 = 1"])
+def test_api_identity_with_undefined_part_is_unverifiable(client, expression, isolated_audit_chain):
+    data = client.post("/verify/math", json={"expression": expression}).json()
+
+    assert data["status"] != "VERIFIED"
+    assert data["admission"] == "BLOCKED"

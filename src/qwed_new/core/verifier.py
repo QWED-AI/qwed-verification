@@ -14,7 +14,7 @@ Enterprise Features:
 """
 
 from sympy import (
-    Symbol, Matrix, Integer, Rational, Float, Poly, Integral, factor_list,
+    Symbol, Matrix, Integer, Rational, Float, Poly, Integral, factor_list, zoo, nan,
     diff, integrate, limit, oo,
     simplify, expand, evaluate
 )
@@ -434,6 +434,8 @@ def _singular_factors(expression: str) -> Optional[frozenset]:
     # "tan(x) - tan(x) + 1" no longer contains x.
     if names & _DOMAIN_RESTRICTED_FUNCTIONS and names - _NON_SYMBOL_NAMES:
         return None
+    if _has_undefined_closed_part(expression):
+        return None
     sources = _denominator_sources(expression)
     if sources is None:
         # Unreadable text can only be trusted to have no singular points
@@ -450,12 +452,50 @@ def _singular_factors(expression: str) -> Optional[frozenset]:
     return frozenset(factors)
 
 
+# Past this many AST nodes the closed-part check is not attempted.
+_MAX_DOMAIN_SCAN_NODES = 400
+
+
+def _has_undefined_closed_part(expression: str) -> bool:
+    """True when a symbol-free part of ``expression`` is undefined, or when
+    that cannot be checked.
+
+    SymPy evaluates such parts away before any identity is compared:
+    ``log(0)**0`` and ``tan(pi/2)**0`` both become 1 (``zoo**0``). Each call,
+    operation and power whose text names no symbol is evaluated on its own
+    and must be finite.
+    """
+    normalized = expression.replace("^", "**")
+    try:
+        tree = ast.parse(normalized, mode="eval")
+    except SyntaxError:
+        return False  # unreadable text is handled by the caller's own guard
+    nodes = [n for n in ast.walk(tree) if isinstance(n, (ast.Call, ast.BinOp, ast.UnaryOp))]
+    if len(nodes) > _MAX_DOMAIN_SCAN_NODES:
+        return True
+    for node in nodes:
+        source = ast.get_source_segment(normalized, node)
+        if set(re.findall(r"[A-Za-z_]\w*", source)) - _NON_SYMBOL_NAMES:
+            continue  # names a symbol: covered by the denominator scan
+        try:
+            value = safe_parse_expr(source)
+        except ValueError:
+            return True
+        if value.has(zoo, nan) or value.is_finite is False:
+            return True
+    return False
+
+
 def _denominator_factors(denominator: Any) -> Optional[set]:
     """Distinct factors of one denominator that can be zero, or None when
     they cannot be found within the factoring budget."""
-    # A constant, or a denominator the symbols' assumptions rule out as zero
-    # (n is a positive integer), excludes no point.
-    if denominator.is_number or denominator.is_nonzero is True:
+    # A constant denominator must be provably non-zero: 1/0, or 1/(x - x)
+    # which parses to 1/0, is undefined everywhere.
+    if denominator.is_number:
+        return set() if denominator.is_zero is False else None
+    # A denominator the symbols' assumptions rule out as zero (n is a
+    # positive integer) excludes no point.
+    if denominator.is_nonzero is True:
         return set()
     symbols = sorted(denominator.free_symbols, key=str)
     if not denominator.is_polynomial(*symbols):

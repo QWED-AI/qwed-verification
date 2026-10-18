@@ -31,6 +31,9 @@ All notable changes to the QWED Protocol will be documented in this file.
     factors. An identity using a function with poles or a singular point
     (`tan`, `sec`, `log`, `factorial`, ...) and a free symbol is never
     VERIFIED this way; closed constants such as `factorial(5) = 120` are.
+    A symbol-free part that is undefined (`log(0)**0 = 1`, `tan(pi/2)**0 = 1`)
+    or a constant zero denominator (`(1/(x-x))**0 = 1`) also blocks it, even
+    though SymPy evaluates such parts away.
   - A witness point is used only when it satisfies the symbol's declared
     domain (`n` is a positive integer, so `-1`, `0` and `1/2` are skipped).
     It is substituted without evaluation and checked by the new
