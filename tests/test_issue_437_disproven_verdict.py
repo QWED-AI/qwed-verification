@@ -766,3 +766,34 @@ def test_unit_conversion_rejects_unknown_units_and_bad_tolerance(args, kwargs):
 def test_determinant_is_exact(matrix, claimed, expected):
     result = VerificationEngine().verify_matrix_operation("determinant", {"A": matrix}, claimed)
     assert result["status"] == expected
+
+
+
+@pytest.mark.parametrize(
+    "integrand, claimed, lower, upper, expected",
+    [
+        # Exact on both sides: decided exactly.
+        ("x**2", "1/3", "0", "1", "VERIFIED"),
+        ("x**2", "1/4", "0", "1", DISPROVEN_STATUS),
+        ("2", "8000000002", "0", "4000000000", DISPROVEN_STATUS),
+        # Float claims: 1e-6 tolerance, evaluated in SymPy precision.
+        ("x**2", "0.333333", "0", "1", "VERIFIED"),
+        ("x**2", "0.3", "0", "1", DISPROVEN_STATUS),
+        ("sin(x)/x", "0.946083", "0", "1", "VERIFIED"),
+        # A divergent integral is not a counter-proof.
+        ("1/x", "1", "1", "oo", INCONCLUSIVE_STATUS),
+    ],
+)
+def test_definite_integral_verdicts(integrand, claimed, lower, upper, expected):
+    result = VerificationEngine().verify_integral(integrand, "x", claimed, lower_bound=lower, upper_bound=upper)
+    assert result["status"] == expected
+
+
+def test_definite_integral_rounding_window_is_undecided():
+    from qwed_new.core.verifier import _definite_integral_status
+
+    exact = sympy.Rational(87960930222080009765725, 10000000000)
+    # 1e-3 off at 8.8e12: beyond the 1e-6 tolerance, inside float rounding.
+    assert _definite_integral_status(exact, sympy.Float("8796093022208.001", 30)) == INCONCLUSIVE_STATUS
+    assert _definite_integral_status(sympy.Symbol("x"), sympy.Float(1.0)) == INCONCLUSIVE_STATUS
+    assert _definite_integral_status(sympy.nan, sympy.Float(1.0)) == INCONCLUSIVE_STATUS

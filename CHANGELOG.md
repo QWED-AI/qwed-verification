@@ -46,6 +46,11 @@ All notable changes to the QWED Protocol will be documented in this file.
     claim that only rounds to the same double, or falls inside the rounding
     window, is `INCONCLUSIVE`. A claimed matrix of the wrong shape is
     `DISPROVEN`; a non-finite entry is `INCONCLUSIVE`.
+  - Definite integrals are decided exactly when both sides are exact; with a
+    float claim they are compared in SymPy precision (never through a
+    double) against the 1e-6 tolerance, and a mismatch inside the float
+    rounding window is `INCONCLUSIVE`. A divergent integral is
+    `INCONCLUSIVE`.
   - `verify_unit_conversion` uses the exact legal unit definitions in Decimal
     (1 lb = 0.45359237 kg, 1 US gal = 3.785411784 L) and `BLOCKED`s units of
     different dimensions (`m` to `kg`) instead of comparing the numbers.

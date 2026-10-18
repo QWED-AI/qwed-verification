@@ -14,7 +14,7 @@ Enterprise Features:
 """
 
 from sympy import (
-    Symbol, Matrix, Integer, Rational, Float, Poly,
+    Symbol, Matrix, Integer, Rational, Float, Poly, Integral,
     diff, integrate, limit, oo,
     simplify, expand, evaluate
 )
@@ -194,6 +194,38 @@ def _matrix_comparison_status(result: Any, expected: Any) -> str:
     if all(match is True for match in matches):
         return "VERIFIED"
     return INCONCLUSIVE_STATUS
+
+
+# Absolute tolerance for a definite integral's value against the claim.
+_DEFINITE_INTEGRAL_TOLERANCE = Decimal("0.000001")
+
+
+def _definite_integral_status(actual: Any, claimed: Any) -> str:
+    """Status for a definite integral's value against the claimed value.
+
+    - A non-finite value (a divergent integral) is INCONCLUSIVE.
+    - Exact on both sides (no Float, no unevaluated Integral): decided exactly.
+    - Otherwise both are evaluated in SymPy at 30 digits and compared as
+      Decimals, never through a binary double: past ~4e9 a double's spacing
+      exceeds the 1e-6 tolerance, so rounding alone could flip the verdict.
+      A mismatch beyond the tolerance but inside the rounding window cannot
+      be told apart from rounding, so it is INCONCLUSIVE.
+    """
+    if actual.is_finite is False or claimed.is_finite is False:
+        return INCONCLUSIVE_STATUS
+    if not (actual.has(Float, Integral) or claimed.has(Float)):
+        return symbolic_difference_status(simplify(actual - claimed))
+    actual_parts, claimed_parts = _decimal_parts(actual), _decimal_parts(claimed)
+    if actual_parts is None or claimed_parts is None:
+        return INCONCLUSIVE_STATUS
+    pairs = list(zip(actual_parts, claimed_parts))
+    if not all(a.is_finite() and b.is_finite() for a, b in pairs):
+        return INCONCLUSIVE_STATUS
+    if all(abs(a - b) <= _DEFINITE_INTEGRAL_TOLERANCE for a, b in pairs):
+        return "VERIFIED"
+    if all(_decimals_close(a, b) for a, b in pairs):
+        return INCONCLUSIVE_STATUS
+    return DISPROVEN_STATUS
 
 
 # Exact points tried, in order, when looking for a counterexample to a
@@ -649,10 +681,8 @@ class VerificationEngine:
                 actual_integral = integrate(expr, (var, lower, upper))
                 
                 # For definite integrals, compare values
-                actual_val = float(actual_integral.evalf())
-                expected_val = float(expected_expr.evalf())
-                is_correct = abs(actual_val - expected_val) < 1e-6
-                status = _numeric_status(is_correct, actual_val, expected_val)
+                status = _definite_integral_status(actual_integral, expected_expr)
+                is_correct = status == "VERIFIED"
             else:
                 # Indefinite integral
                 actual_integral = integrate(expr, var)
