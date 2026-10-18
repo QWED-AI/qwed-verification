@@ -782,6 +782,11 @@ def test_determinant_is_exact(matrix, claimed, expected):
         ("sin(x)/x", "0.946083", "0", "1", "VERIFIED"),
         # A divergent integral is not a counter-proof.
         ("1/x", "1", "1", "oo", INCONCLUSIVE_STATUS),
+        # Off by 2 at 8e9: far outside the double spacing (~1e-6), decided.
+        ("2", "8000000002.0", "0", "4000000000", DISPROVEN_STATUS),
+        # 10**400 + 1 vs a 1e400 claim: rounding before subtracting used to
+        # make this VERIFIED; it cannot be established cheaply, so undecided.
+        ("10**300*10**100 + 1", "Float(10**400, 50)", "0", "1", INCONCLUSIVE_STATUS),
     ],
 )
 def test_definite_integral_verdicts(integrand, claimed, lower, upper, expected):
@@ -790,10 +795,57 @@ def test_definite_integral_verdicts(integrand, claimed, lower, upper, expected):
 
 
 def test_definite_integral_rounding_window_is_undecided():
-    from qwed_new.core.verifier import _definite_integral_status
+    from qwed_new.core.verifier import _scalar_status
 
     exact = sympy.Rational(87960930222080009765725, 10000000000)
     # 1e-3 off at 8.8e12: beyond the 1e-6 tolerance, inside float rounding.
-    assert _definite_integral_status(exact, sympy.Float("8796093022208.001", 30)) == INCONCLUSIVE_STATUS
-    assert _definite_integral_status(sympy.Symbol("x"), sympy.Float(1.0)) == INCONCLUSIVE_STATUS
-    assert _definite_integral_status(sympy.nan, sympy.Float(1.0)) == INCONCLUSIVE_STATUS
+    assert _scalar_status(exact, sympy.Float("8796093022208.001", 30)) == INCONCLUSIVE_STATUS
+    assert _scalar_status(sympy.Symbol("x"), sympy.Float(1.0)) == INCONCLUSIVE_STATUS
+    assert _scalar_status(sympy.nan, sympy.Float(1.0)) == INCONCLUSIVE_STATUS
+
+
+
+@pytest.mark.parametrize(
+    "matrix, claimed, expected",
+    [
+        # Large irrational eigenvalues: exact roots, difference at full precision.
+        ([[2 * 10**9, 10**9], [10**9, 10**9]], [381966011.25010514, 2618033988.7498946], "VERIFIED"),
+        ([[1, 2], [3, 4]], [-0.3722813232690143, 5.372281323269014], "VERIFIED"),
+        ([[2, 0], [0, 3]], [2, 4], DISPROVEN_STATUS),
+        # 1e-4 off at 1e12: beyond 1e-6, within the claim's double spacing.
+        ([[10**12, 0], [0, 1]], [1, 1000000000000.0001], INCONCLUSIVE_STATUS),
+        # Rotation matrix: eigenvalues are +-i; matching only real parts used
+        # to accept [0, 0].
+        ([[0, -1], [1, 0]], [0, 0], DISPROVEN_STATUS),
+    ],
+)
+def test_eigenvalues_compared_exactly(matrix, claimed, expected):
+    result = VerificationEngine().verify_matrix_operation("eigenvalues", {"A": matrix}, claimed)
+    assert result["status"] == expected
+
+
+@pytest.mark.parametrize(
+    "args, kwargs, expected",
+    [
+        # 300 - 273.15 is 26.850000000000023 in binary floats.
+        ((300, "k", "c", 26.85), {"tolerance": 0}, "VERIFIED"),
+        ((32, "f", "c", 0), {"tolerance": 0}, "VERIFIED"),
+        ((100, "c", "f", 200), {}, DISPROVEN_STATUS),
+        ((0, "c", "f", float("nan")), {}, INCONCLUSIVE_STATUS),
+        # Invalid tolerance is rejected before the temperature branch.
+        ((0, "c", "f", 32), {"tolerance": -1}, "ERROR"),
+        ((0, "c", "f", 32), {"tolerance": float("nan")}, "ERROR"),
+    ],
+)
+def test_temperature_conversion_is_decimal_and_validated(args, kwargs, expected):
+    assert VerificationEngine().verify_unit_conversion(*args, **kwargs)["status"] == expected
+
+
+
+def test_scalar_status_is_undecided_when_the_difference_is_not_numeric():
+    from qwed_new.core.verifier import _scalar_status
+
+    x = sympy.Symbol("x")
+    # An unevaluated integral whose value cannot be computed numerically.
+    unevaluable = sympy.Integral(sympy.Function("g")(x), (x, 0, 1))
+    assert _scalar_status(unevaluable, sympy.Float(1.0)) == INCONCLUSIVE_STATUS

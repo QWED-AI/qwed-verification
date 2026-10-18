@@ -46,14 +46,18 @@ All notable changes to the QWED Protocol will be documented in this file.
     claim that only rounds to the same double, or falls inside the rounding
     window, is `INCONCLUSIVE`. A claimed matrix of the wrong shape is
     `DISPROVEN`; a non-finite entry is `INCONCLUSIVE`.
-  - Definite integrals are decided exactly when both sides are exact; with a
-    float claim they are compared in SymPy precision (never through a
-    double) against the 1e-6 tolerance, and a mismatch inside the float
-    rounding window is `INCONCLUSIVE`. A divergent integral is
-    `INCONCLUSIVE`.
+  - Definite integrals and eigenvalues are decided exactly when both sides are
+    exact. With a float claim, the difference itself is evaluated at a
+    precision scaled to the magnitude against the 1e-6 tolerance; a mismatch
+    within the claim's own double representation error is `INCONCLUSIVE`,
+    anything larger is `DISPROVEN`. A divergent integral is `INCONCLUSIVE`.
+    Eigenvalues are compared as complex numbers, so a rotation matrix's
+    `+-i` no longer matches a claim of `[0, 0]`.
   - `verify_unit_conversion` uses the exact legal unit definitions in Decimal
     (1 lb = 0.45359237 kg, 1 US gal = 3.785411784 L) and `BLOCKED`s units of
     different dimensions (`m` to `kg`) instead of comparing the numbers.
+    Temperature conversions also run in Decimal, and the tolerance is
+    validated before any branch.
   - The control plane signs and attests `DISPROVEN` like `VERIFIED`, with
     `verified=False` in the attestation and `is_valid: false` in the result.
   - New `DiagnosticResult.disproven()` builds a `VERIFIED` result with

@@ -91,14 +91,16 @@ def _exact_claim(entry: Any) -> Any:
     return Rational(repr(float(entry))) if entry.is_Float else entry
 
 
-def _decimal_parts(entry: Any) -> Optional[tuple]:
+def _decimal_parts(entry: Any, precision: int = 30) -> Optional[tuple]:
     """Real and imaginary parts as Decimals, evaluated in SymPy (never through
-    a binary double, which overflows past 1.8e308); None if not numeric."""
-    real, imag = entry.evalf(30).as_real_imag()
+    a binary double, which overflows past 1.8e308); None if not numeric or
+    not finite."""
+    real, imag = entry.evalf(precision).as_real_imag()
     try:
-        return Decimal(str(real)), Decimal(str(imag))
+        parts = Decimal(str(real)), Decimal(str(imag))
     except ArithmeticError:
         return None
+    return parts if all(part.is_finite() for part in parts) else None
 
 
 def _decimals_close(a: Decimal, b: Decimal) -> bool:
@@ -114,8 +116,6 @@ def _floats_close(computed: Any, claimed: Any) -> Optional[bool]:
     if computed_parts is None or claimed_parts is None:
         return None
     for a, b in zip(computed_parts, claimed_parts):
-        if not (a.is_finite() and b.is_finite()):
-            return None
         if not _decimals_close(a, b):
             return False
     return True
@@ -196,34 +196,56 @@ def _matrix_comparison_status(result: Any, expected: Any) -> str:
     return INCONCLUSIVE_STATUS
 
 
-# Absolute tolerance for a definite integral's value against the claim.
-_DEFINITE_INTEGRAL_TOLERANCE = Decimal("0.000001")
+# Absolute tolerance for a numeric value (definite integral, eigenvalue)
+# against its claim.
+_SCALAR_TOLERANCE = Decimal("0.000001")
+# Relative spacing of a binary double (2**-52): the claim's own representation
+# error is at most this times its magnitude.
+_DOUBLE_SPACING = Decimal(2) ** -52
+# Past this many significant digits a numeric difference is too costly to
+# establish to 1e-6, so the comparison stays undecided.
+_MAX_SCALAR_PRECISION = 120
 
 
-def _definite_integral_status(actual: Any, claimed: Any) -> str:
-    """Status for a definite integral's value against the claimed value.
+def _magnitude(value: Any) -> Optional[Decimal]:
+    parts = _decimal_parts(value)
+    return None if parts is None else max(abs(part) for part in parts)
+
+
+def _scalar_status(actual: Any, claimed: Any) -> str:
+    """Status for a computed number against a claimed number.
 
     - A non-finite value (a divergent integral) is INCONCLUSIVE.
     - Exact on both sides (no Float, no unevaluated Integral): decided exactly.
-    - Otherwise both are evaluated in SymPy at 30 digits and compared as
-      Decimals, never through a binary double: past ~4e9 a double's spacing
-      exceeds the 1e-6 tolerance, so rounding alone could flip the verdict.
-      A mismatch beyond the tolerance but inside the rounding window cannot
-      be told apart from rounding, so it is INCONCLUSIVE.
+    - Otherwise the DIFFERENCE is evaluated at a precision scaled to the
+      magnitude, so rounding never hides a mismatch above the 1e-6 tolerance
+      (10**400 + 1 vs 1e400 differs by 1, not 0) and never invents one.
+      A mismatch beyond the tolerance but within the claim's own double
+      representation error cannot be told apart from rounding, so it is
+      INCONCLUSIVE; anything larger is a decided mismatch.
     """
     if actual.is_finite is False or claimed.is_finite is False:
         return INCONCLUSIVE_STATUS
     if not (actual.has(Float, Integral) or claimed.has(Float)):
         return symbolic_difference_status(simplify(actual - claimed))
-    actual_parts, claimed_parts = _decimal_parts(actual), _decimal_parts(claimed)
-    if actual_parts is None or claimed_parts is None:
+    magnitudes = [_magnitude(actual), _magnitude(claimed)]
+    if None in magnitudes:
         return INCONCLUSIVE_STATUS
-    pairs = list(zip(actual_parts, claimed_parts))
-    if not all(a.is_finite() and b.is_finite() for a, b in pairs):
+    magnitude = max(magnitudes)
+    digits = magnitude.adjusted() + 1 if magnitude else 1
+    precision = max(30, digits + 15)
+    parts = (
+        _decimal_parts(actual - claimed, precision)
+        if precision <= _MAX_SCALAR_PRECISION
+        else None
+    )
+    if parts is None:
         return INCONCLUSIVE_STATUS
-    if all(abs(a - b) <= _DEFINITE_INTEGRAL_TOLERANCE for a, b in pairs):
+    differences = [abs(part) for part in parts]
+    if all(difference <= _SCALAR_TOLERANCE for difference in differences):
         return "VERIFIED"
-    if all(_decimals_close(a, b) for a, b in pairs):
+    window = _SCALAR_TOLERANCE + magnitude * _DOUBLE_SPACING
+    if all(difference <= window for difference in differences):
         return INCONCLUSIVE_STATUS
     return DISPROVEN_STATUS
 
@@ -681,7 +703,7 @@ class VerificationEngine:
                 actual_integral = integrate(expr, (var, lower, upper))
                 
                 # For definite integrals, compare values
-                status = _definite_integral_status(actual_integral, expected_expr)
+                status = _scalar_status(actual_integral, expected_expr)
                 is_correct = status == "VERIFIED"
             else:
                 # Indefinite integral
@@ -822,11 +844,14 @@ class VerificationEngine:
                 expected_mat = Matrix(expected)
                 
             elif operation == "eigenvalues":
-                mat = list(sympy_matrices.values())[0]
-                # Expand by algebraic multiplicity so repeated roots are counted
-                eigen_multiset = mat.eigenvals()
-                eigenvals = [v for v, m in eigen_multiset.items() for _ in range(m)]
-                eigenvals_float = sorted([complex(v.evalf()).real for v in eigenvals])
+                # Exact eigenvalues of the exact matrix, expanded by algebraic
+                # multiplicity so repeated roots are counted, sorted by value.
+                eigen_multiset = exact_mats[0].eigenvals()
+                eigenvals = sorted(
+                    (v for v, m in eigen_multiset.items() for _ in range(m)),
+                    key=lambda v: complex(v.evalf(30)).real,
+                )
+                eigenvals_float = [complex(v.evalf()).real for v in eigenvals]
                 expected_sorted = sorted(expected)
                 # Cardinality check: claim must match exact eigenvalue count (Issue #130)
                 if len(eigenvals_float) != len(expected_sorted):
@@ -845,13 +870,22 @@ class VerificationEngine:
                         "calculated_count": len(eigenvals_float),
                         "claimed_count": len(expected_sorted),
                     }
-                is_correct = all(
-                    abs(a - b) < 1e-6 
-                    for a, b in zip(eigenvals_float, expected_sorted)
-                )
+                # Each exact eigenvalue against its claim: the difference is
+                # evaluated at a precision scaled to the magnitude, so 15-digit
+                # rounding of a large irrational root never flips the verdict.
+                statuses = [
+                    _scalar_status(value, Matrix([[claim]])[0])
+                    for value, claim in zip(eigenvals, expected_sorted)
+                ]
+                if DISPROVEN_STATUS in statuses:
+                    status = DISPROVEN_STATUS
+                elif all(s == "VERIFIED" for s in statuses):
+                    status = "VERIFIED"
+                else:
+                    status = INCONCLUSIVE_STATUS
                 return {
-                    "is_correct": is_correct,
-                    "status": _numeric_status(is_correct, *eigenvals_float, *expected_sorted),
+                    "is_correct": status == "VERIFIED",
+                    "status": status,
                     "calculated_eigenvalues": eigenvals_float,
                     "claimed_eigenvalues": list(expected)
                 }
@@ -1387,10 +1421,13 @@ class VerificationEngine:
         try:
             from_unit = from_unit.lower()
             to_unit = to_unit.lower()
+            # Validated before any branch, so no path compares against an
+            # invalid (negative or NaN) tolerance.
+            tolerance_decimal = self._parse_tolerance(tolerance)
 
             # Handle temperature separately
             if from_unit in ['c', 'celsius'] or to_unit in ['c', 'celsius']:
-                return self._verify_temperature_conversion(value, from_unit, to_unit, expected, tolerance)
+                return self._verify_temperature_conversion(value, from_unit, to_unit, expected, tolerance_decimal)
 
             if from_unit not in self.UNIT_CONVERSIONS:
                 return {"is_correct": False, "status": "ERROR", "error": f"Unknown unit: {from_unit}"}
@@ -1407,7 +1444,6 @@ class VerificationEngine:
                     ),
                 }
 
-            tolerance_decimal = self._parse_tolerance(tolerance)
             value_decimal = Decimal(str(value))
             expected_decimal = Decimal(str(expected))
             if not (value_decimal.is_finite() and expected_decimal.is_finite()):
@@ -1440,9 +1476,14 @@ class VerificationEngine:
             return {"is_correct": False, "status": "ERROR", "error": str(e)}
 
     def _verify_temperature_conversion(
-        self, value: float, from_unit: str, to_unit: str, expected: float, tolerance: float
+        self, value: float, from_unit: str, to_unit: str, expected: float, tolerance: Decimal
     ) -> Dict[str, Any]:
-        """Handle temperature conversions."""
+        """Handle temperature conversions in Decimal.
+
+        ``tolerance`` is already validated. Inputs are read through
+        ``Decimal(str(...))`` so 300 K is exactly 26.85 C, not
+        26.850000000000023; a non-finite input is INCONCLUSIVE.
+        """
         from_unit = from_unit.lower()
         to_unit = to_unit.lower()
         
@@ -1459,26 +1500,35 @@ class VerificationEngine:
         if not from_u or not to_u:
             return {"is_correct": False, "status": "ERROR", "error": INVALID_TEMPERATURE_UNIT_ERROR}
 
-        # Convert to Celsius first
-        celsius = {
-            'celsius': value,
-            'fahrenheit': (value - 32) * 5 / 9,
-            'kelvin': value - 273.15,
-        }[from_u]
+        value_decimal = Decimal(str(value))
+        expected_decimal = Decimal(str(expected))
+        if not (value_decimal.is_finite() and expected_decimal.is_finite()):
+            return {"is_correct": False, "status": INCONCLUSIVE_STATUS,
+                    "error": "Non-finite value or claim"}
 
-        # Convert from Celsius to target
-        calculated = {
-            'celsius': celsius,
-            'fahrenheit': celsius * 9 / 5 + 32,
-            'kelvin': celsius + 273.15,
-        }[to_u]
-        
-        is_correct = abs(calculated - expected) <= tolerance
-        
+        kelvin_offset = Decimal("273.15")
+        with localcontext() as ctx:
+            ctx.prec = 50
+            # Convert to Celsius first
+            celsius = {
+                'celsius': value_decimal,
+                'fahrenheit': (value_decimal - 32) * 5 / 9,
+                'kelvin': value_decimal - kelvin_offset,
+            }[from_u]
+
+            # Convert from Celsius to target
+            calculated = {
+                'celsius': celsius,
+                'fahrenheit': celsius * 9 / 5 + 32,
+                'kelvin': celsius + kelvin_offset,
+            }[to_u]
+
+            is_correct = abs(calculated - expected_decimal) <= tolerance
+
         return {
             "is_correct": is_correct,
-            "status": _numeric_status(is_correct, calculated, expected),
-            "calculated_value": round(calculated, 2),
+            "status": _numeric_status(is_correct, calculated, expected_decimal),
+            "calculated_value": round(float(calculated), 2),
             "claimed_value": expected,
             "from_unit": from_unit,
             "to_unit": to_unit
