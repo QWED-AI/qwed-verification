@@ -28,6 +28,7 @@ from qwed_new.core.safe_parser import (
 from sympy.parsing.sympy_parser import standard_transformations, implicit_multiplication_application
 from typing import Any, Dict, List, Optional
 from decimal import Decimal, ROUND_HALF_UP, localcontext
+from fractions import Fraction
 from dataclasses import dataclass
 import math
 
@@ -101,6 +102,14 @@ def _decimal_parts(entry: Any) -> Optional[tuple]:
         return None
 
 
+def _decimals_close(a: Decimal, b: Decimal) -> bool:
+    """Relative closeness; the absolute floor applies only against zero, so
+    it never swamps the relative bound for small non-zero values."""
+    if a == 0 or b == 0:
+        return abs(a - b) <= _MATRIX_FLOAT_ABS_TOLERANCE
+    return abs(a - b) <= _MATRIX_FLOAT_REL_TOLERANCE * max(abs(a), abs(b))
+
+
 def _floats_close(computed: Any, claimed: Any) -> Optional[bool]:
     computed_parts, claimed_parts = _decimal_parts(computed), _decimal_parts(claimed)
     if computed_parts is None or claimed_parts is None:
@@ -108,11 +117,39 @@ def _floats_close(computed: Any, claimed: Any) -> Optional[bool]:
     for a, b in zip(computed_parts, claimed_parts):
         if not (a.is_finite() and b.is_finite()):
             return None
-        bound = max(_MATRIX_FLOAT_REL_TOLERANCE * max(abs(a), abs(b)),
-                    _MATRIX_FLOAT_ABS_TOLERANCE)
-        if abs(a - b) > bound:
+        if not _decimals_close(a, b):
             return False
     return True
+
+
+def _nearest_double(value: Any) -> Optional[float]:
+    """The correctly rounded double of an exact rational, or None."""
+    if not value.is_Rational:
+        return None
+    try:
+        nearest = float(Fraction(int(value.p), int(value.q)))
+    except OverflowError:
+        return None
+    return nearest if math.isfinite(nearest) else None
+
+
+def _exact_vs_float_claim(computed: Any, claimed: Any) -> Optional[bool]:
+    """Compare an exact computed entry with a Float claim.
+
+    A float claim can state an exact value only when that value is a double.
+    For one that is not (1/3, 2/3), the best a float claim can say is the
+    correctly rounded double, which is accepted. Any other claim inside the
+    float rounding window cannot be told apart from rounding, so it is
+    undecided; a claim outside it is a decided mismatch.
+    """
+    nearest = _nearest_double(computed)
+    if nearest is not None and Rational(nearest) == computed:
+        # The exact value is a double: the claim must say it exactly.
+        return (computed - _exact_claim(claimed)).equals(0)
+    if nearest is not None and float(claimed) == nearest:
+        return True
+    close = _floats_close(computed, claimed)
+    return None if close else close
 
 
 def _matrix_entry_match(computed: Any, claimed: Any) -> Optional[bool]:
@@ -121,7 +158,9 @@ def _matrix_entry_match(computed: Any, claimed: Any) -> Optional[bool]:
         # Rounding happened in the computation itself, so only a tolerance
         # scaled to the value can compare it.
         return _floats_close(computed, claimed)
-    return (computed - _exact_claim(claimed)).equals(0)
+    if claimed.is_Float:
+        return _exact_vs_float_claim(computed, claimed)
+    return (computed - claimed).equals(0)
 
 
 def _matrix_comparison_status(result: Any, expected: Any) -> str:
@@ -240,16 +279,27 @@ def symbolic_difference_status(difference: Any) -> str:
     for point in _WITNESS_POINTS:
         if not all(check_assumptions(point, sym) is True for sym in symbols):
             continue
-        with evaluate(False):
-            candidate = difference.xreplace(dict.fromkeys(symbols, point))
-        try:
-            check_closed_expression_cost(candidate)
-        except SafeParserError:
-            continue
-        value = candidate.doit()
-        if value.is_number and value.is_finite and value.is_zero is False:
+        value = _witness_value(difference, symbols, point)
+        if value is not None and value.is_number and value.is_finite and value.is_zero is False:
             return DISPROVEN_STATUS
     return INCONCLUSIVE_STATUS
+
+
+def _witness_value(difference: Any, symbols: Any, point: Any) -> Any:
+    """The difference evaluated at ``point``, or None when it cannot be.
+
+    Substitution can fail inside SymPy (an unevaluated ``Derivative(re(x), x)``
+    cannot be taken with respect to a number) or exceed the expansion budget.
+    Either way the witness proves nothing, so it is skipped: the verdict stays
+    INCONCLUSIVE, never VERIFIED.
+    """
+    try:
+        with evaluate(False):
+            candidate = difference.xreplace(dict.fromkeys(symbols, point))
+        check_closed_expression_cost(candidate)
+        return candidate.doit()
+    except (SafeParserError, ValueError, TypeError, ArithmeticError, NotImplementedError):
+        return None
 
 
 @dataclass

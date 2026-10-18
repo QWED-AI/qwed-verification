@@ -575,7 +575,9 @@ async def test_control_plane_undecided_engine_result_is_not_admitted(monkeypatch
         # Exact computed entries are compared exactly, never with a tolerance.
         ("add", {"A": [[1]], "B": [[2]]}, [[3.0000005]], DISPROVEN_STATUS),
         ("inverse", {"A": [[10000000]]}, [[0.0]], DISPROVEN_STATUS),
-        ("inverse", {"A": [[3]]}, [[0.333333333333333]], DISPROVEN_STATUS),
+        # 1/3 truncated to 15 digits: inside the float rounding window, so it
+        # cannot be told apart from rounding (undecided, still not admitted).
+        ("inverse", {"A": [[3]]}, [[0.333333333333333]], INCONCLUSIVE_STATUS),
         ("inverse", {"A": [[2, 0], [0, 4]]}, [[0.5, 0], [0, 0.25]], "VERIFIED"),
         # A float elsewhere in the matrix must not round exact entries.
         ("transpose", {"A": [[10**18, 0.5]]}, [[10**18 + 1], [0.5]], DISPROVEN_STATUS),
@@ -603,3 +605,48 @@ def test_float_entry_comparison_is_undecided_for_non_numeric_or_nan():
     assert _floats_close(sympy.Float(1.0), sympy.Symbol("x")) is None
     assert _floats_close(sympy.Float(1.0), sympy.nan) is None
     assert _floats_close(sympy.Float(1.0), sympy.Float(1.0)) is True
+
+
+# ---------------------------------------------------------------------------
+# Exact results that are not doubles, tiny values, failing witnesses
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "matrices, claimed, expected",
+    [
+        # 1/3 is not a double: its correctly rounded double is the best claim.
+        ({"A": [[3]]}, [[1 / 3]], "VERIFIED"),
+        ({"A": [[2, 1], [1, 2]]}, [[2 / 3, -1 / 3], [-1 / 3, 2 / 3]], "VERIFIED"),
+        # Inside the rounding window but not the nearest double: undecided.
+        ({"A": [[3]]}, [[0.33333333333333326]], INCONCLUSIVE_STATUS),
+        # Far outside it: decided.
+        ({"A": [[3]]}, [[0.3]], DISPROVEN_STATUS),
+    ],
+)
+def test_inverse_with_non_double_exact_entries(matrices, claimed, expected):
+    result = VerificationEngine().verify_matrix_operation("inverse", matrices, claimed)
+    assert result["status"] == expected
+
+
+def test_relative_bound_is_not_swamped_for_small_values():
+    from qwed_new.core.verifier import _floats_close
+
+    # Boltzmann constant vs a 5-digit truncation: 3e-5 relative error.
+    assert _floats_close(sympy.Float(1.380649e-23), sympy.Float(1.3806e-23)) is False
+    # Cancellation residue against an exact zero claim is still rounding.
+    assert _floats_close(sympy.Float(5.551115123125783e-17), sympy.Integer(0)) is True
+
+
+def test_nearest_double_rejects_non_rational_and_overflow():
+    from qwed_new.core.verifier import _nearest_double
+
+    assert _nearest_double(sympy.sqrt(2)) is None
+    assert _nearest_double(sympy.Integer(10) ** 400) is None
+    assert _nearest_double(sympy.Rational(1, 3)) == 1 / 3
+
+
+def test_witness_that_sympy_cannot_evaluate_is_skipped():
+    # d/dx Abs(x) for a complex x leaves Derivative(re(x), x), which cannot be
+    # taken with respect to a number: inconclusive, not an engine error.
+    result = VerificationEngine().verify_derivative("Abs(x)", "x", "1")
+    assert result["status"] == INCONCLUSIVE_STATUS

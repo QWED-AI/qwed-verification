@@ -26,6 +26,8 @@ All notable changes to the QWED Protocol will be documented in this file.
     It is substituted without evaluation and checked by the new
     `safe_parser.check_closed_expression_cost` first, so a lazy power tower
     such as `9**9**9**x` is never expanded at a witness.
+    A witness SymPy cannot evaluate is skipped, so the result is
+    `INCONCLUSIVE` rather than an engine error.
   - A non-zero difference containing a Float literal (`0.1 + 0.2 = 0.3`
     leaves 5.55e-17) is `INCONCLUSIVE`, not `DISPROVEN`. A numeric mismatch
     involving a non-finite value (an overflowed sum, a NaN claim) is also
@@ -33,8 +35,10 @@ All notable changes to the QWED Protocol will be documented in this file.
   - Matrix results are compared entry by entry. An exact computed entry is
     compared exactly with the claim read as the decimal the caller wrote
     (`[[1]] + [[2]]` vs `[[3.0000005]]` is `DISPROVEN`); only a computed
-    entry that is itself a binary float gets a relative tolerance (1e-9,
-    floor 1e-12), so `[[0.1]] + [[0.2]]` vs `[[0.3]]` is `VERIFIED`. A
+    entry that is itself a binary float gets a relative tolerance (1e-9;
+    a 1e-12 floor only against zero), so `[[0.1]] + [[0.2]]` vs `[[0.3]]`
+    is `VERIFIED`. An exact entry that is not a double (`inverse([[3]])` is
+    1/3) accepts its correctly rounded double. A
     claimed matrix of the wrong shape is `DISPROVEN`; a non-finite entry is
     `INCONCLUSIVE`.
   - The control plane signs and attests `DISPROVEN` like `VERIFIED`, with
