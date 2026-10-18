@@ -75,9 +75,9 @@ def _numeric_status(is_correct: bool, *values: Any) -> str:
     return DISPROVEN_STATUS
 
 
-# Tolerance for a computed matrix entry that is itself a binary float: relative
-# to its magnitude (a few double-precision ulps of accumulated rounding), with
-# an absolute floor for results at zero. It is never applied to exact entries.
+# Rounding window around an exact matrix entry that is not a double: a float
+# claim inside it cannot be told apart from rounding, so it is undecided (never
+# accepted). Relative to the magnitude, with an absolute floor against zero.
 _MATRIX_FLOAT_REL_TOLERANCE = Decimal("1e-9")
 _MATRIX_FLOAT_ABS_TOLERANCE = Decimal("1e-12")
 
@@ -135,16 +135,23 @@ def _nearest_double(value: Any) -> Optional[float]:
 def _exact_vs_float_claim(computed: Any, claimed: Any) -> Optional[bool]:
     """Compare an exact computed entry with a Float claim.
 
-    An exact integer, or an exact value that is a double, must be stated
-    exactly: rounding never lets 10**18 + 1 match a claim of 1e18. For a
-    fractional value that is not a double (1/3, 2/3), the best a float claim
-    can say is the correctly rounded double, which is accepted. Any other
-    claim inside the float rounding window cannot be told apart from
-    rounding, so it is undecided; a claim outside it is a decided mismatch.
+    - An exact integer, or an exact value that is a double: the claim holds
+      when its written decimal or its double is exactly that value. A claim
+      whose double only rounds to the same double (1000000000000000001.0 and
+      1e18 are one double) cannot be told apart from rounding, so it is
+      undecided, never accepted and never disproven.
+    - A fractional value that is not a double (1/3): the best a float claim
+      can say is the correctly rounded double, which is accepted. Another
+      claim inside the rounding window is undecided.
+    - Anything outside those is a decided mismatch.
     """
     nearest = _nearest_double(computed)
     if computed.is_Integer or (nearest is not None and Rational(nearest) == computed):
-        return (computed - _exact_claim(claimed)).equals(0)
+        if (computed - _exact_claim(claimed)).equals(0) or Rational(float(claimed)) == computed:
+            return True
+        if nearest is not None and float(claimed) == nearest:
+            return None
+        return False
     if nearest is not None and float(claimed) == nearest:
         return True
     close = _floats_close(computed, claimed)
@@ -152,11 +159,11 @@ def _exact_vs_float_claim(computed: Any, claimed: Any) -> Optional[bool]:
 
 
 def _matrix_entry_match(computed: Any, claimed: Any) -> Optional[bool]:
-    """True / False when decided, None when undecided."""
-    if computed.has(Float):
-        # Rounding happened in the computation itself, so only a tolerance
-        # scaled to the value can compare it.
-        return _floats_close(computed, claimed)
+    """True / False when decided, None when undecided.
+
+    Computed entries are exact: element-wise operations run on the inputs
+    read as the decimals the caller wrote.
+    """
     if claimed.is_Float:
         return _exact_vs_float_claim(computed, claimed)
     return (computed - claimed).equals(0)
@@ -745,19 +752,21 @@ class VerificationEngine:
         try:
             # Convert to SymPy matrices
             sympy_matrices = {name: Matrix(mat) for name, mat in matrices.items()}
-            
+            # Element-wise results are computed exactly: each float input is
+            # read as the decimal the caller wrote (0.1 -> 1/10), so 0.1 + 0.2
+            # is exactly 3/10 and no rounding residue needs a tolerance.
+            exact_mats = [mat.applyfunc(_exact_claim) for mat in sympy_matrices.values()]
+
             if operation == "add":
                 if len(sympy_matrices) != 2:
                     return {"is_correct": False, "status": "ERROR", "error": "Addition requires exactly 2 matrices"}
-                mats = list(sympy_matrices.values())
-                result = mats[0] + mats[1]
+                result = exact_mats[0] + exact_mats[1]
                 expected_mat = Matrix(expected)
-                
+
             elif operation == "multiply":
                 if len(sympy_matrices) != 2:
                     return {"is_correct": False, "status": "ERROR", "error": "Multiplication requires exactly 2 matrices"}
-                mats = list(sympy_matrices.values())
-                result = mats[0] * mats[1]
+                result = exact_mats[0] * exact_mats[1]
                 expected_mat = Matrix(expected)
                 
             elif operation == "determinant":
@@ -772,13 +781,11 @@ class VerificationEngine:
                 }
                 
             elif operation == "inverse":
-                mat = list(sympy_matrices.values())[0]
-                result = mat.inv()
+                result = exact_mats[0].inv()
                 expected_mat = Matrix(expected)
-                
+
             elif operation == "transpose":
-                mat = list(sympy_matrices.values())[0]
-                result = mat.T
+                result = exact_mats[0].T
                 expected_mat = Matrix(expected)
                 
             elif operation == "eigenvalues":
@@ -1272,43 +1279,63 @@ class VerificationEngine:
     # Unit Conversion
     # =========================================================================
     
-    # Conversion factors to base units
+    # Conversion factors to base units, as exact decimal strings. Every factor
+    # is the legal definition (1 lb = 0.45359237 kg, 1 US gal = 3.785411784 L),
+    # so a correct claim is never disproven by a truncated constant.
     UNIT_CONVERSIONS = {
         # Length (base: meters)
-        "m": 1, "meter": 1, "meters": 1,
-        "km": 1000, "kilometer": 1000, "kilometers": 1000,
-        "cm": 0.01, "centimeter": 0.01, "centimeters": 0.01,
-        "mm": 0.001, "millimeter": 0.001, "millimeters": 0.001,
-        "mi": 1609.344, "mile": 1609.344, "miles": 1609.344,
-        "ft": 0.3048, "foot": 0.3048, "feet": 0.3048,
-        "in": 0.0254, "inch": 0.0254, "inches": 0.0254,
-        "yd": 0.9144, "yard": 0.9144, "yards": 0.9144,
-        
+        "m": "1", "meter": "1", "meters": "1",
+        "km": "1000", "kilometer": "1000", "kilometers": "1000",
+        "cm": "0.01", "centimeter": "0.01", "centimeters": "0.01",
+        "mm": "0.001", "millimeter": "0.001", "millimeters": "0.001",
+        "mi": "1609.344", "mile": "1609.344", "miles": "1609.344",
+        "ft": "0.3048", "foot": "0.3048", "feet": "0.3048",
+        "in": "0.0254", "inch": "0.0254", "inches": "0.0254",
+        "yd": "0.9144", "yard": "0.9144", "yards": "0.9144",
+
         # Weight (base: kilograms)
-        "kg": 1, "kilogram": 1, "kilograms": 1,
-        "g": 0.001, "gram": 0.001, "grams": 0.001,
-        "mg": 0.000001, "milligram": 0.000001,
-        "lb": 0.453592, "pound": 0.453592, "pounds": 0.453592,
-        "oz": 0.0283495, "ounce": 0.0283495, "ounces": 0.0283495,
-        
+        "kg": "1", "kilogram": "1", "kilograms": "1",
+        "g": "0.001", "gram": "0.001", "grams": "0.001",
+        "mg": "0.000001", "milligram": "0.000001",
+        "lb": "0.45359237", "pound": "0.45359237", "pounds": "0.45359237",
+        "oz": "0.028349523125", "ounce": "0.028349523125", "ounces": "0.028349523125",
+
         # Temperature handled separately
-        
-        # Volume (base: liters)
-        "l": 1, "liter": 1, "liters": 1, "L": 1,
-        "ml": 0.001, "milliliter": 0.001, "milliliters": 0.001,
-        "gal": 3.78541, "gallon": 3.78541, "gallons": 3.78541,
-        "qt": 0.946353, "quart": 0.946353,
-        "pt": 0.473176, "pint": 0.473176,
-        "cup": 0.236588, "cups": 0.236588,
-        
+
+        # Volume (base: liters; US customary units)
+        "l": "1", "liter": "1", "liters": "1", "L": "1",
+        "ml": "0.001", "milliliter": "0.001", "milliliters": "0.001",
+        "gal": "3.785411784", "gallon": "3.785411784", "gallons": "3.785411784",
+        "qt": "0.946352946", "quart": "0.946352946",
+        "pt": "0.473176473", "pint": "0.473176473",
+        "cup": "0.2365882365", "cups": "0.2365882365",
+
         # Time (base: seconds)
-        "s": 1, "sec": 1, "second": 1, "seconds": 1,
-        "min": 60, "minute": 60, "minutes": 60,
-        "h": 3600, "hr": 3600, "hour": 3600, "hours": 3600,
-        "d": 86400, "day": 86400, "days": 86400,
-        "wk": 604800, "week": 604800, "weeks": 604800,
+        "s": "1", "sec": "1", "second": "1", "seconds": "1",
+        "min": "60", "minute": "60", "minutes": "60",
+        "h": "3600", "hr": "3600", "hour": "3600", "hours": "3600",
+        "d": "86400", "day": "86400", "days": "86400",
+        "wk": "604800", "week": "604800", "weeks": "604800",
     }
-    
+
+    # Physical dimension of each unit: converting across dimensions (metres to
+    # kilograms) is meaningless and must never produce a verdict.
+    UNIT_DIMENSIONS = {
+        **dict.fromkeys(("m", "meter", "meters", "km", "kilometer", "kilometers",
+                         "cm", "centimeter", "centimeters", "mm", "millimeter",
+                         "millimeters", "mi", "mile", "miles", "ft", "foot", "feet",
+                         "in", "inch", "inches", "yd", "yard", "yards"), "length"),
+        **dict.fromkeys(("kg", "kilogram", "kilograms", "g", "gram", "grams", "mg",
+                         "milligram", "lb", "pound", "pounds", "oz", "ounce",
+                         "ounces"), "mass"),
+        **dict.fromkeys(("l", "liter", "liters", "L", "ml", "milliliter", "milliliters",
+                         "gal", "gallon", "gallons", "qt", "quart", "pt", "pint",
+                         "cup", "cups"), "volume"),
+        **dict.fromkeys(("s", "sec", "second", "seconds", "min", "minute", "minutes",
+                         "h", "hr", "hour", "hours", "d", "day", "days", "wk", "week",
+                         "weeks"), "time"),
+    }
+
     def verify_unit_conversion(
         self,
         value: float,
@@ -1319,38 +1346,66 @@ class VerificationEngine:
     ) -> Dict[str, Any]:
         """
         Verify unit conversion calculations.
+
+        The conversion runs in Decimal with the exact unit definitions; inputs
+        are read through ``Decimal(str(...))``. Units of different dimensions
+        are BLOCKED, and a non-finite input is INCONCLUSIVE.
         """
         try:
             from_unit = from_unit.lower()
             to_unit = to_unit.lower()
-            
+
             # Handle temperature separately
             if from_unit in ['c', 'celsius'] or to_unit in ['c', 'celsius']:
                 return self._verify_temperature_conversion(value, from_unit, to_unit, expected, tolerance)
-            
+
             if from_unit not in self.UNIT_CONVERSIONS:
                 return {"is_correct": False, "status": "ERROR", "error": f"Unknown unit: {from_unit}"}
             if to_unit not in self.UNIT_CONVERSIONS:
                 return {"is_correct": False, "status": "ERROR", "error": f"Unknown unit: {to_unit}"}
-            
+            if self.UNIT_DIMENSIONS[from_unit] != self.UNIT_DIMENSIONS[to_unit]:
+                return {
+                    "is_correct": False,
+                    "status": "BLOCKED",
+                    "error": (
+                        f"Incompatible units: {from_unit} is "
+                        f"{self.UNIT_DIMENSIONS[from_unit]}, {to_unit} is "
+                        f"{self.UNIT_DIMENSIONS[to_unit]}"
+                    ),
+                }
+
+            tolerance_decimal = self._parse_tolerance(tolerance)
+            value_decimal = Decimal(str(value))
+            expected_decimal = Decimal(str(expected))
+            if not (value_decimal.is_finite() and expected_decimal.is_finite()):
+                return {"is_correct": False, "status": INCONCLUSIVE_STATUS,
+                        "error": "Non-finite value or claim"}
+
             # Convert: value * (from_factor / to_factor)
-            base_value = value * self.UNIT_CONVERSIONS[from_unit]
-            calculated = base_value / self.UNIT_CONVERSIONS[to_unit]
-            
-            is_correct = abs(calculated - expected) <= tolerance * abs(expected) if expected != 0 else abs(calculated) <= tolerance
-            
+            with localcontext() as ctx:
+                ctx.prec = 50
+                calculated = (
+                    value_decimal
+                    * Decimal(self.UNIT_CONVERSIONS[from_unit])
+                    / Decimal(self.UNIT_CONVERSIONS[to_unit])
+                )
+                if expected_decimal != 0:
+                    is_correct = abs(calculated - expected_decimal) <= tolerance_decimal * abs(expected_decimal)
+                else:
+                    is_correct = abs(calculated) <= tolerance_decimal
+
             return {
                 "is_correct": is_correct,
-                "status": _numeric_status(is_correct, calculated, expected),
-                "calculated_value": round(calculated, 6),
+                "status": _numeric_status(is_correct, calculated, expected_decimal),
+                "calculated_value": round(float(calculated), 6),
                 "claimed_value": expected,
                 "from_unit": from_unit,
                 "to_unit": to_unit
             }
-            
+
         except Exception as e:
             return {"is_correct": False, "status": "ERROR", "error": str(e)}
-    
+
     def _verify_temperature_conversion(
         self, value: float, from_unit: str, to_unit: str, expected: float, tolerance: float
     ) -> Dict[str, Any]:

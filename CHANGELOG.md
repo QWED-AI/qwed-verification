@@ -35,6 +35,22 @@ All notable changes to the QWED Protocol will be documented in this file.
   - `verify_irr` decides Newton convergence on the rate step instead of an
     absolute NPV residual, so small cash flows no longer stop at the
     initial guess and report a correct IRR claim as `DISPROVEN`.
+  - Matrix `add`, `multiply`, `inverse` and `transpose` run exactly: each float
+    input is read as the decimal the caller wrote (`0.1` is 1/10), so
+    `[[0.1]] + [[0.2]]` vs `[[0.3]]` is `VERIFIED` and `[[0.5]] + [[1e9]]` vs
+    `[[1000000001.0]]` is `DISPROVEN`, with no tolerance. A float claim of an
+    exact entry holds when its decimal or its double is exactly that value,
+    or, for a fraction that is not a double (`inverse([[3]])` is 1/3), when it
+    is the correctly rounded double. A claim that only rounds to the same
+    double, or falls inside the rounding window, is `INCONCLUSIVE`. A claimed
+    matrix of the wrong shape is `DISPROVEN`; a non-finite entry is
+    `INCONCLUSIVE`.
+  - `verify_unit_conversion` uses the exact legal unit definitions in Decimal
+    (1 lb = 0.45359237 kg, 1 US gal = 3.785411784 L) and `BLOCKED`s units of
+    different dimensions (`m` to `kg`) instead of comparing the numbers.
+  - `verify_irr` decides Newton convergence on the rate step instead of an
+    absolute NPV residual, so small cash flows no longer stop at the
+    initial guess and report a correct IRR claim as `DISPROVEN`.
   - Matrix results are compared entry by entry. An exact computed entry is
     compared exactly with the claim read as the decimal the caller wrote
     (`[[1]] + [[2]]` vs `[[3.0000005]]` is `DISPROVEN`); only a computed

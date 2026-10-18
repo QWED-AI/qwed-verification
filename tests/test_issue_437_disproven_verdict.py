@@ -656,9 +656,15 @@ def test_witness_that_sympy_cannot_evaluate_is_skipped():
 @pytest.mark.parametrize(
     "matrix, claimed, expected",
     [
-        # 10**18 + 1 is not a double; rounding must never make 1e18 match it.
-        ([[10**18 + 1]], [[1e18]], DISPROVEN_STATUS),
+        # 10**18 + 1 is not a double; its claim of 1e18 (the same double as
+        # 1000000000000000001.0) is undecided: never accepted, never disproven.
+        ([[10**18 + 1]], [[1e18]], INCONCLUSIVE_STATUS),
+        ([[10**18 + 1]], [[1000000000000000001.0]], INCONCLUSIVE_STATUS),
         ([[10**18]], [[1e18]], "VERIFIED"),
+        # 2**60 is a double: a float claim whose double is exactly it holds.
+        ([[2**60]], [[1152921504606846976.0]], "VERIFIED"),
+        # Outside the rounding: decided.
+        ([[10**18 + 1]], [[1.0000000000000002e18]], DISPROVEN_STATUS),
     ],
 )
 def test_exact_integers_are_never_matched_through_rounding(matrix, claimed, expected):
@@ -691,3 +697,53 @@ def test_irr_solver_reports_stall_and_non_convergence():
     result = VerificationEngine._find_irr_newton([1, -2, 1.0001])
     assert result["converged"] is False
     assert result["reason"] == "max_iterations"
+
+
+
+@pytest.mark.parametrize(
+    "matrices, claimed, expected",
+    [
+        # Inputs are read as the decimals written, so the sum is exact.
+        ({"A": [[0.5]], "B": [[1e9]]}, [[1000000001.0]], DISPROVEN_STATUS),
+        ({"A": [[0.5]], "B": [[1e9]]}, [[1000000000.5]], "VERIFIED"),
+        # A non-zero exact result is never accepted as an exact-zero claim.
+        ({"A": [[1e-13]], "B": [[0.0]]}, [[0.0]], INCONCLUSIVE_STATUS),
+    ],
+)
+def test_elementwise_matrix_results_are_exact(matrices, claimed, expected):
+    result = VerificationEngine().verify_matrix_operation("add", matrices, claimed)
+    assert result["status"] == expected
+
+
+@pytest.mark.parametrize(
+    "args, kwargs, expected",
+    [
+        # Exact legal definitions: correct claims hold even with a strict tolerance.
+        ((1, "lb", "kg", 0.45359237), {"tolerance": 1e-9}, "VERIFIED"),
+        ((1, "gal", "l", 3.785411784), {"tolerance": 1e-9}, "VERIFIED"),
+        ((1, "cup", "ml", 236.5882365), {"tolerance": 0}, "VERIFIED"),
+        ((1, "km", "m", 999), {}, DISPROVEN_STATUS),
+        # Different dimensions never produce a verdict.
+        ((1, "m", "kg", 1), {}, "BLOCKED"),
+        ((1, "km", "m", float("nan")), {}, INCONCLUSIVE_STATUS),
+        ((0, "m", "km", 0), {}, "VERIFIED"),
+    ],
+)
+def test_unit_conversion_is_exact_and_dimension_checked(args, kwargs, expected):
+    assert VerificationEngine().verify_unit_conversion(*args, **kwargs)["status"] == expected
+
+
+
+@pytest.mark.parametrize(
+    "args, kwargs",
+    [
+        ((1, "furlong", "m", 201.168), {}),
+        ((1, "m", "furlong", 0.005), {}),
+        # An invalid tolerance is rejected, never used.
+        ((1, "km", "m", 1000), {"tolerance": -1}),
+    ],
+)
+def test_unit_conversion_rejects_unknown_units_and_bad_tolerance(args, kwargs):
+    result = VerificationEngine().verify_unit_conversion(*args, **kwargs)
+    assert result["status"] == "ERROR"
+    assert result["is_correct"] is False
