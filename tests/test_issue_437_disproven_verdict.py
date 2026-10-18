@@ -747,3 +747,22 @@ def test_unit_conversion_rejects_unknown_units_and_bad_tolerance(args, kwargs):
     result = VerificationEngine().verify_unit_conversion(*args, **kwargs)
     assert result["status"] == "ERROR"
     assert result["is_correct"] is False
+
+
+
+@pytest.mark.parametrize(
+    "matrix, claimed, expected",
+    [
+        ([[1, 2], [3, 4]], -2, "VERIFIED"),
+        ([[1, 2], [3, 4]], -2.0, "VERIFIED"),
+        # An absolute 1e-6 window used to accept this wrong claim.
+        ([[1, 2], [3, 4]], -2.0000001, DISPROVEN_STATUS),
+        ([[0.1, 0.2], [0.3, 0.4]], -0.02, "VERIFIED"),
+        # Large magnitude: exact, so no ulp residue can flip the verdict.
+        ([[1e10 + 0.1, 0], [0, 1]], 1e10 + 0.1, "VERIFIED"),
+        ([[float("inf"), 0], [0, 1]], 1, INCONCLUSIVE_STATUS),
+    ],
+)
+def test_determinant_is_exact(matrix, claimed, expected):
+    result = VerificationEngine().verify_matrix_operation("determinant", {"A": matrix}, claimed)
+    assert result["status"] == expected

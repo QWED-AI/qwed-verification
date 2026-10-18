@@ -18,9 +18,9 @@ All notable changes to the QWED Protocol will be documented in this file.
     non-zero: outright, by the coefficients of a bounded polynomial (a
     coefficient counts as non-zero only when SymPy decides it, so a true
     identity with an irrational coefficient like `cos(pi/7) - cos(2*pi/7) +
-    cos(3*pi/7) - 1/2` is never disproven), or at an exact witness point. A difference `simplify` cannot decide returns
-    `INCONCLUSIVE`, which maps to `UNVERIFIABLE`. An undecided `Matrix.equals`
-    is also `INCONCLUSIVE`.
+    cos(3*pi/7) - 1/2` is never disproven), or at an exact witness point. A
+    difference `simplify` cannot decide returns `INCONCLUSIVE`, which maps to
+    `UNVERIFIABLE`.
   - A witness point is used only when it satisfies the symbol's declared
     domain (`n` is a positive integer, so `-1`, `0` and `1/2` are skipped).
     It is substituted without evaluation and checked by the new
@@ -35,32 +35,20 @@ All notable changes to the QWED Protocol will be documented in this file.
   - `verify_irr` decides Newton convergence on the rate step instead of an
     absolute NPV residual, so small cash flows no longer stop at the
     initial guess and report a correct IRR claim as `DISPROVEN`.
-  - Matrix `add`, `multiply`, `inverse` and `transpose` run exactly: each float
-    input is read as the decimal the caller wrote (`0.1` is 1/10), so
-    `[[0.1]] + [[0.2]]` vs `[[0.3]]` is `VERIFIED` and `[[0.5]] + [[1e9]]` vs
-    `[[1000000001.0]]` is `DISPROVEN`, with no tolerance. A float claim of an
-    exact entry holds when its decimal or its double is exactly that value,
-    or, for a fraction that is not a double (`inverse([[3]])` is 1/3), when it
-    is the correctly rounded double. A claim that only rounds to the same
-    double, or falls inside the rounding window, is `INCONCLUSIVE`. A claimed
-    matrix of the wrong shape is `DISPROVEN`; a non-finite entry is
-    `INCONCLUSIVE`.
+  - Matrix `add`, `multiply`, `inverse`, `transpose` and `determinant` run
+    exactly: each float input is read as the decimal the caller wrote (`0.1`
+    is 1/10), with no tolerance. So `[[0.1]] + [[0.2]]` vs `[[0.3]]` is
+    `VERIFIED`, `[[0.5]] + [[1e9]]` vs `[[1000000001.0]]` is `DISPROVEN`, and
+    the determinant no longer accepts `-2.0000001` for `det([[1, 2], [3, 4]])`.
+    A float claim of an exact entry holds when its decimal or its double is
+    exactly that value, or, for a fraction that is not a double
+    (`inverse([[3]])` is 1/3), when it is the correctly rounded double. A
+    claim that only rounds to the same double, or falls inside the rounding
+    window, is `INCONCLUSIVE`. A claimed matrix of the wrong shape is
+    `DISPROVEN`; a non-finite entry is `INCONCLUSIVE`.
   - `verify_unit_conversion` uses the exact legal unit definitions in Decimal
     (1 lb = 0.45359237 kg, 1 US gal = 3.785411784 L) and `BLOCKED`s units of
     different dimensions (`m` to `kg`) instead of comparing the numbers.
-  - `verify_irr` decides Newton convergence on the rate step instead of an
-    absolute NPV residual, so small cash flows no longer stop at the
-    initial guess and report a correct IRR claim as `DISPROVEN`.
-  - Matrix results are compared entry by entry. An exact computed entry is
-    compared exactly with the claim read as the decimal the caller wrote
-    (`[[1]] + [[2]]` vs `[[3.0000005]]` is `DISPROVEN`); only a computed
-    entry that is itself a binary float gets a relative tolerance (1e-9;
-    a 1e-12 floor only against zero), so `[[0.1]] + [[0.2]]` vs `[[0.3]]`
-    is `VERIFIED`. A fractional exact entry that is not a double
-    (`inverse([[3]])` is 1/3) accepts its correctly rounded double; an exact
-    integer is always compared exactly (`10**18 + 1` never matches `1e18`). A
-    claimed matrix of the wrong shape is `DISPROVEN`; a non-finite entry is
-    `INCONCLUSIVE`.
   - The control plane signs and attests `DISPROVEN` like `VERIFIED`, with
     `verified=False` in the attestation and `is_valid: false` in the result.
   - New `DiagnosticResult.disproven()` builds a `VERIFIED` result with

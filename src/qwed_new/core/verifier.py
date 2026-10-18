@@ -175,11 +175,12 @@ def _matrix_comparison_status(result: Any, expected: Any) -> str:
     - A shape mismatch is a decided disproof.
     - A non-finite entry on either side (inf, nan) is a failed computation or
       claim, not a counter-proof: INCONCLUSIVE.
-    - Each entry is compared on its own. An exact computed entry is compared
-      exactly with the claim read as the decimal the caller wrote; only a
-      computed entry that is itself a binary float gets a relative tolerance.
-      So an integer result never matches a nearby float claim, and an exact
-      entry is never rounded through a float.
+    - Each entry is compared on its own. Computed entries are exact (inputs
+      are read as the decimals the caller wrote). A float claim of an exact
+      entry holds only when its decimal or its double is exactly that value,
+      or when it is the correctly rounded double of a fraction that is not a
+      double; a claim that only rounds to it, or lies inside the rounding
+      window, is undecided.
     - One decided mismatch disproves the claim; any undecided entry otherwise
       leaves it INCONCLUSIVE.
     """
@@ -770,12 +771,14 @@ class VerificationEngine:
                 expected_mat = Matrix(expected)
                 
             elif operation == "determinant":
-                mat = list(sympy_matrices.values())[0]
-                result = mat.det()
-                is_correct = abs(float(result) - float(expected)) < 1e-6
+                # Exact determinant compared like a 1x1 matrix entry: no
+                # absolute window that accepts -2.0000001 for -2 or misses
+                # rounding at large magnitudes.
+                result = exact_mats[0].det()
+                status = _matrix_comparison_status(Matrix([[result]]), Matrix([[expected]]))
                 return {
-                    "is_correct": is_correct,
-                    "status": _numeric_status(is_correct, result, expected),
+                    "is_correct": status == "VERIFIED",
+                    "status": status,
                     "calculated_determinant": float(result),
                     "claimed_determinant": expected
                 }
