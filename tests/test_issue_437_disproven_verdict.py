@@ -942,3 +942,29 @@ def test_float_spacing_follows_the_least_precise_float():
     assert _float_spacing(sympy.Float("1.5", 30)) < Decimal(2) ** -52
     # Deliberately less precise than a double: its own, wider spacing.
     assert _float_spacing(sympy.Float(1 / 3, 3)) > Decimal(2) ** -52
+
+
+
+@pytest.mark.parametrize("cash_flows", [[float("inf"), -1], [float("nan"), -1], [-1, float("-inf")]])
+def test_irr_rejects_non_finite_cash_flows(cash_flows):
+    # [inf, -1] used to drive an infinite step into an unbounded halving loop.
+    result = VerificationEngine().verify_irr(cash_flows, 0)
+    assert result["status"] == "BLOCKED"
+
+
+def test_irr_solver_stops_on_a_non_finite_step():
+    from decimal import Decimal
+
+    result = VerificationEngine._find_irr_newton([Decimal("Infinity"), -1])
+    assert result["converged"] is False
+    assert result["reason"] == "non_finite_step"
+
+
+def test_irr_solver_step_halving_is_bounded(monkeypatch):
+    from qwed_new.core import verifier
+
+    # With no halvings allowed, the first step past -100% cannot be pulled back.
+    monkeypatch.setattr(verifier, "_MAX_IRR_STEP_HALVINGS", 0)
+    result = VerificationEngine._find_irr_newton([-100, 20, 20])
+    assert result["converged"] is False
+    assert result["reason"] == "out_of_domain"

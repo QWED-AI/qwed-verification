@@ -304,6 +304,10 @@ def _coarse_scalar_status(actual: Any, claimed: Any, window: Decimal) -> str:
     return INCONCLUSIVE_STATUS
 
 
+# Upper bound on step halvings per Newton iteration in the IRR solver.
+_MAX_IRR_STEP_HALVINGS = 200
+
+
 # Exact points tried, in order, when looking for a counterexample to a
 # symbolic claim. Integers and rationals keep the evaluation exact.
 _WITNESS_POINTS = (Integer(1), Integer(2), Integer(-1), Integer(3), Rational(1, 2), Integer(0))
@@ -1097,13 +1101,28 @@ class VerificationEngine:
                 }
 
             step = npv / npv_derivative
+            if not step.is_finite():
+                return {
+                    "converged": False,
+                    "reason": "non_finite_step",
+                    "iterations": iteration + 1,
+                    "residual": float(abs(npv)),
+                }
             # Stay where the rate means something (1 + r > 0): a full step
             # can jump past -100% to a spurious root (-1.358 for
             # [-100, 20, 20], whose IRR is -0.4417), so halve it until the
-            # next iterate stays in range. r > -1 holds from the 0.1 start, so
-            # the halving always ends.
-            while r - step <= -1:
+            # next iterate stays in range. The halving is bounded.
+            halvings = 0
+            while r - step <= -1 and halvings < _MAX_IRR_STEP_HALVINGS:
                 step /= 2
+                halvings += 1
+            if r - step <= -1:
+                return {
+                    "converged": False,
+                    "reason": "out_of_domain",
+                    "iterations": iteration + 1,
+                    "residual": float(abs(npv)),
+                }
             r = r - step
             if abs(step) < step_threshold:
                 return {"converged": True, "irr": float(r), "iterations": iteration + 1}
@@ -1131,6 +1150,16 @@ class VerificationEngine:
         try:
             if not cash_flows or len(cash_flows) < 2:
                 return {"is_correct": False, "status": "ERROR", "error": "Need at least 2 cash flows"}
+
+            # A non-finite cash flow has no IRR to compute; it would only feed
+            # infinities into the solver.
+            if not all(_is_finite_value(cf) for cf in cash_flows):
+                return {
+                    "is_correct": False,
+                    "status": "BLOCKED",
+                    "error": "IRR is undefined: a cash flow is not a finite number.",
+                    "cash_flows": cash_flows,
+                }
 
             # All-zero cash flows: IRR is mathematically undefined
             if all(cf == 0 for cf in cash_flows):
