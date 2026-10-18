@@ -234,7 +234,7 @@ def _scalar_status(actual: Any, claimed: Any) -> str:
     if None in magnitudes:
         return INCONCLUSIVE_STATUS
     magnitude = max(magnitudes)
-    window = _SCALAR_TOLERANCE + magnitude * _DOUBLE_SPACING
+    window = _SCALAR_TOLERANCE + magnitude * _float_spacing(actual, claimed)
     digits = magnitude.adjusted() + 1 if magnitude else 1
     precision = max(30, digits + 15)
     if precision > _MAX_SCALAR_PRECISION:
@@ -251,6 +251,20 @@ def _scalar_status(actual: Any, claimed: Any) -> str:
     if all(difference <= window for difference in differences):
         return INCONCLUSIVE_STATUS
     return DISPROVEN_STATUS
+
+
+def _float_spacing(*values: Any) -> Decimal:
+    """Relative representation error of the least precise Float involved.
+
+    A claim parsed from "1000000000000.0001" is a 60-bit Float, far more
+    precise than a double, so its window must be narrower than 2**-52 or a
+    real mismatch would be called rounding. With no Float atom (an
+    unevaluated integral against an exact claim), a double's spacing is used.
+    """
+    precisions = [f._prec for value in values for f in value.atoms(Float)]
+    if not precisions:
+        return _DOUBLE_SPACING
+    return Decimal(2) ** -(min(precisions) - 1)
 
 
 def _exact_floats(value: Any) -> Any:

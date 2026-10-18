@@ -784,6 +784,9 @@ def test_determinant_is_exact(matrix, claimed, expected):
         ("1/x", "1", "1", "oo", INCONCLUSIVE_STATUS),
         # Off by 2 at 8e9: far outside the double spacing (~1e-6), decided.
         ("2", "8000000002.0", "0", "4000000000", DISPROVEN_STATUS),
+        # A 17-digit claim parses as a 60-bit Float: off by 1e-4 is beyond its
+        # own representation error, so decided (a double window hid it).
+        ("1", "1000000000000.0001", "0", "10**12", DISPROVEN_STATUS),
         # 10**400 + 1 vs a 1e400 claim: rounding before subtracting used to
         # make this VERIFIED; it cannot be established cheaply, so undecided.
         ("10**300*10**100 + 1", "Float(10**400, 50)", "0", "1", INCONCLUSIVE_STATUS),
@@ -798,8 +801,11 @@ def test_definite_integral_rounding_window_is_undecided():
     from qwed_new.core.verifier import _scalar_status
 
     exact = sympy.Rational(87960930222080009765725, 10000000000)
-    # 1e-3 off at 8.8e12: beyond the 1e-6 tolerance, inside float rounding.
-    assert _scalar_status(exact, sympy.Float("8796093022208.001", 30)) == INCONCLUSIVE_STATUS
+    # 1e-3 off at 8.8e12 with a double claim: beyond the 1e-6 tolerance,
+    # inside the double's rounding.
+    assert _scalar_status(exact, sympy.Float(8796093022208.001)) == INCONCLUSIVE_STATUS
+    # The same value given at 30 digits is precise enough to decide.
+    assert _scalar_status(exact, sympy.Float("8796093022208.001", 30)) == DISPROVEN_STATUS
     assert _scalar_status(sympy.Symbol("x"), sympy.Float(1.0)) == INCONCLUSIVE_STATUS
     assert _scalar_status(sympy.nan, sympy.Float(1.0)) == INCONCLUSIVE_STATUS
 
@@ -911,3 +917,14 @@ def test_coarse_comparison_is_undecided_without_numeric_sides():
     window = Decimal(1)
     assert _coarse_scalar_status(x, sympy.Float(1.0), window) == INCONCLUSIVE_STATUS
     assert _coarse_scalar_status(sympy.Integer(1), x, window) == INCONCLUSIVE_STATUS
+
+
+
+def test_float_spacing_follows_the_least_precise_float():
+    from decimal import Decimal
+
+    from qwed_new.core.verifier import _float_spacing
+
+    assert _float_spacing(sympy.Integer(1)) == Decimal(2) ** -52
+    assert _float_spacing(sympy.Float(1.0)) == Decimal(2) ** -52
+    assert _float_spacing(sympy.Float("1000000000000.0001")) < Decimal(2) ** -52
