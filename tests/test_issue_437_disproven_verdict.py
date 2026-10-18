@@ -681,6 +681,10 @@ def test_exact_integers_are_never_matched_through_rounding(matrix, claimed, expe
         ([-100, 120], 0.2, "VERIFIED"),
         # NPV is exactly 0 at the initial guess.
         ([-100, 110], 0.1, "VERIFIED"),
+        # IRR of -44%: a full Newton step jumps past -100% to the spurious
+        # root -1.358; the damped step stays in range and finds the real one.
+        ([-100, 20, 20], -0.441742430504416, "VERIFIED"),
+        ([-100, 20, 20], -1.358257569495584, DISPROVEN_STATUS),
     ],
 )
 def test_irr_converges_on_rate_step_not_npv_residual(cash_flows, claimed, expected):

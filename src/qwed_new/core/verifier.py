@@ -1097,6 +1097,13 @@ class VerificationEngine:
                 }
 
             step = npv / npv_derivative
+            # Stay where the rate means something (1 + r > 0): a full step
+            # can jump past -100% to a spurious root (-1.358 for
+            # [-100, 20, 20], whose IRR is -0.4417), so halve it until the
+            # next iterate stays in range. r > -1 holds from the 0.1 start, so
+            # the halving always ends.
+            while r - step <= -1:
+                step /= 2
             r = r - step
             if abs(step) < step_threshold:
                 return {"converged": True, "irr": float(r), "iterations": iteration + 1}

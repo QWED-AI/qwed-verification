@@ -34,7 +34,9 @@ All notable changes to the QWED Protocol will be documented in this file.
     `INCONCLUSIVE`.
   - `verify_irr` decides Newton convergence on the rate step instead of an
     absolute NPV residual, so small cash flows no longer stop at the
-    initial guess and report a correct IRR claim as `DISPROVEN`.
+    initial guess and report a correct IRR claim as `DISPROVEN`. Newton steps
+    are damped to keep `1 + r > 0`, so a negative IRR (`[-100, 20, 20]` is
+    -44%) is no longer replaced by a spurious root below -100%.
   - Matrix `add`, `multiply`, `inverse`, `transpose` and `determinant` run
     exactly: each float input is read as the decimal the caller wrote (`0.1`
     is 1/10), with no tolerance. So `[[0.1]] + [[0.2]]` vs `[[0.3]]` is
