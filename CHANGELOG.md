@@ -26,8 +26,9 @@ All notable changes to the QWED Protocol will be documented in this file.
     `constraint_id: math.domain_restricted_identity` in `/verify/math`, and
     `INCONCLUSIVE` (`reason: domain_mismatch`) in `verify_identity` (#429).
     The denominators are read from the expression before SymPy evaluates
-    it (after the same NFKC normalization, so fullwidth operators count);
-    an identity is VERIFIED only when both sides have the same singular
+    it (after the same NFKC normalization, so fullwidth operators count),
+    including the right side of floor division and modulo (`x//x = 1`,
+    `x % x = 0`); an identity is VERIFIED only when both sides have the same singular
     factors. An identity using a function with poles or a singular point
     (`tan`, `sec`, `log`, `factorial`, ...) and a free symbol is never
     VERIFIED this way; closed constants such as `factorial(5) = 120` are.

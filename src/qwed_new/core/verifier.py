@@ -30,7 +30,6 @@ from decimal import Decimal, ROUND_HALF_UP, localcontext
 from fractions import Fraction
 from dataclasses import dataclass
 import ast
-import re
 import unicodedata
 import math
 
@@ -368,31 +367,44 @@ def _polynomial_status(difference: Any, symbols: Any) -> Optional[str]:
 DOMAIN_RESTRICTED_IDENTITY = "math.domain_restricted_identity"
 
 
-def _denominator_sources(expression: str) -> Optional[List[str]]:
-    """Source text of every denominator written in ``expression``.
+def _parse_domain_text(expression: str) -> Optional[tuple]:
+    """``(normalized_text, ast_nodes)`` for ``expression``, or None when it is
+    not Python-parseable (implicit multiplication).
 
-    Read from the Python AST, before SymPy evaluates anything: ``x/x``
-    parses straight to ``1`` and the excluded point x = 0 is lost. Covers
-    the right side of each ``/`` and the base of each power (``**`` or ``^``,
-    which the parser reads as a power) whose exponent is not provably
-    non-negative. None when the text is not Python-parseable (implicit
-    multiplication) or an exponent cannot be read.
+    The parser reads "^" as a power (convert_xor); Python's AST would read it
+    as XOR with looser precedence, so "x^2 - 9" would become x^(2 - 9). Nodes
+    are in breadth-first order, so every child comes after its parent.
     """
-    # The parser reads "^" as a power (convert_xor); Python's AST would read
-    # it as XOR with looser precedence, so "x^2 - 9" would become x^(2 - 9).
     normalized = expression.replace("^", "**")
     try:
         tree = ast.parse(normalized, mode="eval")
     except SyntaxError:
         return None
+    return normalized, list(ast.walk(tree))
+
+
+# Operators whose right operand must be non-zero: x/0, x//0 and x%0 are all
+# undefined, and SymPy folds x//x to 1 and x%x to 0 before any check sees them.
+_DIVISION_OPERATORS = (ast.Div, ast.FloorDiv, ast.Mod)
+
+
+def _denominator_sources(normalized: str, nodes: List[ast.AST]) -> Optional[List[str]]:
+    """Source text of every denominator written in the parsed expression.
+
+    Read from the Python AST, before SymPy evaluates anything: ``x/x``
+    parses straight to ``1`` and the excluded point x = 0 is lost. Covers
+    the right side of each ``/``, ``//`` and ``%``, and the base of each
+    power whose exponent is not provably non-negative. None when an
+    exponent cannot be read.
+    """
     sources = []
-    for node in ast.walk(tree):
+    for node in nodes:
         if not isinstance(node, ast.BinOp):
             continue
-        if isinstance(node.op, ast.Div):
+        if isinstance(node.op, _DIVISION_OPERATORS):
             sources.append(ast.get_source_segment(normalized, node.right))
         elif isinstance(node.op, ast.Pow):
-            nonnegative = _exponent_is_nonnegative(ast.get_source_segment(normalized, node.right))
+            nonnegative = _exponent_is_nonnegative(normalized, node.right)
             if nonnegative is None:
                 return None
             if not nonnegative:
@@ -400,12 +412,16 @@ def _denominator_sources(expression: str) -> Optional[List[str]]:
     return sources
 
 
-def _exponent_is_nonnegative(source: str) -> Optional[bool]:
+def _exponent_is_nonnegative(normalized: str, exponent: ast.AST) -> Optional[bool]:
+    # A plain real literal ("2", "0.5") is decided from the AST; parsing it
+    # again would cost a full SymPy parse per power.
+    if isinstance(exponent, ast.Constant) and type(exponent.value) in (int, float):
+        return exponent.value >= 0
     try:
-        exponent = safe_parse_expr(source)
+        value = safe_parse_expr(ast.get_source_segment(normalized, exponent))
     except ValueError:
         return None
-    return exponent.is_nonnegative is True
+    return value.is_nonnegative is True
 
 
 # Parser functions whose own domain has poles or a singular point (tan at
@@ -428,21 +444,28 @@ def _singular_factors(expression: str) -> Optional[frozenset]:
     # Scan the text the parser reads: safe_parse_expr applies NFKC first, so
     # a fullwidth "x／x" parses as x/x (issue #330).
     expression = unicodedata.normalize("NFKC", expression).strip()
-    names = _names(expression)
+    parsed = _parse_domain_text(expression)
+    if parsed is None:
+        # Unreadable text can only be trusted to have no singular points
+        # when it has no division, power or restricted function at all.
+        names = _text_names(expression)
+        if names & _DOMAIN_RESTRICTED_FUNCTIONS and names - _NON_SYMBOL_NAMES:
+            return None
+        if any(token in expression for token in ("/", "%", "**", "^")):
+            return None
+        return frozenset()
+    normalized, nodes = parsed
+    names = _ast_names(nodes)
     # A closed constant (factorial(5), log(1), tan(pi/4)) has no domain to
     # restrict. Symbols are read from the text too, since the parsed tree of
     # "tan(x) - tan(x) + 1" no longer contains x.
     if names & _DOMAIN_RESTRICTED_FUNCTIONS and names - _NON_SYMBOL_NAMES:
         return None
-    if _has_undefined_closed_part(expression):
+    if _has_undefined_closed_part(normalized, nodes):
         return None
-    sources = _denominator_sources(expression)
+    sources = _denominator_sources(normalized, nodes)
     if sources is None:
-        # Unreadable text can only be trusted to have no singular points
-        # when it has no division and no power at all.
-        if any(token in expression for token in ("/", "**", "^")):
-            return None
-        return frozenset()
+        return None
     factors = set()
     for source in sources:
         denominator_factors = _denominator_factors(safe_parse_expr(source))
@@ -452,47 +475,88 @@ def _singular_factors(expression: str) -> Optional[frozenset]:
     return frozenset(factors)
 
 
-# A decimal literal with an exponent ("1e5", "0.5E-3"): its "e5" is not a name.
-_SCIENTIFIC_LITERAL = re.compile(r"\d+(?:\.\d*)?[eE][+-]?\d+")
+def _ast_names(nodes: List[ast.AST]) -> set:
+    return {node.id for node in nodes if isinstance(node, ast.Name)}
+
+
+def _skip_number(text: str, index: int) -> int:
+    """Index just past the decimal literal starting at ``index``, including
+    an exponent ("1e5", "0.5E-3"), so its "e5" is never read as a name."""
+    end = len(text)
+    while index < end and (text[index].isdigit() or text[index] == "."):
+        index += 1
+    if index < end and text[index] in "eE":
+        digits = index + 1
+        if digits < end and text[digits] in "+-":
+            digits += 1
+        if digits < end and text[digits].isdigit():
+            index = digits
+            while index < end and text[index].isdigit():
+                index += 1
+    return index
+
+
+def _text_names(expression: str) -> set:
+    """Identifiers in text the AST cannot read, found by one linear scan."""
+    names = set()
+    index, end = 0, len(expression)
+    while index < end:
+        char = expression[index]
+        if char.isdigit() or (char == "." and expression[index + 1:index + 2].isdigit()):
+            index = _skip_number(expression, index)
+        elif char.isalpha() or char == "_":
+            start = index
+            while index < end and (expression[index].isalnum() or expression[index] == "_"):
+                index += 1
+            names.add(expression[start:index])
+        else:
+            index += 1
+    return names
 
 
 def _names(expression: str) -> set:
-    """Identifiers in ``expression``: AST names when it parses, otherwise the
-    text with scientific literals removed, so "1e5" never yields "e5"."""
-    try:
-        tree = ast.parse(expression.replace("^", "**"), mode="eval")
-    except SyntaxError:
-        return set(re.findall(r"[A-Za-z_]\w*", _SCIENTIFIC_LITERAL.sub("0", expression)))
-    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    """Identifiers in ``expression``: AST names when it parses, otherwise a
+    text scan that skips numeric literals, so "1e5" never yields "e5"."""
+    parsed = _parse_domain_text(expression)
+    if parsed is None:
+        return _text_names(expression)
+    return _ast_names(parsed[1])
 
 
 # Past this many AST nodes the closed-part check is not attempted.
 _MAX_DOMAIN_SCAN_NODES = 400
 
 
-def _has_undefined_closed_part(expression: str) -> bool:
-    """True when a symbol-free part of ``expression`` is undefined, or when
-    that cannot be checked.
+def _nodes_naming_a_symbol(nodes: List[ast.AST]) -> set:
+    """ids of the nodes whose subtree names a symbol, in one bottom-up pass."""
+    marked = set()
+    for node in reversed(nodes):  # children before parents
+        if isinstance(node, ast.Name):
+            if node.id not in _NON_SYMBOL_NAMES:
+                marked.add(id(node))
+        elif any(id(child) in marked for child in ast.iter_child_nodes(node)):
+            marked.add(id(node))
+    return marked
+
+
+def _has_undefined_closed_part(normalized: str, nodes: List[ast.AST]) -> bool:
+    """True when a symbol-free part of the parsed expression is undefined, or
+    when that cannot be checked.
 
     SymPy evaluates such parts away before any identity is compared:
     ``log(0)**0`` and ``tan(pi/2)**0`` both become 1 (``zoo**0``). Each call,
     operation and power whose text names no symbol is evaluated on its own
     and must be finite.
     """
-    normalized = expression.replace("^", "**")
-    try:
-        tree = ast.parse(normalized, mode="eval")
-    except SyntaxError:
-        return False  # unreadable text is handled by the caller's own guard
-    nodes = [n for n in ast.walk(tree) if isinstance(n, (ast.Call, ast.BinOp, ast.UnaryOp))]
-    if len(nodes) > _MAX_DOMAIN_SCAN_NODES:
+    parts = [n for n in nodes if isinstance(n, (ast.Call, ast.BinOp, ast.UnaryOp))]
+    if len(parts) > _MAX_DOMAIN_SCAN_NODES:
         return True
-    for node in nodes:
-        source = ast.get_source_segment(normalized, node)
-        if {n.id for n in ast.walk(node) if isinstance(n, ast.Name)} - _NON_SYMBOL_NAMES:
+    with_symbol = _nodes_naming_a_symbol(nodes)
+    for node in parts:
+        if id(node) in with_symbol:
             continue  # names a symbol: covered by the denominator scan
         try:
-            value = safe_parse_expr(source)
+            value = safe_parse_expr(ast.get_source_segment(normalized, node))
         except ValueError:
             return True
         if value.has(zoo, nan) or value.is_finite is False:

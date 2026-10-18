@@ -1048,6 +1048,17 @@ def test_verify_identity_keeps_non_identities_not_equivalent():
         # Scientific literals are numbers, not symbols ("e0" in "0e0").
         ("(oo*0e0)**0", "1", False),
         ("log(1e0)", "0", True),
+        # Floor division and modulo exclude a zero right operand too; SymPy
+        # folds x//x to 1 and x%x to 0.
+        ("x//x", "1", False),
+        ("x % x", "0", False),
+        ("(x**2 - 1)//(x - 1)", "x + 1", False),
+        ("x//1", "x", True),
+        ("x % 2", "x % 2", True),
+        # Constant exponents are read from the AST; a negative one still
+        # makes its base a denominator.
+        ("x**-1 * x", "1", False),
+        ("x**0.5 * x**0.5", "x", True),
     ],
 )
 def test_identity_domains_match(lhs, rhs, expected):
@@ -1122,9 +1133,26 @@ def test_api_identity_with_undefined_part_is_unverifiable(client, expression, is
         ("1e5 + x", {"x"}),
         ("0.5E-3*y", {"y"}),
         ("2x + 1e5", {"x"}),  # implicit multiplication: text fallback
+        ("2x + .5e-3y", {"x", "y"}),
+        ("3e + 2x", {"e", "x"}),  # no exponent digits: "e" is a name
+        ("1" * 5000 + "e", {"e"}),  # linear scan on long digit runs
     ],
 )
 def test_names_ignore_scientific_literals(expression, expected):
     from qwed_new.core.verifier import _names
 
     assert _names(expression) == expected
+
+
+@pytest.mark.parametrize("expression", ["x//x = 1", "x % x = 0"])
+def test_api_floor_division_and_modulo_identities_are_unverifiable(client, expression, isolated_audit_chain):
+    data = client.post("/verify/math", json={"expression": expression}).json()
+
+    assert data["status"] != "VERIFIED"
+    assert data["admission"] == "BLOCKED"
+
+
+def test_implicit_multiplication_with_modulo_is_not_trusted():
+    from qwed_new.core.verifier import identity_domains_match
+
+    assert identity_domains_match("2x % x", "0") is False
