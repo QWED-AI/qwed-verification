@@ -985,6 +985,8 @@ def test_irr_solver_step_halving_is_bounded(monkeypatch):
         ("(x+1)**2", "x**2 + 2*x + 1", "VERIFIED"),
         ("1/x + 1/x", "2/x", "VERIFIED"),
         ("sin(x)**2 + cos(x)**2", "1", "VERIFIED"),
+        ("x^2 - 9", "(x-3)*(x+3)", "VERIFIED"),
+        ("n/n", "1", "VERIFIED"),
     ],
 )
 def test_verify_identity_respects_removable_singularities(lhs, rhs, expected):
@@ -1012,6 +1014,14 @@ def test_verify_identity_keeps_non_identities_not_equivalent():
         ("x**__class__", "1", False),    # exponent the parser refuses
         ("2x", "x + x", True),            # unreadable, but no division or power
         ("x/2 + x/2", "x", True),         # a constant denominator excludes nothing
+        # "^" is a power with power precedence, not Python's looser XOR.
+        ("x^2 - 9", "(x-3)*(x+3)", True),
+        ("x^2 + y", "y + x^2", True),
+        ("1 + x^-1", "(x+1)/x", True),
+        # n is a positive integer: a denominator that is never zero.
+        ("n/n", "1", True),
+        ("1/(n*(x-1))", "1/(n*x-n)", True),
+        ("n*x/(n*x)", "1", False),
     ],
 )
 def test_identity_domains_match(lhs, rhs, expected):
@@ -1031,6 +1041,15 @@ def test_api_identity_with_removable_singularity_is_unverifiable(client, express
 
 def test_api_identity_with_matching_singularities_is_verified(client, isolated_audit_chain):
     data = client.post("/verify/math", json={"expression": "1/x + 1/x = 2/x"}).json()
+
+    assert data["status"] == "VERIFIED"
+    assert data["admission"] == "ADMIT"
+
+
+
+@pytest.mark.parametrize("expression", ["x^2 - 9 = (x-3)*(x+3)", "x^2 - 2*x = x*(x-2)", "n/n = 1"])
+def test_api_true_identities_with_caret_or_nonzero_denominator_are_verified(client, expression, isolated_audit_chain):
+    data = client.post("/verify/math", json={"expression": expression}).json()
 
     assert data["status"] == "VERIFIED"
     assert data["admission"] == "ADMIT"

@@ -376,8 +376,11 @@ def _denominator_sources(expression: str) -> Optional[List[str]]:
     non-negative. None when the text is not Python-parseable (implicit
     multiplication) or an exponent cannot be read.
     """
+    # The parser reads "^" as a power (convert_xor); Python's AST would read
+    # it as XOR with looser precedence, so "x^2 - 9" would become x^(2 - 9).
+    normalized = expression.replace("^", "**")
     try:
-        tree = ast.parse(expression, mode="eval")
+        tree = ast.parse(normalized, mode="eval")
     except SyntaxError:
         return None
     sources = []
@@ -385,13 +388,13 @@ def _denominator_sources(expression: str) -> Optional[List[str]]:
         if not isinstance(node, ast.BinOp):
             continue
         if isinstance(node.op, ast.Div):
-            sources.append(ast.get_source_segment(expression, node.right))
-        elif isinstance(node.op, (ast.Pow, ast.BitXor)):
-            nonnegative = _exponent_is_nonnegative(ast.get_source_segment(expression, node.right))
+            sources.append(ast.get_source_segment(normalized, node.right))
+        elif isinstance(node.op, ast.Pow):
+            nonnegative = _exponent_is_nonnegative(ast.get_source_segment(normalized, node.right))
             if nonnegative is None:
                 return None
             if not nonnegative:
-                sources.append(ast.get_source_segment(expression, node.left))
+                sources.append(ast.get_source_segment(normalized, node.left))
     return sources
 
 
@@ -417,7 +420,9 @@ def _singular_factors(expression: str) -> Optional[frozenset]:
     factors = set()
     for source in sources:
         denominator = safe_parse_expr(source)
-        if denominator.is_number:
+        # A constant, or a denominator the symbols' assumptions rule out as
+        # zero (n is a positive integer), excludes no point.
+        if denominator.is_number or denominator.is_nonzero is True:
             continue
         symbols = sorted(denominator.free_symbols, key=str)
         if not denominator.is_polynomial(*symbols):
@@ -427,7 +432,8 @@ def _singular_factors(expression: str) -> Optional[frozenset]:
         if degree is None or degree > _MAX_POLYNOMIAL_DEGREE:
             return None
         for factor, _ in factor_list(denominator, *symbols)[1]:
-            factors.add(Poly(factor, *symbols).monic().as_expr())
+            if factor.is_nonzero is not True:
+                factors.add(Poly(factor, *symbols).monic().as_expr())
     return frozenset(factors)
 
 
