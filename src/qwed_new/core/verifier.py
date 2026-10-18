@@ -30,6 +30,8 @@ from decimal import Decimal, ROUND_HALF_UP, localcontext
 from fractions import Fraction
 from dataclasses import dataclass
 import ast
+import re
+import unicodedata
 import math
 
 INVALID_TEMPERATURE_UNIT_ERROR = "Invalid temperature unit"
@@ -406,10 +408,24 @@ def _exponent_is_nonnegative(source: str) -> Optional[bool]:
     return exponent.is_nonnegative is True
 
 
+# Parser functions whose own domain has poles or a singular point (tan at
+# pi/2, log at 0, factorial at negative integers). Their names are read from
+# the text: "tan(x) - tan(x)" cancels to 0 before any parsed tree is seen.
+_DOMAIN_RESTRICTED_FUNCTIONS = frozenset({
+    "tan", "cot", "sec", "csc", "asin", "acos", "atan", "atan2", "tanh",
+    "log", "ln", "factorial", "binomial",
+})
+
+
 def _singular_factors(expression: str) -> Optional[frozenset]:
     """The distinct factors whose zeros make ``expression`` undefined, or
     None when they cannot be determined cheaply and exactly."""
-    expression = expression.strip()
+    # Scan the text the parser reads: safe_parse_expr applies NFKC first, so
+    # a fullwidth "x／x" parses as x/x (issue #330).
+    expression = unicodedata.normalize("NFKC", expression).strip()
+    names = set(re.findall(r"[A-Za-z_]\w*", expression))
+    if names & _DOMAIN_RESTRICTED_FUNCTIONS:
+        return None
     sources = _denominator_sources(expression)
     if sources is None:
         # Unreadable text can only be trusted to have no singular points
@@ -419,22 +435,31 @@ def _singular_factors(expression: str) -> Optional[frozenset]:
         return frozenset()
     factors = set()
     for source in sources:
-        denominator = safe_parse_expr(source)
-        # A constant, or a denominator the symbols' assumptions rule out as
-        # zero (n is a positive integer), excludes no point.
-        if denominator.is_number or denominator.is_nonzero is True:
-            continue
-        symbols = sorted(denominator.free_symbols, key=str)
-        if not denominator.is_polynomial(*symbols):
-            factors.add(denominator)
-            continue
-        degree = _polynomial_degree_bound(denominator, set(symbols))
-        if degree is None or degree > _MAX_POLYNOMIAL_DEGREE:
+        denominator_factors = _denominator_factors(safe_parse_expr(source))
+        if denominator_factors is None:
             return None
-        for factor, _ in factor_list(denominator, *symbols)[1]:
-            if factor.is_nonzero is not True:
-                factors.add(Poly(factor, *symbols).monic().as_expr())
+        factors |= denominator_factors
     return frozenset(factors)
+
+
+def _denominator_factors(denominator: Any) -> Optional[set]:
+    """Distinct factors of one denominator that can be zero, or None when
+    they cannot be found within the factoring budget."""
+    # A constant, or a denominator the symbols' assumptions rule out as zero
+    # (n is a positive integer), excludes no point.
+    if denominator.is_number or denominator.is_nonzero is True:
+        return set()
+    symbols = sorted(denominator.free_symbols, key=str)
+    if not denominator.is_polynomial(*symbols):
+        return {denominator}
+    degree = _polynomial_degree_bound(denominator, set(symbols))
+    if degree is None or degree > _MAX_POLYNOMIAL_DEGREE:
+        return None
+    return {
+        Poly(factor, *symbols).monic().as_expr()
+        for factor, _ in factor_list(denominator, *symbols)[1]
+        if factor.is_nonzero is not True
+    }
 
 
 def identity_domains_match(lhs: str, rhs: str) -> bool:

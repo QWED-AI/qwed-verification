@@ -987,6 +987,8 @@ def test_irr_solver_step_halving_is_bounded(monkeypatch):
         ("sin(x)**2 + cos(x)**2", "1", "VERIFIED"),
         ("x^2 - 9", "(x-3)*(x+3)", "VERIFIED"),
         ("n/n", "1", "VERIFIED"),
+        ("tan(x)*cos(x)", "sin(x)", INCONCLUSIVE_STATUS),
+        ("sec(x)*cos(x)", "1", INCONCLUSIVE_STATUS),
     ],
 )
 def test_verify_identity_respects_removable_singularities(lhs, rhs, expected):
@@ -1022,6 +1024,16 @@ def test_verify_identity_keeps_non_identities_not_equivalent():
         ("n/n", "1", True),
         ("1/(n*(x-1))", "1/(n*x-n)", True),
         ("n*x/(n*x)", "1", False),
+        # Fullwidth operators: the parser applies NFKC, so the scan must too.
+        ("x／x", "1", False),
+        ("x＾-1*x", "1", False),
+        # Functions with poles: undefined where cos(x) = 0, even when the
+        # parser cancels them away.
+        ("tan(x)*cos(x)", "sin(x)", False),
+        ("sec(x)*cos(x)", "1", False),
+        ("tan(x) - tan(x) + 1", "1", False),
+        # Entire functions stay matched.
+        ("exp(x)*exp(y)", "exp(x+y)", True),
     ],
 )
 def test_identity_domains_match(lhs, rhs, expected):
@@ -1053,3 +1065,12 @@ def test_api_true_identities_with_caret_or_nonzero_denominator_are_verified(clie
 
     assert data["status"] == "VERIFIED"
     assert data["admission"] == "ADMIT"
+
+
+
+@pytest.mark.parametrize("expression", ["x／x = 1", "tan(x)*cos(x) = sin(x)"])
+def test_api_fullwidth_and_pole_identities_are_unverifiable(client, expression, isolated_audit_chain):
+    data = client.post("/verify/math", json={"expression": expression}).json()
+
+    assert data["status"] == "UNVERIFIABLE"
+    assert data["admission"] == "BLOCKED"
