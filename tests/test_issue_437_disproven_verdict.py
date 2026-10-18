@@ -784,9 +784,11 @@ def test_determinant_is_exact(matrix, claimed, expected):
         ("1/x", "1", "1", "oo", INCONCLUSIVE_STATUS),
         # Off by 2 at 8e9: far outside the double spacing (~1e-6), decided.
         ("2", "8000000002.0", "0", "4000000000", DISPROVEN_STATUS),
-        # A 17-digit claim parses as a 60-bit Float: off by 1e-4 is beyond its
-        # own representation error, so decided (a double window hid it).
-        ("1", "1000000000000.0001", "0", "10**12", DISPROVEN_STATUS),
+        # A 17-digit claim may be a double's repr (parsed at 60 bits): off by
+        # 1e-4 at 1e12 is within one double ulp, so it stays undecided.
+        ("1", "1000000000000.0001", "0", "10**12", INCONCLUSIVE_STATUS),
+        # The repr of the double nearest 10**12*pi is not a counter-proof.
+        ("1", "3141592653589.793", "0", "10**12*pi", INCONCLUSIVE_STATUS),
         # 10**400 + 1 vs a 1e400 claim: rounding before subtracting used to
         # make this VERIFIED; it cannot be established cheaply, so undecided.
         ("10**300*10**100 + 1", "Float(10**400, 50)", "0", "1", INCONCLUSIVE_STATUS),
@@ -927,4 +929,7 @@ def test_float_spacing_follows_the_least_precise_float():
 
     assert _float_spacing(sympy.Integer(1)) == Decimal(2) ** -52
     assert _float_spacing(sympy.Float(1.0)) == Decimal(2) ** -52
-    assert _float_spacing(sympy.Float("1000000000000.0001")) < Decimal(2) ** -52
+    # A 16-17 digit string may be a double's repr: double spacing.
+    assert _float_spacing(sympy.Float("1000000000000.0001")) == Decimal(2) ** -52
+    # Clearly more precise than any double: narrower.
+    assert _float_spacing(sympy.Float("1.5", 30)) < Decimal(2) ** -52

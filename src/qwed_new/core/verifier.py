@@ -253,16 +253,22 @@ def _scalar_status(actual: Any, claimed: Any) -> str:
     return DISPROVEN_STATUS
 
 
+# SymPy parses a 16-17 digit string (how Python's repr writes a double) at up
+# to 60 bits, so a Float at or below this may be a double and is treated as one.
+_DOUBLE_REPR_MAX_PRECISION = 60
+
+
 def _float_spacing(*values: Any) -> Decimal:
     """Relative representation error of the least precise Float involved.
 
-    A claim parsed from "1000000000000.0001" is a 60-bit Float, far more
-    precise than a double, so its window must be narrower than 2**-52 or a
-    real mismatch would be called rounding. With no Float atom (an
-    unevaluated integral against an exact claim), a double's spacing is used.
+    A double's 2**-52 is the floor: a claim like "3141592653589.793" is the
+    repr of a double, parsed at 56 bits, and a narrower window would turn
+    the double's own rounding into a counter-proof. Only a Float clearly
+    more precise than any double repr (a 30-digit claim) gets a narrower
+    window. With no Float atom, a double's spacing is used.
     """
     precisions = [f._prec for value in values for f in value.atoms(Float)]
-    if not precisions:
+    if not precisions or min(precisions) <= _DOUBLE_REPR_MAX_PRECISION:
         return _DOUBLE_SPACING
     return Decimal(2) ** -(min(precisions) - 1)
 
