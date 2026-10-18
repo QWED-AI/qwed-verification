@@ -891,3 +891,23 @@ def test_scalar_status_is_undecided_when_the_difference_cannot_be_evaluated(monk
     monkeypatch.setattr(verifier, "_decimal_parts", parts_without_difference)
     status = verifier._scalar_status(sympy.Integer(10**20), sympy.Float(1e20))
     assert status == INCONCLUSIVE_STATUS
+
+
+
+def test_value_that_underflows_to_zero_never_accepts_a_zero_claim():
+    from qwed_new.core.verifier import _exact_vs_float_claim
+
+    # 1e-400 is non-zero but its nearest double is 0.0.
+    assert _exact_vs_float_claim(sympy.Rational(1, 10**400), sympy.Float(0.0)) is None
+    assert _exact_vs_float_claim(sympy.Integer(0), sympy.Float(0.0)) is True
+
+
+def test_coarse_comparison_is_undecided_without_numeric_sides():
+    from decimal import Decimal
+
+    from qwed_new.core.verifier import _coarse_scalar_status
+
+    x = sympy.Symbol("x")
+    window = Decimal(1)
+    assert _coarse_scalar_status(x, sympy.Float(1.0), window) == INCONCLUSIVE_STATUS
+    assert _coarse_scalar_status(sympy.Integer(1), x, window) == INCONCLUSIVE_STATUS

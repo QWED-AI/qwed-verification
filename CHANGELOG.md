@@ -42,7 +42,8 @@ All notable changes to the QWED Protocol will be documented in this file.
     the determinant no longer accepts `-2.0000001` for `det([[1, 2], [3, 4]])`.
     A float claim of an exact entry holds when its decimal or its double is
     exactly that value, or, for a fraction that is not a double
-    (`inverse([[3]])` is 1/3), when it is the correctly rounded double. A
+    (`inverse([[3]])` is 1/3), when it is the correctly rounded double; a
+    non-zero value that underflows to `0.0` never accepts a `0.0` claim. A
     claim that only rounds to the same double, or falls inside the rounding
     window, is `INCONCLUSIVE`. A claimed matrix of the wrong shape is
     `DISPROVEN`; a non-finite entry is `INCONCLUSIVE`.

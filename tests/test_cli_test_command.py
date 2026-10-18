@@ -163,31 +163,25 @@ def test_run_full_engine_tests_prints_verdict_with_admission():
             assert item["result"].endswith(("| ADMIT", "| DENY"))
 
 
-@patch("qwed_new.core.verifier.VerificationEngine")
-def test_failed_check_prints_failed_not_blocked(mock_math_cls):
+def test_failed_check_prints_failed_not_blocked(monkeypatch):
     """A self-check whose engine answer does not match is reported FAILED,
-    and the engine's own status is kept in the detail for diagnosis."""
-    mock_math_cls.return_value.verify_math.return_value = {
-        "status": "BLOCKED",
-        "calculated_value": None,
-    }
+    and the engine's own status is kept in the detail for diagnosis.
+
+    The real engine runs; only the self-check input changes, so the claimed
+    994010994 no longer matches what the engine computes.
+    """
+    monkeypatch.setattr("qwed_sdk.cli.MATH_LABEL_LARGE", "997*998*998")
 
     results = {item["label"]: item for item in _run_full_engine_tests() if item["group"] == "Math"}
 
-    # The engine was really driven with each self-check input.
-    calls = [c.args for c in mock_math_cls.return_value.verify_math.call_args_list]
-    assert calls == [("2+2", 4), ("2+2", 5), ("997*998*999", 994010994)]
-    # Each Math branch failed with FAILED, never with a verdict word.
-    assert {label: item["passed"] for label, item in results.items()} == {
-        "2+2=4": False,
-        "2+2=5": False,
-        "997*998*999": False,
-    }
-    assert {item["result"] for item in results.values()} == {"FAILED"}
-    # Branch-specific detail fields carry what the engine actually returned.
-    assert results["2+2=4"]["detail"] == "computed=None"
-    assert results["2+2=5"]["detail"] == "computed=None"
-    assert results["997*998*999"]["detail"] == "status=BLOCKED"
+    failed = results["997*998*998"]
+    assert failed["passed"] is False
+    assert failed["result"] == "FAILED"
+    # Branch-specific detail: the engine decided the claim is false.
+    assert failed["detail"] == "status=DISPROVEN"
+    # The other Math checks are untouched and still decided.
+    assert results["2+2=4"]["result"] == "VERIFIED | ADMIT"
+    assert results["2+2=5"]["result"] == "VERIFIED (false) | DENY"
 
 
 @patch(

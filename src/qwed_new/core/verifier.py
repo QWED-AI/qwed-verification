@@ -152,7 +152,9 @@ def _exact_vs_float_claim(computed: Any, claimed: Any) -> Optional[bool]:
         if nearest is not None and float(claimed) == nearest:
             return None
         return False
-    if nearest is not None and float(claimed) == nearest:
+    if nearest is not None and nearest != 0 and float(claimed) == nearest:
+        # A non-zero value that underflows to 0.0 never accepts a 0.0 claim:
+        # that claim falls through to the window check and stays undecided.
         return True
     close = _floats_close(computed, claimed)
     return None if close else close
@@ -264,10 +266,14 @@ def _coarse_scalar_status(actual: Any, claimed: Any, window: Decimal) -> str:
     windows is therefore a decided mismatch (2e200 vs 1e200); anything closer
     stays undecided. Agreement is never decided here.
     """
-    actual_parts, claimed_parts = _decimal_parts(actual), _decimal_parts(claimed)
-    if actual_parts and claimed_parts and any(
-        abs(a - c) > 1000 * window for a, c in zip(actual_parts, claimed_parts)
-    ):
+    actual_parts = _decimal_parts(actual)
+    if actual_parts is None:
+        return INCONCLUSIVE_STATUS
+    claimed_parts = _decimal_parts(claimed)
+    if claimed_parts is None:
+        return INCONCLUSIVE_STATUS
+    gaps = [abs(a - c) for a, c in zip(actual_parts, claimed_parts)]
+    if any(gap > 1000 * window for gap in gaps):
         return DISPROVEN_STATUS
     return INCONCLUSIVE_STATUS
 
