@@ -33,7 +33,8 @@ All notable changes to the QWED Protocol will be documented in this file.
     VERIFIED this way; closed constants such as `factorial(5) = 120` are.
     A symbol-free part that is undefined (`log(0)**0 = 1`, `tan(pi/2)**0 = 1`)
     or a constant zero denominator (`(1/(x-x))**0 = 1`) also blocks it, even
-    though SymPy evaluates such parts away.
+    though SymPy evaluates such parts away. Names are read from the AST, so
+    a scientific literal such as `0e0` is never mistaken for a symbol.
   - A witness point is used only when it satisfies the symbol's declared
     domain (`n` is a positive integer, so `-1`, `0` and `1/2` are skipped).
     It is substituted without evaluation and checked by the new

@@ -428,7 +428,7 @@ def _singular_factors(expression: str) -> Optional[frozenset]:
     # Scan the text the parser reads: safe_parse_expr applies NFKC first, so
     # a fullwidth "x／x" parses as x/x (issue #330).
     expression = unicodedata.normalize("NFKC", expression).strip()
-    names = set(re.findall(r"[A-Za-z_]\w*", expression))
+    names = _names(expression)
     # A closed constant (factorial(5), log(1), tan(pi/4)) has no domain to
     # restrict. Symbols are read from the text too, since the parsed tree of
     # "tan(x) - tan(x) + 1" no longer contains x.
@@ -450,6 +450,20 @@ def _singular_factors(expression: str) -> Optional[frozenset]:
             return None
         factors |= denominator_factors
     return frozenset(factors)
+
+
+# A decimal literal with an exponent ("1e5", "0.5E-3"): its "e5" is not a name.
+_SCIENTIFIC_LITERAL = re.compile(r"\d+(?:\.\d*)?[eE][+-]?\d+")
+
+
+def _names(expression: str) -> set:
+    """Identifiers in ``expression``: AST names when it parses, otherwise the
+    text with scientific literals removed, so "1e5" never yields "e5"."""
+    try:
+        tree = ast.parse(expression.replace("^", "**"), mode="eval")
+    except SyntaxError:
+        return set(re.findall(r"[A-Za-z_]\w*", _SCIENTIFIC_LITERAL.sub("0", expression)))
+    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
 
 
 # Past this many AST nodes the closed-part check is not attempted.
@@ -475,7 +489,7 @@ def _has_undefined_closed_part(expression: str) -> bool:
         return True
     for node in nodes:
         source = ast.get_source_segment(normalized, node)
-        if set(re.findall(r"[A-Za-z_]\w*", source)) - _NON_SYMBOL_NAMES:
+        if {n.id for n in ast.walk(node) if isinstance(n, ast.Name)} - _NON_SYMBOL_NAMES:
             continue  # names a symbol: covered by the denominator scan
         try:
             value = safe_parse_expr(source)

@@ -1045,6 +1045,9 @@ def test_verify_identity_keeps_non_identities_not_equivalent():
         ("(1/(x-x))**0", "1", False),
         # A closed part the parser refuses is not trusted.
         ("factorial(100000)*0 + 1", "1", False),
+        # Scientific literals are numbers, not symbols ("e0" in "0e0").
+        ("(oo*0e0)**0", "1", False),
+        ("log(1e0)", "0", True),
     ],
 )
 def test_identity_domains_match(lhs, rhs, expected):
@@ -1110,3 +1113,18 @@ def test_api_identity_with_undefined_part_is_unverifiable(client, expression, is
 
     assert data["status"] != "VERIFIED"
     assert data["admission"] == "BLOCKED"
+
+
+
+@pytest.mark.parametrize(
+    "expression, expected",
+    [
+        ("1e5 + x", {"x"}),
+        ("0.5E-3*y", {"y"}),
+        ("2x + 1e5", {"x"}),  # implicit multiplication: text fallback
+    ],
+)
+def test_names_ignore_scientific_literals(expression, expected):
+    from qwed_new.core.verifier import _names
+
+    assert _names(expression) == expected
