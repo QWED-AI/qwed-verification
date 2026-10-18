@@ -21,7 +21,12 @@ from qwed_new.core.diagnostics import (
     enforce_trust_decision,
     merge_diagnostic_result,
 )
-from qwed_new.core.verifier import DISPROVEN_STATUS, symbolic_difference_status
+from qwed_new.core.verifier import (
+    DISPROVEN_STATUS,
+    DOMAIN_RESTRICTED_IDENTITY,
+    identity_domains_match,
+    symbolic_difference_status,
+)
 from qwed_new.api.verification_context_routes import router as verification_context_router
 
 # Configure logging
@@ -1073,7 +1078,20 @@ async def verify_math(
                 "right_side": str(right),
                 "simplified_difference": str(difference),
             }
-            if identity_status == "VERIFIED":
+            if identity_status == "VERIFIED" and not identity_domains_match(left_str, right_str):
+                # simplify cancelled a removable singularity (x/x = 1 is
+                # false at x = 0): the identity holds only on a restricted
+                # domain, so it is not proven unconditionally (#429).
+                dr = DiagnosticResult.unverifiable(
+                    "Identity holds only where both sides are defined",
+                    developer_fields={
+                        "is_valid": False,
+                        "result": None,
+                        "constraint_id": DOMAIN_RESTRICTED_IDENTITY,
+                        **fields,
+                    },
+                )
+            elif identity_status == "VERIFIED":
                 dr = DiagnosticResult.verified(
                     "Identity is true",
                     developer_fields={"is_valid": True, "result": True, **fields},

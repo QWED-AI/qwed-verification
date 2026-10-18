@@ -14,7 +14,7 @@ Enterprise Features:
 """
 
 from sympy import (
-    Symbol, Matrix, Integer, Rational, Float, Poly, Integral,
+    Symbol, Matrix, Integer, Rational, Float, Poly, Integral, factor_list,
     diff, integrate, limit, oo,
     simplify, expand, evaluate
 )
@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 from decimal import Decimal, ROUND_HALF_UP, localcontext
 from fractions import Fraction
 from dataclasses import dataclass
+import ast
 import math
 
 INVALID_TEMPERATURE_UNIT_ERROR = "Invalid temperature unit"
@@ -362,6 +363,87 @@ def _polynomial_status(difference: Any, symbols: Any) -> Optional[str]:
     return None
 
 
+DOMAIN_RESTRICTED_IDENTITY = "math.domain_restricted_identity"
+
+
+def _denominator_sources(expression: str) -> Optional[List[str]]:
+    """Source text of every denominator written in ``expression``.
+
+    Read from the Python AST, before SymPy evaluates anything: ``x/x``
+    parses straight to ``1`` and the excluded point x = 0 is lost. Covers
+    the right side of each ``/`` and the base of each power (``**`` or ``^``,
+    which the parser reads as a power) whose exponent is not provably
+    non-negative. None when the text is not Python-parseable (implicit
+    multiplication) or an exponent cannot be read.
+    """
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError:
+        return None
+    sources = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.BinOp):
+            continue
+        if isinstance(node.op, ast.Div):
+            sources.append(ast.get_source_segment(expression, node.right))
+        elif isinstance(node.op, (ast.Pow, ast.BitXor)):
+            nonnegative = _exponent_is_nonnegative(ast.get_source_segment(expression, node.right))
+            if nonnegative is None:
+                return None
+            if not nonnegative:
+                sources.append(ast.get_source_segment(expression, node.left))
+    return sources
+
+
+def _exponent_is_nonnegative(source: str) -> Optional[bool]:
+    try:
+        exponent = safe_parse_expr(source)
+    except ValueError:
+        return None
+    return exponent.is_nonnegative is True
+
+
+def _singular_factors(expression: str) -> Optional[frozenset]:
+    """The distinct factors whose zeros make ``expression`` undefined, or
+    None when they cannot be determined cheaply and exactly."""
+    expression = expression.strip()
+    sources = _denominator_sources(expression)
+    if sources is None:
+        # Unreadable text can only be trusted to have no singular points
+        # when it has no division and no power at all.
+        if any(token in expression for token in ("/", "**", "^")):
+            return None
+        return frozenset()
+    factors = set()
+    for source in sources:
+        denominator = safe_parse_expr(source)
+        if denominator.is_number:
+            continue
+        symbols = sorted(denominator.free_symbols, key=str)
+        if not denominator.is_polynomial(*symbols):
+            factors.add(denominator)
+            continue
+        degree = _polynomial_degree_bound(denominator, set(symbols))
+        if degree is None or degree > _MAX_POLYNOMIAL_DEGREE:
+            return None
+        for factor, _ in factor_list(denominator, *symbols)[1]:
+            factors.add(Poly(factor, *symbols).monic().as_expr())
+    return frozenset(factors)
+
+
+def identity_domains_match(lhs: str, rhs: str) -> bool:
+    """True when both sides of an identity are undefined at the same points.
+
+    ``simplify`` cancels removable singularities, so ``x/x - 1`` simplifies
+    to 0 although the left side is undefined at x = 0 (#429). An identity is
+    only established unconditionally when both sides have the same singular
+    factors; otherwise, or when they cannot be determined, it holds only on
+    a restricted domain and must not be VERIFIED.
+    """
+    lhs_factors, rhs_factors = _singular_factors(lhs), _singular_factors(rhs)
+    return lhs_factors is not None and lhs_factors == rhs_factors
+
+
 def symbolic_difference_status(difference: Any) -> str:
     """Status for a claim decided by ``simplify(actual - claimed)``.
 
@@ -623,20 +705,27 @@ class VerificationEngine:
             
             # Method 1: Simplify difference
             diff = simplify(left - right)
-            
+            method = None
             if diff == 0:
-                return {
-                    "is_equivalent": True,
-                    "status": "VERIFIED",
-                    "method": "algebraic_simplification"
-                }
-            
+                method = "algebraic_simplification"
             # Method 2: Try expanding both sides
-            if simplify(expand(left) - expand(right)) == 0:
+            elif simplify(expand(left) - expand(right)) == 0:
+                method = "expansion"
+            if method is not None:
+                if not identity_domains_match(lhs, rhs):
+                    # Equal only after cancelling a removable singularity
+                    # (x**2/x vs x at x = 0): not an unconditional identity.
+                    return {
+                        "is_equivalent": False,
+                        "status": INCONCLUSIVE_STATUS,
+                        "method": method,
+                        "reason": "domain_mismatch",
+                        "constraint_id": DOMAIN_RESTRICTED_IDENTITY,
+                    }
                 return {
                     "is_equivalent": True,
                     "status": "VERIFIED",
-                    "method": "expansion"
+                    "method": method,
                 }
             
             # Method 3: Numerical evaluation at random points
@@ -1080,18 +1169,9 @@ class VerificationEngine:
         max_iterations = 100
 
         for iteration in range(max_iterations):
-            npv = Decimal("0")
-            npv_derivative = Decimal("0")
-
-            for t, cf in enumerate(cash_flows):
-                cf_dec = Decimal(str(cf))
-                npv += cf_dec / ((1 + r) ** t)
-                if t > 0:
-                    npv_derivative -= t * cf_dec / ((1 + r) ** (t + 1))
-
+            npv, npv_derivative = VerificationEngine._npv_and_derivative(cash_flows, r)
             if npv == 0:
                 return {"converged": True, "irr": float(r), "iterations": iteration + 1}
-
             if npv_derivative == 0:
                 return {
                     "converged": False,
@@ -1100,26 +1180,11 @@ class VerificationEngine:
                     "r": float(r),
                 }
 
-            step = npv / npv_derivative
-            if not step.is_finite():
+            step, failure = VerificationEngine._damped_irr_step(r, npv / npv_derivative)
+            if failure is not None:
                 return {
                     "converged": False,
-                    "reason": "non_finite_step",
-                    "iterations": iteration + 1,
-                    "residual": float(abs(npv)),
-                }
-            # Stay where the rate means something (1 + r > 0): a full step
-            # can jump past -100% to a spurious root (-1.358 for
-            # [-100, 20, 20], whose IRR is -0.4417), so halve it until the
-            # next iterate stays in range. The halving is bounded.
-            halvings = 0
-            while r - step <= -1 and halvings < _MAX_IRR_STEP_HALVINGS:
-                step /= 2
-                halvings += 1
-            if r - step <= -1:
-                return {
-                    "converged": False,
-                    "reason": "out_of_domain",
+                    "reason": failure,
                     "iterations": iteration + 1,
                     "residual": float(abs(npv)),
                 }
@@ -1133,6 +1198,37 @@ class VerificationEngine:
             "iterations": max_iterations,
             "residual": float(abs(npv)),
         }
+
+    @staticmethod
+    def _npv_and_derivative(cash_flows: List[float], r: Decimal) -> tuple:
+        """NPV of ``cash_flows`` at rate ``r`` and its derivative in ``r``."""
+        npv = Decimal("0")
+        npv_derivative = Decimal("0")
+        for t, cf in enumerate(cash_flows):
+            cf_dec = Decimal(str(cf))
+            npv += cf_dec / ((1 + r) ** t)
+            if t > 0:
+                npv_derivative -= t * cf_dec / ((1 + r) ** (t + 1))
+        return npv, npv_derivative
+
+    @staticmethod
+    def _damped_irr_step(r: Decimal, step: Decimal) -> tuple:
+        """The Newton step to take from ``r``, or a failure reason.
+
+        Stay where the rate means something (1 + r > 0): a full step can jump
+        past -100% to a spurious root (-1.358 for [-100, 20, 20], whose IRR is
+        -0.4417), so it is halved until the next iterate stays in range. The
+        halving is bounded, and a non-finite step is refused outright.
+        """
+        if not step.is_finite():
+            return step, "non_finite_step"
+        halvings = 0
+        while r - step <= -1 and halvings < _MAX_IRR_STEP_HALVINGS:
+            step /= 2
+            halvings += 1
+        if r - step <= -1:
+            return step, "out_of_domain"
+        return step, None
 
     def verify_irr(
         self,

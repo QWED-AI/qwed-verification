@@ -21,6 +21,13 @@ All notable changes to the QWED Protocol will be documented in this file.
     cos(3*pi/7) - 1/2` is never disproven), or at an exact witness point. A
     difference `simplify` cannot decide returns `INCONCLUSIVE`, which maps to
     `UNVERIFIABLE`.
+  - An identity that only holds after `simplify` cancels a removable
+    singularity (`x/x = 1`, `(x**2-1)/(x-1) = x+1`) is `UNVERIFIABLE` with
+    `constraint_id: math.domain_restricted_identity` in `/verify/math`, and
+    `INCONCLUSIVE` (`reason: domain_mismatch`) in `verify_identity` (#429).
+    The denominators are read from the expression before SymPy evaluates
+    it; an identity is VERIFIED only when both sides have the same singular
+    factors.
   - A witness point is used only when it satisfies the symbol's declared
     domain (`n` is a positive integer, so `-1`, `0` and `1/2` are skipped).
     It is substituted without evaluation and checked by the new

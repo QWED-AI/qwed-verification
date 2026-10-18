@@ -968,3 +968,69 @@ def test_irr_solver_step_halving_is_bounded(monkeypatch):
     result = VerificationEngine._find_irr_newton([-100, 20, 20])
     assert result["converged"] is False
     assert result["reason"] == "out_of_domain"
+
+
+
+# ---------------------------------------------------------------------------
+# #429: identities that only hold after cancelling a removable singularity
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "lhs, rhs, expected",
+    [
+        ("x**2/x", "x", INCONCLUSIVE_STATUS),
+        ("(x**2-1)/(x-1)", "x+1", INCONCLUSIVE_STATUS),
+        ("x/x", "1", INCONCLUSIVE_STATUS),
+        # True identities with the same singular points stay VERIFIED.
+        ("(x+1)**2", "x**2 + 2*x + 1", "VERIFIED"),
+        ("1/x + 1/x", "2/x", "VERIFIED"),
+        ("sin(x)**2 + cos(x)**2", "1", "VERIFIED"),
+    ],
+)
+def test_verify_identity_respects_removable_singularities(lhs, rhs, expected):
+    result = VerificationEngine().verify_identity(lhs, rhs)
+    assert result["status"] == expected
+    if expected == INCONCLUSIVE_STATUS:
+        assert result["reason"] == "domain_mismatch"
+
+
+def test_verify_identity_keeps_non_identities_not_equivalent():
+    assert VerificationEngine().verify_identity("log(x*y)", "log(x) + log(y)")["status"] == "NOT_EQUIVALENT"
+
+
+@pytest.mark.parametrize(
+    "lhs, rhs, expected",
+    [
+        ("x/x", "1", False),
+        ("x^-1*x", "1", False),          # ^ is read as a power
+        ("x**(1-2)*x", "1", False),      # a negative exponent that is not a literal
+        ("2x/x", "2", False),            # implicit multiplication: not readable, so not matched
+        ("x**y*x", "x**(y+1)", True),    # same singular base on both sides
+        ("1/(x*(x-1))", "1/(x**2-x)", True),
+        ("1/sin(x)", "1/sin(x)", True),  # non-polynomial denominator
+        ("1/(x**65+1)", "1/(x**65+1)", False),  # past the factoring budget
+        ("x**__class__", "1", False),    # exponent the parser refuses
+        ("2x", "x + x", True),            # unreadable, but no division or power
+        ("x/2 + x/2", "x", True),         # a constant denominator excludes nothing
+    ],
+)
+def test_identity_domains_match(lhs, rhs, expected):
+    from qwed_new.core.verifier import identity_domains_match
+
+    assert identity_domains_match(lhs, rhs) is expected
+
+
+@pytest.mark.parametrize("expression", ["x/x = 1", "(x**2-1)/(x-1) = x+1"])
+def test_api_identity_with_removable_singularity_is_unverifiable(client, expression, isolated_audit_chain):
+    data = client.post("/verify/math", json={"expression": expression}).json()
+
+    assert data["status"] == "UNVERIFIABLE"
+    assert data["constraint_id"] == "math.domain_restricted_identity"
+    assert data["admission"] == "BLOCKED"
+
+
+def test_api_identity_with_matching_singularities_is_verified(client, isolated_audit_chain):
+    data = client.post("/verify/math", json={"expression": "1/x + 1/x = 2/x"}).json()
+
+    assert data["status"] == "VERIFIED"
+    assert data["admission"] == "ADMIT"
