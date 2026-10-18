@@ -32,13 +32,17 @@ All notable changes to the QWED Protocol will be documented in this file.
     leaves 5.55e-17) is `INCONCLUSIVE`, not `DISPROVEN`. A numeric mismatch
     involving a non-finite value (an overflowed sum, a NaN claim) is also
     `INCONCLUSIVE`.
+  - `verify_irr` decides Newton convergence on the rate step instead of an
+    absolute NPV residual, so small cash flows no longer stop at the
+    initial guess and report a correct IRR claim as `DISPROVEN`.
   - Matrix results are compared entry by entry. An exact computed entry is
     compared exactly with the claim read as the decimal the caller wrote
     (`[[1]] + [[2]]` vs `[[3.0000005]]` is `DISPROVEN`); only a computed
     entry that is itself a binary float gets a relative tolerance (1e-9;
     a 1e-12 floor only against zero), so `[[0.1]] + [[0.2]]` vs `[[0.3]]`
-    is `VERIFIED`. An exact entry that is not a double (`inverse([[3]])` is
-    1/3) accepts its correctly rounded double. A
+    is `VERIFIED`. A fractional exact entry that is not a double
+    (`inverse([[3]])` is 1/3) accepts its correctly rounded double; an exact
+    integer is always compared exactly (`10**18 + 1` never matches `1e18`). A
     claimed matrix of the wrong shape is `DISPROVEN`; a non-finite entry is
     `INCONCLUSIVE`.
   - The control plane signs and attests `DISPROVEN` like `VERIFIED`, with

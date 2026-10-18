@@ -20,7 +20,6 @@ from sympy import (
 )
 from sympy.core.assumptions import check_assumptions
 from qwed_new.core.safe_parser import (
-    SafeParserError,
     check_closed_expression_cost,
     get_safe_symbol,
     safe_parse_expr,
@@ -136,15 +135,15 @@ def _nearest_double(value: Any) -> Optional[float]:
 def _exact_vs_float_claim(computed: Any, claimed: Any) -> Optional[bool]:
     """Compare an exact computed entry with a Float claim.
 
-    A float claim can state an exact value only when that value is a double.
-    For one that is not (1/3, 2/3), the best a float claim can say is the
-    correctly rounded double, which is accepted. Any other claim inside the
-    float rounding window cannot be told apart from rounding, so it is
-    undecided; a claim outside it is a decided mismatch.
+    An exact integer, or an exact value that is a double, must be stated
+    exactly: rounding never lets 10**18 + 1 match a claim of 1e18. For a
+    fractional value that is not a double (1/3, 2/3), the best a float claim
+    can say is the correctly rounded double, which is accepted. Any other
+    claim inside the float rounding window cannot be told apart from
+    rounding, so it is undecided; a claim outside it is a decided mismatch.
     """
     nearest = _nearest_double(computed)
-    if nearest is not None and Rational(nearest) == computed:
-        # The exact value is a double: the claim must say it exactly.
+    if computed.is_Integer or (nearest is not None and Rational(nearest) == computed):
         return (computed - _exact_claim(claimed)).equals(0)
     if nearest is not None and float(claimed) == nearest:
         return True
@@ -298,7 +297,8 @@ def _witness_value(difference: Any, symbols: Any, point: Any) -> Any:
             candidate = difference.xreplace(dict.fromkeys(symbols, point))
         check_closed_expression_cost(candidate)
         return candidate.doit()
-    except (SafeParserError, ValueError, TypeError, ArithmeticError, NotImplementedError):
+    except (ValueError, TypeError, ArithmeticError, NotImplementedError):
+        # ValueError includes SafeParserError (over the expansion budget).
         return None
 
 
@@ -936,9 +936,15 @@ class VerificationEngine:
 
     @staticmethod
     def _find_irr_newton(cash_flows: List[float]) -> Dict[str, Any]:
-        """Run Newton-Raphson to find IRR. Returns result dict with convergence info."""
+        """Run Newton-Raphson to find IRR. Returns result dict with convergence info.
+
+        Convergence is decided on the rate step, not on an absolute NPV
+        residual: with small cash flows the NPV is tiny everywhere, so an
+        absolute residual bound would stop at the initial guess and the
+        mismatch would be reported as a counter-proof.
+        """
         r = Decimal("0.1")
-        convergence_threshold = Decimal("0.0001")
+        step_threshold = Decimal("1e-12")
         max_iterations = 100
 
         for iteration in range(max_iterations):
@@ -951,7 +957,7 @@ class VerificationEngine:
                 if t > 0:
                     npv_derivative -= t * cf_dec / ((1 + r) ** (t + 1))
 
-            if abs(npv) < convergence_threshold:
+            if npv == 0:
                 return {"converged": True, "irr": float(r), "iterations": iteration + 1}
 
             if npv_derivative == 0:
@@ -962,7 +968,10 @@ class VerificationEngine:
                     "r": float(r),
                 }
 
-            r = r - npv / npv_derivative
+            step = npv / npv_derivative
+            r = r - step
+            if abs(step) < step_threshold:
+                return {"converged": True, "irr": float(r), "iterations": iteration + 1}
 
         return {
             "converged": False,

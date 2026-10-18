@@ -650,3 +650,44 @@ def test_witness_that_sympy_cannot_evaluate_is_skipped():
     # taken with respect to a number: inconclusive, not an engine error.
     result = VerificationEngine().verify_derivative("Abs(x)", "x", "1")
     assert result["status"] == INCONCLUSIVE_STATUS
+
+
+
+@pytest.mark.parametrize(
+    "matrix, claimed, expected",
+    [
+        # 10**18 + 1 is not a double; rounding must never make 1e18 match it.
+        ([[10**18 + 1]], [[1e18]], DISPROVEN_STATUS),
+        ([[10**18]], [[1e18]], "VERIFIED"),
+    ],
+)
+def test_exact_integers_are_never_matched_through_rounding(matrix, claimed, expected):
+    result = VerificationEngine().verify_matrix_operation("transpose", {"A": matrix}, claimed)
+    assert result["status"] == expected
+
+
+@pytest.mark.parametrize(
+    "cash_flows, claimed, expected",
+    [
+        # Tiny cash flows: an absolute NPV bound used to stop at the 0.1 guess.
+        ([-0.0001, 0.00012], 0.2, "VERIFIED"),
+        ([-0.0001, 0.00012], 0.1, DISPROVEN_STATUS),
+        ([-100, 120], 0.2, "VERIFIED"),
+        # NPV is exactly 0 at the initial guess.
+        ([-100, 110], 0.1, "VERIFIED"),
+    ],
+)
+def test_irr_converges_on_rate_step_not_npv_residual(cash_flows, claimed, expected):
+    result = VerificationEngine().verify_irr(cash_flows, claimed)
+    assert result["status"] == expected
+    assert result["converged"] is True
+
+
+
+def test_irr_solver_reports_stall_and_non_convergence():
+    # A single cash flow has a zero derivative: stall, not a root.
+    assert VerificationEngine._find_irr_newton([5])["reason"] == "derivative_stall"
+    # (1 - u)**2 + 1e-4 has no real root: Newton never settles.
+    result = VerificationEngine._find_irr_newton([1, -2, 1.0001])
+    assert result["converged"] is False
+    assert result["reason"] == "max_iterations"
