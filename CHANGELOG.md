@@ -52,7 +52,8 @@ All notable changes to the QWED Protocol will be documented in this file.
     precision scaled to the magnitude against the 1e-6 tolerance; a mismatch
     within the representation error of the least precise Float involved
     (a double's 2**-52 at least, narrower only for a claim clearly more
-    precise than any double repr) is
+    precise than any double repr, wider for one deliberately less
+    precise) is
     `INCONCLUSIVE`,
     anything larger is `DISPROVEN`. Floats are replaced by their exact
     values before subtracting, so `2**53 + 1` vs `9007199254740992.0` is no

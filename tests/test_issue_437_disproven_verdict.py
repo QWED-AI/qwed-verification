@@ -789,6 +789,9 @@ def test_determinant_is_exact(matrix, claimed, expected):
         ("1", "1000000000000.0001", "0", "10**12", INCONCLUSIVE_STATUS),
         # The repr of the double nearest 10**12*pi is not a counter-proof.
         ("1", "3141592653589.793", "0", "10**12*pi", INCONCLUSIVE_STATUS),
+        # A claim deliberately given at 3 digits keeps its own wider rounding.
+        ("1/3", "Float(1/3, 3)", "0", "1", INCONCLUSIVE_STATUS),
+        ("1/3", "Float(1/2, 3)", "0", "1", DISPROVEN_STATUS),
         # 10**400 + 1 vs a 1e400 claim: rounding before subtracting used to
         # make this VERIFIED; it cannot be established cheaply, so undecided.
         ("10**300*10**100 + 1", "Float(10**400, 50)", "0", "1", INCONCLUSIVE_STATUS),
@@ -933,3 +936,5 @@ def test_float_spacing_follows_the_least_precise_float():
     assert _float_spacing(sympy.Float("1000000000000.0001")) == Decimal(2) ** -52
     # Clearly more precise than any double: narrower.
     assert _float_spacing(sympy.Float("1.5", 30)) < Decimal(2) ** -52
+    # Deliberately less precise than a double: its own, wider spacing.
+    assert _float_spacing(sympy.Float(1 / 3, 3)) > Decimal(2) ** -52

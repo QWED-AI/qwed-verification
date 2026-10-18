@@ -261,16 +261,22 @@ _DOUBLE_REPR_MAX_PRECISION = 60
 def _float_spacing(*values: Any) -> Decimal:
     """Relative representation error of the least precise Float involved.
 
-    A double's 2**-52 is the floor: a claim like "3141592653589.793" is the
-    repr of a double, parsed at 56 bits, and a narrower window would turn
-    the double's own rounding into a counter-proof. Only a Float clearly
-    more precise than any double repr (a 30-digit claim) gets a narrower
-    window. With no Float atom, a double's spacing is used.
+    - Up to 60 bits, a double's 2**-52 is the floor: a claim like
+      "3141592653589.793" is the repr of a double, parsed at 56 bits, and a
+      narrower window would turn the double's own rounding into a
+      counter-proof. A Float deliberately less precise than a double
+      (``Float(1/3, 3)``) keeps its own, wider spacing.
+    - Above 60 bits (a 30-digit claim) the Float is clearly more precise
+      than any double repr and gets its own, narrower spacing.
+    - With no Float atom, a double's spacing is used.
     """
     precisions = [f._prec for value in values for f in value.atoms(Float)]
-    if not precisions or min(precisions) <= _DOUBLE_REPR_MAX_PRECISION:
+    if not precisions:
         return _DOUBLE_SPACING
-    return Decimal(2) ** -(min(precisions) - 1)
+    own_spacing = Decimal(2) ** -(min(precisions) - 1)
+    if min(precisions) <= _DOUBLE_REPR_MAX_PRECISION:
+        return max(own_spacing, _DOUBLE_SPACING)
+    return own_spacing
 
 
 def _exact_floats(value: Any) -> Any:
