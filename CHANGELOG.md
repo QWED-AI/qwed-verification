@@ -50,7 +50,11 @@ All notable changes to the QWED Protocol will be documented in this file.
     exact. With a float claim, the difference itself is evaluated at a
     precision scaled to the magnitude against the 1e-6 tolerance; a mismatch
     within the claim's own double representation error is `INCONCLUSIVE`,
-    anything larger is `DISPROVEN`. A divergent integral is `INCONCLUSIVE`.
+    anything larger is `DISPROVEN`. Floats are replaced by their exact
+    values before subtracting, so `2**53 + 1` vs `9007199254740992.0` is no
+    longer a difference of 0. Past the precision budget (~1e105) a gross
+    mismatch is still `DISPROVEN` (`2e200` vs `1e200`) and anything closer
+    is `INCONCLUSIVE`. A divergent integral is `INCONCLUSIVE`.
     Eigenvalues are compared as complex numbers, so a rotation matrix's
     `+-i` no longer matches a claim of `[0, 0]`.
   - `verify_unit_conversion` uses the exact legal unit definitions in Decimal

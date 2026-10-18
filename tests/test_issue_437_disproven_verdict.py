@@ -849,3 +849,45 @@ def test_scalar_status_is_undecided_when_the_difference_is_not_numeric():
     # An unevaluated integral whose value cannot be computed numerically.
     unevaluable = sympy.Integral(sympy.Function("g")(x), (x, 0, 1))
     assert _scalar_status(unevaluable, sympy.Float(1.0)) == INCONCLUSIVE_STATUS
+
+
+
+@pytest.mark.parametrize(
+    "actual, claimed, expected",
+    [
+        # Subtracting a Float used to round the exact side first, so these
+        # one-ulp-off claims came out as a difference of 0 and VERIFIED.
+        (sympy.Integer(2**53 + 1), sympy.Float(9007199254740992.0), INCONCLUSIVE_STATUS),
+        (sympy.Integer(10**17 + 8), sympy.Float(1e17), INCONCLUSIVE_STATUS),
+        (sympy.Integer(2**53 + 3), sympy.Float(9007199254740992.0), DISPROVEN_STATUS),
+        (sympy.Integer(2**53), sympy.Float(9007199254740992.0), "VERIFIED"),
+        # Past the precision cap: a gross mismatch is still decided...
+        (sympy.Integer(2 * 10**200), sympy.Float(1e200), DISPROVEN_STATUS),
+        # ...but agreement is never decided there.
+        (sympy.Integer(10**200), sympy.Float(1e200), INCONCLUSIVE_STATUS),
+    ],
+)
+def test_scalar_status_subtracts_exactly_and_decides_gross_mismatches(actual, claimed, expected):
+    from qwed_new.core.verifier import _scalar_status
+
+    assert _scalar_status(actual, claimed) == expected
+
+
+def test_definite_integral_gross_mismatch_at_huge_magnitude_is_disproven():
+    result = VerificationEngine().verify_integral("2", "x", "1e200", lower_bound="0", upper_bound="10**200")
+    assert result["status"] == DISPROVEN_STATUS
+
+
+
+def test_scalar_status_is_undecided_when_the_difference_cannot_be_evaluated(monkeypatch):
+    from qwed_new.core import verifier
+
+    real_parts = verifier._decimal_parts
+
+    def parts_without_difference(entry, precision=30):
+        # Magnitudes evaluate (precision 30); the full-precision difference does not.
+        return real_parts(entry, precision) if precision == 30 else None
+
+    monkeypatch.setattr(verifier, "_decimal_parts", parts_without_difference)
+    status = verifier._scalar_status(sympy.Integer(10**20), sympy.Float(1e20))
+    assert status == INCONCLUSIVE_STATUS

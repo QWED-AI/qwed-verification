@@ -232,22 +232,44 @@ def _scalar_status(actual: Any, claimed: Any) -> str:
     if None in magnitudes:
         return INCONCLUSIVE_STATUS
     magnitude = max(magnitudes)
+    window = _SCALAR_TOLERANCE + magnitude * _DOUBLE_SPACING
     digits = magnitude.adjusted() + 1 if magnitude else 1
     precision = max(30, digits + 15)
-    parts = (
-        _decimal_parts(actual - claimed, precision)
-        if precision <= _MAX_SCALAR_PRECISION
-        else None
-    )
+    if precision > _MAX_SCALAR_PRECISION:
+        return _coarse_scalar_status(actual, claimed, window)
+    # Subtract with every Float replaced by its exact value: SymPy would
+    # otherwise round the exact side to the Float's precision first, so
+    # 2**53 + 1 minus 9007199254740992.0 would come out as 0.
+    parts = _decimal_parts(_exact_floats(actual) - _exact_floats(claimed), precision)
     if parts is None:
         return INCONCLUSIVE_STATUS
     differences = [abs(part) for part in parts]
     if all(difference <= _SCALAR_TOLERANCE for difference in differences):
         return "VERIFIED"
-    window = _SCALAR_TOLERANCE + magnitude * _DOUBLE_SPACING
     if all(difference <= window for difference in differences):
         return INCONCLUSIVE_STATUS
     return DISPROVEN_STATUS
+
+
+def _exact_floats(value: Any) -> Any:
+    """``value`` with each Float replaced by the exact rational it stores."""
+    return value.xreplace({f: Rational(f) for f in value.atoms(Float)})
+
+
+def _coarse_scalar_status(actual: Any, claimed: Any, window: Decimal) -> str:
+    """Decide a mismatch too large in magnitude to subtract at full precision.
+
+    At 30 digits the evaluation error is ~1e-29 of the magnitude, far below
+    the claim's double spacing (~2.2e-16 of it). A gap wider than a thousand
+    windows is therefore a decided mismatch (2e200 vs 1e200); anything closer
+    stays undecided. Agreement is never decided here.
+    """
+    actual_parts, claimed_parts = _decimal_parts(actual), _decimal_parts(claimed)
+    if actual_parts and claimed_parts and any(
+        abs(a - c) > 1000 * window for a, c in zip(actual_parts, claimed_parts)
+    ):
+        return DISPROVEN_STATUS
+    return INCONCLUSIVE_STATUS
 
 
 # Exact points tried, in order, when looking for a counterexample to a
