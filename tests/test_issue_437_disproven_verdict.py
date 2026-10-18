@@ -195,8 +195,8 @@ def test_api_float_rounding_residue_is_not_a_disproof(client, isolated_audit_cha
 
 
 def test_undecided_matrix_equality_is_inconclusive(monkeypatch):
-    # Matrix.equals returns None when it cannot decide: not a disproof.
-    monkeypatch.setattr(sympy.Matrix, "equals", lambda self, other: None)
+    # An entry comparison SymPy cannot decide (equals -> None) is not a disproof.
+    monkeypatch.setattr(sympy.Expr, "equals", lambda self, other, failing_expression=False: None)
     result = VerificationEngine().verify_matrix_operation(
         "add", {"A": [[1, 0], [0, 1]], "B": [[1, 0], [0, 1]]}, [[2, 0], [0, 2]]
     )
@@ -563,19 +563,43 @@ async def test_control_plane_undecided_engine_result_is_not_admitted(monkeypatch
 @pytest.mark.parametrize(
     "operation, matrices, claimed, expected",
     [
-        # 0.1 + 0.2 is 0.30000000000000004 in binary floating point.
+        # Computed entries that are binary floats: relative tolerance.
+        # 0.1 + 0.2 is 0.30000000000000004.
         ("add", {"A": [[0.1]], "B": [[0.2]]}, [[0.3]], "VERIFIED"),
         ("add", {"A": [[0.1]], "B": [[0.2]]}, [[0.9]], DISPROVEN_STATUS),
+        ("multiply", {"A": [[0.1, 0.2]], "B": [[3], [1]]}, [[0.5]], "VERIFIED"),
+        # One ulp off at 1e10 is inside a relative bound, not an absolute 1e-6.
+        ("add", {"A": [[1e10 + 0.1]], "B": [[0.2]]}, [[1e10 + 0.3]], "VERIFIED"),
+        # 2e-7 is not "close to" 0: there is no absolute 1e-6 window.
+        ("add", {"A": [[1e-7]], "B": [[1e-7]]}, [[0]], DISPROVEN_STATUS),
+        # Exact computed entries are compared exactly, never with a tolerance.
+        ("add", {"A": [[1]], "B": [[2]]}, [[3.0000005]], DISPROVEN_STATUS),
+        ("inverse", {"A": [[10000000]]}, [[0.0]], DISPROVEN_STATUS),
+        ("inverse", {"A": [[3]]}, [[0.333333333333333]], DISPROVEN_STATUS),
         ("inverse", {"A": [[2, 0], [0, 4]]}, [[0.5, 0], [0, 0.25]], "VERIFIED"),
+        # A float elsewhere in the matrix must not round exact entries.
+        ("transpose", {"A": [[10**18, 0.5]]}, [[10**18 + 1], [0.5]], DISPROVEN_STATUS),
         ("add", {"A": [[1, 2]], "B": [[3, 4]]}, [[4, 6]], "VERIFIED"),
         ("add", {"A": [[1, 2]], "B": [[3, 4]]}, [[4, 7]], DISPROVEN_STATUS),
         # A claimed matrix of the wrong shape is a decided disproof.
         ("add", {"A": [[1, 2]], "B": [[3, 4]]}, [[4, 6, 0]], DISPROVEN_STATUS),
-        # An entry that overflows a binary float is not a counterexample.
-        ("add", {"A": [[1e308]], "B": [[1e308]]}, [[1.0]], INCONCLUSIVE_STATUS),
+        # Non-finite entries are failed computations or claims, not disproofs.
+        ("add", {"A": [[float("inf")]], "B": [[1]]}, [[5]], INCONCLUSIVE_STATUS),
+        ("add", {"A": [[float("nan")]], "B": [[1]]}, [[1]], INCONCLUSIVE_STATUS),
+        ("add", {"A": [[1e308]], "B": [[1e308]]}, [[2e308]], INCONCLUSIVE_STATUS),
+        # 1e308 + 1e308 is finite in SymPy; it must not overflow into a match.
+        ("add", {"A": [[1e308]], "B": [[1e308]]}, [[1.0]], DISPROVEN_STATUS),
     ],
 )
 def test_matrix_comparison_handles_float_residue(operation, matrices, claimed, expected):
     result = VerificationEngine().verify_matrix_operation(operation, matrices, claimed)
     assert result["status"] == expected
     assert result["is_correct"] is (expected == "VERIFIED")
+
+
+def test_float_entry_comparison_is_undecided_for_non_numeric_or_nan():
+    from qwed_new.core.verifier import _floats_close
+
+    assert _floats_close(sympy.Float(1.0), sympy.Symbol("x")) is None
+    assert _floats_close(sympy.Float(1.0), sympy.nan) is None
+    assert _floats_close(sympy.Float(1.0), sympy.Float(1.0)) is True

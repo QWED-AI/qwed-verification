@@ -75,39 +75,79 @@ def _numeric_status(is_correct: bool, *values: Any) -> str:
     return DISPROVEN_STATUS
 
 
-# Absolute tolerance for comparing matrix entries that are binary floats, the
-# same bound the determinant and eigenvalue checks use.
-_MATRIX_FLOAT_TOLERANCE = Decimal("0.000001")
+# Tolerance for a computed matrix entry that is itself a binary float: relative
+# to its magnitude (a few double-precision ulps of accumulated rounding), with
+# an absolute floor for results at zero. It is never applied to exact entries.
+_MATRIX_FLOAT_REL_TOLERANCE = Decimal("1e-9")
+_MATRIX_FLOAT_ABS_TOLERANCE = Decimal("1e-12")
+
+
+def _exact_claim(entry: Any) -> Any:
+    """A claimed Float as the decimal the caller wrote (0.3 -> 3/10).
+
+    ``repr(float)`` is the shortest decimal that round-trips the double, so it
+    recovers the written literal instead of the binary approximation.
+    """
+    return Rational(repr(float(entry))) if entry.is_Float else entry
+
+
+def _decimal_parts(entry: Any) -> Optional[tuple]:
+    """Real and imaginary parts as Decimals, evaluated in SymPy (never through
+    a binary double, which overflows past 1.8e308); None if not numeric."""
+    real, imag = entry.evalf(30).as_real_imag()
+    try:
+        return Decimal(str(real)), Decimal(str(imag))
+    except ArithmeticError:
+        return None
+
+
+def _floats_close(computed: Any, claimed: Any) -> Optional[bool]:
+    computed_parts, claimed_parts = _decimal_parts(computed), _decimal_parts(claimed)
+    if computed_parts is None or claimed_parts is None:
+        return None
+    for a, b in zip(computed_parts, claimed_parts):
+        if not (a.is_finite() and b.is_finite()):
+            return None
+        bound = max(_MATRIX_FLOAT_REL_TOLERANCE * max(abs(a), abs(b)),
+                    _MATRIX_FLOAT_ABS_TOLERANCE)
+        if abs(a - b) > bound:
+            return False
+    return True
+
+
+def _matrix_entry_match(computed: Any, claimed: Any) -> Optional[bool]:
+    """True / False when decided, None when undecided."""
+    if computed.has(Float):
+        # Rounding happened in the computation itself, so only a tolerance
+        # scaled to the value can compare it.
+        return _floats_close(computed, claimed)
+    return (computed - _exact_claim(claimed)).equals(0)
 
 
 def _matrix_comparison_status(result: Any, expected: Any) -> str:
     """Status for comparing a computed matrix with the claimed one.
 
     - A shape mismatch is a decided disproof.
-    - Float entries carry binary rounding residue (0.1 + 0.2 is not 0.3), so
-      when either side has one, entries are compared through
-      ``Decimal(str(...))`` against an explicit tolerance instead of exactly.
-    - Otherwise entries are exact and ``Matrix.equals`` decides; its None
-      ("cannot decide") is not a disproof, so it stays INCONCLUSIVE.
+    - A non-finite entry on either side (inf, nan) is a failed computation or
+      claim, not a counter-proof: INCONCLUSIVE.
+    - Each entry is compared on its own. An exact computed entry is compared
+      exactly with the claim read as the decimal the caller wrote; only a
+      computed entry that is itself a binary float gets a relative tolerance.
+      So an integer result never matches a nearby float claim, and an exact
+      entry is never rounded through a float.
+    - One decided mismatch disproves the claim; any undecided entry otherwise
+      leaves it INCONCLUSIVE.
     """
     if result.shape != expected.shape:
         return DISPROVEN_STATUS
-    if result.has(Float) or expected.has(Float):
-        computed = [complex(entry.evalf()) for entry in result]
-        claimed = [complex(entry.evalf()) for entry in expected]
-        values = [part for z in computed + claimed for part in (z.real, z.imag)]
-        if not all(math.isfinite(value) for value in values):
-            return INCONCLUSIVE_STATUS
-        is_correct = all(
-            abs(Decimal(str(a.real)) - Decimal(str(b.real))) <= _MATRIX_FLOAT_TOLERANCE
-            and abs(Decimal(str(a.imag)) - Decimal(str(b.imag))) <= _MATRIX_FLOAT_TOLERANCE
-            for a, b in zip(computed, claimed)
-        )
-        return _numeric_status(is_correct)
-    equal = result.equals(expected)
-    if equal is None:
+    if any(entry.is_finite is not True for entry in (*result, *expected)):
         return INCONCLUSIVE_STATUS
-    return _numeric_status(equal is True)
+    matches = [_matrix_entry_match(a, b) for a, b in zip(result, expected)]
+    if any(match is False for match in matches):
+        return DISPROVEN_STATUS
+    if all(match is True for match in matches):
+        return "VERIFIED"
+    return INCONCLUSIVE_STATUS
 
 
 # Exact points tried, in order, when looking for a counterexample to a
