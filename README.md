@@ -179,7 +179,9 @@ QWED has 13 engines and 9 policy guards. What an engine may claim depends on its
 | SQL | SQLGlot | Query structure, destructive statements, injection patterns, schema |
 | Code | Python AST and rules | Dangerous calls and patterns in generated code |
 | Schema | JSON Schema | Structure of JSON output |
-| Symbolic | CrossHair (`qwed[symbolic]`) | Searches for counterexamples; returns `UNVERIFIABLE` or `BLOCKED`, not proofs |
+| Symbolic | CrossHair, in the Docker sandbox | Searches for counterexamples; returns `UNVERIFIABLE` or `BLOCKED`, not proofs |
+
+CrossHair imports, and so executes, the code it analyses, so the Symbolic engine runs it only inside the Docker sandbox, with no network, a read-only filesystem and an unprivileged user. Build the image with `docker build -t qwed-crosshair-sandbox:0.0.101 docker/crosshair-sandbox` (or set `QWED_CROSSHAIR_IMAGE`); without Docker or the image, the engine returns `BLOCKED` and never runs the code on the host.
 
 The Stats engine executes statistical code in a sandbox and returns `UNVERIFIABLE`: running code successfully is not treated as verification ([#298](https://github.com/QWED-AI/qwed-verification/issues/298)). SecureCodeExecutor runs code; it does not verify it.
 

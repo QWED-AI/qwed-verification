@@ -7,7 +7,6 @@ These tests verify the symbolic execution engine works correctly.
 import pytest
 import sys
 import os
-from types import SimpleNamespace
 from unittest.mock import patch
 
 # Add src to path
@@ -145,10 +144,6 @@ def divide(x, y):
         assert len(functions) == 3
 
 
-# Check if CrossHair is available at module level
-_crosshair_available = SymbolicVerifier()._crosshair_available
-
-
 class TestCodeVerification:
     """Test code verification with CrossHair."""
     
@@ -161,7 +156,7 @@ class TestCodeVerification:
 x = 1 + 2
 print(x)
 """
-        with patch.object(self.verifier, "_crosshair_available", True):
+        with patch.object(self.verifier, "_sandbox_available", return_value=True):
             result = self.verifier.verify_code(code)
         assert result.status is DiagnosticStatus.BLOCKED
         assert result.is_verified is False
@@ -169,17 +164,16 @@ print(x)
         assert result.developer_fields["constraint_id"] == "symbolic_verifier.no_verifiable_functions"
         assert result.developer_fields["functions_discovered"] == 0
 
-    def test_verify_crosshair_unavailable_returns_consistent_counts(self):
-        """CrossHair-unavailable results must be BLOCKED with no proof."""
-        with patch.object(self.verifier, "_crosshair_available", False):
+    def test_verify_sandbox_unavailable_is_blocked(self):
+        """Without the sandbox, symbolic verification is BLOCKED with no proof (#431)."""
+        with patch.object(self.verifier, "_sandbox_available", return_value=False):
             result = self.verifier.verify_code("def add(x: int, y: int) -> int:\n    return x + y\n")
 
         assert result.status is DiagnosticStatus.BLOCKED
         assert result.is_verified is False
         assert result.proof_ref is None
-        assert result.developer_fields["constraint_id"] == "symbolic_verifier.crosshair_not_available"
+        assert result.developer_fields["constraint_id"] == "symbolic_verifier.runtime_unavailable"
 
-    @pytest.mark.skipif(not _crosshair_available, reason="CrossHair not installed")
     def test_verify_syntax_error(self):
         """Test verification handles syntax errors."""
         code = """
@@ -206,7 +200,7 @@ def add(x: int, y: int) -> int:
                 "issues": []
             }
         ):
-            with patch.object(self.verifier, "_crosshair_available", True):
+            with patch.object(self.verifier, "_sandbox_available", return_value=True):
                 result = self.verifier.verify_code(code)
         assert result.status is DiagnosticStatus.UNVERIFIABLE
         assert result.developer_fields["constraint_id"] == "symbolic_verifier.no_counterexample_found"
@@ -220,7 +214,7 @@ def add(x: int, y: int) -> int:
 def add(a, b):
     return a + b
 """
-        with patch.object(self.verifier, "_crosshair_available", True):
+        with patch.object(self.verifier, "_sandbox_available", return_value=True):
             result = self.verifier.verify_code(code)
 
         assert result.status is DiagnosticStatus.BLOCKED
@@ -242,7 +236,7 @@ def typed_add(a: int, b: int) -> int:
 def untyped_add(a, b):
     return a + b
 """
-        with patch.object(self.verifier, "_crosshair_available", True):
+        with patch.object(self.verifier, "_sandbox_available", return_value=True):
             with patch.object(
                 self.verifier,
                 "_verify_function",
@@ -287,7 +281,7 @@ def typed_add(a: int, b: int) -> int:
 def untyped_add(a, b):
     return a + b
 """
-        with patch.object(self.verifier, "_crosshair_available", True):
+        with patch.object(self.verifier, "_sandbox_available", return_value=True):
             with patch.object(
                 self.verifier,
                 "_verify_function",
@@ -334,7 +328,7 @@ def untyped_add(a, b):
 def typed_add(a: int, b: int) -> int:
     return a + b
 """
-        with patch.object(self.verifier, "_crosshair_available", True):
+        with patch.object(self.verifier, "_sandbox_available", return_value=True):
             with patch.object(
                 self.verifier,
                 "_verify_function",
@@ -359,7 +353,7 @@ def typed_add(a: int, b: int) -> int:
 def typed_add(a: int, b: int) -> int:
     return a + b
 """
-        with patch.object(self.verifier, "_crosshair_available", True):
+        with patch.object(self.verifier, "_sandbox_available", return_value=True):
             with patch.object(
                 self.verifier,
                 "_verify_function",
@@ -387,7 +381,7 @@ def typed_add(a: int, b: int) -> int:
 def typed_add(a: int, b: int) -> int:
     return a + b
 """
-        with patch.object(self.verifier, "_crosshair_available", True):
+        with patch.object(self.verifier, "_sandbox_available", return_value=True):
             with patch.object(
                 self.verifier,
                 "_verify_function",
@@ -412,7 +406,7 @@ def typed_add(a: int, b: int) -> int:
 def typed_add(a: int, b: int) -> int:
     return a + b
 """
-        with patch.object(self.verifier, "_crosshair_available", True):
+        with patch.object(self.verifier, "_sandbox_available", return_value=True):
             with patch.object(
                 self.verifier,
                 "_verify_function",
@@ -609,39 +603,65 @@ def recursive_func(n: int) -> int:
         assert "_qwed_depth" in bounded
 
 
+class _FakeSandbox:
+    """Stands in for SecureCodeExecutor.run_isolated with a fixed outcome."""
+
+    def __init__(self, returncode=0, output="", error=None):
+        self.returncode, self.output, self.error = returncode, output, error
+        self.calls = []
+
+    def is_available(self):
+        return True
+
+    def run_isolated(self, files, command, **kwargs):
+        self.calls.append((files, command, kwargs))
+        if self.error is not None:
+            raise self.error
+        return self.returncode, self.output
+
+
 class TestCrossHairExitCodes:
     """CrossHair's CLI distinguishes a disproving counterexample (exit 1) from
     an engine-level failure (exit 2) — only exit 1 should be reported as a
-    counterexample."""
+    counterexample. The run happens in the sandbox (#431)."""
 
-    def setup_method(self):
-        self.verifier = SymbolicVerifier(timeout_seconds=5)
+    CODE = "def divide(a: int, b: int) -> float:\n    return a / b\n"
+
+    def _issues(self, **sandbox):
+        verifier = SymbolicVerifier(timeout_seconds=5, sandbox=_FakeSandbox(**sandbox))
+        return verifier._run_crosshair_check(self.CODE, "divide")
 
     def test_exit_code_1_is_counterexample(self):
         """Exit code 1 means CrossHair found a counterexample."""
-        fake_result = SimpleNamespace(returncode=1, stdout="Counterexample: x=0\n", stderr="")
-        with patch("subprocess.run", return_value=fake_result):
-            issues = self.verifier._run_crosshair_check("dummy.py", "divide")
+        issues = self._issues(returncode=1, output="target.py:2: error: ZeroDivisionError when calling divide(0, 0)\n")
 
         assert len(issues) == 1
         assert issues[0]["type"] == "counterexample"
+        assert "divide(0, 0)" in issues[0]["description"]
 
     def test_exit_code_2_is_error_not_counterexample(self):
         """Exit code 2 is an engine failure and must not be mislabeled as a disproof."""
-        fake_result = SimpleNamespace(returncode=2, stdout="", stderr="internal error: crash")
-        with patch("subprocess.run", return_value=fake_result):
-            issues = self.verifier._run_crosshair_check("dummy.py", "divide")
+        issues = self._issues(returncode=2, output="internal error: crash")
 
         assert len(issues) == 1
         assert issues[0]["type"] == "error"
 
+    def test_runner_crash_exit_is_error_not_counterexample(self):
+        """An exception escaping CrossHair exits 98 in the runner, an engine error."""
+        issues = self._issues(returncode=98, output="crosshair.fnutil.NotFound: Name \"divide\" not found")
+
+        assert [issue["type"] for issue in issues] == ["error"]
+
     def test_exit_code_0_with_no_output_is_clean(self):
         """Exit code 0 with no output means CrossHair found no issues."""
-        fake_result = SimpleNamespace(returncode=0, stdout="", stderr="")
-        with patch("subprocess.run", return_value=fake_result):
-            issues = self.verifier._run_crosshair_check("dummy.py", "divide")
+        assert self._issues(returncode=0, output="") == []
 
-        assert issues == []
+    def test_sandbox_timeout_is_timeout_issue(self):
+        from qwed_new.core.secure_code_executor import ExecutionError
+
+        issues = self._issues(error=ExecutionError("Execution timed out after 10s"))
+
+        assert [issue["type"] for issue in issues] == ["timeout"]
 
 
 class TestVerificationBudget:

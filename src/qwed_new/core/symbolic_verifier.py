@@ -1,23 +1,59 @@
 """
 Symbolic Logic Verifier: Python Code Verification using CrossHair.
 
-Engine for symbolic execution - verifies Python code properties without running it.
-Uses CrossHair (Z3-based) for symbolic analysis and property verification.
+Engine for symbolic execution - verifies Python code properties with
+CrossHair (Z3-based) symbolic analysis. CrossHair imports the module it
+analyses, which executes its top-level code, so every CrossHair run happens
+inside the secure Docker sandbox (#431); without the sandbox the verifier
+returns BLOCKED and never falls back to the host.
 
 Phase 1 of QWED's symbolic execution roadmap.
 """
 
 from typing import Dict, Any, List, Optional
 import ast
-import tempfile
 import os
-import sys
 
 from .diagnostics import AdvisoryCheck, DiagnosticResult, DiagnosticStatus
+from .secure_code_executor import ExecutionError, SandboxUnavailable
 
 from .verification_context import VerificationContextDocument
 
 CONSTRAINT_SYNTAX_ERROR = "symbolic_verifier.syntax_error"
+CONSTRAINT_RUNTIME_UNAVAILABLE = "symbolic_verifier.runtime_unavailable"
+
+# The sandbox image must contain CrossHair; build it from
+# docker/crosshair-sandbox/Dockerfile or point QWED_CROSSHAIR_IMAGE at an
+# equivalent image already present on the Docker daemon (it is never pulled).
+CROSSHAIR_IMAGE_ENV = "QWED_CROSSHAIR_IMAGE"
+DEFAULT_CROSSHAIR_IMAGE = "qwed-crosshair-sandbox:0.0.101"
+
+# The in-container runner. Python exits 1 for any uncaught exception, and
+# CrossHair uses exit 1 for "counterexample found", so the runner keeps the two
+# apart: an image without CrossHair exits 97, and an exception escaping
+# CrossHair (an unknown function, a crash) exits 98, an engine error. The
+# function is named by module qualname ("target.func", run with /workspace as
+# the working directory): CrossHair reads "file.py:func" as a qualname and
+# fails to find "py:func".
+_CROSSHAIR_MISSING_EXIT = 97
+_CROSSHAIR_CRASH_EXIT = 98
+_CROSSHAIR_RUNNER = """\
+import runpy, sys, traceback
+try:
+    import crosshair  # noqa: F401
+except ImportError:
+    sys.exit(97)
+func, timeout = sys.argv[1], sys.argv[2]
+sys.argv = ["crosshair", "check", "--per_condition_timeout", timeout, "target." + func]
+try:
+    runpy.run_module("crosshair", run_name="__main__", alter_sys=True)
+except SystemExit:
+    raise
+except BaseException:
+    traceback.print_exc()
+    sys.exit(98)
+"""
+_MAX_CROSSHAIR_OUTPUT_BYTES = 64 * 1024
 
 
 
@@ -46,29 +82,69 @@ class SymbolicVerifier:
         False  # CrossHair finds b=0 counterexample
     """
     
-    def __init__(self, timeout_seconds: int = 30, max_iterations: int = 100):
+    def __init__(
+        self,
+        timeout_seconds: int = 30,
+        max_iterations: int = 100,
+        sandbox: Any = None,
+        image: Optional[str] = None,
+    ):
         """
         Initialize the symbolic verifier.
-        
+
         Args:
             timeout_seconds: Max time per function check
             max_iterations: Max symbolic execution iterations (bounded model checking)
+            sandbox: A ``SecureCodeExecutor`` to run CrossHair in; one is
+                created on first use when omitted.
+            image: Sandbox image containing CrossHair; defaults to
+                ``$QWED_CROSSHAIR_IMAGE`` or ``DEFAULT_CROSSHAIR_IMAGE``.
         """
         self.timeout_seconds = timeout_seconds
         self.max_iterations = max_iterations
-        self._crosshair_available = self._check_crosshair()
-    
-    def _check_crosshair(self) -> bool:
-        """Check if CrossHair is available."""
+        self._sandbox = sandbox
+        self.image = image or os.environ.get(CROSSHAIR_IMAGE_ENV) or DEFAULT_CROSSHAIR_IMAGE
+
+    def _get_sandbox(self) -> Any:
+        if self._sandbox is None:
+            from .secure_code_executor import SecureCodeExecutor
+
+            self._sandbox = SecureCodeExecutor()
+        return self._sandbox
+
+    def _sandbox_available(self) -> bool:
+        """True when the secure sandbox can run containers right now."""
         try:
-            import crosshair
-            return True
-        except ImportError:
+            return bool(self._get_sandbox().is_available())
+        except Exception:
             return False
-    
+
+    @staticmethod
+    def _runtime_unavailable(reason: str) -> DiagnosticResult:
+        return DiagnosticResult.blocked(
+            agent_message=(
+                "Symbolic verification is unavailable: CrossHair only runs inside "
+                "the secure sandbox, and the sandbox could not run it."
+            ),
+            developer_fields={
+                "constraint_id": CONSTRAINT_RUNTIME_UNAVAILABLE,
+                "reason": reason,
+                "verification_mode": "symbolic",
+            },
+        )
+
     def verify_code(self, code: str) -> DiagnosticResult:
         """
         Verify Python code using symbolic execution.
+
+        CrossHair analyses a function by importing the module that holds it,
+        which EXECUTES the supplied code's top-level statements. The code is
+        therefore only ever analysed inside the secure Docker sandbox (no
+        network, read-only root and input, unprivileged user, resource
+        limits). When the sandbox cannot run it (no Docker, no free slot, the
+        CrossHair image is missing or lacks CrossHair) the result is BLOCKED
+        with ``symbolic_verifier.runtime_unavailable``; the code is never
+        imported on the host.
 
         Args:
             code: Python code to verify
@@ -80,15 +156,6 @@ class SymbolicVerifier:
             UNVERIFIABLE rather than an authoritative proof (see issue #15).
             Only UNVERIFIABLE and BLOCKED are currently produced.
         """
-        if not self._crosshair_available:
-            return DiagnosticResult.blocked(
-                agent_message="Symbolic verification is unavailable: the CrossHair engine is not installed.",
-                developer_fields={
-                    "constraint_id": "symbolic_verifier.crosshair_not_available",
-                    "verification_mode": "symbolic",
-                },
-            )
-
         # Parse code to extract functions
         try:
             tree = ast.parse(code)
@@ -115,7 +182,12 @@ class SymbolicVerifier:
                 },
             )
 
-        summary = self._summarize_verification_results(code, functions)
+        if not self._sandbox_available():
+            return self._runtime_unavailable("The secure sandbox (Docker) is not available.")
+        try:
+            summary = self._summarize_verification_results(code, functions)
+        except SandboxUnavailable as e:
+            return self._runtime_unavailable(str(e))
         return self._diagnostic_from_summary(summary)
 
     def _diagnostic_from_summary(self, summary: Dict[str, Any]) -> DiagnosticResult:
@@ -240,9 +312,17 @@ class SymbolicVerifier:
         }
     
     def _extract_functions(self, tree: ast.AST) -> List[Dict[str, Any]]:
-        """Extract function names and info from AST."""
+        """Extract function names and info from AST.
+
+        ``qualname`` is the dotted path CrossHair loads the function by
+        ("func", "Class.method"), or None for a function nested in another
+        function, which cannot be addressed from outside.
+        """
         functions = []
-        
+        parents = {
+            child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)
+        }
+
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef):
                 # Check if function has type hints
@@ -253,6 +333,7 @@ class SymbolicVerifier:
                 
                 functions.append({
                     "name": node.name,
+                    "qualname": self._qualname(node, parents),
                     "has_types": has_annotations,
                     "line_number": node.lineno,
                     "has_docstring": (
@@ -263,7 +344,19 @@ class SymbolicVerifier:
                 })
         
         return functions
-    
+
+    @staticmethod
+    def _qualname(node: ast.FunctionDef, parents: Dict[ast.AST, ast.AST]) -> Optional[str]:
+        parts = [node.name]
+        parent = parents.get(node)
+        while parent is not None and not isinstance(parent, ast.Module):
+            if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                return None
+            if isinstance(parent, ast.ClassDef):
+                parts.insert(0, parent.name)
+            parent = parents.get(parent)
+        return ".".join(parts)
+
     def _verify_function(self, code: str, func_info: Dict[str, Any]) -> Dict[str, Any]:
         """
         Verify a single function using CrossHair.
@@ -287,31 +380,35 @@ class SymbolicVerifier:
                 }]
             }
         
-        try:
-            from crosshair.main import check_function
-            from crosshair.core_and_libs import standalone_statespace
-            from crosshair.options import AnalysisOptionSet
-            
-            # Create temporary module with the code
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-                f.write(code)
-                temp_path = f.name
-            
-            try:
-                # Run CrossHair check
-                issues = self._run_crosshair_check(temp_path, func_name)
-                has_timeout = any(i.get("type") == "timeout" for i in issues)
-                
-                return {
-                    "verified": len(issues) == 0,
+        qualname = func_info.get("qualname", func_name)
+        if qualname is None:
+            return {
+                "verified": False,
+                "function": func_name,
+                "skipped": False,
+                "unverifiable": True,
+                "issues": [{
+                    "type": "unverifiable",
                     "function": func_name,
-                    "skipped": False,
-                    "unverifiable": has_timeout,
-                    "issues": issues
-                }
-            finally:
-                os.unlink(temp_path)
-                
+                    "description": "Nested function: CrossHair cannot load it by name"
+                }]
+            }
+
+        try:
+            # The CrossHair CLI, run in the sandbox, is the only engine call:
+            # nothing here imports CrossHair or the supplied code on the host.
+            issues = self._run_crosshair_check(code, qualname)
+            has_timeout = any(i.get("type") == "timeout" for i in issues)
+
+            return {
+                "verified": len(issues) == 0,
+                "function": func_name,
+                "skipped": False,
+                "unverifiable": has_timeout,
+                "issues": issues
+            }
+        except SandboxUnavailable:
+            raise  # verify_code turns this into BLOCKED for the whole request
         except Exception as e:
             return {
                 "verified": False,
@@ -325,35 +422,41 @@ class SymbolicVerifier:
                 }]
             }
     
-    def _run_crosshair_check(self, file_path: str, func_name: str) -> List[Dict[str, Any]]:
+    def _run_crosshair_check(self, code: str, func_name: str) -> List[Dict[str, Any]]:
         """
-        Run CrossHair check on a specific function.
+        Run CrossHair check on a specific function, inside the sandbox.
 
-        CrossHair's CLI distinguishes a disproving counterexample (exit 1)
-        from an engine-level failure (exit 2) — only exit 1 is reported as a
+        The code is mounted read-only as /workspace/target.py and analysed by
+        the CrossHair CLI in a hardened container. CrossHair's CLI
+        distinguishes a disproving counterexample (exit 1) from an
+        engine-level failure (exit 2) — only exit 1 is reported as a
         counterexample; any other nonzero exit is an error, not a disproof.
 
-        Returns list of issues found.
+        Returns list of issues found. Raises ``SandboxUnavailable`` when the
+        sandbox cannot run CrossHair (including an image without CrossHair).
         """
-        import subprocess
-
-        # Run crosshair check command
         try:
-            result = subprocess.run(
-                [
-                    sys.executable, "-m", "crosshair", "check",
-                    "--per_condition_timeout", str(self.timeout_seconds),
-                    f"{file_path}:{func_name}"
-                ],
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds * 2
+            returncode, output = self._get_sandbox().run_isolated(
+                {"target.py": code},
+                ["python", "-c", _CROSSHAIR_RUNNER, func_name, str(self.timeout_seconds)],
+                image=self.image,
+                timeout=self.timeout_seconds * 2,
+                max_output_bytes=_MAX_CROSSHAIR_OUTPUT_BYTES,
             )
+        except ExecutionError:
+            return [{
+                "type": "timeout",
+                "function": func_name,
+                "description": f"Verification timed out after {self.timeout_seconds}s"
+            }]
 
+        if returncode == _CROSSHAIR_MISSING_EXIT:
+            raise SandboxUnavailable(f"Sandbox image '{self.image}' does not provide CrossHair")
+
+        try:
             issues = []
-            output = result.stdout + result.stderr
 
-            if result.returncode == 1:
+            if returncode == 1:
                 # Exit 1: CrossHair disproved the check with a counterexample.
                 for line in output.split('\n'):
                     if line.strip() and ('error' in line.lower() or 'counterexample' in line.lower()):
@@ -368,22 +471,16 @@ class SymbolicVerifier:
                         "function": func_name,
                         "description": output.strip() or "CrossHair reported a counterexample (exit code 1)."
                     })
-            elif result.returncode != 0:
+            elif returncode != 0:
                 # Any other nonzero exit (e.g. 2) is an engine failure, not a disproof.
                 issues.append({
                     "type": "error",
                     "function": func_name,
-                    "description": output.strip() or f"CrossHair exited with code {result.returncode}."
+                    "description": output.strip() or f"CrossHair exited with code {returncode}."
                 })
 
             return issues
 
-        except subprocess.TimeoutExpired:
-            return [{
-                "type": "timeout",
-                "function": func_name,
-                "description": f"Verification timed out after {self.timeout_seconds}s"
-            }]
         except Exception as e:
             return [{
                 "type": "error", 

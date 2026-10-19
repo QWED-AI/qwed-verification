@@ -4,6 +4,31 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- **CrossHair runs only inside the Docker sandbox (#431).** CrossHair analyses
+  a function by importing its module, which executes the module's top-level
+  code. `SymbolicVerifier` used to run `python -m crosshair check` as a plain
+  host subprocess on a temp file holding the caller's code.
+  - Every CrossHair run now goes through the new
+    `SecureCodeExecutor.run_isolated()`: no network, read-only root, the code
+    mounted read-only, all capabilities dropped, `no-new-privileges`, user
+    65534, and the existing memory/CPU/PID limits and concurrency bound. The
+    output comes from the size-capped container log.
+  - The image comes from `docker/crosshair-sandbox/Dockerfile`
+    (`qwed-crosshair-sandbox:0.0.101`, or `QWED_CROSSHAIR_IMAGE`) and is never
+    pulled at runtime.
+  - Without Docker, a free sandbox slot, the image, or CrossHair inside the
+    image, `verify_code()` returns `BLOCKED`
+    (`symbolic_verifier.runtime_unavailable`). There is no host fallback. This
+    replaces `symbolic_verifier.crosshair_not_available`.
+  - Functions are now named by module qualname (`target.func`,
+    `target.Class.method`). CrossHair reads `file.py:func` as a qualname, so
+    the old form never found the function and exited 1, which was reported as
+    a counterexample for every typed function. An exception escaping CrossHair
+    now exits with its own code and is an engine error, not a counterexample.
+    Nested functions, which CrossHair cannot load by name, are unverifiable.
+
 ### Fixed
 
 - **The natural-language logic bridge emits the DSL parser's operator names.**
