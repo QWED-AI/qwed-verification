@@ -19,9 +19,13 @@ All notable changes to the QWED Protocol will be documented in this file.
     `no-new-privileges` and never runs as a privileged root, on top of the
     existing network, memory, CPU and PID limits. It runs as the owner of
     the host's private `0700` exchange directory: the host user, or, when the
-    host process is root, a fresh uid that no host account or group has and
-    no other running execution uses (the files are re-owned first, without
-    following links, and the directory last). Under a rootless daemon run by
+    host process is root, a fresh uid for this execution (the files are
+    re-owned first, without following links, and the directory last). It
+    comes from 1879048192-2147483646, a range systemd documents as unused,
+    or from `QWED_SANDBOX_UID_RANGE` when the operator reserves one, and is
+    skipped when a host account or group has it, when `/etc/subuid` or
+    `/etc/subgid` delegates it to a user namespace, or when another running
+    execution uses it. Under a rootless daemon run by
     the same user, the container's root is that unprivileged user. A root
     process with a rootless daemon, a userns-remap daemon, or a daemon whose
     security options cannot be read is reported as runtime unavailable

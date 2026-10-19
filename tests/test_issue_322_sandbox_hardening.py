@@ -21,8 +21,15 @@ from qwed_new.core.secure_code_executor import (
 )
 
 DIGEST = "sha256:" + "a" * 64
-FLOOR = sce._SANDBOX_UID_FLOOR
-CEILING = sce._SANDBOX_UID_FLOOR + sce._SANDBOX_UID_SPAN
+FLOOR, LAST = sce._DEFAULT_SANDBOX_UID_RANGE
+CEILING = LAST + 1
+
+
+@pytest.fixture(autouse=True)
+def _no_host_delegations(monkeypatch):
+    # Tests decide for themselves which ids the host has delegated.
+    monkeypatch.delenv(sce.SANDBOX_UID_RANGE_ENV, raising=False)
+    monkeypatch.setattr(sce, "_SUBORDINATE_ID_FILES", ())
 
 
 def _executor(options=("name=seccomp,profile=builtin",)):
@@ -87,6 +94,8 @@ def test_executor_uses_the_pinned_image(monkeypatch):
         f"registry.local:5000/team/pandas:slim@{DIGEST}",
         f"localhost/img@{DIGEST}",
         f"myreg:5000/img@{DIGEST}",
+        f"[2001:db8::1]:5000/team/pandas@{DIGEST}",
+        f"[::1]/img@{DIGEST}",
     ],
 )
 def test_an_override_by_digest_is_used(monkeypatch, override):
@@ -107,6 +116,7 @@ def test_an_override_by_digest_is_used(monkeypatch, override):
         f"Upper/case@{DIGEST}",
         f"a//b@{DIGEST}",
         f"img-@{DIGEST}",
+        f"[zz]/img@{DIGEST}",
     ],
 )
 def test_an_override_that_is_not_a_valid_digest_reference_is_refused(monkeypatch, override):
@@ -192,9 +202,10 @@ def test_a_rootless_daemon_runs_the_container_as_its_root(monkeypatch):
 )
 def test_unsupported_user_mappings_are_refused(monkeypatch, uid, options):
     _as_host_user(monkeypatch, uid)
+    executor = _executor(options=options)
 
     with pytest.raises(SandboxUnavailable):
-        _executor(options=options)._container_user("/ws")
+        executor._container_user("/ws")
 
 
 def test_container_user_without_getuid_is_unprivileged(monkeypatch):
@@ -280,8 +291,9 @@ def test_a_non_regular_entry_is_refused_before_anything_is_handed_over(monkeypat
     except OSError:
         pytest.skip("symlinks are not permitted here")
 
+    executor = _executor()
     with pytest.raises(SandboxUnavailable):
-        _executor()._hand_workspace_to_container_user(str(workspace))
+        executor._hand_workspace_to_container_user(str(workspace))
 
     # The directory itself was never handed over.
     assert all(path != str(workspace) for path, *_ in calls)
@@ -321,6 +333,56 @@ def test_a_uid_a_host_account_has_is_skipped(monkeypatch):
 
     assert uid == FLOOR + 8
     assert FLOOR + 7 not in sce._sandbox_uids_in_use
+    sce._release_sandbox_uid(uid)
+
+
+def test_a_uid_inside_a_subordinate_id_range_is_skipped(monkeypatch, tmp_path):
+    # /etc/subuid and /etc/subgid delegate ids to user namespaces (rootless
+    # containers, nspawn); a process there runs as that host uid.
+    subuid = tmp_path / "subuid"
+    subuid.write_text(f"alice:100000:65536\nbob:{FLOOR + 10}:5\nbroken line\n")
+    subgid = tmp_path / "subgid"
+    subgid.write_text(f"carol:{FLOOR + 20}:1\n")
+    monkeypatch.setattr(sce, "_SUBORDINATE_ID_FILES", (str(subuid), str(subgid), str(tmp_path / "missing")))
+    picks = iter([FLOOR + 12, FLOOR + 20, FLOOR + 30])
+    monkeypatch.setattr(sce.secrets, "randbelow", lambda span: next(picks) - FLOOR)
+    monkeypatch.setattr(sce, "_host_id_exists", lambda uid: False)
+
+    uid = sce._claim_sandbox_uid()
+
+    assert uid == FLOOR + 30
+    sce._release_sandbox_uid(uid)
+
+
+def test_the_default_range_is_the_documented_unused_one():
+    # systemd: 1879048192-2147483647 is unused, above the container range.
+    assert sce._sandbox_uid_range() == (1879048192, 2147483646)
+
+
+@pytest.mark.parametrize(
+    "configured, expected",
+    [
+        ("3000000000-3000000010", sce._DEFAULT_SANDBOX_UID_RANGE),  # past 2^31
+        ("100-200", sce._DEFAULT_SANDBOX_UID_RANGE),  # ordinary accounts
+        ("500000-400000", sce._DEFAULT_SANDBOX_UID_RANGE),  # reversed
+        ("abc", sce._DEFAULT_SANDBOX_UID_RANGE),
+        ("2000000000-2000000099", (2000000000, 2000000099)),
+        (" 70000 - 70000 ", (70000, 70000)),
+    ],
+)
+def test_an_operator_reserved_range_is_validated(monkeypatch, configured, expected):
+    monkeypatch.setenv(sce.SANDBOX_UID_RANGE_ENV, configured)
+
+    assert sce._sandbox_uid_range() == expected
+
+
+def test_uids_come_from_the_operator_range(monkeypatch):
+    monkeypatch.setenv(sce.SANDBOX_UID_RANGE_ENV, "2000000000-2000000000")
+    monkeypatch.setattr(sce, "_host_id_exists", lambda uid: False)
+
+    uid = sce._claim_sandbox_uid()
+
+    assert uid == 2000000000
     sce._release_sandbox_uid(uid)
 
 

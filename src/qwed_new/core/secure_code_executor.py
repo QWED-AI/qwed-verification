@@ -114,10 +114,11 @@ SANDBOX_IMAGE = (
 SANDBOX_IMAGE_ENV = "QWED_SANDBOX_IMAGE"
 # A Docker image reference pinned by digest: an optional registry host, then
 # lowercase path components, an optional tag and the digest. As in Docker, the
-# first part is a host only when it has a dot or a port, or is "localhost".
+# first part is a host only when it has a dot or a port, is "localhost", or is
+# a bracketed IPv6 address.
 _HOST_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
 _REFERENCE_HOST = (
-    r"(?:(?:(?:localhost|" + _HOST_LABEL + r"(?:\." + _HOST_LABEL + r")+)(?::[0-9]+)?"
+    r"(?:(?:(?:localhost|" + _HOST_LABEL + r"(?:\." + _HOST_LABEL + r")+|\[[0-9A-Fa-f:.]+\])(?::[0-9]+)?"
     + r"|" + _HOST_LABEL + r":[0-9]+)/)?"
 )
 _REFERENCE_COMPONENT = r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
@@ -162,13 +163,61 @@ _EXECUTE_HARDENING = {
 # Docker Desktop shares the folder with every container user, so the shared
 # unprivileged uid is enough there.
 _UNPRIVILEGED_UID = 65534
-# When this process is root, each workspace is handed to a fresh uid from this
-# range, far above ordinary accounts and checked against the host's user and
-# group databases, so no other host process owns it.
-_SANDBOX_UID_FLOOR = 1 << 24
-_SANDBOX_UID_SPAN = 1 << 24
+# When this process is root, each workspace is handed to a fresh uid. It comes
+# from a range no allocator hands out: by default 1879048192-2147483646, which
+# systemd's UID/GID allocation documents as unused (above the container range
+# 524288-1879048191, below the 2^31 range kernels and tools mishandle), or
+# from QWED_SANDBOX_UID_RANGE="first-last" when the operator reserves one.
+# Every pick is also checked against the user and group databases and the
+# /etc/subuid and /etc/subgid delegations, so no account or user namespace
+# on the host owns it.
+SANDBOX_UID_RANGE_ENV = "QWED_SANDBOX_UID_RANGE"
+_DEFAULT_SANDBOX_UID_RANGE = (1879048192, 2147483646)
+_SUBORDINATE_ID_FILES = ("/etc/subuid", "/etc/subgid")
 _sandbox_uids_in_use: set = set()
 _sandbox_uids_lock = threading.Lock()
+
+
+def _sandbox_uid_range() -> Tuple[int, int]:
+    """The inclusive (first, last) uid range workspaces are handed to."""
+    configured = os.environ.get(SANDBOX_UID_RANGE_ENV, "").strip()
+    if not configured:
+        return _DEFAULT_SANDBOX_UID_RANGE
+    first, sep, last = configured.partition("-")
+    if sep and first.strip().isdigit() and last.strip().isdigit():
+        first_uid, last_uid = int(first), int(last)
+        # Never the ordinary account range, never past the 2^31 boundary.
+        if 65536 <= first_uid <= last_uid <= _DEFAULT_SANDBOX_UID_RANGE[1]:
+            return first_uid, last_uid
+    logger.error(
+        "%s must be FIRST-LAST within 65536-%d; using the default sandbox uid range",
+        SANDBOX_UID_RANGE_ENV,
+        _DEFAULT_SANDBOX_UID_RANGE[1],
+    )
+    return _DEFAULT_SANDBOX_UID_RANGE
+
+
+def _in_subordinate_range(uid: int) -> bool:
+    """True when /etc/subuid or /etc/subgid delegates this id to some user's
+    namespaces (rootless containers, podman, systemd-nspawn)."""
+    for path in _SUBORDINATE_ID_FILES:
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            parts = line.strip().split(":")
+            if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+                start, count = int(parts[1]), int(parts[2])
+                if start <= uid < start + count:
+                    return True
+    return False
+
+
+def _random_sandbox_uid() -> int:
+    first, last = _sandbox_uid_range()
+    return first + secrets.randbelow(last - first + 1)
 
 
 def _host_id_exists(uid: int) -> bool:
@@ -187,15 +236,16 @@ def _host_id_exists(uid: int) -> bool:
 
 
 def _claim_sandbox_uid() -> int:
-    """A uid (also used as the gid) that no host account or group has and no
-    other workspace of this process is using."""
+    """A uid (also used as the gid) from the sandbox range that no host
+    account or group has, no subordinate id range covers, and no other
+    workspace of this process is using."""
     for _ in range(64):
-        uid = _SANDBOX_UID_FLOOR + secrets.randbelow(_SANDBOX_UID_SPAN)
+        uid = _random_sandbox_uid()
         with _sandbox_uids_lock:
             if uid in _sandbox_uids_in_use:
                 continue
             _sandbox_uids_in_use.add(uid)
-        if not _host_id_exists(uid):
+        if not _host_id_exists(uid) and not _in_subordinate_range(uid):
             return uid
         _release_sandbox_uid(uid)
     raise SandboxUnavailable("No unused uid is available for the sandbox workspace")
@@ -580,8 +630,8 @@ class SecureCodeExecutor:
                     logger.exception("Docker image not found: %s", safe_image)
                     return False, f"Docker image '{safe_image!s}' not found. Please pull it first.", None
 
-                except SandboxUnavailable as e:
-                    logger.error("Sandbox cannot run this execution: %s", _sanitize_log_msg(e))
+                except SandboxUnavailable:
+                    logger.exception("Sandbox cannot run this execution")
                     return False, SECURE_RUNTIME_UNAVAILABLE, None
 
                 except Exception as e:
@@ -650,7 +700,7 @@ class SecureCodeExecutor:
         if handed is None:
             # Not a workspace execute() prepared: run as a fresh uid that owns
             # nothing on the host, which can only fail closed.
-            handed = _SANDBOX_UID_FLOOR + secrets.randbelow(_SANDBOX_UID_SPAN)
+            handed = _random_sandbox_uid()
         return f"{handed}:{handed}"
 
     def _hand_workspace_to_container_user(self, tmpdir: str) -> None:
