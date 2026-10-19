@@ -18,6 +18,7 @@ import tempfile
 import json
 import math
 import os
+import re
 import threading
 import time
 import logging
@@ -98,6 +99,49 @@ _ISOLATED_BASE_ENVIRONMENT = {
     "PYTHONDONTWRITEBYTECODE": "1",
 }
 _DEFAULT_ISOLATED_OUTPUT_BYTES = 64 * 1024
+
+# The image execute() runs code in (#322). A tag such as "slim" can be moved to
+# different content at any time; a digest cannot, so the sandbox only ever
+# runs the exact image that was reviewed. This is amancevice/pandas:slim as
+# published on 2026-08-10. QWED_SANDBOX_IMAGE may name another image, but
+# only by digest; any other value is refused and the pinned image is used.
+SANDBOX_IMAGE = (
+    "amancevice/pandas@sha256:9257b88909bddf60c8a85b06d572fc6dfc708ea9c8a3c3dc2149e312d57f91e3"
+)
+SANDBOX_IMAGE_ENV = "QWED_SANDBOX_IMAGE"
+_DIGEST_REFERENCE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+
+
+def _sandbox_image() -> str:
+    override = os.environ.get(SANDBOX_IMAGE_ENV, "").strip()
+    if not override:
+        return SANDBOX_IMAGE
+    if _DIGEST_REFERENCE.fullmatch(override):
+        return override
+    logger.error(
+        "%s must name an image by digest (name@sha256:<64 hex>); using the pinned sandbox image",
+        SANDBOX_IMAGE_ENV,
+    )
+    return SANDBOX_IMAGE
+
+
+# execute() hardening (#322), on top of the network, memory, CPU and PID
+# limits: a read-only root, no Linux capabilities, no privilege escalation,
+# and never root inside the container. /workspace is the host's private
+# exchange directory (inputs in, result.json out); HOME and TMPDIR point
+# there because nothing else is writable.
+_EXECUTE_HARDENING = {
+    "read_only": True,
+    "cap_drop": ["ALL"],
+    "security_opt": ["no-new-privileges"],
+    "environment": {
+        "HOME": "/workspace",
+        "TMPDIR": "/workspace",
+        "MPLCONFIGDIR": "/workspace",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    },
+}
+_UNPRIVILEGED_UID = 65534
 
 SECURE_RUNTIME_UNAVAILABLE = "SECURE_RUNTIME_UNAVAILABLE"
 CONSTRAINT_VERIFIER_UNAVAILABLE = "secure_code_executor.verifier_unavailable"
@@ -372,9 +416,10 @@ class SecureCodeExecutor:
         # on-disk JSON unboundedly.
         self.max_result_bytes = 2 * 1024 * 1024
         self.execution_count = 0
-        
-        # Docker image to use
-        self.image = "amancevice/pandas:slim"
+
+        # Docker image to use: pinned by digest (#322).
+        self.image = _sandbox_image()
+        self._rootless: Optional[bool] = None
     
     def execute(self, code: str, context: Dict[str, Any]) -> Tuple[bool, Optional[str], Any]:
         """
@@ -430,7 +475,8 @@ class SecureCodeExecutor:
                     f.write(wrapped_code)
                 
                 logger.debug(f"Context and code written to {tmpdir}")
-                
+                self._hand_workspace_to_container_user(tmpdir)
+
                 # 3. Run in Docker container, under the process-wide sandbox
                 # concurrency bound (#446).
                 try:
@@ -479,6 +525,51 @@ class SecureCodeExecutor:
             logger.exception("Failed to create temporary directory")
             return False, f"Setup error: {e!s}", None
     
+    def _is_rootless_daemon(self) -> bool:
+        """True for a rootless Docker daemon, whose container root is the host
+        user itself and holds no host privilege. Asked once per executor."""
+        if getattr(self, "_rootless", None) is None:
+            try:
+                options = self.client.info().get("SecurityOptions") or []
+                self._rootless = isinstance(options, list) and any(
+                    "name=rootless" in str(option) for option in options
+                )
+            except Exception:
+                self._rootless = False
+        return self._rootless
+
+    def _container_user(self) -> str:
+        """The uid:gid the execute() container runs as; never a privileged root.
+
+        The exchange directory is the host's private 0700 temp directory, so
+        the container runs as its owner: the host user when this process is
+        not root, the unprivileged 65534 when it is (execute() hands the
+        directory to 65534 first). A rootless daemon maps the container's root
+        to the host user, so there root is the owner and unprivileged; any
+        other uid would be remapped away from it. Docker Desktop (no getuid)
+        shares the folder with every container user.
+        """
+        getuid = getattr(os, "getuid", None)
+        if getuid is None:
+            return f"{_UNPRIVILEGED_UID}:{_UNPRIVILEGED_UID}"
+        if self._is_rootless_daemon():
+            return "0:0"
+        uid = getuid()
+        if uid == 0:
+            return f"{_UNPRIVILEGED_UID}:{_UNPRIVILEGED_UID}"
+        return f"{uid}:{os.getgid()}"
+
+    def _hand_workspace_to_container_user(self, tmpdir: str) -> None:
+        """When this process is root (and the daemon is not rootless), give the
+        private exchange directory to the unprivileged container user, so it
+        stays 0700 instead of being opened to every local user."""
+        getuid = getattr(os, "getuid", None)
+        if getuid is None or getuid() != 0 or self._is_rootless_daemon():
+            return
+        os.chown(tmpdir, _UNPRIVILEGED_UID, _UNPRIVILEGED_UID)
+        for name in os.listdir(tmpdir):
+            os.chown(os.path.join(tmpdir, name), _UNPRIVILEGED_UID, _UNPRIVILEGED_UID)
+
     def _run_in_container_bounded(self, tmpdir: str, execution_id: str) -> bool:
         """Run the container under the process-wide sandbox slot (#446).
 
@@ -566,6 +657,9 @@ class SecureCodeExecutor:
                 config={"max-size": "10m", "max-file": "1"},
             ),
             "pids_limit": self.pids_limit,
+            # #322: read-only root, no capabilities, never root.
+            **_EXECUTE_HARDENING,
+            "user": self._container_user(),
         }
         try:
             container = self.client.containers.create(**create_kwargs)

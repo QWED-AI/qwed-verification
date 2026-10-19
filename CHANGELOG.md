@@ -6,6 +6,24 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Security
 
+- **The code-execution sandbox runs a pinned image in a hardened container
+  (#322).** `SecureCodeExecutor.execute()` pulled `amancevice/pandas:slim`, a
+  tag that can move to different content at any time, and ran it with a
+  writable root, the default Linux capabilities and the image's default
+  user (root).
+  - The image is pinned by digest (`amancevice/pandas@sha256:9257b889…`,
+    the `slim` tag as published on 2026-08-10). `QWED_SANDBOX_IMAGE` may
+    name another image, but only by digest; any other value is refused and
+    the pinned image is used.
+  - The container now has a read-only root, drops every capability, sets
+    `no-new-privileges` and never runs as a privileged root, on top of the
+    existing network, memory, CPU and PID limits. It runs as the owner of
+    the host's private exchange directory: the host user, or 65534 when the
+    host process is root (the directory is handed to 65534 first, so it stays
+    `0700`). Under a rootless daemon the container's root is the unprivileged
+    host user. `HOME` and `TMPDIR` point at `/workspace`, the only writable
+    path.
+
 - **CrossHair runs only inside the Docker sandbox (#431).** CrossHair analyses
   a function by importing its module, which executes the module's top-level
   code. `SymbolicVerifier` used to run `python -m crosshair check` as a plain
