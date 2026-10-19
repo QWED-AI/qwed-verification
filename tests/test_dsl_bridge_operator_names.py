@@ -228,6 +228,17 @@ def test_holds_evaluates_without_eval():
         ("x > 1 And x < 3", "(AND (GT x 1) (LT x 3))", "SAT"),
         ("x > 5 OR x < 0", "(OR (GT x 5) (LT x 0))", "SAT"),
         ("And(x > 1, Or(x < 3, x > 9))", "(AND (GT x 1) (OR (LT x 3) (GT x 9)))", "SAT"),
+        ("not And(x > 1, x < 3)", "(NOT (AND (GT x 1) (LT x 3)))", "SAT"),
+        ("Or(x < 0, x > 9) and And(x > 1, x < 3)",
+         "(AND (OR (LT x 0) (GT x 9)) (AND (GT x 1) (LT x 3)))", "UNSAT"),
+        # Infix keywords before a parenthesised operand stay operators.
+        ("(x > 1) AND (x < 3)", "(AND (GT x 1) (LT x 3))", "SAT"),
+        ("(x > 1) and (x < 2)", "(AND (GT x 1) (LT x 2))", "UNSAT"),
+        ("x > 1 or (x < 0)", "(OR (GT x 1) (LT x 0))", "SAT"),
+        ("x > 1 and (x < 3 or x > 9)", "(AND (GT x 1) (OR (LT x 3) (GT x 9)))", "SAT"),
+        ("x > 1 AND (x < 3 OR (x > 9))", "(AND (GT x 1) (OR (LT x 3) (GT x 9)))", "SAT"),
+        ("x >= 1 Or (x == -1)", "(OR (GTE x 1) (EQ x -1))", "SAT"),
+        ("(x > 1) AND NOT (x > 2)", "(AND (GT x 1) (NOT (GT x 2)))", "SAT"),
     ],
 )
 def test_connective_calls_and_keywords_bridge(monkeypatch, constraint, dsl, status):

@@ -34,9 +34,24 @@ class DSLVerificationResult:
     provider_used: Optional[str] = None
 
 
+# Text that ends an operand ("x", "3", ")" or "]"), unless that text is itself
+# a connective keyword: in "not And(...)" the And is still a call.
+_OPERAND_END = re.compile(r"[\w)\]]$")
+_KEYWORD_END = re.compile(r"\b(?:and|or|not)$", re.IGNORECASE)
+
+
 def _normalize_keyword(match: re.Match) -> str:
+    """Lowercase a connective to the Python operator, or capitalize it to the
+    And / Or call when it is in call position.
+
+    A keyword followed by "(" is a call only when nothing before it is an
+    operand: "And(a, b)" and "not Or(a, b)" are calls, but in "(a) AND (b)"
+    and "a or (b)" the keyword joins two operands and stays an operator.
+    """
     word = match.group(1).lower()
-    if match.group(2) and word in ("and", "or"):
+    before = match.string[: match.start()].rstrip()
+    after_operand = bool(_OPERAND_END.search(before)) and not _KEYWORD_END.search(before)
+    if match.group(2) and word in ("and", "or") and not after_operand:
         return word.capitalize()
     return word
 
