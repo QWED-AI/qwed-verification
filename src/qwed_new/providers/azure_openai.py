@@ -156,7 +156,7 @@ Your goal is to translate natural language claims into QWED-Logic format (S-Expr
 
 3. EXAMPLES:
    User: "If x is greater than 5 and y is less than 10, then z must be true."
-   Output: (IMPLIES (AND (GT x 5) (LT y 10)) (EQ z True))
+   Output: (IMPLIES (AND (GT x 5) (LT y 10)) (EQ z True))   with variables z: Bool
 
    User: "Every number greater than 5 is also greater than 3."
    Output: (FORALL n (IMPLIES (GT n 5) (GT n 3)))

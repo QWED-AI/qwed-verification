@@ -79,6 +79,12 @@ def test_iff_of_comparisons_from_the_issue():
     assert 3 <= int(result.model["x"]) <= 5
 
 
+def test_iff_accepts_boolean_literals():
+    # (IFF c True) is just c.
+    assert _verify("(AND (IFF (GT x 5) True) (LT x 6))").status == "UNSAT"
+    assert _verify("(AND (IFF (GT x 5) False) (LT x 6))").status == "SAT"
+
+
 def test_iff_rejects_non_boolean_operands():
     # A biconditional of two Ints must not silently become x == y.
     result = _verify("(IFF x y)")
@@ -141,6 +147,15 @@ def test_quantifier_must_bind_a_variable_name(dsl_code):
     assert "must bind a variable name" in result.error
 
 
+@pytest.mark.parametrize("binder", [5, '"x"'])
+def test_compiler_rejects_a_non_name_binder(binder):
+    # The parser blocks these first; the compiler refuses them on its own too.
+    compiled = compile_to_z3(["FORALL", binder, ["GT", "x", 0]])
+
+    assert not compiled.success
+    assert "must bind a variable name" in compiled.error
+
+
 def test_quantifier_body_must_be_boolean():
     result = _verify("(FORALL x (PLUS x 1))")
 
@@ -152,6 +167,10 @@ def test_quantifier_body_is_still_whitelisted():
     result = _verify("(FORALL x (IMPORT os))")
 
     assert result.status == "BLOCKED"
+
+
+# Variables the prompt examples use in a Boolean position.
+_PROMPT_BOOLS = ("z", "access_denied", "is_admin")
 
 
 def _prompt_examples(path):
@@ -179,8 +198,16 @@ def test_provider_prompt_examples_are_valid_dsl(provider):
     for example in examples:
         parsed = parse_and_validate(example)
         assert parsed["status"] == "SUCCESS", (example, parsed)
-        # Bare names in a Boolean position are declared Bool in the prompt.
-        compiled = compile_to_z3(
-            parsed["ast"], {"access_denied": {"type": "Bool"}, "is_admin": {"type": "Bool"}}
-        )
+        # Names in a Boolean position are declared Bool in the prompt.
+        compiled = compile_to_z3(parsed["ast"], dict.fromkeys(_PROMPT_BOOLS, {"type": "Bool"}))
         assert compiled.success, (example, compiled.error)
+        # With the declaration, (EQ z True) compares Booleans; an undeclared
+        # z would be an Int and True would silently become 1.
+        assert not re.search(r"== 1", str(compiled.compiled)), example
+
+
+def test_prompts_declare_every_boolean_example_variable():
+    for provider in ("anthropic.py", "azure_openai.py"):
+        text = (ROOT / "src" / "qwed_new" / "providers" / provider).read_text(encoding="utf-8")
+        for name in _PROMPT_BOOLS:
+            assert f"{name}: Bool" in text, (provider, name)
