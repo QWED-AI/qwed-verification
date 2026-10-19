@@ -34,6 +34,13 @@ class DSLVerificationResult:
     provider_used: Optional[str] = None
 
 
+def _normalize_keyword(match: re.Match) -> str:
+    word = match.group(1).lower()
+    if match.group(2) and word in ("and", "or"):
+        return word.capitalize()
+    return word
+
+
 class DSLLogicVerifier:
     """
     Logic Verifier using QWED-DSL.
@@ -480,10 +487,11 @@ class DSLLogicVerifier:
             flags=re.IGNORECASE,
         )
 
-        # Normalize uppercase keywords from LLM outputs.
-        text = re.sub(r"\bAND\b", "and", text, flags=re.IGNORECASE)
-        text = re.sub(r"\bOR\b", "or", text, flags=re.IGNORECASE)
-        text = re.sub(r"\bNOT\b", "not", text, flags=re.IGNORECASE)
+        # Normalize keyword case from LLM outputs. AND / Or / not ... become the
+        # Python operators, except in call position: "and(" is not valid
+        # Python, so And(...) / OR(...) become the And / Or calls that
+        # _call_to_dsl handles. "not (...)" is valid either way.
+        text = re.sub(r"\b(and|or|not)\b(?=\s*(\()?)", _normalize_keyword, text, flags=re.IGNORECASE)
 
         # Replace accidental assignment-style "=" with comparison "==".
         text = re.sub(r"(?<![<>=!])=(?!=)", "==", text)

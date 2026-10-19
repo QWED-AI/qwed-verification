@@ -17,6 +17,11 @@ All notable changes to the QWED Protocol will be documented in this file.
   compiler and Z3 and check the exact DSL and the SAT/UNSAT result. No verdict
   mapping changed; unknown operators, unsupported Python syntax and solver
   errors still fail closed.
+  The bridge also lowercased `And(...)` / `Or(...)` to `and(...)` / `or(...)`,
+  which is not valid Python, so a constraint written in the function style the
+  bridge supports came back `ERROR`. Keywords in call position now become the
+  `And` / `Or` calls (in any case); infix `AND` / `Or` / `not` still read as
+  operators.
 - **The logic DSL compiles every operator its parser accepts (#428).**
   `IFF`, `FORALL` and `EXISTS` were whitelisted by the parser and suggested
   by the provider prompts, but the Z3 compiler had no branch for them, so any

@@ -149,13 +149,103 @@ def test_bridge_operator_runs_through_z3(monkeypatch, constraints, dsl, status):
             # Python's / is true division and ** on the model is exact; check the
             # witness against Z3's integer semantics only where they agree.
             if "/" not in constraint:
-                assert eval(constraint, {"Not": _not}, model), (constraint, model)
+                assert _holds(constraint, model), (constraint, model)
     else:
         assert result.model is None
 
 
-def _not(arg):
-    return not arg
+_BINOPS = {
+    ast.Add: lambda a, b: a + b,
+    ast.Sub: lambda a, b: a - b,
+    ast.Mult: lambda a, b: a * b,
+    ast.Mod: lambda a, b: a % b,
+    ast.Pow: lambda a, b: a ** b,
+}
+_COMPARISONS = {
+    ast.Eq: lambda a, b: a == b,
+    ast.NotEq: lambda a, b: a != b,
+    ast.Lt: lambda a, b: a < b,
+    ast.LtE: lambda a, b: a <= b,
+    ast.Gt: lambda a, b: a > b,
+    ast.GtE: lambda a, b: a >= b,
+}
+
+
+def _holds(constraint, model):
+    """Evaluate a test constraint on Z3's model without dynamic code execution: only the
+    arithmetic, comparisons and Boolean forms these tests use are known."""
+    return _evaluate(ast.parse(constraint, mode="eval").body, model)
+
+
+def _evaluate(node, model):
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        return model[node.id]
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.Not)):
+        value = _evaluate(node.operand, model)
+        return -value if isinstance(node.op, ast.USub) else not value
+    if isinstance(node, ast.BinOp):
+        return _BINOPS[type(node.op)](_evaluate(node.left, model), _evaluate(node.right, model))
+    if isinstance(node, ast.BoolOp):
+        values = [_evaluate(value, model) for value in node.values]
+        return all(values) if isinstance(node.op, ast.And) else any(values)
+    if isinstance(node, ast.Compare):
+        left = _evaluate(node.left, model)
+        for op, comparator in zip(node.ops, node.comparators):
+            right = _evaluate(comparator, model)
+            if not _COMPARISONS[type(op)](left, right):
+                return False
+            left = right
+        return True
+    if isinstance(node, ast.Call) and node.func.id in ("And", "Or", "Not"):
+        values = [_evaluate(arg, model) for arg in node.args]
+        return {"And": all, "Or": any, "Not": lambda v: not v[0]}[node.func.id](values)
+    raise AssertionError(f"unsupported test constraint node: {ast.dump(node)}")
+
+
+def test_holds_evaluates_without_eval():
+    model = {"x": 2}
+    assert _holds("1 < x <= 2 and x % 2 == 0", model)
+    assert _holds("Or(x > 5, Not(x == 3))", model)
+    assert not _holds("-x ** 2 >= 0", model)
+    with pytest.raises(AssertionError):
+        _holds("__import__('os')", model)
+
+
+@pytest.mark.parametrize(
+    "constraint, dsl, status",
+    [
+        # Function-style connectives, as the prompt suggests, in any case.
+        ("And(x > 1, x < 3)", "(AND (GT x 1) (LT x 3))", "SAT"),
+        ("Or(x > 5, x < 0)", "(OR (GT x 5) (LT x 0))", "SAT"),
+        ("AND(x > 1, x < 2)", "(AND (GT x 1) (LT x 2))", "UNSAT"),
+        ("or (x > 5, x < 0)", "(OR (GT x 5) (LT x 0))", "SAT"),
+        ("Not(x >= 1)", "(NOT (GTE x 1))", "SAT"),
+        ("NOT (x >= 1)", "(NOT (GTE x 1))", "SAT"),
+        # Infix keywords in any case still read as operators.
+        ("x > 1 AND x < 3", "(AND (GT x 1) (LT x 3))", "SAT"),
+        ("x > 1 And x < 3", "(AND (GT x 1) (LT x 3))", "SAT"),
+        ("x > 5 OR x < 0", "(OR (GT x 5) (LT x 0))", "SAT"),
+        ("And(x > 1, Or(x < 3, x > 9))", "(AND (GT x 1) (OR (LT x 3) (GT x 9)))", "SAT"),
+    ],
+)
+def test_connective_calls_and_keywords_bridge(monkeypatch, constraint, dsl, status):
+    # And(...) used to be lowercased to "and(...)", a SyntaxError, so a valid
+    # constraint in the prompt's own function style came back ERROR.
+    result = _verify_nl(monkeypatch, [constraint])
+
+    assert result.error is None, result.error
+    assert result.dsl_code == dsl
+    assert result.status == status
+
+
+def test_keyword_normalization_leaves_names_alone(monkeypatch):
+    result = _verify_nl(monkeypatch, ["order + android == 3", "nothing > 1"],
+                        variables={"order": "Int", "android": "Int", "nothing": "Int"})
+
+    assert result.dsl_code == "(AND (EQ (PLUS order android) 3) (GT nothing 1))"
+    assert result.status == "SAT"
 
 
 @pytest.mark.parametrize("constraint", ["x // 2 == 1", "x << 1 == 2", "x & 1 == 1", "x in (1, 2)", "x is 1", "~x == 1"])
