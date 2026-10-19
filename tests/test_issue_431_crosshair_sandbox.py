@@ -124,7 +124,8 @@ def test_without_docker_the_result_is_blocked_and_nothing_runs(tmp_path):
         _Sandbox(available=False),
         _Sandbox(error=SandboxUnavailable("Sandbox capacity reached — retry shortly.")),
         _Sandbox(error=SandboxUnavailable("Sandbox image 'x' is not available on the Docker daemon")),
-        _Sandbox(returncode=_CROSSHAIR_MISSING_EXIT),  # image without CrossHair
+        # Image without CrossHair: the runner exits before any result line.
+        _Sandbox(returncode=_CROSSHAIR_MISSING_EXIT, marker=False),
     ],
     ids=["no-docker", "no-slot", "no-image", "no-crosshair-in-image"],
 )
@@ -405,6 +406,18 @@ def test_exit_1_without_a_crosshair_report_is_an_engine_error(output):
     issues = SymbolicVerifier(sandbox=_Sandbox(returncode=1, output=output))._run_crosshair_check(TYPED, "add")
 
     assert [issue["type"] for issue in issues] == ["error"]
+
+
+def test_a_child_exit_97_is_an_engine_error_not_a_missing_crosshair():
+    # The runner's own 97 (no CrossHair in the image) never has a result line;
+    # with one, 97 is the child's exit code, chosen by the analysed code.
+    sandbox = _Sandbox(returncode=_CROSSHAIR_MISSING_EXIT, marker=True)
+    result = SymbolicVerifier(sandbox=sandbox).verify_code(TYPED)
+
+    # An engine error for the function, as for exit 2, not a missing runtime.
+    assert result.developer_fields["constraint_id"] == "symbolic_verifier.verification_error"
+    assert result.developer_fields["issues"][0]["type"] == "error"
+    assert "97" in result.developer_fields["issues"][0]["description"]
 
 
 def test_exit_1_with_crosshair_reports_lists_each_counterexample():

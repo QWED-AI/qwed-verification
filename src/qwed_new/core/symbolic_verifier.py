@@ -586,10 +586,12 @@ class SymbolicVerifier:
                 "description": f"Verification timed out after {self.timeout_seconds}s"
             }]
 
-        if returncode == _CROSSHAIR_MISSING_EXIT:
-            raise SandboxUnavailable(f"Sandbox image '{self.image}' does not provide CrossHair")
-
         reported = _reported_code(stdout, nonce)
+        if returncode == _CROSSHAIR_MISSING_EXIT and reported is None:
+            # The runner exits 97 before any result line when the image has no
+            # CrossHair. A 97 that comes with a result line is the child's exit
+            # code (the analysed code can choose it), not a missing CrossHair.
+            raise SandboxUnavailable(f"Sandbox image '{self.image}' does not provide CrossHair")
         if reported is None or reported != returncode:
             # The runner did not finish (or could not protect its result), so
             # the exit code says nothing about CrossHair.
