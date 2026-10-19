@@ -223,6 +223,10 @@ class SymbolicVerifier:
         self.timeout_seconds = timeout_seconds
         self.max_iterations = max_iterations
         self._sandbox = sandbox
+        # A sandbox this verifier creates itself is re-created while Docker is
+        # unreachable, so it recovers once the daemon is back; one passed in
+        # by the caller is the caller's to manage.
+        self._owns_sandbox = sandbox is None
         self.image = image or os.environ.get(CROSSHAIR_IMAGE_ENV) or DEFAULT_CROSSHAIR_IMAGE
 
     def _get_sandbox(self) -> Any:
@@ -233,11 +237,18 @@ class SymbolicVerifier:
         return self._sandbox
 
     def _sandbox_available(self) -> bool:
-        """True when the secure sandbox can run containers right now."""
+        """True when the secure sandbox can run containers right now.
+
+        SecureCodeExecutor connects to Docker only when it is constructed, so
+        an executor this verifier made while the daemon was down would stay
+        unavailable forever; it is dropped and rebuilt on the next request."""
         try:
-            return bool(self._get_sandbox().is_available())
+            available = bool(self._get_sandbox().is_available())
         except Exception:
-            return False
+            available = False
+        if not available and self._owns_sandbox:
+            self._sandbox = None
+        return available
 
     @staticmethod
     def _runtime_unavailable(reason: str) -> DiagnosticResult:

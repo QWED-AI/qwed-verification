@@ -786,3 +786,34 @@ def test_an_unexpected_sandbox_error_is_an_engine_error_for_that_function():
     assert result.status is DiagnosticStatus.UNVERIFIABLE
     assert result.developer_fields["constraint_id"] == "symbolic_verifier.incomplete_coverage"
     assert result.developer_fields["issues"][0]["type"] == "error"
+
+
+def test_a_self_made_sandbox_recovers_once_docker_is_back(monkeypatch):
+    # The first executor is built while Docker is down; the next request
+    # builds a fresh one instead of reusing the dead client forever.
+    built = []
+
+    class _Executor(_Sandbox):
+        def __init__(self):
+            super().__init__(available=len(built) > 0, returncode=0)
+            built.append(self)
+
+    monkeypatch.setattr(sce, "SecureCodeExecutor", _Executor)
+    verifier = SymbolicVerifier(timeout_seconds=5)
+
+    first = verifier.verify_code(TYPED)
+    second = verifier.verify_code(TYPED)
+
+    assert first.developer_fields["constraint_id"] == CONSTRAINT_RUNTIME_UNAVAILABLE
+    assert second.developer_fields["constraint_id"] == "symbolic_verifier.no_counterexample_found"
+    assert len(built) == 2
+    assert built[1].calls
+
+
+def test_a_caller_supplied_sandbox_is_kept_when_unavailable():
+    sandbox = _Sandbox(available=False)
+    verifier = SymbolicVerifier(sandbox=sandbox)
+
+    verifier.verify_code(TYPED)
+
+    assert verifier._get_sandbox() is sandbox
