@@ -604,7 +604,8 @@ def recursive_func(n: int) -> int:
 
 
 class _FakeSandbox:
-    """Stands in for SecureCodeExecutor.run_isolated with a fixed outcome."""
+    """Stands in for SecureCodeExecutor.run_isolated with a fixed outcome,
+    ending the output with the runner's result marker for this run."""
 
     def __init__(self, returncode=0, output="", error=None):
         self.returncode, self.output, self.error = returncode, output, error
@@ -613,11 +614,14 @@ class _FakeSandbox:
     def is_available(self):
         return True
 
-    def run_isolated(self, files, command, **kwargs):
-        self.calls.append((files, command, kwargs))
+    def run_isolated(self, command, **kwargs):
+        from qwed_new.core.symbolic_verifier import _NONCE_ENV, _RESULT_MARKER
+
+        self.calls.append((command, kwargs))
         if self.error is not None:
             raise self.error
-        return self.returncode, self.output
+        nonce = kwargs["environment"][_NONCE_ENV]
+        return self.returncode, f"{self.output}\n{_RESULT_MARKER} {nonce} {self.returncode}\n"
 
 
 class TestCrossHairExitCodes:

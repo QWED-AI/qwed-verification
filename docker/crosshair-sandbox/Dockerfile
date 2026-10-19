@@ -2,8 +2,9 @@
 #
 # CrossHair imports the code it analyses, which executes that code, so
 # SymbolicVerifier only runs it in this image through
-# SecureCodeExecutor.run_isolated(): no network, read-only root and input,
-# no capabilities, no privilege escalation, user 65534, memory/CPU/PID limits.
+# SecureCodeExecutor.run_isolated(): no network, read-only root, no host
+# mounts, no capabilities, no privilege escalation, user 65534, a private
+# tmpfs scratch directory and memory/CPU/PID limits.
 #
 # Build (the tag must match DEFAULT_CROSSHAIR_IMAGE, or set QWED_CROSSHAIR_IMAGE):
 #   docker build -t qwed-crosshair-sandbox:0.0.101 docker/crosshair-sandbox
@@ -22,3 +23,7 @@ RUN pip install --no-cache-dir "crosshair-tool==0.0.101"
 
 WORKDIR /workspace
 USER 65534:65534
+
+# Each container runs one short analysis and exits; there is no long-running
+# service to probe, so health checks are disabled explicitly.
+HEALTHCHECK NONE

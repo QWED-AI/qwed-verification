@@ -11,10 +11,26 @@ All notable changes to the QWED Protocol will be documented in this file.
   code. `SymbolicVerifier` used to run `python -m crosshair check` as a plain
   host subprocess on a temp file holding the caller's code.
   - Every CrossHair run now goes through the new
-    `SecureCodeExecutor.run_isolated()`: no network, read-only root, the code
-    mounted read-only, all capabilities dropped, `no-new-privileges`, user
-    65534, and the existing memory/CPU/PID limits and concurrency bound. The
-    output comes from the size-capped container log.
+    `SecureCodeExecutor.run_isolated()`: no network, read-only root, no host
+    mounts, all capabilities dropped, `no-new-privileges`, user 65534, and the
+    existing memory/CPU/PID limits and concurrency bound. The code travels in
+    the container's environment and is written only to a private tmpfs owned
+    by that user (code over 120 KiB is `BLOCKED`,
+    `symbolic_verifier.input_too_large`), so nothing is written on the host.
+    The output is streamed from the container log and reading stops at the
+    cap. A dropped daemon connection, or a daemon error while waiting, is
+    `BLOCKED` like any other sandbox failure; only a real wait timeout is a
+    timeout.
+  - The analysed code runs in the same process as CrossHair and could end it
+    with a fake exit code (`sys.exit(0)` while being imported, `os._exit(1)`).
+    The runner now reports CrossHair's own outcome on a final line carrying a
+    per-run nonce it hides from the code before importing it, and the
+    verifier trusts an outcome only when that line is present and matches
+    the exit code; otherwise it is an engine error. A `SystemExit` raised from
+    the analysed code is an engine error, not a clean run.
+  - `qwed[symbolic]` now installs the `docker` client. `SymbolicVerifier` no
+    longer imports it at module level, so without it the engine is
+    `BLOCKED` instead of failing to import.
   - The image comes from `docker/crosshair-sandbox/Dockerfile`
     (`qwed-crosshair-sandbox:0.0.101`, or `QWED_CROSSHAIR_IMAGE`) and is never
     pulled at runtime.

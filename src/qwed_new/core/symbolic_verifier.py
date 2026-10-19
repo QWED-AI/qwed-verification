@@ -13,9 +13,17 @@ Phase 1 of QWED's symbolic execution roadmap.
 from typing import Dict, Any, List, Optional
 import ast
 import os
+import secrets
 
 from .diagnostics import AdvisoryCheck, DiagnosticResult, DiagnosticStatus
-from .secure_code_executor import ExecutionError, SandboxUnavailable
+# Docker-free: SecureCodeExecutor (and the optional docker package) is only
+# loaded when the sandbox is actually needed, so a missing docker client is
+# BLOCKED like any other unavailable sandbox, not an import error.
+from .sandbox_errors import (
+    MAX_ISOLATED_ENV_VALUE_BYTES,
+    ExecutionError,
+    SandboxUnavailable,
+)
 
 from .verification_context import VerificationContextDocument
 
@@ -28,32 +36,105 @@ CONSTRAINT_RUNTIME_UNAVAILABLE = "symbolic_verifier.runtime_unavailable"
 CROSSHAIR_IMAGE_ENV = "QWED_CROSSHAIR_IMAGE"
 DEFAULT_CROSSHAIR_IMAGE = "qwed-crosshair-sandbox:0.0.101"
 
-# The in-container runner. Python exits 1 for any uncaught exception, and
-# CrossHair uses exit 1 for "counterexample found", so the runner keeps the two
-# apart: an image without CrossHair exits 97, and an exception escaping
-# CrossHair (an unknown function, a crash) exits 98, an engine error. The
-# function is named by module qualname ("target.func", run with /workspace as
-# the working directory): CrossHair reads "file.py:func" as a qualname and
+CONSTRAINT_INPUT_TOO_LARGE = "symbolic_verifier.input_too_large"
+
+# The in-container runner. The source arrives in the environment (nothing on
+# the host is mounted) and is written to target.py in the container's private
+# scratch directory, its working directory. The function is named by module
+# qualname ("target.func"): CrossHair reads "file.py:func" as a qualname and
 # fails to find "py:func".
+#
+# CrossHair imports target.py in this same process, so the analysed code can
+# end the process itself (sys.exit(0), os._exit(1)) and fake any exit code.
+# The runner therefore reports CrossHair's own outcome on a final line
+#   QWED_CROSSHAIR_RESULT <nonce> <code>
+# where the nonce is a per-run secret it removes from the environment before
+# the target is imported. The host trusts an outcome only when that line is
+# present with its nonce and matches the exit code; anything else is an
+# engine error. A SystemExit raised from target.py, an exception escaping
+# CrossHair, and an image without CrossHair get their own codes, so only
+# CrossHair's own exit 1 is a counterexample.
 _CROSSHAIR_MISSING_EXIT = 97
 _CROSSHAIR_CRASH_EXIT = 98
-_CROSSHAIR_RUNNER = """\
-import runpy, sys, traceback
+_SOURCE_ENV = "QWED_TARGET_SOURCE"
+_NONCE_ENV = "QWED_RUN_NONCE"
+_RESULT_MARKER = "QWED_CROSSHAIR_RESULT"
+_CROSSHAIR_RUNNER = f"""\
+import os, runpy, sys, traceback
+nonce = os.environ.pop("{_NONCE_ENV}", "")
+source = os.environ.pop("{_SOURCE_ENV}", "")
 try:
     import crosshair  # noqa: F401
 except ImportError:
-    sys.exit(97)
+    sys.exit({_CROSSHAIR_MISSING_EXIT})
+with open("target.py", "w", encoding="utf-8") as f:
+    f.write(source)
+del source
 func, timeout = sys.argv[1], sys.argv[2]
 sys.argv = ["crosshair", "check", "--per_condition_timeout", timeout, "target." + func]
+code = {_CROSSHAIR_CRASH_EXIT}
 try:
     runpy.run_module("crosshair", run_name="__main__", alter_sys=True)
-except SystemExit:
-    raise
+    code = 0
+except SystemExit as exit_:
+    frames = traceback.extract_tb(exit_.__traceback__)
+    if any(os.path.basename(frame.filename) == "target.py" for frame in frames):
+        traceback.print_exc()
+    elif exit_.code is None:
+        code = 0
+    elif isinstance(exit_.code, int):
+        code = exit_.code
+    else:
+        code = 1
 except BaseException:
     traceback.print_exc()
-    sys.exit(98)
+sys.stdout.flush()
+sys.stderr.flush()
+print("{_RESULT_MARKER}", nonce, code, flush=True)
+sys.exit(code)
 """
 _MAX_CROSSHAIR_OUTPUT_BYTES = 64 * 1024
+# The container's wall-clock limit is twice the per-condition timeout plus
+# this allowance: starting Python and importing CrossHair under the sandbox's
+# CPU limit takes seconds before any analysis begins.
+_CONTAINER_STARTUP_SECONDS = 30
+
+
+def _split_result_marker(output: str, nonce: str) -> tuple:
+    """``(output_without_marker, reported_code)``; ``reported_code`` is None
+    unless the last marker line carries this run's nonce and an integer."""
+    lines = output.rstrip("\n").split("\n")
+    parts = lines[-1].split() if lines else []
+    if len(parts) == 3 and parts[0] == _RESULT_MARKER and parts[1] == nonce and nonce:
+        try:
+            return "\n".join(lines[:-1]), int(parts[2])
+        except ValueError:
+            pass
+    return output, None
+
+
+def _issues_from_crosshair(returncode: int, output: str, func_name: str) -> List[Dict[str, Any]]:
+    """Issues for a run whose outcome CrossHair itself reported. Exit 1 is a
+    disproving counterexample; any other nonzero exit (2, a crash, a
+    SystemExit from the analysed code) is an engine error, not a disproof."""
+    if returncode == 0:
+        return []
+    if returncode != 1:
+        return [{
+            "type": "error",
+            "function": func_name,
+            "description": output.strip() or f"CrossHair exited with code {returncode}."
+        }]
+    issues = [
+        {"type": "counterexample", "function": func_name, "description": line.strip()}
+        for line in output.split("\n")
+        if line.strip() and ("error" in line.lower() or "counterexample" in line.lower())
+    ]
+    return issues or [{
+        "type": "counterexample",
+        "function": func_name,
+        "description": output.strip() or "CrossHair reported a counterexample (exit code 1)."
+    }]
 
 
 
@@ -140,8 +221,9 @@ class SymbolicVerifier:
         CrossHair analyses a function by importing the module that holds it,
         which EXECUTES the supplied code's top-level statements. The code is
         therefore only ever analysed inside the secure Docker sandbox (no
-        network, read-only root and input, unprivileged user, resource
-        limits). When the sandbox cannot run it (no Docker, no free slot, the
+        network, read-only root, no host mounts, unprivileged user, resource
+        limits). Code larger than ``MAX_ISOLATED_ENV_VALUE_BYTES`` is BLOCKED
+        (``symbolic_verifier.input_too_large``). When the sandbox cannot run it (no Docker, no free slot, the
         CrossHair image is missing or lacks CrossHair) the result is BLOCKED
         with ``symbolic_verifier.runtime_unavailable``; the code is never
         imported on the host.
@@ -182,6 +264,16 @@ class SymbolicVerifier:
                 },
             )
 
+        if len(code.encode("utf-8")) > MAX_ISOLATED_ENV_VALUE_BYTES:
+            # The source travels to the sandbox in one environment value.
+            return DiagnosticResult.blocked(
+                agent_message="Symbolic verification blocked: the code is too large to analyse.",
+                developer_fields={
+                    "constraint_id": CONSTRAINT_INPUT_TOO_LARGE,
+                    "max_bytes": MAX_ISOLATED_ENV_VALUE_BYTES,
+                    "verification_mode": "symbolic",
+                },
+            )
         if not self._sandbox_available():
             return self._runtime_unavailable("The secure sandbox (Docker) is not available.")
         try:
@@ -426,8 +518,9 @@ class SymbolicVerifier:
         """
         Run CrossHair check on a specific function, inside the sandbox.
 
-        The code is mounted read-only as /workspace/target.py and analysed by
-        the CrossHair CLI in a hardened container. CrossHair's CLI
+        The code is passed in the container's environment, written to
+        target.py in its private scratch directory and analysed by the
+        CrossHair CLI in a hardened container. CrossHair's CLI
         distinguishes a disproving counterexample (exit 1) from an
         engine-level failure (exit 2) — only exit 1 is reported as a
         counterexample; any other nonzero exit is an error, not a disproof.
@@ -435,12 +528,13 @@ class SymbolicVerifier:
         Returns list of issues found. Raises ``SandboxUnavailable`` when the
         sandbox cannot run CrossHair (including an image without CrossHair).
         """
+        nonce = secrets.token_hex(16)
         try:
             returncode, output = self._get_sandbox().run_isolated(
-                {"target.py": code},
                 ["python", "-c", _CROSSHAIR_RUNNER, func_name, str(self.timeout_seconds)],
                 image=self.image,
-                timeout=self.timeout_seconds * 2,
+                timeout=self.timeout_seconds * 2 + _CONTAINER_STARTUP_SECONDS,
+                environment={_SOURCE_ENV: code, _NONCE_ENV: nonce},
                 max_output_bytes=_MAX_CROSSHAIR_OUTPUT_BYTES,
             )
         except ExecutionError:
@@ -453,40 +547,19 @@ class SymbolicVerifier:
         if returncode == _CROSSHAIR_MISSING_EXIT:
             raise SandboxUnavailable(f"Sandbox image '{self.image}' does not provide CrossHair")
 
-        try:
-            issues = []
-
-            if returncode == 1:
-                # Exit 1: CrossHair disproved the check with a counterexample.
-                for line in output.split('\n'):
-                    if line.strip() and ('error' in line.lower() or 'counterexample' in line.lower()):
-                        issues.append({
-                            "type": "counterexample",
-                            "function": func_name,
-                            "description": line.strip()
-                        })
-                if not issues:
-                    issues.append({
-                        "type": "counterexample",
-                        "function": func_name,
-                        "description": output.strip() or "CrossHair reported a counterexample (exit code 1)."
-                    })
-            elif returncode != 0:
-                # Any other nonzero exit (e.g. 2) is an engine failure, not a disproof.
-                issues.append({
-                    "type": "error",
-                    "function": func_name,
-                    "description": output.strip() or f"CrossHair exited with code {returncode}."
-                })
-
-            return issues
-
-        except Exception as e:
+        output, reported = _split_result_marker(output, nonce)
+        if reported is None or reported != returncode:
+            # The runner did not finish, or the analysed code ended the process
+            # itself: its exit code says nothing about CrossHair.
             return [{
-                "type": "error", 
+                "type": "error",
                 "function": func_name,
-                "description": str(e)
+                "description": (
+                    f"CrossHair did not report a result (exit code {returncode}): "
+                    f"{output.strip()[-500:]}"
+                ),
             }]
+        return _issues_from_crosshair(returncode, output, func_name)
     
     def _check_division_safety(self, node, issues, properties_checked):
         """Check a node for division-by-zero hazards."""

@@ -11,6 +11,7 @@ Provides sandboxed execution of LLM-generated code with:
 
 import ast
 import docker
+import requests
 from docker.types import LogConfig
 import tempfile
 import json
@@ -22,6 +23,12 @@ import logging
 from typing import Any, Dict, List, Tuple, Optional
 
 from .diagnostics import AdvisoryCheck, DiagnosticResult
+# Re-exported: callers import these from here as well as from sandbox_errors.
+from .sandbox_errors import (  # noqa: F401
+    MAX_ISOLATED_ENV_VALUE_BYTES,
+    ExecutionError,
+    SandboxUnavailable,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -65,16 +72,29 @@ SANDBOX_CAPACITY_REACHED = "Sandbox capacity reached — retry shortly."
 
 # Container settings for run_isolated(): analysis tools that import untrusted
 # code (CrossHair, #431) get no network, a read-only root, no Linux
-# capabilities, no privilege escalation and an unprivileged user. Their input
-# is mounted read-only and their output is read from the container log, so the
-# container needs no writable host path at all.
+# capabilities, no privilege escalation and an unprivileged user. Nothing on
+# the host is mounted: inputs arrive in the environment, the only writable
+# path is a private tmpfs owned by that user, and the output is read from the
+# container log.
+_ISOLATED_USER = "65534"
+_ISOLATED_SCRATCH = "/workspace"
 _ISOLATED_HARDENING = {
     "read_only": True,
     "cap_drop": ["ALL"],
     "security_opt": ["no-new-privileges"],
-    "user": "65534:65534",
-    "tmpfs": {"/tmp": "rw,noexec,nosuid,size=64m"},
-    "environment": {"HOME": "/tmp", "PYTHONDONTWRITEBYTECODE": "1"},
+    "user": f"{_ISOLATED_USER}:{_ISOLATED_USER}",
+    "tmpfs": {
+        _ISOLATED_SCRATCH: (
+            f"rw,noexec,nosuid,nodev,size=16m,"
+            f"uid={_ISOLATED_USER},gid={_ISOLATED_USER},mode=0700"
+        ),
+    },
+    "working_dir": _ISOLATED_SCRATCH,
+}
+_ISOLATED_BASE_ENVIRONMENT = {
+    "HOME": _ISOLATED_SCRATCH,
+    "TMPDIR": _ISOLATED_SCRATCH,
+    "PYTHONDONTWRITEBYTECODE": "1",
 }
 _DEFAULT_ISOLATED_OUTPUT_BYTES = 64 * 1024
 
@@ -260,6 +280,41 @@ def _find_dangerous_pattern_fallback(code: str) -> Optional[str]:
         if keyword in code_lower:
             return keyword
     return None
+
+def _is_wait_timeout(error: BaseException) -> bool:
+    """True when ``container.wait`` gave up because the container ran past its
+    timeout. docker-py surfaces that as a requests timeout, or, over the Unix
+    socket adapter, as a ConnectionError reading "Read timed out"; any other
+    error is the daemon failing, not the container running long."""
+    if isinstance(error, requests.exceptions.Timeout):
+        return True
+    return isinstance(error, requests.exceptions.ConnectionError) and "timed out" in str(error).lower()
+
+
+def _read_capped_logs(container: Any, max_bytes: int) -> str:
+    """The container's stdout and stderr, read as a stream and stopped at
+    ``max_bytes`` so a noisy container never loads its whole log (up to the
+    10 MB json-file cap) into this process."""
+    stream = container.logs(stdout=True, stderr=True, stream=True, follow=False)
+    chunks: List[bytes] = []
+    size = 0
+    truncated = False
+    try:
+        for chunk in stream:
+            room = max_bytes - size
+            if len(chunk) > room:
+                chunks.append(chunk[:room])
+                truncated = True
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+    finally:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
+    output = b"".join(chunks).decode("utf-8", errors="replace")
+    return output + "\n[output truncated]" if truncated else output
+
 
 def _sanitize_log_msg(msg: str) -> str:
     """Strip newline characters to prevent log injection."""
@@ -551,84 +606,80 @@ class SecureCodeExecutor:
     
     def run_isolated(
         self,
-        files: Dict[str, str],
         command: List[str],
         *,
         image: str,
         timeout: float,
+        environment: Optional[Dict[str, str]] = None,
         max_output_bytes: int = _DEFAULT_ISOLATED_OUTPUT_BYTES,
     ) -> Tuple[int, str]:
-        """Run ``command`` in a hardened container over read-only ``files``.
+        """Run ``command`` in a hardened container.
 
         For analysis tools that import, and therefore execute, untrusted code
-        (#431). ``files`` maps plain file names to text; they are mounted
-        read-only at /workspace. The container has no network, a read-only
-        root, no capabilities, no privilege escalation and runs as an
-        unprivileged user (see ``_ISOLATED_HARDENING``), under the same
-        memory, CPU, PID and process-wide concurrency bounds as ``execute``.
-        The image is never pulled: it must already exist on the daemon.
+        (#431). The container has no network, a read-only root, no
+        capabilities, no privilege escalation and runs as an unprivileged
+        user (see ``_ISOLATED_HARDENING``), under the same memory, CPU, PID
+        and process-wide concurrency bounds as ``execute``. Nothing on the
+        host is mounted or written: inputs travel in ``environment`` (each
+        value at most ``MAX_ISOLATED_ENV_VALUE_BYTES``), and the command's
+        only writable path is its working directory, a private tmpfs. The
+        image is never pulled: it must already exist on the daemon.
 
         Returns ``(exit_code, output)``, the output being the container log
         capped at ``max_output_bytes``. Raises ``SandboxUnavailable`` when the
         run cannot happen in the sandbox (no Docker, no free slot, missing
-        image, daemon error) and ``ExecutionError`` when it exceeds
-        ``timeout``. There is no host fallback.
+        image, daemon or connection error), ``ExecutionError`` when it
+        exceeds ``timeout`` and ``ValueError`` for an oversized input. There
+        is no host fallback.
         """
+        environment = dict(environment or {})
+        for name, value in environment.items():
+            if len(str(value).encode("utf-8")) > MAX_ISOLATED_ENV_VALUE_BYTES:
+                raise ValueError(f"Isolated input {name} exceeds {MAX_ISOLATED_ENV_VALUE_BYTES} bytes")
         if not self.is_available():
             raise SandboxUnavailable(SECURE_RUNTIME_UNAVAILABLE)
-        for name in files:
-            if not name or name in (".", "..") or os.path.basename(name) != name or "\\" in name:
-                raise ValueError(f"Isolated input must be a plain file name: {name!r}")
 
         self.execution_count += 1
         execution_id = f"isolated_{self.execution_count}"
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # The container user is unprivileged, so the mounted directory and
-            # files must be world-readable (TemporaryDirectory is 0700).
-            os.chmod(tmpdir, 0o755)
-            for name, content in files.items():
-                path = os.path.join(tmpdir, name)
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(content)
-                os.chmod(path, 0o644)
-
-            create_kwargs = {
-                "image": image,
-                "command": list(command),
-                "volumes": {tmpdir: {"bind": "/workspace", "mode": "ro"}},
-                "working_dir": "/workspace",
-                "mem_limit": self.memory_limit,
-                "cpu_period": 100000,
-                "cpu_quota": int(self.cpu_limit * 100000),
-                "network_mode": "none",
-                "log_config": LogConfig(
-                    type=LogConfig.types.JSON,
-                    config={"max-size": "10m", "max-file": "1"},
-                ),
-                "pids_limit": self.pids_limit,
-                **_ISOLATED_HARDENING,
-            }
-            if not _sandbox_slots.acquire(timeout=_SANDBOX_ACQUIRE_TIMEOUT_SECONDS):
-                raise SandboxUnavailable(SANDBOX_CAPACITY_REACHED)
-            cleanup_status: Dict[str, Any] = {"leaked": False}
-            try:
-                return self._run_isolated_container(
-                    create_kwargs, execution_id, timeout, max_output_bytes, cleanup_status
+        create_kwargs = {
+            "image": image,
+            "command": list(command),
+            "environment": {**_ISOLATED_BASE_ENVIRONMENT, **environment},
+            "mem_limit": self.memory_limit,
+            "cpu_period": 100000,
+            "cpu_quota": int(self.cpu_limit * 100000),
+            "network_mode": "none",
+            "log_config": LogConfig(
+                type=LogConfig.types.JSON,
+                config={"max-size": "10m", "max-file": "1"},
+            ),
+            "pids_limit": self.pids_limit,
+            **_ISOLATED_HARDENING,
+        }
+        if not _sandbox_slots.acquire(timeout=_SANDBOX_ACQUIRE_TIMEOUT_SECONDS):
+            raise SandboxUnavailable(SANDBOX_CAPACITY_REACHED)
+        cleanup_status: Dict[str, Any] = {"leaked": False}
+        try:
+            return self._run_isolated_container(
+                create_kwargs, execution_id, timeout, max_output_bytes, cleanup_status
+            )
+        except docker.errors.ImageNotFound as e:
+            raise SandboxUnavailable(
+                f"Sandbox image '{_sanitize_log_msg(image)}' is not available on the Docker daemon"
+            ) from e
+        except (docker.errors.DockerException, requests.exceptions.RequestException) as e:
+            # docker-py wraps HTTP status errors in DockerException but lets
+            # transport failures (the daemon socket dropping after ping) through
+            # as requests exceptions; both mean the sandbox could not run.
+            raise SandboxUnavailable(f"Sandbox runtime error: {_sanitize_log_msg(e)}") from e
+        finally:
+            if cleanup_status["leaked"]:
+                logger.error(
+                    "Holding sandbox slot for %s: container removal unconfirmed",
+                    execution_id,
                 )
-            except docker.errors.ImageNotFound as e:
-                raise SandboxUnavailable(
-                    f"Sandbox image '{_sanitize_log_msg(image)}' is not available on the Docker daemon"
-                ) from e
-            except docker.errors.DockerException as e:
-                raise SandboxUnavailable(f"Sandbox runtime error: {_sanitize_log_msg(e)}") from e
-            finally:
-                if cleanup_status["leaked"]:
-                    logger.error(
-                        "Holding sandbox slot for %s: container removal unconfirmed",
-                        execution_id,
-                    )
-                else:
-                    _sandbox_slots.release()
+            else:
+                _sandbox_slots.release()
 
     def _run_isolated_container(
         self,
@@ -650,15 +701,13 @@ class SecureCodeExecutor:
                 try:
                     container.kill()
                 except Exception:
-                    logger.debug("Failed to kill isolated container after timeout", exc_info=True)
-                raise ExecutionError(f"Execution timed out after {timeout}s") from e
+                    logger.debug("Failed to kill isolated container", exc_info=True)
+                if _is_wait_timeout(e):
+                    raise ExecutionError(f"Execution timed out after {timeout}s") from e
+                raise  # a daemon error, not a timeout: run_isolated reports it as unavailable
             status = wait_result.get("StatusCode") if isinstance(wait_result, dict) else None
             exit_code = status if isinstance(status, int) else -1
-            raw = container.logs(stdout=True, stderr=True) or b""
-            output = raw[:max_output_bytes].decode("utf-8", errors="replace")
-            if len(raw) > max_output_bytes:
-                output += "\n[output truncated]"
-            return exit_code, output
+            return exit_code, _read_capped_logs(container, max_output_bytes)
         finally:
             if not self._remove_container(container, execution_id):
                 cleanup_status["leaked"] = True
@@ -918,12 +967,3 @@ except Exception as e:
             return False
 
 
-class ExecutionError(Exception):
-    """Raised when code execution fails."""
-    pass
-
-
-class SandboxUnavailable(Exception):
-    """Raised when a request cannot run in the sandbox at all: no Docker, no
-    free slot, a missing image or a daemon error. Callers must fail closed;
-    there is no host fallback."""
