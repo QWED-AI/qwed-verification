@@ -18,6 +18,9 @@ import tempfile
 import json
 import math
 import os
+import re
+import secrets
+import stat
 import threading
 import time
 import logging
@@ -77,8 +80,9 @@ SANDBOX_CAPACITY_REACHED = "Sandbox capacity reached — retry shortly."
 # the host is mounted: inputs arrive in the environment, the only writable
 # path is a private tmpfs owned by that user, and the output is read from the
 # container log.
+_WORKSPACE = "/workspace"
 _ISOLATED_USER = "65534"
-_ISOLATED_SCRATCH = "/workspace"
+_ISOLATED_SCRATCH = _WORKSPACE
 _ISOLATED_HARDENING = {
     "read_only": True,
     "cap_drop": ["ALL"],
@@ -98,6 +102,187 @@ _ISOLATED_BASE_ENVIRONMENT = {
     "PYTHONDONTWRITEBYTECODE": "1",
 }
 _DEFAULT_ISOLATED_OUTPUT_BYTES = 64 * 1024
+
+# The image execute() runs code in (#322). A tag such as "slim" can be moved to
+# different content at any time; a digest cannot, so the sandbox only ever
+# runs the exact image that was reviewed. This is amancevice/pandas:slim as
+# published on 2026-08-10. QWED_SANDBOX_IMAGE may name another image, but
+# only by digest; any other value is refused and the pinned image is used.
+SANDBOX_IMAGE = (
+    "amancevice/pandas@sha256:9257b88909bddf60c8a85b06d572fc6dfc708ea9c8a3c3dc2149e312d57f91e3"
+)
+SANDBOX_IMAGE_ENV = "QWED_SANDBOX_IMAGE"
+# A Docker image reference pinned by digest: an optional registry host, then
+# lowercase path components, an optional tag and the digest. As in Docker, the
+# first part is a host only when it has a dot or a port, is "localhost", or is
+# a bracketed IPv6 address.
+_HOST_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+_REFERENCE_HOST = (
+    r"(?:(?:(?:localhost|" + _HOST_LABEL + r"(?:\." + _HOST_LABEL + r")+|\[[0-9A-Fa-f:.]+\])(?::[0-9]+)?"
+    + r"|" + _HOST_LABEL + r":[0-9]+)/)?"
+)
+_REFERENCE_COMPONENT = r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
+_DIGEST_REFERENCE = re.compile(
+    _REFERENCE_HOST
+    + _REFERENCE_COMPONENT
+    + r"(?:/" + _REFERENCE_COMPONENT + r")*"
+    + r"(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?"
+    + r"@sha256:[0-9a-f]{64}"
+)
+
+
+def _sandbox_image() -> str:
+    override = os.environ.get(SANDBOX_IMAGE_ENV, "").strip()
+    if not override:
+        return SANDBOX_IMAGE
+    if _DIGEST_REFERENCE.fullmatch(override):
+        return override
+    logger.error(
+        "%s must name an image by digest (name@sha256:<64 hex>); using the pinned sandbox image",
+        SANDBOX_IMAGE_ENV,
+    )
+    return SANDBOX_IMAGE
+
+
+# execute() hardening (#322), on top of the network, memory, CPU and PID
+# limits: a read-only root, no Linux capabilities, no privilege escalation,
+# and never root inside the container. /workspace is the host's private
+# exchange directory (inputs in, result.json out); HOME and TMPDIR point
+# there because nothing else is writable.
+_EXECUTE_HARDENING = {
+    "read_only": True,
+    "cap_drop": ["ALL"],
+    "security_opt": ["no-new-privileges"],
+    "environment": {
+        "HOME": _WORKSPACE,
+        "TMPDIR": _WORKSPACE,
+        "MPLCONFIGDIR": _WORKSPACE,
+        "PYTHONDONTWRITEBYTECODE": "1",
+    },
+}
+# Docker Desktop shares the folder with every container user, so the shared
+# unprivileged uid is enough there.
+_UNPRIVILEGED_UID = 65534
+# When this process is root, each workspace is handed to a fresh uid. It comes
+# from a range no allocator hands out: by default 1879048192-2147483646, which
+# systemd's UID/GID allocation documents as unused (above the container range
+# 524288-1879048191, below the 2^31 range kernels and tools mishandle), or
+# from QWED_SANDBOX_UID_RANGE="first-last" when the operator reserves one.
+# Every pick is also checked against the user and group databases and the
+# /etc/subuid and /etc/subgid delegations, so no account or user namespace
+# on the host owns it.
+SANDBOX_UID_RANGE_ENV = "QWED_SANDBOX_UID_RANGE"
+_DEFAULT_SANDBOX_UID_RANGE = (1879048192, 2147483646)
+_SUBORDINATE_ID_FILES = ("/etc/subuid", "/etc/subgid")
+_sandbox_uids_in_use: set = set()
+_sandbox_uids_lock = threading.Lock()
+
+
+def _sandbox_uid_range() -> Tuple[int, int]:
+    """The inclusive (first, last) uid range workspaces are handed to."""
+    configured = os.environ.get(SANDBOX_UID_RANGE_ENV, "").strip()
+    if not configured:
+        return _DEFAULT_SANDBOX_UID_RANGE
+    first, sep, last = configured.partition("-")
+    if sep and first.strip().isdigit() and last.strip().isdigit():
+        first_uid, last_uid = int(first), int(last)
+        # Never the ordinary account range, never past the 2^31 boundary.
+        if 65536 <= first_uid <= last_uid <= _DEFAULT_SANDBOX_UID_RANGE[1]:
+            return first_uid, last_uid
+    logger.error(
+        "%s must be FIRST-LAST within 65536-%d; using the default sandbox uid range",
+        SANDBOX_UID_RANGE_ENV,
+        _DEFAULT_SANDBOX_UID_RANGE[1],
+    )
+    return _DEFAULT_SANDBOX_UID_RANGE
+
+
+def _subordinate_ranges() -> List[Tuple[int, int]]:
+    """The (start, count) id blocks /etc/subuid and /etc/subgid delegate to
+    users' namespaces (rootless containers, podman, systemd-nspawn)."""
+    ranges = []
+    for path in _SUBORDINATE_ID_FILES:
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            parts = line.strip().split(":")
+            if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+                ranges.append((int(parts[1]), int(parts[2])))
+    return ranges
+
+
+def _random_sandbox_uid() -> int:
+    first, last = _sandbox_uid_range()
+    return first + secrets.randbelow(last - first + 1)
+
+
+def _host_id_exists(uid: int) -> bool:
+    try:
+        import grp
+        import pwd
+    except ImportError:  # pragma: no cover - POSIX only
+        return False
+    for lookup in (pwd.getpwuid, grp.getgrgid):
+        try:
+            lookup(uid)
+            return True
+        except KeyError:
+            continue
+    return False
+
+
+# Ids checked per claim: every id of a small (operator-reserved) range, and a
+# bounded walk through a large one, where a free id comes up almost at once.
+_MAX_UID_PROBES = 4096
+
+
+def _claim_sandbox_uid() -> int:
+    """A uid (also used as the gid) from the sandbox range that no host
+    account or group has, no subordinate id range covers, and no other
+    workspace of this process is using.
+
+    The range is walked in order from a random starting point, so a range
+    with a single free id always finds it instead of retrying busy ones. A
+    delegated subuid/subgid block is skipped whole, as one probe, so a large
+    block cannot use up the probes.
+    """
+    first, last = _sandbox_uid_range()
+    size = last - first + 1
+    start = secrets.randbelow(size)
+    delegated = _subordinate_ranges()
+    step = probes = 0
+    while step < size and probes < _MAX_UID_PROBES:
+        probes += 1
+        uid = first + (start + step) % size
+        block_end = _delegated_block_end(uid, delegated)
+        if block_end is not None:
+            # Up to the block's end, or to the range's end, where the walk
+            # wraps around to the range's start.
+            step += min(block_end, last + 1) - uid
+            continue
+        step += 1
+        with _sandbox_uids_lock:
+            if uid in _sandbox_uids_in_use:
+                continue
+            _sandbox_uids_in_use.add(uid)
+        if not _host_id_exists(uid):
+            return uid
+        _release_sandbox_uid(uid)
+    raise SandboxUnavailable("No unused uid is available for the sandbox workspace")
+
+
+def _delegated_block_end(uid: int, delegated: List[Tuple[int, int]]) -> Optional[int]:
+    """The first id after the delegated block covering ``uid``, or None."""
+    ends = [start + count for start, count in delegated if start <= uid < start + count]
+    return max(ends) if ends else None
+
+
+def _release_sandbox_uid(uid: int) -> None:
+    with _sandbox_uids_lock:
+        _sandbox_uids_in_use.discard(uid)
 
 SECURE_RUNTIME_UNAVAILABLE = "SECURE_RUNTIME_UNAVAILABLE"
 CONSTRAINT_VERIFIER_UNAVAILABLE = "secure_code_executor.verifier_unavailable"
@@ -372,9 +557,11 @@ class SecureCodeExecutor:
         # on-disk JSON unboundedly.
         self.max_result_bytes = 2 * 1024 * 1024
         self.execution_count = 0
-        
-        # Docker image to use
-        self.image = "amancevice/pandas:slim"
+
+        # Docker image to use: pinned by digest (#322).
+        self.image = _sandbox_image()
+        self._daemon_mode_cache: Optional[str] = None
+        self._workspace_users: Dict[str, int] = {}
     
     def execute(self, code: str, context: Dict[str, Any]) -> Tuple[bool, Optional[str], Any]:
         """
@@ -430,10 +617,11 @@ class SecureCodeExecutor:
                     f.write(wrapped_code)
                 
                 logger.debug(f"Context and code written to {tmpdir}")
-                
+
                 # 3. Run in Docker container, under the process-wide sandbox
                 # concurrency bound (#446).
                 try:
+                    self._hand_workspace_to_container_user(tmpdir)
                     if not self._run_in_container_bounded(tmpdir, execution_id):
                         logger.warning("Sandbox capacity reached, rejecting %s", execution_id)
                         return False, SANDBOX_CAPACITY_REACHED, None
@@ -470,15 +658,106 @@ class SecureCodeExecutor:
                     safe_image = _sanitize_log_msg(str(self.image))
                     logger.exception("Docker image not found: %s", safe_image)
                     return False, f"Docker image '{safe_image!s}' not found. Please pull it first.", None
-                    
+
+                except SandboxUnavailable:
+                    logger.exception("Sandbox cannot run this execution")
+                    return False, SECURE_RUNTIME_UNAVAILABLE, None
+
                 except Exception as e:
                     logger.exception("Unexpected execution error")
                     return False, f"Execution error: {e!s}", None
-                    
+
+                finally:
+                    self._release_workspace_user(tmpdir)
+                                        
         except OSError as e:
             logger.exception("Failed to create temporary directory")
             return False, f"Setup error: {e!s}", None
     
+    def _daemon_mode(self) -> str:
+        """How the Docker daemon maps container users: "rootless" (container
+        root is the unprivileged daemon owner), "userns" (userns-remap), or
+        "default". Raises SandboxUnavailable when the daemon cannot be asked,
+        so an unknown mapping is never guessed; a known answer is cached."""
+        cached = getattr(self, "_daemon_mode_cache", None)
+        if cached is not None:
+            return cached
+        try:
+            options = self.client.info().get("SecurityOptions") or []
+        except Exception as e:
+            raise SandboxUnavailable("Could not read the Docker daemon's security options") from e
+        names = [str(option) for option in options] if isinstance(options, list) else []
+        if any("name=rootless" in name for name in names):
+            mode = "rootless"
+        elif any("name=userns" in name for name in names):
+            mode = "userns"
+        else:
+            mode = "default"
+        self._daemon_mode_cache = mode
+        return mode
+
+    def _container_user(self, tmpdir: Optional[str] = None) -> str:
+        """The uid:gid the execute() container runs as; never a privileged root.
+
+        The exchange directory is the host's private 0700 temp directory, so
+        the container runs as its owner:
+        - this process is not root: the host user;
+        - this process is root: the fresh uid execute() handed the workspace
+          to (see _hand_workspace_to_container_user), never a shared one;
+        - a rootless daemon, run by the same non-root user: container root,
+          which that daemon maps to the host user;
+        - Docker Desktop (no getuid): 65534, as the folder is shared with any
+          container user.
+        A root process with a rootless daemon, or a userns-remap daemon, maps
+        container users away from the directory's owner, so those are refused
+        (SandboxUnavailable) rather than run with a directory they cannot use.
+        """
+        getuid = getattr(os, "getuid", None)
+        if getuid is None:
+            return f"{_UNPRIVILEGED_UID}:{_UNPRIVILEGED_UID}"
+        mode = self._daemon_mode()
+        uid = getuid()
+        if mode == "userns":
+            raise SandboxUnavailable("A userns-remap Docker daemon cannot use the sandbox workspace")
+        if mode == "rootless":
+            if uid == 0:
+                raise SandboxUnavailable("A root process cannot hand the workspace to a rootless daemon")
+            return "0:0"
+        if uid != 0:
+            return f"{uid}:{os.getgid()}"
+        handed = getattr(self, "_workspace_users", {}).get(tmpdir) if tmpdir else None
+        if handed is None:
+            # Not a workspace execute() prepared: run as a fresh uid that owns
+            # nothing on the host, which can only fail closed.
+            handed = _random_sandbox_uid()
+        return f"{handed}:{handed}"
+
+    def _hand_workspace_to_container_user(self, tmpdir: str) -> None:
+        """When this process is root under a default daemon, give the private
+        exchange directory to a fresh uid no other host process has, so it
+        stays 0700 and private to this execution.
+
+        The files are re-owned first, without following links and only if
+        they are regular files, and the directory last: until then it is
+        still root's, so nothing can swap an entry in between.
+        """
+        getuid = getattr(os, "getuid", None)
+        if getuid is None or getuid() != 0 or self._daemon_mode() != "default":
+            return
+        uid = _claim_sandbox_uid()
+        self._workspace_users[tmpdir] = uid
+        for name in os.listdir(tmpdir):
+            path = os.path.join(tmpdir, name)
+            if not stat.S_ISREG(os.lstat(path).st_mode):
+                raise SandboxUnavailable(f"Unexpected non-regular workspace entry: {name}")
+            os.chown(path, uid, uid, follow_symlinks=False)
+        os.chown(tmpdir, uid, uid, follow_symlinks=False)
+
+    def _release_workspace_user(self, tmpdir: str) -> None:
+        uid = getattr(self, "_workspace_users", {}).pop(tmpdir, None)
+        if uid is not None:
+            _release_sandbox_uid(uid)
+
     def _run_in_container_bounded(self, tmpdir: str, execution_id: str) -> bool:
         """Run the container under the process-wide sandbox slot (#446).
 
@@ -553,7 +832,7 @@ class SecureCodeExecutor:
         create_kwargs = {
             "image": self.image,
             "command": cmd,
-            "volumes": {tmpdir: {'bind': '/workspace', 'mode': 'rw'}},
+            "volumes": {tmpdir: {'bind': _WORKSPACE, 'mode': 'rw'}},
             "mem_limit": self.memory_limit,
             "cpu_period": 100000,
             "cpu_quota": int(self.cpu_limit * 100000),
@@ -566,6 +845,9 @@ class SecureCodeExecutor:
                 config={"max-size": "10m", "max-file": "1"},
             ),
             "pids_limit": self.pids_limit,
+            # #322: read-only root, no capabilities, never root.
+            **_EXECUTE_HARDENING,
+            "user": self._container_user(tmpdir),
         }
         try:
             container = self.client.containers.create(**create_kwargs)
