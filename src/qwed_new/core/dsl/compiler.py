@@ -63,6 +63,41 @@ def _as_bool(value: Any, role: str) -> Any:
     raise ValueError(f"{role} must be Boolean, got: {value}")
 
 
+def _is_boolean(value: Any) -> bool:
+    """True for a Python bool or a Z3 Boolean expression."""
+    return isinstance(value, bool) or is_bool(value)
+
+
+def _check_comparison_sorts(operator: str, left: Any, right: Any) -> tuple:
+    """Reject comparisons that mix Boolean and non-Boolean operands.
+
+    Python ``True``/``False`` are ints, and an undeclared name is auto-created
+    as an Int, so ``(EQ flag True)`` used to compile to ``flag == 1`` and come
+    back SAT with ``flag = 1``. z3 likewise coerces an Int compared with a Bool
+    variable to ``x == If(b, 1, 0)``. Neither means what the constraint says,
+    so fail closed instead of guessing the intended sort. Booleans have no
+    ordering, so GT/LT/GTE/LTE reject any Boolean operand.
+
+    Returns the operands, with Python bools lifted to Z3 for EQ/NEQ.
+    """
+    left_bool, right_bool = _is_boolean(left), _is_boolean(right)
+    if operator in ('EQ', 'NEQ'):
+        if left_bool and right_bool:
+            return _as_bool(left, operator), _as_bool(right, operator)
+        if left_bool or right_bool:
+            literal = isinstance(left, bool) or isinstance(right, bool)
+            kind = "a Boolean literal" if literal else "a Boolean value"
+            raise ValueError(
+                f"{operator} compares {kind} with a non-Boolean value: "
+                f"{left} vs {right}. Declare Boolean variables with (VAR name Bool)."
+            )
+    elif left_bool or right_bool:
+        raise ValueError(
+            f"{operator} compares a Boolean value, which has no ordering: {left} vs {right}"
+        )
+    return left, right
+
+
 @dataclass
 class CompileResult:
     """Result of compiling DSL to Z3/SymPy."""
@@ -210,7 +245,13 @@ class Z3Compiler:
             return Xor(compiled_args[0], compiled_args[1])
         elif operator == 'IFF':
             return _as_bool(compiled_args[0], 'IFF operand') == _as_bool(compiled_args[1], 'IFF operand')
-        elif operator == 'EQ':
+
+        if operator in ('EQ', 'NEQ', 'GT', 'LT', 'GTE', 'LTE'):
+            if len(compiled_args) != 2:
+                raise ValueError(f"{operator} requires exactly 2 operands")
+            compiled_args = list(_check_comparison_sorts(operator, *compiled_args))
+
+        if operator == 'EQ':
             return compiled_args[0] == compiled_args[1]
         elif operator == 'NEQ':
             return compiled_args[0] != compiled_args[1]
