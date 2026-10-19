@@ -17,6 +17,26 @@ All notable changes to the QWED Protocol will be documented in this file.
   compiler and Z3 and check the exact DSL and the SAT/UNSAT result. No verdict
   mapping changed; unknown operators, unsupported Python syntax and solver
   errors still fail closed.
+- **The logic DSL compiles every operator its parser accepts (#428).**
+  `IFF`, `FORALL` and `EXISTS` were whitelisted by the parser and suggested
+  by the provider prompts, but the Z3 compiler had no branch for them, so any
+  program using them failed with `Unknown operator`.
+  - `(IFF a b)` compiles to a biconditional. Both operands must be Boolean
+    (comparisons or `Bool` variables); `(IFF x y)` on two Ints is an error
+    instead of silently becoming `x == y`.
+  - `(FORALL x body)` and `(EXISTS x body)` bind `x` inside `body` only. The
+    bound variable takes its declared sort (`Int` if undeclared, as for free
+    variables), a free variable of the same name outside the quantifier is
+    unaffected, and the body must be Boolean. The parser blocks a binder that
+    is not a plain variable name (a number, an operator, a literal or an
+    expression).
+  - A solver `unknown` (e.g. a timeout on a hard quantified formula) stays
+    `BLOCKED` at `/verify/logic`, as before.
+  - The Anthropic and Azure OpenAI logic prompts now describe the binder and
+    Boolean-operand rules, and their examples are valid DSL: the old
+    `(FORALL p (EQ (status p) happy))` used an operator that does not exist.
+  - A structural test compiles one sample program for every whitelisted
+    operator, so the parser and compiler cannot drift apart again.
 - **A math claim proven false is now `VERIFIED` with admission `DENY`, not
   `UNVERIFIABLE` (#437).** `2+2=5` used to come back as "Verification
   inconclusive", which recorded a definite counter-proof as "could not be
