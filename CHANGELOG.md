@@ -26,6 +26,25 @@ All notable changes to the QWED Protocol will be documented in this file.
     `(FORALL p (EQ (status p) happy))` used an operator that does not exist.
   - A structural test compiles one sample program for every whitelisted
     operator, so the parser and compiler cannot drift apart again.
+- **The logic DSL no longer turns a Boolean literal into 1 or 0.** Python
+  `True`/`False` are ints and an undeclared name is auto-created as an `Int`,
+  so `(EQ flag True)` compiled to `flag == 1` and came back `SAT` with
+  `flag = 1`: a verified answer to a constraint that did not mean what was
+  asked. z3 likewise turned an `Int` compared with a `Bool` variable into
+  `x == If(b, 1, 0)`.
+  - `EQ`/`NEQ` between a Boolean (literal, `Bool` variable or comparison) and
+    a non-Boolean value is now a compile error (`ERROR`, never `SAT`/`VERIFIED`).
+    `GT`/`LT`/`GTE`/`LTE` reject any Boolean operand, since Booleans have no
+    ordering.
+  - `PLUS`/`MINUS`/`MULT`/`DIV`/`POW`/`MOD` reject Boolean operands, so a
+    Boolean cannot reach a comparison disguised as a number:
+    `(EQ x (PLUS True 0))` used to compile to `x == 1`, and a `Bool` variable
+    inside arithmetic to `If(b, 1, 0)`.
+  - An undeclared name compared with `True`/`False` is rejected, not guessed
+    to be a `Bool`: the error asks for `(VAR name Bool)`. Inferring the sort
+    from the literal would hide a translation that forgot the declaration.
+  - Comparing two Booleans, or a declared `Bool` with `True`/`False`, works as
+    before, and numeric comparisons are unchanged.
 - **A math claim proven false is now `VERIFIED` with admission `DENY`, not
   `UNVERIFIABLE` (#437).** `2+2=5` used to come back as "Verification
   inconclusive", which recorded a definite counter-proof as "could not be
