@@ -12,6 +12,7 @@ Provides sandboxed execution of LLM-generated code with:
 import ast
 import docker
 import requests
+import urllib3
 from docker.types import LogConfig
 import tempfile
 import json
@@ -284,18 +285,30 @@ def _find_dangerous_pattern_fallback(code: str) -> Optional[str]:
 def _is_wait_timeout(error: BaseException) -> bool:
     """True when ``container.wait`` gave up because the container ran past its
     timeout. docker-py surfaces that as a requests timeout, or, over the Unix
-    socket adapter, as a ConnectionError reading "Read timed out"; any other
-    error is the daemon failing, not the container running long."""
+    socket adapter, as a ConnectionError wrapping urllib3's ReadTimeoutError;
+    any other error is the daemon failing, not the container running long."""
     if isinstance(error, requests.exceptions.Timeout):
         return True
-    return isinstance(error, requests.exceptions.ConnectionError) and "timed out" in str(error).lower()
+    if not isinstance(error, requests.exceptions.ConnectionError):
+        return False
+    for arg in error.args:
+        # The adapter wraps the read timeout directly, or in a MaxRetryError
+        # whose reason is the timeout; only an untyped cause falls back to
+        # the message text.
+        if isinstance(arg, urllib3.exceptions.ReadTimeoutError):
+            return True
+        if isinstance(getattr(arg, "reason", None), urllib3.exceptions.ReadTimeoutError):
+            return True
+        if isinstance(arg, str) and "timed out" in arg.lower():
+            return True
+    return False
 
 
-def _read_capped_logs(container: Any, max_bytes: int) -> str:
-    """The container's stdout and stderr, read as a stream and stopped at
+def _read_capped_logs(container: Any, max_bytes: int, *, stdout: bool, stderr: bool) -> str:
+    """One stream of the container log, read as a stream and stopped at
     ``max_bytes`` so a noisy container never loads its whole log (up to the
     10 MB json-file cap) into this process."""
-    stream = container.logs(stdout=True, stderr=True, stream=True, follow=False)
+    stream = container.logs(stdout=stdout, stderr=stderr, stream=True, follow=False)
     chunks: List[bytes] = []
     size = 0
     truncated = False
@@ -612,7 +625,7 @@ class SecureCodeExecutor:
         timeout: float,
         environment: Optional[Dict[str, str]] = None,
         max_output_bytes: int = _DEFAULT_ISOLATED_OUTPUT_BYTES,
-    ) -> Tuple[int, str]:
+    ) -> Tuple[int, str, str]:
         """Run ``command`` in a hardened container.
 
         For analysis tools that import, and therefore execute, untrusted code
@@ -625,8 +638,8 @@ class SecureCodeExecutor:
         only writable path is its working directory, a private tmpfs. The
         image is never pulled: it must already exist on the daemon.
 
-        Returns ``(exit_code, output)``, the output being the container log
-        capped at ``max_output_bytes``. Raises ``SandboxUnavailable`` when the
+        Returns ``(exit_code, stdout, stderr)``, each stream of the container
+        log read separately and capped at ``max_output_bytes``. Raises ``SandboxUnavailable`` when the
         run cannot happen in the sandbox (no Docker, no free slot, missing
         image, daemon or connection error), ``ExecutionError`` when it
         exceeds ``timeout`` and ``ValueError`` for an oversized input. There
@@ -688,9 +701,9 @@ class SecureCodeExecutor:
         timeout: float,
         max_output_bytes: int,
         cleanup_status: Dict[str, Any],
-    ) -> Tuple[int, str]:
+    ) -> Tuple[int, str, str]:
         """Create, start and wait for one isolated container; read its exit
-        code and capped log before it is removed (the same create/start/
+        code and capped stdout and stderr before it is removed (the same create/start/
         remove lifecycle as ``_run_in_container``, which stays untouched)."""
         container = self.client.containers.create(**create_kwargs)
         try:
@@ -707,7 +720,11 @@ class SecureCodeExecutor:
                 raise  # a daemon error, not a timeout: run_isolated reports it as unavailable
             status = wait_result.get("StatusCode") if isinstance(wait_result, dict) else None
             exit_code = status if isinstance(status, int) else -1
-            return exit_code, _read_capped_logs(container, max_output_bytes)
+            return (
+                exit_code,
+                _read_capped_logs(container, max_output_bytes, stdout=True, stderr=False),
+                _read_capped_logs(container, max_output_bytes, stdout=False, stderr=True),
+            )
         finally:
             if not self._remove_container(container, execution_id):
                 cleanup_status["leaked"] = True

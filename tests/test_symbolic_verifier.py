@@ -605,7 +605,7 @@ def recursive_func(n: int) -> int:
 
 class _FakeSandbox:
     """Stands in for SecureCodeExecutor.run_isolated with a fixed outcome,
-    ending the output with the runner's result marker for this run."""
+    writing the runner's result line for this run to stdout."""
 
     def __init__(self, returncode=0, output="", error=None):
         self.returncode, self.output, self.error = returncode, output, error
@@ -621,7 +621,7 @@ class _FakeSandbox:
         if self.error is not None:
             raise self.error
         nonce = kwargs["environment"][_NONCE_ENV]
-        return self.returncode, f"{self.output}\n{_RESULT_MARKER} {nonce} {self.returncode}\n"
+        return self.returncode, f"{_RESULT_MARKER} {nonce} {self.returncode}\n", self.output
 
 
 class TestCrossHairExitCodes:

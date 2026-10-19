@@ -21,13 +21,19 @@ All notable changes to the QWED Protocol will be documented in this file.
     cap. A dropped daemon connection, or a daemon error while waiting, is
     `BLOCKED` like any other sandbox failure; only a real wait timeout is a
     timeout.
-  - The analysed code runs in the same process as CrossHair and could end it
-    with a fake exit code (`sys.exit(0)` while being imported, `os._exit(1)`).
-    The runner now reports CrossHair's own outcome on a final line carrying a
-    per-run nonce it hides from the code before importing it, and the
-    verifier trusts an outcome only when that line is present and matches
-    the exit code; otherwise it is an engine error. A `SystemExit` raised from
-    the analysed code is an engine error, not a clean run.
+  - CrossHair now runs in a child process of the in-container runner. The
+    runner keeps a per-run nonce out of the child's environment, makes itself
+    non-dumpable (so the child cannot read its `/proc` environment or file
+    descriptors), sends the child's output to stderr, and alone writes one
+    result line with the nonce and the child's exit code to stdout. The
+    verifier reads stdout and stderr separately and trusts an exit code only
+    when that line confirms it; otherwise the run is an engine error. So the
+    analysed code cannot forge the result line, and long or unterminated
+    output cannot hide it. The analysed code still controls the child's own
+    exit code, as any code CrossHair imports can, which is why a clean run is
+    only ever "no counterexample found" (`UNVERIFIABLE`). A `SystemExit`
+    raised from the analysed code while it is imported is an engine error,
+    not a clean run.
   - `qwed[symbolic]` now installs the `docker` client. `SymbolicVerifier` no
     longer imports it at module level, so without it the engine is
     `BLOCKED` instead of failing to import.

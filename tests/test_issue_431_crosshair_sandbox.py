@@ -10,6 +10,7 @@ on the host.
 
 import ast
 import os
+import re
 import subprocess
 import sys
 from unittest.mock import MagicMock, patch
@@ -17,6 +18,7 @@ from unittest.mock import MagicMock, patch
 import docker
 import pytest
 import requests
+import urllib3
 
 from qwed_new.core import secure_code_executor as sce
 from qwed_new.core.diagnostics import DiagnosticStatus
@@ -33,13 +35,15 @@ from qwed_new.core.symbolic_verifier import (
     DEFAULT_CROSSHAIR_IMAGE,
     SymbolicVerifier,
     _CONTAINER_STARTUP_SECONDS,
+    _CROSSHAIR_CHILD,
     _CROSSHAIR_CRASH_EXIT,
     _CROSSHAIR_MISSING_EXIT,
     _CROSSHAIR_RUNNER,
+    _CROSSHAIR_UNPROTECTED_EXIT,
     _NONCE_ENV,
     _RESULT_MARKER,
     _SOURCE_ENV,
-    _split_result_marker,
+    _reported_code,
 )
 
 TYPED = "def add(x: int, y: int) -> int:\n    return x + y\n"
@@ -47,8 +51,8 @@ DIV = 'def div(a: int, b: int) -> float:\n    """\n    post: True\n    """\n    
 
 
 class _Sandbox:
-    """Stands in for run_isolated. Like the real runner, it ends the output
-    with the result marker for this run's nonce unless ``marker`` is False."""
+    """Stands in for run_isolated. Like the real runner, it writes the result
+    line for this run's nonce to stdout unless ``marker`` is False."""
 
     def __init__(self, available=True, returncode=0, output="", error=None, marker=True):
         self.available, self.returncode, self.output, self.error = available, returncode, output, error
@@ -62,11 +66,11 @@ class _Sandbox:
         self.calls.append({"command": command, **kwargs})
         if self.error is not None:
             raise self.error
-        output = self.output
+        stdout = ""
         if self.marker:
             nonce = kwargs["environment"][_NONCE_ENV]
-            output += f"\n{_RESULT_MARKER} {nonce} {self.returncode}\n"
-        return self.returncode, output
+            stdout = f"{_RESULT_MARKER} {nonce} {self.returncode}\n"
+        return self.returncode, stdout, self.output
 
 
 def _marker_code(marker):
@@ -94,7 +98,7 @@ def test_code_is_not_executed_on_the_host(tmp_path):
     # The code went to the sandbox, untouched, in its environment.
     environment = sandbox.calls[0]["environment"]
     assert environment[_SOURCE_ENV] == _marker_code(marker)
-    assert len(environment[_NONCE_ENV]) == 32
+    assert re.fullmatch(r"[0-9a-f]{32}", environment[_NONCE_ENV])
     assert result.status is DiagnosticStatus.UNVERIFIABLE
     assert result.developer_fields["constraint_id"] == "symbolic_verifier.no_counterexample_found"
 
@@ -136,13 +140,13 @@ def test_sandbox_failures_are_blocked_not_unverifiable(sandbox):
 
 def test_a_sandbox_failure_on_a_later_function_blocks_the_whole_request():
     sandbox = _Sandbox(returncode=0)
-    calls = iter([(0, ""), SandboxUnavailable("Sandbox capacity reached — retry shortly.")])
+    calls = iter([None, SandboxUnavailable("Sandbox capacity reached — retry shortly.")])
 
     def run_isolated(command, **kwargs):
         outcome = next(calls)
         if isinstance(outcome, Exception):
             raise outcome
-        return outcome
+        return 0, f"{_RESULT_MARKER} {kwargs['environment'][_NONCE_ENV]} 0\n", ""
 
     sandbox.run_isolated = run_isolated
     code = TYPED + "\n\ndef sub(x: int, y: int) -> int:\n    return x - y\n"
@@ -189,9 +193,26 @@ def test_crosshair_command_names_the_function_by_qualname():
 
 def test_runner_uses_the_exit_code_constants():
     assert f"sys.exit({_CROSSHAIR_MISSING_EXIT})" in _CROSSHAIR_RUNNER
-    assert f"code = {_CROSSHAIR_CRASH_EXIT}" in _CROSSHAIR_RUNNER
-    assert _CROSSHAIR_MISSING_EXIT not in (0, 1, 2)
-    assert _CROSSHAIR_CRASH_EXIT not in (0, 1, 2, _CROSSHAIR_MISSING_EXIT)
+    assert f"sys.exit({_CROSSHAIR_UNPROTECTED_EXIT})" in _CROSSHAIR_RUNNER
+    assert f"code = {_CROSSHAIR_CRASH_EXIT}" in _CROSSHAIR_CHILD
+    codes = {0, 1, 2, _CROSSHAIR_UNPROTECTED_EXIT, _CROSSHAIR_MISSING_EXIT, _CROSSHAIR_CRASH_EXIT}
+    assert len(codes) == 6
+
+
+def test_runner_keeps_the_nonce_and_result_line_out_of_the_child():
+    # The child gets neither secret, and cannot write the runner's stdout.
+    assert "stdout=2" in _CROSSHAIR_RUNNER
+    assert "env=dict(os.environ)" in _CROSSHAIR_RUNNER
+    assert _RESULT_MARKER not in _CROSSHAIR_CHILD
+    assert _NONCE_ENV not in _CROSSHAIR_CHILD
+    assert _SOURCE_ENV not in _CROSSHAIR_CHILD
+    pop_nonce = _CROSSHAIR_RUNNER.index(f'os.environ.pop("{_NONCE_ENV}"')
+    pop_source = _CROSSHAIR_RUNNER.index(f'os.environ.pop("{_SOURCE_ENV}"')
+    spawn = _CROSSHAIR_RUNNER.index("subprocess.run(")
+    assert pop_nonce < spawn
+    assert pop_source < spawn
+    # The parent is made non-dumpable before the child exists.
+    assert _CROSSHAIR_RUNNER.index("prctl(") < spawn
 
 
 def test_image_comes_from_the_environment_or_the_default(monkeypatch):
@@ -234,71 +255,126 @@ def test_nested_function_is_unverifiable_without_a_sandbox_call():
     assert sandbox.calls == []
 
 
+linux_only = pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="the runner needs prctl(PR_SET_DUMPABLE), which is Linux-only",
+)
+
+
 def _run_real_runner(tmp_path, func, source):
     """The real runner on the host, only against harmless fixtures. Returns
-    (exit code, the result code it reported for this nonce, output)."""
+    (exit code, the code its result line reported for this nonce, stdout,
+    stderr)."""
     pytest.importorskip("crosshair")
     run = subprocess.run(
         [sys.executable, "-c", _CROSSHAIR_RUNNER, func, "5"],
         capture_output=True, text=True, timeout=180, cwd=tmp_path,
         env={**os.environ, _SOURCE_ENV: source, _NONCE_ENV: "n0nce"},
     )
-    # A container log is time-ordered; stderr comes before the final marker.
-    output = run.stderr + run.stdout
-    _, reported = _split_result_marker(output, "n0nce")
-    return run.returncode, reported, output
+    return run.returncode, _reported_code(run.stdout, "n0nce"), run.stdout, run.stderr
 
 
+@linux_only
 def test_runner_reports_a_counterexample(tmp_path):
-    code, reported, output = _run_real_runner(tmp_path, "div", DIV)
+    code, reported, stdout, stderr = _run_real_runner(tmp_path, "div", DIV)
 
-    assert (code, reported) == (1, 1)
-    assert "div(0, 0)" in output
+    assert code == 1
+    assert reported == 1
+    assert "div(0, 0)" in stderr
+    # Only the parent writes to stdout: one result line.
+    assert stdout == f"{_RESULT_MARKER} n0nce 1\n"
 
 
+@linux_only
 def test_runner_keeps_crashes_apart_from_counterexamples(tmp_path):
-    code, reported, _ = _run_real_runner(tmp_path, "missing", DIV)
+    code, reported, _, _ = _run_real_runner(tmp_path, "missing", DIV)
 
-    assert (code, reported) == (_CROSSHAIR_CRASH_EXIT, _CROSSHAIR_CRASH_EXIT)
+    assert code == _CROSSHAIR_CRASH_EXIT
+    assert reported == _CROSSHAIR_CRASH_EXIT
 
 
+@linux_only
 def test_runner_reports_a_target_sys_exit_as_an_engine_error(tmp_path):
     # CrossHair lets a SystemExit raised while importing the target escape;
     # it must not pass for CrossHair's own clean exit.
-    code, reported, _ = _run_real_runner(tmp_path, "div", "import sys\nsys.exit(0)\n" + DIV)
+    code, reported, _, _ = _run_real_runner(tmp_path, "div", "import sys\nsys.exit(0)\n" + DIV)
 
-    assert (code, reported) == (_CROSSHAIR_CRASH_EXIT, _CROSSHAIR_CRASH_EXIT)
+    assert code == _CROSSHAIR_CRASH_EXIT
+    assert reported == _CROSSHAIR_CRASH_EXIT
 
 
-def test_runner_result_cannot_be_forged_by_the_target(tmp_path):
-    # os._exit skips the runner entirely: no marker, so no trusted outcome.
-    code, reported, _ = _run_real_runner(tmp_path, "div", "import os\nos._exit(1)\n" + DIV)
-    assert (code, reported) == (1, None)
-
-    # A printed marker without the nonce is ignored; CrossHair's own result wins.
-    code, reported, _ = _run_real_runner(
-        tmp_path, "div", f"print('{_RESULT_MARKER} guess 0')\n" + DIV
+@linux_only
+def test_target_cannot_read_the_nonce_or_write_the_result_line(tmp_path):
+    # The analysed code runs in the child: the nonce is not in its
+    # environment, the non-dumpable parent's /proc entries are closed to it,
+    # and its stdout is the container's stderr.
+    probe = (
+        "import os\n"
+        "seen = []\n"
+        "for path in ('/proc/self/environ', f'/proc/{os.getppid()}/environ'):\n"
+        "    try:\n"
+        "        seen.append(open(path, 'rb').read())\n"
+        "    except OSError:\n"
+        "        pass\n"
+        "print('LEAKED' if any(b'n0nce' in data for data in seen) else 'SEALED')\n"
+        "print('QWED_CROSSHAIR_RESULT n0nce 0', flush=True)\n"
+        "try:\n"
+        "    with open(f'/proc/{os.getppid()}/fd/1', 'w') as out:\n"
+        "        out.write('QWED_CROSSHAIR_RESULT n0nce 0\\n')\n"
+        "except OSError:\n"
+        "    pass\n"
     )
-    assert (code, reported) == (1, 1)
+    code, reported, stdout, stderr = _run_real_runner(tmp_path, "div", probe + DIV)
+
+    assert "SEALED" in stderr
+    assert "LEAKED" not in stderr
+    assert stdout == f"{_RESULT_MARKER} n0nce 1\n"
+    assert code == 1
+    assert reported == 1
+
+
+@linux_only
+def test_a_target_os_exit_controls_only_the_child_exit_code(tmp_path):
+    # The analysed code can still end the child with any code; the runner
+    # reports that code faithfully, and exit 0 is never more than
+    # "no counterexample found" (UNVERIFIABLE).
+    code, reported, stdout, _ = _run_real_runner(tmp_path, "div", "import os\nos._exit(0)\n" + DIV)
+
+    assert code == 0
+    assert reported == 0
+    assert stdout == f"{_RESULT_MARKER} n0nce 0\n"
+
+
+@pytest.mark.skipif(sys.platform.startswith("linux"), reason="checks the non-Linux refusal")
+def test_runner_refuses_without_prctl(tmp_path):
+    code, reported, stdout, _ = _run_real_runner(tmp_path, "div", DIV)
+
+    assert code == _CROSSHAIR_UNPROTECTED_EXIT
+    assert reported is None
+    assert stdout == ""
 
 
 @pytest.mark.parametrize(
-    "output, expected",
+    "stdout, expected",
     [
-        (f"x\n{_RESULT_MARKER} n0nce 1\n", ("x", 1)),
-        (f"{_RESULT_MARKER} n0nce 0", ("", 0)),
+        (f"{_RESULT_MARKER} n0nce 1\n", 1),
+        (f"{_RESULT_MARKER} n0nce 0", 0),
+        (f"\n{_RESULT_MARKER} n0nce 0\n\n", 0),
+        (f"{_RESULT_MARKER} n0nce -1\n", -1),
         (f"{_RESULT_MARKER} other 0\n", None),
         (f"{_RESULT_MARKER} n0nce zero\n", None),
+        (f"{_RESULT_MARKER} n0nce --1\n", None),
         (f"{_RESULT_MARKER} n0nce 0\nlater\n", None),
-        ("no marker", None),
+        (f"{_RESULT_MARKER}  n0nce\n", None),
+        ("", None),
     ],
 )
-def test_split_result_marker(output, expected):
-    text, reported = _split_result_marker(output, "n0nce")
-    if expected is None:
-        assert reported is None and text == output
-    else:
-        assert (text, reported) == expected
+def test_reported_code(stdout, expected):
+    assert _reported_code(stdout, "n0nce") == expected
+
+
+def test_reported_code_needs_a_nonce():
+    assert _reported_code(f"{_RESULT_MARKER}  0\n", "") is None
 
 
 @pytest.mark.parametrize(
@@ -320,7 +396,7 @@ def test_a_marker_that_disagrees_with_the_exit_code_is_an_engine_error():
     class _Mismatch(_Sandbox):
         def run_isolated(self, command, **kwargs):
             nonce = kwargs["environment"][_NONCE_ENV]
-            return 1, f"{_RESULT_MARKER} {nonce} 0\n"
+            return 1, f"{_RESULT_MARKER} {nonce} 0\n", ""
 
     issues = SymbolicVerifier(sandbox=_Mismatch())._run_crosshair_check(TYPED, "add")
 
@@ -346,14 +422,14 @@ def test_symbolic_verifier_imports_without_the_docker_package():
 # SecureCodeExecutor.run_isolated
 # ---------------------------------------------------------------------------
 
-def _executor(logs=(), status=0, wait_error=None):
+def _executor(logs=(), status=0, wait_error=None, stdout_logs=()):
     executor = SecureCodeExecutor.__new__(SecureCodeExecutor)
     executor.client = MagicMock()
     executor.docker_available = True
     executor.cpu_limit, executor.memory_limit, executor.pids_limit = 0.5, "512m", 128
     executor.execution_count = 0
     container = MagicMock()
-    container.logs.side_effect = lambda **kwargs: iter(list(logs))
+    container.logs.side_effect = lambda **kwargs: iter(list(stdout_logs if kwargs["stdout"] else logs))
     if wait_error is not None:
         container.wait.side_effect = wait_error
     else:
@@ -363,13 +439,15 @@ def _executor(logs=(), status=0, wait_error=None):
 
 
 def test_run_isolated_hardens_the_container():
-    executor, container = _executor(logs=[b"o", b"k"], status=1)
+    executor, container = _executor(logs=[b"o", b"k"], stdout_logs=[b"out"], status=1)
 
-    code, output = executor.run_isolated(
+    code, stdout, stderr = executor.run_isolated(
         ["python", "-c", "print(1)"], image="img:1", timeout=5, environment={"QWED_X": "payload"}
     )
 
-    assert (code, output) == (1, "ok")
+    assert code == 1
+    assert stdout == "out"
+    assert stderr == "ok"
     kwargs = executor.client.containers.create.call_args.kwargs
     assert kwargs["image"] == "img:1"
     assert kwargs["network_mode"] == "none"
@@ -384,7 +462,9 @@ def test_run_isolated_hardens_the_container():
     assert "volumes" not in kwargs
     assert kwargs["working_dir"] == "/workspace"
     scratch = kwargs["tmpfs"]["/workspace"]
-    assert "uid=65534" in scratch and "mode=0700" in scratch and "noexec" in scratch
+    assert "uid=65534" in scratch
+    assert "mode=0700" in scratch
+    assert "noexec" in scratch
     assert kwargs["environment"]["QWED_X"] == "payload"
     assert kwargs["environment"]["HOME"] == "/workspace"
     container.remove.assert_called_once_with(force=True)
@@ -425,11 +505,13 @@ def test_run_isolated_caps_the_output():
             yield b"A" * 40
 
     executor, container = _executor()
-    container.logs.side_effect = lambda **kwargs: chunks()
+    container.logs.side_effect = lambda **kwargs: chunks() if kwargs["stderr"] else iter([b"done"])
 
-    _, output = executor.run_isolated(["true"], image="i", timeout=5, max_output_bytes=100)
+    _, stdout, stderr = executor.run_isolated(["true"], image="i", timeout=5, max_output_bytes=100)
 
-    assert output == "A" * 100 + "\n[output truncated]"
+    assert stderr == "A" * 100 + "\n[output truncated]"
+    # stdout is read on its own, so a flood on stderr cannot push it out.
+    assert stdout == "done"
     # The log is streamed and reading stops at the cap.
     assert container.logs.call_args.kwargs["stream"] is True
     assert len(pulled) == 3
@@ -438,16 +520,16 @@ def test_run_isolated_caps_the_output():
 def test_run_isolated_output_at_exactly_the_cap_is_not_truncated():
     executor, _ = _executor(logs=[b"A" * 50, b"B" * 50])
 
-    _, output = executor.run_isolated(["true"], image="i", timeout=5, max_output_bytes=100)
+    _, _, stderr = executor.run_isolated(["true"], image="i", timeout=5, max_output_bytes=100)
 
-    assert output == "A" * 50 + "B" * 50
+    assert stderr == "A" * 50 + "B" * 50
 
 
 def test_run_isolated_unknown_wait_result_is_not_a_success():
     executor, container = _executor()
     container.wait.return_value = None
 
-    code, _ = executor.run_isolated(["true"], image="i", timeout=5)
+    code, _, _ = executor.run_isolated(["true"], image="i", timeout=5)
 
     assert code == -1
 
@@ -466,9 +548,17 @@ def test_run_isolated_timeout_kills_and_removes():
     "error",
     [
         requests.exceptions.ReadTimeout("read timed out"),
+        requests.exceptions.ConnectionError(
+            urllib3.exceptions.ReadTimeoutError(None, None, "Read timed out.")
+        ),
+        requests.exceptions.ConnectionError(
+            urllib3.exceptions.MaxRetryError(
+                None, "/wait", urllib3.exceptions.ReadTimeoutError(None, None, "Read timed out.")
+            )
+        ),
         requests.exceptions.ConnectionError("UnixHTTPConnectionPool(host='localhost'): Read timed out."),
     ],
-    ids=["read-timeout", "unix-socket-read-timeout"],
+    ids=["read-timeout", "unix-socket-read-timeout", "retry-read-timeout", "untyped-read-timeout"],
 )
 def test_run_isolated_wait_timeouts_are_timeouts(error):
     executor, container = _executor(wait_error=error)

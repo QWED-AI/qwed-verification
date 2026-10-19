@@ -38,38 +38,41 @@ DEFAULT_CROSSHAIR_IMAGE = "qwed-crosshair-sandbox:0.0.101"
 
 CONSTRAINT_INPUT_TOO_LARGE = "symbolic_verifier.input_too_large"
 
-# The in-container runner. The source arrives in the environment (nothing on
-# the host is mounted) and is written to target.py in the container's private
-# scratch directory, its working directory. The function is named by module
-# qualname ("target.func"): CrossHair reads "file.py:func" as a qualname and
-# fails to find "py:func".
+# The in-container runner, in two processes.
 #
-# CrossHair imports target.py in this same process, so the analysed code can
-# end the process itself (sys.exit(0), os._exit(1)) and fake any exit code.
-# The runner therefore reports CrossHair's own outcome on a final line
-#   QWED_CROSSHAIR_RESULT <nonce> <code>
-# where the nonce is a per-run secret it removes from the environment before
-# the target is imported. The host trusts an outcome only when that line is
-# present with its nonce and matches the exit code; anything else is an
-# engine error. A SystemExit raised from target.py, an exception escaping
-# CrossHair, and an image without CrossHair get their own codes, so only
-# CrossHair's own exit 1 is a counterexample.
+# The parent receives the source and a per-run nonce in its environment,
+# writes the source to target.py in the container's private scratch
+# directory, and makes itself non-dumpable, so no other process of the same
+# user can read its /proc entries (environ, fd, mem). It then runs CrossHair
+# in a child process whose environment holds neither value, with the child's
+# stdout and stderr both sent to the container's stderr. Only the parent
+# writes to stdout, one line once the child has exited:
+#   QWED_CROSSHAIR_RESULT <nonce> <child exit code>
+# The host reads stdout and stderr separately and trusts an exit code only
+# when that line carries this run's nonce and matches it. So the analysed
+# code, which CrossHair imports into the child, can neither read the nonce
+# nor write a result line, and a long or unterminated output cannot hide the
+# line. What it still controls is the child's own exit code (os._exit), as
+# any code CrossHair imports can: that is why an exit-0 run is only ever
+# "no counterexample found", UNVERIFIABLE, never a proof.
+#
+# In the child, an image without CrossHair exits _CROSSHAIR_MISSING_EXIT (the
+# parent checks first), and a SystemExit raised from target.py or an
+# exception escaping CrossHair exits _CROSSHAIR_CRASH_EXIT, an engine error,
+# so only CrossHair's own exit 1 is read as a counterexample. The parent
+# exits _CROSSHAIR_UNPROTECTED_EXIT, without a result line, when it cannot
+# make itself non-dumpable (prctl is Linux-only). The function is named by
+# module qualname ("target.func"): CrossHair reads "file.py:func" as a
+# qualname and fails to find "py:func".
+_CROSSHAIR_UNPROTECTED_EXIT = 96
 _CROSSHAIR_MISSING_EXIT = 97
 _CROSSHAIR_CRASH_EXIT = 98
 _SOURCE_ENV = "QWED_TARGET_SOURCE"
 _NONCE_ENV = "QWED_RUN_NONCE"
 _RESULT_MARKER = "QWED_CROSSHAIR_RESULT"
-_CROSSHAIR_RUNNER = f"""\
+_PR_SET_DUMPABLE = 4
+_CROSSHAIR_CHILD = f"""\
 import os, runpy, sys, traceback
-nonce = os.environ.pop("{_NONCE_ENV}", "")
-source = os.environ.pop("{_SOURCE_ENV}", "")
-try:
-    import crosshair  # noqa: F401
-except ImportError:
-    sys.exit({_CROSSHAIR_MISSING_EXIT})
-with open("target.py", "w", encoding="utf-8") as f:
-    f.write(source)
-del source
 func, timeout = sys.argv[1], sys.argv[2]
 sys.argv = ["crosshair", "check", "--per_condition_timeout", timeout, "target." + func]
 code = {_CROSSHAIR_CRASH_EXIT}
@@ -90,6 +93,29 @@ except BaseException:
     traceback.print_exc()
 sys.stdout.flush()
 sys.stderr.flush()
+sys.exit(code)
+"""
+_CROSSHAIR_RUNNER = f"""\
+import ctypes, importlib.util, os, subprocess, sys
+nonce = os.environ.pop("{_NONCE_ENV}", "")
+source = os.environ.pop("{_SOURCE_ENV}", "")
+if importlib.util.find_spec("crosshair") is None:
+    sys.exit({_CROSSHAIR_MISSING_EXIT})
+try:
+    protected = ctypes.CDLL(None).prctl({_PR_SET_DUMPABLE}, 0, 0, 0, 0) == 0
+except Exception:
+    protected = False
+if not protected:
+    print("cannot make the runner non-dumpable", file=sys.stderr)
+    sys.exit({_CROSSHAIR_UNPROTECTED_EXIT})
+with open("target.py", "w", encoding="utf-8") as f:
+    f.write(source)
+del source
+child = subprocess.run(
+    [sys.executable, "-c", {_CROSSHAIR_CHILD!r}, sys.argv[1], sys.argv[2]],
+    stdin=subprocess.DEVNULL, stdout=2, stderr=2, env=dict(os.environ),
+)
+code = child.returncode if child.returncode >= 0 else {_CROSSHAIR_CRASH_EXIT}
 print("{_RESULT_MARKER}", nonce, code, flush=True)
 sys.exit(code)
 """
@@ -100,17 +126,25 @@ _MAX_CROSSHAIR_OUTPUT_BYTES = 64 * 1024
 _CONTAINER_STARTUP_SECONDS = 30
 
 
-def _split_result_marker(output: str, nonce: str) -> tuple:
-    """``(output_without_marker, reported_code)``; ``reported_code`` is None
-    unless the last marker line carries this run's nonce and an integer."""
-    lines = output.rstrip("\n").split("\n")
+def _is_int_text(text: str) -> bool:
+    digits = text[1:] if text.startswith("-") else text
+    return digits.isdigit()
+
+
+def _reported_code(stdout: str, nonce: str) -> Optional[int]:
+    """The exit code the runner reported on stdout, or None unless its last
+    line is the result line for this run's nonce with an integer code."""
+    lines = [line for line in stdout.splitlines() if line.strip()]
     parts = lines[-1].split() if lines else []
-    if len(parts) == 3 and parts[0] == _RESULT_MARKER and parts[1] == nonce and nonce:
-        try:
-            return "\n".join(lines[:-1]), int(parts[2])
-        except ValueError:
-            pass
-    return output, None
+    if (
+        len(parts) == 3
+        and parts[0] == _RESULT_MARKER
+        and nonce
+        and parts[1] == nonce
+        and _is_int_text(parts[2])
+    ):
+        return int(parts[2])
+    return None
 
 
 def _issues_from_crosshair(returncode: int, output: str, func_name: str) -> List[Dict[str, Any]]:
@@ -520,7 +554,10 @@ class SymbolicVerifier:
 
         The code is passed in the container's environment, written to
         target.py in its private scratch directory and analysed by the
-        CrossHair CLI in a hardened container. CrossHair's CLI
+        CrossHair CLI in a child process of the runner (see
+        ``_CROSSHAIR_RUNNER``). The exit code is used only when the runner's
+        result line on stdout confirms it; CrossHair's own output arrives on
+        stderr. CrossHair's CLI
         distinguishes a disproving counterexample (exit 1) from an
         engine-level failure (exit 2) — only exit 1 is reported as a
         counterexample; any other nonzero exit is an error, not a disproof.
@@ -530,7 +567,7 @@ class SymbolicVerifier:
         """
         nonce = secrets.token_hex(16)
         try:
-            returncode, output = self._get_sandbox().run_isolated(
+            returncode, stdout, output = self._get_sandbox().run_isolated(
                 ["python", "-c", _CROSSHAIR_RUNNER, func_name, str(self.timeout_seconds)],
                 image=self.image,
                 timeout=self.timeout_seconds * 2 + _CONTAINER_STARTUP_SECONDS,
@@ -547,10 +584,10 @@ class SymbolicVerifier:
         if returncode == _CROSSHAIR_MISSING_EXIT:
             raise SandboxUnavailable(f"Sandbox image '{self.image}' does not provide CrossHair")
 
-        output, reported = _split_result_marker(output, nonce)
+        reported = _reported_code(stdout, nonce)
         if reported is None or reported != returncode:
-            # The runner did not finish, or the analysed code ended the process
-            # itself: its exit code says nothing about CrossHair.
+            # The runner did not finish (or could not protect its result), so
+            # the exit code says nothing about CrossHair.
             return [{
                 "type": "error",
                 "function": func_name,
