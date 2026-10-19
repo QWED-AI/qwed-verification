@@ -15,13 +15,17 @@ from qwed_new.core import secure_code_executor as sce
 from qwed_new.core.secure_code_executor import (
     SANDBOX_IMAGE,
     SANDBOX_IMAGE_ENV,
+    SECURE_RUNTIME_UNAVAILABLE,
+    SandboxUnavailable,
     SecureCodeExecutor,
 )
 
 DIGEST = "sha256:" + "a" * 64
+FLOOR = sce._SANDBOX_UID_FLOOR
+CEILING = sce._SANDBOX_UID_FLOOR + sce._SANDBOX_UID_SPAN
 
 
-def _executor():
+def _executor(options=("name=seccomp,profile=builtin",)):
     executor = SecureCodeExecutor.__new__(SecureCodeExecutor)
     executor.client = MagicMock()
     executor.docker_available = True
@@ -30,8 +34,9 @@ def _executor():
     executor.max_result_bytes = 2 * 1024 * 1024
     executor.execution_count = 0
     executor.image = SANDBOX_IMAGE
-    executor._rootless = None
-    executor.client.info.return_value = {"SecurityOptions": ["name=seccomp,profile=builtin"]}
+    executor._daemon_mode_cache = None
+    executor._workspace_users = {}
+    executor.client.info.return_value = {"SecurityOptions": list(options)}
     executor.client.containers.create.return_value = MagicMock()
     return executor
 
@@ -39,6 +44,22 @@ def _executor():
 def _as_host_user(monkeypatch, uid, gid=1000):
     monkeypatch.setattr(sce.os, "getuid", lambda: uid, raising=False)
     monkeypatch.setattr(sce.os, "getgid", lambda: gid, raising=False)
+
+
+def _chown_recorder(monkeypatch):
+    calls = []
+
+    def chown(path, uid, gid, *, follow_symlinks=True):
+        calls.append((path, uid, gid, follow_symlinks))
+
+    monkeypatch.setattr(sce.os, "chown", chown, raising=False)
+    return calls
+
+
+def _uid_of(user):
+    uid, gid = user.split(":")
+    assert uid == gid
+    return int(uid)
 
 
 # ---------------------------------------------------------------------------
@@ -58,10 +79,20 @@ def test_executor_uses_the_pinned_image(monkeypatch):
     assert SecureCodeExecutor().image == SANDBOX_IMAGE
 
 
-def test_an_override_by_digest_is_used(monkeypatch):
-    monkeypatch.setenv(SANDBOX_IMAGE_ENV, f"registry.local/pandas@{DIGEST}")
+@pytest.mark.parametrize(
+    "override",
+    [
+        f"pandas@{DIGEST}",
+        f"registry.local/pandas@{DIGEST}",
+        f"registry.local:5000/team/pandas:slim@{DIGEST}",
+        f"localhost/img@{DIGEST}",
+        f"myreg:5000/img@{DIGEST}",
+    ],
+)
+def test_an_override_by_digest_is_used(monkeypatch, override):
+    monkeypatch.setenv(SANDBOX_IMAGE_ENV, override)
 
-    assert SecureCodeExecutor().image == f"registry.local/pandas@{DIGEST}"
+    assert SecureCodeExecutor().image == override
 
 
 @pytest.mark.parametrize(
@@ -72,15 +103,20 @@ def test_an_override_by_digest_is_used(monkeypatch):
         "amancevice/pandas@sha256:short",
         f"amancevice/pandas@sha512:{'a' * 64}",
         f"bad name@{DIGEST}",
+        f"/bad@{DIGEST}",
+        f"Upper/case@{DIGEST}",
+        f"a//b@{DIGEST}",
+        f"img-@{DIGEST}",
     ],
 )
-def test_an_override_without_a_digest_is_refused(monkeypatch, override):
+def test_an_override_that_is_not_a_valid_digest_reference_is_refused(monkeypatch, override):
     monkeypatch.setenv(SANDBOX_IMAGE_ENV, override)
 
     assert SecureCodeExecutor().image == SANDBOX_IMAGE
 
 
-def test_a_missing_image_is_pulled_by_digest():
+def test_a_missing_image_is_pulled_by_digest(monkeypatch):
+    _as_host_user(monkeypatch, 1000)
     executor = _executor()
     container = MagicMock()
     executor.client.containers.create.side_effect = [sce.docker.errors.ImageNotFound("missing"), container]
@@ -117,22 +153,48 @@ def test_execute_container_is_hardened(monkeypatch):
     assert kwargs["volumes"] == {"/does-not-matter": {"bind": "/workspace", "mode": "rw"}}
 
 
+def test_a_non_root_host_runs_the_container_as_itself(monkeypatch):
+    _as_host_user(monkeypatch, 1000, gid=1001)
+
+    assert _executor()._container_user("/ws") == "1000:1001"
+
+
+def test_a_root_host_runs_the_container_as_the_workspace_uid(monkeypatch):
+    _as_host_user(monkeypatch, 0)
+    executor = _executor()
+    executor._workspace_users["/ws"] = FLOOR + 42
+
+    assert executor._container_user("/ws") == f"{FLOOR + 42}:{FLOOR + 42}"
+
+
+def test_a_root_host_without_a_prepared_workspace_still_never_runs_as_root(monkeypatch):
+    _as_host_user(monkeypatch, 0)
+
+    uid = _uid_of(_executor()._container_user("/not-prepared"))
+
+    assert FLOOR <= uid < CEILING
+
+
+def test_a_rootless_daemon_runs_the_container_as_its_root(monkeypatch):
+    # Container root is the unprivileged host user who runs the daemon.
+    _as_host_user(monkeypatch, 1000)
+
+    assert _executor(options=["name=rootless"])._container_user("/ws") == "0:0"
+
+
 @pytest.mark.parametrize(
-    "uid, rootless, expected",
+    "uid, options",
     [
-        (1000, False, "1000:1000"),  # the owner of the private exchange directory
-        (0, False, "65534:65534"),  # never root; execute() hands it the directory
-        (1000, True, "0:0"),  # rootless: container root is the unprivileged host user
-        (0, True, "0:0"),
+        (0, ["name=rootless"]),  # the daemon's user is not the directory's owner
+        (1000, ["name=userns"]),  # userns-remap maps every container uid away
+        (0, ["name=userns"]),
     ],
 )
-def test_container_user_is_never_a_privileged_root(monkeypatch, uid, rootless, expected):
+def test_unsupported_user_mappings_are_refused(monkeypatch, uid, options):
     _as_host_user(monkeypatch, uid)
-    executor = _executor()
-    options = ["name=seccomp,profile=builtin"] + (["name=rootless"] if rootless else [])
-    executor.client.info.return_value = {"SecurityOptions": options}
 
-    assert executor._container_user() == expected
+    with pytest.raises(SandboxUnavailable):
+        _executor(options=options)._container_user("/ws")
 
 
 def test_container_user_without_getuid_is_unprivileged(monkeypatch):
@@ -140,27 +202,36 @@ def test_container_user_without_getuid_is_unprivileged(monkeypatch):
     monkeypatch.delattr(sce.os, "getuid", raising=False)
     executor = _executor()
 
-    assert executor._container_user() == "65534:65534"
+    assert executor._container_user("/ws") == "65534:65534"
+    executor.client.info.assert_not_called()
 
 
-@pytest.mark.parametrize("info", [RuntimeError("daemon down"), {"SecurityOptions": None}, {}])
-def test_an_unknown_daemon_is_not_treated_as_rootless(monkeypatch, info):
-    _as_host_user(monkeypatch, 0)
+def test_an_unreadable_daemon_is_unavailable_and_asked_again(monkeypatch):
+    _as_host_user(monkeypatch, 1000)
     executor = _executor()
-    if isinstance(info, Exception):
-        executor.client.info.side_effect = info
-    else:
-        executor.client.info.return_value = info
+    executor.client.info.side_effect = [RuntimeError("daemon down"), {"SecurityOptions": []}]
 
-    assert executor._container_user() == "65534:65534"
+    with pytest.raises(SandboxUnavailable):
+        executor._container_user("/ws")
+    # The failure is not cached as an answer.
+    assert executor._container_user("/ws") == "1000:1000"
+
+
+@pytest.mark.parametrize("info", [{"SecurityOptions": None}, {}, {"SecurityOptions": "name=rootless"}])
+def test_missing_or_odd_security_options_are_the_default_mode(monkeypatch, info):
+    _as_host_user(monkeypatch, 1000)
+    executor = _executor()
+    executor.client.info.return_value = info
+
+    assert executor._container_user("/ws") == "1000:1000"
 
 
 def test_the_daemon_is_asked_once(monkeypatch):
     _as_host_user(monkeypatch, 1000)
     executor = _executor()
 
-    executor._container_user()
-    executor._container_user()
+    executor._container_user("/ws")
+    executor._container_user("/ws")
 
     executor.client.info.assert_called_once()
 
@@ -169,53 +240,113 @@ def test_the_daemon_is_asked_once(monkeypatch):
 # The exchange directory stays private
 # ---------------------------------------------------------------------------
 
-def _chown_recorder(monkeypatch):
-    calls = []
-    monkeypatch.setattr(sce.os, "chown", lambda path, uid, gid: calls.append((path, uid, gid)), raising=False)
-    return calls
-
-
-def test_as_root_the_directory_is_handed_to_the_container_user(monkeypatch, tmp_path):
-    _as_host_user(monkeypatch, 0)
-    calls = _chown_recorder(monkeypatch)
+def _workspace(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "script.py").write_text("x = 1\n")
     (workspace / "context.json").write_text("{}")
+    return workspace
 
-    _executor()._hand_workspace_to_container_user(str(workspace))
 
-    assert sorted(calls) == sorted([
-        (str(workspace), 65534, 65534),
-        (str(workspace / "script.py"), 65534, 65534),
-        (str(workspace / "context.json"), 65534, 65534),
+def test_as_root_the_workspace_goes_to_a_fresh_uid_files_first(monkeypatch, tmp_path):
+    _as_host_user(monkeypatch, 0)
+    calls = _chown_recorder(monkeypatch)
+    workspace = _workspace(tmp_path)
+    executor = _executor()
+
+    executor._hand_workspace_to_container_user(str(workspace))
+
+    uid = executor._workspace_users[str(workspace)]
+    assert FLOOR <= uid < CEILING
+    assert uid in sce._sandbox_uids_in_use
+    # Every entry, then the directory last, and never through a link.
+    assert calls[-1] == (str(workspace), uid, uid, False)
+    assert sorted(calls[:-1]) == sorted([
+        (str(workspace / "script.py"), uid, uid, False),
+        (str(workspace / "context.json"), uid, uid, False),
     ])
+    executor._release_workspace_user(str(workspace))
+    assert uid not in sce._sandbox_uids_in_use
+    assert str(workspace) not in executor._workspace_users
 
 
-@pytest.mark.parametrize("uid, rootless", [(1000, False), (0, True), (1000, True)])
-def test_otherwise_the_directory_is_left_alone(monkeypatch, tmp_path, uid, rootless):
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs symlinks")
+def test_a_non_regular_entry_is_refused_before_anything_is_handed_over(monkeypatch, tmp_path):
+    _as_host_user(monkeypatch, 0)
+    calls = _chown_recorder(monkeypatch)
+    workspace = _workspace(tmp_path)
+    try:
+        os.symlink(tmp_path / "outside", workspace / "link")
+    except OSError:
+        pytest.skip("symlinks are not permitted here")
+
+    with pytest.raises(SandboxUnavailable):
+        _executor()._hand_workspace_to_container_user(str(workspace))
+
+    # The directory itself was never handed over.
+    assert all(path != str(workspace) for path, *_ in calls)
+
+
+@pytest.mark.parametrize("uid, options", [(1000, []), (1000, ["name=rootless"])])
+def test_otherwise_the_directory_is_left_alone(monkeypatch, tmp_path, uid, options):
     _as_host_user(monkeypatch, uid)
     calls = _chown_recorder(monkeypatch)
-    executor = _executor()
-    if rootless:
-        executor.client.info.return_value = {"SecurityOptions": ["name=rootless"]}
+    executor = _executor(options=options)
 
     executor._hand_workspace_to_container_user(str(tmp_path))
 
     assert calls == []
+    assert executor._workspace_users == {}
 
 
-def test_execute_hands_over_the_directory_before_the_container_runs(monkeypatch):
-    _as_host_user(monkeypatch, 0)
-    calls = _chown_recorder(monkeypatch)
-    executor = _executor()
+def test_two_workspaces_never_share_a_uid(monkeypatch):
+    picks = iter([FLOOR + 1, FLOOR + 1, FLOOR + 2])
+    monkeypatch.setattr(sce.secrets, "randbelow", lambda span: next(picks) - FLOOR)
+    monkeypatch.setattr(sce, "_host_id_exists", lambda uid: False)
+
+    first = sce._claim_sandbox_uid()
+    second = sce._claim_sandbox_uid()
+
+    assert (first, second) == (FLOOR + 1, FLOOR + 2)
+    sce._release_sandbox_uid(first)
+    sce._release_sandbox_uid(second)
+
+
+def test_a_uid_a_host_account_has_is_skipped(monkeypatch):
+    picks = iter([FLOOR + 7, FLOOR + 8])
+    monkeypatch.setattr(sce.secrets, "randbelow", lambda span: next(picks) - FLOOR)
+    monkeypatch.setattr(sce, "_host_id_exists", lambda uid: uid == FLOOR + 7)
+
+    uid = sce._claim_sandbox_uid()
+
+    assert uid == FLOOR + 8
+    assert FLOOR + 7 not in sce._sandbox_uids_in_use
+    sce._release_sandbox_uid(uid)
+
+
+def test_no_free_uid_is_unavailable(monkeypatch):
+    monkeypatch.setattr(sce, "_host_id_exists", lambda uid: True)
+
+    with pytest.raises(SandboxUnavailable):
+        sce._claim_sandbox_uid()
+
+
+def _prepared_execute(monkeypatch, executor):
     executor.client.ping.return_value = True
     safe = MagicMock(is_verified=True, developer_fields={"is_valid": True})
     monkeypatch.setattr(executor, "_is_safe_code", lambda code: safe)
+
+
+def test_execute_hands_over_the_workspace_and_releases_it(monkeypatch):
+    _as_host_user(monkeypatch, 0)
+    calls = _chown_recorder(monkeypatch)
+    executor = _executor()
+    _prepared_execute(monkeypatch, executor)
     seen = {}
 
     def fake_run(tmpdir, execution_id, cleanup_status=None):
-        seen["chowned_before_run"] = any(path == tmpdir for path, _, _ in calls)
+        seen["uid"] = executor._workspace_users.get(tmpdir)
+        seen["handed_before_run"] = (tmpdir, seen["uid"], seen["uid"], False) in calls
         seen["files"] = sorted(os.listdir(tmpdir))
         with open(os.path.join(tmpdir, "result.json"), "w") as f:
             f.write('{"result": 2}')
@@ -225,5 +356,30 @@ def test_execute_hands_over_the_directory_before_the_container_runs(monkeypatch)
     success, error, result = executor.execute("result = 1 + 1", {})
 
     assert (success, error, result) == (True, None, 2)
-    assert seen["chowned_before_run"] is True
+    assert seen["handed_before_run"] is True
     assert seen["files"] == ["context.json", "script.py", "user_code.py"]
+    assert executor._workspace_users == {}
+    assert seen["uid"] not in sce._sandbox_uids_in_use
+
+
+def test_execute_reports_an_unsupported_daemon_as_runtime_unavailable(monkeypatch):
+    _as_host_user(monkeypatch, 0)
+    _chown_recorder(monkeypatch)
+    executor = _executor(options=["name=userns"])
+    _prepared_execute(monkeypatch, executor)
+
+    def run_in_container(tmpdir, execution_id, cleanup_status=None):
+        executor._container_user(tmpdir)
+
+    monkeypatch.setattr(executor, "_run_in_container", run_in_container)
+
+    assert executor.execute("result = 1", {}) == (False, SECURE_RUNTIME_UNAVAILABLE, None)
+
+
+def test_execute_reports_an_unreadable_daemon_as_runtime_unavailable(monkeypatch):
+    _as_host_user(monkeypatch, 0)
+    executor = _executor()
+    executor.client.info.side_effect = RuntimeError("daemon down")
+    _prepared_execute(monkeypatch, executor)
+
+    assert executor.execute("result = 1", {}) == (False, SECURE_RUNTIME_UNAVAILABLE, None)

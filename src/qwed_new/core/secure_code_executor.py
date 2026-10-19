@@ -19,6 +19,8 @@ import json
 import math
 import os
 import re
+import secrets
+import stat
 import threading
 import time
 import logging
@@ -78,8 +80,9 @@ SANDBOX_CAPACITY_REACHED = "Sandbox capacity reached — retry shortly."
 # the host is mounted: inputs arrive in the environment, the only writable
 # path is a private tmpfs owned by that user, and the output is read from the
 # container log.
+_WORKSPACE = "/workspace"
 _ISOLATED_USER = "65534"
-_ISOLATED_SCRATCH = "/workspace"
+_ISOLATED_SCRATCH = _WORKSPACE
 _ISOLATED_HARDENING = {
     "read_only": True,
     "cap_drop": ["ALL"],
@@ -109,7 +112,22 @@ SANDBOX_IMAGE = (
     "amancevice/pandas@sha256:9257b88909bddf60c8a85b06d572fc6dfc708ea9c8a3c3dc2149e312d57f91e3"
 )
 SANDBOX_IMAGE_ENV = "QWED_SANDBOX_IMAGE"
-_DIGEST_REFERENCE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+# A Docker image reference pinned by digest: an optional registry host, then
+# lowercase path components, an optional tag and the digest. As in Docker, the
+# first part is a host only when it has a dot or a port, or is "localhost".
+_HOST_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+_REFERENCE_HOST = (
+    r"(?:(?:(?:localhost|" + _HOST_LABEL + r"(?:\." + _HOST_LABEL + r")+)(?::[0-9]+)?"
+    + r"|" + _HOST_LABEL + r":[0-9]+)/)?"
+)
+_REFERENCE_COMPONENT = r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
+_DIGEST_REFERENCE = re.compile(
+    _REFERENCE_HOST
+    + _REFERENCE_COMPONENT
+    + r"(?:/" + _REFERENCE_COMPONENT + r")*"
+    + r"(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?"
+    + r"@sha256:[0-9a-f]{64}"
+)
 
 
 def _sandbox_image() -> str:
@@ -135,13 +153,57 @@ _EXECUTE_HARDENING = {
     "cap_drop": ["ALL"],
     "security_opt": ["no-new-privileges"],
     "environment": {
-        "HOME": "/workspace",
-        "TMPDIR": "/workspace",
-        "MPLCONFIGDIR": "/workspace",
+        "HOME": _WORKSPACE,
+        "TMPDIR": _WORKSPACE,
+        "MPLCONFIGDIR": _WORKSPACE,
         "PYTHONDONTWRITEBYTECODE": "1",
     },
 }
+# Docker Desktop shares the folder with every container user, so the shared
+# unprivileged uid is enough there.
 _UNPRIVILEGED_UID = 65534
+# When this process is root, each workspace is handed to a fresh uid from this
+# range, far above ordinary accounts and checked against the host's user and
+# group databases, so no other host process owns it.
+_SANDBOX_UID_FLOOR = 1 << 24
+_SANDBOX_UID_SPAN = 1 << 24
+_sandbox_uids_in_use: set = set()
+_sandbox_uids_lock = threading.Lock()
+
+
+def _host_id_exists(uid: int) -> bool:
+    try:
+        import grp
+        import pwd
+    except ImportError:  # pragma: no cover - POSIX only
+        return False
+    for lookup in (pwd.getpwuid, grp.getgrgid):
+        try:
+            lookup(uid)
+            return True
+        except KeyError:
+            continue
+    return False
+
+
+def _claim_sandbox_uid() -> int:
+    """A uid (also used as the gid) that no host account or group has and no
+    other workspace of this process is using."""
+    for _ in range(64):
+        uid = _SANDBOX_UID_FLOOR + secrets.randbelow(_SANDBOX_UID_SPAN)
+        with _sandbox_uids_lock:
+            if uid in _sandbox_uids_in_use:
+                continue
+            _sandbox_uids_in_use.add(uid)
+        if not _host_id_exists(uid):
+            return uid
+        _release_sandbox_uid(uid)
+    raise SandboxUnavailable("No unused uid is available for the sandbox workspace")
+
+
+def _release_sandbox_uid(uid: int) -> None:
+    with _sandbox_uids_lock:
+        _sandbox_uids_in_use.discard(uid)
 
 SECURE_RUNTIME_UNAVAILABLE = "SECURE_RUNTIME_UNAVAILABLE"
 CONSTRAINT_VERIFIER_UNAVAILABLE = "secure_code_executor.verifier_unavailable"
@@ -419,7 +481,8 @@ class SecureCodeExecutor:
 
         # Docker image to use: pinned by digest (#322).
         self.image = _sandbox_image()
-        self._rootless: Optional[bool] = None
+        self._daemon_mode_cache: Optional[str] = None
+        self._workspace_users: Dict[str, int] = {}
     
     def execute(self, code: str, context: Dict[str, Any]) -> Tuple[bool, Optional[str], Any]:
         """
@@ -475,11 +538,11 @@ class SecureCodeExecutor:
                     f.write(wrapped_code)
                 
                 logger.debug(f"Context and code written to {tmpdir}")
-                self._hand_workspace_to_container_user(tmpdir)
 
                 # 3. Run in Docker container, under the process-wide sandbox
                 # concurrency bound (#446).
                 try:
+                    self._hand_workspace_to_container_user(tmpdir)
                     if not self._run_in_container_bounded(tmpdir, execution_id):
                         logger.warning("Sandbox capacity reached, rejecting %s", execution_id)
                         return False, SANDBOX_CAPACITY_REACHED, None
@@ -516,59 +579,105 @@ class SecureCodeExecutor:
                     safe_image = _sanitize_log_msg(str(self.image))
                     logger.exception("Docker image not found: %s", safe_image)
                     return False, f"Docker image '{safe_image!s}' not found. Please pull it first.", None
-                    
+
+                except SandboxUnavailable as e:
+                    logger.error("Sandbox cannot run this execution: %s", _sanitize_log_msg(e))
+                    return False, SECURE_RUNTIME_UNAVAILABLE, None
+
                 except Exception as e:
                     logger.exception("Unexpected execution error")
                     return False, f"Execution error: {e!s}", None
-                    
+
+                finally:
+                    self._release_workspace_user(tmpdir)
+                                        
         except OSError as e:
             logger.exception("Failed to create temporary directory")
             return False, f"Setup error: {e!s}", None
     
-    def _is_rootless_daemon(self) -> bool:
-        """True for a rootless Docker daemon, whose container root is the host
-        user itself and holds no host privilege. Asked once per executor."""
-        if getattr(self, "_rootless", None) is None:
-            try:
-                options = self.client.info().get("SecurityOptions") or []
-                self._rootless = isinstance(options, list) and any(
-                    "name=rootless" in str(option) for option in options
-                )
-            except Exception:
-                self._rootless = False
-        return self._rootless
+    def _daemon_mode(self) -> str:
+        """How the Docker daemon maps container users: "rootless" (container
+        root is the unprivileged daemon owner), "userns" (userns-remap), or
+        "default". Raises SandboxUnavailable when the daemon cannot be asked,
+        so an unknown mapping is never guessed; a known answer is cached."""
+        cached = getattr(self, "_daemon_mode_cache", None)
+        if cached is not None:
+            return cached
+        try:
+            options = self.client.info().get("SecurityOptions") or []
+        except Exception as e:
+            raise SandboxUnavailable("Could not read the Docker daemon's security options") from e
+        names = [str(option) for option in options] if isinstance(options, list) else []
+        if any("name=rootless" in name for name in names):
+            mode = "rootless"
+        elif any("name=userns" in name for name in names):
+            mode = "userns"
+        else:
+            mode = "default"
+        self._daemon_mode_cache = mode
+        return mode
 
-    def _container_user(self) -> str:
+    def _container_user(self, tmpdir: Optional[str] = None) -> str:
         """The uid:gid the execute() container runs as; never a privileged root.
 
         The exchange directory is the host's private 0700 temp directory, so
-        the container runs as its owner: the host user when this process is
-        not root, the unprivileged 65534 when it is (execute() hands the
-        directory to 65534 first). A rootless daemon maps the container's root
-        to the host user, so there root is the owner and unprivileged; any
-        other uid would be remapped away from it. Docker Desktop (no getuid)
-        shares the folder with every container user.
+        the container runs as its owner:
+        - this process is not root: the host user;
+        - this process is root: the fresh uid execute() handed the workspace
+          to (see _hand_workspace_to_container_user), never a shared one;
+        - a rootless daemon, run by the same non-root user: container root,
+          which that daemon maps to the host user;
+        - Docker Desktop (no getuid): 65534, as the folder is shared with any
+          container user.
+        A root process with a rootless daemon, or a userns-remap daemon, maps
+        container users away from the directory's owner, so those are refused
+        (SandboxUnavailable) rather than run with a directory they cannot use.
         """
         getuid = getattr(os, "getuid", None)
         if getuid is None:
             return f"{_UNPRIVILEGED_UID}:{_UNPRIVILEGED_UID}"
-        if self._is_rootless_daemon():
-            return "0:0"
+        mode = self._daemon_mode()
         uid = getuid()
-        if uid == 0:
-            return f"{_UNPRIVILEGED_UID}:{_UNPRIVILEGED_UID}"
-        return f"{uid}:{os.getgid()}"
+        if mode == "userns":
+            raise SandboxUnavailable("A userns-remap Docker daemon cannot use the sandbox workspace")
+        if mode == "rootless":
+            if uid == 0:
+                raise SandboxUnavailable("A root process cannot hand the workspace to a rootless daemon")
+            return "0:0"
+        if uid != 0:
+            return f"{uid}:{os.getgid()}"
+        handed = getattr(self, "_workspace_users", {}).get(tmpdir) if tmpdir else None
+        if handed is None:
+            # Not a workspace execute() prepared: run as a fresh uid that owns
+            # nothing on the host, which can only fail closed.
+            handed = _SANDBOX_UID_FLOOR + secrets.randbelow(_SANDBOX_UID_SPAN)
+        return f"{handed}:{handed}"
 
     def _hand_workspace_to_container_user(self, tmpdir: str) -> None:
-        """When this process is root (and the daemon is not rootless), give the
-        private exchange directory to the unprivileged container user, so it
-        stays 0700 instead of being opened to every local user."""
+        """When this process is root under a default daemon, give the private
+        exchange directory to a fresh uid no other host process has, so it
+        stays 0700 and private to this execution.
+
+        The files are re-owned first, without following links and only if
+        they are regular files, and the directory last: until then it is
+        still root's, so nothing can swap an entry in between.
+        """
         getuid = getattr(os, "getuid", None)
-        if getuid is None or getuid() != 0 or self._is_rootless_daemon():
+        if getuid is None or getuid() != 0 or self._daemon_mode() != "default":
             return
-        os.chown(tmpdir, _UNPRIVILEGED_UID, _UNPRIVILEGED_UID)
+        uid = _claim_sandbox_uid()
+        self._workspace_users[tmpdir] = uid
         for name in os.listdir(tmpdir):
-            os.chown(os.path.join(tmpdir, name), _UNPRIVILEGED_UID, _UNPRIVILEGED_UID)
+            path = os.path.join(tmpdir, name)
+            if not stat.S_ISREG(os.lstat(path).st_mode):
+                raise SandboxUnavailable(f"Unexpected non-regular workspace entry: {name}")
+            os.chown(path, uid, uid, follow_symlinks=False)
+        os.chown(tmpdir, uid, uid, follow_symlinks=False)
+
+    def _release_workspace_user(self, tmpdir: str) -> None:
+        uid = getattr(self, "_workspace_users", {}).pop(tmpdir, None)
+        if uid is not None:
+            _release_sandbox_uid(uid)
 
     def _run_in_container_bounded(self, tmpdir: str, execution_id: str) -> bool:
         """Run the container under the process-wide sandbox slot (#446).
@@ -644,7 +753,7 @@ class SecureCodeExecutor:
         create_kwargs = {
             "image": self.image,
             "command": cmd,
-            "volumes": {tmpdir: {'bind': '/workspace', 'mode': 'rw'}},
+            "volumes": {tmpdir: {'bind': _WORKSPACE, 'mode': 'rw'}},
             "mem_limit": self.memory_limit,
             "cpu_period": 100000,
             "cpu_quota": int(self.cpu_limit * 100000),
@@ -659,7 +768,7 @@ class SecureCodeExecutor:
             "pids_limit": self.pids_limit,
             # #322: read-only root, no capabilities, never root.
             **_EXECUTE_HARDENING,
-            "user": self._container_user(),
+            "user": self._container_user(tmpdir),
         }
         try:
             container = self.client.containers.create(**create_kwargs)

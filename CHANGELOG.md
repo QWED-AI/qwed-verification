@@ -18,11 +18,15 @@ All notable changes to the QWED Protocol will be documented in this file.
   - The container now has a read-only root, drops every capability, sets
     `no-new-privileges` and never runs as a privileged root, on top of the
     existing network, memory, CPU and PID limits. It runs as the owner of
-    the host's private exchange directory: the host user, or 65534 when the
-    host process is root (the directory is handed to 65534 first, so it stays
-    `0700`). Under a rootless daemon the container's root is the unprivileged
-    host user. `HOME` and `TMPDIR` point at `/workspace`, the only writable
-    path.
+    the host's private `0700` exchange directory: the host user, or, when the
+    host process is root, a fresh uid that no host account or group has and
+    no other running execution uses (the files are re-owned first, without
+    following links, and the directory last). Under a rootless daemon run by
+    the same user, the container's root is that unprivileged user. A root
+    process with a rootless daemon, a userns-remap daemon, or a daemon whose
+    security options cannot be read is reported as runtime unavailable
+    instead of being guessed. `HOME` and `TMPDIR` point at `/workspace`, the
+    only writable path.
 
 - **CrossHair runs only inside the Docker sandbox (#431).** CrossHair analyses
   a function by importing its module, which executes the module's top-level
