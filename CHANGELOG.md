@@ -36,6 +36,10 @@ All notable changes to the QWED Protocol will be documented in this file.
     a non-Boolean value is now a compile error (`ERROR`, never `SAT`/`VERIFIED`).
     `GT`/`LT`/`GTE`/`LTE` reject any Boolean operand, since Booleans have no
     ordering.
+  - `PLUS`/`MINUS`/`MULT`/`DIV`/`POW`/`MOD` reject Boolean operands, so a
+    Boolean cannot reach a comparison disguised as a number:
+    `(EQ x (PLUS True 0))` used to compile to `x == 1`, and a `Bool` variable
+    inside arithmetic to `If(b, 1, 0)`.
   - An undeclared name compared with `True`/`False` is rejected, not guessed
     to be a `Bool`: the error asks for `(VAR name Bool)`. Inferring the sort
     from the literal would hide a translation that forgot the declaration.

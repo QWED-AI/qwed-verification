@@ -98,6 +98,23 @@ def _check_comparison_sorts(operator: str, left: Any, right: Any) -> tuple:
     return left, right
 
 
+_ARITHMETIC_OPERATORS = ('PLUS', 'MINUS', 'MULT', 'DIV', 'POW', 'MOD')
+
+
+def _check_arithmetic_sorts(operator: str, operands: list) -> None:
+    """Reject Boolean operands in arithmetic.
+
+    ``True + 0`` is 1 in Python and z3 turns ``b + 0`` into ``If(b, 1, 0) + 0``,
+    so without this check ``(EQ x (PLUS True 0))`` compiled to ``x == 1`` and
+    slipped past the comparison check as a plain numeric equality.
+    """
+    for operand in operands:
+        if _is_boolean(operand):
+            raise ValueError(
+                f"{operator} applies arithmetic to a Boolean value: {operand}"
+            )
+
+
 @dataclass
 class CompileResult:
     """Result of compiling DSL to Z3/SymPy."""
@@ -250,6 +267,8 @@ class Z3Compiler:
             if len(compiled_args) != 2:
                 raise ValueError(f"{operator} requires exactly 2 operands")
             compiled_args = list(_check_comparison_sorts(operator, *compiled_args))
+        elif operator in _ARITHMETIC_OPERATORS:
+            _check_arithmetic_sorts(operator, compiled_args)
 
         if operator == 'EQ':
             return compiled_args[0] == compiled_args[1]
