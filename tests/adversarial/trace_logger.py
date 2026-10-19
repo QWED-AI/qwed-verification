@@ -48,7 +48,7 @@ class TestTrace:
 
     # QWED Verdicts
     qwed_engine: str = ""  # "sympy", "z3", "reasoning"
-    qwed_verdict: str = ""  # "VERIFIED", "CORRECTION_NEEDED", "SAT", "UNSAT"
+    qwed_verdict: str = ""  # engine status, e.g. "VERIFIED", "DISPROVEN", "INCONCLUSIVE", "SAT", "UNSAT"
     qwed_verdict_variant: str = ""
 
     # Analysis

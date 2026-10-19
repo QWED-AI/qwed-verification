@@ -4,6 +4,114 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A math claim proven false is now `VERIFIED` with admission `DENY`, not
+  `UNVERIFIABLE` (#437).** `2+2=5` used to come back as "Verification
+  inconclusive", which recorded a definite counter-proof as "could not be
+  proven". Admission was `DENY` either way, so nothing unsafe passed, but audit
+  rows and Verification Context documents carried the wrong meaning.
+  - `VerificationEngine` no longer emits `CORRECTION_NEEDED`. A mismatch decided
+    by a concrete computation returns the legacy status `DISPROVEN`.
+  - Symbolic checks (derivative, indefinite integral, limit, `/verify/math`
+    identities) return `DISPROVEN` only when SymPy decides the difference is
+    non-zero: outright, by the coefficients of a bounded polynomial (a
+    coefficient counts as non-zero only when SymPy decides it, so a true
+    identity with an irrational coefficient like `cos(pi/7) - cos(2*pi/7) +
+    cos(3*pi/7) - 1/2` is never disproven), or at an exact witness point. A
+    difference `simplify` cannot decide returns `INCONCLUSIVE`, which maps to
+    `UNVERIFIABLE`.
+  - An identity that only holds after `simplify` cancels a removable
+    singularity (`x/x = 1`, `(x**2-1)/(x-1) = x+1`) is `UNVERIFIABLE` with
+    `constraint_id: math.domain_restricted_identity` in `/verify/math`, and
+    `INCONCLUSIVE` (`reason: domain_mismatch`) in `verify_identity` (#429).
+    The denominators are read from the expression before SymPy evaluates
+    it (after the same NFKC normalization, so fullwidth operators count),
+    including the right side of floor division and modulo (`x//x = 1`,
+    `x % x = 0`); an identity is VERIFIED only when both sides have the same singular
+    factors. An identity using a function with poles or a singular point
+    (`tan`, `sec`, `log`, `factorial`, ...) and a free symbol is never
+    VERIFIED this way; closed constants such as `factorial(5) = 120` are.
+    A symbol-free part that is undefined (`log(0)**0 = 1`, `tan(pi/2)**0 = 1`)
+    or a constant zero denominator (`(1/(x-x))**0 = 1`) also blocks it, even
+    though SymPy evaluates such parts away. Names are read from the AST, so
+    a scientific literal such as `0e0` is never mistaken for a symbol.
+  - A witness point is used only when it satisfies the symbol's declared
+    domain (`n` is a positive integer, so `-1`, `0` and `1/2` are skipped).
+    It is substituted without evaluation and checked by the new
+    `safe_parser.check_closed_expression_cost` first, so a lazy power tower
+    such as `9**9**9**x` is never expanded at a witness.
+    A witness SymPy cannot evaluate is skipped, so the result is
+    `INCONCLUSIVE` rather than an engine error.
+  - A non-zero difference containing a Float literal (`0.1 + 0.2 = 0.3`
+    leaves 5.55e-17) is `INCONCLUSIVE`, not `DISPROVEN`. A numeric mismatch
+    involving a non-finite value (an overflowed sum, a NaN claim) is also
+    `INCONCLUSIVE`.
+  - `verify_irr` decides Newton convergence on the rate step instead of an
+    absolute NPV residual, so small cash flows no longer stop at the
+    initial guess and report a correct IRR claim as `DISPROVEN`. Newton steps
+    are damped to keep `1 + r > 0`, so a negative IRR (`[-100, 20, 20]` is
+    -44%) is no longer replaced by a spurious root below -100%.
+    Non-finite cash flows are `BLOCKED` before the solver runs, and the step
+    halving is bounded, so `[inf, -1]` can no longer hang the request.
+  - Matrix `add`, `multiply`, `inverse`, `transpose` and `determinant` run
+    exactly: each float input is read as the decimal the caller wrote (`0.1`
+    is 1/10), with no tolerance. So `[[0.1]] + [[0.2]]` vs `[[0.3]]` is
+    `VERIFIED`, `[[0.5]] + [[1e9]]` vs `[[1000000001.0]]` is `DISPROVEN`, and
+    the determinant no longer accepts `-2.0000001` for `det([[1, 2], [3, 4]])`.
+    A float claim of an exact entry holds when its decimal or its double is
+    exactly that value, or, for a fraction that is not a double
+    (`inverse([[3]])` is 1/3), when it is the correctly rounded double; a
+    non-zero value that underflows to `0.0` never accepts a `0.0` claim. A
+    claim that only rounds to the same double, or falls inside the rounding
+    window, is `INCONCLUSIVE`. A claimed matrix of the wrong shape is
+    `DISPROVEN`; a non-finite entry is `INCONCLUSIVE`.
+  - Definite integrals and eigenvalues are decided exactly when both sides are
+    exact. With a float claim, the difference itself is evaluated at a
+    precision scaled to the magnitude against the 1e-6 tolerance; a mismatch
+    within the representation error of the least precise Float involved
+    (a double's 2**-52 at least, narrower only for a claim clearly more
+    precise than any double repr, wider for one deliberately less
+    precise) is
+    `INCONCLUSIVE`,
+    anything larger is `DISPROVEN`. Floats are replaced by their exact
+    values before subtracting, so `2**53 + 1` vs `9007199254740992.0` is no
+    longer a difference of 0. Past the precision budget (~1e105) a gross
+    mismatch is still `DISPROVEN` (`2e200` vs `1e200`) and anything closer
+    is `INCONCLUSIVE`. A divergent integral is `INCONCLUSIVE`.
+    Eigenvalues are compared as complex numbers, so a rotation matrix's
+    `+-i` no longer matches a claim of `[0, 0]`.
+  - `verify_unit_conversion` uses the exact legal unit definitions in Decimal
+    (1 lb = 0.45359237 kg, 1 US gal = 3.785411784 L) and `BLOCKED`s units of
+    different dimensions (`m` to `kg`) instead of comparing the numbers.
+    Temperature conversions also run in Decimal, and the tolerance is
+    validated before any branch.
+  - The control plane signs and attests `DISPROVEN` like `VERIFIED`, with
+    `verified=False` in the attestation and `is_valid: false` in the result.
+  - New `DiagnosticResult.disproven()` builds a `VERIFIED` result with
+    `is_valid` forced to `False`. `from_legacy_dict` raises for `DISPROVEN`,
+    because a counter-proof needs a `proof_ref`.
+  - The control-plane math response and `/verify/math` now include
+    `admission`. `/verify/math` logs `is_verified` from `is_valid`, so a
+    proven-false identity is no longer logged as verified.
+  - `/verify/natural_language` now returns the verdict the control plane
+    enforced (attached as `diagnostic`) together with `admission`, instead of
+    re-deriving it from the legacy engine dict, which turned every decided
+    claim into `UNVERIFIABLE`. A malformed diagnostic is `BLOCKED`, and if the
+    output sanitizer rejects the translated expression the verdict is
+    `BLOCKED` too. The verdict carries `translated_expression`,
+    `verification_scope: translated_expression_only` and
+    `query_semantics_verified: false`, so it is not mistaken for proof of the
+    user's question. For the same reason admission is always `DENY` there
+    (and in the control-plane response), even when the translated claim
+    holds: the translation itself is unverified, so the user's question is
+    never admitted. The verdict is not changed, and the log row's
+    `is_verified` follows admission.
+- **`qwed init` and `qwed test` print the verdict with its admission (#438).**
+  Decided cases no longer print `BLOCKED`, and `VERIFIED` never appears alone:
+  `2+2=5 -> VERIFIED (false) | DENY`. A failed self-check prints `FAILED`. The
+  closing lines say `All engines ready.` instead of "All engines verified".
+
 ### Changed
 
 - **The API now writes its audit rows through the signed hash chain.** Every

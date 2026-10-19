@@ -223,6 +223,11 @@ safe-to-ship decision, computed from the verdict plus policy.
 unsafe) with admission `DENY`. This is the critical case a conflated model gets
 wrong.
 
+**Proven false is the same case.** A claim the engine disproves (for example the
+math claim `2+2=5`) is `VERIFIED` with `is_valid: false` and admission `DENY`. It
+is never `UNVERIFIABLE`: `UNVERIFIABLE` means the engine could neither prove nor
+disprove the claim.
+
 **Gating.** Execution and shipping consumers gate **exclusively** on
 `admission == "ADMIT"`. `is_valid` contributes to the admission decision but is
 **not** an alternative authorization gate — a valid statement can still be denied
@@ -232,6 +237,7 @@ by policy.
 |---------|-------|---------------------|
 | `VERIFIED`, valid | proven safe | `ADMIT` |
 | `VERIFIED`, unsafe | proven unsafe | **`DENY`** |
+| `VERIFIED`, false | proven false (counter-proof) | **`DENY`** |
 | `UNVERIFIABLE` | not proven | `DENY` (fail-closed) |
 | `BLOCKED` | verification failed | `DENY` (fail-closed) |
 

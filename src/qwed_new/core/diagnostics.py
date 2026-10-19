@@ -659,6 +659,30 @@ class DiagnosticResult:
         )
 
     @classmethod
+    def disproven(
+        cls,
+        agent_message: str,
+        developer_fields: Dict[str, Any],
+        evidence: Dict[str, Any],
+        proof_data: Optional[str] = None,
+    ) -> "DiagnosticResult":
+        """Construct a VERIFIED result for a claim proven FALSE (#437).
+
+        A deterministic counter-proof is a decided verdict: the status is
+        VERIFIED (truth was established) and ``developer_fields.is_valid`` is
+        forced to False, so :func:`admission_decision` returns BLOCKED (DENY).
+        It must never be reported as UNVERIFIABLE ("inconclusive").
+
+        Args are as for :meth:`verified`.
+        """
+        return cls.verified(
+            agent_message,
+            developer_fields={**developer_fields, "is_valid": False},
+            evidence=evidence,
+            proof_data=proof_data,
+        )
+
+    @classmethod
     def unverifiable(
         cls,
         agent_message: str,
@@ -707,8 +731,9 @@ class DiagnosticResult:
         """Migration helper: convert ad-hoc engine dict to DiagnosticResult.
 
         Interprets the common pre-#204 patterns:
-            {"is_correct": True, "status": "VERIFIED", ...}  → VERIFIED
-            {"is_correct": False, "status": "CORRECTION_NEEDED", ...}  → UNVERIFIABLE
+            {"is_correct": True, "status": "VERIFIED", ...}  → ValueError (needs evidence)
+            {"is_correct": False, "status": "DISPROVEN", ...}  → ValueError (needs evidence)
+            {"is_correct": False, "status": "CORRECTION_NEEDED", ...}  → UNVERIFIABLE (pre-#437)
             {"is_correct": False, "status": "BLOCKED", ...}  → BLOCKED
             {"is_correct": False, "status": "ERROR", "error": ...}  → BLOCKED
             {"is_correct": False, "status": "SYNTAX_ERROR", ...}  → BLOCKED
@@ -751,6 +776,15 @@ class DiagnosticResult:
                 "from_legacy_dict cannot migrate VERIFIED results — "
                 "proof artifacts were not retained by legacy engines. "
                 "Use DiagnosticResult.verified() with explicit evidence dict."
+            )
+
+        # A counter-proof is a decided verdict (VERIFIED, is_valid False), not
+        # an inconclusive one, and VERIFIED needs proof_ref (#437).
+        if legacy_status == "DISPROVEN":
+            raise ValueError(
+                "from_legacy_dict cannot migrate DISPROVEN results — a counter-proof "
+                "is VERIFIED with is_valid False and needs a proof_ref. "
+                "Use DiagnosticResult.disproven() with explicit evidence dict."
             )
 
         if legacy_status == "BLOCKED":

@@ -191,6 +191,11 @@ def test_init_non_interactive_success(
     assert "Step 2/3: API Key" in result.output
     assert "Step 3/3: Generate QWED API Key" in result.output
     assert "qwed_live_test_key" in result.output
+    # #438: verdict vocabulary in the self-check output.
+    assert "2+2=5                    -> VERIFIED (false) | DENY" in result.output
+    assert "-> BLOCKED" not in result.output
+    assert "All engines ready." in result.output
+    assert "All engines verified" not in result.output
 
 
 @patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
@@ -1280,6 +1285,18 @@ def test_run_init_smoke_suite_returns_all_checks():
     labels = [item["label"] for item in suite]
     assert labels == ["2+2=5", "x>5 AND x<3", "SELECT * WHERE 1=1", "eval(user_input)"]
     assert all(item["passed"] for item in suite)
+
+
+def test_run_init_smoke_suite_prints_verdict_with_admission():
+    """#438: decided cases never print BLOCKED, and VERIFIED never appears
+    without its admission."""
+    results = {item["label"]: item["result"] for item in _run_init_smoke_suite()}
+    assert results == {
+        "2+2=5": "VERIFIED (false) | DENY",
+        "x>5 AND x<3": "UNVERIFIABLE | DENY",
+        "SELECT * WHERE 1=1": "VERIFIED (unsafe) | DENY",
+        "eval(user_input)": "VERIFIED (unsafe) | DENY",
+    }
 
 
 def test_ensure_local_server_running_returns_when_already_healthy(monkeypatch):

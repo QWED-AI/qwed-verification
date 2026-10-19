@@ -16,13 +16,18 @@ from typing import Dict, Any, Optional
 from qwed_new.core.router import Router
 from qwed_new.core.policy import PolicyEngine
 from qwed_new.core.translator import TranslationLayer
-from qwed_new.core.verifier import VerificationEngine
+from qwed_new.core.verifier import VerificationEngine, DISPROVEN_STATUS
 from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
 from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.core.observability import metrics_collector
 from qwed_new.core.security import EnhancedSecurityGateway, redact_pii
 from qwed_new.core.output_sanitizer import OutputSanitizer
-from qwed_new.core.diagnostics import DiagnosticResult, enforce_trust_decision
+from qwed_new.core.diagnostics import (
+    AdmissionDecision,
+    DiagnosticResult,
+    admission_decision,
+    enforce_trust_decision,
+)
 from qwed_new.core.attestation import create_verification_attestation, AttestationStatus
 
 logger = logging.getLogger(__name__)
@@ -60,6 +65,19 @@ async def _run_z3_call(func, *args, **kwargs):
     )
 
 
+def natural_language_admission(diagnostic: DiagnosticResult) -> AdmissionDecision:
+    """Admission for a verdict reached through an LLM translation.
+
+    The engine decided only the translated expression; nothing proves that
+    expression means what the user asked. The verdict is kept as produced
+    (QWED #15), but it is admitted for the user's query only when its
+    developer fields record that the query semantics were verified.
+    """
+    if diagnostic.developer_fields.get("query_semantics_verified") is not True:
+        return AdmissionDecision.BLOCKED
+    return admission_decision(diagnostic)
+
+
 class ControlPlane:
     """
     The QWED Kernel.
@@ -83,7 +101,7 @@ class ControlPlane:
     ) -> Dict[str, Any]:
         """Describe exactly what the math pipeline did and did not prove."""
         expression_status = verification_result.get("status")
-        deterministic_evaluation = expression_status in {"VERIFIED", "CORRECTION_NEEDED"}
+        deterministic_evaluation = expression_status in {"VERIFIED", DISPROVEN_STATUS}
         return {
             "query_interpretation_source": "llm_translation",
             "query_semantics_verified": False,
@@ -98,12 +116,108 @@ class ControlPlane:
     def _determine_math_response_status(verification_result: Dict[str, Any]) -> str:
         """Avoid representing translated-query evaluation as a proven user-query verdict."""
         expression_status = verification_result.get("status")
-        if expression_status in {"VERIFIED", "CORRECTION_NEEDED"}:
+        if expression_status in {"VERIFIED", DISPROVEN_STATUS}:
             return "INCONCLUSIVE"
         if expression_status == "SYNTAX_ERROR":
             return "ERROR"
         return expression_status or "ERROR"
         
+    @staticmethod
+    def _math_diagnostic(expression: str, verification_result: Dict[str, Any]) -> tuple:
+        """Build the decided DiagnosticResult for a VERIFIED / DISPROVEN math
+        result, with the evidence string its attestation must bind to.
+
+        A proven-false claim (#437) is VERIFIED with is_valid False, so
+        admission is DENY; it is never reported as UNVERIFIABLE.
+        """
+        legacy_status = verification_result["status"]
+        evidence = {
+            "expression": expression,
+            "calculated_value": verification_result.get("calculated_value"),
+            "claimed_value": verification_result.get("claimed_value"),
+            "diff": verification_result.get("diff"),
+            "precision_mode": verification_result.get("precision_mode"),
+            "status": legacy_status,
+        }
+        if legacy_status == "VERIFIED":
+            dr = DiagnosticResult.verified(
+                "Expression verified successfully",
+                developer_fields={**verification_result, "is_valid": True},
+                evidence=evidence,
+                proof_data=str(evidence),
+            )
+        else:
+            dr = DiagnosticResult.disproven(
+                "Claimed value is proven false",
+                developer_fields=verification_result,
+                evidence=evidence,
+                proof_data=str(evidence),
+            )
+        return dr, str(evidence)
+
+    def _enforce_math_verdict(
+        self,
+        expression: str,
+        verification_result: Dict[str, Any],
+        trust_boundary: Dict[str, Any],
+    ) -> DiagnosticResult:
+        """Turn the engine result into an enforced DiagnosticResult.
+
+        Attestation is always required — advisory mode was a temporary
+        migration measure (#265). Decided verdicts (VERIFIED / DISPROVEN) are
+        signed; anything else goes through the fail-closed legacy mapping.
+
+        The engine checked only the LLM's translated expression, never the
+        user's question, so the verdict carries that expression and its scope:
+        a consumer reading only the diagnostic cannot mistake it for proof of
+        the question itself.
+        """
+        verification_result = {
+            **verification_result,
+            "translated_expression": expression,
+            "verification_scope": "translated_expression_only",
+            "query_semantics_verified": False,
+        }
+        if verification_result.get("status", "ERROR") not in ("VERIFIED", DISPROVEN_STATUS):
+            # from_legacy_dict raises only for VERIFIED / DISPROVEN without
+            # proof_ref, which never reach this branch.
+            dr = DiagnosticResult.from_legacy_dict(verification_result, engine="math")
+            return enforce_trust_decision(
+                dr,
+                require_attestation=True,
+                query=expression,  # #279 — consistent log-side hash attribution to expression
+            )
+
+        dr, proof_data = self._math_diagnostic(expression, verification_result)
+        # (#279) Attest the translated formula — not the natural-language
+        # query — so qwed.query_hash binds to the expression the deterministic
+        # engine actually verified, not the user's prose.
+        att_result = create_verification_attestation(
+            status="VERIFIED",
+            verified=dr.developer_fields.get("is_valid") is True,
+            engine="math",
+            query=expression,
+            confidence=1.0,
+            proof_data=proof_data,
+        )
+        if att_result.status is not AttestationStatus.ISSUED:
+            logger.warning(
+                "trust_boundary.attestation_failed query_hash=%s status=%s",
+                hashlib.sha256(expression.encode()).hexdigest()[:16] if expression else "unknown",
+                att_result.status.value,
+            )
+            trust_boundary["attestation_error"] = att_result.error_code
+            return DiagnosticResult.blocked(
+                "Attestation unavailable — cannot sign VERIFIED result",
+                developer_fields={"constraint_id": "api.attestation.signing_error"},
+            )
+        return enforce_trust_decision(
+            dr,
+            require_attestation=True,
+            attestation_token=att_result.token,
+            query=expression,  # #279 — must match qwed.query_hash in the attestation
+        )
+
     async def process_natural_language(
         self, 
         query: str, 
@@ -172,73 +286,15 @@ class ControlPlane:
             trust_boundary = self._build_math_trust_boundary(provider, verification_result)
 
             # 4.5 Trust Boundary Enforcement (Issue #191 / #265)
-            # Attestation is always required — advisory mode was a
-            # temporary migration measure (#265).
-            legacy_status = verification_result.get("status", "ERROR")
-            if legacy_status == "VERIFIED":
-                # VERIFIED requires proof_ref. Build DiagnosticResult.verified()
-                # from the computation evidence and issue an attestation.
-                evidence = {
-                    "expression": task.expression,
-                    "calculated_value": verification_result.get("calculated_value"),
-                    "claimed_value": verification_result.get("claimed_value"),
-                    "diff": verification_result.get("diff"),
-                    "precision_mode": verification_result.get("precision_mode"),
-                    "status": "VERIFIED",
-                }
-                dr = DiagnosticResult.verified(
-                    "Expression verified successfully",
-                    developer_fields=verification_result,
-                    evidence=evidence,
-                    proof_data=str(evidence),
-                )
-                # Issue attestation for the VERIFIED result.
-                # (#279) Attest the translated formula — not the natural-language
-                # query — so qwed.query_hash binds to task.expression (what the
-                # deterministic engine actually verified), not the user's prose.
-                att_result = create_verification_attestation(
-                    status="VERIFIED",
-                    verified=True,
-                    engine="math",
-                    query=task.expression,
-                    confidence=1.0,
-                    proof_data=str(evidence),
-                )
-                if att_result.status is not AttestationStatus.ISSUED:
-                    logger.warning(
-                        "trust_boundary.attestation_failed query_hash=%s status=%s",
-                        hashlib.sha256(task.expression.encode()).hexdigest()[:16] if task.expression else "unknown",
-                        att_result.status.value,
-                    )
-                    dr = DiagnosticResult.blocked(
-                        "Attestation unavailable — cannot sign VERIFIED result",
-                        developer_fields={"constraint_id": "api.attestation.signing_error"},
-                    )
-                    enforced = dr
-                    trust_boundary["attestation_error"] = att_result.error_code
-                else:
-                    enforced = enforce_trust_decision(
-                        dr,
-                        require_attestation=True,
-                        attestation_token=att_result.token,
-                        query=task.expression,  # #279 — must match qwed.query_hash in the attestation
-                    )
-            else:
-                # Non-VERIFIED path: convert legacy dict and enforce.
-                # from_legacy_dict raises only for VERIFIED without proof_ref,
-                # which is already handled above.
-                dr = DiagnosticResult.from_legacy_dict(verification_result, engine="math")
-                enforced = enforce_trust_decision(
-                    dr,
-                    require_attestation=True,
-                    query=task.expression,  # #279 — consistent log-side hash attribution to expression
-                )
+            enforced = self._enforce_math_verdict(task.expression, verification_result, trust_boundary)
             trust_boundary["trust_enforced"] = enforced.status.value
             trust_boundary["attestation_policy"] = "mandatory"
             response_status = enforced.status.value
             trust_boundary["overall_status"] = enforced.status.value
 
             # 5. Response Construction
+            # Admission is a separate decision from the verdict (QWED #15):
+            # VERIFIED alone does not mean the claim holds.
             response = {
                 "status": response_status,
                 "final_answer": verification_result.get("calculated_value"),
@@ -256,7 +312,22 @@ class ControlPlane:
                 output_type="math",
                 organization_id=organization_id
             )
-            # (Simple pass-through for now, but place is reserved)
+            # The sanitizer may reject the translated expression and set status
+            # to ERROR; the verdict must not outlive that rejection.
+            if response.get("status") != enforced.status.value:
+                enforced = DiagnosticResult.blocked(
+                    "Output sanitization rejected the translated expression",
+                    developer_fields={"constraint_id": "control_plane.output_sanitization"},
+                )
+            # The enforced verdict travels with the response so API consumers
+            # (e.g. /verify/natural_language) use it instead of re-deriving it
+            # from the legacy engine dict.
+            response["diagnostic"] = self.output_sanitizer.sanitize_output(
+                result=enforced.to_dict(),
+                output_type="diagnostic",
+                organization_id=organization_id,
+            )
+            response["admission"] = natural_language_admission(enforced).value
             
             # 7. Track Metrics
             if organization_id:
