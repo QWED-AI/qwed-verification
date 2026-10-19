@@ -47,6 +47,31 @@ class DSLLogicVerifier:
     4. Solve and return result
     """
     
+    # Operator names the natural-language bridge emits. They must be the DSL
+    # parser's whitelist names (QWEDLogicDSL().operators): a name the parser
+    # does not know comes back BLOCKED, so a drift here silently rejects valid
+    # constraints. tests/test_dsl_bridge_operator_names.py pins the two together.
+    _BINOP_DSL = {
+        ast.Add: "PLUS",
+        ast.Sub: "MINUS",
+        ast.Mult: "MULT",
+        ast.Div: "DIV",
+        ast.Mod: "MOD",
+        ast.Pow: "POW",
+    }
+    _COMPARE_DSL = {
+        ast.Eq: "EQ",
+        ast.NotEq: "NEQ",
+        ast.Gt: "GT",
+        ast.Lt: "LT",
+        ast.GtE: "GTE",
+        ast.LtE: "LTE",
+    }
+    # AND/OR from boolean ops, chained comparisons and And()/Or(); NOT from
+    # `not` and Not(); MINUS from unary minus, emitted as (MINUS 0 x).
+    _STRUCTURAL_DSL = frozenset({"AND", "OR", "NOT", "MINUS"})
+    BRIDGE_OPERATORS = frozenset(_BINOP_DSL.values()) | frozenset(_COMPARE_DSL.values()) | _STRUCTURAL_DSL
+
     def __init__(self, timeout_ms: int = 5000):
         self.timeout_ms = timeout_ms
     
@@ -336,36 +361,20 @@ class DSLLogicVerifier:
 
     def _binop_to_dsl(self, node: ast.BinOp) -> str:
         """Convert arithmetic binary operations to DSL."""
-        op_map = {
-            ast.Add: "PLUS",
-            ast.Sub: "MINUS",
-            ast.Mult: "MUL",
-            ast.Div: "DIV",
-            ast.Mod: "MOD",
-            ast.Pow: "POW",
-        }
-        op = op_map.get(type(node.op))
+        op = self._BINOP_DSL.get(type(node.op))
         if not op:
             raise ValueError(f"Unsupported arithmetic operator: {type(node.op).__name__}")
         return f"({op} {self._ast_to_dsl(node.left)} {self._ast_to_dsl(node.right)})"
 
     def _compare_to_dsl(self, node: ast.Compare) -> str:
         """Convert comparison expressions (including chains) to DSL."""
-        cmp_map = {
-            ast.Eq: "EQ",
-            ast.NotEq: "NE",
-            ast.Gt: "GT",
-            ast.Lt: "LT",
-            ast.GtE: "GE",
-            ast.LtE: "LE",
-        }
         if len(node.ops) != len(node.comparators):
             raise ValueError("Invalid comparison expression")
 
         comparisons: List[str] = []
         left = node.left
         for op_node, right in zip(node.ops, node.comparators, strict=False):
-            op = cmp_map.get(type(op_node))
+            op = self._COMPARE_DSL.get(type(op_node))
             if not op:
                 raise ValueError(f"Unsupported comparison operator: {type(op_node).__name__}")
             comparisons.append(f"({op} {self._ast_to_dsl(left)} {self._ast_to_dsl(right)})")

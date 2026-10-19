@@ -98,10 +98,10 @@ def test_logic_task_to_dsl_rejects_non_satisfiability_goal():
 def test_constraint_to_dsl_uses_canonical_operators():
     verifier = DSLLogicVerifier()
 
-    assert verifier._constraint_to_dsl("x * y == 10") == "(EQ (MUL x y) 10)"
-    assert verifier._constraint_to_dsl("x != y") == "(NE x y)"
-    assert verifier._constraint_to_dsl("x >= 5") == "(GE x 5)"
-    assert verifier._constraint_to_dsl("x <= 5") == "(LE x 5)"
+    assert verifier._constraint_to_dsl("x * y == 10") == "(EQ (MULT x y) 10)"
+    assert verifier._constraint_to_dsl("x != y") == "(NEQ x y)"
+    assert verifier._constraint_to_dsl("x >= 5") == "(GTE x 5)"
+    assert verifier._constraint_to_dsl("x <= 5") == "(LTE x 5)"
 
 
 def test_constraint_to_dsl_rejects_float_literals():
