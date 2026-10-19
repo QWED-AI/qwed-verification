@@ -13,6 +13,7 @@ Phase 1 of QWED's symbolic execution roadmap.
 from typing import Dict, Any, List, Optional
 import ast
 import os
+import re
 import secrets
 
 from .diagnostics import AdvisoryCheck, DiagnosticResult, DiagnosticStatus
@@ -54,7 +55,10 @@ CONSTRAINT_INPUT_TOO_LARGE = "symbolic_verifier.input_too_large"
 # nor write a result line, and a long or unterminated output cannot hide the
 # line. What it still controls is the child's own exit code (os._exit), as
 # any code CrossHair imports can: that is why an exit-0 run is only ever
-# "no counterexample found", UNVERIFIABLE, never a proof.
+# "no counterexample found", UNVERIFIABLE, never a proof, and why an exit 1
+# counts as a counterexample only with CrossHair's own report line. The
+# protection of the parent's /proc entries assumes the runner is not root:
+# the sandbox runs it as user 65534 with every capability dropped.
 #
 # In the child, an image without CrossHair exits _CROSSHAIR_MISSING_EXIT (the
 # parent checks first), and a SystemExit raised from target.py or an
@@ -147,27 +151,28 @@ def _reported_code(stdout: str, nonce: str) -> Optional[int]:
     return None
 
 
+# How CrossHair reports a counterexample: "<file>:<line>: error: <message>".
+_CROSSHAIR_REPORT_LINE = re.compile(r":\d+: error: ")
+
+
 def _issues_from_crosshair(returncode: int, output: str, func_name: str) -> List[Dict[str, Any]]:
-    """Issues for a run whose outcome CrossHair itself reported. Exit 1 is a
-    disproving counterexample; any other nonzero exit (2, a crash, a
-    SystemExit from the analysed code) is an engine error, not a disproof."""
+    """Issues for a run the runner reported. Exit 1 is a disproving
+    counterexample only together with CrossHair's own report of it: the
+    analysed code can end the child early with os._exit(1), and that exit
+    alone proves nothing. Any other nonzero exit (2, a crash, a SystemExit
+    from the analysed code) is an engine error, not a disproof."""
     if returncode == 0:
         return []
-    if returncode != 1:
-        return [{
-            "type": "error",
-            "function": func_name,
-            "description": output.strip() or f"CrossHair exited with code {returncode}."
-        }]
-    issues = [
-        {"type": "counterexample", "function": func_name, "description": line.strip()}
-        for line in output.split("\n")
-        if line.strip() and ("error" in line.lower() or "counterexample" in line.lower())
-    ]
-    return issues or [{
-        "type": "counterexample",
+    reports = [line.strip() for line in output.split("\n") if _CROSSHAIR_REPORT_LINE.search(line)]
+    if returncode == 1 and reports:
+        return [
+            {"type": "counterexample", "function": func_name, "description": report}
+            for report in reports
+        ]
+    return [{
+        "type": "error",
         "function": func_name,
-        "description": output.strip() or "CrossHair reported a counterexample (exit code 1)."
+        "description": output.strip()[-500:] or f"CrossHair exited with code {returncode} without a report.",
     }]
 
 

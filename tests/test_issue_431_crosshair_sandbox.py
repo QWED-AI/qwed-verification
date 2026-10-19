@@ -304,24 +304,30 @@ def test_runner_reports_a_target_sys_exit_as_an_engine_error(tmp_path):
 
 
 @linux_only
+@pytest.mark.skipif(
+    sys.platform.startswith("linux") and os.geteuid() == 0,
+    reason="root bypasses the non-dumpable protection; the sandbox runs the runner as user 65534",
+)
 def test_target_cannot_read_the_nonce_or_write_the_result_line(tmp_path):
     # The analysed code runs in the child: the nonce is not in its
     # environment, the non-dumpable parent's /proc entries are closed to it,
-    # and its stdout is the container's stderr.
+    # and its stdout is the container's stderr. (CrossHair's own audit wall
+    # also refuses some of these opens while the code is imported; either
+    # refusal is fine, so the probe catches everything.)
     probe = (
         "import os\n"
         "seen = []\n"
         "for path in ('/proc/self/environ', f'/proc/{os.getppid()}/environ'):\n"
         "    try:\n"
         "        seen.append(open(path, 'rb').read())\n"
-        "    except OSError:\n"
+        "    except BaseException:\n"
         "        pass\n"
         "print('LEAKED' if any(b'n0nce' in data for data in seen) else 'SEALED')\n"
         "print('QWED_CROSSHAIR_RESULT n0nce 0', flush=True)\n"
         "try:\n"
         "    with open(f'/proc/{os.getppid()}/fd/1', 'w') as out:\n"
         "        out.write('QWED_CROSSHAIR_RESULT n0nce 0\\n')\n"
-        "except OSError:\n"
+        "except BaseException:\n"
         "    pass\n"
     )
     code, reported, stdout, stderr = _run_real_runner(tmp_path, "div", probe + DIV)
@@ -343,6 +349,24 @@ def test_a_target_os_exit_controls_only_the_child_exit_code(tmp_path):
     assert code == 0
     assert reported == 0
     assert stdout == f"{_RESULT_MARKER} n0nce 0\n"
+
+
+@linux_only
+def test_an_early_os_exit_1_is_not_a_counterexample(tmp_path):
+    # The child ends before CrossHair checks anything; its exit 1 comes with
+    # no CrossHair report, so the verifier treats it as an engine error.
+    code, reported, stdout, stderr = _run_real_runner(tmp_path, "div", "import os\nos._exit(1)\n" + DIV)
+
+    assert code == 1
+    assert reported == 1
+
+    class _Replay(_Sandbox):
+        def run_isolated(self, command, **kwargs):
+            nonce = kwargs["environment"][_NONCE_ENV]
+            return code, stdout.replace("n0nce", nonce), stderr
+
+    issues = SymbolicVerifier(sandbox=_Replay())._run_crosshair_check(DIV, "div")
+    assert [issue["type"] for issue in issues] == ["error"]
 
 
 @pytest.mark.skipif(sys.platform.startswith("linux"), reason="checks the non-Linux refusal")
@@ -371,6 +395,29 @@ def test_runner_refuses_without_prctl(tmp_path):
 )
 def test_reported_code(stdout, expected):
     assert _reported_code(stdout, "n0nce") == expected
+
+
+@pytest.mark.parametrize(
+    "output",
+    ["", "error: something", "a counterexample was found", "Traceback (most recent call last):"],
+)
+def test_exit_1_without_a_crosshair_report_is_an_engine_error(output):
+    issues = SymbolicVerifier(sandbox=_Sandbox(returncode=1, output=output))._run_crosshair_check(TYPED, "add")
+
+    assert [issue["type"] for issue in issues] == ["error"]
+
+
+def test_exit_1_with_crosshair_reports_lists_each_counterexample():
+    output = (
+        "/workspace/target.py:5: error: ZeroDivisionError:  when calling div(0, 0)\n"
+        "noise\n"
+        "/workspace/target.py:9: error: false when calling g(-1)\n"
+    )
+    issues = SymbolicVerifier(sandbox=_Sandbox(returncode=1, output=output))._run_crosshair_check(TYPED, "add")
+
+    assert [issue["type"] for issue in issues] == ["counterexample", "counterexample"]
+    assert "div(0, 0)" in issues[0]["description"]
+    assert "g(-1)" in issues[1]["description"]
 
 
 def test_reported_code_needs_a_nonce():
