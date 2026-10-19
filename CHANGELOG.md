@@ -6,6 +6,22 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Fixed
 
+- **The natural-language logic bridge emits the DSL parser's operator names.**
+  `DSLLogicVerifier` translated `!=`, `>=`, `<=` and `*` to `NE`, `GE`, `LE`
+  and `MUL`, which the DSL whitelist does not know (it has `NEQ`, `GTE`,
+  `LTE` and `MULT`). Every bridged constraint using one of them came back
+  `BLOCKED` ("Unknown operator"): fail-closed, but valid constraints such as
+  `x >= 5` or `x * 2 <= 10` could never be verified. The bridge now emits the
+  whitelist names. A test pins every operator the bridge can emit to
+  `QWEDLogicDSL().operators`, and per-operator tests run the real parser,
+  compiler and Z3 and check the exact DSL and the SAT/UNSAT result. No verdict
+  mapping changed; unknown operators, unsupported Python syntax and solver
+  errors still fail closed.
+  The bridge also lowercased `And(...)` / `Or(...)` to `and(...)` / `or(...)`,
+  which is not valid Python, so a constraint written in the function style the
+  bridge supports came back `ERROR`. Keywords in call position now become the
+  `And` / `Or` calls (in any case); infix `AND` / `Or` / `not` still read as
+  operators.
 - **The logic DSL compiles every operator its parser accepts (#428).**
   `IFF`, `FORALL` and `EXISTS` were whitelisted by the parser and suggested
   by the provider prompts, but the Z3 compiler had no branch for them, so any
