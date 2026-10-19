@@ -354,6 +354,50 @@ def test_a_uid_inside_a_subordinate_id_range_is_skipped(monkeypatch, tmp_path):
     sce._release_sandbox_uid(uid)
 
 
+def _delegate(monkeypatch, tmp_path, lines):
+    subuid = tmp_path / "subuid"
+    subuid.write_text("".join(f"{line}\n" for line in lines))
+    monkeypatch.setattr(sce, "_SUBORDINATE_ID_FILES", (str(subuid),))
+
+
+@pytest.mark.parametrize("start", [0, 5000, 99998])
+def test_a_large_delegated_block_is_skipped_whole(monkeypatch, tmp_path, start):
+    # A 99999-id block, far more than the probe budget, covers all but the
+    # last id of the range; wherever the walk starts, it finds that id.
+    monkeypatch.setenv(sce.SANDBOX_UID_RANGE_ENV, "2000000000-2000099999")
+    _delegate(monkeypatch, tmp_path, ["podman:2000000000:99999"])
+    monkeypatch.setattr(sce.secrets, "randbelow", lambda span: start)
+    probes = []
+    monkeypatch.setattr(sce, "_host_id_exists", lambda uid: probes.append(uid) or False)
+
+    uid = sce._claim_sandbox_uid()
+
+    assert uid == 2000099999
+    assert probes == [2000099999]
+    sce._release_sandbox_uid(uid)
+
+
+def test_a_block_running_past_the_range_end_wraps_to_its_start(monkeypatch, tmp_path):
+    monkeypatch.setenv(sce.SANDBOX_UID_RANGE_ENV, "2000000000-2000000009")
+    _delegate(monkeypatch, tmp_path, ["a:2000000005:100"])
+    monkeypatch.setattr(sce.secrets, "randbelow", lambda span: 7)
+    monkeypatch.setattr(sce, "_host_id_exists", lambda uid: False)
+
+    uid = sce._claim_sandbox_uid()
+
+    assert uid == 2000000000
+    sce._release_sandbox_uid(uid)
+
+
+def test_a_range_wholly_delegated_is_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setenv(sce.SANDBOX_UID_RANGE_ENV, "2000000000-2000000009")
+    _delegate(monkeypatch, tmp_path, ["a:1999999990:15", "b:2000000004:6"])
+    monkeypatch.setattr(sce, "_host_id_exists", lambda uid: False)
+
+    with pytest.raises(SandboxUnavailable):
+        sce._claim_sandbox_uid()
+
+
 @pytest.mark.parametrize("start", [0, 41, 98, 99])
 def test_a_small_range_with_one_free_uid_always_finds_it(monkeypatch, start):
     monkeypatch.setenv(sce.SANDBOX_UID_RANGE_ENV, "2000000000-2000000099")

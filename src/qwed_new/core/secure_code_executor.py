@@ -214,12 +214,6 @@ def _subordinate_ranges() -> List[Tuple[int, int]]:
     return ranges
 
 
-def _in_subordinate_range(uid: int, ranges: Optional[List[Tuple[int, int]]] = None) -> bool:
-    """True when a subordinate id delegation covers this id."""
-    blocks = _subordinate_ranges() if ranges is None else ranges
-    return any(start <= uid < start + count for start, count in blocks)
-
-
 def _random_sandbox_uid() -> int:
     first, last = _sandbox_uid_range()
     return first + secrets.randbelow(last - first + 1)
@@ -251,22 +245,39 @@ def _claim_sandbox_uid() -> int:
     workspace of this process is using.
 
     The range is walked in order from a random starting point, so a range
-    with a single free id always finds it instead of retrying busy ones.
+    with a single free id always finds it instead of retrying busy ones. A
+    delegated subuid/subgid block is skipped whole, as one probe, so a large
+    block cannot use up the probes.
     """
     first, last = _sandbox_uid_range()
     size = last - first + 1
     start = secrets.randbelow(size)
     delegated = _subordinate_ranges()
-    for step in range(min(size, _MAX_UID_PROBES)):
+    step = probes = 0
+    while step < size and probes < _MAX_UID_PROBES:
+        probes += 1
         uid = first + (start + step) % size
+        block_end = _delegated_block_end(uid, delegated)
+        if block_end is not None:
+            # Up to the block's end, or to the range's end, where the walk
+            # wraps around to the range's start.
+            step += min(block_end, last + 1) - uid
+            continue
+        step += 1
         with _sandbox_uids_lock:
             if uid in _sandbox_uids_in_use:
                 continue
             _sandbox_uids_in_use.add(uid)
-        if not _host_id_exists(uid) and not _in_subordinate_range(uid, delegated):
+        if not _host_id_exists(uid):
             return uid
         _release_sandbox_uid(uid)
     raise SandboxUnavailable("No unused uid is available for the sandbox workspace")
+
+
+def _delegated_block_end(uid: int, delegated: List[Tuple[int, int]]) -> Optional[int]:
+    """The first id after the delegated block covering ``uid``, or None."""
+    ends = [start + count for start, count in delegated if start <= uid < start + count]
+    return max(ends) if ends else None
 
 
 def _release_sandbox_uid(uid: int) -> None:
