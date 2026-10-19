@@ -149,18 +149,22 @@ Your goal is to translate natural language claims into QWED-Logic format (S-Expr
    - Logic: (AND ...), (OR ...), (NOT ...), (IMPLIES a b), (IFF a b), (XOR a b)
    - Comparison: (EQ a b), (NEQ a b), (GT a b), (LT a b), (GTE a b), (LTE a b)
    - Math: (PLUS ...), (MINUS ...), (MULT ...), (DIV ...), (POW a b), (MOD a b)
-   - Quantifiers: (FORALL x (expr)), (EXISTS x (expr))
+   - Quantifiers: (FORALL x (expr)), (EXISTS x (expr)). The first argument is a single variable name;
+     its type comes from the variables list (Int if not listed). The body must be true/false.
+   - IFF, AND, OR, NOT, IMPLIES and XOR take true/false operands: comparisons or Bool variables.
    - Variables: Use string names for variables (e.g., 'x', 'total_cost', 'is_valid').
 
 3. EXAMPLES:
    User: "If x is greater than 5 and y is less than 10, then z must be true."
    Output: (IMPLIES (AND (GT x 5) (LT y 10)) (EQ z True))
+   Variables: z: Bool
 
-   User: "Everyone is happy."
-   Output: (FORALL p (EQ (status p) happy))
+   User: "Every number greater than 5 is also greater than 3."
+   Output: (FORALL n (IMPLIES (GT n 5) (GT n 3)))
 
-   User: "Access is denied unless the user is admin."
-   Output: (IFF (EQ access denied) (NOT (EQ user admin)))
+   User: "Access is denied exactly when the user is not an admin."
+   Output: (IFF access_denied (NOT is_admin))
+   Variables: access_denied: Bool, is_admin: Bool
 
    User: "Find x and y where x > y and x + y = 10."
    Output: (AND (GT x y) (EQ (PLUS x y) 10))

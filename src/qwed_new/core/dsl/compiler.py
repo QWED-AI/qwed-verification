@@ -11,6 +11,7 @@ from dataclasses import dataclass
 try:
     from z3 import (
         Int, Bool, Real, And, Or, Not, Implies, Xor,
+        BoolVal, ForAll, Exists, is_bool,
     )
     Z3_AVAILABLE = True
 except ImportError:
@@ -47,6 +48,19 @@ def _check_pow_cost(base: Any, exponent: Any) -> None:
 def _is_quoted_literal(token: str) -> bool:
     """True if a token is a quoted string literal (parser keeps the quotes)."""
     return len(token) >= 2 and token[0] in ("'", '"') and token[-1] == token[0]
+
+
+def _as_bool(value: Any, role: str) -> Any:
+    """``value`` as a Z3 Bool, or ValueError when it is not Boolean.
+
+    ``IFF`` is a biconditional, not equality: ``(IFF x y)`` on two Int
+    variables must fail rather than silently compile to ``x == y``.
+    """
+    if isinstance(value, bool):
+        return BoolVal(value)
+    if is_bool(value):
+        return value
+    raise ValueError(f"{role} must be Boolean, got: {value}")
 
 
 @dataclass
@@ -174,7 +188,12 @@ class Z3Compiler:
         
         operator = node[0].upper() if isinstance(node[0], str) else node[0]
         args = node[1:]
-        
+
+        # A quantifier's first argument names the variable it binds; it must
+        # not be compiled as a free variable reference.
+        if operator in ('FORALL', 'EXISTS'):
+            return self._compile_quantifier(operator, args, z3_vars)
+
         # Compile arguments recursively
         compiled_args = [self._compile_expr(arg, z3_vars) for arg in args]
         
@@ -189,6 +208,8 @@ class Z3Compiler:
             return Implies(compiled_args[0], compiled_args[1])
         elif operator == 'XOR':
             return Xor(compiled_args[0], compiled_args[1])
+        elif operator == 'IFF':
+            return _as_bool(compiled_args[0], 'IFF operand') == _as_bool(compiled_args[1], 'IFF operand')
         elif operator == 'EQ':
             return compiled_args[0] == compiled_args[1]
         elif operator == 'NEQ':
@@ -228,6 +249,31 @@ class Z3Compiler:
             return None  # VAR doesn't produce a constraint
         else:
             raise ValueError(f"Unknown operator: {operator}")
+
+    def _compile_quantifier(self, operator: str, args: list, z3_vars: Dict[str, Any]) -> Any:
+        """Compile ``(FORALL x body)`` / ``(EXISTS x body)``.
+
+        The bound variable takes the sort of a ``VAR`` declaration or a
+        declared variable of the same name, and is Int otherwise (the same
+        default as a free variable). Inside the body the name refers to the
+        bound variable; outside it, a free variable of the same name is
+        unaffected. The body must be Boolean.
+        """
+        name, body = args
+        if not isinstance(name, str) or _is_quoted_literal(name):
+            raise ValueError(f"{operator} must bind a variable name, got: {name}")
+        bound = z3_vars[name] if name in z3_vars else Int(name)
+        had_free, previous = name in z3_vars, z3_vars.get(name)
+        z3_vars[name] = bound
+        try:
+            compiled_body = _as_bool(self._compile_expr(body, z3_vars), f"{operator} body")
+        finally:
+            if had_free:
+                z3_vars[name] = previous
+            else:
+                del z3_vars[name]
+        quantifier = ForAll if operator == 'FORALL' else Exists
+        return quantifier([bound], compiled_body)
 
 
 class SymPyCompiler:
