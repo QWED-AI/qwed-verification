@@ -203,7 +203,26 @@ def test_provider_prompt_examples_are_valid_dsl(provider):
         assert compiled.success, (example, compiled.error)
         # With the declaration, (EQ z True) compares Booleans; an undeclared
         # z would be an Int and True would silently become 1.
-        assert not re.search(r"== 1", str(compiled.compiled)), example
+        assert not re.search(r"== 1\b", str(compiled.compiled)), example
+
+
+@pytest.mark.parametrize("provider", ["anthropic.py", "azure_openai.py"])
+def test_prompt_output_lines_hold_only_dsl(provider):
+    # The prompt demands DSL only; an example with trailing prose teaches the
+    # model to append text that the parser then rejects.
+    text = (ROOT / "src" / "qwed_new" / "providers" / provider).read_text(encoding="utf-8")
+    outputs = [line.split("Output: ", 1)[1].strip() for line in text.splitlines() if "Output: " in line]
+
+    assert outputs
+    assert outputs == _prompt_examples(ROOT / "src" / "qwed_new" / "providers" / provider)
+
+
+def test_int_comparison_against_one_is_detected():
+    # The guard in the prompt test must catch True coerced to 1, but not 10.
+    pattern = r"== 1\b"
+    assert re.search(pattern, "z == 1")
+    assert re.search(pattern, "And(x > 5, z == 1)")
+    assert not re.search(pattern, "x + y == 10")
 
 
 def test_prompts_declare_every_boolean_example_variable():

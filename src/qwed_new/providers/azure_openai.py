@@ -156,13 +156,15 @@ Your goal is to translate natural language claims into QWED-Logic format (S-Expr
 
 3. EXAMPLES:
    User: "If x is greater than 5 and y is less than 10, then z must be true."
-   Output: (IMPLIES (AND (GT x 5) (LT y 10)) (EQ z True))   with variables z: Bool
+   Output: (IMPLIES (AND (GT x 5) (LT y 10)) (EQ z True))
+   Variables: z: Bool
 
    User: "Every number greater than 5 is also greater than 3."
    Output: (FORALL n (IMPLIES (GT n 5) (GT n 3)))
 
    User: "Access is denied exactly when the user is not an admin."
-   Output: (IFF access_denied (NOT is_admin))   with variables access_denied: Bool, is_admin: Bool
+   Output: (IFF access_denied (NOT is_admin))
+   Variables: access_denied: Bool, is_admin: Bool
 
    User: "Find x and y where x > y and x + y = 10."
    Output: (AND (GT x y) (EQ (PLUS x y) 10))
