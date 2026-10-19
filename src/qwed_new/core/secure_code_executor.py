@@ -197,9 +197,10 @@ def _sandbox_uid_range() -> Tuple[int, int]:
     return _DEFAULT_SANDBOX_UID_RANGE
 
 
-def _in_subordinate_range(uid: int) -> bool:
-    """True when /etc/subuid or /etc/subgid delegates this id to some user's
-    namespaces (rootless containers, podman, systemd-nspawn)."""
+def _subordinate_ranges() -> List[Tuple[int, int]]:
+    """The (start, count) id blocks /etc/subuid and /etc/subgid delegate to
+    users' namespaces (rootless containers, podman, systemd-nspawn)."""
+    ranges = []
     for path in _SUBORDINATE_ID_FILES:
         try:
             with open(path, encoding="utf-8") as f:
@@ -209,10 +210,14 @@ def _in_subordinate_range(uid: int) -> bool:
         for line in lines:
             parts = line.strip().split(":")
             if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
-                start, count = int(parts[1]), int(parts[2])
-                if start <= uid < start + count:
-                    return True
-    return False
+                ranges.append((int(parts[1]), int(parts[2])))
+    return ranges
+
+
+def _in_subordinate_range(uid: int, ranges: Optional[List[Tuple[int, int]]] = None) -> bool:
+    """True when a subordinate id delegation covers this id."""
+    blocks = _subordinate_ranges() if ranges is None else ranges
+    return any(start <= uid < start + count for start, count in blocks)
 
 
 def _random_sandbox_uid() -> int:
@@ -235,17 +240,30 @@ def _host_id_exists(uid: int) -> bool:
     return False
 
 
+# Ids checked per claim: every id of a small (operator-reserved) range, and a
+# bounded walk through a large one, where a free id comes up almost at once.
+_MAX_UID_PROBES = 4096
+
+
 def _claim_sandbox_uid() -> int:
     """A uid (also used as the gid) from the sandbox range that no host
     account or group has, no subordinate id range covers, and no other
-    workspace of this process is using."""
-    for _ in range(64):
-        uid = _random_sandbox_uid()
+    workspace of this process is using.
+
+    The range is walked in order from a random starting point, so a range
+    with a single free id always finds it instead of retrying busy ones.
+    """
+    first, last = _sandbox_uid_range()
+    size = last - first + 1
+    start = secrets.randbelow(size)
+    delegated = _subordinate_ranges()
+    for step in range(min(size, _MAX_UID_PROBES)):
+        uid = first + (start + step) % size
         with _sandbox_uids_lock:
             if uid in _sandbox_uids_in_use:
                 continue
             _sandbox_uids_in_use.add(uid)
-        if not _host_id_exists(uid) and not _in_subordinate_range(uid):
+        if not _host_id_exists(uid) and not _in_subordinate_range(uid, delegated):
             return uid
         _release_sandbox_uid(uid)
     raise SandboxUnavailable("No unused uid is available for the sandbox workspace")

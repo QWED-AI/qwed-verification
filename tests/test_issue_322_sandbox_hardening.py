@@ -344,14 +344,41 @@ def test_a_uid_inside_a_subordinate_id_range_is_skipped(monkeypatch, tmp_path):
     subgid = tmp_path / "subgid"
     subgid.write_text(f"carol:{FLOOR + 20}:1\n")
     monkeypatch.setattr(sce, "_SUBORDINATE_ID_FILES", (str(subuid), str(subgid), str(tmp_path / "missing")))
-    picks = iter([FLOOR + 12, FLOOR + 20, FLOOR + 30])
-    monkeypatch.setattr(sce.secrets, "randbelow", lambda span: next(picks) - FLOOR)
+    monkeypatch.setattr(sce.secrets, "randbelow", lambda span: 12)
     monkeypatch.setattr(sce, "_host_id_exists", lambda uid: False)
 
     uid = sce._claim_sandbox_uid()
 
-    assert uid == FLOOR + 30
+    # The walk starts inside bob's block (10-14) and takes the first id after it.
+    assert uid == FLOOR + 15
     sce._release_sandbox_uid(uid)
+
+
+@pytest.mark.parametrize("start", [0, 41, 98, 99])
+def test_a_small_range_with_one_free_uid_always_finds_it(monkeypatch, start):
+    monkeypatch.setenv(sce.SANDBOX_UID_RANGE_ENV, "2000000000-2000000099")
+    monkeypatch.setattr(sce.secrets, "randbelow", lambda span: start)
+    free = 2000000042
+    monkeypatch.setattr(sce, "_host_id_exists", lambda uid: uid != free)
+
+    uid = sce._claim_sandbox_uid()
+
+    assert uid == free
+    sce._release_sandbox_uid(uid)
+
+
+def test_a_large_range_is_probed_a_bounded_number_of_times(monkeypatch):
+    probes = []
+
+    def taken(uid):
+        probes.append(uid)
+        return True
+
+    monkeypatch.setattr(sce, "_host_id_exists", taken)
+
+    with pytest.raises(SandboxUnavailable):
+        sce._claim_sandbox_uid()
+    assert len(probes) == sce._MAX_UID_PROBES
 
 
 def test_the_default_range_is_the_documented_unused_one():
