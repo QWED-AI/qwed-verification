@@ -31,9 +31,15 @@ All notable changes to the QWED Protocol will be documented in this file.
     analysed code cannot forge the result line, and long or unterminated
     output cannot hide it. The analysed code still controls the child's own
     exit code, as any code CrossHair imports can, which is why a clean run is
-    only ever "no counterexample found" (`UNVERIFIABLE`). A `SystemExit`
-    raised from the analysed code while it is imported is an engine error,
-    not a clean run.
+    only ever "no counterexample found" (`UNVERIFIABLE`), and why an exit 1
+    is a counterexample only together with CrossHair's own report line
+    (`<file>:<line>: error: ...`); an early `os._exit(1)` is an engine error.
+    A `SystemExit` raised from the analysed code while it is imported is an
+    engine error, not a clean run, and a child exit of 97 that comes with a
+    result line is not mistaken for a missing CrossHair.
+  - A `SecureCodeExecutor` that `SymbolicVerifier` creates itself is rebuilt
+    while Docker is unreachable, so the engine recovers once the daemon is
+    back instead of staying `BLOCKED`.
   - `qwed[symbolic]` now installs the `docker` client. `SymbolicVerifier` no
     longer imports it at module level, so without it the engine is
     `BLOCKED` instead of failing to import.
