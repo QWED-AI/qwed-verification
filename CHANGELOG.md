@@ -4,6 +4,59 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- **CrossHair runs only inside the Docker sandbox (#431).** CrossHair analyses
+  a function by importing its module, which executes the module's top-level
+  code. `SymbolicVerifier` used to run `python -m crosshair check` as a plain
+  host subprocess on a temp file holding the caller's code.
+  - Every CrossHair run now goes through the new
+    `SecureCodeExecutor.run_isolated()`: no network, read-only root, no host
+    mounts, all capabilities dropped, `no-new-privileges`, user 65534, and the
+    existing memory/CPU/PID limits and concurrency bound. The code travels in
+    the container's environment and is written only to a private tmpfs owned
+    by that user (code over 120 KiB is `BLOCKED`,
+    `symbolic_verifier.input_too_large`), so nothing is written on the host.
+    The output is streamed from the container log and reading stops at the
+    cap. A dropped daemon connection, or a daemon error while waiting, is
+    `BLOCKED` like any other sandbox failure; only a real wait timeout is a
+    timeout.
+  - CrossHair now runs in a child process of the in-container runner. The
+    runner keeps a per-run nonce out of the child's environment, makes itself
+    non-dumpable (so the child cannot read its `/proc` environment or file
+    descriptors), sends the child's output to stderr, and alone writes one
+    result line with the nonce and the child's exit code to stdout. The
+    verifier reads stdout and stderr separately and trusts an exit code only
+    when that line confirms it; otherwise the run is an engine error. So the
+    analysed code cannot forge the result line, and long or unterminated
+    output cannot hide it. The analysed code still controls the child's own
+    exit code, as any code CrossHair imports can, which is why a clean run is
+    only ever "no counterexample found" (`UNVERIFIABLE`), and why an exit 1
+    is a counterexample only together with CrossHair's own report line
+    (`<file>:<line>: error: ...`); an early `os._exit(1)` is an engine error.
+    A `SystemExit` raised from the analysed code while it is imported is an
+    engine error, not a clean run, and a child exit of 97 that comes with a
+    result line is not mistaken for a missing CrossHair.
+  - A `SecureCodeExecutor` that `SymbolicVerifier` creates itself is rebuilt
+    while Docker is unreachable, so the engine recovers once the daemon is
+    back instead of staying `BLOCKED`.
+  - `qwed[symbolic]` now installs the `docker` client. `SymbolicVerifier` no
+    longer imports it at module level, so without it the engine is
+    `BLOCKED` instead of failing to import.
+  - The image comes from `docker/crosshair-sandbox/Dockerfile`
+    (`qwed-crosshair-sandbox:0.0.101`, or `QWED_CROSSHAIR_IMAGE`) and is never
+    pulled at runtime.
+  - Without Docker, a free sandbox slot, the image, or CrossHair inside the
+    image, `verify_code()` returns `BLOCKED`
+    (`symbolic_verifier.runtime_unavailable`). There is no host fallback. This
+    replaces `symbolic_verifier.crosshair_not_available`.
+  - Functions are now named by module qualname (`target.func`,
+    `target.Class.method`). CrossHair reads `file.py:func` as a qualname, so
+    the old form never found the function and exited 1, which was reported as
+    a counterexample for every typed function. An exception escaping CrossHair
+    now exits with its own code and is an engine error, not a counterexample.
+    Nested functions, which CrossHair cannot load by name, are unverifiable.
+
 ### Fixed
 
 - **The natural-language logic bridge emits the DSL parser's operator names.**
