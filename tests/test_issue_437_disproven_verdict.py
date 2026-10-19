@@ -515,6 +515,8 @@ async def test_control_plane_verdict_carries_translated_scope(monkeypatch, claim
     fields = result["diagnostic"]["developer_fields"]
     assert result["diagnostic"]["status"] == "VERIFIED"
     assert fields["is_valid"] is holds
+    # Even a translated claim that holds is not admitted for the question.
+    assert result["admission"] == "BLOCKED"
     assert fields["translated_expression"] == "0.15 * 200"
     assert fields["verification_scope"] == "translated_expression_only"
     assert fields["query_semantics_verified"] is False
@@ -533,10 +535,36 @@ def test_natural_language_response_exposes_translated_scope(client, isolated_aud
     ).to_dict()
     data = _nl_post(client, {"status": "VERIFIED", "diagnostic": diagnostic})
 
-    assert data["admission"] == "ADMIT"
+    # The verdict on the translated expression is kept as produced, but the
+    # user's question is not admitted: the translation is unverified.
+    assert data["status"] == "VERIFIED"
+    assert data["is_valid"] is True
+    assert data["admission"] == "BLOCKED"
     assert data["translated_expression"] == "0.15 * 200"
     assert data["verification_scope"] == "translated_expression_only"
     assert data["query_semantics_verified"] is False
+
+    with Session(isolated_audit_chain) as session:
+        (logged,) = session.exec(select(VerificationLog)).all()
+    assert logged.is_verified is False
+
+
+def test_natural_language_admission_requires_verified_query_semantics():
+    from qwed_new.core.control_plane import natural_language_admission
+    from qwed_new.core.diagnostics import AdmissionDecision
+
+    def verdict(**fields):
+        return DiagnosticResult.verified(
+            "Expression verified successfully",
+            developer_fields={"is_valid": True, **fields},
+            evidence={"expression": "0.15 * 200"},
+            proof_data="proof",
+        )
+
+    assert natural_language_admission(verdict()) is AdmissionDecision.BLOCKED
+    assert natural_language_admission(verdict(query_semantics_verified=False)) is AdmissionDecision.BLOCKED
+    assert natural_language_admission(verdict(query_semantics_verified="true")) is AdmissionDecision.BLOCKED
+    assert natural_language_admission(verdict(query_semantics_verified=True)) is AdmissionDecision.ADMIT
 
 
 @pytest.mark.asyncio

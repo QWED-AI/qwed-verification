@@ -22,7 +22,12 @@ from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.core.observability import metrics_collector
 from qwed_new.core.security import EnhancedSecurityGateway, redact_pii
 from qwed_new.core.output_sanitizer import OutputSanitizer
-from qwed_new.core.diagnostics import DiagnosticResult, admission_decision, enforce_trust_decision
+from qwed_new.core.diagnostics import (
+    AdmissionDecision,
+    DiagnosticResult,
+    admission_decision,
+    enforce_trust_decision,
+)
 from qwed_new.core.attestation import create_verification_attestation, AttestationStatus
 
 logger = logging.getLogger(__name__)
@@ -58,6 +63,19 @@ async def _run_z3_call(func, *args, **kwargs):
         loop.run_in_executor(_Z3_EXECUTOR, functools.partial(func, *args, **kwargs)),
         timeout=_Z3_CALL_TIMEOUT_SECONDS,
     )
+
+
+def natural_language_admission(diagnostic: DiagnosticResult) -> AdmissionDecision:
+    """Admission for a verdict reached through an LLM translation.
+
+    The engine decided only the translated expression; nothing proves that
+    expression means what the user asked. The verdict is kept as produced
+    (QWED #15), but it is admitted for the user's query only when its
+    developer fields record that the query semantics were verified.
+    """
+    if diagnostic.developer_fields.get("query_semantics_verified") is not True:
+        return AdmissionDecision.BLOCKED
+    return admission_decision(diagnostic)
 
 
 class ControlPlane:
@@ -309,7 +327,7 @@ class ControlPlane:
                 output_type="diagnostic",
                 organization_id=organization_id,
             )
-            response["admission"] = admission_decision(enforced).value
+            response["admission"] = natural_language_admission(enforced).value
             
             # 7. Track Metrics
             if organization_id:

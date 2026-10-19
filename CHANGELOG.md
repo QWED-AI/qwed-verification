@@ -102,7 +102,11 @@ All notable changes to the QWED Protocol will be documented in this file.
     `BLOCKED` too. The verdict carries `translated_expression`,
     `verification_scope: translated_expression_only` and
     `query_semantics_verified: false`, so it is not mistaken for proof of the
-    user's question.
+    user's question. For the same reason admission is always `DENY` there
+    (and in the control-plane response), even when the translated claim
+    holds: the translation itself is unverified, so the user's question is
+    never admitted. The verdict is not changed, and the log row's
+    `is_verified` follows admission.
 - **`qwed init` and `qwed test` print the verdict with its admission (#438).**
   Decided cases no longer print `BLOCKED`, and `VERIFIED` never appears alone:
   `2+2=5 -> VERIFIED (false) | DENY`. A failed self-check prints `FAILED`. The

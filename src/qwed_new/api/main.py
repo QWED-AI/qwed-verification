@@ -15,6 +15,7 @@ from fractions import Fraction
 
 from qwed_new.core.security import redact_pii
 from qwed_new.core.diagnostics import (
+    AdmissionDecision,
     AdvisoryCheck,
     DiagnosticResult,
     admission_decision,
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 INTERNAL_VERIFICATION_ERROR = "Internal verification error"
 INTERNAL_PROCESSING_ERROR = "Internal processing error"
 
-from qwed_new.core.control_plane import ControlPlane
+from qwed_new.core.control_plane import ControlPlane, natural_language_admission
 from qwed_new.core.tenant_context import get_current_tenant, TenantContext
 from qwed_new.core.database import create_db_and_tables, get_session
 from qwed_new.core.audit_logger import get_audit_logger
@@ -612,16 +613,20 @@ async def verify_natural_language(
     if dr is None:
         dr = _natural_language_diagnostic(result)
     dr = _enforce_trust(dr, query=request.query)
-    # A proven-false claim is VERIFIED too: admission is the separate
-    # safe-to-use decision (QWED #15).
-    admission = admission_decision(dr)
+    # The verdict covers the LLM's translated expression, not the user's
+    # question, so it is never admitted for the question while the
+    # translation itself is unverified. The verdict stays as produced
+    # (QWED #15); only admission is withheld.
+    admission = natural_language_admission(dr)
 
     log = VerificationLog(
         organization_id=tenant.organization_id,
         user_id=tenant.user_id if hasattr(tenant, 'user_id') else None,
         query=request.query,
         result=_cap_log_result(dr.to_dict()),
-        is_verified=dr.developer_fields.get("is_valid") is True,
+        # The log row is keyed by the user's question, which is only
+        # verified when it is admitted.
+        is_verified=admission is AdmissionDecision.ADMIT,
         domain="MATH"
     )
     _safe_commit_log(log)
