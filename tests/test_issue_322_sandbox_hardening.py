@@ -425,6 +425,28 @@ def test_a_large_range_is_probed_a_bounded_number_of_times(monkeypatch):
     assert len(probes) == sce._MAX_UID_PROBES
 
 
+@pytest.mark.parametrize(
+    "users, groups, expected",
+    [({5}, set(), True), (set(), {5}, True), (set(), set(), False)],
+    ids=["a-user-has-it", "a-group-has-it", "free"],
+)
+def test_host_id_exists_reads_the_user_and_group_databases(monkeypatch, users, groups, expected):
+    import sys
+    import types
+
+    def lookup(ids):
+        def find(uid):
+            if uid in ids:
+                return object()
+            raise KeyError(uid)
+        return find
+
+    monkeypatch.setitem(sys.modules, "pwd", types.SimpleNamespace(getpwuid=lookup(users)))
+    monkeypatch.setitem(sys.modules, "grp", types.SimpleNamespace(getgrgid=lookup(groups)))
+
+    assert sce._host_id_exists(5) is expected
+
+
 def test_the_default_range_is_the_documented_unused_one():
     # systemd: 1879048192-2147483647 is unused, above the container range.
     assert sce._sandbox_uid_range() == (1879048192, 2147483646)
