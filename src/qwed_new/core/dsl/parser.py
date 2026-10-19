@@ -306,6 +306,19 @@ class QWEDLogicDSL:
             variables[var_name] = Variable(name=var_name, var_type=var_type)
             return
         
+        # A quantifier binds a variable: its first argument is a name, not an
+        # expression, and it must not shadow an operator or a literal.
+        if spec.category is OperatorCategory.QUANTIFIER:
+            bound = args[0]
+            if (
+                not isinstance(bound, str)
+                or bound in self.reserved
+                or bound.upper() in self.operators
+                or not bound.isidentifier()
+            ):
+                raise ValueError(f"Operator '{op_upper}' must bind a variable name, got: {bound}")
+            args = args[1:]
+
         # Recursively validate arguments
         for arg in args:
             self._validate_recursive(arg, variables)
