@@ -5,9 +5,16 @@
 # unsafe code that the Code engine must reject. The dangerous calls in them
 # are data, never run; tests/test_evals.py fails the build if one is ever
 # accepted.
+#
+# Dockerfile: the API server image runs uvicorn with --host 0.0.0.0 (#467).
+# Inside a container the server must listen on all of the container's own
+# interfaces, or a published port reaches nothing; what is exposed outside
+# is decided by the port mapping (docker run -p, Compose, Kubernetes), not
+# by this bind. Scoped to the root Dockerfile only.
 suppressions:
   - pattern=eval-call reason=used-in-tests path=evals/cases/*.json
   - pattern=exec-call reason=used-in-tests path=evals/cases/*.json
   - pattern=pickle-load reason=used-in-tests path=evals/cases/*.json
   - pattern=os-system reason=used-in-tests path=evals/cases/*.json
   - pattern=subprocess-call reason=used-in-tests path=evals/cases/*.json
+  - pattern=bind-all-interfaces reason=false-positive path=Dockerfile
