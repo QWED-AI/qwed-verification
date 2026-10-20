@@ -72,6 +72,18 @@ describe('captured server responses', () => {
         expect(Array.isArray(unsafeCode.issues)).toBe(true);
     });
 
+    it.each(['math_false', 'code_unsafe', 'logic', 'fact'])(
+        '%s keeps its endpoint fields through a JSON round trip',
+        name => {
+            const first = response(name);
+            const second = parseVerificationResponse(JSON.parse(JSON.stringify(first)));
+            expect(second).toEqual(first);
+            for (const key of Object.keys(fixture(name) as object)) {
+                expect(second).toHaveProperty([key]);
+            }
+        }
+    );
+
     it('reads a string error, as /verify/logic sends it', () => {
         expect(getErrorMessage(response('logic'))).toBe('LLM translation failed');
         expect(getErrorMessage(response('math_verified'))).toBeNull();
@@ -196,7 +208,8 @@ describe('client', () => {
 
     it('verifyCode does not admit unsafe code', async () => {
         serve('code_unsafe');
-        expect(isAdmitted(await client.verifyCode("import os\nos.system('rm -rf /')"))).toBe(false);
+        // fetch is stubbed, so the code sent does not matter.
+        expect(isAdmitted(await client.verifyCode('unsafe code placeholder'))).toBe(false);
     });
 
     it('verifyLogic parses a response without an admission', async () => {

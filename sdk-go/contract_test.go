@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -99,7 +101,7 @@ func TestContractEnvelopeDetails(t *testing.T) {
 	if falseIdentity.Extra["result"] != false {
 		t.Errorf("Extra[result]: got %v, want false", falseIdentity.Extra["result"])
 	}
-	for _, key := range envelopeFields {
+	for key := range envelopeFields {
 		if _, ok := falseIdentity.Extra[key]; ok {
 			t.Errorf("Extra holds envelope field %q", key)
 		}
@@ -240,5 +242,105 @@ func TestEnvelopeFieldOfTheWrongTypeIsAnError(t *testing.T) {
 		if err := json.Unmarshal([]byte(body), &r); err == nil {
 			t.Errorf("%s: parsed without an error", body)
 		}
+	}
+}
+
+func sameEnvelope(t *testing.T, where string, got, want *VerificationResponse) {
+	t.Helper()
+	if got.Status != want.Status || got.Admission != want.Admission || got.ProofRef != want.ProofRef ||
+		got.AgentMessage != want.AgentMessage || got.ConstraintID != want.ConstraintID {
+		t.Errorf("%s: envelope changed: got %+v, want %+v", where, got, want)
+	}
+	if (got.IsAuthoritative == nil) != (want.IsAuthoritative == nil) ||
+		(got.IsAuthoritative != nil && *got.IsAuthoritative != *want.IsAuthoritative) {
+		t.Errorf("%s: is_authoritative changed", where)
+	}
+	if !reflect.DeepEqual(got.DeveloperFields, want.DeveloperFields) {
+		t.Errorf("%s: developer_fields changed", where)
+	}
+	if !reflect.DeepEqual(got.Extra, want.Extra) {
+		t.Errorf("%s: Extra changed: got %v, want %v", where, got.Extra, want.Extra)
+	}
+	if got.IsAdmitted() != want.IsAdmitted() {
+		t.Errorf("%s: IsAdmitted changed", where)
+	}
+}
+
+func TestAResponseSurvivesAMarshalRoundTrip(t *testing.T) {
+	names := []string{
+		"math_verified", "math_false", "math_ambiguous", "code_safe", "code_unsafe",
+		"sql", "natural_language", "logic", "fact",
+	}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			first := response(t, name)
+			data, err := json.Marshal(first)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var second VerificationResponse
+			if err := json.Unmarshal(data, &second); err != nil {
+				t.Fatal(err)
+			}
+			sameEnvelope(t, name, &second, first)
+		})
+	}
+
+	// The endpoint fields are written beside the envelope, as the server sent them.
+	data, err := json.Marshal(response(t, "math_false"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"is_valid":false`, `"result":false`, `"admission":"BLOCKED"`} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("marshalled response has no %s: %s", want, data)
+		}
+	}
+}
+
+func TestABatchSurvivesAMarshalRoundTrip(t *testing.T) {
+	var first BatchResponse
+	if err := json.Unmarshal(fixture(t, "batch"), &first); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var second BatchResponse
+	if err := json.Unmarshal(data, &second); err != nil {
+		t.Fatal(err)
+	}
+	if second.JobID != first.JobID || second.Status != first.Status || len(second.Items) != len(first.Items) {
+		t.Fatalf("batch job changed: got %+v", second)
+	}
+	for i := range first.Items {
+		sameEnvelope(t, "batch item", second.Items[i].Result, first.Items[i].Result)
+	}
+}
+
+func TestExtraNeverReplacesAnEnvelopeField(t *testing.T) {
+	r := VerificationResponse{
+		Status: StatusBlocked,
+		Extra: map[string]interface{}{
+			"status":    "VERIFIED",
+			"admission": "ADMIT",
+			"proof_ref": "sha256:ab",
+			"note":      "kept",
+		},
+	}
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded VerificationResponse
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Status != StatusBlocked || decoded.Admission != "" || decoded.ProofRef != "" || decoded.IsAdmitted() {
+		t.Errorf("an Extra key replaced an envelope field: %s", data)
+	}
+	if decoded.Extra["note"] != "kept" {
+		t.Errorf("Extra[note]: got %v, want kept", decoded.Extra["note"])
 	}
 }

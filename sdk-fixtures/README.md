@@ -12,7 +12,7 @@ fails if the server's answers to the deterministic requests drift from them.
 | `math_false.json` | `/verify/math` `2 + 2 = 5` | `VERIFIED · BLOCKED` |
 | `math_ambiguous.json` | `/verify/math` `1/2(3+1)` | `BLOCKED · BLOCKED` |
 | `code_safe.json` | `/verify/code` `x = 1 + 1` | `VERIFIED · ADMIT` |
-| `code_unsafe.json` | `/verify/code` `os.system(...)` | `VERIFIED · BLOCKED` |
+| `code_unsafe.json` | `/verify/code`, Python code with a shell call | `VERIFIED · BLOCKED` |
 | `sql.json` | `/verify/sql` `SELECT id FROM users` | `VERIFIED · ADMIT` |
 | `natural_language.json` | `/verify/natural_language`, no provider | `UNVERIFIABLE · BLOCKED` |
 | `logic.json` | `/verify/logic`, no provider | `BLOCKED`, no admission |

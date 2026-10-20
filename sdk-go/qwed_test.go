@@ -158,8 +158,8 @@ func TestVerifyCode(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient("test-key", WithBaseURL(server.URL))
-	result, err := client.VerifyCode(context.Background(), "import os
-os.system('rm -rf /')", "python")
+	// The server is mocked, so the code sent does not matter.
+	result, err := client.VerifyCode(context.Background(), "eval(input())", "python")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

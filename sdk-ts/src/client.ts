@@ -410,8 +410,10 @@ export function isAdmitted(response: VerificationResponse | null | undefined): b
  * `admission` keep only the values the server sends; any other status,
  * including a missing one, becomes `Unknown`, any other admission becomes
  * `Unknown`, and a null admission is left out. Neither is ever admitted.
- * Every other field is kept as sent. The client calls this for every
- * `verify*` method.
+ * Every other field is kept as sent. The client calls this for `verify`,
+ * `verifyMath`, `verifyLogic`, `verifyCode`, `verifyFact`, `verifySQL`,
+ * `verifyProcess` and `verifyRAG`; `verifyAgent` and `verifyAgentAction`
+ * return the agent endpoint's own shape and are not parsed.
  */
 export function parseVerificationResponse(body: unknown): VerificationResponse {
     if (!isRecord(body)) {

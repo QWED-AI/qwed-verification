@@ -159,9 +159,9 @@ type VerificationResponse struct {
 
 // envelopeFields are the keys VerificationResponse reads itself; every other
 // key goes to Extra.
-var envelopeFields = []string{
-	"status", "admission", "proof_ref", "agent_message",
-	"is_authoritative", "constraint_id", "developer_fields",
+var envelopeFields = map[string]bool{
+	"status": true, "admission": true, "proof_ref": true, "agent_message": true,
+	"is_authoritative": true, "constraint_id": true, "developer_fields": true,
 }
 
 // UnmarshalJSON decodes the envelope, keeps the other fields in Extra and
@@ -177,7 +177,7 @@ func (r *VerificationResponse) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	for _, key := range envelopeFields {
+	for key := range envelopeFields {
 		delete(fields, key)
 	}
 	*r = VerificationResponse(env)
@@ -188,6 +188,33 @@ func (r *VerificationResponse) UnmarshalJSON(data []byte) error {
 	r.Extra = fields
 	r.Verified = r.IsAdmitted()
 	return nil
+}
+
+// MarshalJSON writes the envelope fields with Extra's keys beside them, as
+// the server sent them, so a decoded response survives a round trip. An
+// Extra key never replaces an envelope field, even one left out because it
+// is empty.
+func (r VerificationResponse) MarshalJSON() ([]byte, error) {
+	type envelope VerificationResponse // no methods, so no recursion
+	data, err := json.Marshal(envelope(r))
+	if err != nil || len(r.Extra) == 0 {
+		return data, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	for key, value := range r.Extra {
+		if envelopeFields[key] {
+			continue
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		fields[key] = raw
+	}
+	return json.Marshal(fields)
 }
 
 // IsAdmitted reports whether the server admitted the result: Admission is

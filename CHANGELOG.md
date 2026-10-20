@@ -111,8 +111,11 @@ All notable changes to the QWED Protocol will be documented in this file.
     `progress_percent`, item counts, `items[]` with `id`, `status`, `query`,
     `type`, `result`, `error`, `latency_ms`); there is no `summary`.
   - TypeScript exports `parseVerificationResponse()` and
-    `parseBatchResponse()`, which every `verify*` method now uses, and
-    `getErrorMessage()` reads a string `error`.
+    `parseBatchResponse()`, which every `verify*` method except the two
+    agent methods now uses, and `getErrorMessage()` reads a string `error`.
+  - Go's `VerificationResponse` marshals `Extra` back beside the envelope
+    fields, so a decoded response survives a JSON round trip; an `Extra` key
+    never replaces an envelope field.
   - Contract tests in both SDKs parse the captured responses, now shared with
     the Rust SDK in `sdk-fixtures/`. CI runs `go test` (the Go tests never
     ran before) and `vitest run` without `--passWithNoTests`. READMEs and the

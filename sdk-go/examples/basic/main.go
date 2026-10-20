@@ -72,8 +72,16 @@ def process_input(data):
 		log.Printf("Code verification failed: %v", err)
 	} else {
 		fmt.Println(verdict(codeResult))
-		if !codeResult.IsAdmitted() {
+		switch {
+		case codeResult.IsAdmitted():
+			fmt.Println("Code passed verification")
+		case codeResult.Status == qwed.StatusVerified && codeResult.Admission == qwed.AdmissionBlocked:
+			// VERIFIED · BLOCKED: the verifier analysed the code and proved it unsafe.
 			fmt.Println("⚠️  Security vulnerability detected!")
+		default:
+			// Not admitted for another reason: the verifier could not analyse
+			// the code, so it is neither proven safe nor proven unsafe.
+			fmt.Println("⚠️  Could not verify the code; do not run it")
 		}
 	}
 
