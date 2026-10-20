@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'Dockerfile'
+      - '.dockerignore'
       - 'requirements-server.txt'
       - 'pyproject.toml'
       - 'src/**'

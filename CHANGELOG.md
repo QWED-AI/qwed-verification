@@ -112,6 +112,8 @@ All notable changes to the QWED Protocol will be documented in this file.
     and `tests/test_issue_468_rust_sdk_contract.py` fails if the server's
     answers drift from those fixtures. The README documents the envelope and
     gating on `is_admitted()`.
+  - `.dockerignore` leaves test folders at any depth and the non-Python
+    SDKs (`sdk-*/`) out of the Docker build context; no image copies them.
 
 - **The Docker image runs the API server, and the Compose stack builds
   (#467).** The image published as `qwedai/qwed-verification` ran the GitHub

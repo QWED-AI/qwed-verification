@@ -7,6 +7,7 @@ on:
     branches: [ main ]
     paths:
       - 'Dockerfile'
+      - '.dockerignore'
       - 'requirements.txt'
       - 'requirements.in'
       - 'requirements-server.txt'
