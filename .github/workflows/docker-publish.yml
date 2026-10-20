@@ -5,10 +5,10 @@ on:
     branches: [main]
     paths:
       - 'Dockerfile'
-      - 'requirements.txt'
-      - 'requirements.in'
+      - 'requirements-server.txt'
+      - 'pyproject.toml'
+      - 'src/**'
       - 'qwed_sdk/**'
-      - 'action_entrypoint.py'
       - '.github/workflows/docker-publish.yml'
   release:
     types: [published]
@@ -65,6 +65,9 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          # The API server (#467). The default target is the GitHub Action,
+          # which action.yml builds from the Dockerfile and never pulls.
+          target: server
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

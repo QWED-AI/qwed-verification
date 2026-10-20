@@ -80,6 +80,9 @@ server = [
     "opentelemetry-exporter-otlp>=1.20.0",
     "opentelemetry-instrumentation-fastapi>=0.41b0",
     "opentelemetry-instrumentation-requests>=0.41b0",
+    # The code executor imports the Docker client at module level; without a
+    # reachable daemon it fails closed, but the import itself must succeed.
+    "docker>=7.0.0",
 ]
 symbolic = [
     "crosshair-tool>=0.0.100",

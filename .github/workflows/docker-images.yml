@@ -1,0 +1,112 @@
+name: Docker images
+
+# #467: the server target must start the API server, deploy/docker-compose.yml
+# must build it, and the default target must still be the GitHub Action.
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - 'requirements.in'
+      - 'requirements-server.txt'
+      - 'pyproject.toml'
+      - 'src/**'
+      - 'qwed_sdk/**'
+      - 'action_entrypoint.py'
+      - 'action.yml'
+      - 'deploy/**'
+      - '.github/workflows/docker-images.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  server-image:
+    name: Server image starts and serves /health
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Write deploy/.env with throwaway secrets
+        run: |
+          gen() { python3 -c "import secrets; print(secrets.token_urlsafe(48))"; }
+          pg_password="$(gen)"
+          {
+            echo "QWED_CORS_ORIGINS=http://localhost:3000"
+            echo "API_KEY_SECRET=$(gen)"
+            echo "QWED_JWT_SECRET_KEY=$(gen)"
+            echo "QWED_API_KEY_LOOKUP_SECRET=$(gen)"
+            echo "QWED_AUDIT_SECRET_KEY=$(gen)"
+            echo "QWED_METRICS_OPERATOR_USER_IDS="
+            echo "POSTGRES_USER=qwed"
+            echo "POSTGRES_DB=qwed_db"
+            echo "POSTGRES_PASSWORD=${pg_password}"
+            echo "DATABASE_URL=postgresql://qwed:${pg_password}@postgres:5432/qwed_db"
+            echo "GF_SECURITY_ADMIN_USER=admin"
+            echo "GF_SECURITY_ADMIN_PASSWORD=$(gen)"
+          } > deploy/.env
+
+      - name: Validate the Compose file
+        run: docker compose -f deploy/docker-compose.yml config --quiet
+
+      - name: Build the server image through Compose
+        run: docker compose -f deploy/docker-compose.yml build qwed-core
+
+      - name: Start the server image and wait for /health
+        run: |
+          # SQLite in the image's data directory, so no Postgres is needed here.
+          docker run -d --name qwed-smoke -p 8000:8000 \
+            --env-file deploy/.env -e DATABASE_URL=sqlite:///./qwed.db \
+            qwedai/qwed-verification:local
+          for _ in $(seq 1 60); do
+            if body="$(curl -fsS http://127.0.0.1:8000/health)"; then
+              echo "$body"
+              echo "$body" | python3 -c "import json, sys; assert json.load(sys.stdin)['status'] == 'healthy'"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::The server image did not answer /health within 120 seconds."
+          exit 1
+
+      - name: The image's own health check passes
+        run: |
+          for _ in $(seq 1 30); do
+            status="$(docker inspect -f '{{.State.Health.Status}}' qwed-smoke)"
+            echo "health: ${status}"
+            [ "${status}" = "healthy" ] && exit 0
+            [ "${status}" = "unhealthy" ] && exit 1
+            sleep 5
+          done
+          exit 1
+
+      - name: The server runs as a non-root user
+        run: test "$(docker exec qwed-smoke id -u)" = "1000"
+
+      - name: Server logs
+        if: always()
+        run: docker logs qwed-smoke || true
+
+  action-image:
+    name: Default target is still the GitHub Action
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Build the default target, as action.yml does
+        run: docker build -t qwed-action .
+
+      - name: Run a scan-code pass
+        run: |
+          workspace="$(mktemp -d)"
+          printf 'x = 1\n' > "${workspace}/app.py"
+          docker run --rm -v "${workspace}:/github/workspace" \
+            -e INPUT_ACTION=scan-code -e INPUT_FAIL_ON_FINDINGS=true \
+            qwed-action | tee action.log
+          grep -q "QWED Code Scanner" action.log
+          grep -q "No issues found in 1 file(s)" action.log

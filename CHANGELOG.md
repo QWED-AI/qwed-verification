@@ -85,6 +85,35 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Fixed
 
+- **The Docker image runs the API server, and the Compose stack builds
+  (#467).** The image published as `qwedai/qwed-verification` ran the GitHub
+  Action: its entrypoint was the Action script, the uvicorn `CMD` was passed
+  to it as ignored arguments, and the image had no FastAPI or uvicorn. The
+  Compose file pointed at a Dockerfile in `deploy/`, which does not exist,
+  and mounted a Grafana folder that was never shipped.
+  - The Dockerfile has two targets. `server` runs uvicorn on port 8000 as a
+    non-root user, installs every server dependency from the new hash-pinned
+    `requirements-server.txt`, and has a health check on `/health`.
+    `action` is the GitHub Action as before; it stays the last stage, so
+    `action.yml`, which builds the Dockerfile without a target, is unchanged.
+  - Docker Hub now gets the `server` target, so `qwedai/qwed-verification`
+    is the API server from 7.3.1. Anyone who ran an earlier tag as a
+    scanner should use the Action instead.
+  - `deploy/docker-compose.yml` builds the server target from the
+    repository root, requires all five server secrets (`QWED_CORS_ORIGINS`,
+    `API_KEY_SECRET`, `QWED_JWT_SECRET_KEY`, `QWED_API_KEY_LOOKUP_SECRET`,
+    `QWED_AUDIT_SECRET_KEY`), checks health without curl, and keeps the
+    server's data in a volume. `deploy/.env.example` lists every setting,
+    and Grafana gets Prometheus and Jaeger data sources.
+  - The `docker` client is part of the `server` extra: the code executor
+    imports it at module level, so a request that reached it failed with an
+    `ImportError` instead of the sandbox's fail-closed result.
+  - The Kubernetes manifest pins `7.3.1`, the first server image, and its
+    Secret lists the three secrets it was missing.
+  - A new "Docker images" workflow builds the server through Compose,
+    starts it and waits for `/health` and the image's own health check, and
+    checks that the default target still runs the Action.
+
 - **`AgentStateGuard` returns `BLOCKED` for deeply nested JSON instead of
   raising `RecursionError` (#469).** Parsing and canonicalisation recurse once
   per nesting level and only `ValueError` was caught, so a payload such as
