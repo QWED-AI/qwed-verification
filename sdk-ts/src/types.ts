@@ -133,7 +133,18 @@ export interface VerificationError {
  * such as `is_valid`, `issues` or `error`.
  */
 export interface VerificationResponse {
+    /**
+     * One of the four `VerificationStatus` values; a status this SDK does not
+     * know is `Unknown`. Gate on {@link isAdmitted}, not on the status.
+     */
     status: VerificationStatus;
+    /**
+     * The server's status text exactly as sent, such as `SAT` or
+     * `NOT_MATH_QUERY` where `status` is `Unknown`. The parser sets it on
+     * every response; it is absent when the server sent no status string.
+     * Never used for admission.
+     */
+    rawStatus?: string;
     /** Absent where the endpoint makes no decision. Absent is not admitted. */
     admission?: Admission;
     /** Set only when `status` is VERIFIED. */
@@ -276,10 +287,23 @@ export interface AgentVerificationRequest {
 
 export type AgentDecision = 'APPROVED' | 'DENIED' | 'CORRECTED' | 'PENDING' | 'BUDGET_EXCEEDED';
 
+/**
+ * `verification.status` on an agent answer. The agent endpoint passes on the
+ * maths engine's own result, whose status can be `VERIFIED`, `BLOCKED`,
+ * `DISPROVEN` (the computation contradicts the claim), `INCONCLUSIVE` (a
+ * non-finite value, so neither proven nor disproven) or `SYNTAX_ERROR`. Only
+ * an admission decision is a pass; none of these alone is.
+ */
+export type AgentVerificationStatus =
+    | VerificationStatus
+    | 'DISPROVEN'
+    | 'INCONCLUSIVE'
+    | 'SYNTAX_ERROR';
+
 export interface AgentVerificationResponse {
     decision: AgentDecision;
     verification?: {
-        status: VerificationStatus;
+        status: AgentVerificationStatus;
         engine?: string;
         risk_level?: 'low' | 'medium' | 'high' | 'critical';
         checks_passed?: string[];

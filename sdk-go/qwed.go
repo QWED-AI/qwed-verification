@@ -136,7 +136,14 @@ type RequestOptions struct {
 // VerificationResponse is a verification answer: the server's
 // DiagnosticResult envelope.
 type VerificationResponse struct {
+	// Status is one of the four VerificationStatus values; a status this SDK
+	// does not know is StatusUnknown. Gate on IsAdmitted, not on Status.
 	Status VerificationStatus `json:"status"`
+	// RawStatus is the server's status text exactly as sent, set on every
+	// decode, such as "SAT" or "NOT_MATH_QUERY" where Status is StatusUnknown.
+	// It is empty when the server sent no status string. It is never used
+	// for admission.
+	RawStatus string `json:"-"`
 	// Admission is empty where the endpoint makes no decision. Empty is not
 	// admitted.
 	Admission Admission `json:"admission,omitempty"`
@@ -164,23 +171,36 @@ var envelopeFields = map[string]bool{
 	"is_authoritative": true, "constraint_id": true, "developer_fields": true,
 }
 
-// UnmarshalJSON decodes the envelope, keeps the other fields in Extra and
-// sets the deprecated Verified field from IsAdmitted. A field of the wrong
-// JSON type, such as a non-string proof_ref, is an error.
+// decodeKeepingNumbers decodes with UseNumber, so a JSON number in an
+// interface{} value stays a json.Number with its exact text instead of a
+// float64 (which rounds integers above 2^53 and re-encodes decimals).
+func decodeKeepingNumbers(data []byte, v interface{}) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	return dec.Decode(v)
+}
+
+// UnmarshalJSON decodes the envelope, keeps the other fields in Extra, keeps
+// the server's status text in RawStatus and sets the deprecated Verified
+// field from IsAdmitted. Numbers in DeveloperFields and Extra are
+// json.Number. A field of the wrong JSON type, such as a non-string
+// proof_ref, is an error.
 func (r *VerificationResponse) UnmarshalJSON(data []byte) error {
 	type envelope VerificationResponse // no methods, so no recursion
 	var env envelope
-	if err := json.Unmarshal(data, &env); err != nil {
+	if err := decodeKeepingNumbers(data, &env); err != nil {
 		return err
 	}
 	var fields map[string]interface{}
-	if err := json.Unmarshal(data, &fields); err != nil {
+	if err := decodeKeepingNumbers(data, &fields); err != nil {
 		return err
 	}
+	rawStatus, _ := fields["status"].(string)
 	for key := range envelopeFields {
 		delete(fields, key)
 	}
 	*r = VerificationResponse(env)
+	r.RawStatus = rawStatus
 	if r.Status == "" {
 		// No status key: the field's own UnmarshalJSON never ran.
 		r.Status = StatusUnknown
@@ -191,18 +211,27 @@ func (r *VerificationResponse) UnmarshalJSON(data []byte) error {
 }
 
 // MarshalJSON writes the envelope fields with Extra's keys beside them, as
-// the server sent them, so a decoded response survives a round trip. An
-// Extra key never replaces an envelope field, even one left out because it
-// is empty.
+// the server sent them, so a decoded response survives a round trip. When
+// Status is StatusUnknown, the status written is RawStatus, the server's
+// own text. An Extra key never replaces an envelope field, even one left out
+// because it is empty.
 func (r VerificationResponse) MarshalJSON() ([]byte, error) {
 	type envelope VerificationResponse // no methods, so no recursion
 	data, err := json.Marshal(envelope(r))
-	if err != nil || len(r.Extra) == 0 {
+	keepRawStatus := r.Status == StatusUnknown && r.RawStatus != ""
+	if err != nil || (len(r.Extra) == 0 && !keepRawStatus) {
 		return data, err
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return nil, err
+	}
+	if keepRawStatus {
+		raw, err := json.Marshal(r.RawStatus)
+		if err != nil {
+			return nil, err
+		}
+		fields["status"] = raw
 	}
 	for key, value := range r.Extra {
 		if envelopeFields[key] {

@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
     Admission,
+    AgentVerificationStatus,
     QWEDClient,
     QWEDError,
     VerificationStatus,
@@ -131,6 +132,38 @@ describe('status and admission parsing', () => {
         const r = parseVerificationResponse(body);
         expect(r.status).toBe(status);
         expect(r.admission).toBe(admission);
+    });
+
+    it('keeps the server status text in rawStatus', () => {
+        // A batch logic item can answer with a solver status, not an envelope one.
+        const sat = parseVerificationResponse({
+            status: 'SAT',
+            admission: 'ADMIT',
+            proof_ref: 'sha256:ab',
+            model: { x: 6 },
+        });
+        expect(sat.status).toBe(VerificationStatus.Unknown);
+        expect(sat.rawStatus).toBe('SAT');
+        expect(isAdmitted(sat)).toBe(false);
+
+        expect(response('math_verified').rawStatus).toBe('VERIFIED');
+        expect(parseVerificationResponse({ status: 'verified' }).rawStatus).toBe('verified');
+        expect(parseVerificationResponse({ status: null })).not.toHaveProperty('rawStatus');
+        expect(parseVerificationResponse({})).not.toHaveProperty('rawStatus');
+        // A rawStatus key in the body is not trusted.
+        expect(parseVerificationResponse({ rawStatus: 'VERIFIED' })).not.toHaveProperty('rawStatus');
+        expect(parseVerificationResponse({ status: 'BLOCKED', rawStatus: 'VERIFIED' }).rawStatus).toBe('BLOCKED');
+    });
+
+    it('types the agent verification statuses the maths engine returns', () => {
+        const statuses: AgentVerificationStatus[] = [
+            VerificationStatus.Verified,
+            VerificationStatus.Blocked,
+            'DISPROVEN',
+            'INCONCLUSIVE',
+            'SYNTAX_ERROR',
+        ];
+        expect(statuses).toHaveLength(5);
     });
 
     it.each([null, 'VERIFIED', [], 42])('rejects a body that is not an object: %j', body => {

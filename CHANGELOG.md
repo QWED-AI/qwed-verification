@@ -115,7 +115,19 @@ All notable changes to the QWED Protocol will be documented in this file.
     agent methods now uses, and `getErrorMessage()` reads a string `error`.
   - Go's `VerificationResponse` marshals `Extra` back beside the envelope
     fields, so a decoded response survives a JSON round trip; an `Extra` key
-    never replaces an envelope field.
+    never replaces an envelope field. Numbers in `Extra` and
+    `DeveloperFields` are `json.Number`, so large integers and long decimals
+    keep their exact text. (TypeScript numbers come from `JSON.parse` and
+    keep its float limits.)
+  - All three SDKs keep the server's status text as `RawStatus` (Go),
+    `rawStatus` (TypeScript) or `raw_status` (Rust), such as `SAT` or
+    `NOT_MATH_QUERY` where the parsed status is Unknown. It is never used for
+    admission. The Rust `VerificationResponse` now deserialises through a
+    private wire type (`#[serde(from)]`) to fill it; a missing or non-string
+    `status` is still an error.
+  - TypeScript's `AgentVerificationResponse.verification.status` is
+    `AgentVerificationStatus`, which adds the maths engine's `DISPROVEN`,
+    `INCONCLUSIVE` and `SYNTAX_ERROR`.
   - Contract tests in both SDKs parse the captured responses, now shared with
     the Rust SDK in `sdk-fixtures/`. CI runs `go test` (the Go tests never
     ran before) and `vitest run` without `--passWithNoTests`. READMEs and the

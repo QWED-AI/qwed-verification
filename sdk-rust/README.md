@@ -39,6 +39,7 @@ Every verification returns the server's DiagnosticResult envelope:
 | Field | Meaning |
 |-------|---------|
 | `status` | `Verified`, `Unverifiable` or `Blocked` (`Unknown` for a value this SDK does not know) |
+| `raw_status` | The server's status text exactly as sent, such as `SAT` where `status` is `Unknown`; never used for admission |
 | `admission` | `Some(Admit)` or `Some(Blocked)` where the endpoint decides; `None` where it does not |
 | `proof_ref` | Set only when `status` is `Verified` |
 | `agent_message`, `developer_fields`, `is_authoritative`, `constraint_id` | Explanation and detail |

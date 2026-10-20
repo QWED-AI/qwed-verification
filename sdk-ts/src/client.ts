@@ -410,7 +410,10 @@ export function isAdmitted(response: VerificationResponse | null | undefined): b
  * `admission` keep only the values the server sends; any other status,
  * including a missing one, becomes `Unknown`, any other admission becomes
  * `Unknown`, and a null admission is left out. Neither is ever admitted.
- * Every other field is kept as sent. The client calls this for `verify`,
+ * The server's status text is kept in `rawStatus`. Every other field is
+ * kept as sent; numbers are JavaScript numbers, so an integer above 2^53 or
+ * a long decimal is rounded by `JSON.parse` before it gets here. The client
+ * calls this for `verify`,
  * `verifyMath`, `verifyLogic`, `verifyCode`, `verifyFact`, `verifySQL`,
  * `verifyProcess` and `verifyRAG`; `verifyAgent` and `verifyAgentAction`
  * return the agent endpoint's own shape and are not parsed.
@@ -426,6 +429,13 @@ export function parseVerificationResponse(body: unknown): VerificationResponse {
             ? (body.status as VerificationStatus)
             : VerificationStatus.Unknown,
     };
+    // The server's own text, even where status is Unknown; never trusted
+    // from a rawStatus key in the body.
+    if (typeof body.status === 'string') {
+        response.rawStatus = body.status;
+    } else {
+        delete response.rawStatus;
+    }
     if (body.admission === undefined || body.admission === null) {
         delete response.admission;
     } else {

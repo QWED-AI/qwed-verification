@@ -344,3 +344,90 @@ func TestExtraNeverReplacesAnEnvelopeField(t *testing.T) {
 		t.Errorf("Extra[note]: got %v, want kept", decoded.Extra["note"])
 	}
 }
+
+func TestNumbersKeepTheirExactText(t *testing.T) {
+	// 9007199254740993 is 2^53 + 1, which a float64 rounds to ...992.
+	body := `{"status": "VERIFIED", "admission": "ADMIT", "proof_ref": "sha256:ab",
+		"developer_fields": {"big": 9007199254740993, "decimal": 0.1000000000000000055511151231257827},
+		"big": 9007199254740993, "decimal": 0.1000000000000000055511151231257827, "is_valid": true}`
+	var r VerificationResponse
+	if err := json.Unmarshal([]byte(body), &r); err != nil {
+		t.Fatal(err)
+	}
+	for where, fields := range map[string]map[string]interface{}{"developer_fields": r.DeveloperFields, "Extra": r.Extra} {
+		if fields["big"] != json.Number("9007199254740993") {
+			t.Errorf("%s[big]: got %#v", where, fields["big"])
+		}
+		if fields["decimal"] != json.Number("0.1000000000000000055511151231257827") {
+			t.Errorf("%s[decimal]: got %#v", where, fields["decimal"])
+		}
+	}
+	if r.Extra["is_valid"] != true || !r.IsAdmitted() {
+		t.Error("booleans and the envelope still decode as before")
+	}
+
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"big":9007199254740993`,
+		`"decimal":0.1000000000000000055511151231257827`,
+		`"developer_fields":{"big":9007199254740993,"decimal":0.1000000000000000055511151231257827}`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("re-encoded response has no %s: %s", want, data)
+		}
+	}
+}
+
+func TestRawStatusKeepsTheServersText(t *testing.T) {
+	// A batch logic item can answer with a solver status, not an envelope one.
+	body := `{"status": "SAT", "admission": "ADMIT", "proof_ref": "sha256:ab", "model": {"x": 6}}`
+	var r VerificationResponse
+	if err := json.Unmarshal([]byte(body), &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.Status != StatusUnknown || r.RawStatus != "SAT" || r.IsAdmitted() {
+		t.Errorf("got Status %q RawStatus %q admitted %v; want UNKNOWN, SAT, false",
+			r.Status, r.RawStatus, r.IsAdmitted())
+	}
+	if _, ok := r.Extra["status"]; ok {
+		t.Error("status leaked into Extra")
+	}
+
+	// Re-encoding writes the server's text back, so it survives a round trip.
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"status":"SAT"`) {
+		t.Errorf("re-encoded response lost the raw status: %s", data)
+	}
+	var again VerificationResponse
+	if err := json.Unmarshal(data, &again); err != nil {
+		t.Fatal(err)
+	}
+	if again.Status != StatusUnknown || again.RawStatus != "SAT" {
+		t.Errorf("round trip: got %q / %q", again.Status, again.RawStatus)
+	}
+
+	for body, want := range map[string]string{
+		`{"status": "VERIFIED"}`: "VERIFIED",
+		`{"status": "verified"}`: "verified",
+		`{"status": null}`:       "",
+		`{}`:                     "",
+	} {
+		var r VerificationResponse
+		if err := json.Unmarshal([]byte(body), &r); err != nil {
+			t.Fatal(err)
+		}
+		if r.RawStatus != want {
+			t.Errorf("%s: RawStatus %q, want %q", body, r.RawStatus, want)
+		}
+	}
+
+	if response(t, "math_verified").RawStatus != "VERIFIED" {
+		t.Error("a fixture's RawStatus should be its status")
+	}
+}
