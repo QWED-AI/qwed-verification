@@ -52,15 +52,26 @@ jobs:
       - name: Validate the Compose file
         run: docker compose -f deploy/docker-compose.yml config --quiet
 
-      - name: Grafana refuses an empty admin password
+      - name: Grafana refuses to start without an admin password
         run: |
           # The Compose entrypoint hands over to the image's /run.sh.
           docker run --rm --entrypoint /bin/sh grafana/grafana:10.2.2 -c 'test -x /run.sh'
-          if docker compose -f deploy/docker-compose.yml run --rm --no-deps \
-              -e GF_SECURITY_ADMIN_PASSWORD= grafana; then
-            echo "::error::Grafana started with an empty admin password."
+          # Run Grafana from an env file without its admin login line. A
+          # working guard exits at once with its message; a broken one leaves
+          # Grafana serving, which the timeout stops (exit 124).
+          cp deploy/.env deploy/.env.full
+          grep -v '^GF_SECURITY_ADMIN_PASS' deploy/.env.full > deploy/.env
+          set +e
+          out="$(timeout 60 docker compose -f deploy/docker-compose.yml run --rm --no-deps grafana 2>&1)"
+          status=$?
+          set -e
+          mv deploy/.env.full deploy/.env
+          echo "${out}"
+          if [ "${status}" -eq 0 ] || [ "${status}" -eq 124 ]; then
+            echo "::error::Grafana started without an admin password (exit ${status})."
             exit 1
           fi
+          echo "${out}" | grep -q "is empty"
 
       - name: Build the server image through Compose
         run: docker compose -f deploy/docker-compose.yml build qwed-core
