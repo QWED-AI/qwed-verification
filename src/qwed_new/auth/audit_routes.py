@@ -16,7 +16,7 @@ from qwed_new.core.database import get_session
 from qwed_new.core.audit_logger import SecurityError, get_audit_logger
 from qwed_new.core.models import VerificationLog, User
 from .roles import ADMIN_ROLES, READ_ROLES
-from .routes import require_user_role
+from .routes import ROLE_REFUSED, require_user_role
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -25,7 +25,7 @@ router = APIRouter(prefix="/audit", tags=["audit"])
 _READER = Depends(require_user_role(READ_ROLES))
 _ADMIN = Depends(require_user_role(ADMIN_ROLES))
 
-@router.get("/logs")
+@router.get("/logs", responses=ROLE_REFUSED)
 async def get_logs(
     limit: int = Query(50, le=200),
     status: Optional[str] = Query(None),
@@ -64,7 +64,10 @@ async def get_logs(
         ]
     }
 
-@router.get("/logs/{log_id}")
+@router.get(
+    "/logs/{log_id}",
+    responses={**ROLE_REFUSED, 404: {"description": "No such log in the organisation"}},
+)
 async def get_log_detail(
     log_id: int,
     current_user: User = _READER,
@@ -85,7 +88,7 @@ async def get_log_detail(
         "created_at": log.timestamp.isoformat()
     }
 
-@router.get("/export")
+@router.get("/export", responses=ROLE_REFUSED)
 async def export_logs(
     current_user: User = _ADMIN,
     session: Session = Depends(get_session)
@@ -134,6 +137,7 @@ SEED_ENABLED_ENV_VAR = "QWED_ENABLE_AUDIT_SEED"
 @router.post(
     "/seed",
     responses={
+        **ROLE_REFUSED,
         404: {"description": "Sample seeding is disabled"},
         500: {"description": "Audit persistence failed"},
     },

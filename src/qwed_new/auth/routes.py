@@ -213,7 +213,7 @@ def require_user_role(allowed: frozenset):
     organisation or a role outside the allowlist (see auth/roles.py).
     """
 
-    async def dependency(
+    def dependency(
         current_user: User = Depends(get_current_user),
         session: Session = Depends(get_session),
     ) -> User:
@@ -226,6 +226,8 @@ def require_user_role(allowed: frozenset):
 _READER = Depends(require_user_role(READ_ROLES))
 _WRITER = Depends(require_user_role(WRITE_ROLES))
 _KEY_NOT_FOUND = "API key not found"
+# OpenAPI docs for what a role-checked route can refuse.
+ROLE_REFUSED = {403: {"description": "User or organisation inactive, or role not allowed"}}
 # Largest id an SQL BIGINT holds; a larger digit string would overflow the
 # query and fail with a server error instead of a 404.
 _MAX_KEY_ID = 2**63 - 1
@@ -240,7 +242,7 @@ async def get_me(current_user: User = Depends(get_current_user)):
         "role": current_user.role
     }
 
-@router.post("/api-keys", response_model=APIKeyResponse)
+@router.post("/api-keys", response_model=APIKeyResponse, responses=ROLE_REFUSED)
 async def create_api_key_endpoint(
     request: APIKeyCreateRequest,
     current_user: User = _WRITER,
@@ -269,7 +271,7 @@ async def create_api_key_endpoint(
         "created_at": api_key.created_at
     }
 
-@router.get("/api-keys", response_model=List[APIKeyListItem])
+@router.get("/api-keys", response_model=List[APIKeyListItem], responses=ROLE_REFUSED)
 async def list_api_keys(
     current_user: User = _READER,
     session: Session = Depends(get_session)
@@ -301,7 +303,15 @@ async def list_api_keys(
         for key in keys
     ]
 
-@router.delete("/api-keys/{key_id}")
+@router.delete(
+    "/api-keys/{key_id}",
+    responses={
+        403: {"description": "User or organisation inactive, role not allowed, "
+                             "or the key's owner ranks higher"},
+        404: {"description": "No such key in the organisation, an invalid id, "
+                             "or another user's key for a member or viewer"},
+    },
+)
 async def revoke_api_key_endpoint(
     key_id: str,
     current_user: User = _READER,
