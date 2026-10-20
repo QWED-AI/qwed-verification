@@ -18,18 +18,34 @@ pnpm add @qwed-ai/sdk
 ## Quick Start
 
 ```typescript
-import { QWEDClient } from '@qwed-ai/sdk';
+import { QWEDClient, isAdmitted } from '@qwed-ai/sdk';
 
 const client = new QWEDClient({
   apiKey: 'qwed_your_api_key',
   baseUrl: 'http://localhost:8000', // optional
 });
 
-// Verify a math query
-const result = await client.verify('What is 2+2?');
-console.log(result.verified); // true
-console.log(result.status);   // 'VERIFIED'
+const result = await client.verifyMath('2 + 2 = 4');
+console.log(result.status);       // 'VERIFIED'
+console.log(result.admission);    // 'ADMIT'
+console.log(isAdmitted(result));  // true
 ```
+
+## Reading a result
+
+Every verification returns the server's DiagnosticResult envelope:
+
+| Field | Meaning |
+|-------|---------|
+| `status` | `VERIFIED`, `UNVERIFIABLE` or `BLOCKED` (`UNKNOWN` for a missing value or one this SDK does not know) |
+| `admission` | `ADMIT` or `BLOCKED` where the endpoint decides (`UNKNOWN` for a value this SDK does not know); absent where it does not, as on `/verify/logic`, `/verify/fact` and batch items |
+| `proof_ref` | Set only when `status` is `VERIFIED` |
+| `agent_message`, `developer_fields`, `is_authoritative`, `constraint_id` | Explanation and detail |
+| any other key | The endpoint's own fields, such as `is_valid`, `issues` or `error` |
+
+**Gate on `isAdmitted(result)`, not on `status`.** `VERIFIED` means the engine reached a deterministic answer, not that the claim holds: `2 + 2 = 5` is `VERIFIED · BLOCKED` (proven false), and unsafe code is `VERIFIED · BLOCKED` (proven unsafe). `isAdmitted()` is true only for `ADMIT` together with `VERIFIED` and a `proof_ref`; a missing or unknown admission is never admitted.
+
+`verified` and `isVerified()` are deprecated. The server sends no `verified` field; the client sets `verified` to `isAdmitted(result)`, and `isVerified()` returns `isAdmitted()`. If you fetch responses yourself, pass the parsed JSON to `parseVerificationResponse()` or `parseBatchResponse()`.
 
 ## Verification Methods
 
@@ -43,15 +59,17 @@ const result = await client.verify('Is 15% of 200 equal to 30?');
 
 ```typescript
 const result = await client.verifyMath('x**2 + 2*x + 1 = (x+1)**2');
-console.log(result.result?.is_valid); // true
+console.log(isAdmitted(result)); // true for a true identity
+console.log(result.is_valid);
 ```
 
 ### Logic (QWED-DSL)
 
 ```typescript
 const result = await client.verifyLogic('(AND (GT x 5) (LT y 10))');
-console.log(result.result?.satisfiability); // 'SAT'
-console.log(result.result?.model);          // { x: 6, y: 9 }
+// /verify/logic makes no admission decision: admission is undefined and
+// isAdmitted() is false, whatever the status.
+console.log(result.status, result.admission);
 ```
 
 ### Code Security
@@ -62,8 +80,9 @@ const result = await client.verifyCode(`
   os.system('rm -rf /')
 `, { language: 'python' });
 
-console.log(result.verified); // false
-console.log(result.result?.vulnerabilities);
+console.log(result.status, result.admission); // 'VERIFIED', 'BLOCKED'
+console.log(isAdmitted(result));              // false
+console.log(result.issues);                   // what was found
 ```
 
 ### Fact Verification
@@ -73,7 +92,9 @@ const result = await client.verifyFact(
   'Paris is the capital of France',
   'France is a country in Europe. Its capital city is Paris.'
 );
-console.log(result.result?.verdict); // 'SUPPORTED'
+// A heuristic match is not a proof: UNVERIFIABLE, with no admission.
+console.log(result.status);                // 'UNVERIFIABLE'
+console.log(result.deterministic_verdict); // 'SUPPORTED'
 ```
 
 ### SQL Validation
@@ -89,14 +110,19 @@ const result = await client.verifySQL(
 ## Batch Verification
 
 ```typescript
-const result = await client.verifyBatch([
+const batch = await client.verifyBatch([
   { query: '2+2=4', type: VerificationType.Math },
   { query: '3*3=9', type: VerificationType.Math },
   { query: '(AND (GT x 5))', type: VerificationType.Logic },
 ]);
 
-console.log(result.summary.success_rate); // 100
-console.log(result.items);                // individual results
+console.log(batch.job_id, batch.status); // job state, such as 'completed' or 'partial'
+console.log(batch.completed_items, batch.failed_items, batch.total_items);
+for (const item of batch.items) {
+  // item.status is the item's state (`completed`, `failed`);
+  // item.result is its verification answer.
+  console.log(item.query, item.result?.status, isAdmitted(item.result));
+}
 ```
 
 ## Attestations
@@ -108,7 +134,7 @@ const result = await client.verify('2+2=4', {
   includeAttestation: true,
 });
 
-if (result.attestation) {
+if (typeof result.attestation === 'string') {
   const parsed = parseAttestation(result.attestation);
   console.log(parsed?.payload.qwed.result.status); // 'VERIFIED'
 }
@@ -174,8 +200,10 @@ All types are exported and fully documented:
 import {
   VerificationType,
   VerificationStatus,
+  Admission,
   VerificationResponse,
   BatchResponse,
+  BatchItemResult,
   AgentVerificationResponse,
   // ... and more
 } from '@qwed-ai/sdk';
@@ -212,10 +240,16 @@ them.
 
 ```bash
 npm ci
-npm run typecheck   # tsc --noEmit, covers every file under src/
-npm run lint        # eslint src
+npm run typecheck   # tsc --noEmit for src/, then src/ and tests/ together
+npm run lint        # eslint src tests
+npx vitest run      # contract and client tests
 npm run build       # tsup -> dist/ (cjs + esm + .d.ts)
 ```
+
+The contract tests in `tests/contract.test.ts` parse responses captured from
+the server, stored in `sdk-fixtures/` at the repository root. The Go and Rust
+SDKs parse the same files, and `tests/test_issue_468_rust_sdk_contract.py`
+fails if the server's answers drift from them.
 
 ## License
 

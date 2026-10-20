@@ -1,10 +1,11 @@
-"""#468: the Rust SDK could not parse the server's responses.
+"""#468, #480: the Rust, Go and TypeScript SDKs could not read the server's responses.
 
-The Rust SDK's contract tests (``sdk-rust/tests/contract.rs``) parse responses
-captured from the server and stored in ``sdk-rust/tests/fixtures/``. This
-test sends the same requests the SDK sends and checks that the server still
+The SDKs' contract tests (``sdk-rust/tests/contract.rs``,
+``sdk-go/contract_test.go``, ``sdk-ts/tests/contract.test.ts``) parse
+responses captured from the server and stored in ``sdk-fixtures/``. This
+test sends the same requests the SDKs send and checks that the server still
 answers with the shape stored there, so a change to the envelope fails here
-instead of silently breaking the SDK.
+instead of silently breaking an SDK.
 
 Only deterministic endpoints are compared. The natural-language, logic and
 fact fixtures depend on which LLM provider is configured, so they are kept
@@ -20,7 +21,7 @@ from fastapi.testclient import TestClient
 
 from qwed_new.api.main import app, get_current_tenant, get_session
 
-FIXTURES = Path(__file__).resolve().parent.parent / "sdk-rust" / "tests" / "fixtures"
+FIXTURES = Path(__file__).resolve().parent.parent / "sdk-fixtures"
 
 # The request body each fixture was captured with, as sdk-rust/src/lib.rs sends it.
 REQUESTS = {
@@ -41,8 +42,10 @@ REQUESTS = {
 
 ENVIRONMENT_DEPENDENT = {"natural_language", "logic", "fact"}
 
-# The JSON types VerificationResponse in sdk-rust/src/lib.rs reads. A field
-# of another type makes the Rust call fail with Error::Serialization.
+# The JSON types VerificationResponse in sdk-rust/src/lib.rs and
+# sdk-go/qwed.go reads. A field of another type makes the Rust call fail with
+# Error::Serialization and the Go call fail to unmarshal. (The TypeScript SDK
+# reads any type, and its isAdmitted() needs a string proof_ref.)
 NONE = type(None)
 RUST_FIELD_TYPES = {
     "status": (str,),
@@ -53,13 +56,15 @@ RUST_FIELD_TYPES = {
     "constraint_id": (str, NONE),
     "developer_fields": (dict, NONE),
 }
-# BatchResult and BatchResponse fields, the same way.
+# BatchResult and BatchResponse fields, the same way (Go reads error,
+# created_at and completed_at as strings).
 BATCH_ITEM_TYPES = {
     "id": (str,),
     "status": (str,),
     "query": (str, NONE),
     "type": (str, NONE),
     "result": (dict, NONE),
+    "error": (str, NONE),
     "latency_ms": (int, float, NONE),
 }
 BATCH_JOB_TYPES = {
@@ -69,6 +74,8 @@ BATCH_JOB_TYPES = {
     "total_items": (int, NONE),
     "completed_items": (int, NONE),
     "failed_items": (int, NONE),
+    "created_at": (str, NONE),
+    "completed_at": (str, NONE),
     "items": (list,),
 }
 

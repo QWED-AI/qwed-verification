@@ -39,9 +39,26 @@ func main() {
         log.Fatal(err)
     }
     
-    fmt.Printf("Verified: %v\n", result.Verified)
+    fmt.Println(result.Status, result.Admission) // VERIFIED ADMIT
+    fmt.Println(result.IsAdmitted())             // true
 }
 ```
+
+## Reading a result
+
+Every verification returns the server's DiagnosticResult envelope:
+
+| Field | Meaning |
+|-------|---------|
+| `Status` | `StatusVerified`, `StatusUnverifiable` or `StatusBlocked` (`StatusUnknown` for a missing value or one this SDK does not know) |
+| `Admission` | `AdmissionAdmit` or `AdmissionBlocked` where the endpoint decides (`AdmissionUnknown` for a value this SDK does not know); empty where it does not, as on `/verify/logic`, `/verify/fact` and batch items |
+| `ProofRef` | Set only when `Status` is `StatusVerified` |
+| `AgentMessage`, `DeveloperFields`, `IsAuthoritative`, `ConstraintID` | Explanation and detail |
+| `Extra` | The endpoint's own fields, such as `is_valid`, `issues` or `error` |
+
+**Gate on `IsAdmitted()`, not on `Status`.** `VERIFIED` means the engine reached a deterministic answer, not that the claim holds: `2 + 2 = 5` is `VERIFIED · BLOCKED` (proven false), and unsafe code is `VERIFIED · BLOCKED` (proven unsafe). `IsAdmitted()` is true only for `ADMIT` together with `VERIFIED` and a `ProofRef`; a missing or unknown admission is never admitted.
+
+The `Verified` field and `IsVerified()` are deprecated. The server sends no `verified` field; decoding sets `Verified` to `IsAdmitted()`, and `IsVerified()` returns `IsAdmitted()`.
 
 ## Features
 
@@ -89,7 +106,11 @@ type Verifier interface {
 type MockVerifier struct{}
 
 func (m *MockVerifier) VerifyMath(ctx context.Context, expr string) (*qwed.VerificationResponse, error) {
-    return &qwed.VerificationResponse{Verified: true}, nil
+    return &qwed.VerificationResponse{
+        Status:    qwed.StatusVerified,
+        Admission: qwed.AdmissionAdmit,
+        ProofRef:  "sha256:...",
+    }, nil
 }
 
 // Use mock in your code that accepts Verifier interface
@@ -115,15 +136,49 @@ if err != nil {
 
 ```go
 type VerificationResponse struct {
-    Status      VerificationStatus     `json:"status"`
-    Verified    bool                   `json:"verified"`
-    Engine      string                 `json:"engine,omitempty"`
-    Result      map[string]interface{} `json:"result,omitempty"`
-    Attestation string                 `json:"attestation,omitempty"`
-    Error       *ErrorInfo             `json:"error,omitempty"`
-    Metadata    *ResponseMetadata      `json:"metadata,omitempty"`
+    Status          VerificationStatus     // VERIFIED, UNVERIFIABLE, BLOCKED or UNKNOWN
+    Admission       Admission              // ADMIT, BLOCKED, UNKNOWN, or "" for no decision
+    ProofRef        string                 // set only for VERIFIED
+    AgentMessage    string
+    IsAuthoritative *bool
+    ConstraintID    string
+    DeveloperFields map[string]interface{}
+    Extra           map[string]interface{} // the endpoint's own fields
+    Verified        bool                   // Deprecated: set to IsAdmitted()
+}
+
+func (r *VerificationResponse) IsAdmitted() bool
+```
+
+A batch job:
+
+```go
+batch, err := client.VerifyBatch(ctx, []qwed.BatchItem{
+    {Query: "2 + 2 = 4", Type: qwed.TypeMath},
+    {Query: "2 + 2 = 5", Type: qwed.TypeMath},
+}, nil)
+if err != nil {
+    log.Fatal(err)
+}
+// batch.Status is the job state: completed, partial, failed, ...
+fmt.Println(batch.JobID, batch.Status, batch.CompletedItems, batch.FailedItems, batch.TotalItems)
+for _, item := range batch.Items {
+    // item.Status is the item state; item.Result is its verification answer.
+    fmt.Println(item.Query, item.Status, item.IsAdmitted())
 }
 ```
+
+## Tests
+
+```bash
+go test ./...
+```
+
+`contract_test.go` parses responses captured from the server, stored in
+`sdk-fixtures/` at the repository root, so run the tests from a checkout of
+the whole repository. The Rust and TypeScript SDKs parse the same files, and
+`tests/test_issue_468_rust_sdk_contract.py` fails if the server's answers
+drift from them.
 
 ## Examples
 

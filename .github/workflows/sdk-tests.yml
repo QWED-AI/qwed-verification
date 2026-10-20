@@ -8,6 +8,7 @@ on:
       - 'sdk-ts/**'
       - 'sdk-go/**'
       - 'sdk-rust/**'
+      - 'sdk-fixtures/**'
   pull_request:
     branches: [main]
     paths:
@@ -15,6 +16,7 @@ on:
       - 'sdk-ts/**'
       - 'sdk-go/**'
       - 'sdk-rust/**'
+      - 'sdk-fixtures/**'
   workflow_dispatch:  # Manual trigger
 
 permissions:
@@ -86,10 +88,10 @@ jobs:
           cd sdk-ts
           npm run lint
       
-      - name: Test runner smoke (vitest starts, no tests yet)
+      - name: Test (contract tests against captured server responses)
         run: |
           cd sdk-ts
-          npx vitest run --passWithNoTests
+          npx vitest run
 
   # ============================================
   # TypeScript SDK consumer compat (oldest supported runtime)
@@ -160,6 +162,11 @@ jobs:
         run: |
           cd sdk-go
           go vet ./...
+
+      - name: Test (contract tests against captured server responses)
+        run: |
+          cd sdk-go
+          go test -v ./...
 
   # ============================================
   # Rust SDK

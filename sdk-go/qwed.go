@@ -3,11 +3,17 @@
 // Example usage:
 //
 //	client := qwed.NewClient("qwed_your_api_key")
-//	result, err := client.Verify("What is 2+2?")
+//	result, err := client.VerifyMath(context.Background(), "2 + 2 = 4")
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-//	fmt.Println(result.Verified) // true
+//	fmt.Println(result.Status, result.Admission, result.IsAdmitted()) // VERIFIED ADMIT true
+//
+// Every verification answer is a QWED DiagnosticResult: a Status (VERIFIED,
+// UNVERIFIABLE or BLOCKED), an Admission decision (ADMIT or BLOCKED) where
+// the endpoint makes one, and a ProofRef when the status is VERIFIED. Gate on
+// IsAdmitted, never on the status alone: 2 + 2 = 5 is also VERIFIED (proven
+// false) but is not admitted.
 package qwed
 
 import (
@@ -39,18 +45,78 @@ const (
 	TypeReasoning       VerificationType = "reasoning"
 )
 
-// VerificationStatus represents the result status.
+// VerificationStatus is the diagnostic status of a verification
+// (DiagnosticResult.status).
+//
+// StatusVerified says the engine reached a deterministic answer, not that the
+// claim holds: a false identity such as 2 + 2 = 5 is VERIFIED too, and its
+// admission is BLOCKED. Gate on VerificationResponse.IsAdmitted.
 type VerificationStatus string
 
 const (
-	StatusVerified    VerificationStatus = "VERIFIED"
-	StatusFailed      VerificationStatus = "FAILED"
-	StatusCorrected   VerificationStatus = "CORRECTED"
-	StatusBlocked     VerificationStatus = "BLOCKED"
-	StatusError       VerificationStatus = "ERROR"
-	StatusTimeout     VerificationStatus = "TIMEOUT"
-	StatusUnsupported VerificationStatus = "UNSUPPORTED"
+	// StatusVerified: the claim was evaluated deterministically and
+	// ProofRef is set.
+	StatusVerified VerificationStatus = "VERIFIED"
+	// StatusUnverifiable: the claim could not be proven.
+	StatusUnverifiable VerificationStatus = "UNVERIFIABLE"
+	// StatusBlocked: verification could not be attempted (parse error,
+	// policy, missing dependency).
+	StatusBlocked VerificationStatus = "BLOCKED"
+	// StatusUnknown: a missing status, or one this SDK version does not
+	// know. Never admitted.
+	StatusUnknown VerificationStatus = "UNKNOWN"
 )
+
+// UnmarshalJSON keeps the three statuses the server sends and maps any other
+// value, including null, to StatusUnknown.
+func (s *VerificationStatus) UnmarshalJSON(data []byte) error {
+	var raw *string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*s = StatusUnknown
+	if raw != nil {
+		switch v := VerificationStatus(*raw); v {
+		case StatusVerified, StatusUnverifiable, StatusBlocked:
+			*s = v
+		}
+	}
+	return nil
+}
+
+// Admission is the server's decision at its enforcement boundary.
+//
+// The empty value means the endpoint made no admission decision, as
+// /verify/logic, /verify/fact and batch items do today. It is never admitted.
+type Admission string
+
+const (
+	// AdmissionAdmit: the boundary may proceed with the verdict.
+	AdmissionAdmit Admission = "ADMIT"
+	// AdmissionBlocked: the boundary must not admit.
+	AdmissionBlocked Admission = "BLOCKED"
+	// AdmissionUnknown: a decision this SDK version does not know. Never
+	// admitted.
+	AdmissionUnknown Admission = "UNKNOWN"
+)
+
+// UnmarshalJSON keeps ADMIT and BLOCKED, maps null to the empty value (no
+// decision) and any other value to AdmissionUnknown.
+func (a *Admission) UnmarshalJSON(data []byte) error {
+	var raw *string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*a = ""
+	if raw != nil {
+		*a = AdmissionUnknown
+		switch v := Admission(*raw); v {
+		case AdmissionAdmit, AdmissionBlocked:
+			*a = v
+		}
+	}
+	return nil
+}
 
 // VerificationRequest represents a verification request.
 type VerificationRequest struct {
@@ -67,29 +133,78 @@ type RequestOptions struct {
 	IncludeAttestation   bool `json:"include_attestation,omitempty"`
 }
 
-// VerificationResponse represents the API response.
+// VerificationResponse is a verification answer: the server's
+// DiagnosticResult envelope.
 type VerificationResponse struct {
-	Status      VerificationStatus     `json:"status"`
-	Verified    bool                   `json:"verified"`
-	Engine      string                 `json:"engine,omitempty"`
-	Result      map[string]interface{} `json:"result,omitempty"`
-	Attestation string                 `json:"attestation,omitempty"`
-	Error       *ErrorInfo             `json:"error,omitempty"`
-	Metadata    *ResponseMetadata      `json:"metadata,omitempty"`
+	Status VerificationStatus `json:"status"`
+	// Admission is empty where the endpoint makes no decision. Empty is not
+	// admitted.
+	Admission Admission `json:"admission,omitempty"`
+	// ProofRef is set only when Status is StatusVerified.
+	ProofRef        string                 `json:"proof_ref,omitempty"`
+	AgentMessage    string                 `json:"agent_message,omitempty"`
+	IsAuthoritative *bool                  `json:"is_authoritative,omitempty"`
+	ConstraintID    string                 `json:"constraint_id,omitempty"`
+	DeveloperFields map[string]interface{} `json:"developer_fields,omitempty"`
+	// Extra holds the endpoint's own fields, such as is_valid, issues or
+	// error.
+	Extra map[string]interface{} `json:"-"`
+
+	// Verified is set to IsAdmitted() when a response is decoded. The server
+	// sends no verified field.
+	//
+	// Deprecated: use IsAdmitted.
+	Verified bool `json:"-"`
 }
 
-// ErrorInfo contains error details.
+// envelopeFields are the keys VerificationResponse reads itself; every other
+// key goes to Extra.
+var envelopeFields = []string{
+	"status", "admission", "proof_ref", "agent_message",
+	"is_authoritative", "constraint_id", "developer_fields",
+}
+
+// UnmarshalJSON decodes the envelope, keeps the other fields in Extra and
+// sets the deprecated Verified field from IsAdmitted. A field of the wrong
+// JSON type, such as a non-string proof_ref, is an error.
+func (r *VerificationResponse) UnmarshalJSON(data []byte) error {
+	type envelope VerificationResponse // no methods, so no recursion
+	var env envelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		return err
+	}
+	var fields map[string]interface{}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, key := range envelopeFields {
+		delete(fields, key)
+	}
+	*r = VerificationResponse(env)
+	if r.Status == "" {
+		// No status key: the field's own UnmarshalJSON never ran.
+		r.Status = StatusUnknown
+	}
+	r.Extra = fields
+	r.Verified = r.IsAdmitted()
+	return nil
+}
+
+// IsAdmitted reports whether the server admitted the result: Admission is
+// ADMIT, Status is VERIFIED and ProofRef is set. Anything else, including a
+// missing or unknown admission, is not admitted. It is false for nil.
+func (r *VerificationResponse) IsAdmitted() bool {
+	return r != nil &&
+		r.Admission == AdmissionAdmit &&
+		r.Status == StatusVerified &&
+		r.ProofRef != ""
+}
+
+// ErrorInfo contains the details of a failed HTTP request.
 type ErrorInfo struct {
 	Code    string                 `json:"code"`
 	Message string                 `json:"message"`
 	Details map[string]interface{} `json:"details,omitempty"`
-}
-
-// ResponseMetadata contains response metadata.
-type ResponseMetadata struct {
-	RequestID       string  `json:"request_id,omitempty"`
-	LatencyMs       float64 `json:"latency_ms,omitempty"`
-	ProtocolVersion string  `json:"protocol_version,omitempty"`
 }
 
 // BatchRequest represents a batch verification request.
@@ -110,29 +225,58 @@ type BatchOptions struct {
 	FailFast    bool `json:"fail_fast,omitempty"`
 }
 
-// BatchResponse represents the batch API response.
+// BatchResponse is a batch job and its items.
 type BatchResponse struct {
-	JobID   string        `json:"job_id"`
-	Status  string        `json:"status"`
-	Summary *BatchSummary `json:"summary,omitempty"`
-	Items   []BatchResult `json:"items,omitempty"`
+	JobID string `json:"job_id"`
+	// Status is the job state: pending, processing, completed, partial or
+	// failed.
+	Status          string        `json:"status"`
+	ProgressPercent float64       `json:"progress_percent"`
+	TotalItems      int           `json:"total_items"`
+	CompletedItems  int           `json:"completed_items"`
+	FailedItems     int           `json:"failed_items"`
+	CreatedAt       string        `json:"created_at,omitempty"`
+	CompletedAt     string        `json:"completed_at,omitempty"`
+	Items           []BatchResult `json:"items"`
 }
 
-// BatchSummary contains batch statistics.
-type BatchSummary struct {
-	Total       int     `json:"total"`
-	Verified    int     `json:"verified"`
-	Failed      int     `json:"failed"`
-	SuccessRate float64 `json:"success_rate"`
-}
-
-// BatchResult represents a single batch item result.
+// BatchResult is one item of a batch job.
 type BatchResult struct {
-	ID       string                 `json:"id"`
-	Status   VerificationStatus     `json:"status"`
-	Verified bool                   `json:"verified"`
-	Result   map[string]interface{} `json:"result,omitempty"`
-	Error    *ErrorInfo             `json:"error,omitempty"`
+	ID string `json:"id"`
+	// Status is the item state, such as pending, completed or failed. The
+	// verification status is Result.Status.
+	Status string           `json:"status"`
+	Query  string           `json:"query,omitempty"`
+	Type   VerificationType `json:"type,omitempty"`
+	// Result is the item's verification answer, once it has one.
+	Result    *VerificationResponse `json:"result,omitempty"`
+	Error     string                `json:"error,omitempty"`
+	LatencyMs float64               `json:"latency_ms,omitempty"`
+
+	// Verified is set to IsAdmitted() when an item is decoded. The server
+	// sends no verified field.
+	//
+	// Deprecated: use IsAdmitted.
+	Verified bool `json:"-"`
+}
+
+// UnmarshalJSON decodes the item and sets the deprecated Verified field from
+// IsAdmitted.
+func (b *BatchResult) UnmarshalJSON(data []byte) error {
+	type item BatchResult // no methods, so no recursion
+	var it item
+	if err := json.Unmarshal(data, &it); err != nil {
+		return err
+	}
+	*b = BatchResult(it)
+	b.Verified = b.IsAdmitted()
+	return nil
+}
+
+// IsAdmitted reports whether the item has a result that is admitted (see
+// VerificationResponse.IsAdmitted). It is false for nil.
+func (b *BatchResult) IsAdmitted() bool {
+	return b != nil && b.Result.IsAdmitted()
 }
 
 // ============================================================================
@@ -389,7 +533,10 @@ func (c *Client) request(ctx context.Context, method, path string, body, result 
 // Helpers
 // ============================================================================
 
-// IsVerified returns true if the response indicates successful verification.
+// IsVerified returns resp.IsAdmitted().
+//
+// Deprecated: use VerificationResponse.IsAdmitted. VERIFIED alone is not a
+// pass, and the server sends no verified field.
 func IsVerified(resp *VerificationResponse) bool {
-	return resp != nil && resp.Verified
+	return resp.IsAdmitted()
 }
