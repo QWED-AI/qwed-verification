@@ -1,0 +1,128 @@
+{
+  "advisory_checks": [
+    {
+      "advisory_only": true,
+      "constraint_id": "fact_verifier.tfidf_cosine_similarity",
+      "details": {
+        "citations": [
+          {
+            "relevance_score": 0.667,
+            "sentence": "Paris is the capital of France.",
+            "support_type": "supports"
+          }
+        ],
+        "confidence": "0.945",
+        "deterministic_verdict": "SUPPORTED",
+        "reasoning": "Keywords matched: paris, france",
+        "scores": {
+          "entity_match": 1.0,
+          "keyword_overlap": 1.0,
+          "negation_conflict": 0.0,
+          "semantic_similarity": 0.816
+        }
+      },
+      "name": "heuristic_supported"
+    }
+  ],
+  "agent_message": "Fact claim supported by heuristic analysis \u2014 not a deterministic proof",
+  "citations": [
+    {
+      "relevance_score": 0.667,
+      "sentence": "Paris is the capital of France.",
+      "support_type": "supports"
+    }
+  ],
+  "constraint_id": "fact_verifier.heuristic_supported",
+  "deterministic_confidence": 0.945,
+  "deterministic_verdict": "SUPPORTED",
+  "developer_fields": {
+    "advisory_checks": [
+      {
+        "advisory_only": true,
+        "constraint_id": "fact_verifier.tfidf_cosine_similarity",
+        "details": {
+          "citations": [
+            {
+              "relevance_score": 0.667,
+              "sentence": "Paris is the capital of France.",
+              "support_type": "supports"
+            }
+          ],
+          "confidence": "0.945",
+          "deterministic_verdict": "SUPPORTED",
+          "reasoning": "Keywords matched: paris, france",
+          "scores": {
+            "entity_match": 1.0,
+            "keyword_overlap": 1.0,
+            "negation_conflict": 0.0,
+            "semantic_similarity": 0.816
+          }
+        },
+        "name": "heuristic_supported"
+      }
+    ],
+    "citations": [
+      {
+        "relevance_score": 0.667,
+        "sentence": "Paris is the capital of France.",
+        "support_type": "supports"
+      }
+    ],
+    "constraint_id": "fact_verifier.heuristic_supported",
+    "deterministic_confidence": 0.945,
+    "deterministic_verdict": "SUPPORTED",
+    "evidence": "Keywords matched: paris, france",
+    "methods_used": [
+      {
+        "advisory_only": false,
+        "name": "semantic_similarity"
+      },
+      {
+        "advisory_only": false,
+        "name": "keyword_overlap"
+      },
+      {
+        "advisory_only": false,
+        "name": "entity_matching"
+      },
+      {
+        "advisory_only": false,
+        "name": "negation_detection"
+      }
+    ],
+    "scores": {
+      "entity_match": 1.0,
+      "keyword_overlap": 1.0,
+      "negation_conflict": 0.0,
+      "semantic_similarity": 0.816
+    }
+  },
+  "evidence": "Keywords matched: paris, france",
+  "is_authoritative": false,
+  "methods_used": [
+    {
+      "advisory_only": false,
+      "name": "semantic_similarity"
+    },
+    {
+      "advisory_only": false,
+      "name": "keyword_overlap"
+    },
+    {
+      "advisory_only": false,
+      "name": "entity_matching"
+    },
+    {
+      "advisory_only": false,
+      "name": "negation_detection"
+    }
+  ],
+  "proof_ref": null,
+  "scores": {
+    "entity_match": 1.0,
+    "keyword_overlap": 1.0,
+    "negation_conflict": 0.0,
+    "semantic_similarity": 0.816
+  },
+  "status": "UNVERIFIABLE"
+}

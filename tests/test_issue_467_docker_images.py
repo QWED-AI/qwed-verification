@@ -104,6 +104,24 @@ def test_the_dockerfile_binds_all_interfaces_in_exactly_one_place():
     assert "::" not in DOCKERFILE.replace("http://", "")
 
 
+def test_the_build_context_leaves_out_tests_and_other_sdks_but_not_what_images_copy():
+    patterns = [
+        line.strip()
+        for line in (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    # Test folders anywhere (sdk-rust/tests, #468) and the non-Python SDKs.
+    assert "**/tests/" in patterns
+    assert "sdk-*/" in patterns
+    # Nothing the Dockerfile copies may be ignored.
+    copied = set(re.findall(r"^COPY (?:--chown=\S+ )?(\S+) ", DOCKERFILE, re.M))
+    assert copied == {"requirements-server.txt", "src/qwed_new", "qwed_sdk", "requirements.txt", "action_entrypoint.py"}
+    for source in copied:
+        top = source.split("/")[0]
+        assert not any(p.rstrip("/") in (source, top) for p in patterns), source
+        assert not any(re.fullmatch(p.rstrip("/").replace(".", r"\.").replace("*", "[^/]*"), top) for p in patterns), source
+
+
 def test_the_server_stage_does_not_inherit_the_action_entrypoint():
     server = "\n".join(_stages()["server"])
     assert "entrypoint.sh" not in server

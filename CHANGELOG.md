@@ -85,6 +85,36 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Fixed
 
+- **The Rust SDK parses the server's responses (#468).** `VerificationResponse`
+  required a top-level `verified` field the server never sends, and
+  `VerificationStatus` had no `UNVERIFIABLE`, so every `verify*` call failed
+  to deserialize. Batch responses also expected a `summary` the server does
+  not send. **Breaking for the `qwed` crate's types.**
+  - `VerificationResponse` models the DiagnosticResult envelope: `status`
+    (`Verified`, `Unverifiable`, `Blocked`, or `Unknown` for a value the SDK
+    does not know), `admission` (`Admit`, `Blocked`, `Unknown`, or `None`
+    where the endpoint makes no decision), `proof_ref`, `agent_message`,
+    `developer_fields`, `is_authoritative`, `constraint_id`, and the
+    endpoint's own fields in `extra`. The `verified`, `engine`, `result`,
+    `attestation`, `error` and `metadata` fields and the `ErrorInfo`,
+    `ResponseMetadata` and `BatchSummary` types are gone.
+  - `is_admitted()` replaces `verified`: true only for `admission` ADMIT with
+    `status` VERIFIED and a `proof_ref`. VERIFIED alone is not enough, because
+    a claim proven false (`2 + 2 = 5`) or code proven unsafe is VERIFIED and
+    BLOCKED. A missing or unknown admission is never admitted. `is_verified()`
+    is deprecated and now returns `is_admitted()`.
+  - `BatchResponse` and `BatchResult` match the batch job the server returns;
+    each item's `result` is a `VerificationResponse`.
+  - A body that does not match now fails as `Error::Serialization` rather
+    than as an HTTP decode error.
+  - Contract tests parse responses captured from the server
+    (`sdk-rust/tests/fixtures`), CI now runs `cargo test` for the Rust SDK,
+    and `tests/test_issue_468_rust_sdk_contract.py` fails if the server's
+    answers drift from those fixtures. The README documents the envelope and
+    gating on `is_admitted()`.
+  - `.dockerignore` leaves test folders at any depth and the non-Python
+    SDKs (`sdk-*/`) out of the Docker build context; no image copies them.
+
 - **The Docker image runs the API server, and the Compose stack builds
   (#467).** The image published as `qwedai/qwed-verification` ran the GitHub
   Action: its entrypoint was the Action script, the uvicorn `CMD` was passed

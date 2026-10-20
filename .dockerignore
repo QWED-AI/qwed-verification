@@ -13,9 +13,15 @@ __pycache__/
 # Debug / test — NOT for production images
 scripts/
 tests/
+# Test folders anywhere (a bare "tests/" matches only the root one).
+**/tests/
 check_prs.py
 fix_cache.py
 update_cache.py
 
 # Docs
 *.md
+
+# SDKs for other languages: no image uses them. (qwed_sdk, the Python SDK,
+# is copied into both images and does not match.)
+sdk-*/

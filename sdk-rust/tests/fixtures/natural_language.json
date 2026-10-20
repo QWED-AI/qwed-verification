@@ -1,0 +1,11 @@
+{
+  "admission": "BLOCKED",
+  "agent_message": "Verification inconclusive",
+  "constraint_id": "math.legacy_inconclusive",
+  "developer_fields": {
+    "constraint_id": "math.legacy_inconclusive"
+  },
+  "is_authoritative": false,
+  "proof_ref": null,
+  "status": "UNVERIFIABLE"
+}

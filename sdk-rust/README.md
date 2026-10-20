@@ -23,14 +23,28 @@ use qwed::QWEDClient;
 #[tokio::main]
 async fn main() -> Result<(), qwed::Error> {
     let client = QWEDClient::new("qwed_your_api_key");
-    
-    let result = client.verify("What is 2+2?").await?;
-    println!("Verified: {}", result.verified); // true
-    println!("Status: {:?}", result.status);   // Verified
-    
+
+    let result = client.verify_math("2 + 2 = 4").await?;
+    println!("Status: {:?}", result.status);       // Verified
+    println!("Admitted: {}", result.is_admitted()); // true
+
     Ok(())
 }
 ```
+
+## Reading a result
+
+Every verification returns the server's DiagnosticResult envelope:
+
+| Field | Meaning |
+|-------|---------|
+| `status` | `Verified`, `Unverifiable` or `Blocked` (`Unknown` for a value this SDK does not know) |
+| `admission` | `Some(Admit)` or `Some(Blocked)` where the endpoint decides; `None` where it does not |
+| `proof_ref` | Set only when `status` is `Verified` |
+| `agent_message`, `developer_fields`, `is_authoritative`, `constraint_id` | Explanation and detail |
+| `extra` | Endpoint-specific fields, such as `is_valid` or `issues` |
+
+**Gate on `is_admitted()`, not on `status`.** `Verified` means the engine reached a deterministic answer, not that the claim holds: `2 + 2 = 5` is `Verified` (proven false) with admission `Blocked`, and unsafe code is `Verified` (proven unsafe) and `Blocked`. `is_admitted()` is true only for `Admit` together with `Verified` and a `proof_ref`; a missing or unknown admission is never admitted.
 
 ## Verification Methods
 
@@ -50,7 +64,7 @@ let result = client.verify_math("x**2 + 2*x + 1 = (x+1)**2").await?;
 
 ```rust
 let result = client.verify_logic("(AND (GT x 5) (LT y 10))").await?;
-// result.result["satisfiability"] = "SAT"
+// /verify/logic makes no admission decision, so is_admitted() is false.
 ```
 
 ### Code Security
@@ -91,9 +105,12 @@ let items = vec![
     BatchItem { query: "3*3=9".into(), r#type: Some(VerificationType::Math) },
 ];
 
-let result = client.verify_batch(items).await?;
-if let Some(summary) = result.summary {
-    println!("Success rate: {:.1}%", summary.success_rate);
+let batch = client.verify_batch(items).await?;
+println!("Job {} is {}", batch.job_id, batch.status);
+for item in &batch.items {
+    if let Some(result) = &item.result {
+        println!("{}: {:?}, admitted={}", item.id, result.status, item.is_admitted());
+    }
 }
 ```
 
@@ -115,8 +132,8 @@ let client = QWEDClient::with_options(
 use qwed::{QWEDClient, Error};
 
 match client.verify("test").await {
-    Ok(result) => println!("Verified: {}", result.verified),
-    Err(Error::Auth) => eprintln!("Invalid API key"),
+    Ok(result) => println!("Admitted: {}", result.is_admitted()),
+Err(Error::Auth) => eprintln!("Invalid API key"),
     Err(Error::RateLimit) => eprintln!("Rate limit exceeded"),
     Err(Error::Api { code, message }) => eprintln!("Error {}: {}", code, message),
     Err(e) => eprintln!("Error: {}", e),
@@ -128,10 +145,11 @@ match client.verify("test").await {
 | Type | Description |
 |------|-------------|
 | `VerificationType` | Enum: Math, Logic, Stats, Fact, Code, Sql, etc. |
-| `VerificationStatus` | Enum: Verified, Failed, Corrected, Blocked, etc. |
-| `VerificationResponse` | Full verification result |
-| `BatchResponse` | Batch operation result |
-| `Error` | Error enum with Auth, RateLimit, Api variants |
+| `VerificationStatus` | Enum: Verified, Unverifiable, Blocked, Unknown |
+| `Admission` | Enum: Admit, Blocked, Unknown |
+| `VerificationResponse` | The DiagnosticResult envelope, with `is_admitted()` |
+| `BatchResponse`, `BatchResult` | A batch job and its items; each item (`BatchResult`) has `is_admitted()` |
+| `Error` | Error enum with Http, Auth, RateLimit, Api and Serialization variants |
 
 ## Async Runtime
 

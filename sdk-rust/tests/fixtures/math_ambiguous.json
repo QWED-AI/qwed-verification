@@ -1,0 +1,22 @@
+{
+  "admission": "BLOCKED",
+  "agent_message": "Expression may be ambiguous due to implicit multiplication after division",
+  "developer_fields": {
+    "is_valid": false,
+    "note": "Interpreted using standard order of operations",
+    "original": "2",
+    "result": false,
+    "simplified": "2",
+    "status": "BLOCKED",
+    "warning": "ambiguous"
+  },
+  "is_authoritative": false,
+  "is_valid": false,
+  "note": "Interpreted using standard order of operations",
+  "original": "2",
+  "proof_ref": null,
+  "result": false,
+  "simplified": "2",
+  "status": "BLOCKED",
+  "warning": "ambiguous"
+}
