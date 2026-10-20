@@ -231,6 +231,41 @@ func TestIsAdmittedFailsClosed(t *testing.T) {
 	}
 }
 
+func TestAStatusChangedLocallyIsWrittenAsChanged(t *testing.T) {
+	// RawStatus is written only for StatusUnknown, so a local downgrade from
+	// VERIFIED to BLOCKED is not undone by the server's text.
+	r := response(t, "math_verified")
+	r.Status = StatusBlocked
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var again VerificationResponse
+	if err := json.Unmarshal(data, &again); err != nil {
+		t.Fatal(err)
+	}
+	if again.Status != StatusBlocked || again.RawStatus != "BLOCKED" || again.IsAdmitted() || again.Verified {
+		t.Errorf("downgrade lost: got %q / %q, admitted %v: %s", again.Status, again.RawStatus, again.IsAdmitted(), data)
+	}
+
+	var batch BatchResponse
+	if err := json.Unmarshal(fixture(t, "batch"), &batch); err != nil {
+		t.Fatal(err)
+	}
+	batch.Items[0].Result.Status = StatusBlocked
+	data, err = json.Marshal(batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var batchAgain BatchResponse
+	if err := json.Unmarshal(data, &batchAgain); err != nil {
+		t.Fatal(err)
+	}
+	if batchAgain.Items[0].Result.Status != StatusBlocked || batchAgain.Items[0].IsAdmitted() {
+		t.Errorf("batch item downgrade lost: got %q", batchAgain.Items[0].Result.Status)
+	}
+}
+
 func TestARagOrProcessGuardResultIsNotAnAdmission(t *testing.T) {
 	// /verify/rag and /verify/process merge the guard's result to the top
 	// level and make no admission decision.

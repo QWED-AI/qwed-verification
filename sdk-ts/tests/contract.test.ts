@@ -213,6 +213,40 @@ describe('status and admission parsing', () => {
             expect(again.items[2].result).toBeNull();
         });
 
+        it('writes a status changed locally, not the server text', () => {
+            const r = parseVerificationResponse(verified);
+            r.status = VerificationStatus.Blocked;
+            expect(JSON.parse(JSON.stringify(r)).status).toBe('BLOCKED');
+
+            const again = roundTrip(r, parseVerificationResponse);
+            expect(again.status).toBe(VerificationStatus.Blocked);
+            expect(again.rawStatus).toBe('BLOCKED');
+            expect(isAdmitted(again)).toBe(false);
+            expect(again.verified).toBe(false);
+        });
+
+        it('writes a status changed locally on a batch item result', () => {
+            const batch = parseBatchResponse({
+                job_id: 'j',
+                status: 'completed',
+                items: [{ id: 'j-0', status: 'completed', type: 'math', result: verified }],
+            });
+            const result = batch.items[0].result;
+            if (!result) throw new Error('no result');
+            result.status = VerificationStatus.Blocked;
+
+            const again = roundTrip(batch, parseBatchResponse);
+            expect(again.items[0].result?.status).toBe(VerificationStatus.Blocked);
+            expect(isAdmitted(again.items[0].result)).toBe(false);
+            expect(again.items[0].verified).toBe(false);
+        });
+
+        it('writes an empty rawStatus as the status itself', () => {
+            const r = parseVerificationResponse({ status: '' });
+            expect(r.status).toBe(VerificationStatus.Unknown);
+            expect(JSON.parse(JSON.stringify(r)).status).toBe('UNKNOWN');
+        });
+
         it('never trusts a rawStatus key in a body, after a round trip too', () => {
             const forged = { status: 'BLOCKED', rawStatus: 'VERIFIED', admission: 'ADMIT', proof_ref: 'sha256:ab' };
             const r = roundTrip(parseVerificationResponse(forged), parseVerificationResponse);

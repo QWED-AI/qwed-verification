@@ -142,9 +142,10 @@ export interface VerificationResponse {
      * The server's status text exactly as sent, such as `SAT` or
      * `NOT_MATH_QUERY` where `status` is `Unknown`. The parser sets it on
      * every response; it is absent when the server sent no status string.
-     * Never used for admission, and never read from a body. `JSON.stringify`
-     * of a parsed response writes it back as `status`, so it survives a
-     * round trip.
+     * Never used for admission, and never read from a body. Where `status`
+     * is `Unknown`, `JSON.stringify` of a parsed response writes it back as
+     * `status`, so it survives a round trip; a known `status` is written as
+     * it is.
      */
     rawStatus?: string;
     /** Absent where the endpoint makes no decision. Absent is not admitted. */

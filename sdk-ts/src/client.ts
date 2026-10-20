@@ -414,10 +414,11 @@ export function isAdmitted(response: VerificationResponse | null | undefined): b
  * kept as sent; numbers are JavaScript numbers, so an integer above 2^53 or
  * a long decimal is rounded by `JSON.parse` before it gets here.
  *
- * The result has a non-enumerable `toJSON`, so `JSON.stringify` writes the
- * server's text back as `status` and no `rawStatus` key, as the server sent
- * it. Parsing that JSON again gives the same `status` and `rawStatus`, so a
- * cached or logged response keeps the server's status.
+ * The result has a non-enumerable `toJSON`, so `JSON.stringify` writes no
+ * `rawStatus` key and, where `status` is `Unknown`, writes the server's text
+ * as `status`. Parsing that JSON again gives the same `status` and
+ * `rawStatus`, so a cached or logged response keeps the server's status. A
+ * known status is written as it is, including one changed locally.
  *
  * The client calls this for `verify`, `verifyMath`, `verifyLogic`,
  * `verifyCode`, `verifyFact`, `verifySQL`, `verifyProcess` and `verifyRAG`;
@@ -460,13 +461,20 @@ export function parseVerificationResponse(body: unknown): VerificationResponse {
 }
 
 /**
- * `toJSON` for a parsed response: every enumerable field, with the server's
- * status text as `status` (`rawStatus` where it is set) and no `rawStatus`
- * key.
+ * `toJSON` for a parsed response: every enumerable field and no `rawStatus`
+ * key. `status` is the response's own status, except that an `Unknown`
+ * status is written as the server's text (`rawStatus`) so it survives a
+ * round trip. A known status always wins, so a response changed locally
+ * (say from VERIFIED to BLOCKED) is written as changed. Go's `MarshalJSON`
+ * follows the same rule.
  */
 function serialiseAsSent(this: VerificationResponse): Record<string, unknown> {
     const { rawStatus, ...fields } = this;
-    return { ...fields, status: rawStatus ?? fields.status };
+    const keepRawStatus =
+        fields.status === VerificationStatus.Unknown &&
+        typeof rawStatus === 'string' &&
+        rawStatus.length > 0;
+    return { ...fields, status: keepRawStatus ? rawStatus : fields.status };
 }
 
 /**
