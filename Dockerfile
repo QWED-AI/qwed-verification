@@ -41,16 +41,21 @@ COPY qwed_sdk /app/qwed_sdk/
 WORKDIR /var/lib/qwed
 USER qwed
 
+# uvicorn reads its host and port from these. Change the port with
+# -e UVICORN_PORT=...; the health check follows it (a --port argument would
+# not).
+ENV UVICORN_HOST=0.0.0.0 \
+    UVICORN_PORT=8000
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD ["python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"]
+    CMD ["python", "-c", "import os, sys, urllib.request; port = os.environ.get('UVICORN_PORT', '8000'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=4).status == 200 else 1)"]
 
-# The server refuses to start without QWED_CORS_ORIGINS, and needs
-# API_KEY_SECRET, QWED_JWT_SECRET_KEY, QWED_API_KEY_LOOKUP_SECRET and
-# QWED_AUDIT_SECRET_KEY for authentication and the audit chain.
+# The server refuses to start without QWED_CORS_ORIGINS, QWED_JWT_SECRET_KEY
+# or QWED_API_KEY_LOOKUP_SECRET. It also needs API_KEY_SECRET, and
+# QWED_AUDIT_SECRET_KEY to sign the audit chain.
 ENTRYPOINT ["python", "-m", "uvicorn", "qwed_new.api.main:app"]
-CMD ["--host", "0.0.0.0", "--port", "8000"]
 
 
 # ============== GITHUB ACTION (default target, keep last) ==============

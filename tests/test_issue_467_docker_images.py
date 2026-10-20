@@ -75,13 +75,23 @@ def test_the_server_stage_runs_uvicorn_as_a_non_root_user():
     server = "\n".join(_stages()["server"])
 
     assert 'ENTRYPOINT ["python", "-m", "uvicorn", "qwed_new.api.main:app"]' in server
-    assert 'CMD ["--host", "0.0.0.0", "--port", "8000"]' in server
     assert re.search(r"^USER qwed$", server, re.M)
     assert "--require-hashes -r /app/requirements-server.txt" in server
     assert "COPY src/qwed_new /app/qwed_new/" in server
     assert "COPY qwed_sdk /app/qwed_sdk/" in server
-    assert "HEALTHCHECK" in server
-    assert "/health" in server
+
+
+def test_the_health_check_follows_the_port_uvicorn_listens_on():
+    # uvicorn and the health check both read UVICORN_PORT, so changing the
+    # port with -e UVICORN_PORT=... keeps the container healthy.
+    server = "\n".join(_stages()["server"])
+
+    assert re.search(r"ENV UVICORN_HOST=0\.0\.0\.0 \\\s+UVICORN_PORT=8000", server)
+    assert not re.search(r"^CMD ", server, re.M)
+    assert "--port" not in server
+    healthcheck = server[server.index("HEALTHCHECK"):server.index("ENTRYPOINT")]
+    assert "os.environ.get('UVICORN_PORT', '8000')" in healthcheck
+    assert "http://127.0.0.1:{port}/health" in healthcheck
 
 
 def test_the_server_stage_does_not_inherit_the_action_entrypoint():
@@ -180,6 +190,18 @@ def test_the_kubernetes_secret_has_every_server_secret():
     provided = set(secret["stringData"]) | set(config["data"])
 
     assert set(SERVER_SECRETS) <= provided
+
+
+def test_shipped_secret_and_env_files_hold_no_placeholder_values():
+    # A filled-in-looking placeholder passes "is it set?" checks and fails
+    # only at runtime; an empty value is refused up front.
+    secret = yaml.safe_load((ROOT / "deploy" / "kubernetes" / "secret.yaml").read_text(encoding="utf-8"))
+    assert all(value == "" for value in secret["stringData"].values())
+
+    example = (ROOT / "deploy" / ".env.example").read_text(encoding="utf-8")
+    values = dict(re.findall(r"^([A-Z0-9_]+)=(.*)$", example, re.M))
+    assert values["DATABASE_URL"] == ""
+    assert not any("<" in value or "REPLACE" in value for value in values.values())
 
 
 def test_docker_hub_publishes_the_server_target():

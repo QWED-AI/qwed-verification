@@ -86,6 +86,18 @@ jobs:
       - name: The server runs as a non-root user
         run: test "$(docker exec qwed-smoke id -u)" = "1000"
 
+      - name: Changing UVICORN_PORT moves the server and its health check together
+        run: |
+          docker run -d --name qwed-smoke-port -p 9000:9000 \
+            --env-file deploy/.env -e DATABASE_URL=sqlite:///./qwed.db -e UVICORN_PORT=9000 \
+            qwedai/qwed-verification:local
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:9000/health && break
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:9000/health
+          docker exec qwed-smoke-port python -c "import os, sys, urllib.request; port = os.environ.get('UVICORN_PORT', '8000'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=4).status == 200 else 1)"
+
       - name: Server logs
         if: always()
         run: docker logs qwed-smoke || true
