@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import unicodedata
 from decimal import Decimal
@@ -24,6 +25,13 @@ from typing import Any, Dict, Iterable
 
 
 from qwed_new.core.diagnostics import compute_proof_ref
+
+# One forward-only token scan for the pre-parse nesting check: a JSON string,
+# or a single bracket. A string runs to its closing quote or, when it never
+# closes, to the end of the text (group 1 is then empty), and a backslash may
+# end the text too, so a string match can never fail and nothing is ever
+# re-scanned. Runs of plain characters are consumed at once.
+_JSON_TOKEN = re.compile(r'"[^"\\]*(?:\\(?:.|\Z)[^"\\]*)*("|\Z)|[\[\]{}]', re.DOTALL)
 
 
 class AgentStateGuard:
@@ -55,6 +63,11 @@ class AgentStateGuard:
         }
     )
     MAX_VALIDATION_DEPTH = 64
+    # Nesting accepted before parsing (#469). Deeper than MAX_VALIDATION_DEPTH,
+    # so the validator still reports an ordinary over-deep state
+    # (QWED-AGENT-STATE-103), and far below the interpreter's recursion limit,
+    # so parsing and canonicalisation can never overflow the stack.
+    MAX_PARSE_DEPTH = 256
 
     def __init__(
         self,
@@ -111,9 +124,23 @@ class AgentStateGuard:
                 message="Blocked: proposed agent state must be a non-empty JSON string.",
             )
 
+        # The nesting check runs inside the same handler as the parser, so even
+        # a MemoryError from the check itself comes back BLOCKED. RecursionError
+        # and MemoryError are caught so that a payload that defeats the check
+        # is still BLOCKED, never raised (#469). ArithmeticError covers
+        # parse_float=Decimal on an exponent outside Decimal's range
+        # (decimal.InvalidOperation is not a ValueError).
         try:
+            if self._nesting_exceeds(proposed_state_json, self.MAX_PARSE_DEPTH):
+                return self._blocked(
+                    error_code="QWED-AGENT-STATE-102",
+                    message=(
+                        "Blocked: invalid or non-deterministic JSON state payload. "
+                        f"Nesting exceeds {self.MAX_PARSE_DEPTH} levels."
+                    ),
+                )
             state_data = self._load_strict_json(proposed_state_json)
-        except ValueError as exc:
+        except (ValueError, ArithmeticError, RecursionError, MemoryError) as exc:
             return self._blocked(
                 error_code="QWED-AGENT-STATE-102",
                 message=f"Blocked: invalid or non-deterministic JSON state payload. {exc}",
@@ -121,7 +148,7 @@ class AgentStateGuard:
 
         try:
             normalized_state = self._canonicalize(state_data)
-        except ValueError as exc:
+        except (ValueError, RecursionError, MemoryError) as exc:
             return self._blocked(
                 error_code="QWED-AGENT-STATE-102",
                 message=(
@@ -267,6 +294,34 @@ class AgentStateGuard:
             "committed_path": str(commit_target),
             "committed_bytes": committed_bytes,
         }
+
+    @staticmethod
+    def _nesting_exceeds(text: str, limit: int) -> bool:
+        """True when the JSON text opens more than ``limit`` arrays or objects
+        inside each other. One forward pass over strings and brackets
+        (``_JSON_TOKEN``): brackets inside strings do not count, a string
+        that never closes takes the rest of the text, and its brackets are
+        counted as structure. Malformed text is otherwise left to the
+        parser."""
+        if text.count("[") + text.count("{") <= limit:
+            return False
+        depth = 0
+        for match in _JSON_TOKEN.finditer(text):
+            token = match.group()
+            if token[0] == '"':
+                if match.group(1):
+                    continue
+                # An unterminated string ends the text; the parser rejects it,
+                # but its brackets must not hide nesting from this check.
+                rest = token[1:]
+                return depth + rest.count("[") + rest.count("{") > limit
+            if token in "[{":
+                depth += 1
+                if depth > limit:
+                    return True
+            else:
+                depth -= 1
+        return False
 
     def _load_strict_json(self, proposed_state_json: str) -> Any:
         return json.loads(
