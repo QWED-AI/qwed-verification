@@ -157,8 +157,11 @@ type VerificationResponse struct {
 	// error.
 	Extra map[string]interface{} `json:"-"`
 
-	// Verified is set to IsAdmitted() when a response is decoded. The server
-	// sends no verified field.
+	// Verified is set to IsAdmitted() on every decode, whatever the body
+	// says. Endpoints that make no admission decision (logic, fact, rag,
+	// process and batch items today) are never admitted. The verified field
+	// /verify/rag and /verify/process send is their guard's own result; it is
+	// kept in Extra["verified"] and DeveloperFields["verified"].
 	//
 	// Deprecated: use IsAdmitted.
 	Verified bool `json:"-"`
@@ -309,8 +312,8 @@ type BatchResult struct {
 	Error     string                `json:"error,omitempty"`
 	LatencyMs float64               `json:"latency_ms,omitempty"`
 
-	// Verified is set to IsAdmitted() when an item is decoded. The server
-	// sends no verified field.
+	// Verified is set to IsAdmitted() when an item is decoded. Batch items
+	// carry no admission decision today, so it is false.
 	//
 	// Deprecated: use IsAdmitted.
 	Verified bool `json:"-"`
@@ -592,7 +595,7 @@ func (c *Client) request(ctx context.Context, method, path string, body, result 
 // IsVerified returns resp.IsAdmitted().
 //
 // Deprecated: use VerificationResponse.IsAdmitted. VERIFIED alone is not a
-// pass, and the server sends no verified field.
+// pass, and a verified field in a response is not an admission decision.
 func IsVerified(resp *VerificationResponse) bool {
 	return resp.IsAdmitted()
 }

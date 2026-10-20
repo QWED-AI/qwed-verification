@@ -156,8 +156,11 @@ export interface VerificationResponse {
     constraint_id?: string | null;
     developer_fields?: Record<string, unknown> | null;
     /**
-     * Set by the client to `isAdmitted(response)`. The server sends no
-     * `verified` field.
+     * Set by the parser to `isAdmitted(response)`, whatever the body says.
+     * Endpoints that make no admission decision (logic, fact, rag, process
+     * and batch items today) are never admitted. The `verified` that
+     * `/verify/rag` and `/verify/process` send is their guard's own result;
+     * it stays in `developer_fields.verified`.
      * @deprecated Use {@link isAdmitted}.
      */
     verified?: boolean;
@@ -180,8 +183,8 @@ export interface BatchItemResult {
     error?: string | null;
     latency_ms?: number;
     /**
-     * Set by the client to `isAdmitted(item.result)`. The server sends no
-     * `verified` field.
+     * Set by the parser to `isAdmitted(item.result)`. Batch items carry no
+     * admission decision today, so it is false.
      * @deprecated Use `isAdmitted(item.result)`.
      */
     verified?: boolean;

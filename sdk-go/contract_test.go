@@ -231,6 +231,24 @@ func TestIsAdmittedFailsClosed(t *testing.T) {
 	}
 }
 
+func TestARagOrProcessGuardResultIsNotAnAdmission(t *testing.T) {
+	// /verify/rag and /verify/process merge the guard's result to the top
+	// level and make no admission decision.
+	body := `{"status": "VERIFIED", "proof_ref": "sha256:ab", "verified": true,
+		"developer_fields": {"verified": true}}`
+	var r VerificationResponse
+	if err := json.Unmarshal([]byte(body), &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.Admission != "" || r.IsAdmitted() || r.Verified || IsVerified(&r) {
+		t.Error("a guard's verified field must not admit a response with no admission decision")
+	}
+	if r.DeveloperFields["verified"] != true || r.Extra["verified"] != true {
+		t.Errorf("the guard's own result should be kept: developer_fields %v, Extra %v",
+			r.DeveloperFields["verified"], r.Extra["verified"])
+	}
+}
+
 func TestEnvelopeFieldOfTheWrongTypeIsAnError(t *testing.T) {
 	for _, body := range []string{
 		`{"status": "VERIFIED", "admission": "ADMIT", "proof_ref": {"sha256": "ab"}}`,

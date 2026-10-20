@@ -265,6 +265,22 @@ describe('isAdmitted fails closed', () => {
         expect(r.verified).toBe(want);
     });
 
+    it('does not admit a rag or process answer on its guard verified field', () => {
+        // /verify/rag and /verify/process merge the guard's result to the top
+        // level and make no admission decision.
+        const r = parseVerificationResponse({
+            status: 'VERIFIED',
+            proof_ref: 'sha256:ab',
+            verified: true,
+            developer_fields: { verified: true },
+        });
+        expect(r.admission).toBeUndefined();
+        expect(isAdmitted(r)).toBe(false);
+        expect(r.verified).toBe(false);
+        expect(isVerified(r)).toBe(false);
+        expect(r.developer_fields?.verified).toBe(true);
+    });
+
     it('is false for a missing response', () => {
         expect(isAdmitted(null)).toBe(false);
         expect(isAdmitted(undefined)).toBe(false);

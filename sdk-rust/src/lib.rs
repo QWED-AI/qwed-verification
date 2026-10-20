@@ -403,7 +403,7 @@ impl QWEDClient {
 
 /// Whether the server admitted the result. Same as
 /// [`VerificationResponse::is_admitted`].
-#[deprecated(since = "7.3.1", note = "use VerificationResponse::is_admitted; the server sends no `verified` field")]
+#[deprecated(since = "7.3.1", note = "use VerificationResponse::is_admitted; a `verified` field is not an admission decision")]
 pub fn is_verified(response: &VerificationResponse) -> bool {
     response.is_admitted()
 }

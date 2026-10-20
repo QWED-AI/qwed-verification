@@ -47,6 +47,8 @@ Every verification returns the server's DiagnosticResult envelope:
 
 **Gate on `is_admitted()`, not on `status`.** `Verified` means the engine reached a deterministic answer, not that the claim holds: `2 + 2 = 5` is `Verified` (proven false) with admission `Blocked`, and unsafe code is `Verified` (proven unsafe) and `Blocked`. `is_admitted()` is true only for `Admit` together with `Verified` and a `proof_ref`; a missing or unknown admission is never admitted.
 
+Endpoints that make no admission decision (`/verify/logic`, `/verify/fact`, `/verify/rag`, `/verify/process` and batch items today) are therefore never admitted. `/verify/rag` and `/verify/process` also send a `verified` field, which is their guard's own result, not an admission; it is in `extra["verified"]` and `developer_fields`. The deprecated `is_verified()` returns `is_admitted()`.
+
 ## Verification Methods
 
 ### Natural Language

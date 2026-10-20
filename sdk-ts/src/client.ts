@@ -497,8 +497,8 @@ export function parseBatchResponse(body: unknown): BatchResponse {
 
 /**
  * Returns `isAdmitted(response)`.
- * @deprecated Use {@link isAdmitted}. VERIFIED alone is not a pass, and the
- * server sends no `verified` field.
+ * @deprecated Use {@link isAdmitted}. VERIFIED alone is not a pass, and a
+ * `verified` field in a response is not an admission decision.
  */
 export function isVerified(response: VerificationResponse): boolean {
     return isAdmitted(response);

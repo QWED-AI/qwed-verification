@@ -86,9 +86,13 @@ All notable changes to the QWED Protocol will be documented in this file.
 ### Fixed
 
 - **The Go and TypeScript SDKs read the DiagnosticResult envelope and gate
-  on admission (#480).** Both read a top-level `verified` field the server
-  never sends, so Go's `Verified`, TypeScript's `verified` and both
-  `isVerified()` helpers were always false, and neither exposed `admission`
+  on admission (#480).** Both read a top-level `verified` field that only
+  `/verify/rag` and `/verify/process` send (their guard's own result, not an
+  admission), so Go's `Verified`, TypeScript's `verified` and both
+  `isVerified()` helpers were false on every other endpoint. They now always
+  equal the admission check, so rag and process, which make no admission
+  decision, are not admitted; the guard's value stays in
+  `developer_fields.verified`. Neither SDK exposed `admission`
   or `proof_ref`. Go's `VerifyMath` and `VerifyLogic` also failed to decode,
   because `/verify/math` sends `result` as a boolean and `/verify/logic`
   sends `error` as a string. **Breaking for both SDKs' types.**
