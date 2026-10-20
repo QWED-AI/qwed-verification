@@ -1,3 +1,4 @@
+from collections import Counter
 from typing import List, Dict, Any, Tuple, Optional
 try:
     from presidio_analyzer import AnalyzerEngine
@@ -62,10 +63,13 @@ class PIIDetector:
         )
         
         pii_count = len(results)
-        detected_types = list(set([r.entity_type for r in results]))
-        
+        # One entry per hit, so two emails count 2 (#470); `types` lists each
+        # type once, sorted so the report is stable.
+        type_counts = dict(sorted(Counter(r.entity_type for r in results).items()))
+        detected_types = list(type_counts)
+
         if pii_count == 0:
-            return text, {"pii_detected": 0, "types": []}
+            return text, {"pii_detected": 0, "types": [], "type_counts": {}}
         
         # 2. Anonymize (Mask)
         # We replace with <ENTITY_TYPE> to keep context for the LLM if possible, 
@@ -88,6 +92,7 @@ class PIIDetector:
         return anonymized_result.text, {
             "pii_detected": pii_count,
             "types": detected_types,
+            "type_counts": type_counts,
             "items": [str(r) for r in results],
             "positions": [{"start": r.start, "end": r.end, "type": r.entity_type} for r in results]
         }

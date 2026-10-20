@@ -85,6 +85,13 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Fixed
 
+- **`qwed pii` prints the real count for each entity type (#470).** The
+  detector's report listed each type once, and the CLI counted each type in
+  that list, so two emails printed `EMAIL_ADDRESS: 1`. The report now has
+  `type_counts`, counted over every hit, and `types` is sorted; the CLI prints
+  the counts in type order and falls back to counting `positions` for a report
+  without `type_counts`.
+
 - **The Go and TypeScript SDKs read the DiagnosticResult envelope and gate
   on admission (#480).** Both read a top-level `verified` field that only
   `/verify/rag` and `/verify/process` send (their guard's own result, not an
