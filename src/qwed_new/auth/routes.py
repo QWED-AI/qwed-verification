@@ -18,6 +18,10 @@ from .security import (
     hash_password, verify_password, create_access_token,
     generate_api_key, mask_api_key, decode_access_token
 )
+from .roles import (
+    ADMIN_ROLES, READ_ROLES, WRITE_ROLES, ensure_user_role,
+    outranks_or_equals,
+)
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -201,6 +205,28 @@ async def get_current_user(
     
     return user
 
+
+def require_user_role(allowed: frozenset):
+    """Dependency for a user-session route that only ``allowed`` roles may use (#478).
+
+    Builds on get_current_user and refuses an inactive user, an inactive
+    organisation or a role outside the allowlist (see auth/roles.py).
+    """
+
+    async def dependency(
+        current_user: User = Depends(get_current_user),
+        session: Session = Depends(get_session),
+    ) -> User:
+        return ensure_user_role(current_user, session, allowed)
+
+    return dependency
+
+
+# Built once, at import (Ruff B008).
+_READER = Depends(require_user_role(READ_ROLES))
+_WRITER = Depends(require_user_role(WRITE_ROLES))
+_KEY_NOT_FOUND = "API key not found"
+
 @router.get("/me")
 async def get_me(current_user: User = Depends(get_current_user)):
     """Get current user info."""
@@ -214,10 +240,10 @@ async def get_me(current_user: User = Depends(get_current_user)):
 @router.post("/api-keys", response_model=APIKeyResponse)
 async def create_api_key_endpoint(
     request: APIKeyCreateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = _WRITER,
     session: Session = Depends(get_session)
 ):
-    """Generate a new API key."""
+    """Generate a new API key. Members and above; a viewer cannot (#478)."""
     # Generate key
     plaintext_key, key_hash = generate_api_key()
     
@@ -242,16 +268,22 @@ async def create_api_key_endpoint(
 
 @router.get("/api-keys", response_model=List[APIKeyListItem])
 async def list_api_keys(
-    current_user: User = Depends(get_current_user),
+    current_user: User = _READER,
     session: Session = Depends(get_session)
 ):
-    """List all API keys for the current user's organization."""
-    # Show all keys for the organization
+    """List active API keys (#478).
+
+    Admins and owners see every key in their organisation; members and
+    viewers see only their own.
+    """
     statement = select(ApiKey).where(
         ApiKey.organization_id == current_user.organization_id,
         ApiKey.is_active == True
-    ).order_by(ApiKey.created_at.desc())
-    
+    )
+    if current_user.role not in ADMIN_ROLES:
+        statement = statement.where(ApiKey.user_id == current_user.id)
+    statement = statement.order_by(ApiKey.created_at.desc())
+
     keys = session.exec(statement).all()
     
     return [
@@ -269,20 +301,36 @@ async def list_api_keys(
 @router.delete("/api-keys/{key_id}")
 async def revoke_api_key_endpoint(
     key_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = _READER,
     session: Session = Depends(get_session)
 ):
-    """Revoke an API key."""
-    # Ensure key belongs to user's org
+    """Revoke an API key (#478).
+
+    Anyone may revoke their own key. Revoking another user's key needs admin
+    or owner, and never a key whose owner ranks higher, as for key rotation.
+    A member or viewer gets 404 for a key that is not theirs, since they
+    cannot list it either.
+    """
+    try:
+        key_pk = int(key_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=_KEY_NOT_FOUND) from None
     statement = select(ApiKey).where(
-        ApiKey.id == int(key_id),
+        ApiKey.id == key_pk,
         ApiKey.organization_id == current_user.organization_id
     )
     key = session.exec(statement).first()
-    
+
     if not key:
-        raise HTTPException(status_code=404, detail="API key not found")
-    
+        raise HTTPException(status_code=404, detail=_KEY_NOT_FOUND)
+
+    if key.user_id != current_user.id:
+        if current_user.role not in ADMIN_ROLES:
+            raise HTTPException(status_code=404, detail=_KEY_NOT_FOUND)
+        key_owner = session.get(User, key.user_id) if key.user_id else None
+        if key_owner is not None and not outranks_or_equals(current_user.role, key_owner.role):
+            raise HTTPException(status_code=403, detail="Cannot revoke a key owned by a higher-privileged user")
+
     # Soft delete / revoke
     key.is_active = False
     key.revoked_at = datetime.utcnow()

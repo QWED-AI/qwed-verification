@@ -6,6 +6,29 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Security
 
+- **Role checks on the API-key and audit routes; `rbac.py` removed (#478).**
+  The user-session routes under `/auth/api-keys` and `/audit` only required a
+  logged-in user, so any role could create keys, list and revoke every key in
+  the organisation (the owner's included), and read and export the whole
+  audit log. Not exploitable today, since signup creates one user per
+  organisation, but each became a gap as soon as an organisation has a second
+  user.
+  - Roles and explicit allowlists live in `auth/roles.py`; a role that is not
+    listed is refused, and every checked route also refuses an inactive user
+    or organisation. `/admin/*` uses the same ranking.
+  - API keys: creating one needs member or higher. Admins and owners list
+    every key in their organisation; members and viewers list only their
+    own. Anyone may revoke their own key; revoking another user's needs admin
+    or owner and never a key whose owner ranks higher, as for key rotation.
+    A member or viewer gets 404 for a key that is not theirs, and a
+    non-numeric key id is 404 instead of a server error.
+  - Audit: every role may read its organisation's log; exporting it and
+    seeding samples need admin or owner.
+  - `core/rbac.py` is deleted. Nothing imported it, it had no `owner` role,
+    and it could be mistaken for the access control that actually runs.
+  - Agent tokens are still stored in plain text; hashing them is a separate
+    change.
+
 - **The code-execution sandbox runs a pinned image in a hardened container
   (#322).** `SecureCodeExecutor.execute()` pulled `amancevice/pandas:slim`, a
   tag that can move to different content at any time, and ran it with a

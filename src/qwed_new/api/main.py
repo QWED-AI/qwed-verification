@@ -2168,14 +2168,16 @@ async def verify_with_consensus(
 from qwed_new.core.compliance_exporter import ComplianceExporter
 from qwed_new.core.threat_detector import threat_detector
 from qwed_new.core.key_rotation import key_manager
+from qwed_new.auth.roles import ROLE_RANK
 
 compliance_exporter = ComplianceExporter()
 
 
 # Shared across the admin handlers so the message lives in one place.
 _FOREIGN_ORG_DETAIL = "Cannot access another organization's data"
-# Role hierarchy for admin operations (higher number = more privilege).
-_ROLE_RANK = {"viewer": 0, "member": 1, "admin": 2, "owner": 3}
+# Role hierarchy for admin operations (higher number = more privilege); one
+# ranking shared with the user-session routes (#478).
+_ROLE_RANK = ROLE_RANK
 
 
 # Liveness for admin endpoints is the same rule the tenant boundary enforces;
