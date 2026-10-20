@@ -155,6 +155,73 @@ describe('status and admission parsing', () => {
         expect(parseVerificationResponse({ status: 'BLOCKED', rawStatus: 'VERIFIED' }).rawStatus).toBe('BLOCKED');
     });
 
+    describe('a JSON round trip keeps the server status', () => {
+        const roundTrip = <T>(value: T, parse: (body: unknown) => T): T =>
+            parse(JSON.parse(JSON.stringify(value)));
+        const sat = { status: 'SAT', admission: 'ADMIT', proof_ref: 'sha256:ab', model: { x: 6 } };
+        const verified = { status: 'VERIFIED', admission: 'ADMIT', proof_ref: 'sha256:ab' };
+
+        it('writes the server text as status and no rawStatus key', () => {
+            const written = JSON.parse(JSON.stringify(parseVerificationResponse(sat)));
+            expect(written.status).toBe('SAT');
+            expect(written).not.toHaveProperty('rawStatus');
+            expect(written).not.toHaveProperty('toJSON');
+            expect(written.model).toEqual({ x: 6 });
+        });
+
+        it('keeps an unknown status unknown, and not admitted', () => {
+            for (const r of [
+                roundTrip(parseVerificationResponse(sat), parseVerificationResponse),
+                roundTrip(roundTrip(parseVerificationResponse(sat), parseVerificationResponse), parseVerificationResponse),
+            ]) {
+                expect(r.status).toBe(VerificationStatus.Unknown);
+                expect(r.rawStatus).toBe('SAT');
+                expect(isAdmitted(r)).toBe(false);
+                expect(r.verified).toBe(false);
+            }
+        });
+
+        it('keeps a known status', () => {
+            const r = roundTrip(parseVerificationResponse(verified), parseVerificationResponse);
+            expect(r.status).toBe(VerificationStatus.Verified);
+            expect(r.rawStatus).toBe('VERIFIED');
+            expect(isAdmitted(r)).toBe(true);
+        });
+
+        it('keeps the status of batch item results', () => {
+            const batch = parseBatchResponse({
+                job_id: 'j',
+                status: 'completed',
+                items: [
+                    { id: 'j-0', status: 'completed', type: 'logic', result: sat },
+                    { id: 'j-1', status: 'completed', type: 'math', result: verified },
+                    { id: 'j-2', status: 'failed', result: null, error: 'boom' },
+                ],
+            });
+            const written = JSON.parse(JSON.stringify(batch));
+            expect(written.items.map((item: { result: { status?: string } | null }) => item.result?.status))
+                .toEqual(['SAT', 'VERIFIED', undefined]);
+
+            const again = roundTrip(batch, parseBatchResponse);
+            expect(again.items.map(item => item.result?.status)).toEqual([
+                VerificationStatus.Unknown,
+                VerificationStatus.Verified,
+                undefined,
+            ]);
+            expect(again.items.map(item => item.result?.rawStatus)).toEqual(['SAT', 'VERIFIED', undefined]);
+            expect(again.items.map(item => isAdmitted(item.result))).toEqual([false, true, false]);
+            expect(again.items[2].result).toBeNull();
+        });
+
+        it('never trusts a rawStatus key in a body, after a round trip too', () => {
+            const forged = { status: 'BLOCKED', rawStatus: 'VERIFIED', admission: 'ADMIT', proof_ref: 'sha256:ab' };
+            const r = roundTrip(parseVerificationResponse(forged), parseVerificationResponse);
+            expect(r.status).toBe(VerificationStatus.Blocked);
+            expect(r.rawStatus).toBe('BLOCKED');
+            expect(isAdmitted(r)).toBe(false);
+        });
+    });
+
     it('types the agent verification statuses the maths engine returns', () => {
         const statuses: AgentVerificationStatus[] = [
             VerificationStatus.Verified,

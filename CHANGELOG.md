@@ -122,7 +122,10 @@ All notable changes to the QWED Protocol will be documented in this file.
   - All three SDKs keep the server's status text as `RawStatus` (Go),
     `rawStatus` (TypeScript) or `raw_status` (Rust), such as `SAT` or
     `NOT_MATH_QUERY` where the parsed status is Unknown. It is never used for
-    admission. The Rust `VerificationResponse` now deserialises through a
+    admission. Go's `MarshalJSON` and a non-enumerable `toJSON` on parsed
+    TypeScript responses write it back as `status`, so a saved response keeps
+    the server's status when parsed again; the Rust response types are
+    deserialise-only. The Rust `VerificationResponse` now deserialises through a
     private wire type (`#[serde(from)]`) to fill it; a missing or non-string
     `status` is still an error.
   - TypeScript's `AgentVerificationResponse.verification.status` is

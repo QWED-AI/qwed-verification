@@ -412,11 +412,17 @@ export function isAdmitted(response: VerificationResponse | null | undefined): b
  * `Unknown`, and a null admission is left out. Neither is ever admitted.
  * The server's status text is kept in `rawStatus`. Every other field is
  * kept as sent; numbers are JavaScript numbers, so an integer above 2^53 or
- * a long decimal is rounded by `JSON.parse` before it gets here. The client
- * calls this for `verify`,
- * `verifyMath`, `verifyLogic`, `verifyCode`, `verifyFact`, `verifySQL`,
- * `verifyProcess` and `verifyRAG`; `verifyAgent` and `verifyAgentAction`
- * return the agent endpoint's own shape and are not parsed.
+ * a long decimal is rounded by `JSON.parse` before it gets here.
+ *
+ * The result has a non-enumerable `toJSON`, so `JSON.stringify` writes the
+ * server's text back as `status` and no `rawStatus` key, as the server sent
+ * it. Parsing that JSON again gives the same `status` and `rawStatus`, so a
+ * cached or logged response keeps the server's status.
+ *
+ * The client calls this for `verify`, `verifyMath`, `verifyLogic`,
+ * `verifyCode`, `verifyFact`, `verifySQL`, `verifyProcess` and `verifyRAG`;
+ * `verifyAgent` and `verifyAgentAction` return the agent endpoint's own
+ * shape and are not parsed.
  */
 export function parseVerificationResponse(body: unknown): VerificationResponse {
     if (!isRecord(body)) {
@@ -444,7 +450,23 @@ export function parseVerificationResponse(body: unknown): VerificationResponse {
             : Admission.Unknown;
     }
     response.verified = isAdmitted(response);
+    Object.defineProperty(response, 'toJSON', {
+        value: serialiseAsSent,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+    });
     return response;
+}
+
+/**
+ * `toJSON` for a parsed response: every enumerable field, with the server's
+ * status text as `status` (`rawStatus` where it is set) and no `rawStatus`
+ * key.
+ */
+function serialiseAsSent(this: VerificationResponse): Record<string, unknown> {
+    const { rawStatus, ...fields } = this;
+    return { ...fields, status: rawStatus ?? fields.status };
 }
 
 /**
