@@ -67,7 +67,7 @@ func main() {
 
 ```go
 client := qwed.NewClient("api-key",
-    qwed.WithBaseURL("http://qwed-server:8000"), // your QWED server
+    qwed.WithBaseURL("http://localhost:8000"), // your local QWED server
     qwed.WithTimeout(30 * time.Second),
     qwed.WithHTTPClient(customClient),
 )

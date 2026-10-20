@@ -99,6 +99,9 @@ class QWEDSyntaxError(QWEDError):
         
         if self.suggestion:
             parts.append(f"\n💡 {self.suggestion}")
+
+        if self.docs_url:
+            parts.append(f"\n📚 Docs: {self.docs_url}")
         
         return "".join(parts)
 

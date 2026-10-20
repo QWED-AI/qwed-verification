@@ -301,7 +301,14 @@ All notable changes to the QWED Protocol will be documented in this file.
     `https://qwedai.tech/schemas/verification-context/v1.0`, in both copies.
     Tools that look the schema up by its old `$id` need the new one.
   - `qwed init` signs up its local bootstrap account with an `example.com`
-    address, and test fixtures use `example.com` and `example.test`.
+    address, and test fixtures use `example.com` and `example.test`. The
+    organisation slug in that address is cut to fit the 64-character limit
+    on an email's local part; a long organisation name used to make signup
+    fail with a 422.
+  - `scripts/setup_and_verify.py` reads the admin login from
+    `QWED_ADMIN_EMAIL`, so a local setup made with the old address keeps
+    working.
+  - `QWEDSyntaxError` now shows its docs link, as the other QWED errors do.
 - **The API now writes its audit rows through the signed hash chain.** Every
   `/verify/*` endpoint, the Verification Context routes and `POST /audit/seed`
   used to write `VerificationLog` rows directly, so `entry_hash`,

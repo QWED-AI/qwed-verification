@@ -3,7 +3,9 @@ import time
 import os
 
 BASE_URL = "http://localhost:8000"
-EMAIL = "rahul@qwedai.tech"
+# Set QWED_ADMIN_EMAIL to the address an earlier run signed up with:
+# signing up a new address under the same organisation name is refused.
+EMAIL = os.environ.get("QWED_ADMIN_EMAIL", "rahul@qwedai.tech")
 PASSWORD = os.environ["QWED_ADMIN_PASSWORD"]
 ORG_NAME = "QWED Internal"
 

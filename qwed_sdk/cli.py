@@ -126,6 +126,9 @@ def _normalize_provider_choice(value: Optional[str]) -> str:
     return (value or "").strip().lower().replace("_", "-")
 
 
+_MAX_EMAIL_SLUG = 55
+
+
 def _sanitize_org_slug(org_name: str) -> str:
     lowered = "".join(ch if ch.isalnum() else "-" for ch in org_name.lower())
     cleaned = "-".join(filter(None, lowered.split("-")))
@@ -484,7 +487,9 @@ def _bootstrap_api_key(server_url: str, organization_name: str) -> tuple[str, st
 
     base = server_url.rstrip("/")
     org_slug = _sanitize_org_slug(organization_name)
-    email = f"{org_slug}-{secrets.token_hex(4)}@example.com"
+    # An email local part may be at most 64 characters; "-<8 hex>" uses 9.
+    local_slug = org_slug[:_MAX_EMAIL_SLUG].rstrip("-") or "qwed-org"
+    email = f"{local_slug}-{secrets.token_hex(4)}@example.com"
     password = secrets.token_urlsafe(24)
     signup_payload = {
         "email": email,

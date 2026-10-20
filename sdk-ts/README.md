@@ -186,7 +186,7 @@ import {
 ```typescript
 const client = new QWEDClient({
   apiKey: 'qwed_...',          // Required
-  baseUrl: 'http://qwed-server:8000', // Optional, your QWED server; default: localhost:8000
+  baseUrl: 'http://localhost:8000', // Optional, your local QWED server (the default)
   timeout: 30000,              // Optional, default: 30000ms
   headers: {                   // Optional custom headers
     'X-Custom-Header': 'value',
