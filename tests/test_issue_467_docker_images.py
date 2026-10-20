@@ -94,6 +94,16 @@ def test_the_health_check_follows_the_port_uvicorn_listens_on():
     assert "http://127.0.0.1:{port}/health" in healthcheck
 
 
+def test_the_dockerfile_binds_all_interfaces_in_exactly_one_place():
+    # .qwed.yml suppresses bind-all-interfaces for the whole root Dockerfile,
+    # because a suppression cannot name a line. This keeps it to the one
+    # intended bind: a second 0.0.0.0 has to change this test and be reviewed.
+    lines = [line for line in DOCKERFILE.splitlines() if "0.0.0.0" in line]
+
+    assert lines == ["ENV UVICORN_HOST=0.0.0.0 \\"]
+    assert "::" not in DOCKERFILE.replace("http://", "")
+
+
 def test_the_server_stage_does_not_inherit_the_action_entrypoint():
     server = "\n".join(_stages()["server"])
     assert "entrypoint.sh" not in server
