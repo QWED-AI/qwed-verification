@@ -43,7 +43,8 @@ def test_exception_docs_links_go_straight_to_the_page(error, page):
 
 
 def test_a_syntax_error_shows_its_docs_link():
-    text = str(QWEDSyntaxError("bad token", expression="x +", column=2))
+    # QWEDError passes its formatted message to Exception, so it is args[0].
+    text = QWEDSyntaxError("bad token", expression="x +", column=2).args[0]
 
     assert "Syntax Error: bad token" in text
     assert "📚 Docs: " + DOCS + "api/dsl-reference" in text
@@ -53,7 +54,7 @@ def test_the_server_error_hint_names_no_status_host():
     error = QWEDAPIError("boom", status_code=500)
 
     assert error.suggestion == "Server error. Check the QWED server logs and retry."
-    assert "status." not in str(error)
+    assert "status." not in error.args[0]
 
 
 def _signup_email(org_name):
