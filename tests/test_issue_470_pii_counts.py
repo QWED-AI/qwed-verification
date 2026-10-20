@@ -16,7 +16,6 @@ from click.testing import CliRunner
 
 import qwed_sdk.pii_detector as pii_module
 from qwed_sdk.cli import cli
-from qwed_sdk.pii_detector import PIIDetector
 
 TEXT = "Mail a@example.com or b@example.com, call 555-0100, card 4532-1234-5678-9010"
 
@@ -48,10 +47,10 @@ class _FakeAnonymizer:
 
 def _detector(monkeypatch, hits):
     monkeypatch.setattr(pii_module, "OperatorConfig", lambda *args, **kwargs: (args, kwargs), raising=False)
-    detector = object.__new__(PIIDetector)
+    detector = object.__new__(pii_module.PIIDetector)
     detector.analyzer = _FakeAnalyzer(hits)
     detector.anonymizer = _FakeAnonymizer()
-    detector.entities = PIIDetector.DEFAULT_ENTITIES
+    detector.entities = pii_module.PIIDetector.DEFAULT_ENTITIES
     return detector
 
 
