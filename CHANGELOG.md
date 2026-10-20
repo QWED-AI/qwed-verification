@@ -96,6 +96,30 @@ All notable changes to the QWED Protocol will be documented in this file.
   and so is a number whose exponent is outside `Decimal`'s range
   (`decimal.InvalidOperation`), which also escaped before.
   Transitions and commits inherit this through `verify_state_payload`.
+- **The GitHub Action's scan modes run with the default `paths`, and an empty
+  scan is no longer admitted (#466).** `action.yml` defaulted `paths` to
+  `'.'`, which `Path('.').glob` rejects, so `scan-code`, `verify-shell` and
+  `scan-secrets` exited with a traceback before scanning anything. A pattern
+  that matched no files reported `VERIFIED · ADMIT`.
+  - `paths` now defaults to empty. Unset, empty or `.` uses the mode's own
+    patterns: `**/*.py`, `**/*.sh`, or the env, JSON, YAML, TOML and INI
+    files for `scan-secrets`.
+  - A scan that covered no files is `UNVERIFIABLE · DENY`, with
+    `verified=false` and a reason in the verification context. It fails the
+    step unless `fail_on_findings` is `false`.
+  - So is a partial scan: a matched file that cannot be read, or a Python
+    file that does not parse, was skipped with a warning and the rest of
+    the scan could still be admitted.
+  - An invalid pattern, or one that matches a file outside the workspace (an
+    absolute path, `..`, or a symlink to a file elsewhere), is reported by
+    name and the scan is `UNVERIFIABLE · DENY` rather than raised. Matches
+    that are not regular files, such as a symlinked directory, are ignored.
+  - `scan-secrets` no longer swaps in the default secret-file patterns when
+    the given `paths` match nothing; that admitted files nobody asked for.
+  - A new `files_scanned` output gives the number of files scanned. A file
+    reached through more than one pattern or link is scanned once, and the
+    mode's file type is checked first, so a link with another name cannot
+    stand in for a `.py` or `.sh` file and leave it unscanned.
 - **The natural-language logic bridge emits the DSL parser's operator names.**
   `DSLLogicVerifier` translated `!=`, `>=`, `<=` and `*` to `NE`, `GE`, `LE`
   and `MUL`, which the DSL whitelist does not know (it has `NEQ`, `GTE`,

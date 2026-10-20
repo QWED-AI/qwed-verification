@@ -54,14 +54,97 @@ def set_output(name: str, value: str):
     print(f"::set-output name={name}::{value}")  # Legacy fallback
 
 
-def expand_paths(patterns: str) -> list[Path]:
-    """Expand glob patterns to file paths."""
-    files = []
-    for pattern in patterns.split(","):
-        pattern = pattern.strip()
-        if pattern:
-            files.extend(Path(".").glob(pattern.strip()))
-    return [f for f in files if f.is_file()]
+CODE_PATTERNS = "**/*.py"
+SHELL_PATTERNS = "**/*.sh"
+CONFIG_FILE_PATTERNS = "**/*.env,**/*.json,**/*.yaml,**/*.yml,**/*.toml,**/*.ini"
+
+# A bare "." (the Action's old default) means "the workspace", so it takes
+# the mode's own patterns rather than being passed to glob, which rejects it.
+_WORKSPACE_PATTERNS = ("", ".", "./")
+
+
+def _split_patterns(patterns: str) -> list[str]:
+    return [p.strip() for p in patterns.split(",") if p.strip()]
+
+
+def expand_paths(
+    patterns: str, default: str = "", suffixes: tuple[str, ...] = ()
+) -> tuple[list[Path], list[str]]:
+    """Expand comma-separated glob patterns to files inside the workspace.
+
+    An empty input, or a pattern of ".", uses ``default``. Only regular files
+    are kept, and only those ending in one of ``suffixes`` when it is given.
+    The suffix filter runs before duplicates are dropped, so a link with
+    another name never stands in for a file the mode would scan. Returns the
+    files and one error per pattern that could not be expanded or that
+    reaches a file outside the workspace, so the caller can refuse to admit
+    the scan.
+    """
+    expanded = []
+    for pattern in _split_patterns(patterns) or [""]:
+        if pattern in _WORKSPACE_PATTERNS:
+            expanded.extend(_split_patterns(default))
+        else:
+            expanded.append(pattern)
+
+    root = Path.cwd().resolve()
+    files, errors, seen = [], [], set()
+    for pattern in dict.fromkeys(expanded):
+        try:
+            matches = list(Path(".").glob(pattern))
+        except (ValueError, IndexError, NotImplementedError) as exc:
+            errors.append(f"invalid pattern {pattern!r}: {exc or type(exc).__name__}")
+            continue
+        outside = []
+        for match in matches:
+            if not match.is_file() or (suffixes and not match.name.endswith(suffixes)):
+                continue
+            resolved = match.resolve()
+            if not resolved.is_relative_to(root):
+                outside.append(str(match))
+                continue
+            if resolved not in seen:
+                seen.add(resolved)
+                files.append(match)
+        if outside:
+            shown = ", ".join(outside[:5]) + (f" and {len(outside) - 5} more" if len(outside) > 5 else "")
+            errors.append(f"pattern {pattern!r} matches files outside the workspace: {shown}")
+    return files, errors
+
+
+def _finish_scan(scan_type: str, findings: list, files_scanned: int, errors: list[str]):
+    """Set the outputs for a file scan and exit non-zero if it is not admitted.
+
+    A scan is admitted only if it covered at least one file, every pattern
+    expanded cleanly, every matched file was scanned and nothing was found.
+    An empty or partial scan proves nothing.
+    """
+    reason = None
+    if errors:
+        reason = "; ".join(errors[:5])
+        if len(errors) > 5:
+            reason += f"; and {len(errors) - 5} more"
+    elif files_scanned == 0:
+        reason = "no files matched the paths input, so nothing was scanned"
+
+    verified = reason is None and not findings
+    if reason:
+        print(f"\n❌ Not admitted: {reason}.")
+
+    set_output("verified", "true" if verified else "false")
+    set_output("findings_count", str(len(findings)))
+    set_output("files_scanned", str(files_scanned))
+    set_output("badge_url", generate_badge_url(verified))
+
+    evidence = {"findings_count": len(findings), "files_scanned": files_scanned}
+    if reason:
+        evidence["reason"] = reason
+    verdict = "VERIFIED" if verified else "UNVERIFIABLE"
+    admission = "ADMIT" if verified else "DENY"
+    _set_vc_outputs(verdict, admission, evidence, scan_type, reason=reason)
+
+    if not verified and get_env("FAIL_ON_FINDINGS", "true") == "true":
+        sys.exit(1)
 
 
 # ============== VERIFY MODE (Legacy) ==============
@@ -122,28 +205,23 @@ def action_verify():
 # ============== SCAN-SECRETS MODE ==============
 def action_scan_secrets():
     """Scan files for leaked secrets."""
-    paths = get_env("PATHS", ".")
+    paths = get_env("PATHS")
     output_format = get_env("OUTPUT_FORMAT", "text")
-    
+
     print("🔐 QWED Secret Scanner v3.0")
-    print(f"   Scanning: {paths}")
-    
+    print(f"   Scanning: {paths or CONFIG_FILE_PATTERNS}")
+
     guard = ConfigGuard()
-    files = expand_paths(paths)
-    
-    if not files:
-        # Default: scan common secret-containing files
-        common_patterns = ["**/*.env", "**/*.json", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.ini"]
-        for pattern in common_patterns:
-            files.extend(Path(".").glob(pattern))
-        files = [f for f in files if f.is_file()]
-    
+    files, errors = expand_paths(paths, CONFIG_FILE_PATTERNS)
+
     findings = []
-    
+    files_scanned = 0
+
     for filepath in files:
         try:
             content = filepath.read_text(errors="ignore")
-            
+            files_scanned += 1
+
             # Scan as string (for non-JSON files)
             result = guard.scan_string(content)
             
@@ -157,6 +235,7 @@ def action_scan_secrets():
                     })
         except Exception as e:
             print(f"   ⚠️  Could not scan {filepath}: {e}")
+            errors.append(f"could not scan {filepath}")
     
     # Output results
     # Output results manually to prevent tainting output_results with secret data
@@ -182,19 +261,10 @@ def action_scan_secrets():
             print(f"\n❌ Found {len(findings)} secret(s).")
             print("   ⚠️  Details omitted from logs to prevent leakage.")
             print("   📄 Check the 'Security' tab or 'qwed-results.sarif' artifact.")
-        else:
-            print("\n✅ No secrets found!\n")
-    
-    set_output("verified", "true" if len(findings) == 0 else "false")
-    set_output("findings_count", str(len(findings)))
-    set_output("badge_url", generate_badge_url(len(findings) == 0))
-    
-    verdict = "VERIFIED" if len(findings) == 0 else "UNVERIFIABLE"
-    admission = "ADMIT" if len(findings) == 0 else "DENY"
-    _set_vc_outputs(verdict, admission, {"findings_count": len(findings)}, "secrets")
-    
-    if findings and get_env("FAIL_ON_FINDINGS", "true") == "true":
-        sys.exit(1)
+        elif files_scanned:
+            print(f"\n✅ No secrets found in {files_scanned} file(s).\n")
+
+    _finish_scan("secrets", findings, files_scanned, errors)
 
 
 # ============== SCAN-CODE MODE ==============
@@ -202,26 +272,25 @@ def action_scan_code():
     """Batch scan Python files for dangerous patterns."""
     import ast
     
-    paths = get_env("PATHS", "**/*.py")
+    paths = get_env("PATHS")
     output_format = get_env("OUTPUT_FORMAT", "text")
-    
+
     print("🛡️  QWED Code Scanner v3.0")
-    print(f"   Scanning: {paths}")
-    
-    files = expand_paths(paths)
+    print(f"   Scanning: {paths or CODE_PATTERNS}")
+
+    files, errors = expand_paths(paths, CODE_PATTERNS, (".py",))
     findings = []
+    files_scanned = 0
     
     dangerous_calls = ["eval", "exec", "compile", "__import__", "subprocess", "os.system"]
     dangerous_imports = ["os", "subprocess", "sys", "shutil"]
     
     for filepath in files:
-        if not str(filepath).endswith(".py"):
-            continue
-            
         try:
             content = filepath.read_text(errors="ignore")
             tree = ast.parse(content)
-            
+            files_scanned += 1
+
             for node in ast.walk(tree):
                 # Check dangerous function calls
                 if isinstance(node, ast.Call):
@@ -255,44 +324,35 @@ def action_scan_code():
                             })
                             
         except SyntaxError:
-            pass  # Skip files with syntax errors
+            print(f"   ⚠️  Could not parse {filepath}")
+            errors.append(f"could not parse {filepath}")
         except Exception as e:
             print(f"   ⚠️  Could not scan {filepath}: {e}")
+            errors.append(f"could not scan {filepath}")
     
-    output_results(findings, output_format, "code")
-    
-    set_output("verified", "true" if len(findings) == 0 else "false")
-    set_output("findings_count", str(len(findings)))
-    set_output("badge_url", generate_badge_url(len(findings) == 0))
-    
-    verdict = "VERIFIED" if len(findings) == 0 else "UNVERIFIABLE"
-    admission = "ADMIT" if len(findings) == 0 else "DENY"
-    _set_vc_outputs(verdict, admission, {"findings_count": len(findings)}, "code")
-    
-    if findings and get_env("FAIL_ON_FINDINGS", "true") == "true":
-        sys.exit(1)
+    output_results(findings, output_format, "code", files_scanned)
+    _finish_scan("code", findings, files_scanned, errors)
 
 
 # ============== VERIFY-SHELL MODE ==============
 def action_verify_shell():
     """Lint shell scripts for dangerous patterns."""
-    paths = get_env("PATHS", "**/*.sh")
+    paths = get_env("PATHS")
     output_format = get_env("OUTPUT_FORMAT", "text")
-    
+
     print("💻 QWED Shell Linter v3.0")
-    print(f"   Scanning: {paths}")
-    
+    print(f"   Scanning: {paths or SHELL_PATTERNS}")
+
     guard = SystemGuard()
-    files = expand_paths(paths)
+    files, errors = expand_paths(paths, SHELL_PATTERNS, (".sh",))
     findings = []
-    
+    files_scanned = 0
+
     for filepath in files:
-        if not str(filepath).endswith(".sh"):
-            continue
-            
         try:
             content = filepath.read_text(errors="ignore")
-            
+            files_scanned += 1
+
             for lineno, line in enumerate(content.splitlines(), 1):
                 line = line.strip()
                 if not line or line.startswith("#"):
@@ -310,19 +370,10 @@ def action_verify_shell():
                     
         except Exception as e:
             print(f"   ⚠️  Could not scan {filepath}: {e}")
+            errors.append(f"could not scan {filepath}")
     
-    output_results(findings, output_format, "shell")
-    
-    set_output("verified", "true" if len(findings) == 0 else "false")
-    set_output("findings_count", str(len(findings)))
-    set_output("badge_url", generate_badge_url(len(findings) == 0))
-    
-    verdict = "VERIFIED" if len(findings) == 0 else "UNVERIFIABLE"
-    admission = "ADMIT" if len(findings) == 0 else "DENY"
-    _set_vc_outputs(verdict, admission, {"findings_count": len(findings)}, "shell")
-    
-    if findings and get_env("FAIL_ON_FINDINGS", "true") == "true":
-        sys.exit(1)
+    output_results(findings, output_format, "shell", files_scanned)
+    _finish_scan("shell", findings, files_scanned, errors)
 
 
 
@@ -400,7 +451,7 @@ def action_verify_process():
 
 
 # ============== OUTPUT HELPERS ==============
-def output_results(findings: list, format: str, scan_type: str):
+def output_results(findings: list, format: str, scan_type: str, files_scanned: int | None = None):
     """Output findings in requested format."""
     
     """Output findings in requested format."""
@@ -444,8 +495,10 @@ def output_results(findings: list, format: str, scan_type: str):
                 print(f"   └── Detected potential {safe_type} issue.\n")
             if len(findings) > 20:
                 print(f"   ... and {len(findings) - 20} more issues.")
-        else:
+        elif files_scanned is None:
             print("\n✅ No issues found!\n")
+        elif files_scanned:
+            print(f"\n✅ No issues found in {files_scanned} file(s).\n")
 
 
 def generate_sarif(findings: list, scan_type: str) -> dict:
@@ -496,9 +549,11 @@ def generate_badge_url(passed: bool) -> str:
 
 
 # ============== VERIFICATION CONTEXT v1.0 ==============
-def _formal_statement_for(scan_type: str, verdict: str) -> str:
+def _formal_statement_for(scan_type: str, verdict: str, reason: str | None = None) -> str:
     if verdict == "VERIFIED":
         return f"QWED {scan_type} verification passed with no findings"
+    elif reason:
+        return f"QWED {scan_type} verification was not admitted: {reason}"
     elif verdict == "UNVERIFIABLE":
         return f"QWED {scan_type} verification detected findings and was not admitted"
     else:
@@ -511,6 +566,7 @@ def _build_verification_context(
     proof_ref,
     evidence: dict,
     scan_type: str,
+    reason: str | None = None,
 ) -> dict:
     configuration: dict = {"action": get_env("ACTION", "verify")}
     paths = get_env("PATHS", "")
@@ -520,7 +576,7 @@ def _build_verification_context(
     return {
         "spec_version": "1.0",
         "object": {
-            "formal_statement": _formal_statement_for(scan_type, verdict),
+            "formal_statement": _formal_statement_for(scan_type, verdict, reason),
         },
         "context": {
             "interpretation": {
@@ -561,12 +617,12 @@ def _compute_vc_proof_ref(formal_statement: str, context: dict) -> str:
     return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
-def _set_vc_outputs(verdict: str, admission: str, evidence: dict, scan_type: str):
+def _set_vc_outputs(verdict: str, admission: str, evidence: dict, scan_type: str, reason: str | None = None):
     output_format = get_env("OUTPUT_FORMAT", "text")
-    formal_statement = _formal_statement_for(scan_type, verdict)
+    formal_statement = _formal_statement_for(scan_type, verdict, reason)
 
     if verdict == "VERIFIED":
-        vc_for_hash = _build_verification_context(verdict, admission, None, evidence, scan_type)
+        vc_for_hash = _build_verification_context(verdict, admission, None, evidence, scan_type, reason)
         proof_ref = _compute_vc_proof_ref(formal_statement, vc_for_hash["context"])
     else:
         proof_ref = None
@@ -576,7 +632,7 @@ def _set_vc_outputs(verdict: str, admission: str, evidence: dict, scan_type: str
     set_output("proof_ref", proof_ref if proof_ref is not None else "")
 
     if output_format in ("verification-context", "json"):
-        vc = _build_verification_context(verdict, admission, proof_ref, evidence, scan_type)
+        vc = _build_verification_context(verdict, admission, proof_ref, evidence, scan_type, reason)
         set_output("verification_context", json.dumps(vc, separators=(",", ":")))
 
 
