@@ -10,7 +10,9 @@
 # Inside a container the server must listen on all of the container's own
 # interfaces, or a published port reaches nothing; what is exposed outside
 # is decided by the port mapping (docker run -p, Compose, Kubernetes), not
-# by this bind. Scoped to the root Dockerfile only.
+# by this bind. Scoped to the root Dockerfile only. A suppression cannot
+# name a line, so tests/test_issue_467_docker_images.py (#474) fails if the
+# Dockerfile binds all interfaces anywhere but the one ENV UVICORN_HOST line.
 suppressions:
   - pattern=eval-call reason=used-in-tests path=evals/cases/*.json
   - pattern=exec-call reason=used-in-tests path=evals/cases/*.json
