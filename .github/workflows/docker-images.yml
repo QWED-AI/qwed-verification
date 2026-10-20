@@ -1,0 +1,233 @@
+name: Docker images
+
+# #467: the server target must start the API server, deploy/docker-compose.yml
+# must build it, and the default target must still be the GitHub Action.
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - 'requirements.in'
+      - 'requirements-server.txt'
+      - 'pyproject.toml'
+      - 'src/**'
+      - 'qwed_sdk/**'
+      - 'action_entrypoint.py'
+      - 'action.yml'
+      - 'deploy/**'
+      - '.github/workflows/docker-images.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  server-image:
+    name: Server image starts and serves /health
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Write deploy/.env with throwaway secrets
+        run: |
+          gen() { python3 -c "import secrets; print(secrets.token_urlsafe(48))"; }
+          pg_password="$(gen)"
+          {
+            echo "QWED_CORS_ORIGINS=http://localhost:3000"
+            echo "API_KEY_SECRET=$(gen)"
+            echo "QWED_JWT_SECRET_KEY=$(gen)"
+            echo "QWED_API_KEY_LOOKUP_SECRET=$(gen)"
+            echo "QWED_AUDIT_SECRET_KEY=$(gen)"
+            echo "QWED_METRICS_OPERATOR_USER_IDS="
+            echo "POSTGRES_USER=qwed"
+            echo "POSTGRES_DB=qwed_db"
+            echo "POSTGRES_PASSWORD=${pg_password}"
+            echo "DATABASE_URL=postgresql://qwed:${pg_password}@postgres:5432/qwed_db"
+            echo "GF_SECURITY_ADMIN_USER=admin"
+            echo "GF_SECURITY_ADMIN_PASSWORD=$(gen)"
+          } > deploy/.env
+
+      - name: Validate the Compose file
+        run: docker compose -f deploy/docker-compose.yml config --quiet
+
+      - name: Grafana refuses to start without an admin password
+        run: |
+          # The Compose entrypoint hands over to the image's /run.sh.
+          docker run --rm --entrypoint /bin/sh grafana/grafana:10.2.2 -c 'test -x /run.sh'
+          # Run Grafana from an env file without its admin login line. A
+          # working guard exits at once with its message; a broken one leaves
+          # Grafana serving, which the timeout stops (exit 124).
+          cp deploy/.env deploy/.env.full
+          grep -v '^GF_SECURITY_ADMIN_PASS' deploy/.env.full > deploy/.env
+          set +e
+          out="$(timeout 60 docker compose -f deploy/docker-compose.yml run --rm --no-deps grafana 2>&1)"
+          status=$?
+          set -e
+          mv deploy/.env.full deploy/.env
+          echo "${out}"
+          if [ "${status}" -eq 0 ] || [ "${status}" -eq 124 ]; then
+            echo "::error::Grafana started without an admin password (exit ${status})."
+            exit 1
+          fi
+          echo "${out}" | grep -q "is empty"
+
+      - name: Build the server image through Compose
+        run: docker compose -f deploy/docker-compose.yml build qwed-core
+
+      - name: Start the server image and wait for /health
+        run: |
+          # SQLite in the image's data directory, so no Postgres is needed here.
+          docker run -d --name qwed-smoke -p 8000:8000 \
+            --env-file deploy/.env -e DATABASE_URL=sqlite:///./qwed.db \
+            qwedai/qwed-verification:local
+          for _ in $(seq 1 60); do
+            if body="$(curl -fsS http://127.0.0.1:8000/health)"; then
+              echo "$body"
+              echo "$body" | python3 -c "import json, sys; assert json.load(sys.stdin)['status'] == 'healthy'"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::The server image did not answer /health within 120 seconds."
+          exit 1
+
+      - name: The image's own health check passes
+        run: |
+          for _ in $(seq 1 30); do
+            status="$(docker inspect -f '{{.State.Health.Status}}' qwed-smoke)"
+            echo "health: ${status}"
+            [ "${status}" = "healthy" ] && exit 0
+            [ "${status}" = "unhealthy" ] && exit 1
+            sleep 5
+          done
+          exit 1
+
+      - name: The server runs as a non-root user
+        run: test "$(docker exec qwed-smoke id -u)" = "1000"
+
+      - name: Changing UVICORN_PORT moves the server and its health check together
+        run: |
+          docker run -d --name qwed-smoke-port -p 9000:9000 \
+            --env-file deploy/.env -e DATABASE_URL=sqlite:///./qwed.db -e UVICORN_PORT=9000 \
+            qwedai/qwed-verification:local
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:9000/health && break
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:9000/health
+          # The image's own HEALTHCHECK must follow the port too.
+          for _ in $(seq 1 30); do
+            status="$(docker inspect -f '{{.State.Health.Status}}' qwed-smoke-port)"
+            echo "health: ${status}"
+            [ "${status}" = "healthy" ] && exit 0
+            [ "${status}" = "unhealthy" ] && exit 1
+            sleep 5
+          done
+          exit 1
+
+      - name: Server logs
+        if: always()
+        run: docker logs qwed-smoke || true
+
+  action-image:
+    name: Default target is still the GitHub Action
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Build the default target, as action.yml does
+        run: docker build -t qwed-action .
+
+      - name: Run a scan-code pass
+        run: |
+          workspace="$(mktemp -d)"
+          printf 'x = 1\n' > "${workspace}/app.py"
+          docker run --rm -v "${workspace}:/github/workspace" \
+            -e INPUT_ACTION=scan-code -e INPUT_FAIL_ON_FINDINGS=true \
+            qwed-action | tee action.log
+          grep -q "QWED Code Scanner" action.log
+          grep -q "No issues found in 1 file(s)" action.log
+
+  compose-stack:
+    name: Full Compose stack comes up healthy
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Write deploy/.env with throwaway secrets
+        run: |
+          gen() { python3 -c "import secrets; print(secrets.token_urlsafe(48))"; }
+          pg_password="$(gen)"
+          {
+            echo "QWED_CORS_ORIGINS=http://localhost:3000"
+            echo "API_KEY_SECRET=$(gen)"
+            echo "QWED_JWT_SECRET_KEY=$(gen)"
+            echo "QWED_API_KEY_LOOKUP_SECRET=$(gen)"
+            echo "QWED_AUDIT_SECRET_KEY=$(gen)"
+            echo "QWED_METRICS_OPERATOR_USER_IDS="
+            echo "POSTGRES_USER=qwed"
+            echo "POSTGRES_DB=qwed_db"
+            echo "POSTGRES_PASSWORD=${pg_password}"
+            echo "DATABASE_URL=postgresql://qwed:${pg_password}@postgres:5432/qwed_db"
+            echo "GF_SECURITY_ADMIN_USER=admin"
+            echo "GF_SECURITY_ADMIN_PASSWORD=$(gen)"
+          } > deploy/.env
+
+      - name: Start every service and wait until all are healthy
+        run: docker compose -f deploy/docker-compose.yml up -d --build --wait --wait-timeout 420
+
+      - name: The API is up and its tables are in Postgres
+        run: |
+          body="$(curl -fsS http://127.0.0.1:8000/health)"
+          echo "${body}"
+          echo "${body}" | python3 -c "import json, sys; assert json.load(sys.stdin)['status'] == 'healthy'"
+          # The server creates its tables at startup from DATABASE_URL, so they
+          # are only in Postgres if the server really runs on it.
+          tables="$(docker compose -f deploy/docker-compose.yml exec -T postgres \
+            psql -U qwed -d qwed_db -Atc "select count(*) from information_schema.tables where table_schema = 'public'")"
+          echo "tables in Postgres: ${tables}"
+          [ "${tables}" -gt 0 ]
+
+      - name: Prometheus reaches the API by its service name
+        run: |
+          python3 - <<'EOF'
+          import json
+          import sys
+          import time
+          import urllib.request
+
+          # /metrics/prometheus needs an operator API key, so until one is
+          # configured a reachable API answers 401. Any other error (such as
+          # an unresolvable host) means Prometheus cannot reach the API.
+          last = None
+          for _ in range(30):
+              with urllib.request.urlopen("http://127.0.0.1:9090/api/v1/targets", timeout=5) as response:
+                  targets = json.load(response)["data"]["activeTargets"]
+              api = [t for t in targets if t["labels"].get("job") == "qwed-api"]
+              assert api, "no qwed-api scrape target"
+              last = api[0]
+              assert last["scrapeUrl"].startswith("http://qwed-core:8000/"), last["scrapeUrl"]
+              if last["health"] == "up" or "401" in last["lastError"]:
+                  print(last["health"], last["lastError"])
+                  sys.exit(0)
+              time.sleep(5)
+          print(last)
+          sys.exit(1)
+          EOF
+
+      - name: Stack status and logs
+        if: always()
+        run: |
+          docker compose -f deploy/docker-compose.yml ps
+          docker compose -f deploy/docker-compose.yml logs --no-color --tail 200
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose -f deploy/docker-compose.yml down -v

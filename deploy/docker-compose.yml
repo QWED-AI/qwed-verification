@@ -1,9 +1,15 @@
 
+# Run from the repository root:
+#   cp deploy/.env.example deploy/.env   # then fill in every value
+#   docker compose -f deploy/docker-compose.yml up -d
+# Paths below are relative to this file (deploy/).
 services:
   qwed-core:
     build:
-      context: .
+      context: ..
       dockerfile: Dockerfile
+      target: server
+    image: qwedai/qwed-verification:local
     container_name: qwed_core
     depends_on:
       postgres:
@@ -18,6 +24,12 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
       - QWED_CORS_ORIGINS=${QWED_CORS_ORIGINS:?set QWED_CORS_ORIGINS}
       - API_KEY_SECRET=${API_KEY_SECRET:?set API_KEY_SECRET}
+      # Keep these three stable across restarts: changing the JWT or lookup
+      # secret invalidates issued tokens and API keys, and the audit secret
+      # signs the audit chain. The lookup secret must differ from the JWT one.
+      - QWED_JWT_SECRET_KEY=${QWED_JWT_SECRET_KEY:?set QWED_JWT_SECRET_KEY}
+      - QWED_API_KEY_LOOKUP_SECRET=${QWED_API_KEY_LOOKUP_SECRET:?set QWED_API_KEY_LOOKUP_SECRET}
+      - QWED_AUDIT_SECRET_KEY=${QWED_AUDIT_SECRET_KEY:?set QWED_AUDIT_SECRET_KEY}
       # All-tenant metrics operator allowlist (issue #337): user IDs permitted
       # to read /metrics and /metrics/prometheus. Unset = deny every caller,
       # including the Prometheus scraper. Set it to the scraper identity's
@@ -26,9 +38,10 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./src:/app/src
+      - qwed-data:/var/lib/qwed
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      # The image has no curl; use its own Python.
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -36,11 +49,14 @@ services:
   postgres:
     image: postgres:15
     container_name: qwed_postgres
-    env_file:
-      - .env
+    # Only Postgres's own settings, not the whole deploy/.env: the server's
+    # secrets stay out of this container. A name without a value is read
+    # from deploy/.env. The postgres image refuses to initialise a database
+    # while the password is empty.
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-qwed}
-      POSTGRES_DB: ${POSTGRES_DB:-qwed_db}
+      - POSTGRES_USER=${POSTGRES_USER:-qwed}
+      - POSTGRES_DB=${POSTGRES_DB:-qwed_db}
+      - POSTGRES_PASSWORD
     ports:
       - "5432:5432"
     volumes:
@@ -104,11 +120,19 @@ services:
   grafana:
     image: grafana/grafana:10.2.2
     container_name: qwed_grafana
-    env_file:
-      - .env
+    # Only Grafana's own settings, not the whole deploy/.env. A name without a
+    # value is read from deploy/.env.
     environment:
-      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:?set GF_SECURITY_ADMIN_USER}
-      GF_USERS_ALLOW_SIGN_UP: "false"
+      - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER:?set GF_SECURITY_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD
+      - GF_USERS_ALLOW_SIGN_UP=false
+    # Grafana would fall back to its default admin/admin while the admin
+    # password is empty, so refuse to start instead, then hand over to the
+    # image's own entrypoint (/run.sh).
+    entrypoint:
+      - /bin/sh
+      - -c
+      - '[ -n "$${GF_SECURITY_ADMIN_PASSWORD}" ] || { echo "deploy/.env: GF_SECURITY_ADMIN_PASSWORD is empty" >&2; exit 1; }; exec /run.sh'
     volumes:
       - grafanadata:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning
@@ -124,6 +148,7 @@ services:
       retries: 5
 
 volumes:
+  qwed-data:
   pgdata:
   redisdata:
   prometheusdata:

@@ -85,6 +85,48 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Fixed
 
+- **The Docker image runs the API server, and the Compose stack builds
+  (#467).** The image published as `qwedai/qwed-verification` ran the GitHub
+  Action: its entrypoint was the Action script, the uvicorn `CMD` was passed
+  to it as ignored arguments, and the image had no FastAPI or uvicorn. The
+  Compose file pointed at a Dockerfile in `deploy/`, which does not exist,
+  and mounted a Grafana folder that was never shipped.
+  - The Dockerfile has two targets. `server` runs uvicorn on port 8000 as a
+    non-root user, installs every server dependency from the new hash-pinned
+    `requirements-server.txt`, and has a health check on `/health`. The
+    host and port come from `UVICORN_HOST` and `UVICORN_PORT`, which the
+    health check reads too, so `-e UVICORN_PORT=...` moves both.
+    `action` is the GitHub Action as before; it stays the last stage, so
+    `action.yml`, which builds the Dockerfile without a target, is unchanged.
+  - Docker Hub now gets the `server` target, so `qwedai/qwed-verification`
+    is the API server from 7.3.1. Anyone who ran an earlier tag as a
+    scanner should use the Action instead.
+  - `deploy/docker-compose.yml` builds the server target from the
+    repository root, requires all five server secrets (`QWED_CORS_ORIGINS`,
+    `API_KEY_SECRET`, `QWED_JWT_SECRET_KEY`, `QWED_API_KEY_LOOKUP_SECRET`,
+    `QWED_AUDIT_SECRET_KEY`), checks health without curl, and keeps the
+    server's data in a volume. `deploy/.env.example` lists every setting
+    with empty values. Compose refuses to start until the server settings
+    and `DATABASE_URL` are filled in; the Postgres and Grafana containers
+    refuse to start while their passwords are empty (Grafana would otherwise
+    fall back to `admin`/`admin`). Postgres and Grafana no longer load the
+    whole `.env` file, which handed them the server's secrets; each gets
+    only its own settings. Grafana gets Prometheus and Jaeger data
+    sources, and Prometheus scrapes the API as `qwed-core:8000` instead of
+    `host.docker.internal`, which does not resolve inside the Compose
+    network on Linux.
+  - The `docker` client is part of the `server` extra: the code executor
+    imports it at module level, so a request that reached it failed with an
+    `ImportError` instead of the sandbox's fail-closed result.
+  - The Kubernetes manifest pins `7.3.1`, the first server image. Its
+    Secret lists the three secrets it was missing and ships every value
+    empty instead of with secret-like placeholders.
+  - A new "Docker images" workflow builds the server through Compose,
+    starts it and waits for `/health` and the image's own health check,
+    checks that the default target still runs the Action, and brings the
+    whole Compose stack up until every service is healthy, with the server
+    on Postgres and Prometheus reaching it.
+
 - **`AgentStateGuard` returns `BLOCKED` for deeply nested JSON instead of
   raising `RecursionError` (#469).** Parsing and canonicalisation recurse once
   per nesting level and only `ValueError` was caught, so a payload such as
