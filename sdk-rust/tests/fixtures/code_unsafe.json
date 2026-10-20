@@ -1,0 +1,45 @@
+{
+  "admission": "BLOCKED",
+  "agent_message": "The code failed security verification and is not safe to use.",
+  "constraint_id": "code_verifier.code_unsafe",
+  "critical_count": 1,
+  "developer_fields": {
+    "constraint_id": "code_verifier.code_unsafe",
+    "critical_count": 1,
+    "engine": "CodeVerifier-Pattern-Scanner",
+    "info_count": 0,
+    "is_safe": false,
+    "is_valid": false,
+    "issues": [
+      {
+        "description": "Shell or process execution",
+        "line_number": 2,
+        "pattern": "os.system",
+        "recommendation": "Do not run commands from generated code; route them through a reviewed, sandboxed tool.",
+        "severity": "CRITICAL",
+        "type": "process_execution"
+      }
+    ],
+    "language": "python",
+    "warning_count": 0
+  },
+  "engine": "CodeVerifier-Pattern-Scanner",
+  "info_count": 0,
+  "is_authoritative": true,
+  "is_safe": false,
+  "is_valid": false,
+  "issues": [
+    {
+      "description": "Shell or process execution",
+      "line_number": 2,
+      "pattern": "os.system",
+      "recommendation": "Do not run commands from generated code; route them through a reviewed, sandboxed tool.",
+      "severity": "CRITICAL",
+      "type": "process_execution"
+    }
+  ],
+  "language": "python",
+  "proof_ref": "sha256:7af9783bae4f34b7d986203f9ef27d2ebf323cbad8dae0a0a9afdad5133b264a",
+  "status": "VERIFIED",
+  "warning_count": 0
+}

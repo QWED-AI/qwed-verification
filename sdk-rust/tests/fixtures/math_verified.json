@@ -1,0 +1,19 @@
+{
+  "admission": "ADMIT",
+  "agent_message": "Identity is true",
+  "developer_fields": {
+    "is_valid": true,
+    "left_side": "4",
+    "result": true,
+    "right_side": "4",
+    "simplified_difference": "0"
+  },
+  "is_authoritative": true,
+  "is_valid": true,
+  "left_side": "4",
+  "proof_ref": "sha256:a5f3eb1175437d507d28bea1d2bc229ce518fd0e4eb861c5f69e8ccef8a0e8ec",
+  "result": true,
+  "right_side": "4",
+  "simplified_difference": "0",
+  "status": "VERIFIED"
+}

@@ -1,0 +1,27 @@
+{
+  "admission": "ADMIT",
+  "agent_message": "The code passed security verification and is safe to use.",
+  "constraint_id": "code_verifier.code_safe",
+  "critical_count": 0,
+  "developer_fields": {
+    "constraint_id": "code_verifier.code_safe",
+    "critical_count": 0,
+    "engine": "CodeVerifier-Pattern-Scanner",
+    "info_count": 0,
+    "is_safe": true,
+    "is_valid": true,
+    "issues": [],
+    "language": "python",
+    "warning_count": 0
+  },
+  "engine": "CodeVerifier-Pattern-Scanner",
+  "info_count": 0,
+  "is_authoritative": true,
+  "is_safe": true,
+  "is_valid": true,
+  "issues": [],
+  "language": "python",
+  "proof_ref": "sha256:9dab3efee82e26a8839c98722bb19458d52b9a735879ad579c530458f409612e",
+  "status": "VERIFIED",
+  "warning_count": 0
+}

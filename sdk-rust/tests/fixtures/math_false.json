@@ -1,0 +1,19 @@
+{
+  "admission": "BLOCKED",
+  "agent_message": "Identity is false",
+  "developer_fields": {
+    "is_valid": false,
+    "left_side": "4",
+    "result": false,
+    "right_side": "5",
+    "simplified_difference": "-1"
+  },
+  "is_authoritative": true,
+  "is_valid": false,
+  "left_side": "4",
+  "proof_ref": "sha256:7fa3d4672e495d958c1b2cadb945370f1a4ec0e696f2c7a66b6885dfa44598ad",
+  "result": false,
+  "right_side": "5",
+  "simplified_difference": "-1",
+  "status": "VERIFIED"
+}

@@ -1,0 +1,19 @@
+{
+  "agent_message": "LLM translation failed",
+  "developer_fields": {
+    "dsl_code": null,
+    "error": "LLM translation failed",
+    "latency_ms": 313.7392997741699,
+    "model": null,
+    "provider_used": "openai_compat",
+    "status": "ERROR"
+  },
+  "dsl_code": null,
+  "error": "LLM translation failed",
+  "is_authoritative": false,
+  "latency_ms": 313.7392997741699,
+  "model": null,
+  "proof_ref": null,
+  "provider_used": "openai_compat",
+  "status": "BLOCKED"
+}

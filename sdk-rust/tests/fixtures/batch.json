@@ -1,0 +1,60 @@
+{
+  "completed_at": "2026-10-20T13:17:12.921170",
+  "completed_items": 2,
+  "created_at": "2026-10-20T13:17:12.838948",
+  "failed_items": 0,
+  "items": [
+    {
+      "error": null,
+      "id": "a681dc9f-0",
+      "latency_ms": 82.2,
+      "query": "2 + 2 = 4",
+      "result": {
+        "agent_message": "Identity verified",
+        "developer_fields": {
+          "diff": "0",
+          "is_valid": true,
+          "query": "2 + 2 = 4",
+          "type": "math"
+        },
+        "diff": "0",
+        "is_authoritative": true,
+        "is_valid": true,
+        "proof_ref": "sha256:f6154c4ffb71d9a96b6dc0cb718cb7f094696b0c2efe9841a6787a09d138cdf8",
+        "query": "2 + 2 = 4",
+        "status": "VERIFIED",
+        "type": "math"
+      },
+      "status": "completed",
+      "type": "math"
+    },
+    {
+      "error": null,
+      "id": "a681dc9f-1",
+      "latency_ms": 8.8,
+      "query": "2 + 2 = 5",
+      "result": {
+        "agent_message": "Not equal: 4 != 5",
+        "developer_fields": {
+          "diff": "-1",
+          "is_valid": false,
+          "query": "2 + 2 = 5",
+          "type": "math"
+        },
+        "diff": "-1",
+        "is_authoritative": false,
+        "is_valid": false,
+        "proof_ref": null,
+        "query": "2 + 2 = 5",
+        "status": "UNVERIFIABLE",
+        "type": "math"
+      },
+      "status": "completed",
+      "type": "math"
+    }
+  ],
+  "job_id": "a681dc9f",
+  "progress_percent": 100.0,
+  "status": "completed",
+  "total_items": 2
+}

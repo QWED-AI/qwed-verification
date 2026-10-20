@@ -1,0 +1,43 @@
+{
+  "admission": "ADMIT",
+  "agent_message": "The SQL query passed verification and is safe to execute.",
+  "complexity": {
+    "aggregate_count": 0,
+    "column_count": 1,
+    "condition_count": 0,
+    "estimated_cost": 1.39,
+    "join_count": 0,
+    "subquery_depth": 0,
+    "table_count": 1
+  },
+  "constraint_id": "sql_verifier.sql_valid",
+  "critical_count": 0,
+  "developer_fields": {
+    "complexity": {
+      "aggregate_count": 0,
+      "column_count": 1,
+      "condition_count": 0,
+      "estimated_cost": 1.39,
+      "join_count": 0,
+      "subquery_depth": 0,
+      "table_count": 1
+    },
+    "constraint_id": "sql_verifier.sql_valid",
+    "critical_count": 0,
+    "engine": "SQLGlot-AST-Scanner",
+    "executable_comments_expanded": false,
+    "is_valid": true,
+    "issues": [],
+    "malicious_classification": false,
+    "warning_count": 0
+  },
+  "engine": "SQLGlot-AST-Scanner",
+  "executable_comments_expanded": false,
+  "is_authoritative": true,
+  "is_valid": true,
+  "issues": [],
+  "malicious_classification": false,
+  "proof_ref": "sha256:00d0c2df2c136561187704f580005002bd5257376b96b0b02bafe47c936c7d42",
+  "status": "VERIFIED",
+  "warning_count": 0
+}

@@ -179,7 +179,14 @@ jobs:
         run: |
           cd sdk-rust
           cargo build --verbose
-      
+
+      # Unit tests, doc tests and the contract tests that parse responses
+      # captured from the server (tests/fixtures, #468).
+      - name: Test
+        run: |
+          cd sdk-rust
+          cargo test --verbose
+
       - name: Clippy (Lint)
         run: |
           cd sdk-rust

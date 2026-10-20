@@ -9,11 +9,19 @@
 //! #[tokio::main]
 //! async fn main() -> Result<(), qwed::Error> {
 //!     let client = QWEDClient::new("qwed_your_api_key");
-//!     let result = client.verify("What is 2+2?").await?;
-//!     println!("Verified: {}", result.verified);
+//!     let result = client.verify_math("2 + 2 = 4").await?;
+//!     // Gate on admission, not on the status alone: `2 + 2 = 5` is also
+//!     // VERIFIED (proven false) but is not admitted.
+//!     println!("{:?} admitted={}", result.status, result.is_admitted());
 //!     Ok(())
 //! }
 //! ```
+//!
+//! Every verification answer is a QWED DiagnosticResult: a `status`
+//! (`VERIFIED`, `UNVERIFIABLE` or `BLOCKED`), an `admission` decision
+//! (`ADMIT` or `BLOCKED`) where the endpoint makes one, and a `proof_ref`
+//! when the status is `VERIFIED`. [`VerificationResponse::is_admitted`] is
+//! the only check to gate on.
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -40,17 +48,35 @@ pub enum VerificationType {
     Reasoning,
 }
 
-/// Verification result status
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Diagnostic status of a verification (`DiagnosticResult.status`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum VerificationStatus {
+    /// The claim was evaluated deterministically and `proof_ref` is set. This
+    /// says the engine reached an answer, not that the claim holds: a false
+    /// identity is VERIFIED too. Gate on [`VerificationResponse::is_admitted`].
     Verified,
-    Failed,
-    Corrected,
+    /// The claim could not be proven.
+    Unverifiable,
+    /// Verification could not be attempted (parse error, policy, missing
+    /// dependency).
     Blocked,
-    Error,
-    Timeout,
-    Unsupported,
+    /// A status this SDK version does not know. Never admitted.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Admission decision at the server's enforcement boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Admission {
+    /// The boundary may proceed with the verdict.
+    Admit,
+    /// The boundary must not admit.
+    Blocked,
+    /// A decision this SDK version does not know. Never admitted.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Verification request
@@ -76,38 +102,39 @@ pub struct RequestOptions {
     pub include_attestation: Option<bool>,
 }
 
-/// Verification response
+/// A verification answer: the server's DiagnosticResult envelope.
 #[derive(Debug, Clone, Deserialize)]
 pub struct VerificationResponse {
     pub status: VerificationStatus,
-    pub verified: bool,
+    /// Present on endpoints that make an admission decision. Missing means
+    /// not admitted.
     #[serde(default)]
-    pub engine: Option<String>,
+    pub admission: Option<Admission>,
+    /// Set only when `status` is VERIFIED.
     #[serde(default)]
-    pub result: Option<HashMap<String, serde_json::Value>>,
+    pub proof_ref: Option<String>,
     #[serde(default)]
-    pub attestation: Option<String>,
+    pub agent_message: Option<String>,
     #[serde(default)]
-    pub error: Option<ErrorInfo>,
+    pub is_authoritative: Option<bool>,
     #[serde(default)]
-    pub metadata: Option<ResponseMetadata>,
+    pub constraint_id: Option<String>,
+    #[serde(default)]
+    pub developer_fields: Option<HashMap<String, serde_json::Value>>,
+    /// Endpoint-specific fields, such as `is_valid`, `issues` or `error`.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
-/// Error information
-#[derive(Debug, Clone, Deserialize)]
-pub struct ErrorInfo {
-    pub code: String,
-    pub message: String,
-    #[serde(default)]
-    pub details: Option<HashMap<String, serde_json::Value>>,
-}
-
-/// Response metadata
-#[derive(Debug, Clone, Deserialize)]
-pub struct ResponseMetadata {
-    pub request_id: Option<String>,
-    pub latency_ms: Option<f64>,
-    pub protocol_version: Option<String>,
+impl VerificationResponse {
+    /// True only when the server admitted the result: `admission` is ADMIT,
+    /// `status` is VERIFIED and a `proof_ref` is present. Anything else,
+    /// including a missing or unknown admission, is not admitted.
+    pub fn is_admitted(&self) -> bool {
+        self.admission == Some(Admission::Admit)
+            && self.status == VerificationStatus::Verified
+            && self.proof_ref.as_deref().is_some_and(|r| !r.is_empty())
+    }
 }
 
 /// Batch item
@@ -118,36 +145,50 @@ pub struct BatchItem {
     pub r#type: Option<VerificationType>,
 }
 
-/// Batch response
+/// Batch job and its items.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BatchResponse {
     pub job_id: String,
+    /// Job state, such as `completed` or `processing`.
     pub status: String,
     #[serde(default)]
-    pub summary: Option<BatchSummary>,
+    pub progress_percent: Option<f64>,
+    #[serde(default)]
+    pub total_items: Option<u32>,
+    #[serde(default)]
+    pub completed_items: Option<u32>,
+    #[serde(default)]
+    pub failed_items: Option<u32>,
     #[serde(default)]
     pub items: Vec<BatchResult>,
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
-/// Batch summary
-#[derive(Debug, Clone, Deserialize)]
-pub struct BatchSummary {
-    pub total: u32,
-    pub verified: u32,
-    pub failed: u32,
-    pub success_rate: f64,
-}
-
-/// Batch result item
+/// One item of a batch job.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BatchResult {
     pub id: String,
-    pub status: VerificationStatus,
-    pub verified: bool,
+    /// Item state, such as `completed` or `failed`.
+    pub status: String,
     #[serde(default)]
-    pub result: Option<HashMap<String, serde_json::Value>>,
+    pub query: Option<String>,
+    #[serde(default, rename = "type")]
+    pub item_type: Option<String>,
+    /// The item's verification answer, once it has one.
     #[serde(default)]
-    pub error: Option<ErrorInfo>,
+    pub result: Option<VerificationResponse>,
+    #[serde(default)]
+    pub error: Option<serde_json::Value>,
+    #[serde(default)]
+    pub latency_ms: Option<f64>,
+}
+
+impl BatchResult {
+    /// True only when the item has a result that [`VerificationResponse::is_admitted`].
+    pub fn is_admitted(&self) -> bool {
+        self.result.as_ref().is_some_and(VerificationResponse::is_admitted)
+    }
 }
 
 // ============================================================================
@@ -310,7 +351,10 @@ impl QWEDClient {
             });
         }
 
-        Ok(response.json().await?)
+        // Read the body first so a shape mismatch surfaces as
+        // Error::Serialization rather than as an HTTP error.
+        let text = response.text().await?;
+        Ok(serde_json::from_str(&text)?)
     }
 }
 
@@ -318,9 +362,11 @@ impl QWEDClient {
 // Helpers
 // ============================================================================
 
-/// Check if a response indicates successful verification
+/// Whether the server admitted the result. Same as
+/// [`VerificationResponse::is_admitted`].
+#[deprecated(since = "7.3.1", note = "use VerificationResponse::is_admitted; the server sends no `verified` field")]
 pub fn is_verified(response: &VerificationResponse) -> bool {
-    response.verified
+    response.is_admitted()
 }
 
 #[cfg(test)]
@@ -339,5 +385,58 @@ mod tests {
         let json = "\"VERIFIED\"";
         let status: VerificationStatus = serde_json::from_str(json).unwrap();
         assert_eq!(status, VerificationStatus::Verified);
+    }
+
+    #[test]
+    fn test_every_server_status_parses() {
+        for (raw, expected) in [
+            ("\"VERIFIED\"", VerificationStatus::Verified),
+            ("\"UNVERIFIABLE\"", VerificationStatus::Unverifiable),
+            ("\"BLOCKED\"", VerificationStatus::Blocked),
+            ("\"SOMETHING_NEW\"", VerificationStatus::Unknown),
+        ] {
+            let status: VerificationStatus = serde_json::from_str(raw).unwrap();
+            assert_eq!(status, expected, "{raw}");
+        }
+    }
+
+    fn response(json: &str) -> VerificationResponse {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn test_admission_needs_admit_verified_and_proof_ref() {
+        let admitted = r#"{"status":"VERIFIED","admission":"ADMIT","proof_ref":"sha256:ab"}"#;
+        assert!(response(admitted).is_admitted());
+
+        for json in [
+            // Proven false, or unsafe: VERIFIED but blocked.
+            r#"{"status":"VERIFIED","admission":"BLOCKED","proof_ref":"sha256:ab"}"#,
+            // No admission decision at all (logic, fact).
+            r#"{"status":"VERIFIED","proof_ref":"sha256:ab"}"#,
+            // An admission the SDK does not know.
+            r#"{"status":"VERIFIED","admission":"DENY","proof_ref":"sha256:ab"}"#,
+            // ADMIT without the proof VERIFIED requires.
+            r#"{"status":"VERIFIED","admission":"ADMIT"}"#,
+            r#"{"status":"VERIFIED","admission":"ADMIT","proof_ref":""}"#,
+            r#"{"status":"VERIFIED","admission":"ADMIT","proof_ref":null}"#,
+            // ADMIT with a status that is not VERIFIED.
+            r#"{"status":"UNVERIFIABLE","admission":"ADMIT","proof_ref":"sha256:ab"}"#,
+            r#"{"status":"SOMETHING_NEW","admission":"ADMIT","proof_ref":"sha256:ab"}"#,
+        ] {
+            assert!(!response(json).is_admitted(), "{json}");
+        }
+    }
+
+    #[test]
+    fn test_a_response_without_status_does_not_parse() {
+        assert!(serde_json::from_str::<VerificationResponse>(r#"{"admission":"ADMIT"}"#).is_err());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_is_verified_follows_admission() {
+        let blocked = response(r#"{"status":"VERIFIED","admission":"BLOCKED","proof_ref":"sha256:ab"}"#);
+        assert!(!is_verified(&blocked));
     }
 }
