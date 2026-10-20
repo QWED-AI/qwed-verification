@@ -1,6 +1,6 @@
 # Documentation
 
-The QWED documentation lives at **[docs.qwedai.com](https://docs.qwedai.com)** (source: [QWED-AI/docs](https://github.com/QWED-AI/docs)). The guides that used to be in this folder were out of date copies of those pages and have been removed.
+The QWED documentation lives at **[docs.qwedai.tech](https://docs.qwedai.tech)** (source: [QWED-AI/docs](https://github.com/QWED-AI/docs)). The guides that used to be in this folder were out of date copies of those pages and have been removed.
 
 What remains here belongs to this repository:
 

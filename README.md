@@ -13,7 +13,7 @@
   [![codecov](https://codecov.io/gh/QWED-AI/qwed-verification/branch/main/graph/badge.svg)](https://codecov.io/gh/QWED-AI/qwed-verification)
   [![DOI](https://zenodo.org/badge/1115581942.svg)](https://doi.org/10.5281/zenodo.18111675)
 
-  [Website](https://qwedai.com) · [Documentation](https://docs.qwedai.com) · [Install](#install) · [Engines](#engines-and-guards) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+  [Website](https://qwedai.tech) · [Documentation](https://docs.qwedai.tech) · [Install](#install) · [Engines](#engines-and-guards) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 </div>
 
 ---
@@ -79,7 +79,7 @@ Other languages and runtimes:
 | TypeScript | `npm install @qwed-ai/sdk` | Published on each release; pin a version, e.g. `@7.3.0` |
 | Go | `go get github.com/QWED-AI/qwed-verification/sdk-go/v7` | Released under `sdk-go/vX.Y.Z` tags; pin a version, e.g. `@v7.3.0` |
 | Rust | `cargo add qwed` | |
-| Docker | `docker pull qwedai/qwed-verification` | The API server. It needs `API_KEY_SECRET` and `QWED_CORS_ORIGINS`; see [self-hosting](https://docs.qwedai.com/advanced/self-hosting) |
+| Docker | `docker pull qwedai/qwed-verification` | The API server. It needs `API_KEY_SECRET` and `QWED_CORS_ORIGINS`; see [self-hosting](https://docs.qwedai.tech/advanced/self-hosting) |
 
 From source:
 
@@ -164,11 +164,11 @@ curl -X POST http://localhost:8000/verify/math \
   -d '{"expression": "2*(3+4) = 14"}'
 ```
 
-The full endpoint list is in the [API reference](https://docs.qwedai.com/api/overview). For running QWED without the server, see [QWEDLocal](https://docs.qwedai.com/advanced/qwed-local).
+The full endpoint list is in the [API reference](https://docs.qwedai.tech/api/overview). For running QWED without the server, see [QWEDLocal](https://docs.qwedai.tech/advanced/qwed-local).
 
 ## Engines and guards
 
-QWED has 13 engines and 9 policy guards. What an engine may claim depends on its tier ([details](https://docs.qwedai.com/engines/overview)).
+QWED has 13 engines and 9 policy guards. What an engine may claim depends on its tier ([details](https://docs.qwedai.tech/engines/overview)).
 
 **Proof engines.** All except Symbolic can return `VERIFIED`, always with a `proof_ref`.
 
@@ -231,7 +231,7 @@ pytest tests/ -v
 
 ## Security
 
-Report vulnerabilities privately through [GitHub](https://github.com/QWED-AI/qwed-verification/security/advisories/new) or rahul@qwedai.com; see [SECURITY.md](SECURITY.md). Published advisories, with affected and fixed versions, are on the [Security tab](https://github.com/QWED-AI/qwed-verification/security/advisories) and at [qwedai.com/security/advisories](https://qwedai.com/security/advisories). Only the latest release receives security fixes.
+Report vulnerabilities privately through [GitHub](https://github.com/QWED-AI/qwed-verification/security/advisories/new) or rahul@qwedai.tech; see [SECURITY.md](SECURITY.md). Published advisories, with affected and fixed versions, are on the [Security tab](https://github.com/QWED-AI/qwed-verification/security/advisories) and at [qwedai.tech/security/advisories](https://qwedai.tech/security/advisories). Only the latest release receives security fixes.
 
 ## Project
 

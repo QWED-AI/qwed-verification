@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://qwed.dev/schemas/verification-context/v1.0",
+  "$id": "https://qwedai.tech/schemas/verification-context/v1.0",
   "title": "QWED Verification Context",
   "description": "QWED Verification Context v1.0 — the object of verification plus the context required to interpret, reproduce, and trust the verification. Derived from ADR-001..005.",
   "type": "object",

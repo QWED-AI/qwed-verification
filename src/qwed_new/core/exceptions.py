@@ -23,7 +23,7 @@ class QWEDError(Exception):
     ):
         self.message = message
         self.suggestion = suggestion
-        self.docs_url = docs_url or "https://docs.qwedai.com/docs/faq"
+        self.docs_url = docs_url or "https://docs.qwedai.tech/faq"
         self.details = details or {}
         super().__init__(self._format_message())
     
@@ -80,7 +80,7 @@ class QWEDSyntaxError(QWEDError):
         super().__init__(
             message=message,
             suggestion=suggestion or "Check your expression syntax",
-            docs_url="https://docs.qwedai.com/docs/api/dsl-reference",
+            docs_url="https://docs.qwedai.tech/api/dsl-reference",
             details=details
         )
     
@@ -99,6 +99,9 @@ class QWEDSyntaxError(QWEDError):
         
         if self.suggestion:
             parts.append(f"\n💡 {self.suggestion}")
+
+        if self.docs_url:
+            parts.append(f"\n📚 Docs: {self.docs_url}")
         
         return "".join(parts)
 
@@ -127,7 +130,7 @@ class QWEDSymbolNotFoundError(QWEDError):
         super().__init__(
             message=f"Symbol '{symbol}' not found",
             suggestion=suggestion,
-            docs_url="https://docs.qwedai.com/docs/api/dsl-reference#variables",
+            docs_url="https://docs.qwedai.tech/api/dsl-reference#variables",
             details={"symbol": symbol, "expression": expression}
         )
     
@@ -177,7 +180,7 @@ class QWEDVerificationError(QWEDError):
         super().__init__(
             message=message,
             suggestion=suggestion,
-            docs_url="https://docs.qwedai.com/docs/engines/overview",
+            docs_url="https://docs.qwedai.tech/engines/overview",
             details=details
         )
 
@@ -306,7 +309,7 @@ class QWEDConfigError(QWEDError):
         super().__init__(
             message=message,
             suggestion=suggestion,
-            docs_url="https://docs.qwedai.com/docs/getting-started/installation",
+            docs_url="https://docs.qwedai.tech/getting-started/installation",
             details={
                 "config_key": config_key,
                 "expected_type": expected_type,
@@ -330,14 +333,14 @@ class QWEDAPIError(QWEDError):
         elif status_code == 429:
             suggestion = "Rate limit exceeded. Wait and retry."
         elif status_code == 500:
-            suggestion = "Server error. Check status at status.qwedai.com"
+            suggestion = "Server error. Check the QWED server logs and retry."
         elif status_code:
             suggestion = f"HTTP {status_code}. Check your request."
         
         super().__init__(
             message=message,
             suggestion=suggestion,
-            docs_url="https://docs.qwedai.com/docs/api/authentication",
+            docs_url="https://docs.qwedai.tech/api/authentication",
             details={"status_code": status_code, "endpoint": endpoint}
         )
 
@@ -363,7 +366,7 @@ class QWEDDependencyError(QWEDError):
         super().__init__(
             message=message,
             suggestion=f"Install with: {install_cmd}",
-            docs_url="https://docs.qwedai.com/docs/getting-started/installation",
+            docs_url="https://docs.qwedai.tech/getting-started/installation",
             details={"package": package, "install_command": install_cmd}
         )
 

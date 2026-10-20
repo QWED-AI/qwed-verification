@@ -15,7 +15,7 @@ def test_state_guard_initialization(tmp_path):
 
 def test_state_guard_snapshot_and_rollback(tmp_path):
     subprocess.run(["git", "init"], cwd=str(tmp_path), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@qwed.ai"], cwd=str(tmp_path), check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(tmp_path), check=True)
     subprocess.run(["git", "config", "user.name", "Tester"], cwd=str(tmp_path), check=True)
     
     # Create an initial file

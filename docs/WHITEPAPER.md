@@ -14,7 +14,7 @@ slug: /whitepaper
 **Authors:** Rahul Dass  
 **Organization:** QWED-AI  
 **ORCID:** [0009-0000-2088-7487](https://orcid.org/0009-0000-2088-7487)  
-**Email:** rahul@qwedai.com  
+**Email:** rahul@qwedai.tech  
 **Version:** 1.1.0  
 **Date:** 28 December 2025  
 **License:** Apache 2.0  
@@ -31,9 +31,9 @@ slug: /whitepaper
 > 5. **Guarantees.** Statements that QWED eliminates the impact of hallucinations, guarantees accurate conversion, or safely evaluates logic without `eval()` risk are contradicted by later advisories that fixed false `VERIFIED` results and code-injection bugs (GHSA-q27q-98j4-9pfv, GHSA-xmm6-8r3x-j567, GHSA-4v5r-g7f4-vvgc, GHSA-mfh5-3c8f-975p, GHSA-j622-qffp-rc27).
 > 6. **Comparisons.** The descriptions of Guardrails AI and NeMo Guardrails as pattern-matching tools, and the latency figures attributed to them, are not sourced and should be disregarded.
 > 7. **Regulation.** The claim that QWED provides the formal guarantees the EU AI Act or NIST AI RMF require is withdrawn; neither framework prescribes formal guarantees and no conformity assessment has been made.
-> 8. **Code.** The Section 7.1 example passes `verification_type="math"` and `verification_type="sql"` to `QWEDTool`, but `QWEDTool` has no such parameter. See [LangChain integration](https://docs.qwedai.com/integrations/langchain) for current usage.
+> 8. **Code.** The Section 7.1 example passes `verification_type="math"` and `verification_type="sql"` to `QWEDTool`, but `QWEDTool` has no such parameter. See [LangChain integration](https://docs.qwedai.tech/integrations/langchain) for current usage.
 >
-> Current behaviour is documented at [docs.qwedai.com](https://docs.qwedai.com).
+> Current behaviour is documented at [docs.qwedai.tech](https://docs.qwedai.tech).
 
 ---
 
@@ -1387,4 +1387,4 @@ This research received no external funding.
 ---
 
 **QWED-AI**  
-https://qwedai.com | https://docs.qwedai.com | https://github.com/QWED-AI/qwed-verification
+https://qwedai.tech | https://docs.qwedai.tech | https://github.com/QWED-AI/qwed-verification

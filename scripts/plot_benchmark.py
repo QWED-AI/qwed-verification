@@ -99,7 +99,7 @@ ax.annotate('QWED: 100%\nAll 22 Errors Caught',
 
 # Add subtitle
 plt.figtext(0.5, 0.02, 
-            'QWED enables LLMs for production by providing deterministic verification | qwed.ai',
+            'QWED enables LLMs for production by providing deterministic verification | qwedai.tech',
             ha='center', fontsize=10, color='#7f8c8d', style='italic')
 
 # Save

@@ -50,7 +50,7 @@ class TestSecurityFixes(unittest.TestCase):
         
         # Use a dummy DID for testing self-issued check
         # Inject deterministic key suffix to avoid datetime usage in __init__
-        service = AttestationService(issuer_did="did:web:qwed.ai", key_suffix="test")
+        service = AttestationService(issuer_did="did:web:qwedai.tech", key_suffix="test")
         
         result = VerificationResult(
             status="VERIFIED",

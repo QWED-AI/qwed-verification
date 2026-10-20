@@ -104,7 +104,7 @@ use std::time::Duration;
 
 let client = QWEDClient::with_options(
     "qwed_...",
-    "https://api.qwed.ai",
+    "http://localhost:8000", // your local QWED server
     Duration::from_secs(60),
 );
 ```
