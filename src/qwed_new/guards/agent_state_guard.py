@@ -26,12 +26,12 @@ from typing import Any, Dict, Iterable
 
 from qwed_new.core.diagnostics import compute_proof_ref
 
-# A complete JSON string literal, escapes included, in the unrolled form: runs
-# of plain characters are consumed at once, and each escape is a backslash plus
-# one character, so no character can be matched two ways and matching stays
-# linear.
-_JSON_STRING_LITERAL = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"', re.DOTALL)
-_JSON_BRACKET = re.compile(r"[\[\]{}]")
+# One forward-only token scan for the pre-parse nesting check: a JSON string,
+# or a single bracket. A string runs to its closing quote or, when it never
+# closes, to the end of the text (group 1 is then empty), and a backslash may
+# end the text too, so a string match can never fail and nothing is ever
+# re-scanned. Runs of plain characters are consumed at once.
+_JSON_TOKEN = re.compile(r'"[^"\\]*(?:\\(?:.|\Z)[^"\\]*)*("|\Z)|[\[\]{}]', re.DOTALL)
 
 
 class AgentStateGuard:
@@ -124,20 +124,21 @@ class AgentStateGuard:
                 message="Blocked: proposed agent state must be a non-empty JSON string.",
             )
 
-        if self._nesting_exceeds(proposed_state_json, self.MAX_PARSE_DEPTH):
-            return self._blocked(
-                error_code="QWED-AGENT-STATE-102",
-                message=(
-                    "Blocked: invalid or non-deterministic JSON state payload. "
-                    f"Nesting exceeds {self.MAX_PARSE_DEPTH} levels."
-                ),
-            )
-
-        # RecursionError and MemoryError are caught too: a payload that defeats
-        # the nesting check must still come back BLOCKED, never raise (#469).
-        # ArithmeticError covers parse_float=Decimal on an exponent outside
-        # Decimal's range (decimal.InvalidOperation is not a ValueError).
+        # The nesting check runs inside the same handler as the parser, so even
+        # a MemoryError from the check itself comes back BLOCKED. RecursionError
+        # and MemoryError are caught so that a payload that defeats the check
+        # is still BLOCKED, never raised (#469). ArithmeticError covers
+        # parse_float=Decimal on an exponent outside Decimal's range
+        # (decimal.InvalidOperation is not a ValueError).
         try:
+            if self._nesting_exceeds(proposed_state_json, self.MAX_PARSE_DEPTH):
+                return self._blocked(
+                    error_code="QWED-AGENT-STATE-102",
+                    message=(
+                        "Blocked: invalid or non-deterministic JSON state payload. "
+                        f"Nesting exceeds {self.MAX_PARSE_DEPTH} levels."
+                    ),
+                )
             state_data = self._load_strict_json(proposed_state_json)
         except (ValueError, ArithmeticError, RecursionError, MemoryError) as exc:
             return self._blocked(
@@ -297,18 +298,24 @@ class AgentStateGuard:
     @staticmethod
     def _nesting_exceeds(text: str, limit: int) -> bool:
         """True when the JSON text opens more than ``limit`` arrays or objects
-        inside each other. Brackets inside strings do not count: complete
-        string literals are removed first in one regex pass, so only the
-        structural brackets are walked in Python. Malformed text is left to
-        the parser."""
+        inside each other. One forward pass over strings and brackets
+        (``_JSON_TOKEN``): brackets inside strings do not count, a string
+        that never closes takes the rest of the text, and its brackets are
+        counted as structure. Malformed text is otherwise left to the
+        parser."""
         if text.count("[") + text.count("{") <= limit:
             return False
-        structure = _JSON_STRING_LITERAL.sub("", text)
-        if structure.count("[") + structure.count("{") <= limit:
-            return False
         depth = 0
-        for match in _JSON_BRACKET.finditer(structure):
-            if match.group() in "[{":
+        for match in _JSON_TOKEN.finditer(text):
+            token = match.group()
+            if token[0] == '"':
+                if match.group(1):
+                    continue
+                # An unterminated string ends the text; the parser rejects it,
+                # but its brackets must not hide nesting from this check.
+                rest = token[1:]
+                return depth + rest.count("[") + rest.count("{") > limit
+            if token in "[{":
                 depth += 1
                 if depth > limit:
                     return True

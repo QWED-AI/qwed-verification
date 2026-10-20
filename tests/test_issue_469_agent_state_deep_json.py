@@ -132,10 +132,56 @@ def test_a_long_string_full_of_brackets_is_still_verified():
     assert result["verified"] is True
 
 
-def test_brackets_after_an_unterminated_string_count_as_structure():
-    # The parser rejects this anyway; the check must not be fooled into
-    # treating the brackets as string content.
-    assert AgentStateGuard._nesting_exceeds('"' + "[" * 300, 256) is True
+BACKSLASH, QUOTE = "\\", '"'
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (QUOTE + "[" * 300, True),  # an unterminated string's brackets count
+        ("[" * 10 + QUOTE + "[" * 300, True),
+        ("[" * 300 + QUOTE + "abc" + BACKSLASH, True),  # lone trailing backslash
+        (QUOTE + "x" + QUOTE + "[" * 300, True),
+        ("[" * 10 + json.dumps("[" * 300) + "]" * 10, False),
+        ((BACKSLASH + QUOTE) * 1_000 + "[" * 300, True),
+        ("[" * 257 + QUOTE + (BACKSLASH + QUOTE) * 1_000, True),
+    ],
+    ids=[
+        "unterminated", "unterminated-after-structure", "trailing-backslash", "closed-then-deep",
+        "closed-shallow", "escaped-quotes-then-deep", "deep-then-escaped-quotes",
+    ],
+)
+def test_nesting_check_cases(text, expected):
+    assert AgentStateGuard._nesting_exceeds(text, 256) is expected
+
+
+@pytest.mark.timeout(20)
+@pytest.mark.parametrize(
+    "text",
+    [
+        (BACKSLASH + QUOTE) * 1_000_000 + "[" * 300,
+        "[" * 257 + QUOTE + (BACKSLASH + QUOTE) * 1_000_000,
+        QUOTE.join(["["] * 300_000),
+    ],
+    ids=["escaped-quote-run-then-brackets", "brackets-then-escaped-quote-run", "many-short-strings"],
+)
+def test_nesting_check_is_linear_on_unterminated_and_escaped_strings(text):
+    # A scan that retries from every quote is quadratic here: these inputs
+    # would take far longer than the timeout. One forward pass takes well
+    # under a second.
+    assert AgentStateGuard._nesting_exceeds(text, 256) is True
+
+
+def test_a_failure_inside_the_nesting_check_is_blocked(monkeypatch):
+    def explode(text, limit):
+        raise MemoryError("scan")
+
+    monkeypatch.setattr(AgentStateGuard, "_nesting_exceeds", staticmethod(explode))
+
+    result = _build_guard().verify_state_payload(VALID_STATE)
+
+    assert result["status"] == "BLOCKED"
+    assert result["error_code"] == PARSE_ERROR
 
 
 @pytest.mark.parametrize("error", [RecursionError("deep"), MemoryError("big")])
