@@ -22,14 +22,36 @@ export enum VerificationType {
     Security = 'security',
 }
 
+/**
+ * Diagnostic status of a verification (`DiagnosticResult.status`).
+ *
+ * `Verified` says the engine reached a deterministic answer, not that the
+ * claim holds: a false identity such as `2 + 2 = 5` is VERIFIED too, and its
+ * admission is BLOCKED. Gate on {@link isAdmitted}, never on the status alone.
+ */
 export enum VerificationStatus {
+    /** The claim was evaluated deterministically and `proof_ref` is set. */
     Verified = 'VERIFIED',
-    Failed = 'FAILED',
-    Corrected = 'CORRECTED',
+    /** The claim could not be proven. */
+    Unverifiable = 'UNVERIFIABLE',
+    /** Verification could not be attempted (parse error, policy, missing dependency). */
     Blocked = 'BLOCKED',
-    Error = 'ERROR',
-    Timeout = 'TIMEOUT',
-    Unsupported = 'UNSUPPORTED',
+    /** A missing status, or one this SDK version does not know. Never admitted. */
+    Unknown = 'UNKNOWN',
+}
+
+/**
+ * The server's decision at its enforcement boundary. Absent (`undefined`)
+ * where the endpoint makes no decision, as `/verify/logic`, `/verify/fact`
+ * and batch items do today; absent is never admitted.
+ */
+export enum Admission {
+    /** The boundary may proceed with the verdict. */
+    Admit = 'ADMIT',
+    /** The boundary must not admit. */
+    Blocked = 'BLOCKED',
+    /** A decision this SDK version does not know. Never admitted. */
+    Unknown = 'UNKNOWN',
 }
 
 export enum Satisfiability {
@@ -96,58 +118,6 @@ export interface BatchRequest {
 // Response Types
 // ============================================================================
 
-export interface Vulnerability {
-    type: string;
-    severity: 'low' | 'medium' | 'high' | 'critical';
-    line?: number;
-    message: string;
-}
-
-export interface Citation {
-    text: string;
-    source: string;
-}
-
-export interface VerificationResultData {
-    is_valid?: boolean;
-    message?: string;
-    expected?: unknown;
-    actual?: unknown;
-    simplified?: string;
-    model?: Record<string, unknown>;
-    satisfiability?: Satisfiability;
-    vulnerabilities?: Vulnerability[];
-    verdict?: FactVerdict;
-    citations?: Citation[];
-    
-    // ProcessVerifier Metrics
-    score?: number;
-    process_rate?: number;
-    missing_steps?: string[];
-    missed_milestones?: string[];
-    
-    // RAGGuard DRM Metrics
-    drm_rate?: number;
-    chunks_checked?: number;
-    mismatched_count?: number;
-    
-    // IRAC Compliance Audits
-    'irac.issue'?: string;
-    'irac.rule'?: string;
-    'irac.application'?: string;
-    'irac.conclusion'?: string;
-
-    // Agentic Standalone Metrics
-    risk?: 'DOCUMENT_RETRIEVAL_MISMATCH' | 'EXFILTRATION_ATTEMPT' | 'MCP_POISONING' | 'TOXIC_CHAIN' | 'SOVEREIGNTY_VIOLATION' | 'FABRICATED_REASONING';
-    risk_level?: 'low' | 'medium' | 'high' | 'critical';
-}
-
-export interface VerificationProof {
-    type: string;
-    steps?: unknown[];
-    hash: string;
-}
-
 export interface VerificationError {
     code: string;
     message: string;
@@ -155,47 +125,84 @@ export interface VerificationError {
     documentation_url?: string;
 }
 
-export interface VerificationResponseMetadata {
-    request_id?: string;
-    latency_ms?: number;
-    engine_version?: string;
-    protocol_version?: string;
-    cached?: boolean;
-}
-
+/**
+ * A verification answer: the server's DiagnosticResult envelope.
+ *
+ * Gate on {@link isAdmitted}: true only for admission ADMIT with status
+ * VERIFIED and a `proof_ref`. Every other key is the endpoint's own field,
+ * such as `is_valid`, `issues` or `error`.
+ */
 export interface VerificationResponse {
+    /**
+     * One of the four `VerificationStatus` values; a status this SDK does not
+     * know is `Unknown`. Gate on {@link isAdmitted}, not on the status.
+     */
     status: VerificationStatus;
-    verified: boolean;
-    engine?: string;
-    result?: VerificationResultData;
-    proof?: VerificationProof;
-    attestation?: string;
-    error?: VerificationError;
-    metadata?: VerificationResponseMetadata;
+    /**
+     * The server's status text exactly as sent, such as `SAT` or
+     * `NOT_MATH_QUERY` where `status` is `Unknown`. The parser sets it on
+     * every response; it is absent when the server sent no status string.
+     * Never used for admission, and never read from a body. Where `status`
+     * is `Unknown`, `JSON.stringify` of a parsed response writes it back as
+     * `status`, so it survives a round trip; a known `status` is written as
+     * it is.
+     */
+    rawStatus?: string;
+    /** Absent where the endpoint makes no decision. Absent is not admitted. */
+    admission?: Admission;
+    /** Set only when `status` is VERIFIED. */
+    proof_ref?: string | null;
+    agent_message?: string | null;
+    is_authoritative?: boolean | null;
+    constraint_id?: string | null;
+    developer_fields?: Record<string, unknown> | null;
+    /**
+     * Set by the parser to `isAdmitted(response)`, whatever the body says.
+     * Endpoints that make no admission decision (logic, fact, rag, process
+     * and batch items today) are never admitted. The `verified` that
+     * `/verify/rag` and `/verify/process` send is their guard's own result;
+     * it stays in `developer_fields.verified`.
+     * @deprecated Use {@link isAdmitted}.
+     */
+    verified?: boolean;
+    /** The endpoint's own fields. */
+    [field: string]: unknown;
 }
 
+/** One item of a batch job. */
 export interface BatchItemResult {
     id: string;
-    status: VerificationStatus;
-    verified: boolean;
-    result?: VerificationResultData;
-    error?: VerificationError;
+    /**
+     * Item state, such as `pending`, `completed` or `failed`. The
+     * verification status is `result.status`.
+     */
+    status: string;
+    query?: string;
+    type?: string;
+    /** The item's verification answer, once it has one. */
+    result?: VerificationResponse | null;
+    error?: string | null;
+    latency_ms?: number;
+    /**
+     * Set by the parser to `isAdmitted(item.result)`. Batch items carry no
+     * admission decision today, so it is false.
+     * @deprecated Use `isAdmitted(item.result)`.
+     */
+    verified?: boolean;
 }
 
+/** A batch job and its items. */
 export interface BatchResponse {
-    batch: true;
     job_id: string;
-    status: 'completed' | 'partial' | 'failed';
-    summary: {
-        total: number;
-        verified: number;
-        failed: number;
-        success_rate: number;
-    };
+    /** Job state: `pending`, `processing`, `completed`, `partial` or `failed`. */
+    status: string;
+    progress_percent?: number;
+    total_items?: number;
+    completed_items?: number;
+    failed_items?: number;
+    created_at?: string;
+    completed_at?: string | null;
     items: BatchItemResult[];
-    metadata?: {
-        total_latency_ms?: number;
-    };
 }
 
 // ============================================================================
@@ -286,10 +293,23 @@ export interface AgentVerificationRequest {
 
 export type AgentDecision = 'APPROVED' | 'DENIED' | 'CORRECTED' | 'PENDING' | 'BUDGET_EXCEEDED';
 
+/**
+ * `verification.status` on an agent answer. The agent endpoint passes on the
+ * maths engine's own result, whose status can be `VERIFIED`, `BLOCKED`,
+ * `DISPROVEN` (the computation contradicts the claim), `INCONCLUSIVE` (a
+ * non-finite value, so neither proven nor disproven) or `SYNTAX_ERROR`. Only
+ * an admission decision is a pass; none of these alone is.
+ */
+export type AgentVerificationStatus =
+    | VerificationStatus
+    | 'DISPROVEN'
+    | 'INCONCLUSIVE'
+    | 'SYNTAX_ERROR';
+
 export interface AgentVerificationResponse {
     decision: AgentDecision;
     verification?: {
-        status: VerificationStatus;
+        status: AgentVerificationStatus;
         engine?: string;
         risk_level?: 'low' | 'medium' | 'high' | 'critical';
         checks_passed?: string[];

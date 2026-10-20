@@ -4,12 +4,15 @@
  * 
  * @example
  * ```typescript
- * import { QWEDClient } from '@qwed-ai/sdk';
+ * import { QWEDClient, isAdmitted } from '@qwed-ai/sdk';
  * 
  * const client = new QWEDClient({ apiKey: 'qwed_...' });
- * const result = await client.verify('What is 2+2?');
- * console.log(result.verified); // true
+ * const result = await client.verifyMath('2 + 2 = 4');
+ * console.log(result.status, result.admission, isAdmitted(result)); // VERIFIED ADMIT true
  * ```
+ *
+ * Gate on `isAdmitted()`, never on `status` alone: `2 + 2 = 5` is also
+ * VERIFIED (proven false), with admission BLOCKED.
  */
 
 // Re-export types
@@ -21,7 +24,10 @@ export {
     QWEDError,
     QWEDAuthError,
     QWEDRateLimitError,
+    isAdmitted,
     isVerified,
+    parseVerificationResponse,
+    parseBatchResponse,
     getErrorMessage,
     parseAttestation,
 } from './client';

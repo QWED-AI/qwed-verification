@@ -104,26 +104,65 @@ pub struct RequestOptions {
 
 /// A verification answer: the server's DiagnosticResult envelope.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(from = "WireResponse")]
 pub struct VerificationResponse {
+    /// One of the known statuses, or `Unknown`. Gate on
+    /// [`VerificationResponse::is_admitted`], not on the status.
     pub status: VerificationStatus,
+    /// The server's status text exactly as sent, such as `SAT` or
+    /// `NOT_MATH_QUERY` where `status` is `Unknown`. Never used for admission.
+    pub raw_status: String,
     /// Present on endpoints that make an admission decision. Missing means
     /// not admitted.
-    #[serde(default)]
     pub admission: Option<Admission>,
     /// Set only when `status` is VERIFIED.
-    #[serde(default)]
     pub proof_ref: Option<String>,
-    #[serde(default)]
     pub agent_message: Option<String>,
-    #[serde(default)]
     pub is_authoritative: Option<bool>,
-    #[serde(default)]
     pub constraint_id: Option<String>,
-    #[serde(default)]
     pub developer_fields: Option<HashMap<String, serde_json::Value>>,
     /// Endpoint-specific fields, such as `is_valid`, `issues` or `error`.
-    #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+/// A verification answer as it arrives. `status` is required and must be a
+/// string; `VerificationResponse` keeps it as `raw_status` and parses it.
+#[derive(Deserialize)]
+struct WireResponse {
+    status: String,
+    #[serde(default)]
+    admission: Option<Admission>,
+    #[serde(default)]
+    proof_ref: Option<String>,
+    #[serde(default)]
+    agent_message: Option<String>,
+    #[serde(default)]
+    is_authoritative: Option<bool>,
+    #[serde(default)]
+    constraint_id: Option<String>,
+    #[serde(default)]
+    developer_fields: Option<HashMap<String, serde_json::Value>>,
+    #[serde(flatten)]
+    extra: HashMap<String, serde_json::Value>,
+}
+
+impl From<WireResponse> for VerificationResponse {
+    fn from(wire: WireResponse) -> Self {
+        // VerificationStatus maps any value it does not know to Unknown.
+        let status = serde_json::from_value(serde_json::Value::String(wire.status.clone()))
+            .unwrap_or(VerificationStatus::Unknown);
+        Self {
+            status,
+            raw_status: wire.status,
+            admission: wire.admission,
+            proof_ref: wire.proof_ref,
+            agent_message: wire.agent_message,
+            is_authoritative: wire.is_authoritative,
+            constraint_id: wire.constraint_id,
+            developer_fields: wire.developer_fields,
+            extra: wire.extra,
+        }
+    }
 }
 
 impl VerificationResponse {
@@ -364,7 +403,7 @@ impl QWEDClient {
 
 /// Whether the server admitted the result. Same as
 /// [`VerificationResponse::is_admitted`].
-#[deprecated(since = "7.3.1", note = "use VerificationResponse::is_admitted; the server sends no `verified` field")]
+#[deprecated(since = "7.3.1", note = "use VerificationResponse::is_admitted; a `verified` field is not an admission decision")]
 pub fn is_verified(response: &VerificationResponse) -> bool {
     response.is_admitted()
 }
@@ -431,6 +470,50 @@ mod tests {
     #[test]
     fn test_a_response_without_status_does_not_parse() {
         assert!(serde_json::from_str::<VerificationResponse>(r#"{"admission":"ADMIT"}"#).is_err());
+        assert!(serde_json::from_str::<VerificationResponse>(r#"{"status":null}"#).is_err());
+        assert!(serde_json::from_str::<VerificationResponse>(r#"{"status":1}"#).is_err());
+    }
+
+    #[test]
+    fn test_raw_status_keeps_the_servers_text() {
+        // A batch logic item can answer with a solver status, not an envelope one.
+        let sat = response(r#"{"status":"SAT","admission":"ADMIT","proof_ref":"sha256:ab","model":{"x":6}}"#);
+        assert_eq!(sat.status, VerificationStatus::Unknown);
+        assert_eq!(sat.raw_status, "SAT");
+        assert!(!sat.is_admitted());
+        assert!(!sat.extra.contains_key("status"));
+        assert_eq!(sat.extra["model"]["x"], 6);
+
+        for (json, status, raw) in [
+            (r#"{"status":"VERIFIED"}"#, VerificationStatus::Verified, "VERIFIED"),
+            (r#"{"status":"UNVERIFIABLE"}"#, VerificationStatus::Unverifiable, "UNVERIFIABLE"),
+            (r#"{"status":"BLOCKED"}"#, VerificationStatus::Blocked, "BLOCKED"),
+            (r#"{"status":"verified"}"#, VerificationStatus::Unknown, "verified"),
+            (r#"{"status":"NOT_MATH_QUERY"}"#, VerificationStatus::Unknown, "NOT_MATH_QUERY"),
+        ] {
+            let r = response(json);
+            assert_eq!(r.status, status, "{json}");
+            assert_eq!(r.raw_status, raw, "{json}");
+        }
+    }
+
+    #[test]
+    fn test_envelope_fields_still_parse_through_the_wire_type() {
+        let r = response(
+            r#"{"status":"VERIFIED","admission":"ADMIT","proof_ref":"sha256:ab","agent_message":"ok",
+                "is_authoritative":true,"constraint_id":"c","developer_fields":{"is_valid":true},"is_valid":true}"#,
+        );
+        assert!(r.is_admitted());
+        assert_eq!(r.agent_message.as_deref(), Some("ok"));
+        assert_eq!(r.is_authoritative, Some(true));
+        assert_eq!(r.constraint_id.as_deref(), Some("c"));
+        assert_eq!(r.developer_fields.unwrap()["is_valid"], true);
+        assert_eq!(r.extra["is_valid"], true);
+        for key in ["status", "admission", "proof_ref", "agent_message", "developer_fields"] {
+            assert!(!r.extra.contains_key(key), "{key} leaked into extra");
+        }
+        // A field of the wrong type is still an error.
+        assert!(serde_json::from_str::<VerificationResponse>(r#"{"status":"VERIFIED","proof_ref":{"a":1}}"#).is_err());
     }
 
     #[test]

@@ -1,14 +1,14 @@
 //! Contract tests (#468): the SDK must parse what the QWED server sends.
 //!
-//! Every file in `tests/fixtures/` is a response captured from the server for
-//! the request this SDK makes. `tests/test_issue_468_rust_sdk_contract.py` in
-//! the repository root checks that the deterministic ones still match what
-//! the server returns today.
+//! Every file in `sdk-fixtures/` at the repository root is a response
+//! captured from the server for the request this SDK makes. The Go and
+//! TypeScript SDKs parse the same files. `tests/test_issue_468_rust_sdk_contract.py`
+//! checks that the deterministic ones still match what the server returns today.
 
 use qwed::{Admission, BatchResponse, VerificationResponse, VerificationStatus};
 
 fn fixture(name: &str) -> String {
-    let path = format!("{}/tests/fixtures/{name}.json", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/../sdk-fixtures/{name}.json", env!("CARGO_MANIFEST_DIR"));
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
 }
 

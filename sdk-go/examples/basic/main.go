@@ -49,7 +49,7 @@ func main() {
 	if err != nil {
 		log.Printf("Math verification failed: %v", err)
 	} else {
-		fmt.Printf("Verified: %v, Engine: %s\n", mathResult.Verified, mathResult.Engine)
+		fmt.Println(verdict(mathResult))
 	}
 
 	// Example 3: Logic Verification
@@ -58,7 +58,7 @@ func main() {
 	if err != nil {
 		log.Printf("Logic verification failed: %v", err)
 	} else {
-		fmt.Printf("Verified: %v, Engine: %s\n", logicResult.Verified, logicResult.Engine)
+		fmt.Println(verdict(logicResult))
 	}
 
 	// Example 4: Code Security Check
@@ -71,9 +71,17 @@ def process_input(data):
 	if err != nil {
 		log.Printf("Code verification failed: %v", err)
 	} else {
-		fmt.Printf("Safe: %v, Engine: %s\n", codeResult.Verified, codeResult.Engine)
-		if !codeResult.Verified {
+		fmt.Println(verdict(codeResult))
+		switch {
+		case codeResult.IsAdmitted():
+			fmt.Println("Code passed verification")
+		case codeResult.Status == qwed.StatusVerified && codeResult.Admission == qwed.AdmissionBlocked:
+			// VERIFIED · BLOCKED: the verifier analysed the code and proved it unsafe.
 			fmt.Println("⚠️  Security vulnerability detected!")
+		default:
+			// Not admitted for another reason: the verifier could not analyse
+			// the code, so it is neither proven safe nor proven unsafe.
+			fmt.Println("⚠️  Could not verify the code; do not run it")
 		}
 	}
 
@@ -86,7 +94,7 @@ def process_input(data):
 	if err != nil {
 		log.Printf("Fact verification failed: %v", err)
 	} else {
-		fmt.Printf("Verified: %v, Engine: %s\n", factResult.Verified, factResult.Engine)
+		fmt.Println(verdict(factResult))
 	}
 
 	// Example 6: SQL Validation
@@ -99,7 +107,7 @@ def process_input(data):
 	if err != nil {
 		log.Printf("SQL verification failed: %v", err)
 	} else {
-		fmt.Printf("Valid: %v, Engine: %s\n", sqlResult.Verified, sqlResult.Engine)
+		fmt.Println(verdict(sqlResult))
 	}
 
 	// Example 7: Batch Verification
@@ -113,11 +121,27 @@ def process_input(data):
 	if err != nil {
 		log.Printf("Batch verification failed: %v", err)
 	} else {
-		fmt.Printf("Job ID: %s, Status: %s\n", batchResult.JobID, batchResult.Status)
-		if batchResult.Summary != nil {
-			fmt.Printf("Success Rate: %.1f%%\n", batchResult.Summary.SuccessRate*100)
+		fmt.Printf("Job ID: %s, Status: %s, %d/%d items done\n",
+			batchResult.JobID, batchResult.Status, batchResult.CompletedItems, batchResult.TotalItems)
+		for _, item := range batchResult.Items {
+			if item.Result != nil {
+				fmt.Printf("  %s: %s\n", item.Query, verdict(item.Result))
+			} else {
+				fmt.Printf("  %s: %s %s\n", item.Query, item.Status, item.Error)
+			}
 		}
 	}
 
 	fmt.Println("\n✅ All examples completed!")
+}
+
+// verdict pairs the status with the admission decision, such as
+// "VERIFIED · ADMIT". Only an admitted result is a pass: 2 + 2 = 5 is
+// "VERIFIED · BLOCKED".
+func verdict(r *qwed.VerificationResponse) string {
+	admission := string(r.Admission)
+	if admission == "" {
+		admission = "no admission"
+	}
+	return fmt.Sprintf("%s · %s (admitted: %v) %s", r.Status, admission, r.IsAdmitted(), r.AgentMessage)
 }

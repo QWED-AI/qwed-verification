@@ -85,6 +85,61 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Fixed
 
+- **The Go and TypeScript SDKs read the DiagnosticResult envelope and gate
+  on admission (#480).** Both read a top-level `verified` field that only
+  `/verify/rag` and `/verify/process` send (their guard's own result, not an
+  admission), so Go's `Verified`, TypeScript's `verified` and both
+  `isVerified()` helpers were false on every other endpoint. They now always
+  equal the admission check, so rag and process, which make no admission
+  decision, are not admitted; the guard's value stays in
+  `developer_fields.verified`. Neither SDK exposed `admission`
+  or `proof_ref`. Go's `VerifyMath` and `VerifyLogic` also failed to decode,
+  because `/verify/math` sends `result` as a boolean and `/verify/logic`
+  sends `error` as a string. **Breaking for both SDKs' types.**
+  - `VerificationStatus` is `VERIFIED`, `UNVERIFIABLE`, `BLOCKED`, or
+    `UNKNOWN` for a missing value or one the SDK does not know; the stale
+    `FAILED`, `CORRECTED`, `ERROR`, `TIMEOUT` and `UNSUPPORTED` are gone. A
+    new `Admission` is `ADMIT`, `BLOCKED` or `UNKNOWN`, and empty (Go) or
+    absent (TypeScript) where the endpoint makes no decision.
+  - The response models the envelope: `status`, `admission`, `proof_ref`,
+    `agent_message`, `developer_fields`, `is_authoritative`,
+    `constraint_id`, and the endpoint's own fields (Go `Extra`, TypeScript
+    other keys). Go drops `Engine`, `Result`, `Attestation`, `Error`,
+    `Metadata`, `ResponseMetadata` and `BatchSummary`; TypeScript drops
+    `engine`, `result`, `proof`, `metadata` and the types only they used.
+  - `IsAdmitted()` (Go) and `isAdmitted()` (TypeScript) are true only for
+    `admission` ADMIT with `status` VERIFIED and a non-empty `proof_ref`.
+    `Verified` / `verified` and `IsVerified()` / `isVerified()` are
+    deprecated and now follow admission.
+  - The batch types match the job the server returns (`job_id`, `status`,
+    `progress_percent`, item counts, `items[]` with `id`, `status`, `query`,
+    `type`, `result`, `error`, `latency_ms`); there is no `summary`.
+  - TypeScript exports `parseVerificationResponse()` and
+    `parseBatchResponse()`, which every `verify*` method except the two
+    agent methods now uses, and `getErrorMessage()` reads a string `error`.
+  - Go's `VerificationResponse` marshals `Extra` back beside the envelope
+    fields, so a decoded response survives a JSON round trip; an `Extra` key
+    never replaces an envelope field. Numbers in `Extra` and
+    `DeveloperFields` are `json.Number`, so large integers and long decimals
+    keep their exact text. (TypeScript numbers come from `JSON.parse` and
+    keep its float limits.)
+  - All three SDKs keep the server's status text as `RawStatus` (Go),
+    `rawStatus` (TypeScript) or `raw_status` (Rust), such as `SAT` or
+    `NOT_MATH_QUERY` where the parsed status is Unknown. It is never used for
+    admission. Go's `MarshalJSON` and a non-enumerable `toJSON` on parsed
+    TypeScript responses write it back as `status`, so a saved response keeps
+    the server's status when parsed again; the Rust response types are
+    deserialise-only. The Rust `VerificationResponse` now deserialises through a
+    private wire type (`#[serde(from)]`) to fill it; a missing or non-string
+    `status` is still an error.
+  - TypeScript's `AgentVerificationResponse.verification.status` is
+    `AgentVerificationStatus`, which adds the maths engine's `DISPROVEN`,
+    `INCONCLUSIVE` and `SYNTAX_ERROR`.
+  - Contract tests in both SDKs parse the captured responses, now shared with
+    the Rust SDK in `sdk-fixtures/`. CI runs `go test` (the Go tests never
+    ran before) and `vitest run` without `--passWithNoTests`. READMEs and the
+    Go example explain gating on admission.
+
 - **The Rust SDK parses the server's responses (#468).** `VerificationResponse`
   required a top-level `verified` field the server never sends, and
   `VerificationStatus` had no `UNVERIFIABLE`, so every `verify*` call failed
@@ -108,7 +163,7 @@ All notable changes to the QWED Protocol will be documented in this file.
   - A body that does not match now fails as `Error::Serialization` rather
     than as an HTTP decode error.
   - Contract tests parse responses captured from the server
-    (`sdk-rust/tests/fixtures`), CI now runs `cargo test` for the Rust SDK,
+    (now in `sdk-fixtures/`, shared with the Go and TypeScript SDKs), CI now runs `cargo test` for the Rust SDK,
     and `tests/test_issue_468_rust_sdk_contract.py` fails if the server's
     answers drift from those fixtures. The README documents the envelope and
     gating on `is_admitted()`.

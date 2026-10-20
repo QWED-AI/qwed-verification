@@ -4,10 +4,13 @@
  */
 
 import {
+    Admission,
     QWEDClientOptions,
     VerificationRequest,
     VerificationResponse,
+    VerificationStatus,
     VerificationType,
+    BatchItemResult,
     BatchRequest,
     BatchResponse,
     AgentRegistration,
@@ -182,44 +185,48 @@ export class QWEDClient {
             },
         };
 
-        return this.request('POST', '/verify/natural_language', request);
+        return parseVerificationResponse(
+            await this.request<unknown>('POST', '/verify/natural_language', request)
+        );
     }
 
     async verifyMath(
         expression: string,
         options?: { precision?: number }
     ): Promise<VerificationResponse> {
-        return this.request('POST', '/verify/math', {
+        return parseVerificationResponse(await this.request<unknown>('POST', '/verify/math', {
             expression,
             params: { precision: options?.precision },
-        });
+        }));
     }
 
     async verifyLogic(
         query: string,
         options?: { format?: 'natural' | 'dsl' }
     ): Promise<VerificationResponse> {
-        return this.request('POST', '/verify/logic', {
+        return parseVerificationResponse(await this.request<unknown>('POST', '/verify/logic', {
             query,
             params: { format: options?.format || 'dsl' },
-        });
+        }));
     }
 
     async verifyCode(
         code: string,
         options?: { language?: string }
     ): Promise<VerificationResponse> {
-        return this.request('POST', '/verify/code', {
+        return parseVerificationResponse(await this.request<unknown>('POST', '/verify/code', {
             code,
             language: options?.language || 'python',
-        });
+        }));
     }
 
     async verifyFact(
         claim: string,
         context: string
     ): Promise<VerificationResponse> {
-        return this.request('POST', '/verify/fact', { claim, context });
+        return parseVerificationResponse(
+            await this.request<unknown>('POST', '/verify/fact', { claim, context })
+        );
     }
 
     async verifySQL(
@@ -227,22 +234,22 @@ export class QWEDClient {
         schema: string,
         options?: { dialect?: string }
     ): Promise<VerificationResponse> {
-        return this.request('POST', '/verify/sql', {
+        return parseVerificationResponse(await this.request<unknown>('POST', '/verify/sql', {
             query,
             schema_ddl: schema,
             dialect: options?.dialect || 'postgresql',
-        });
+        }));
     }
 
     async verifyProcess(
         reasoningTrace: string,
         options?: { mode?: 'irac' | 'milestones'; keyMilestones?: string[] }
     ): Promise<VerificationResponse> {
-        return this.request('POST', '/verify/process', {
+        return parseVerificationResponse(await this.request<unknown>('POST', '/verify/process', {
             trace: reasoningTrace,
             mode: options?.mode || 'irac',
             milestones: options?.keyMilestones,
-        });
+        }));
     }
 
     async verifyRAG(
@@ -250,11 +257,11 @@ export class QWEDClient {
         retrievedChunks: Record<string, unknown>[],
         options?: { maxDrmRate?: string }
     ): Promise<VerificationResponse> {
-        return this.request('POST', '/verify/rag', {
+        return parseVerificationResponse(await this.request<unknown>('POST', '/verify/rag', {
             target_document_id: targetDocumentId,
             chunks: retrievedChunks,
             max_drm_rate: options?.maxDrmRate,
-        });
+        }));
     }
 
     async verifyAgent(
@@ -306,7 +313,7 @@ export class QWEDClient {
             },
         };
 
-        return this.request('POST', '/verify/batch', request);
+        return parseBatchResponse(await this.request<unknown>('POST', '/verify/batch', request));
     }
 
     // --------------------------------------------------------------------------
@@ -369,12 +376,161 @@ export class QWEDClient {
 // Helper Functions
 // ============================================================================
 
-export function isVerified(response: VerificationResponse): boolean {
-    return response.verified === true;
+const KNOWN_STATUSES: ReadonlySet<unknown> = new Set([
+    VerificationStatus.Verified,
+    VerificationStatus.Unverifiable,
+    VerificationStatus.Blocked,
+]);
+
+const KNOWN_ADMISSIONS: ReadonlySet<unknown> = new Set([Admission.Admit, Admission.Blocked]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/**
+ * True only when the server admitted the result: `admission` is ADMIT,
+ * `status` is VERIFIED and `proof_ref` is a non-empty string. Anything else,
+ * including a missing or unknown admission, is not admitted.
+ *
+ * VERIFIED alone is not a pass: a claim proven false (`2 + 2 = 5`) or code
+ * proven unsafe is VERIFIED with admission BLOCKED.
+ */
+export function isAdmitted(response: VerificationResponse | null | undefined): boolean {
+    return (
+        response?.admission === Admission.Admit &&
+        response.status === VerificationStatus.Verified &&
+        typeof response.proof_ref === 'string' &&
+        response.proof_ref.length > 0
+    );
+}
+
+/**
+ * Reads a verification answer from a parsed JSON body. `status` and
+ * `admission` keep only the values the server sends; any other status,
+ * including a missing one, becomes `Unknown`, any other admission becomes
+ * `Unknown`, and a null admission is left out. Neither is ever admitted.
+ * The server's status text is kept in `rawStatus`. Every other field is
+ * kept as sent; numbers are JavaScript numbers, so an integer above 2^53 or
+ * a long decimal is rounded by `JSON.parse` before it gets here.
+ *
+ * The result has a non-enumerable `toJSON`, so `JSON.stringify` writes no
+ * `rawStatus` key and, where `status` is `Unknown`, writes the server's text
+ * as `status`. Parsing that JSON again gives the same `status` and
+ * `rawStatus`, so a cached or logged response keeps the server's status. A
+ * known status is written as it is, including one changed locally.
+ *
+ * The client calls this for `verify`, `verifyMath`, `verifyLogic`,
+ * `verifyCode`, `verifyFact`, `verifySQL`, `verifyProcess` and `verifyRAG`;
+ * `verifyAgent` and `verifyAgentAction` return the agent endpoint's own
+ * shape and are not parsed.
+ */
+export function parseVerificationResponse(body: unknown): VerificationResponse {
+    if (!isRecord(body)) {
+        throw new QWEDError('Response is not a verification result', 'QWED-SDK-PARSE-001');
+    }
+
+    const response: VerificationResponse = {
+        ...body,
+        status: KNOWN_STATUSES.has(body.status)
+            ? (body.status as VerificationStatus)
+            : VerificationStatus.Unknown,
+    };
+    // The server's own text, even where status is Unknown; never trusted
+    // from a rawStatus key in the body.
+    if (typeof body.status === 'string') {
+        response.rawStatus = body.status;
+    } else {
+        delete response.rawStatus;
+    }
+    if (body.admission === undefined || body.admission === null) {
+        delete response.admission;
+    } else {
+        response.admission = KNOWN_ADMISSIONS.has(body.admission)
+            ? (body.admission as Admission)
+            : Admission.Unknown;
+    }
+    response.verified = isAdmitted(response);
+    Object.defineProperty(response, 'toJSON', {
+        value: serialiseAsSent,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+    });
+    return response;
+}
+
+/**
+ * `toJSON` for a parsed response: every enumerable field and no `rawStatus`
+ * key. `status` is the response's own status, except that an `Unknown`
+ * status is written as the server's text (`rawStatus`) when that text is one
+ * this SDK does not know, such as `SAT`, so it survives a round trip.
+ *
+ * Invariant: the status written is either the current `status`, or server
+ * text the SDK does not know, which always parses back to `Unknown`. So
+ * serialising never raises a status: a response changed locally (VERIFIED
+ * to BLOCKED, or to `Unknown` to quarantine it) is written as changed. Go's
+ * `MarshalJSON` follows the same rule.
+ */
+function serialiseAsSent(this: VerificationResponse): Record<string, unknown> {
+    const { rawStatus, ...fields } = this;
+    const keepRawStatus =
+        fields.status === VerificationStatus.Unknown &&
+        typeof rawStatus === 'string' &&
+        rawStatus.length > 0 &&
+        !KNOWN_STATUSES.has(rawStatus) &&
+        rawStatus !== VerificationStatus.Unknown;
+    return { ...fields, status: keepRawStatus ? rawStatus : fields.status };
+}
+
+/**
+ * Reads a batch job from a parsed JSON body; each item's `result` goes
+ * through {@link parseVerificationResponse}.
+ */
+export function parseBatchResponse(body: unknown): BatchResponse {
+    if (!isRecord(body) || !Array.isArray(body.items)) {
+        throw new QWEDError('Response is not a batch job', 'QWED-SDK-PARSE-002');
+    }
+
+    const items = body.items.map((item: unknown): BatchItemResult => {
+        if (!isRecord(item)) {
+            throw new QWEDError('Batch item is not an object', 'QWED-SDK-PARSE-002');
+        }
+        const result = item.result === undefined || item.result === null
+            ? item.result
+            : parseVerificationResponse(item.result);
+        return {
+            ...(item as unknown as BatchItemResult),
+            result,
+            verified: isAdmitted(result),
+        };
+    });
+
+    return { ...(body as unknown as BatchResponse), items };
+}
+
+/**
+ * Returns `isAdmitted(response)`.
+ * @deprecated Use {@link isAdmitted}. VERIFIED alone is not a pass, and a
+ * `verified` field in a response is not an admission decision.
+ */
+export function isVerified(response: VerificationResponse): boolean {
+    return isAdmitted(response);
+}
+
+/**
+ * The response's `error` field: a string on endpoints such as
+ * `/verify/logic`, or the `message` of an error object.
+ */
 export function getErrorMessage(response: VerificationResponse): string | null {
-    return response.error?.message || null;
+    const error = response.error;
+    if (typeof error === 'string') {
+        return error || null;
+    }
+    if (isRecord(error) && typeof error.message === 'string') {
+        return error.message || null;
+    }
+    return null;
 }
 
 export function parseAttestation(jwt: string): {

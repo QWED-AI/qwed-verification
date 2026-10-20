@@ -85,24 +85,24 @@ func TestHealth(t *testing.T) {
 	}
 }
 
-func TestVerifyMath(t *testing.T) {
-	server := mockServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/verify/math" {
-			t.Errorf("expected path /verify/math, got %s", r.URL.Path)
+// serveFixture answers every request with a response captured from the server.
+func serveFixture(t *testing.T, path, name string) *httptest.Server {
+	t.Helper()
+	body := fixture(t, name)
+	return mockServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != path {
+			t.Errorf("expected path %s, got %s", path, r.URL.Path)
 		}
-
-		// Check headers
 		if r.Header.Get("X-API-Key") != "test-key" {
 			t.Error("missing or incorrect API key header")
 		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(VerificationResponse{
-			Status:   StatusVerified,
-			Verified: true,
-			Engine:   "math",
-		})
+		w.Write(body)
 	})
+}
+
+func TestVerifyMath(t *testing.T) {
+	server := serveFixture(t, "/verify/math", "math_verified")
 	defer server.Close()
 
 	client := NewClient("test-key", WithBaseURL(server.URL))
@@ -112,24 +112,33 @@ func TestVerifyMath(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !result.Verified {
-		t.Error("expected verified to be true")
+	if result.Status != StatusVerified || result.Admission != AdmissionAdmit {
+		t.Errorf("expected VERIFIED / ADMIT, got %s / %s", result.Status, result.Admission)
 	}
 
-	if result.Engine != "math" {
-		t.Errorf("expected engine 'math', got '%s'", result.Engine)
+	if !result.IsAdmitted() {
+		t.Error("expected a true identity to be admitted")
+	}
+}
+
+func TestVerifyMathProvenFalseIsNotAdmitted(t *testing.T) {
+	server := serveFixture(t, "/verify/math", "math_false")
+	defer server.Close()
+
+	client := NewClient("test-key", WithBaseURL(server.URL))
+	result, err := client.VerifyMath(context.Background(), "2 + 2 = 5")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Status != StatusVerified || result.IsAdmitted() {
+		t.Errorf("expected VERIFIED and not admitted, got %s admitted=%v", result.Status, result.IsAdmitted())
 	}
 }
 
 func TestVerifyLogic(t *testing.T) {
-	server := mockServer(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(VerificationResponse{
-			Status:   StatusVerified,
-			Verified: true,
-			Engine:   "logic",
-		})
-	})
+	server := serveFixture(t, "/verify/logic", "logic")
 	defer server.Close()
 
 	client := NewClient("test-key", WithBaseURL(server.URL))
@@ -139,89 +148,85 @@ func TestVerifyLogic(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !result.Verified {
-		t.Error("expected verified to be true")
+	if result.Status != StatusBlocked || result.Admission != "" || result.IsAdmitted() {
+		t.Errorf("expected BLOCKED with no admission, got %s / %q", result.Status, result.Admission)
 	}
 }
 
 func TestVerifyCode(t *testing.T) {
-	server := mockServer(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(VerificationResponse{
-			Status:   StatusFailed,
-			Verified: false,
-			Engine:   "code",
-			Result: map[string]interface{}{
-				"vulnerabilities": []string{"eval_usage"},
-			},
-		})
-	})
+	server := serveFixture(t, "/verify/code", "code_unsafe")
 	defer server.Close()
 
 	client := NewClient("test-key", WithBaseURL(server.URL))
+	// The server is mocked, so the code sent does not matter.
 	result, err := client.VerifyCode(context.Background(), "eval(input())", "python")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if result.Verified {
-		t.Error("expected verified to be false for unsafe code")
+	if result.Admission != AdmissionBlocked || result.IsAdmitted() {
+		t.Error("expected unsafe code to be blocked")
 	}
 }
 
 func TestVerifyFact(t *testing.T) {
-	server := mockServer(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(VerificationResponse{
-			Status:   StatusVerified,
-			Verified: true,
-			Engine:   "fact",
-		})
-	})
+	server := serveFixture(t, "/verify/fact", "fact")
 	defer server.Close()
 
 	client := NewClient("test-key", WithBaseURL(server.URL))
 	result, err := client.VerifyFact(
 		context.Background(),
 		"Paris is the capital of France",
-		"France is a country in Europe. Its capital city is Paris.",
+		"Paris is the capital of France.",
 	)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !result.Verified {
-		t.Error("expected fact to be verified")
+	if result.Status != StatusUnverifiable || result.IsAdmitted() {
+		t.Error("expected a heuristic fact match to be UNVERIFIABLE and not admitted")
 	}
 }
 
 func TestVerifySQL(t *testing.T) {
-	server := mockServer(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(VerificationResponse{
-			Status:   StatusVerified,
-			Verified: true,
-			Engine:   "sql",
-		})
-	})
+	server := serveFixture(t, "/verify/sql", "sql")
 	defer server.Close()
 
 	client := NewClient("test-key", WithBaseURL(server.URL))
 	result, err := client.VerifySQL(
 		context.Background(),
-		"SELECT * FROM users WHERE id = 1",
-		"CREATE TABLE users (id INT, name VARCHAR(100))",
-		"postgresql",
+		"SELECT id FROM users",
+		"CREATE TABLE users (id INT)",
+		"sqlite",
 	)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !result.Verified {
-		t.Error("expected SQL to be verified")
+	if !result.IsAdmitted() {
+		t.Error("expected a safe SQL query to be admitted")
+	}
+}
+
+func TestVerifyBatch(t *testing.T) {
+	server := serveFixture(t, "/verify/batch", "batch")
+	defer server.Close()
+
+	client := NewClient("test-key", WithBaseURL(server.URL))
+	result, err := client.VerifyBatch(context.Background(), []BatchItem{
+		{Query: "2 + 2 = 4", Type: TypeMath},
+		{Query: "2 + 2 = 5", Type: TypeMath},
+	}, nil)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Status != "completed" || len(result.Items) != 2 {
+		t.Errorf("expected a completed job with 2 items, got %s with %d", result.Status, len(result.Items))
 	}
 }
 
@@ -288,8 +293,10 @@ func TestIsVerified(t *testing.T) {
 		expected bool
 	}{
 		{"nil response", nil, false},
-		{"verified true", &VerificationResponse{Verified: true}, true},
-		{"verified false", &VerificationResponse{Verified: false}, false},
+		{"admitted", &VerificationResponse{Status: StatusVerified, Admission: AdmissionAdmit, ProofRef: "sha256:ab"}, true},
+		{"verified but blocked", &VerificationResponse{Status: StatusVerified, Admission: AdmissionBlocked, ProofRef: "sha256:ab"}, false},
+		// The deprecated field is not read: IsVerified follows admission.
+		{"verified field only", &VerificationResponse{Verified: true}, false},
 	}
 
 	for _, tt := range tests {
@@ -316,38 +323,38 @@ func (m *MockClient) Health(ctx context.Context) (map[string]interface{}, error)
 }
 
 func (m *MockClient) Verify(ctx context.Context, query string) (*VerificationResponse, error) {
-	return &VerificationResponse{Verified: true}, nil
+	return &VerificationResponse{Status: StatusUnverifiable, Admission: AdmissionBlocked}, nil
 }
 
 func (m *MockClient) VerifyWithOptions(ctx context.Context, query string, opts *RequestOptions) (*VerificationResponse, error) {
-	return &VerificationResponse{Verified: true}, nil
+	return &VerificationResponse{Status: StatusUnverifiable, Admission: AdmissionBlocked}, nil
 }
 
 func (m *MockClient) VerifyMath(ctx context.Context, expression string) (*VerificationResponse, error) {
 	if m.VerifyMathFunc != nil {
 		return m.VerifyMathFunc(ctx, expression)
 	}
-	return &VerificationResponse{Verified: true, Engine: "math"}, nil
+	return &VerificationResponse{Status: StatusUnverifiable, Admission: AdmissionBlocked}, nil
 }
 
 func (m *MockClient) VerifyLogic(ctx context.Context, query string) (*VerificationResponse, error) {
-	return &VerificationResponse{Verified: true, Engine: "logic"}, nil
+	return &VerificationResponse{Status: StatusUnverifiable, Admission: AdmissionBlocked}, nil
 }
 
 func (m *MockClient) VerifyCode(ctx context.Context, code, language string) (*VerificationResponse, error) {
-	return &VerificationResponse{Verified: true, Engine: "code"}, nil
+	return &VerificationResponse{Status: StatusUnverifiable, Admission: AdmissionBlocked}, nil
 }
 
 func (m *MockClient) VerifyFact(ctx context.Context, claim, factContext string) (*VerificationResponse, error) {
-	return &VerificationResponse{Verified: true, Engine: "fact"}, nil
+	return &VerificationResponse{Status: StatusUnverifiable, Admission: AdmissionBlocked}, nil
 }
 
 func (m *MockClient) VerifySQL(ctx context.Context, query, schemaDDL, dialect string) (*VerificationResponse, error) {
-	return &VerificationResponse{Verified: true, Engine: "sql"}, nil
+	return &VerificationResponse{Status: StatusUnverifiable, Admission: AdmissionBlocked}, nil
 }
 
 func (m *MockClient) VerifyBatch(ctx context.Context, items []BatchItem, opts *BatchOptions) (*BatchResponse, error) {
-	return &BatchResponse{Status: "complete"}, nil
+	return &BatchResponse{Status: "completed"}, nil
 }
 
 // Verify MockClient implements Verifier
@@ -358,9 +365,10 @@ func TestMockClientUsage(t *testing.T) {
 	mock := &MockClient{
 		VerifyMathFunc: func(ctx context.Context, expr string) (*VerificationResponse, error) {
 			return &VerificationResponse{
-				Verified: true,
-				Engine:   "math",
-				Result:   map[string]interface{}{"answer": 4},
+				Status:    StatusVerified,
+				Admission: AdmissionAdmit,
+				ProofRef:  "sha256:ab",
+				Extra:     map[string]interface{}{"is_valid": true},
 			}, nil
 		},
 	}
@@ -370,7 +378,7 @@ func TestMockClientUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !result.Verified {
-		t.Error("expected mock to return verified")
+	if !result.IsAdmitted() {
+		t.Error("expected mock to return an admitted result")
 	}
 }
