@@ -196,6 +196,7 @@ def test_every_value_left_empty_in_the_env_example_is_required_by_compose():
 # line there trips secret scanners); they come from env_file and are refused
 # when empty at container start instead.
 ENFORCED_AT_START = {"POSTGRES_PASSWORD", "GF_SECURITY_ADMIN_PASSWORD"}
+ENFORCED_AT_START_SERVICES = ("postgres", "grafana")
 
 
 def test_empty_passwords_are_refused_when_the_containers_start():
@@ -209,9 +210,14 @@ def test_empty_passwords_are_refused_when_the_containers_start():
     # The postgres image exits on an empty POSTGRES_PASSWORD unless host
     # auth is set to trust, which this stack must never do.
     assert "POSTGRES_HOST_AUTH_METHOD" not in COMPOSE_PATH.read_text(encoding="utf-8")
-    for service, key in (("postgres", "POSTGRES_PASSWORD"), ("grafana", "GF_SECURITY_ADMIN_PASSWORD")):
-        # Passed by name, so Compose reads the value from deploy/.env.
-        assert key in COMPOSE["services"][service]["environment"]
+    # Each password is passed by name, so Compose reads it from deploy/.env.
+    passed_by_name = {
+        item
+        for service in ENFORCED_AT_START_SERVICES
+        for item in COMPOSE["services"][service]["environment"]
+        if "=" not in item
+    }
+    assert passed_by_name == ENFORCED_AT_START
 
 
 def test_no_service_receives_the_whole_env_file():
