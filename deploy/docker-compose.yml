@@ -54,6 +54,8 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-qwed}
       POSTGRES_DB: ${POSTGRES_DB:-qwed_db}
+      # Refuse to start without a password rather than run Postgres unset.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
@@ -121,6 +123,8 @@ services:
       - .env
     environment:
       GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:?set GF_SECURITY_ADMIN_USER}
+      # An empty password would leave Grafana on its default admin/admin.
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:?set GF_SECURITY_ADMIN_PASSWORD}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafanadata:/var/lib/grafana

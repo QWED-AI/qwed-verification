@@ -174,8 +174,23 @@ def test_the_env_example_lists_every_required_compose_variable():
     listed = set(re.findall(r"^([A-Z0-9_]+)=", example, re.M))
 
     assert required <= listed
-    # Postgres reads its password from the env file, not from interpolation.
-    assert "POSTGRES_PASSWORD" in listed
+
+
+# Settings deploy/.env.example may leave empty because empty is a valid value.
+OPTIONAL_EMPTY = {"QWED_METRICS_OPERATOR_USER_IDS"}  # empty denies every caller
+
+
+def test_every_value_left_empty_in_the_env_example_is_required_by_compose():
+    # The example tells users Compose refuses to start until every empty value
+    # is filled in. A value only passed through env_file starts empty instead:
+    # Grafana would fall back to admin/admin, Postgres to no password.
+    text = COMPOSE_PATH.read_text(encoding="utf-8")
+    required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", text))
+    example = (ROOT / "deploy" / ".env.example").read_text(encoding="utf-8")
+    empty = {name for name, value in re.findall(r"^([A-Z0-9_]+)=(.*)$", example, re.M) if value == ""}
+
+    assert empty - OPTIONAL_EMPTY <= required
+    assert {"POSTGRES_PASSWORD", "GF_SECURITY_ADMIN_PASSWORD"} <= required
 
 
 def test_grafana_provisions_the_compose_data_sources():
