@@ -266,6 +266,75 @@ func TestAStatusChangedLocallyIsWrittenAsChanged(t *testing.T) {
 	}
 }
 
+// remarshal marshals v and decodes the result into out.
+func remarshal(t *testing.T, v, out interface{}) {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMarshallingNeverRaisesAStatus(t *testing.T) {
+	// After a round trip the status is whatever the caller set, and only
+	// VERIFIED (with ADMIT and a proof) is admitted. SAT stands for server
+	// text the SDK does not know; setting StatusUnknown quarantines a result.
+	starts := []string{"VERIFIED", "UNVERIFIABLE", "BLOCKED", "SAT"}
+	targets := []VerificationStatus{StatusVerified, StatusUnverifiable, StatusBlocked, StatusUnknown}
+	for _, start := range starts {
+		for _, target := range targets {
+			body := `{"status": "` + start + `", "admission": "ADMIT", "proof_ref": "sha256:ab"}`
+			wantAdmitted := target == StatusVerified
+
+			var r VerificationResponse
+			if err := json.Unmarshal([]byte(body), &r); err != nil {
+				t.Fatal(err)
+			}
+			r.Status = target
+			var again VerificationResponse
+			remarshal(t, r, &again)
+			if again.Status != target || again.IsAdmitted() != wantAdmitted {
+				t.Errorf("response from %s set to %s: got %s, admitted %v", start, target, again.Status, again.IsAdmitted())
+			}
+
+			batchBody := `{"job_id": "j", "status": "completed", "items": [{"id": "j-0", "status": "completed", "result": ` + body + `}]}`
+			var batch BatchResponse
+			if err := json.Unmarshal([]byte(batchBody), &batch); err != nil {
+				t.Fatal(err)
+			}
+			batch.Items[0].Result.Status = target
+			var batchAgain BatchResponse
+			remarshal(t, batch, &batchAgain)
+			item := batchAgain.Items[0]
+			if item.Result.Status != target || item.IsAdmitted() != wantAdmitted {
+				t.Errorf("batch item from %s set to %s: got %s, admitted %v", start, target, item.Result.Status, item.IsAdmitted())
+			}
+		}
+	}
+}
+
+func TestAQuarantinedResponseStaysUnknown(t *testing.T) {
+	r := response(t, "math_verified")
+	r.Status = StatusUnknown
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"status":"UNKNOWN"`) {
+		t.Errorf("a quarantined VERIFIED response was written with its old status: %s", data)
+	}
+	var again VerificationResponse
+	if err := json.Unmarshal(data, &again); err != nil {
+		t.Fatal(err)
+	}
+	if again.Status != StatusUnknown || again.IsAdmitted() {
+		t.Errorf("got %s, admitted %v", again.Status, again.IsAdmitted())
+	}
+}
+
 func TestARagOrProcessGuardResultIsNotAnAdmission(t *testing.T) {
 	// /verify/rag and /verify/process merge the guard's result to the top
 	// level and make no admission decision.

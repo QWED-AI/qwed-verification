@@ -241,6 +241,61 @@ describe('status and admission parsing', () => {
             expect(again.items[0].verified).toBe(false);
         });
 
+        it('keeps a response quarantined as Unknown, single and batch', () => {
+            const r = parseVerificationResponse(verified);
+            r.status = VerificationStatus.Unknown;
+            expect(JSON.parse(JSON.stringify(r)).status).toBe('UNKNOWN');
+            const again = roundTrip(r, parseVerificationResponse);
+            expect(again.status).toBe(VerificationStatus.Unknown);
+            expect(isAdmitted(again)).toBe(false);
+
+            const batch = parseBatchResponse({
+                job_id: 'j',
+                status: 'completed',
+                items: [{ id: 'j-0', status: 'completed', type: 'math', result: verified }],
+            });
+            const result = batch.items[0].result;
+            if (!result) throw new Error('no result');
+            result.status = VerificationStatus.Unknown;
+            const batchAgain = roundTrip(batch, parseBatchResponse);
+            expect(batchAgain.items[0].result?.status).toBe(VerificationStatus.Unknown);
+            expect(isAdmitted(batchAgain.items[0].result)).toBe(false);
+        });
+
+        // Serialising never raises a status: after a round trip the status is
+        // whatever the caller set, and only VERIFIED (with ADMIT and a proof)
+        // is admitted. SAT stands for server text the SDK does not know.
+        const starts = ['VERIFIED', 'UNVERIFIABLE', 'BLOCKED', 'SAT'];
+        const targets = [
+            VerificationStatus.Verified,
+            VerificationStatus.Unverifiable,
+            VerificationStatus.Blocked,
+            VerificationStatus.Unknown,
+        ];
+        const cases = starts.flatMap(start => targets.map(target => [start, target] as const));
+
+        it.each(cases)('from %s set to %s: written as set, single response', (start, target) => {
+            const r = parseVerificationResponse({ ...verified, status: start });
+            r.status = target;
+            const again = roundTrip(r, parseVerificationResponse);
+            expect(again.status).toBe(target);
+            expect(isAdmitted(again)).toBe(target === VerificationStatus.Verified);
+        });
+
+        it.each(cases)('from %s set to %s: written as set, batch item', (start, target) => {
+            const batch = parseBatchResponse({
+                job_id: 'j',
+                status: 'completed',
+                items: [{ id: 'j-0', status: 'completed', result: { ...verified, status: start } }],
+            });
+            const result = batch.items[0].result;
+            if (!result) throw new Error('no result');
+            result.status = target;
+            const again = roundTrip(batch, parseBatchResponse);
+            expect(again.items[0].result?.status).toBe(target);
+            expect(isAdmitted(again.items[0].result)).toBe(target === VerificationStatus.Verified);
+        });
+
         it('writes an empty rawStatus as the status itself', () => {
             const r = parseVerificationResponse({ status: '' });
             expect(r.status).toBe(VerificationStatus.Unknown);

@@ -463,17 +463,23 @@ export function parseVerificationResponse(body: unknown): VerificationResponse {
 /**
  * `toJSON` for a parsed response: every enumerable field and no `rawStatus`
  * key. `status` is the response's own status, except that an `Unknown`
- * status is written as the server's text (`rawStatus`) so it survives a
- * round trip. A known status always wins, so a response changed locally
- * (say from VERIFIED to BLOCKED) is written as changed. Go's `MarshalJSON`
- * follows the same rule.
+ * status is written as the server's text (`rawStatus`) when that text is one
+ * this SDK does not know, such as `SAT`, so it survives a round trip.
+ *
+ * Invariant: the status written is either the current `status`, or server
+ * text the SDK does not know, which always parses back to `Unknown`. So
+ * serialising never raises a status: a response changed locally (VERIFIED
+ * to BLOCKED, or to `Unknown` to quarantine it) is written as changed. Go's
+ * `MarshalJSON` follows the same rule.
  */
 function serialiseAsSent(this: VerificationResponse): Record<string, unknown> {
     const { rawStatus, ...fields } = this;
     const keepRawStatus =
         fields.status === VerificationStatus.Unknown &&
         typeof rawStatus === 'string' &&
-        rawStatus.length > 0;
+        rawStatus.length > 0 &&
+        !KNOWN_STATUSES.has(rawStatus) &&
+        rawStatus !== VerificationStatus.Unknown;
     return { ...fields, status: keepRawStatus ? rawStatus : fields.status };
 }
 

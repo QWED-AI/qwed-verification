@@ -213,15 +213,31 @@ func (r *VerificationResponse) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// isKnownStatus reports whether s is one of this SDK's VerificationStatus
+// values, StatusUnknown included.
+func isKnownStatus(s string) bool {
+	switch VerificationStatus(s) {
+	case StatusVerified, StatusUnverifiable, StatusBlocked, StatusUnknown:
+		return true
+	}
+	return false
+}
+
 // MarshalJSON writes the envelope fields with Extra's keys beside them, as
 // the server sent them, so a decoded response survives a round trip. When
-// Status is StatusUnknown, the status written is RawStatus, the server's
-// own text. An Extra key never replaces an envelope field, even one left out
-// because it is empty.
+// Status is StatusUnknown and RawStatus is server text this SDK does not
+// know, such as SAT, the status written is RawStatus.
+//
+// Invariant: the status written is either the current Status, or server text
+// the SDK does not know, which always decodes back to StatusUnknown. So
+// marshalling never raises a status: a response changed locally (VERIFIED
+// to BLOCKED, or to StatusUnknown to quarantine it) is written as changed.
+// The TypeScript SDK's toJSON follows the same rule. An Extra key never
+// replaces an envelope field, even one left out because it is empty.
 func (r VerificationResponse) MarshalJSON() ([]byte, error) {
 	type envelope VerificationResponse // no methods, so no recursion
 	data, err := json.Marshal(envelope(r))
-	keepRawStatus := r.Status == StatusUnknown && r.RawStatus != ""
+	keepRawStatus := r.Status == StatusUnknown && r.RawStatus != "" && !isKnownStatus(r.RawStatus)
 	if err != nil || (len(r.Extra) == 0 && !keepRawStatus) {
 		return data, err
 	}
