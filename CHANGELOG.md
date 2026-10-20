@@ -91,8 +91,10 @@ All notable changes to the QWED Protocol will be documented in this file.
   `'[' * 200000` escaped the public API as an exception. A payload nested
   deeper than `MAX_PARSE_DEPTH` (256 levels, above the 64-level validation
   limit) is now rejected before parsing with `QWED-AGENT-STATE-102`, by a
-  single pass that ignores brackets inside strings. Any `RecursionError` or
-  `MemoryError` from parsing or canonicalisation is mapped to the same code.
+  pass that ignores brackets inside strings. Any `RecursionError` or
+  `MemoryError` from parsing or canonicalisation is mapped to the same code,
+  and so is a number whose exponent is outside `Decimal`'s range
+  (`decimal.InvalidOperation`), which also escaped before.
   Transitions and commits inherit this through `verify_state_payload`.
 - **The natural-language logic bridge emits the DSL parser's operator names.**
   `DSLLogicVerifier` translated `!=`, `>=`, `<=` and `*` to `NE`, `GE`, `LE`

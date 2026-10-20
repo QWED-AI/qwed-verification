@@ -112,6 +112,32 @@ def test_escaped_quotes_do_not_end_a_string():
     assert result["verified"] is True
 
 
+@pytest.mark.parametrize("number", ["1e9999999999999999999999", "-1e-9999999999999999999", "1.5E+99999999999999999999"])
+def test_a_number_outside_decimal_range_is_blocked_not_raised(number):
+    # parse_float=Decimal raises decimal.InvalidOperation, an ArithmeticError,
+    # for an exponent beyond Decimal's limits.
+    payload = '{"agent_id": "a1", "status": "pending", "step_count": ' + number + ', "tasks": []}'
+
+    result = _build_guard().verify_state_payload(payload)
+
+    assert result["status"] == "BLOCKED"
+    assert result["error_code"] == PARSE_ERROR
+
+
+def test_a_long_string_full_of_brackets_is_still_verified():
+    state = {"agent_id": "[" * 200_000 + "\\" + '"' + "{" * 200_000, "status": "pending", "step_count": 1, "tasks": []}
+
+    result = _build_guard().verify_state_payload(json.dumps(state))
+
+    assert result["verified"] is True
+
+
+def test_brackets_after_an_unterminated_string_count_as_structure():
+    # The parser rejects this anyway; the check must not be fooled into
+    # treating the brackets as string content.
+    assert AgentStateGuard._nesting_exceeds('"' + "[" * 300, 256) is True
+
+
 @pytest.mark.parametrize("error", [RecursionError("deep"), MemoryError("big")])
 def test_a_parser_failure_past_the_check_is_still_blocked(monkeypatch, error):
     guard = _build_guard()

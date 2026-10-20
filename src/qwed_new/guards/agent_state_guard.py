@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import unicodedata
 from decimal import Decimal
@@ -24,6 +25,13 @@ from typing import Any, Dict, Iterable
 
 
 from qwed_new.core.diagnostics import compute_proof_ref
+
+# A complete JSON string literal, escapes included, in the unrolled form: runs
+# of plain characters are consumed at once, and each escape is a backslash plus
+# one character, so no character can be matched two ways and matching stays
+# linear.
+_JSON_STRING_LITERAL = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"', re.DOTALL)
+_JSON_BRACKET = re.compile(r"[\[\]{}]")
 
 
 class AgentStateGuard:
@@ -127,9 +135,11 @@ class AgentStateGuard:
 
         # RecursionError and MemoryError are caught too: a payload that defeats
         # the nesting check must still come back BLOCKED, never raise (#469).
+        # ArithmeticError covers parse_float=Decimal on an exponent outside
+        # Decimal's range (decimal.InvalidOperation is not a ValueError).
         try:
             state_data = self._load_strict_json(proposed_state_json)
-        except (ValueError, RecursionError, MemoryError) as exc:
+        except (ValueError, ArithmeticError, RecursionError, MemoryError) as exc:
             return self._blocked(
                 error_code="QWED-AGENT-STATE-102",
                 message=f"Blocked: invalid or non-deterministic JSON state payload. {exc}",
@@ -287,27 +297,22 @@ class AgentStateGuard:
     @staticmethod
     def _nesting_exceeds(text: str, limit: int) -> bool:
         """True when the JSON text opens more than ``limit`` arrays or objects
-        inside each other. One linear pass; brackets inside strings do not
-        count. Malformed text is left to the parser."""
+        inside each other. Brackets inside strings do not count: complete
+        string literals are removed first in one regex pass, so only the
+        structural brackets are walked in Python. Malformed text is left to
+        the parser."""
         if text.count("[") + text.count("{") <= limit:
             return False
+        structure = _JSON_STRING_LITERAL.sub("", text)
+        if structure.count("[") + structure.count("{") <= limit:
+            return False
         depth = 0
-        in_string = escaped = False
-        for char in text:
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == '"':
-                    in_string = False
-            elif char == '"':
-                in_string = True
-            elif char in "[{":
+        for match in _JSON_BRACKET.finditer(structure):
+            if match.group() in "[{":
                 depth += 1
                 if depth > limit:
                     return True
-            elif char in "]}":
+            else:
                 depth -= 1
         return False
 
