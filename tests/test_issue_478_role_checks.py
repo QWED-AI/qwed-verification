@@ -66,7 +66,7 @@ def env(tmp_path, monkeypatch):
 
     main.app.dependency_overrides[main.get_session] = lambda: session
     monkeypatch.delenv("QWED_ENABLE_AUDIT_SEED", raising=False)
-    client = TestClient(main.app, raise_server_exceptions=False)
+    client = TestClient(main.app)  # a 500 raises, with its traceback
 
     def call(method, path, who, **kwargs):
         token = create_access_token({"sub": str(users[who].id)})
@@ -154,6 +154,7 @@ def test_every_role_can_revoke_its_own_key(env, who):
 
     assert response.status_code == 200
     assert not _is_active(env, who)
+    assert env.session.get(ApiKey, env.keys[who].id).revoked_at is not None
 
 
 @pytest.mark.parametrize("who, target", [
@@ -183,7 +184,7 @@ def test_admins_and_owners_revoke_keys_of_users_who_do_not_outrank_them(env, who
     assert _is_active(env, target) is (status != 200)
 
 
-@pytest.mark.parametrize("key_id", ["abc", "1.5", "-", "99999"])
+@pytest.mark.parametrize("key_id", ["abc", "1.5", "-", "0", "-1", "99999", str(2**63), "9" * 40])
 def test_a_bad_or_unknown_key_id_is_404_not_500(env, key_id):
     assert env.call("DELETE", f"/auth/api-keys/{key_id}", "owner").status_code == 404
 

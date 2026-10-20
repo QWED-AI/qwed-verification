@@ -4,7 +4,7 @@ Authentication routes for QWED Enterprise Portal.
 import asyncio
 from fastapi import APIRouter, HTTPException, Depends, Header, Request
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlmodel import Session, select
 
 from qwed_new.core.database import get_session
@@ -226,6 +226,9 @@ def require_user_role(allowed: frozenset):
 _READER = Depends(require_user_role(READ_ROLES))
 _WRITER = Depends(require_user_role(WRITE_ROLES))
 _KEY_NOT_FOUND = "API key not found"
+# Largest id an SQL BIGINT holds; a larger digit string would overflow the
+# query and fail with a server error instead of a 404.
+_MAX_KEY_ID = 2**63 - 1
 
 @router.get("/me")
 async def get_me(current_user: User = Depends(get_current_user)):
@@ -315,6 +318,8 @@ async def revoke_api_key_endpoint(
         key_pk = int(key_id)
     except ValueError:
         raise HTTPException(status_code=404, detail=_KEY_NOT_FOUND) from None
+    if not 1 <= key_pk <= _MAX_KEY_ID:
+        raise HTTPException(status_code=404, detail=_KEY_NOT_FOUND)
     statement = select(ApiKey).where(
         ApiKey.id == key_pk,
         ApiKey.organization_id == current_user.organization_id
@@ -333,7 +338,9 @@ async def revoke_api_key_endpoint(
 
     # Soft delete / revoke
     key.is_active = False
-    key.revoked_at = datetime.utcnow()
+    # Timezone-aware: sqlmodel>=0.0.28 rejects a naive datetime, which made
+    # every revoke fail with a server error on a fresh install.
+    key.revoked_at = datetime.now(timezone.utc)
     session.add(key)
     session.commit()
     

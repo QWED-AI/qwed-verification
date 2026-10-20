@@ -21,7 +21,11 @@ All notable changes to the QWED Protocol will be documented in this file.
     own. Anyone may revoke their own key; revoking another user's needs admin
     or owner and never a key whose owner ranks higher, as for key rotation.
     A member or viewer gets 404 for a key that is not theirs, and a
-    non-numeric key id is 404 instead of a server error.
+    non-numeric or out-of-range key id is 404 instead of a server error.
+  - Revoking a key no longer fails with a server error on a fresh install.
+    The route stored a naive `datetime.utcnow()`, which `sqlmodel` 0.0.28 and
+    later reject; with the version a new install gets (0.0.48), every revoke
+    returned 500. It now stores a timezone-aware time.
   - Audit: every role may read its organisation's log; exporting it and
     seeding samples need admin or owner.
   - `core/rbac.py` is deleted. Nothing imported it, it had no `owner` role,
