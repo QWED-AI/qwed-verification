@@ -189,8 +189,28 @@ def test_every_value_left_empty_in_the_env_example_is_required_by_compose():
     example = (ROOT / "deploy" / ".env.example").read_text(encoding="utf-8")
     empty = {name for name, value in re.findall(r"^([A-Z0-9_]+)=(.*)$", example, re.M) if value == ""}
 
-    assert empty - OPTIONAL_EMPTY <= required
-    assert {"POSTGRES_PASSWORD", "GF_SECURITY_ADMIN_PASSWORD"} <= required
+    assert empty - OPTIONAL_EMPTY - ENFORCED_AT_START <= required
+
+
+# Passwords are not interpolated into the Compose file (a password-shaped
+# line there trips secret scanners); they come from env_file and are refused
+# when empty at container start instead.
+ENFORCED_AT_START = {"POSTGRES_PASSWORD", "GF_SECURITY_ADMIN_PASSWORD"}
+
+
+def test_empty_passwords_are_refused_when_the_containers_start():
+    grafana = COMPOSE["services"]["grafana"]
+    command = grafana["entrypoint"][-1]
+
+    assert grafana["entrypoint"][:2] == ["/bin/sh", "-c"]
+    assert command.startswith('[ -n "$${GF_SECURITY_ADMIN_PASSWORD}" ] || {')
+    assert "exit 1" in command
+    assert command.endswith("exec /run.sh")
+    # The postgres image exits on an empty POSTGRES_PASSWORD unless host
+    # auth is set to trust, which this stack must never do.
+    assert "POSTGRES_HOST_AUTH_METHOD" not in COMPOSE_PATH.read_text(encoding="utf-8")
+    for service in ("postgres", "grafana"):
+        assert ".env" in COMPOSE["services"][service]["env_file"]
 
 
 def test_grafana_provisions_the_compose_data_sources():
