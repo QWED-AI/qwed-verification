@@ -55,6 +55,11 @@ class AgentStateGuard:
         }
     )
     MAX_VALIDATION_DEPTH = 64
+    # Nesting accepted before parsing (#469). Deeper than MAX_VALIDATION_DEPTH,
+    # so the validator still reports an ordinary over-deep state
+    # (QWED-AGENT-STATE-103), and far below the interpreter's recursion limit,
+    # so parsing and canonicalisation can never overflow the stack.
+    MAX_PARSE_DEPTH = 256
 
     def __init__(
         self,
@@ -111,9 +116,20 @@ class AgentStateGuard:
                 message="Blocked: proposed agent state must be a non-empty JSON string.",
             )
 
+        if self._nesting_exceeds(proposed_state_json, self.MAX_PARSE_DEPTH):
+            return self._blocked(
+                error_code="QWED-AGENT-STATE-102",
+                message=(
+                    "Blocked: invalid or non-deterministic JSON state payload. "
+                    f"Nesting exceeds {self.MAX_PARSE_DEPTH} levels."
+                ),
+            )
+
+        # RecursionError and MemoryError are caught too: a payload that defeats
+        # the nesting check must still come back BLOCKED, never raise (#469).
         try:
             state_data = self._load_strict_json(proposed_state_json)
-        except ValueError as exc:
+        except (ValueError, RecursionError, MemoryError) as exc:
             return self._blocked(
                 error_code="QWED-AGENT-STATE-102",
                 message=f"Blocked: invalid or non-deterministic JSON state payload. {exc}",
@@ -121,7 +137,7 @@ class AgentStateGuard:
 
         try:
             normalized_state = self._canonicalize(state_data)
-        except ValueError as exc:
+        except (ValueError, RecursionError, MemoryError) as exc:
             return self._blocked(
                 error_code="QWED-AGENT-STATE-102",
                 message=(
@@ -267,6 +283,33 @@ class AgentStateGuard:
             "committed_path": str(commit_target),
             "committed_bytes": committed_bytes,
         }
+
+    @staticmethod
+    def _nesting_exceeds(text: str, limit: int) -> bool:
+        """True when the JSON text opens more than ``limit`` arrays or objects
+        inside each other. One linear pass; brackets inside strings do not
+        count. Malformed text is left to the parser."""
+        if text.count("[") + text.count("{") <= limit:
+            return False
+        depth = 0
+        in_string = escaped = False
+        for char in text:
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+            elif char == '"':
+                in_string = True
+            elif char in "[{":
+                depth += 1
+                if depth > limit:
+                    return True
+            elif char in "]}":
+                depth -= 1
+        return False
 
     def _load_strict_json(self, proposed_state_json: str) -> Any:
         return json.loads(
