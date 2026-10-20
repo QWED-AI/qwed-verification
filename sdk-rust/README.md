@@ -148,7 +148,7 @@ Err(Error::Auth) => eprintln!("Invalid API key"),
 | `VerificationStatus` | Enum: Verified, Unverifiable, Blocked, Unknown |
 | `Admission` | Enum: Admit, Blocked, Unknown |
 | `VerificationResponse` | The DiagnosticResult envelope, with `is_admitted()` |
-| `BatchResponse`, `BatchResult` | A batch job and its items, each with `is_admitted()` |
+| `BatchResponse`, `BatchResult` | A batch job and its items; each item (`BatchResult`) has `is_admitted()` |
 | `Error` | Error enum with Http, Auth, RateLimit, Api and Serialization variants |
 
 ## Async Runtime
