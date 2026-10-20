@@ -2342,9 +2342,13 @@ def pii(text: str):
             click.echo(f"\nDetected: {info['pii_detected']} entities")
         
         # Show types
+        # `types` lists each type once, so count from every hit (#470).
         if info['pii_detected'] > 0:
-            for entity_type in set(info.get('types', [])):
-                count = info['types'].count(entity_type)
+            counts = info.get('type_counts')
+            if counts is None:
+                from collections import Counter
+                counts = Counter(p['type'] for p in info.get('positions', []))
+            for entity_type, count in sorted(counts.items()):
                 click.echo(f"  - {entity_type}: {count}")
         
     except ImportError:
