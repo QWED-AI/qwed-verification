@@ -42,9 +42,9 @@ inputs:
   
   # New: Batch scan inputs
   paths:
-    description: 'Glob patterns for files to scan (e.g. "**/*.py,**/*.env")'
+    description: 'Comma-separated glob patterns for files to scan (e.g. "src/**/*.py"). Leave unset to use the mode default: **/*.py for scan-code, **/*.sh for verify-shell, and env, JSON, YAML, TOML and INI files for scan-secrets. A scan that matches no files is UNVERIFIABLE and DENY.'
     required: false
-    default: '.'
+    default: ''
   
   # New: Output format
   output_format:
@@ -65,6 +65,8 @@ outputs:
     description: 'Detailed proof or error explanation'
   findings_count:
     description: 'Number of security issues found (for scan modes)'
+  files_scanned:
+    description: 'Number of files scanned (for scan modes). Zero means the scan was not admitted.'
   badge_url:
     description: 'URL for QWED verified badge'
   sarif_file:
