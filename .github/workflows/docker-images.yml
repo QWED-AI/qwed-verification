@@ -143,3 +143,83 @@ jobs:
             qwed-action | tee action.log
           grep -q "QWED Code Scanner" action.log
           grep -q "No issues found in 1 file(s)" action.log
+
+  compose-stack:
+    name: Full Compose stack comes up healthy
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Write deploy/.env with throwaway secrets
+        run: |
+          gen() { python3 -c "import secrets; print(secrets.token_urlsafe(48))"; }
+          pg_password="$(gen)"
+          {
+            echo "QWED_CORS_ORIGINS=http://localhost:3000"
+            echo "API_KEY_SECRET=$(gen)"
+            echo "QWED_JWT_SECRET_KEY=$(gen)"
+            echo "QWED_API_KEY_LOOKUP_SECRET=$(gen)"
+            echo "QWED_AUDIT_SECRET_KEY=$(gen)"
+            echo "QWED_METRICS_OPERATOR_USER_IDS="
+            echo "POSTGRES_USER=qwed"
+            echo "POSTGRES_DB=qwed_db"
+            echo "POSTGRES_PASSWORD=${pg_password}"
+            echo "DATABASE_URL=postgresql://qwed:${pg_password}@postgres:5432/qwed_db"
+            echo "GF_SECURITY_ADMIN_USER=admin"
+            echo "GF_SECURITY_ADMIN_PASSWORD=$(gen)"
+          } > deploy/.env
+
+      - name: Start every service and wait until all are healthy
+        run: docker compose -f deploy/docker-compose.yml up -d --build --wait --wait-timeout 420
+
+      - name: The API is up and its tables are in Postgres
+        run: |
+          body="$(curl -fsS http://127.0.0.1:8000/health)"
+          echo "${body}"
+          echo "${body}" | python3 -c "import json, sys; assert json.load(sys.stdin)['status'] == 'healthy'"
+          # The server creates its tables at startup from DATABASE_URL, so they
+          # are only in Postgres if the server really runs on it.
+          tables="$(docker compose -f deploy/docker-compose.yml exec -T postgres \
+            psql -U qwed -d qwed_db -Atc "select count(*) from information_schema.tables where table_schema = 'public'")"
+          echo "tables in Postgres: ${tables}"
+          [ "${tables}" -gt 0 ]
+
+      - name: Prometheus reaches the API by its service name
+        run: |
+          python3 - <<'EOF'
+          import json
+          import sys
+          import time
+          import urllib.request
+
+          # /metrics/prometheus needs an operator API key, so until one is
+          # configured a reachable API answers 401. Any other error (such as
+          # an unresolvable host) means Prometheus cannot reach the API.
+          last = None
+          for _ in range(30):
+              with urllib.request.urlopen("http://127.0.0.1:9090/api/v1/targets", timeout=5) as response:
+                  targets = json.load(response)["data"]["activeTargets"]
+              api = [t for t in targets if t["labels"].get("job") == "qwed-api"]
+              assert api, "no qwed-api scrape target"
+              last = api[0]
+              assert last["scrapeUrl"].startswith("http://qwed-core:8000/"), last["scrapeUrl"]
+              if last["health"] == "up" or "401" in last["lastError"]:
+                  print(last["health"], last["lastError"])
+                  sys.exit(0)
+              time.sleep(5)
+          print(last)
+          sys.exit(1)
+          EOF
+
+      - name: Stack status and logs
+        if: always()
+        run: |
+          docker compose -f deploy/docker-compose.yml ps
+          docker compose -f deploy/docker-compose.yml logs --no-color --tail 200
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose -f deploy/docker-compose.yml down -v

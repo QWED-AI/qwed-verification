@@ -106,8 +106,13 @@ All notable changes to the QWED Protocol will be documented in this file.
     `API_KEY_SECRET`, `QWED_JWT_SECRET_KEY`, `QWED_API_KEY_LOOKUP_SECRET`,
     `QWED_AUDIT_SECRET_KEY`), checks health without curl, and keeps the
     server's data in a volume. `deploy/.env.example` lists every setting
-    with empty values, so Compose refuses to start until each is filled in,
-    and Grafana gets Prometheus and Jaeger data sources.
+    with empty values. Compose refuses to start until the server settings
+    and `DATABASE_URL` are filled in; the Postgres and Grafana containers
+    refuse to start while their passwords are empty (Grafana would otherwise
+    fall back to `admin`/`admin`). Grafana gets Prometheus and Jaeger data
+    sources, and Prometheus scrapes the API as `qwed-core:8000` instead of
+    `host.docker.internal`, which does not resolve inside the Compose
+    network on Linux.
   - The `docker` client is part of the `server` extra: the code executor
     imports it at module level, so a request that reached it failed with an
     `ImportError` instead of the sandbox's fail-closed result.
@@ -115,8 +120,10 @@ All notable changes to the QWED Protocol will be documented in this file.
     Secret lists the three secrets it was missing and ships every value
     empty instead of with secret-like placeholders.
   - A new "Docker images" workflow builds the server through Compose,
-    starts it and waits for `/health` and the image's own health check, and
-    checks that the default target still runs the Action.
+    starts it and waits for `/health` and the image's own health check,
+    checks that the default target still runs the Action, and brings the
+    whole Compose stack up until every service is healthy, with the server
+    on Postgres and Prometheus reaching it.
 
 - **`AgentStateGuard` returns `BLOCKED` for deeply nested JSON instead of
   raising `RecursionError` (#469).** Parsing and canonicalisation recurse once

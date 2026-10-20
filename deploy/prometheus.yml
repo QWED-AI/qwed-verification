@@ -20,7 +20,9 @@ scrape_configs:
   # Until then this job records 401s (fail-closed is intentional).
   - job_name: 'qwed-api'
     static_configs:
-      - targets: ['host.docker.internal:8000']
+      # The API's Compose service name; host.docker.internal does not resolve
+      # inside the Compose network on Linux.
+      - targets: ['qwed-core:8000']
     # /metrics/prometheus serves the Prometheus text exposition format;
     # /metrics returns JSON, which Prometheus cannot parse (Greptile P1
     # on docs PR QWED-AI/docs#269).

@@ -213,6 +213,16 @@ def test_empty_passwords_are_refused_when_the_containers_start():
         assert ".env" in COMPOSE["services"][service]["env_file"]
 
 
+def test_prometheus_scrapes_the_api_by_its_compose_service_name():
+    # host.docker.internal does not resolve inside the Compose network on Linux.
+    config = yaml.safe_load((ROOT / "deploy" / "prometheus.yml").read_text(encoding="utf-8"))
+    api = next(job for job in config["scrape_configs"] if job["job_name"] == "qwed-api")
+    targets = [t for group in api["static_configs"] for t in group["targets"]]
+
+    assert targets == ["qwed-core:8000"]
+    assert "qwed-core" in COMPOSE["services"]
+
+
 def test_grafana_provisions_the_compose_data_sources():
     path = ROOT / "deploy" / "grafana" / "provisioning" / "datasources" / "datasources.yml"
     sources = yaml.safe_load(path.read_text(encoding="utf-8"))["datasources"]
