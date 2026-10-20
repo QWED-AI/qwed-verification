@@ -56,7 +56,7 @@ def set_output(name: str, value: str):
 
 CODE_PATTERNS = "**/*.py"
 SHELL_PATTERNS = "**/*.sh"
-SECRET_PATTERNS = "**/*.env,**/*.json,**/*.yaml,**/*.yml,**/*.toml,**/*.ini"
+CONFIG_FILE_PATTERNS = "**/*.env,**/*.json,**/*.yaml,**/*.yml,**/*.toml,**/*.ini"
 
 # A bare "." (the Action's old default) means "the workspace", so it takes
 # the mode's own patterns rather than being passed to glob, which rejects it.
@@ -67,12 +67,18 @@ def _split_patterns(patterns: str) -> list[str]:
     return [p.strip() for p in patterns.split(",") if p.strip()]
 
 
-def expand_paths(patterns: str, default: str = "") -> tuple[list[Path], list[str]]:
+def expand_paths(
+    patterns: str, default: str = "", suffixes: tuple[str, ...] = ()
+) -> tuple[list[Path], list[str]]:
     """Expand comma-separated glob patterns to files inside the workspace.
 
-    An empty input, or a pattern of ".", uses ``default``. Returns the files
-    and one error per pattern that could not be expanded or that reaches
-    outside the workspace, so the caller can refuse to admit the scan.
+    An empty input, or a pattern of ".", uses ``default``. Only regular files
+    are kept, and only those ending in one of ``suffixes`` when it is given.
+    The suffix filter runs before duplicates are dropped, so a link with
+    another name never stands in for a file the mode would scan. Returns the
+    files and one error per pattern that could not be expanded or that
+    reaches a file outside the workspace, so the caller can refuse to admit
+    the scan.
     """
     expanded = []
     for pattern in _split_patterns(patterns) or [""]:
@@ -89,17 +95,20 @@ def expand_paths(patterns: str, default: str = "") -> tuple[list[Path], list[str
         except (ValueError, IndexError, NotImplementedError) as exc:
             errors.append(f"invalid pattern {pattern!r}: {exc or type(exc).__name__}")
             continue
-        outside = False
+        outside = []
         for match in matches:
+            if not match.is_file() or (suffixes and not match.name.endswith(suffixes)):
+                continue
             resolved = match.resolve()
             if not resolved.is_relative_to(root):
-                outside = True
+                outside.append(str(match))
                 continue
-            if resolved not in seen and match.is_file():
+            if resolved not in seen:
                 seen.add(resolved)
                 files.append(match)
         if outside:
-            errors.append(f"pattern {pattern!r} matches files outside the workspace")
+            shown = ", ".join(outside[:5]) + (f" and {len(outside) - 5} more" if len(outside) > 5 else "")
+            errors.append(f"pattern {pattern!r} matches files outside the workspace: {shown}")
     return files, errors
 
 
@@ -107,11 +116,14 @@ def _finish_scan(scan_type: str, findings: list, files_scanned: int, errors: lis
     """Set the outputs for a file scan and exit non-zero if it is not admitted.
 
     A scan is admitted only if it covered at least one file, every pattern
-    expanded cleanly and nothing was found. An empty scan proves nothing.
+    expanded cleanly, every matched file was scanned and nothing was found.
+    An empty or partial scan proves nothing.
     """
     reason = None
     if errors:
-        reason = "; ".join(errors)
+        reason = "; ".join(errors[:5])
+        if len(errors) > 5:
+            reason += f"; and {len(errors) - 5} more"
     elif files_scanned == 0:
         reason = "no files matched the paths input, so nothing was scanned"
 
@@ -197,10 +209,10 @@ def action_scan_secrets():
     output_format = get_env("OUTPUT_FORMAT", "text")
 
     print("🔐 QWED Secret Scanner v3.0")
-    print(f"   Scanning: {paths or SECRET_PATTERNS}")
+    print(f"   Scanning: {paths or CONFIG_FILE_PATTERNS}")
 
     guard = ConfigGuard()
-    files, errors = expand_paths(paths, SECRET_PATTERNS)
+    files, errors = expand_paths(paths, CONFIG_FILE_PATTERNS)
 
     findings = []
     files_scanned = 0
@@ -223,6 +235,7 @@ def action_scan_secrets():
                     })
         except Exception as e:
             print(f"   ⚠️  Could not scan {filepath}: {e}")
+            errors.append(f"could not scan {filepath}")
     
     # Output results
     # Output results manually to prevent tainting output_results with secret data
@@ -265,7 +278,7 @@ def action_scan_code():
     print("🛡️  QWED Code Scanner v3.0")
     print(f"   Scanning: {paths or CODE_PATTERNS}")
 
-    files, errors = expand_paths(paths, CODE_PATTERNS)
+    files, errors = expand_paths(paths, CODE_PATTERNS, (".py",))
     findings = []
     files_scanned = 0
     
@@ -273,9 +286,6 @@ def action_scan_code():
     dangerous_imports = ["os", "subprocess", "sys", "shutil"]
     
     for filepath in files:
-        if not str(filepath).endswith(".py"):
-            continue
-            
         try:
             content = filepath.read_text(errors="ignore")
             tree = ast.parse(content)
@@ -314,9 +324,11 @@ def action_scan_code():
                             })
                             
         except SyntaxError:
-            pass  # Skip files with syntax errors
+            print(f"   ⚠️  Could not parse {filepath}")
+            errors.append(f"could not parse {filepath}")
         except Exception as e:
             print(f"   ⚠️  Could not scan {filepath}: {e}")
+            errors.append(f"could not scan {filepath}")
     
     output_results(findings, output_format, "code", files_scanned)
     _finish_scan("code", findings, files_scanned, errors)
@@ -332,14 +344,11 @@ def action_verify_shell():
     print(f"   Scanning: {paths or SHELL_PATTERNS}")
 
     guard = SystemGuard()
-    files, errors = expand_paths(paths, SHELL_PATTERNS)
+    files, errors = expand_paths(paths, SHELL_PATTERNS, (".sh",))
     findings = []
     files_scanned = 0
 
     for filepath in files:
-        if not str(filepath).endswith(".sh"):
-            continue
-
         try:
             content = filepath.read_text(errors="ignore")
             files_scanned += 1
@@ -361,6 +370,7 @@ def action_verify_shell():
                     
         except Exception as e:
             print(f"   ⚠️  Could not scan {filepath}: {e}")
+            errors.append(f"could not scan {filepath}")
     
     output_results(findings, output_format, "shell", files_scanned)
     _finish_scan("shell", findings, files_scanned, errors)

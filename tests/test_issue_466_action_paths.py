@@ -10,6 +10,7 @@ covered no files is UNVERIFIABLE · DENY.
 """
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,13 @@ def _write(workspace, name, content):
     path = workspace / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
+
+
+def _symlink(link, target, target_is_directory=False):
+    try:
+        os.symlink(target, link, target_is_directory=target_is_directory)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlinks are not available here: {exc}")
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -138,6 +146,42 @@ def test_a_file_that_cannot_be_parsed_is_not_counted(monkeypatch, workspace):
     assert out["verdict"] == "UNVERIFIABLE"
 
 
+def test_one_unparseable_file_denies_an_otherwise_clean_scan(monkeypatch, workspace):
+    # A partial scan proves nothing about the files it skipped.
+    _write(workspace, *MODES["scan-code"])
+    _write(workspace, "broken.py", "def (:\n")
+
+    exit_code, out = _run(monkeypatch, workspace, "scan-code")
+
+    assert exit_code == 1
+    assert out["files_scanned"] == "1"
+    assert out["verdict"] == "UNVERIFIABLE"
+    assert out["admission"] == "DENY"
+    assert out["proof_ref"] == ""
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_one_unreadable_file_denies_an_otherwise_clean_scan(monkeypatch, workspace, mode):
+    name, content = MODES[mode]
+    _write(workspace, name, content)
+    _write(workspace, "locked" + Path(name).suffix, content)
+    real_read_text = Path.read_text
+
+    def read_text(self, *args, **kwargs):
+        if self.name.startswith("locked"):
+            raise PermissionError("denied")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    exit_code, out = _run(monkeypatch, workspace, mode)
+
+    assert exit_code == 1
+    assert out["files_scanned"] == "1"
+    assert out["verdict"] == "UNVERIFIABLE"
+    assert out["admission"] == "DENY"
+
+
 def test_findings_are_still_denied(monkeypatch, workspace):
     _write(workspace, "bad.py", "eval('1')\n")
 
@@ -173,7 +217,47 @@ def test_expand_paths_reports_invalid_patterns():
     files, errors = entry.expand_paths("/etc/*", entry.CODE_PATTERNS)
 
     assert files == []
-    assert len(errors) == 1 and "/etc/*" in errors[0]
+    assert len(errors) == 1
+    assert "/etc/*" in errors[0]
+
+
+def test_a_symlinked_directory_outside_the_workspace_is_not_an_error(monkeypatch, workspace):
+    # Only files that would be scanned are checked against the workspace.
+    outside = workspace.parent / "elsewhere.py"
+    outside.mkdir()
+    _symlink(workspace / "linked.py", outside, target_is_directory=True)
+    _write(workspace, *MODES["scan-code"])
+
+    exit_code, out = _run(monkeypatch, workspace, "scan-code")
+
+    assert exit_code == 0
+    assert out["verdict"] == "VERIFIED"
+
+
+def test_a_symlinked_file_outside_the_workspace_is_named(workspace):
+    outside = workspace.parent / "elsewhere.json"
+    outside.write_text("{}")
+    _symlink(workspace / "linked.json", outside)
+
+    files, errors = entry.expand_paths("", entry.CONFIG_FILE_PATTERNS)
+
+    assert files == []
+    assert len(errors) == 1
+    assert "linked.json" in errors[0]
+
+
+def test_a_link_with_another_name_does_not_hide_the_file_it_points_to(monkeypatch, workspace):
+    # alias.txt -> bad.py: de-duplicating before the .py filter would keep the
+    # alias, drop bad.py, and then skip the alias for its suffix.
+    _write(workspace, "bad.py", "eval('1')\n")
+    _write(workspace, *MODES["scan-code"])
+    _symlink(workspace / "alias.txt", workspace / "bad.py")
+
+    exit_code, out = _run(monkeypatch, workspace, "scan-code", "alias.txt,**/*.py")
+
+    assert exit_code == 1
+    assert out["findings_count"] == "1"
+    assert out["files_scanned"] == "2"
 
 
 def test_action_yml_no_longer_defaults_paths_to_dot():
