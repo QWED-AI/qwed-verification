@@ -117,7 +117,15 @@ jobs:
             sleep 2
           done
           curl -fsS http://127.0.0.1:9000/health
-          docker exec qwed-smoke-port python -c "import os, sys, urllib.request; port = os.environ.get('UVICORN_PORT', '8000'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=4).status == 200 else 1)"
+          # The image's own HEALTHCHECK must follow the port too.
+          for _ in $(seq 1 30); do
+            status="$(docker inspect -f '{{.State.Health.Status}}' qwed-smoke-port)"
+            echo "health: ${status}"
+            [ "${status}" = "healthy" ] && exit 0
+            [ "${status}" = "unhealthy" ] && exit 1
+            sleep 5
+          done
+          exit 1
 
       - name: Server logs
         if: always()

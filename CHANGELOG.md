@@ -109,7 +109,9 @@ All notable changes to the QWED Protocol will be documented in this file.
     with empty values. Compose refuses to start until the server settings
     and `DATABASE_URL` are filled in; the Postgres and Grafana containers
     refuse to start while their passwords are empty (Grafana would otherwise
-    fall back to `admin`/`admin`). Grafana gets Prometheus and Jaeger data
+    fall back to `admin`/`admin`). Postgres and Grafana no longer load the
+    whole `.env` file, which handed them the server's secrets; each gets
+    only its own settings. Grafana gets Prometheus and Jaeger data
     sources, and Prometheus scrapes the API as `qwed-core:8000` instead of
     `host.docker.internal`, which does not resolve inside the Compose
     network on Linux.

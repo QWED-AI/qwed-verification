@@ -49,13 +49,14 @@ services:
   postgres:
     image: postgres:15
     container_name: qwed_postgres
-    env_file:
-      - .env
+    # Only Postgres's own settings, not the whole deploy/.env: the server's
+    # secrets stay out of this container. A name without a value is read
+    # from deploy/.env. The postgres image refuses to initialise a database
+    # while the password is empty.
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-qwed}
-      POSTGRES_DB: ${POSTGRES_DB:-qwed_db}
-      # The password comes from env_file. The postgres image refuses to
-      # initialise a database while it is empty, so no Compose guard is needed.
+      - POSTGRES_USER=${POSTGRES_USER:-qwed}
+      - POSTGRES_DB=${POSTGRES_DB:-qwed_db}
+      - POSTGRES_PASSWORD
     ports:
       - "5432:5432"
     volumes:
@@ -119,14 +120,15 @@ services:
   grafana:
     image: grafana/grafana:10.2.2
     container_name: qwed_grafana
-    env_file:
-      - .env
+    # Only Grafana's own settings, not the whole deploy/.env. A name without a
+    # value is read from deploy/.env.
     environment:
-      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:?set GF_SECURITY_ADMIN_USER}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    # The admin password comes from env_file. Grafana would fall back to its
-    # default admin/admin while it is empty, so refuse to start instead, then
-    # hand over to the image's own entrypoint (/run.sh).
+      - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER:?set GF_SECURITY_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD
+      - GF_USERS_ALLOW_SIGN_UP=false
+    # Grafana would fall back to its default admin/admin while the admin
+    # password is empty, so refuse to start instead, then hand over to the
+    # image's own entrypoint (/run.sh).
     entrypoint:
       - /bin/sh
       - -c

@@ -209,8 +209,21 @@ def test_empty_passwords_are_refused_when_the_containers_start():
     # The postgres image exits on an empty POSTGRES_PASSWORD unless host
     # auth is set to trust, which this stack must never do.
     assert "POSTGRES_HOST_AUTH_METHOD" not in COMPOSE_PATH.read_text(encoding="utf-8")
-    for service in ("postgres", "grafana"):
-        assert ".env" in COMPOSE["services"][service]["env_file"]
+    for service, key in (("postgres", "POSTGRES_PASSWORD"), ("grafana", "GF_SECURITY_ADMIN_PASSWORD")):
+        # Passed by name, so Compose reads the value from deploy/.env.
+        assert key in COMPOSE["services"][service]["environment"]
+
+
+def test_no_service_receives_the_whole_env_file():
+    # env_file would hand Postgres and Grafana every server secret in
+    # deploy/.env; each service gets only the keys it uses.
+    server_only = set(SERVER_SECRETS) | {"DATABASE_URL"}
+    for name, service in COMPOSE["services"].items():
+        assert "env_file" not in service, name
+        if name == "qwed-core":
+            continue
+        keys = {item.split("=", 1)[0] for item in service.get("environment", [])}
+        assert not keys & server_only, name
 
 
 def test_prometheus_scrapes_the_api_by_its_compose_service_name():
