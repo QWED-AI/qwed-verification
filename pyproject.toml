@@ -3,7 +3,7 @@ name = "qwed"
 version = "7.3.0"
 description = "Open-source AI verification infrastructure for deterministic verification of LLM outputs, tool calls, code, schemas, and agent state before production execution."
 authors = [
-    {name = "Rahul Dass", email = "rahul@qwedai.com"}
+    {name = "Rahul Dass", email = "rahul@qwedai.tech"}
 ]
 license = {text = "Apache-2.0"}
 keywords = [
@@ -64,8 +64,8 @@ requires-python = ">=3.10"
 readme = "README.md"
 
 [project.urls]
-Homepage = "https://qwedai.com"
-Documentation = "https://docs.qwedai.com"
+Homepage = "https://qwedai.tech"
+Documentation = "https://docs.qwedai.tech"
 Repository = "https://github.com/QWED-AI/qwed-verification"
 Changelog = "https://github.com/QWED-AI/qwed-verification/blob/main/CHANGELOG.md"
 

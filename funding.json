@@ -5,10 +5,10 @@
         "type": "individual",
         "role": "owner",
         "name": "Rahul Dass",
-        "email": "rahul@qwedai.com",
+        "email": "rahul@qwedai.tech",
         "description": "Founder and sole maintainer of QWED, an open-source verification layer for LLM and AI-agent output.",
         "webpageUrl": {
-            "url": "https://qwedai.com"
+            "url": "https://qwedai.tech"
         }
     },
     "projects": [
@@ -17,7 +17,7 @@
             "name": "QWED Protocol (Core)",
             "description": "Open-source verification layer for LLM and AI-agent output. Checks AI-generated math, logic, SQL, code and schemas with deterministic engines (SymPy, Z3, SQLGlot, AST analysis) and fails closed when a result cannot be verified.",
             "webpageUrl": {
-                "url": "https://qwedai.com"
+                "url": "https://qwedai.tech"
             },
             "repositoryUrl": {
                 "url": "https://github.com/QWED-AI/qwed-verification"
@@ -40,7 +40,7 @@
             "name": "QWED Tax",
             "description": "Deterministic verification for AI-generated tax decisions, using Z3 and decimal arithmetic. Sits between AI agents and execution systems; not a calculator or filing platform.",
             "webpageUrl": {
-                "url": "https://docs.qwedai.com/tax/overview"
+                "url": "https://docs.qwedai.tech/tax/overview"
             },
             "repositoryUrl": {
                 "url": "https://github.com/QWED-AI/qwed-tax"
@@ -59,7 +59,7 @@
             "name": "QWED Legal",
             "description": "Deterministic verification of computational legal claims: dates, amounts and structured constraints. Blocks unproven legal outputs.",
             "webpageUrl": {
-                "url": "https://docs.qwedai.com/legal/overview"
+                "url": "https://docs.qwedai.tech/legal/overview"
             },
             "repositoryUrl": {
                 "url": "https://github.com/QWED-AI/qwed-legal"
@@ -78,7 +78,7 @@
             "name": "QWED Finance",
             "description": "Deterministic verification for AI-generated financial decisions: NPV, IRR, Black-Scholes, YTM and VaR, AML/KYC rules with Z3, and ISO 20022 / SWIFT schemas. Fails closed.",
             "webpageUrl": {
-                "url": "https://finance.qwedai.com"
+                "url": "https://finance.qwedai.tech"
             },
             "repositoryUrl": {
                 "url": "https://github.com/QWED-AI/qwed-finance"
@@ -97,7 +97,7 @@
             "name": "QWED UCP",
             "description": "Deterministic verification for Universal Commerce Protocol (UCP) checkouts: catches math, state and schema errors before payment.",
             "webpageUrl": {
-                "url": "https://docs.qwedai.com/ucp/overview"
+                "url": "https://docs.qwedai.tech/ucp/overview"
             },
             "repositoryUrl": {
                 "url": "https://github.com/QWED-AI/qwed-ucp"

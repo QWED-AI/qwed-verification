@@ -12,7 +12,7 @@ Thank you for your interest in contributing! Before you start, please read this 
 |------|----------------|
 | [README.md](./README.md) | Understand what QWED is |
 | [QWED_RULES.md](./QWED_RULES.md) | Canonical enforcement rules for contributors and tools |
-| [Architecture](https://docs.qwedai.com/architecture) | System design and engine architecture |
+| [Architecture](https://docs.qwedai.tech/architecture) | System design and engine architecture |
 | [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) | Community standards |
 | [SECURITY.md](./SECURITY.md) | How to report vulnerabilities |
 
@@ -174,7 +174,7 @@ qwed-verification/
 
 Some enterprise features (such as SSO) are developed in a separate, private repository. This repository does include basic authentication, tenant isolation, audit logging and RBAC: bug fixes and security fixes for them are welcome here. Please open an issue before proposing new enterprise-scope features.
 
-For enterprise questions, contact support@qwedai.com.
+For enterprise questions, contact support@qwedai.tech.
 
 ---
 
@@ -206,5 +206,5 @@ This project is governed under a BDFL model. See [GOVERNANCE.md](./GOVERNANCE.md
 
 - Open an issue with the `question` label
 - Join discussions in GitHub Discussions
-- Email: support@qwedai.com (security reports: see [SECURITY.md](./SECURITY.md))
+- Email: support@qwedai.tech (security reports: see [SECURITY.md](./SECURITY.md))
 

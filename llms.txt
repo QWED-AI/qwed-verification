@@ -5,12 +5,12 @@
 QWED has 13 engines and 9 policy guards. Proof engines (Math, Logic, SQL, Code, Schema) can return VERIFIED with a proof_ref; the Symbolic engine (CrossHair) searches for counterexamples and returns UNVERIFIABLE or BLOCKED; policy guards block or hold; advisory engines (Fact, Graph, Image, Reasoning, Consensus) add signals for review.
 
 ## Documentation
-- [Documentation](https://docs.qwedai.com): installation, engines, API reference, guides
-- [Engine tiers](https://docs.qwedai.com/engines/overview): what each tier may claim
+- [Documentation](https://docs.qwedai.tech): installation, engines, API reference, guides
+- [Engine tiers](https://docs.qwedai.tech/engines/overview): what each tier may claim
 - [README](https://github.com/QWED-AI/qwed-verification/blob/main/README.md): install, first run, limits
 - [Verification Context v1.0](https://github.com/QWED-AI/qwed-verification/tree/main/spec): the result record format
 - [Security policy](https://github.com/QWED-AI/qwed-verification/blob/main/SECURITY.md) and [advisories](https://github.com/QWED-AI/qwed-verification/security/advisories)
-- [Website](https://qwedai.com), with Markdown copies of every page listed in https://qwedai.com/llms.txt
+- [Website](https://qwedai.tech), with Markdown copies of every page listed in https://qwedai.tech/llms.txt
 
 ## Related packages
 - [qwed-finance](https://github.com/QWED-AI/qwed-finance): banking and payment calculations, ISO 20022

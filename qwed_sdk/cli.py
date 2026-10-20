@@ -484,7 +484,7 @@ def _bootstrap_api_key(server_url: str, organization_name: str) -> tuple[str, st
 
     base = server_url.rstrip("/")
     org_slug = _sanitize_org_slug(organization_name)
-    email = f"{org_slug}-{secrets.token_hex(4)}@qwed-init.dev"
+    email = f"{org_slug}-{secrets.token_hex(4)}@example.com"
     password = secrets.token_urlsafe(24)
     signup_payload = {
         "email": email,
@@ -1454,7 +1454,7 @@ def init(
     click.echo(f"    -H \"x-api-key: {qwed_api_key}\" \\")
     click.echo("    -H \"Content-Type: application/json\" \\")
     click.echo("    -d '{\"expression\": \"2+2=4\"}'")
-    click.echo("\nDocumentation: https://docs.qwedai.com")
+    click.echo("\nDocumentation: https://docs.qwedai.tech")
     click.echo(SEPARATOR)
     click.echo(f"\nEnvironment file: {env_path}")
 

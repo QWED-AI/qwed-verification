@@ -67,7 +67,7 @@ func main() {
 
 ```go
 client := qwed.NewClient("api-key",
-    qwed.WithBaseURL("https://api.qwedai.com"),
+    qwed.WithBaseURL("http://qwed-server:8000"), // your QWED server
     qwed.WithTimeout(30 * time.Second),
     qwed.WithHTTPClient(customClient),
 )
@@ -138,4 +138,4 @@ Apache 2.0 - See [LICENSE](../LICENSE)
 - [QWED Main Repository](https://github.com/QWED-AI/qwed-verification)
 - [Python SDK](https://pypi.org/project/qwed/)
 - [TypeScript SDK](https://www.npmjs.com/package/@qwed-ai/sdk)
-- [Documentation](https://docs.qwedai.com)
+- [Documentation](https://docs.qwedai.tech)

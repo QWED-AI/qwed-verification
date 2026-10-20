@@ -3,7 +3,7 @@ import time
 import os
 
 BASE_URL = "http://localhost:8000"
-EMAIL = "rahul@qwedai.com"
+EMAIL = "rahul@qwedai.tech"
 PASSWORD = os.environ["QWED_ADMIN_PASSWORD"]
 ORG_NAME = "QWED Internal"
 

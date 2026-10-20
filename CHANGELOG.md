@@ -283,6 +283,25 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Changed
 
+- **Contacts and links moved to `qwedai.tech`.** It is now the only QWED
+  domain in the repository.
+  - The maintainer and security contact is `rahul@qwedai.tech` (SECURITY.md,
+    the Code of Conduct, the README, `pyproject.toml`, `funding.json`). Support
+    is `support@qwedai.tech`. The default `ALERT_EMAIL_TO` is now
+    `rahul@qwedai.tech`; set the variable to keep another address.
+  - Website, docs and finance links point to `qwedai.tech`, `docs.qwedai.tech`
+    and `finance.qwedai.tech`. Error messages link to the docs pages directly
+    instead of through redirects, and the `.env.example` LLM guide link, which
+    was a 404, now points to the current page.
+  - Links to hosts that never existed are gone. The 500-error hint says to
+    check the server logs, the SDK READMEs show a self-hosted server as the
+    custom base URL (there is no hosted API), and the issue template links to
+    `docs.qwedai.tech`.
+  - The Verification Context schema `$id` is
+    `https://qwedai.tech/schemas/verification-context/v1.0`, in both copies.
+    Tools that look the schema up by its old `$id` need the new one.
+  - `qwed init` signs up its local bootstrap account with an `example.com`
+    address, and test fixtures use `example.com` and `example.test`.
 - **The API now writes its audit rows through the signed hash chain.** Every
   `/verify/*` endpoint, the Verification Context routes and `POST /audit/seed`
   used to write `VerificationLog` rows directly, so `entry_hash`,

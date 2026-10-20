@@ -441,14 +441,14 @@ def test_send_owner_email_success(monkeypatch):
         def send_message(self, msg):
             seen["msg"] = msg
 
-    monkeypatch.setenv("SMTP_USER", "bot@qwed.test")
+    monkeypatch.setenv("SMTP_USER", "bot@example.test")
     monkeypatch.setenv("SMTP_PASSWORD", "pw")
     monkeypatch.setattr(smtplib, "SMTP", _FakeSMTP)
     manager = AlertManager()
 
     manager.send_owner_email("owner@acme.test", "subject-line", "body-text")
 
-    assert seen["login"] == ("bot@qwed.test", "pw")
+    assert seen["login"] == ("bot@example.test", "pw")
     assert seen["timeout"] == 10
     assert seen["msg"]["To"] == "owner@acme.test"
     assert "subject-line" in seen["msg"]["Subject"]
@@ -458,7 +458,7 @@ def test_send_owner_email_success(monkeypatch):
 def test_send_owner_email_rejects_bad_recipient(monkeypatch):
     from qwed_new.core.alerting import AlertManager
 
-    monkeypatch.setenv("SMTP_USER", "bot@qwed.test")
+    monkeypatch.setenv("SMTP_USER", "bot@example.test")
     monkeypatch.setenv("SMTP_PASSWORD", "pw")
 
     manager = AlertManager()
@@ -502,7 +502,7 @@ def test_send_owner_email_smtp_failure_propagates(monkeypatch):
         def send_message(self, msg):
             raise RuntimeError("smtp down")
 
-    monkeypatch.setenv("SMTP_USER", "bot@qwed.test")
+    monkeypatch.setenv("SMTP_USER", "bot@example.test")
     monkeypatch.setenv("SMTP_PASSWORD", "pw")
     monkeypatch.setattr(smtplib, "SMTP", _DownSMTP)
 

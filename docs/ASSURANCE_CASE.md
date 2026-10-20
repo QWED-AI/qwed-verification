@@ -59,6 +59,6 @@ This document explains why we believe QWED meets its security requirements, and 
 Security controls are checked by:
 - **CI**: the test suite, `scripts/check_boundary.py`, CodeQL, SonarCloud and Snyk.
 - **Tests**: security-focused tests in `tests/security/` and across `tests/`.
-- **Soundness eval**: `evals/` runs claims with a known answer through the engines. `tests/test_evals.py` fails CI if any claim that does not hold is accepted, and `.github/workflows/eval.yml` attaches the report (`eval-results.json`) to every release. The 7.3.0 report: 84 claims, 0 accepted wrongly. The latest results are also shown at [qwedai.com/evidence](https://qwedai.com/evidence).
+- **Soundness eval**: `evals/` runs claims with a known answer through the engines. `tests/test_evals.py` fails CI if any claim that does not hold is accepted, and `.github/workflows/eval.yml` attaches the report (`eval-results.json`) to every release. The 7.3.0 report: 84 claims, 0 accepted wrongly. The latest results are also shown at [qwedai.tech/evidence](https://qwedai.tech/evidence).
 - **External reports**: private vulnerability reporting; see [SECURITY.md](../SECURITY.md) and the published advisories.
 - **Open work**: the [security tracker issues](https://github.com/QWED-AI/qwed-verification/issues?q=is%3Aissue+is%3Aopen+label%3Asecurity).

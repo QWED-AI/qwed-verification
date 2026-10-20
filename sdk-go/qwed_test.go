@@ -39,11 +39,11 @@ func TestNewClient(t *testing.T) {
 
 func TestNewClientWithOptions(t *testing.T) {
 	client := NewClient("test-key",
-		WithBaseURL("https://api.qwedai.com"),
+		WithBaseURL("http://127.0.0.1:9000"),
 		WithTimeout(10*time.Second),
 	)
 
-	if client.baseURL != "https://api.qwedai.com" {
+	if client.baseURL != "http://127.0.0.1:9000" {
 		t.Errorf("expected custom baseURL, got '%s'", client.baseURL)
 	}
 }
