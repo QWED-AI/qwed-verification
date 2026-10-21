@@ -26,12 +26,27 @@ All notable changes to the QWED Protocol will be documented in this file.
     The route stored a naive `datetime.utcnow()`, which `sqlmodel` 0.0.28 and
     later reject; with the version a new install gets (0.0.48), every revoke
     returned 500. It now stores a timezone-aware time.
+- **Agent tokens are stored as a keyed digest, not in plain text (#478).**
+  `Agent.agent_token` held the token itself and was looked up by equality, so
+  a read of the database exposed every agent token.
+  - Tokens are stored as `hmac256:<hex>`, the same keyed MAC as API keys
+    (keyed with `QWED_API_KEY_LOOKUP_SECRET`, under its own label), and looked
+    up by digest. A token is shown once, when it is issued.
+  - At startup the server hashes any token still stored in plain text, in
+    place, so existing tokens keep working. The `hmac256:` prefix marks hashed
+    rows, so the step changes nothing once done. A plaintext row never
+    authenticates directly.
+  - `POST /agents/{agent_id}/token/reissue` (member and above, own
+    organisation) gives an agent a new token and retires the old one. It is
+    optional: a token that sat in plain text may also sit in a database
+    backup.
+  - Registering an agent, authenticating it and logging its activity no
+    longer fail on a fresh install: the agent models and registry used naive
+    datetimes, which `sqlmodel` 0.0.28 and later reject.
   - Audit: every role may read its organisation's log; exporting it and
     seeding samples need admin or owner.
   - `core/rbac.py` is deleted. Nothing imported it, it had no `owner` role,
     and it could be mistaken for the access control that actually runs.
-  - Agent tokens are still stored in plain text; hashing them is a separate
-    change.
 
 - **The code-execution sandbox runs a pinned image in a hardened container
   (#322).** `SecureCodeExecutor.execute()` pulled `amancevice/pandas:slim`, a

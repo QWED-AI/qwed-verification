@@ -10,13 +10,20 @@ This module handles:
 
 import secrets
 from typing import List, Optional, Tuple
-from sqlmodel import Session, select
-from datetime import datetime
+from sqlmodel import Session, col, select
+from datetime import datetime, timezone
+
+from qwed_new.auth.security import AGENT_TOKEN_HASH_PREFIX, hash_agent_token
 
 from qwed_new.core.agent_models import (
     Agent, AgentPermission, AgentActivity,
     AgentType, AgentStatus
 )
+
+def _as_utc(value: datetime) -> datetime:
+    """Treat a naive stored datetime as UTC so it compares with aware ones."""
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
 
 class AgentRegistry:
     """
@@ -42,18 +49,19 @@ class AgentRegistry:
         Register a new AI agent with QWED.
         
         Returns:
-            (Agent object, agent_token)
+            (Agent object, agent_token). The token is returned once; only its
+            digest is stored (#478).
         """
         # Generate secure token
         agent_token = self._generate_agent_token()
-        
+
         # Create agent
         agent = Agent(
             organization_id=organization_id,
             name=name,
             agent_type=agent_type,
             description=description,
-            agent_token=agent_token,
+            agent_token=hash_agent_token(agent_token),
             max_cost_per_day=max_cost_per_day,
             created_by_user_id=created_by_user_id
         )
@@ -76,16 +84,21 @@ class AgentRegistry:
     ) -> Optional[Agent]:
         """
         Verify agent token and return agent if valid.
+
+        The token is looked up by its digest, so a row that still holds a
+        plaintext token (not yet migrated) never matches: fail closed.
         """
+        if not isinstance(agent_token, str) or not agent_token:
+            return None
         statement = select(Agent).where(
-            Agent.agent_token == agent_token,
+            Agent.agent_token == hash_agent_token(agent_token),
             Agent.status == AgentStatus.ACTIVE
         )
         agent = session.exec(statement).first()
-        
+
         if agent:
             # Update last active timestamp
-            agent.last_active = datetime.utcnow()
+            agent.last_active = datetime.now(timezone.utc)
             session.add(agent)
             session.commit()
         
@@ -147,7 +160,7 @@ class AgentRegistry:
         # Check if any permission is valid
         for perm in permissions:
             # Check expiration
-            if perm.expires_at and perm.expires_at < datetime.utcnow():
+            if perm.expires_at and _as_utc(perm.expires_at) < datetime.now(timezone.utc):
                 continue
             
             # Check daily usage limit
@@ -262,6 +275,36 @@ class AgentRegistry:
                 "suspended"
             )
     
+    def reissue_agent_token(self, session: Session, agent: Agent) -> str:
+        """Give an agent a new token, returned once; the old one stops working.
+
+        Optional after the #478 migration: hashing in place keeps existing
+        tokens valid, but a token that sat in plaintext may also sit in a
+        database backup, so its owner may want a new one.
+        """
+        agent_token = self._generate_agent_token()
+        agent.agent_token = hash_agent_token(agent_token)
+        session.add(agent)
+        session.commit()
+        session.refresh(agent)
+        return agent_token
+
+    def migrate_plaintext_agent_tokens(self, session: Session) -> int:
+        """Hash every agent token still stored in plaintext (#478).
+
+        Idempotent: a hashed row carries AGENT_TOKEN_HASH_PREFIX and is left
+        alone, so running this again changes nothing. Existing tokens keep
+        working. Returns how many rows were hashed.
+        """
+        statement = select(Agent).where(~col(Agent.agent_token).startswith(AGENT_TOKEN_HASH_PREFIX))
+        agents = session.exec(statement).all()
+        for agent in agents:
+            agent.agent_token = hash_agent_token(agent.agent_token)
+            session.add(agent)
+        if agents:
+            session.commit()
+        return len(agents)
+
     def _generate_agent_token(self) -> str:
         """
         Generate a secure agent authentication token.
@@ -278,8 +321,8 @@ class AgentRegistry:
         """
         Count how many times agent used a permission today.
         """
-        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-        
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
         statement = select(AgentActivity).where(
             AgentActivity.agent_id == agent_id,
             AgentActivity.activity_type.contains(permission_type),
