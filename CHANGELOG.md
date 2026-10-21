@@ -515,6 +515,19 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Changed
 
+- **The audit log routes report the stored verdict and the chain entry
+  (#484).** `GET /audit/logs` and `GET /audit/logs/{log_id}` returned only
+  `status`, derived from `is_verified`, so an UNVERIFIABLE result read
+  `blocked`, and `is_verified` means something different on different routes.
+  - Both routes add `verdict`: `VERIFIED`, `UNVERIFIABLE` or `BLOCKED` as the
+    verifier stored it in the row's result (the `status` of a `/verify/*`
+    result, the `verdict` of a Verification Context document, or the item
+    result's `status` in a `/verify/batch` row), or `null` when the result
+    has none, is truncated, or holds another value. It is never worked out
+    from `is_verified`.
+  - The list adds each row's `entry_hash`. The detail adds `entry_hash`,
+    `previous_hash` and `hmac_signature`, as stored.
+  - `status` is unchanged, for existing clients. Read `verdict` instead.
 - **Contacts and links moved to `qwedai.tech`.** It is now the only QWED
   domain in the repository.
   - The maintainer and security contact is `rahul@qwedai.tech` (SECURITY.md,

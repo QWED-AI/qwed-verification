@@ -2,10 +2,11 @@
 Audit log routes for QWED Enterprise Portal.
 """
 import asyncio
+import json
 import os
 
 from fastapi import APIRouter, Depends, Query, HTTPException
-from typing import Optional
+from typing import Any, Optional
 import csv
 import io
 from fastapi.responses import StreamingResponse
@@ -15,6 +16,7 @@ from sqlmodel import Session, select
 from qwed_new.core.database import get_session
 from qwed_new.core.audit_logger import SecurityError, get_audit_logger
 from qwed_new.core.models import VerificationLog, User
+from qwed_new.core.verification_context import Verdict
 from .roles import ADMIN_ROLES, READ_ROLES
 from .routes import ROLE_REFUSED, require_user_role
 
@@ -25,6 +27,34 @@ router = APIRouter(prefix="/audit", tags=["audit"])
 _READER = Depends(require_user_role(READ_ROLES))
 _ADMIN = Depends(require_user_role(ADMIN_ROLES))
 
+_VERDICTS = frozenset(v.value for v in Verdict)
+
+
+def stored_verdict(result: str) -> str | None:
+    """The verdict the verifier stored in a row's result, or None (#484).
+
+    Reads the three shapes a row can hold: a DiagnosticResult from a
+    /verify/* route (``status``), a Verification Context document
+    (``verdict``), and a /verify/batch item row (``details.result.status``).
+    Only VERIFIED, UNVERIFIABLE and BLOCKED count; anything else, including
+    a truncated result, is None. Nothing is worked out from ``is_verified``.
+    """
+    try:
+        value: Any = json.loads(result)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(value, dict) or value.get("truncated") is True:
+        return None
+    if "spec_version" in value:
+        candidate = value.get("verdict")
+    elif "batch_job_id" in value:
+        details = value.get("details")
+        inner = details.get("result") if isinstance(details, dict) else None
+        candidate = inner.get("status") if isinstance(inner, dict) else None
+    else:
+        candidate = value.get("status")
+    return candidate if isinstance(candidate, str) and candidate in _VERDICTS else None
+
 @router.get("/logs", responses=ROLE_REFUSED)
 async def get_logs(
     limit: int = Query(50, le=200),
@@ -32,7 +62,13 @@ async def get_logs(
     current_user: User = _READER,
     session: Session = Depends(get_session)
 ):
-    """Get audit logs for the current organization."""
+    """Get audit logs for the current organization.
+
+    ``verdict`` is the stored verdict (see ``stored_verdict``), or null.
+    ``status`` is kept for existing clients: it is derived from
+    ``is_verified``, whose meaning differs by route, so an UNVERIFIABLE
+    result reads "blocked". Read ``verdict`` instead.
+    """
     statement = select(VerificationLog).where(
         VerificationLog.organization_id == current_user.organization_id
     ).order_by(VerificationLog.timestamp.desc()).limit(limit)
@@ -56,9 +92,11 @@ async def get_logs(
                 "request_input": log.query,
                 "verification_result": log.result,
                 "engine_used": log.domain,
+                "verdict": stored_verdict(log.result),
                 "status": "verified" if log.is_verified else "blocked",
                 "latency_ms": 0, # Placeholder, add latency to model if needed
-                "created_at": log.timestamp.isoformat()
+                "created_at": log.timestamp.isoformat(),
+                "entry_hash": log.entry_hash,
             }
             for log in logs
         ]
@@ -73,19 +111,27 @@ async def get_log_detail(
     current_user: User = _READER,
     session: Session = Depends(get_session)
 ):
-    """Get detailed information for a single audit log."""
+    """Get detailed information for a single audit log.
+
+    Adds the row's chain entry: its own hash, the hash it links to, and its
+    HMAC signature, as stored. ``verdict`` and ``status`` are as on the list.
+    """
     log = session.get(VerificationLog, log_id)
-    
+
     if not log or log.organization_id != current_user.organization_id:
         raise HTTPException(status_code=404, detail="Log not found")
-    
+
     return {
         "id": str(log.id),
         "request_input": log.query,
         "verification_result": log.result,
         "engine_used": log.domain,
+        "verdict": stored_verdict(log.result),
         "status": "verified" if log.is_verified else "blocked",
-        "created_at": log.timestamp.isoformat()
+        "created_at": log.timestamp.isoformat(),
+        "entry_hash": log.entry_hash,
+        "previous_hash": log.previous_hash,
+        "hmac_signature": log.hmac_signature,
     }
 
 @router.get("/export", responses=ROLE_REFUSED)
