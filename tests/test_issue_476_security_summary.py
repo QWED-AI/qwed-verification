@@ -13,6 +13,7 @@ from `verify_audit_trail` over the period, failing closed. The URL is
 unchanged.
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -185,7 +186,7 @@ def test_events_are_counted_by_the_types_actually_written(db):
 
 # ---------------------------------------------------------------- route
 
-def test_the_route_returns_the_summary_at_the_same_url(db):
+def _get_report_as_admin(db):
     user = User(email="admin@test", password_hash="x", organization_id=db.org.id, role="admin")
     db.session.add(user)
     db.session.commit()
@@ -193,17 +194,41 @@ def test_the_route_returns_the_summary_at_the_same_url(db):
     raw, digest = generate_api_key()
     db.session.add(ApiKey(key_hash=digest, key_preview=raw[:8], organization_id=db.org.id, user_id=user.id))
     db.session.commit()
-    _log(db.org.id)
 
     main.app.dependency_overrides[main.get_session] = lambda: db.session
     try:
-        response = TestClient(main.app).get(
+        return TestClient(main.app).get(
             f"/admin/compliance/report/soc2/{db.org.id}", headers={"x-api-key": raw}
         )
     finally:
         main.app.dependency_overrides.clear()
 
+
+def test_the_route_returns_the_summary_at_the_same_url(db):
+    _log(db.org.id)
+
+    response = _get_report_as_admin(db)
+
     assert response.status_code == 200
     body = response.json()
     assert body["report_type"] == "Security activity summary"
     assert body["audit_trail"]["status"] == "VERIFIED"
+
+
+def test_the_route_builds_the_report_off_the_event_loop(db, monkeypatch):
+    # The audit check queries the database for every entry in the period, so
+    # the route must not run it on the event loop (it would stall the worker).
+    seen = []
+
+    def report(org_id):
+        try:
+            asyncio.get_running_loop()
+            seen.append("on the event loop")
+        except RuntimeError:
+            seen.append("in a worker thread")
+        return {"org": org_id}
+
+    monkeypatch.setattr(main.compliance_exporter, "generate_soc2_report", report)
+
+    assert _get_report_as_admin(db).status_code == 200
+    assert seen == ["in a worker thread"]

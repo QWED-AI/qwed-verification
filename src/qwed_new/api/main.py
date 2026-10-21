@@ -2298,7 +2298,9 @@ async def generate_soc2_report(
     """
     if org_id != ctx.organization_id:
         raise HTTPException(status_code=403, detail=_FOREIGN_ORG_DETAIL)
-    return compliance_exporter.generate_soc2_report(org_id)
+    # Off the event loop: the audit check verifies every entry in the period,
+    # with database queries per entry, so a large trail would stall the worker.
+    return await asyncio.to_thread(compliance_exporter.generate_soc2_report, org_id)
 
 @app.get("/admin/security/threats/{org_id}", tags=["Security"], responses=_FOREIGN_ORG_RESPONSE)
 async def get_threat_summary(
