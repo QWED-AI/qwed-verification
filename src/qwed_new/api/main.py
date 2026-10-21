@@ -2280,12 +2280,22 @@ async def verify_audit_log_entry(
     verifier = AuditLogger()
     return verifier.verify_log_entry(log_id, session)
 
-@app.get("/admin/compliance/report/soc2/{org_id}", tags=["Compliance"], responses=_FOREIGN_ORG_RESPONSE)
+@app.get(
+    "/admin/compliance/report/soc2/{org_id}",
+    tags=["Compliance"],
+    summary="Security activity summary",
+    responses=_FOREIGN_ORG_RESPONSE,
+)
 async def generate_soc2_report(
     org_id: int,
     ctx: AdminContext = _REQUIRE_ADMIN,
 ):
-    """Generate SOC 2 Type II compliance report (own organization only)."""
+    """Security activity summary for the caller's organisation (own organisation only).
+
+    Activity counts and a check of the audit trail over the last 90 days,
+    all computed from the server's records (#476). It is not a SOC 2 report;
+    the path keeps its old name for compatibility.
+    """
     if org_id != ctx.organization_id:
         raise HTTPException(status_code=403, detail=_FOREIGN_ORG_DETAIL)
     return compliance_exporter.generate_soc2_report(org_id)
