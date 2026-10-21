@@ -109,6 +109,8 @@ def test_a_signed_trail_is_verified(db):
     assert trail["total_entries"] == trail["verified_entries"] == 2
     assert trail["failed_entries"] == 0
     assert trail["errors"] == []
+    assert trail["total_errors"] == 0
+    assert trail["errors_truncated"] is False
     assert "does not show that every request was recorded" in trail["scope"]
 
 
@@ -138,6 +140,23 @@ def test_unsigned_legacy_entries_are_not_verified(db):
     assert trail["status"] == "NOT_VERIFIED"
     assert trail["legacy_entries"] == 1
     assert trail["verified_entries"] == 0
+
+
+def test_a_long_error_list_says_it_was_cut(db, monkeypatch):
+    errors = [f"entry {i} failed" for i in range(25)]
+
+    class _Logger:
+        def verify_audit_trail(self, organization_id, start_date=None, end_date=None):
+            return {"valid": False, "total_entries": 25, "verified_entries": 0,
+                    "failed_entries": list(range(25)), "legacy_entries": [], "errors": errors}
+
+    monkeypatch.setattr(exporter_module, "get_audit_logger", lambda: _Logger())
+
+    trail = exporter.generate_soc2_report(db.org.id)["audit_trail"]
+
+    assert trail["errors"] == errors[:20]
+    assert trail["total_errors"] == 25
+    assert trail["errors_truncated"] is True
 
 
 def test_an_empty_trail_is_not_reported_as_verified(db):

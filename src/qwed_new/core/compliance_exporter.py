@@ -267,6 +267,8 @@ class ComplianceExporter:
             "failed_entries": len(trail["failed_entries"]),
             "legacy_entries": len(trail.get("legacy_entries", [])),
             "errors": trail["errors"][:_MAX_REPORTED_ERRORS],
+            "total_errors": len(trail["errors"]),
+            "errors_truncated": len(trail["errors"]) > _MAX_REPORTED_ERRORS,
         }
     
     def export_gdpr_data(

@@ -147,8 +147,9 @@ All notable changes to the QWED Protocol will be documented in this file.
     the 90-day period: `VERIFIED` only when there are entries and all of them
     check out, `NO_ENTRIES` when there are none, and `NOT_VERIFIED` when any
     fails, predates the chain, or the check cannot run (for example without
-    `QWED_AUDIT_SECRET_KEY`). It covers the entries that were recorded; it
-    does not show that every request wrote one (see #477).
+    `QWED_AUDIT_SECRET_KEY`). It lists up to 20 errors, with `total_errors`
+    and `errors_truncated` when there are more. It covers the entries that
+    were recorded; it does not show that every request wrote one (see #477).
   - **Breaking for consumers of this response:** anything that read the
     removed fields must move to `audit_trail` and `security_events_by_type`.
 - **`qwed pii` prints the real count for each entity type (#470).** The
