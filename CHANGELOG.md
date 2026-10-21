@@ -32,10 +32,12 @@ All notable changes to the QWED Protocol will be documented in this file.
   - Tokens are stored as `hmac256:<hex>`, the same keyed MAC as API keys
     (keyed with `QWED_API_KEY_LOOKUP_SECRET`, under its own label), and looked
     up by digest. A token is shown once, when it is issued.
-  - At startup the server hashes any token still stored in plain text, in
-    place, so existing tokens keep working. The `hmac256:` prefix marks hashed
-    rows, so the step changes nothing once done. A plaintext row never
-    authenticates directly.
+  - At startup, after the fail-closed checks, the server hashes any token
+    still stored in plain text, in place, so existing tokens keep working. The
+    `hmac256:` prefix marks hashed rows, so the step changes nothing once done,
+    and a row is only changed if it still holds the token that was read, so a
+    token re-issued meanwhile is kept. A plaintext row never authenticates
+    directly.
   - `POST /agents/{agent_id}/token/reissue` (member and above, own
     organisation) gives an agent a new token and retires the old one. It is
     optional: a token that sat in plain text may also sit in a database

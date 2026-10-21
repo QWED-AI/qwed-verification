@@ -11,6 +11,7 @@ reject naive datetimes, which made registering an agent fail on a fresh
 install.
 """
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -25,6 +26,7 @@ from qwed_new.auth.security import (
     hash_agent_token,
     hash_api_key,
 )
+from qwed_new.core import agent_registry as agent_registry_module
 from qwed_new.core import database
 from qwed_new.core.agent_models import Agent
 from qwed_new.core.agent_registry import AgentRegistry
@@ -76,6 +78,20 @@ def test_the_agent_digest_is_keyed_and_separate_from_api_keys():
     assert hash_agent_token(token) == hash_agent_token(token)
     assert hash_agent_token(token) != hash_agent_token(token + "b")
     assert hash_agent_token(token).removeprefix(AGENT_TOKEN_HASH_PREFIX) != hash_api_key(token)
+
+
+def test_the_agent_digest_depends_on_the_lookup_secret(monkeypatch):
+    token = "agent_" + "a" * 64
+    monkeypatch.setenv("QWED_API_KEY_LOOKUP_SECRET", "secret-one")
+    first = hash_agent_token(token)
+    monkeypatch.setenv("QWED_API_KEY_LOOKUP_SECRET", "secret-two")
+    second = hash_agent_token(token)
+
+    # Keyed: a different secret gives a different digest, and neither is a
+    # plain, unkeyed SHA-256 of the token that anyone could recompute.
+    assert first != second
+    plain = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    assert plain not in (first.removeprefix(AGENT_TOKEN_HASH_PREFIX), second.removeprefix(AGENT_TOKEN_HASH_PREFIX))
 
 
 # ---------------------------------------------------------------- authentication
@@ -163,16 +179,66 @@ def test_the_migration_hashes_only_plaintext_rows(db):
         assert agent.agent_token == hash_agent_token("agent_" + c * 64)
 
 
-def test_startup_runs_the_migration(db, monkeypatch):
+def test_a_reissue_during_the_migration_is_not_overwritten(db, monkeypatch):
+    token = "agent_" + "7" * 64
+    agent = _plaintext_agent(db, db.org, token)
+    real_hash = agent_registry_module.hash_agent_token
+    reissued = []
+
+    def hash_then_reissue(value):
+        # Between the migration's read and its update, another worker
+        # re-issues this agent's token.
+        if value == token and not reissued:
+            reissued.append(None)
+            with Session(db.engine) as other:
+                reissued[0] = registry.reissue_agent_token(other, other.get(Agent, agent.id))
+        return real_hash(value)
+
+    monkeypatch.setattr(agent_registry_module, "hash_agent_token", hash_then_reissue)
+    migrated = registry.migrate_plaintext_agent_tokens(db.session)
+    monkeypatch.setattr(agent_registry_module, "hash_agent_token", real_hash)
+
+    assert migrated == 0
+    assert registry.authenticate_agent(db.session, reissued[0]).id == agent.id
+    assert registry.authenticate_agent(db.session, token) is None
+
+
+def test_startup_runs_the_migration_after_the_fail_closed_checks(db, monkeypatch):
     token = "agent_" + "6" * 64
     agent = _plaintext_agent(db, db.org, token)
     monkeypatch.setattr(database, "engine", db.engine)
+    calls = []
+    monkeypatch.setattr(main, "_enforce_environment_integrity", lambda: calls.append("enforce"))
+    monkeypatch.setattr(main, "create_db_and_tables", lambda: calls.append("create"))
+    monkeypatch.setattr(main, "get_audit_logger", lambda: calls.append("audit"))
+    real_migrate = main._migrate_agent_tokens
+    monkeypatch.setattr(main, "_migrate_agent_tokens", lambda: (calls.append("migrate"), real_migrate()))
 
-    main._migrate_agent_tokens()
-    main._migrate_agent_tokens()  # a second start changes nothing
+    main.on_startup()
+    main.on_startup()  # a second start changes nothing
 
+    assert calls == ["enforce", "create", "audit", "migrate"] * 2
     db.session.refresh(agent)
     assert agent.agent_token == hash_agent_token(token)
+
+
+def test_a_failed_startup_check_leaves_plaintext_rows_alone(db, monkeypatch):
+    token = "agent_" + "8" * 64
+    agent = _plaintext_agent(db, db.org, token)
+    monkeypatch.setattr(database, "engine", db.engine)
+    monkeypatch.setattr(main, "_enforce_environment_integrity", lambda: None)
+    monkeypatch.setattr(main, "create_db_and_tables", lambda: None)
+
+    def no_audit_key():
+        raise RuntimeError("no audit key")
+
+    monkeypatch.setattr(main, "get_audit_logger", no_audit_key)
+
+    with pytest.raises(RuntimeError):
+        main.on_startup()
+
+    db.session.refresh(agent)
+    assert agent.agent_token == token
 
 
 # ---------------------------------------------------------------- re-issue

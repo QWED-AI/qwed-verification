@@ -356,10 +356,12 @@ def _migrate_agent_tokens() -> None:
 def on_startup():
     _enforce_environment_integrity()
     create_db_and_tables()
-    _migrate_agent_tokens()
     # Fail closed at boot: every verify endpoint appends to the signed audit
     # chain, so the server does not start without QWED_AUDIT_SECRET_KEY.
     get_audit_logger()
+    # After the fail-closed checks: a server that refuses to start does not
+    # touch stored data.
+    _migrate_agent_tokens()
 
 # Initialize Kernel (Control Plane)
 control_plane = ControlPlane()

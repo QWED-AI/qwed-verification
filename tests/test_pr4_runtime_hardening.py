@@ -669,9 +669,15 @@ def test_on_startup_enforces_environment_before_db_init():
     ) as mock_enforce, patch(
         "qwed_new.api.main.create_db_and_tables",
         side_effect=lambda: calls.append("create"),
-    ) as mock_create_db:
+    ) as mock_create_db, patch(
+        "qwed_new.api.main.get_audit_logger",
+        side_effect=lambda: calls.append("audit"),
+    ), patch(
+        "qwed_new.api.main._migrate_agent_tokens",
+        side_effect=lambda: calls.append("migrate"),
+    ):
         api_main.on_startup()
 
     mock_enforce.assert_called_once()
     mock_create_db.assert_called_once()
-    assert calls == ["enforce", "create"]
+    assert calls == ["enforce", "create", "audit", "migrate"]

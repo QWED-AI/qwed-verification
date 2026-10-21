@@ -10,6 +10,7 @@ This module handles:
 
 import secrets
 from typing import List, Optional, Tuple
+from sqlalchemy import update
 from sqlmodel import Session, col, select
 from datetime import datetime, timezone
 
@@ -295,15 +296,24 @@ class AgentRegistry:
         Idempotent: a hashed row carries AGENT_TOKEN_HASH_PREFIX and is left
         alone, so running this again changes nothing. Existing tokens keep
         working. Returns how many rows were hashed.
+
+        Each row is updated only if it still holds the plaintext that was
+        read, so a token re-issued (or hashed by another worker) in between
+        is never overwritten with the old token's digest.
         """
-        statement = select(Agent).where(~col(Agent.agent_token).startswith(AGENT_TOKEN_HASH_PREFIX))
-        agents = session.exec(statement).all()
-        for agent in agents:
-            agent.agent_token = hash_agent_token(agent.agent_token)
-            session.add(agent)
-        if agents:
-            session.commit()
-        return len(agents)
+        statement = select(Agent.id, Agent.agent_token).where(
+            ~col(Agent.agent_token).startswith(AGENT_TOKEN_HASH_PREFIX)
+        )
+        migrated = 0
+        for agent_id, plaintext in session.exec(statement).all():
+            result = session.exec(
+                update(Agent)
+                .where(col(Agent.id) == agent_id, col(Agent.agent_token) == plaintext)
+                .values(agent_token=hash_agent_token(plaintext))
+            )
+            migrated += result.rowcount
+        session.commit()
+        return migrated
 
     def _generate_agent_token(self) -> str:
         """
