@@ -1911,7 +1911,7 @@ async def agent_verify(
     # AgentActivity is neither chained nor signed, so it is not the audit
     # record (#477).
     dr = _enforce_trust(_natural_language_diagnostic(result), query=request.query)
-    _safe_commit_log(VerificationLog(
+    await asyncio.to_thread(_safe_commit_log, VerificationLog(
         organization_id=agent.organization_id,
         user_id=None,
         query=request.query,
@@ -2420,6 +2420,7 @@ async def startup_security_tasks():
 # ============================================================
 
 from qwed_new.core.batch import batch_service, BatchCapacityError
+from qwed_new.api.batch_audit import batch_audit_hook
 from typing import List
 
 class BatchVerifyRequest(BaseModel):
@@ -2431,68 +2432,6 @@ class BatchVerifyItem(BaseModel):
     query: str
     type: str = "natural_language"
     params: Optional[dict] = None
-
-# The audit domain for each batch item type, as its single route records it.
-_BATCH_AUDIT_DOMAIN = {
-    "natural_language": "MATH",
-    "logic": "LOGIC",
-    "math": "MATH",
-    "code": "CODE",
-    "fact": "FACT",
-    "sql": "SQL",
-}
-
-
-def _batch_item_is_verified(item) -> bool:
-    """is_verified for a batch item's audit row, never more than its route records.
-
-    Only a completed VERIFIED result with a proof_ref counts; code proven
-    unsafe (is_valid False) does not, as on /verify/code; and a natural
-    language item counts only when its query semantics were verified, as on
-    /verify/natural_language.
-    """
-    if item.status != "completed" or not isinstance(item.result, dict):
-        return False
-    diagnostic = item.result.get("diagnostic")
-    verdict = diagnostic if isinstance(diagnostic, dict) else item.result
-    if verdict.get("status") != "VERIFIED" or not verdict.get("proof_ref"):
-        return False
-    fields = verdict.get("developer_fields") or {}
-    if fields.get("is_valid") is False:
-        return False
-    if item.verification_type.value == "natural_language":
-        return fields.get("query_semantics_verified") is True
-    return True
-
-
-def _batch_audit_hook(tenant: TenantContext):
-    """Append one chained audit row per batch item (#477).
-
-    The row carries the job and item id, the item type and its outcome. A
-    failed append raises, and the batch service then fails the item and
-    withholds its result.
-    """
-    async def append(job, item) -> None:
-        payload = {
-            "batch_job_id": job.job_id,
-            "batch_item_id": item.id,
-            "batch_item_type": item.verification_type.value,
-            "item_status": item.status,
-            "result": item.result,
-            "error": item.error,
-        }
-        log = VerificationLog(
-            organization_id=job.organization_id,
-            user_id=tenant.user_id if hasattr(tenant, "user_id") else None,
-            query=item.query,
-            result=_cap_log_result(payload),
-            is_verified=_batch_item_is_verified(item),
-            domain=_BATCH_AUDIT_DOMAIN.get(item.verification_type.value, "BATCH"),
-        )
-        await asyncio.to_thread(_safe_commit_log, log)
-
-    return append
-
 
 @app.post("/verify/batch", tags=["Batch"], responses={503: {"description": "Batch capacity reached"}})
 async def batch_verify(
@@ -2543,7 +2482,9 @@ async def batch_verify(
     # For very large batches, return job_id and process async.
     # Every item appends its audit row; an item whose append fails is
     # returned as failed, without its result (#477).
-    job = await batch_service.process_job(job, audit=_batch_audit_hook(tenant))
+    job = await batch_service.process_job(job, audit=batch_audit_hook(
+        tenant, commit_log=_safe_commit_log, cap_result=_cap_log_result, max_chars=_MAX_LOG_RESULT_CHARS,
+    ))
     
     # Return results
     return batch_service.get_job_results(job.job_id)

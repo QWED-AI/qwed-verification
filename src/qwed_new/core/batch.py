@@ -247,8 +247,8 @@ class BatchVerificationService:
         """Append the item's audit row; fail the item if that fails (#477)."""
         try:
             await audit(job, item)
-        except Exception as exc:  # noqa: BLE001 - any failure fails the item
-            logger.error("Batch item %s audit append failed: %s", item.id, type(exc).__name__)
+        except Exception as exc:  # any failure fails the item
+            logger.exception("Batch item %s audit append failed: %s", item.id, type(exc).__name__)
             if item.status == "completed":
                 job.failed_items += 1
             item.status = "failed"

@@ -136,16 +136,20 @@ All notable changes to the QWED Protocol will be documented in this file.
   neither chained nor signed, so these verifications never reached the audit
   trail, `/audit/logs`, the CSV export or the activity summary.
   - Batch: each item appends one row after it runs, failed items included.
-    The row's result holds the job id, item id, item type, the item's status
-    and its result or error; the domain is the one the item type's own route
-    records. `is_verified` is never more than that route would record: a
-    completed `VERIFIED` result with a `proof_ref`, not code proven unsafe,
-    and for natural language only when the query semantics were verified.
+    The row's result holds the job id, item id, item type and the item's
+    status, with its result or error under `details`. Only `details` is
+    capped, so the identifiers survive a large result. The domain is the one
+    the item type's own route records, and so is `is_verified`: `SAT` for
+    logic; `VERIFIED` with `is_valid` true for math and code (code proven
+    unsafe is not); `VERIFIED` with a `proof_ref` for fact and SQL; and the
+    `/verify/natural_language` admission rule for natural language. The
+    appends run in worker threads.
   - An item whose append fails is returned as `failed`, with no result and
     the error `audit persistence failed`, so no result leaves without its row.
   - Agents: the route appends the row `/verify/natural_language` writes, plus
-    `agent_id`, before it logs the activity and returns. If the append fails
-    it returns 500 `audit persistence failed` and logs no activity.
+    `agent_id`, in a worker thread, before it logs the activity and returns.
+    If the append fails it returns 500 `audit persistence failed` and logs no
+    activity.
   - As on the other routes, the row does not record the calling user yet
     (#484).
 - **The "SOC 2" report no longer returns fixed PASS values (#476).**

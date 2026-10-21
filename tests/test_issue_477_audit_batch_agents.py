@@ -12,6 +12,7 @@ route appends the row /verify/natural_language writes, plus the agent id, and
 returns 500 if the append fails.
 """
 
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -19,7 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from qwed_new.api import main
+from qwed_new.api import batch_audit, main
 from qwed_new.auth.security import generate_api_key
 from qwed_new.core import audit_logger as audit_module
 from qwed_new.core.agent_models import AgentActivity
@@ -130,7 +131,7 @@ def test_a_failed_item_still_appends_its_row(env, fake_items):
     (row,) = _rows(env)
     payload = json.loads(row.result)
     assert payload["item_status"] == "failed"
-    assert payload["result"] is None
+    assert payload["details"] == {"result": None, "error": "engine failed"}
     assert row.is_verified is False
 
 
@@ -150,24 +151,61 @@ def test_an_item_whose_append_fails_is_failed_without_its_result(env, fake_items
     assert _rows(env) == []
 
 
+def _nl(semantics_verified):
+    dr = DiagnosticResult.verified(
+        "Identity verified",
+        developer_fields={"query_semantics_verified": semantics_verified, "is_valid": True},
+        evidence={"left": "2+2", "right": "4"},
+        proof_data="2+2=4",
+    )
+    return {"diagnostic": dr.to_dict()}
+
+
 @pytest.mark.parametrize("vtype, status, result, verified", [
+    # math and code: VERIFIED with is_valid True, as /verify/math and /verify/code record.
     ("math", "completed", {"status": "VERIFIED", "proof_ref": PROOF, "developer_fields": {"is_valid": True}}, True),
-    ("math", "completed", {"status": "VERIFIED", "proof_ref": None}, False),
-    ("math", "completed", {"status": "UNVERIFIABLE", "proof_ref": None}, False),
+    ("math", "completed", {"status": "UNVERIFIABLE", "proof_ref": None, "developer_fields": {"is_valid": True}}, False),
+    ("math", "completed", {"status": "VERIFIED", "proof_ref": PROOF, "developer_fields": {}}, False),
     ("math", "failed", None, False),
-    # Code proven unsafe is VERIFIED but not valid, as on /verify/code.
+    ("code", "completed", {"status": "VERIFIED", "proof_ref": PROOF, "developer_fields": {"is_valid": True}}, True),
+    # Code proven unsafe is VERIFIED but not valid.
     ("code", "completed", {"status": "VERIFIED", "proof_ref": PROOF, "developer_fields": {"is_valid": False}}, False),
-    # Natural language: only when the query semantics were verified.
-    ("natural_language", "completed",
-     {"diagnostic": {"status": "VERIFIED", "proof_ref": PROOF, "developer_fields": {}}}, False),
-    ("natural_language", "completed",
-     {"diagnostic": {"status": "VERIFIED", "proof_ref": PROOF,
-                     "developer_fields": {"query_semantics_verified": True}}}, True),
+    # logic: SAT, which /verify/logic turns into VERIFIED with a proof_ref.
+    ("logic", "completed", {"status": "SAT"}, True),
+    ("logic", "completed", {"status": "UNSAT"}, False),
+    # fact and sql: is_authoritative; a proven-malicious query is VERIFIED.
+    ("sql", "completed", {"status": "VERIFIED", "proof_ref": PROOF, "developer_fields": {"is_valid": False}}, True),
+    ("sql", "completed", {"status": "VERIFIED", "proof_ref": None}, False),
+    ("fact", "completed", {"status": "VERIFIED", "proof_ref": PROOF}, True),
+    ("fact", "completed", {"status": "UNVERIFIABLE", "proof_ref": None}, False),
+    # natural language: the /verify/natural_language admission rule.
+    ("natural_language", "completed", _nl(True), True),
+    ("natural_language", "completed", _nl(False), False),
+    ("natural_language", "completed", {"status": "VERIFIED", "proof_ref": PROOF}, False),
+    ("natural_language", "completed", {"diagnostic": {"status": "VERIFIED"}}, False),
 ])
-def test_a_batch_row_is_verified_no_more_than_its_route_records(vtype, status, result, verified):
+def test_a_batch_row_is_verified_as_its_route_records(vtype, status, result, verified):
     item = BatchItem(id="j-0", query="q", verification_type=VerificationType(vtype), status=status, result=result)
 
-    assert main._batch_item_is_verified(item) is verified
+    assert batch_audit.batch_item_is_verified(item) is verified
+
+
+def test_the_batch_ids_survive_a_result_over_the_cap(env, monkeypatch):
+    async def huge(item, organization_id):
+        return {"status": "UNVERIFIABLE", "issues": [f"issue {i} " + "x" * 200 for i in range(2000)]}
+
+    monkeypatch.setattr(main.batch_service, "_verify_item", huge)
+
+    body = _batch(env, [{"query": "big", "type": "code"}]).json()
+
+    (row,) = _rows(env)
+    payload = json.loads(row.result)
+    assert payload["batch_job_id"] == body["job_id"]
+    assert payload["batch_item_id"] == body["items"][0]["id"]
+    assert payload["batch_item_type"] == "code"
+    assert payload["item_status"] == "completed"
+    assert len(row.result) <= main._MAX_LOG_RESULT_CHARS
+    assert _trail_is_valid(env)
 
 
 # ---------------------------------------------------------------- agents
@@ -201,6 +239,24 @@ def test_an_agent_verification_appends_a_chained_row(env, agent):
     assert row.query == "what is 2+2"
     assert row.is_verified is False
     assert row.domain == "MATH"
+
+
+def test_the_agent_append_runs_off_the_event_loop(env, agent, monkeypatch):
+    seen = []
+    real = main._safe_commit_log
+
+    def commit(log):
+        try:
+            asyncio.get_running_loop()
+            seen.append("on the event loop")
+        except RuntimeError:
+            seen.append("in a worker thread")
+        real(log)
+
+    monkeypatch.setattr(main, "_safe_commit_log", commit)
+
+    assert _agent_verify(env, agent).status_code == 200
+    assert seen == ["in a worker thread"]
 
 
 def test_an_agent_verification_is_not_returned_if_the_append_fails(env, agent, monkeypatch):
