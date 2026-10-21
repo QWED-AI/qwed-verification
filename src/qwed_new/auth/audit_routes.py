@@ -38,6 +38,11 @@ def stored_verdict(result: str) -> str | None:
     (``verdict``), and a /verify/batch item row (``details.result.status``).
     Only VERIFIED, UNVERIFIABLE and BLOCKED count; anything else, including
     a truncated result, is None. Nothing is worked out from ``is_verified``.
+
+    This is the verdict, not an admission. VERIFIED means the check ran to a
+    proof, not that the claim holds or may be admitted: a disproven identity
+    or code proven unsafe is VERIFIED with a DENY admission (see
+    ``AdmissionDecision`` in core/diagnostics.py). Never gate on it alone.
     """
     try:
         value: Any = json.loads(result)
@@ -64,10 +69,11 @@ async def get_logs(
 ):
     """Get audit logs for the current organization.
 
-    ``verdict`` is the stored verdict (see ``stored_verdict``), or null.
-    ``status`` is kept for existing clients: it is derived from
-    ``is_verified``, whose meaning differs by route, so an UNVERIFIABLE
-    result reads "blocked". Read ``verdict`` instead.
+    ``verdict`` is the stored verdict (see ``stored_verdict``), or null. It
+    is not an admission: a disproven claim is VERIFIED, with a "blocked"
+    ``status``. ``status`` is unchanged: "verified" or "blocked" from the
+    row's ``is_verified``, which each route sets by its own rule. Neither
+    is an admission decision; these rows do not store one yet (#307).
     """
     statement = select(VerificationLog).where(
         VerificationLog.organization_id == current_user.organization_id
@@ -114,7 +120,8 @@ async def get_log_detail(
     """Get detailed information for a single audit log.
 
     Adds the row's chain entry: its own hash, the hash it links to, and its
-    HMAC signature, as stored. ``verdict`` and ``status`` are as on the list.
+    HMAC signature, as stored. ``verdict`` and ``status`` are as on the list,
+    and neither is an admission decision.
     """
     log = session.get(VerificationLog, log_id)
 

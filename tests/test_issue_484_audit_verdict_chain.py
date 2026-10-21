@@ -107,6 +107,14 @@ def env(tmp_path):
         organization_id=org.id, query="q2", result=json.dumps({"truncated": True, "preview": ""}),
         is_verified=True, domain="STATS", entry_hash="h2", previous_hash="h1", hmac_signature="s2",
     ))
+    # What /verify/math stores for a false identity: the check ran to a
+    # proof, so the verdict is VERIFIED, and is_verified is False.
+    disproven = add(VerificationLog(
+        organization_id=org.id, query="(a + b)**2 = a**2 + b**2",
+        result=diagnostic("VERIFIED", agent_message="Identity is false",
+                          developer_fields={"is_valid": False}, proof_ref="sha256:p"),
+        is_verified=False, domain="MATH", entry_hash="h3", previous_hash="h2", hmac_signature="s3",
+    ))
 
     main.app.dependency_overrides[main.get_session] = lambda: session
     client = TestClient(main.app)
@@ -117,7 +125,7 @@ def env(tmp_path):
         assert response.status_code == 200, response.text
         return response.json()
 
-    yield SimpleNamespace(get=get, unverifiable=unverifiable, truncated=truncated)
+    yield SimpleNamespace(get=get, unverifiable=unverifiable, truncated=truncated, disproven=disproven)
     main.app.dependency_overrides.clear()
     session.close()
 
@@ -133,6 +141,19 @@ def test_the_list_reports_the_stored_verdict_and_the_entry_hash(env):
     second = rows[str(env.truncated.id)]
     assert second["verdict"] is None
     assert second["entry_hash"] == "h2"
+
+
+def test_a_disproven_claim_is_verified_but_not_admitted(env):
+    # The verdict is not an admission: a false identity is VERIFIED, and the
+    # route's own flag still says "blocked". Neither route claims to return
+    # an admission, since these rows do not store one.
+    row = next(r for r in env.get("/audit/logs")["logs"] if r["id"] == str(env.disproven.id))
+    detail = env.get(f"/audit/logs/{env.disproven.id}")
+
+    for body in (row, detail):
+        assert body["verdict"] == "VERIFIED"
+        assert body["status"] == "blocked"
+        assert "admission" not in body
 
 
 def test_the_list_does_not_return_the_link_or_signature(env):

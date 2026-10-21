@@ -525,9 +525,13 @@ All notable changes to the QWED Protocol will be documented in this file.
     result's `status` in a `/verify/batch` row), or `null` when the result
     has none, is truncated, or holds another value. It is never worked out
     from `is_verified`.
+  - `verdict` is not an admission. `VERIFIED` means the check ran to a
+    proof, not that the claim holds: a disproven identity or code proven
+    unsafe is `VERIFIED` with a `blocked` status. Do not gate on it alone.
   - The list adds each row's `entry_hash`. The detail adds `entry_hash`,
     `previous_hash` and `hmac_signature`, as stored.
-  - `status` is unchanged, for existing clients. Read `verdict` instead.
+  - `status` is unchanged. Neither field is an admission decision; these
+    rows do not store one yet (#307).
 - **Contacts and links moved to `qwedai.tech`.** It is now the only QWED
   domain in the repository.
   - The maintainer and security contact is `rahul@qwedai.tech` (SECURITY.md,
