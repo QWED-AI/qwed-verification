@@ -74,7 +74,8 @@ class ResourceQuota(SQLModel, table=True):
 class VerificationLog(SQLModel, table=True):
     """
     Logs are scoped to organizations for data isolation.
-    Enhanced with cryptographic audit trail for SOC 2 / GDPR compliance.
+    Each entry is HMAC-signed and hash-chained, so changes can be detected.
+    The trail is a record to support audits; it does not make a system compliant.
     """
     id: Optional[int] = Field(default=None, primary_key=True)
     organization_id: int = Field(foreign_key="organization.id", index=True)
