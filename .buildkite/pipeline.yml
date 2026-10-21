@@ -3,7 +3,10 @@ steps:
     command:
       # The agent's system Python is externally managed (PEP 668), so pip
       # cannot install into it; install into a venv for this build instead.
-      - python3 -m venv .venv
+      # The hosted image has pip but not python3-venv (no ensurepip), so the
+      # venv is created without pip and borrows the system one to install
+      # its own; everything still installs into .venv.
+      - python3 -m venv --without-pip --system-site-packages .venv
       - .venv/bin/python -m pip install --upgrade pip
       - .venv/bin/python -m pip install -e ".[dev,symbolic,server,pii]"
       - .venv/bin/python -m pytest tests/ -x --timeout=30 -q --ignore=tests/advanced_audit --ignore=tests/security -p no:cacheprovider
