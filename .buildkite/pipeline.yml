@@ -1,7 +1,10 @@
 steps:
   - label: "🧪 Run Tests"
     command:
-      - pip install --upgrade pip
-      - pip install -e ".[dev,symbolic,server,pii]"
-      - pytest tests/ -x --timeout=30 -q --ignore=tests/advanced_audit --ignore=tests/security -p no:cacheprovider
+      # The agent's system Python is externally managed (PEP 668), so pip
+      # cannot install into it; install into a venv for this build instead.
+      - python3 -m venv .venv
+      - .venv/bin/python -m pip install --upgrade pip
+      - .venv/bin/python -m pip install -e ".[dev,symbolic,server,pii]"
+      - .venv/bin/python -m pytest tests/ -x --timeout=30 -q --ignore=tests/advanced_audit --ignore=tests/security -p no:cacheprovider
     timeout_in_minutes: 10
