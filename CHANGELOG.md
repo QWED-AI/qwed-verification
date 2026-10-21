@@ -151,6 +151,13 @@ All notable changes to the QWED Protocol will be documented in this file.
     lists up to 20 errors, and `total_errors` and `errors_truncated` say
     whether the list was cut. It covers the entries that were recorded; it
     does not show that every request wrote one (see #477).
+  - `VERIFIED` always comes with a `proof_ref` (`sha256:...`) over `evidence`:
+    the organisation, the period, the first and last entry id checked, the
+    entry count and the chain head hash, which commits to every entry before
+    it. Every other status has `proof_ref` and `evidence` set to `null`.
+  - Checking an entry read its previous entry without a `LIMIT`
+    (`Result.first()` adds none), so on PostgreSQL every earlier row was
+    fetched for each entry checked. It now reads one row.
   - **Breaking for consumers of this response:** anything that read the
     removed fields must move to `audit_trail` and `security_events_by_type`.
 - **`qwed pii` prints the real count for each entity type (#470).** The

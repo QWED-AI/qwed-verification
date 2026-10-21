@@ -14,11 +14,13 @@ unchanged.
 """
 
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine
 
 from qwed_new.api import main
@@ -27,6 +29,7 @@ from qwed_new.core import audit_logger as audit_module
 from qwed_new.core import compliance_exporter as exporter_module
 from qwed_new.core.audit_logger import AUDIT_SECRET_ENV_VAR
 from qwed_new.core.compliance_exporter import ComplianceExporter
+from qwed_new.core.diagnostics import compute_proof_ref
 from qwed_new.core.models import (
     ApiKey,
     Organization,
@@ -112,6 +115,72 @@ def test_a_signed_trail_is_verified(db):
     assert trail["total_errors"] == 0
     assert trail["errors_truncated"] is False
     assert "does not show that every request was recorded" in trail["scope"]
+
+
+def test_verified_carries_a_proof_ref_bound_to_the_range_checked(db):
+    first = int(_log(db.org.id, "1+1"))
+    last = int(_log(db.org.id, "2+2"))
+
+    trail = exporter.generate_soc2_report(db.org.id)["audit_trail"]
+
+    # QWED_RULES.md section 14: VERIFIED only with a proof_ref bound to the
+    # evidence. The head hash commits to every entry in the chain up to it.
+    evidence = trail["evidence"]
+    assert evidence["first_entry_id"] == first
+    assert evidence["last_entry_id"] == last
+    assert evidence["entries"] == 2
+    assert evidence["head_hash"] == db.session.get(VerificationLog, last).entry_hash
+    assert re.fullmatch(r"sha256:[a-f0-9]{64}", trail["proof_ref"])
+    assert trail["proof_ref"] == compute_proof_ref(evidence)
+
+
+def test_the_proof_ref_changes_when_the_trail_changes(db):
+    _log(db.org.id, "1+1")
+    before = exporter.generate_soc2_report(db.org.id)["audit_trail"]["evidence"]
+    _log(db.org.id, "2+2")
+    after = exporter.generate_soc2_report(db.org.id)["audit_trail"]["evidence"]
+
+    assert after["head_hash"] != before["head_hash"]
+    assert compute_proof_ref(after) != compute_proof_ref(before)
+
+
+@pytest.mark.parametrize("setup, status", [
+    ("none", "NO_ENTRIES"),
+    ("legacy", "NOT_VERIFIED"),
+])
+def test_no_proof_ref_unless_verified(db, setup, status):
+    if setup == "legacy":
+        db.session.add(VerificationLog(
+            organization_id=db.org.id, query="old", result="{}", is_verified=True, domain="math",
+        ))
+        db.session.commit()
+
+    trail = exporter.generate_soc2_report(db.org.id)["audit_trail"]
+
+    assert trail["status"] == status
+    assert trail["proof_ref"] is None
+    assert trail["evidence"] is None
+
+
+def test_the_previous_entry_is_read_with_a_limit(db):
+    # Result.first() does not add a LIMIT; without one, checking each entry
+    # fetched every earlier row (quadratic over a trail, on PostgreSQL).
+    for i in range(3):
+        _log(db.org.id, f"{i}+{i}")
+    statements = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(" ".join(statement.split()).upper())
+
+    event.listen(db.engine, "before_cursor_execute", capture)
+    try:
+        exporter.generate_soc2_report(db.org.id)
+    finally:
+        event.remove(db.engine, "before_cursor_execute", capture)
+
+    newest_first = [s for s in statements if "FROM VERIFICATIONLOG" in s and "ORDER BY VERIFICATIONLOG.ID DESC" in s]
+    assert newest_first
+    assert all(" LIMIT " in s for s in newest_first)
 
 
 def test_a_tampered_entry_is_not_verified(db):

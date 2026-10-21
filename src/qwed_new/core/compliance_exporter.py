@@ -27,6 +27,7 @@ from qwed_new.core.models import (
 )
 from qwed_new.core.audit_logger import get_audit_logger
 from qwed_new.core.database import engine
+from qwed_new.core.diagnostics import compute_proof_ref
 
 logger = logging.getLogger(__name__)
 
@@ -232,8 +233,9 @@ class ComplianceExporter:
         """Verify the organisation's audit entries in the period (#476).
 
         VERIFIED only when there are entries and every one checks out
-        (signature and chain). It covers the entries that were recorded; it
-        cannot show that every request wrote one. Fails closed: if the check
+        (signature and chain), and then with a proof_ref over the evidence
+        (the range checked and its head hash). It covers the entries that
+        were recorded; it cannot show that every request wrote one. Fails closed: if the check
         cannot run (for example QWED_AUDIT_SECRET_KEY is unset), the result
         is NOT_VERIFIED.
         """
@@ -251,6 +253,8 @@ class ComplianceExporter:
             # are None rather than 0, which would read as "no entries".
             return {
                 "status": "NOT_VERIFIED",
+                "proof_ref": None,
+                "evidence": None,
                 "scope": scope,
                 "total_entries": None,
                 "verified_entries": None,
@@ -261,14 +265,30 @@ class ComplianceExporter:
                 "errors_truncated": False,
             }
 
+        evidence = None
+        proof_ref = None
         if trail["total_entries"] == 0:
             status = "NO_ENTRIES"
-        elif trail["valid"]:
+        elif trail["valid"] and trail.get("head_hash"):
+            # VERIFIED only with a proof_ref (QWED_RULES.md section 14), bound
+            # to the range checked: the head hash commits to every entry in it.
             status = "VERIFIED"
+            evidence = {
+                "organization_id": organization_id,
+                "period_start": start_date.isoformat(),
+                "period_end": end_date.isoformat(),
+                "first_entry_id": trail["first_entry_id"],
+                "last_entry_id": trail["last_entry_id"],
+                "entries": trail["total_entries"],
+                "head_hash": trail["head_hash"],
+            }
+            proof_ref = compute_proof_ref(evidence)
         else:
             status = "NOT_VERIFIED"
         return {
             "status": status,
+            "proof_ref": proof_ref,
+            "evidence": evidence,
             "scope": scope,
             "total_entries": trail["total_entries"],
             "verified_entries": trail["verified_entries"],
