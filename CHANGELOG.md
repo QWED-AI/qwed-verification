@@ -129,6 +129,37 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Fixed
 
+- **The "SOC 2" report no longer returns fixed PASS values (#476).**
+  `GET /admin/compliance/report/soc2/{org_id}` returned `security_controls`
+  and `compliance_status` blocks of fixed strings that nothing checked
+  (`"audit_trail_complete": "PASS"`, `"access_control": "RBAC + API Keys"`,
+  `"encryption_at_rest": "N/A (SQLite)"` whatever the database), and
+  `threats_blocked` and `block_rate` counted an event type nothing writes, so
+  both were always 0. It called itself a SOC 2 Type II report, which is an
+  auditor's attestation the server cannot issue. The URL is unchanged; the
+  response is now a "Security activity summary" (`report_version` 2.0):
+  - `security_controls`, `compliance_status`, `threats_blocked` and
+    `block_rate` are removed. A `disclaimer` says the report is not a SOC 2
+    report.
+  - `metrics.security_events_by_type` counts events by the types actually
+    written.
+  - `audit_trail` checks the signature and hash chain of every audit entry in
+    the 90-day period: `VERIFIED` only when there are entries and all of them
+    check out, `NO_ENTRIES` when there are none, and `NOT_VERIFIED` when any
+    fails, predates the chain, or the check cannot run (for example without
+    `QWED_AUDIT_SECRET_KEY`; the entry counts are then `null`, not 0). It
+    lists up to 20 errors, and `total_errors` and `errors_truncated` say
+    whether the list was cut. It covers the entries that were recorded; it
+    does not show that every request wrote one (see #477).
+  - `VERIFIED` always comes with a `proof_ref` (`sha256:...`) over `evidence`:
+    the organisation, the period, the first and last entry id checked, the
+    entry count and the chain head hash, which commits to every entry before
+    it. Every other status has `proof_ref` and `evidence` set to `null`.
+  - Checking an entry read its previous entry without a `LIMIT`
+    (`Result.first()` adds none), so on PostgreSQL every earlier row was
+    fetched for each entry checked. It now reads one row.
+  - **Breaking for consumers of this response:** anything that read the
+    removed fields must move to `audit_trail` and `security_events_by_type`.
 - **`qwed pii` prints the real count for each entity type (#470).** The
   detector's report listed each type once, and the CLI counted each type in
   that list, so two emails printed `EMAIL_ADDRESS: 1`. The report now has

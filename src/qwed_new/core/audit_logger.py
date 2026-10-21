@@ -428,7 +428,10 @@ class AuditLogger:
             select(VerificationLog)
             .where(VerificationLog.organization_id == log_entry.organization_id)
             .where(VerificationLog.id < log_id)
-            .order_by(VerificationLog.id.desc()),
+            .order_by(VerificationLog.id.desc())
+            # Result.first() does not add a LIMIT: without it every earlier
+            # row is fetched to read one, quadratic over a whole trail.
+            .limit(1),
         ).first()
         chain_valid = self._verify_chain_link(
             log_entry, prev_log, errors, chained_before=chained_before
@@ -592,7 +595,10 @@ class AuditLogger:
                 "total_entries": int,
                 "verified_entries": int,
                 "failed_entries": list[int],
-                "errors": list[str]
+                "errors": list[str],
+                "first_entry_id": int | None,
+                "last_entry_id": int | None,
+                "head_hash": str | None,
             }
         """
         with Session(engine) as session:
@@ -638,6 +644,11 @@ class AuditLogger:
                 "legacy_entries": legacy,
                 "errors": errors,
                 "organization_id": organization_id,
+                # The range checked. Each entry hash covers the previous one,
+                # so the head hash commits to the whole chain up to it.
+                "first_entry_id": logs[0].id if logs else None,
+                "last_entry_id": logs[-1].id if logs else None,
+                "head_hash": logs[-1].entry_hash if logs else None,
             }
 
 
