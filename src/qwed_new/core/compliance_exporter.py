@@ -247,10 +247,18 @@ class ComplianceExporter:
             )
         except Exception as exc:  # noqa: BLE001 - any failure reports NOT_VERIFIED
             logger.warning("Audit trail check failed for org %s: %s", organization_id, type(exc).__name__)
+            # Same keys as a completed check. The counts are unknown, so they
+            # are None rather than 0, which would read as "no entries".
             return {
                 "status": "NOT_VERIFIED",
                 "scope": scope,
+                "total_entries": None,
+                "verified_entries": None,
+                "failed_entries": None,
+                "legacy_entries": None,
                 "errors": [f"The audit trail could not be checked ({type(exc).__name__})."],
+                "total_errors": 1,
+                "errors_truncated": False,
             }
 
         if trail["total_entries"] == 0:

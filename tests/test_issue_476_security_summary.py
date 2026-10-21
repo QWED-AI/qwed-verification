@@ -168,6 +168,7 @@ def test_an_empty_trail_is_not_reported_as_verified(db):
 
 def test_the_check_fails_closed_without_the_audit_key(db, monkeypatch):
     _log(db.org.id)
+    completed = exporter.generate_soc2_report(db.org.id)["audit_trail"]
     monkeypatch.delenv(AUDIT_SECRET_ENV_VAR)
     monkeypatch.setattr(audit_module, "_default_logger", None)
 
@@ -175,6 +176,13 @@ def test_the_check_fails_closed_without_the_audit_key(db, monkeypatch):
 
     assert trail["status"] == "NOT_VERIFIED"
     assert "could not be checked" in trail["errors"][0]
+    # Same shape as a completed check, so a consumer reads one schema; the
+    # counts are unknown (None), not 0, which would read as "no entries".
+    assert trail.keys() == completed.keys()
+    for count in ("total_entries", "verified_entries", "failed_entries", "legacy_entries"):
+        assert trail[count] is None
+    assert trail["total_errors"] == 1
+    assert trail["errors_truncated"] is False
 
 
 def test_another_organisations_entries_are_not_counted(db):
