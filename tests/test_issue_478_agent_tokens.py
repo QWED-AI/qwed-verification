@@ -12,6 +12,7 @@ install.
 """
 
 import hashlib
+import hmac
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -72,11 +73,17 @@ def test_registering_stores_only_the_digest(db):
     assert token not in agent.agent_token
 
 
-def test_the_agent_digest_is_keyed_and_separate_from_api_keys():
+def test_the_agent_digest_is_keyed_and_separate_from_api_keys(monkeypatch):
     token = "agent_" + "a" * 64
+    monkeypatch.setenv("QWED_API_KEY_LOOKUP_SECRET", "known-secret")
 
-    assert hash_agent_token(token) == hash_agent_token(token)
-    assert hash_agent_token(token) != hash_agent_token(token + "b")
+    # Known answer: HMAC-SHA256 under the lookup secret and the agent label,
+    # computed here independently of hash_agent_token.
+    expected = AGENT_TOKEN_HASH_PREFIX + hmac.new(
+        b"known-secret:qwed_agent_token_lookup", token.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    assert hash_agent_token(token) == expected
+    assert hash_agent_token(token + "b") != expected
     assert hash_agent_token(token).removeprefix(AGENT_TOKEN_HASH_PREFIX) != hash_api_key(token)
 
 
