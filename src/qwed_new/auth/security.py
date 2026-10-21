@@ -267,6 +267,24 @@ def hash_api_key(api_key: str) -> str:
     mac = hmac.digest(_api_key_lookup_secret() + b":qwed_api_key_lookup", api_key.encode("utf-8"), "sha256")
     return mac.hex()
 
+
+# Stored agent tokens carry this prefix, so a row that still holds a plaintext
+# token (``agent_<hex>``, from before #478) is told apart from a hashed one.
+AGENT_TOKEN_HASH_PREFIX = "hmac256:"
+
+
+def hash_agent_token(agent_token: str) -> str:
+    """Lookup digest for an agent token, stored instead of the token (#478).
+
+    The same keyed MAC as hash_api_key, under its own domain label, so an
+    agent token and an API key with the same text never share a digest. A
+    read of the database no longer yields usable agent tokens. Agent tokens
+    are 256-bit random values, so a fast MAC is enough (see hash_api_key).
+    """
+    # codeql[py/weak-sensitive-data-hashing]
+    mac = hmac.digest(_api_key_lookup_secret() + b":qwed_agent_token_lookup", agent_token.encode("utf-8"), "sha256")
+    return AGENT_TOKEN_HASH_PREFIX + mac.hex()
+
 def is_api_key_live(api_key, now: Optional[datetime] = None) -> bool:
     """Return True only if an API-key row is still a usable credential.
 

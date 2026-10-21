@@ -341,6 +341,17 @@ def _enforce_environment_integrity() -> None:
         raise RuntimeError(f"Environment integrity verification failed: {result.get('risk')}")
 
 
+def _migrate_agent_tokens() -> None:
+    """Hash agent tokens still stored in plaintext; a no-op once done (#478)."""
+    from qwed_new.core.agent_registry import agent_registry as _registry
+    from qwed_new.core.database import engine
+
+    with Session(engine) as session:
+        migrated = _registry.migrate_plaintext_agent_tokens(session)
+    if migrated:
+        logger.info("Hashed %d agent token(s) stored in plaintext (#478)", migrated)
+
+
 @app.on_event("startup")
 def on_startup():
     _enforce_environment_integrity()
@@ -348,6 +359,9 @@ def on_startup():
     # Fail closed at boot: every verify endpoint appends to the signed audit
     # chain, so the server does not start without QWED_AUDIT_SECRET_KEY.
     get_audit_logger()
+    # After the fail-closed checks: a server that refuses to start does not
+    # touch stored data.
+    _migrate_agent_tokens()
 
 # Initialize Kernel (Control Plane)
 control_plane = ControlPlane()
@@ -2328,6 +2342,38 @@ async def rotate_api_key(
         "new_key_id": new_key.id,
         "new_key_preview": new_key.key_preview,
         "new_key_secret": raw_key  # Show once
+    }
+
+
+@app.post(
+    "/agents/{agent_id}/token/reissue",
+    tags=["Agents"],
+    responses={
+        403: {"description": "API key not live, or role below member"},
+        404: {"description": "No such agent in the caller's organisation"},
+    },
+)
+async def reissue_agent_token(
+    agent_id: int,
+    ctx: AdminContext = _REQUIRE_ADMIN_OR_MEMBER,
+    session: Session = Depends(get_session),
+):
+    """Give an agent a new token, shown once; the old token stops working (#478).
+
+    Optional: the #478 migration hashes stored tokens in place, so existing
+    tokens keep working. Re-issue one whose plaintext may still sit in a
+    database backup from before the migration. Members and above, for agents
+    in their own organisation only.
+    """
+    agent = session.get(Agent, agent_id)
+    if agent is None or agent.organization_id != ctx.organization_id:
+        # 404, not 403: do not confirm that an agent id in another org exists.
+        raise HTTPException(status_code=404, detail="Agent not found")
+    agent_token = agent_registry.reissue_agent_token(session, agent)
+    return {
+        "agent_id": agent.id,
+        "agent_token": agent_token,  # Show once
+        "message": "Agent token re-issued. Store it securely; the previous token no longer works.",
     }
 
 @app.on_event("startup")

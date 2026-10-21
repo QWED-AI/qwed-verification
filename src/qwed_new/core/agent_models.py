@@ -13,6 +13,10 @@ from sqlmodel import Field, SQLModel, JSON, Column
 from datetime import datetime
 from enum import Enum
 
+# Timezone-aware defaults: sqlmodel>=0.0.28 rejects naive datetimes, which made
+# registering an agent or logging its activity fail on a fresh install.
+from qwed_new.core.models import _utcnow
+
 class AgentType(str, Enum):
     """Types of AI agents."""
     AUTONOMOUS = "autonomous"  # Fully autonomous (AutoGPT-style)
@@ -38,16 +42,17 @@ class Agent(SQLModel, table=True):
     agent_type: str = Field(default=AgentType.AUTONOMOUS)
     description: Optional[str] = None
     
-    # Authentication
-    agent_token: str = Field(unique=True, index=True)  # Like API key but for agents
-    
+    # Authentication: the token's lookup digest (hash_agent_token,
+    # "hmac256:<hex>"), never the token itself (#478).
+    agent_token: str = Field(unique=True, index=True)
+
     # Status & Limits
     status: str = Field(default=AgentStatus.ACTIVE)
     max_cost_per_day: float = Field(default=100.0)  # Budget limit
     current_cost_today: float = Field(default=0.0)
     
     # Metadata
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utcnow)
     last_active: Optional[datetime] = None
     created_by_user_id: Optional[int] = Field(default=None, foreign_key="user.id")
 
@@ -67,7 +72,7 @@ class AgentPermission(SQLModel, table=True):
     max_uses_per_day: Optional[int] = None  # Rate limit per permission
     expires_at: Optional[datetime] = None  # Temporary permissions
     
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utcnow)
 
 class AgentActivity(SQLModel, table=True):
     """
@@ -92,7 +97,7 @@ class AgentActivity(SQLModel, table=True):
     latency_ms: Optional[float] = None
     
     # Audit Trail
-    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    timestamp: datetime = Field(default_factory=_utcnow, index=True)
     ip_address: Optional[str] = None
 
 class ToolCall(SQLModel, table=True):
@@ -118,4 +123,4 @@ class ToolCall(SQLModel, table=True):
     risk_score: float = Field(default=0.0)  # 0.0 = safe, 1.0 = dangerous
     blocked_reason: Optional[str] = None
     
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_utcnow)
