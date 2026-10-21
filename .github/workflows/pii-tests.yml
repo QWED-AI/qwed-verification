@@ -1,0 +1,67 @@
+name: PII tests
+
+# The PII masking tests need the pii extra (Presidio) and spaCy's
+# en_core_web_lg model, about 1 GB in memory. The other CI jobs do not install
+# them, so without this job those tests skip everywhere. A GitHub-hosted
+# ubuntu-latest runner has the memory for it (the Buildkite agent does not:
+# build #1284 was killed at test_pii_masking). Standard runners are free for
+# public repositories.
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - "qwed_sdk/**"
+      - "tests/test_pii_masking.py"
+      - "tests/test_issue_470_pii_counts.py"
+      - "pyproject.toml"
+      - ".github/workflows/pii-tests.yml"
+  push:
+    branches: [ main ]
+    paths:
+      - "qwed_sdk/**"
+      - "tests/test_pii_masking.py"
+      - "tests/test_issue_470_pii_counts.py"
+      - "pyproject.toml"
+      - ".github/workflows/pii-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pii:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,pii]"
+          python -m spacy download en_core_web_lg
+      - name: Run the PII tests
+        run: |
+          pytest tests/test_pii_masking.py tests/test_issue_470_pii_counts.py \
+            -v -rs -p no:cacheprovider --junitxml=pii-results.xml
+      - name: Fail if any PII test was skipped
+        # The tests skip themselves when Presidio is missing; in this job that
+        # would mean the install broke, so a skip is a failure here.
+        run: |
+          python - <<'EOF'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("pii-results.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+          tests = sum(int(s.get("tests", 0)) for s in suites)
+          skipped = sum(int(s.get("skipped", 0)) for s in suites)
+          print(f"{tests} tests, {skipped} skipped")
+          if tests == 0 or skipped:
+              sys.exit("PII tests were skipped or not collected; Presidio or the spaCy model is missing.")
+          EOF
