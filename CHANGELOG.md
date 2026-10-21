@@ -129,6 +129,29 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Fixed
 
+- **`/verify/batch` and `/agents/{agent_id}/verify` write audit rows (#477).**
+  The single `/verify/*` routes append a chained, signed `VerificationLog` row
+  and return 500 if the append fails. The batch route ran up to 100 items and
+  wrote no row, and the agent route logged only to `AgentActivity`, which is
+  neither chained nor signed, so these verifications never reached the audit
+  trail, `/audit/logs`, the CSV export or the activity summary.
+  - Batch: each item appends one row after it runs, failed items included.
+    The row's result holds the job id, item id, item type and the item's
+    status, with its result or error under `details`. Only `details` is
+    capped, so the identifiers survive a large result. The domain is the one
+    the item type's own route records, and so is `is_verified`: `SAT` for
+    logic; `VERIFIED` with `is_valid` true for math and code (code proven
+    unsafe is not); `VERIFIED` with a `proof_ref` for fact and SQL; and the
+    `/verify/natural_language` admission rule for natural language. The
+    appends run in worker threads.
+  - An item whose append fails is returned as `failed`, with no result and
+    the error `audit persistence failed`, so no result leaves without its row.
+  - Agents: the route appends the row `/verify/natural_language` writes, plus
+    `agent_id`, in a worker thread, before it logs the activity and returns.
+    If the append fails it returns 500 `audit persistence failed` and logs no
+    activity.
+  - As on the other routes, the row does not record the calling user yet
+    (#484).
 - **The "SOC 2" report no longer returns fixed PASS values (#476).**
   `GET /admin/compliance/report/soc2/{org_id}` returned `security_controls`
   and `compliance_status` blocks of fixed strings that nothing checked
@@ -524,7 +547,9 @@ All notable changes to the QWED Protocol will be documented in this file.
   `hmac_signature` and `previous_hash` stayed empty. `/admin/compliance/verify/{log_id}`
   and `verify_audit_trail` could not verify those rows, and the CSV export
   marked them `Legacy`. They now append through `AuditLogger`, so new rows are
-  HMAC-signed and chained per organisation.
+  HMAC-signed and chained per organisation. `/verify/batch` and
+  `/agents/{agent_id}/verify` wrote no row at all; they append one too now
+  (#477, under Fixed).
 - **Breaking: `QWED_AUDIT_SECRET_KEY` is required.** The server refuses to start
   without it. If an audit append fails at request time (key unset, a chain head
   that fails verification, a continuity mismatch, a database error), the request

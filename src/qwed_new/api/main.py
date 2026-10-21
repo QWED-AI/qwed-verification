@@ -1894,16 +1894,32 @@ async def agent_verify(
 ):
     """
     Agent makes a verification request through QWED.
-    Includes full audit trail.
+
+    Appends a chained, signed row to the organisation's audit trail, as
+    /verify/natural_language does, and also logs the call to the agent's
+    activity. The result is not returned if the audit append fails (#477).
     """
     import time
     start_time = time.time()
-    
+
     agent = _require_authenticated_agent(session, agent_id, x_agent_token)
     _enforce_agent_budget(session, agent_id, agent, request.query)
     _run_agent_security_checks(session, agent_id, agent, request)
     result = await _process_agent_verification(agent, request)
-    
+
+    # The same row /verify/natural_language writes, plus the agent id.
+    # AgentActivity is neither chained nor signed, so it is not the audit
+    # record (#477).
+    dr = _enforce_trust(_natural_language_diagnostic(result), query=request.query)
+    await asyncio.to_thread(_safe_commit_log, VerificationLog(
+        organization_id=agent.organization_id,
+        user_id=None,
+        query=request.query,
+        result=_cap_log_result({**dr.to_dict(), "agent_id": agent_id}),
+        is_verified=natural_language_admission(dr) is AdmissionDecision.ADMIT,
+        domain="MATH",
+    ))
+
     # 4. Log activity
     latency = (time.time() - start_time) * 1000
     agent_registry.log_activity(
@@ -2404,6 +2420,7 @@ async def startup_security_tasks():
 # ============================================================
 
 from qwed_new.core.batch import batch_service, BatchCapacityError
+from qwed_new.api.batch_audit import batch_audit_hook
 from typing import List
 
 class BatchVerifyRequest(BaseModel):
@@ -2462,8 +2479,12 @@ async def batch_verify(
         raise HTTPException(status_code=503, detail="Batch capacity reached — retry shortly.") from None
     
     # Process synchronously (for simplicity)
-    # For very large batches, return job_id and process async
-    job = await batch_service.process_job(job)
+    # For very large batches, return job_id and process async.
+    # Every item appends its audit row; an item whose append fails is
+    # returned as failed, without its result (#477).
+    job = await batch_service.process_job(job, audit=batch_audit_hook(
+        tenant, commit_log=_safe_commit_log, cap_result=_cap_log_result, max_chars=_MAX_LOG_RESULT_CHARS,
+    ))
     
     # Return results
     return batch_service.get_job_results(job.job_id)

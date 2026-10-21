@@ -11,6 +11,7 @@ import time
 import uuid
 import logging
 from collections import OrderedDict
+from collections.abc import Awaitable, Callable
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 from enum import Enum
@@ -175,13 +176,20 @@ class BatchVerificationService:
         self._jobs[job_id] = job
         return job
     
-    async def process_job(self, job: BatchJob) -> BatchJob:
+    async def process_job(
+        self,
+        job: BatchJob,
+        audit: Callable[[BatchJob, BatchItem], Awaitable[None]] | None = None,
+    ) -> BatchJob:
         """
         Process all items in a batch job concurrently.
-        
+
         Args:
             job: The batch job to process
-            
+            audit: Appends one audit row per item, after the item is verified
+                or has failed (#477). If it raises, the item is failed and its
+                result withheld, so no result is returned without its row.
+
         Returns:
             Updated BatchJob with results
         """
@@ -212,6 +220,8 @@ class BatchVerificationService:
                     logger.warning(f"Batch item {item.id} failed: {e}")
                 finally:
                     item.latency_ms = (time.time() - start_time) * 1000
+                if audit is not None:
+                    await self._audit_item(job, item, audit)
         
         # Process all items concurrently
         await asyncio.gather(*[process_item(item) for item in job.items])
@@ -228,6 +238,23 @@ class BatchVerificationService:
         
         return job
     
+    @staticmethod
+    async def _audit_item(
+        job: BatchJob,
+        item: BatchItem,
+        audit: Callable[[BatchJob, BatchItem], Awaitable[None]],
+    ) -> None:
+        """Append the item's audit row; fail the item if that fails (#477)."""
+        try:
+            await audit(job, item)
+        except Exception as exc:  # any failure fails the item
+            logger.exception("Batch item %s audit append failed: %s", item.id, type(exc).__name__)
+            if item.status == "completed":
+                job.failed_items += 1
+            item.status = "failed"
+            item.result = None
+            item.error = "audit persistence failed"
+
     async def _verify_item(
         self,
         item: BatchItem,
