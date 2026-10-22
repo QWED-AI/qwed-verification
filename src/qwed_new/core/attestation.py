@@ -12,6 +12,7 @@ Security contract (Issue #188):
 """
 
 import hashlib
+import re
 import json
 import base64
 import logging
@@ -266,6 +267,7 @@ class AttestationService:
         chain_index: Optional[int] = None,
         issued_at: Optional[int] = None,
         jti: Optional[str] = None,
+        proof_hash: Optional[str] = None,
     ) -> Attestation:
         """
         Create a signed attestation for a verification result.
@@ -278,6 +280,10 @@ class AttestationService:
             chain_index:         Optional index in the chain.
             issued_at:           Optional issuance epoch (injectable for determinism).
             jti:                 Optional attestation ID (injectable for determinism).
+            proof_hash:          Optional proof hash to bind as is, in place
+                                 of hashing proof_data: a DiagnosticResult's
+                                 proof_ref, which is already that hash (#320).
+                                 Give one of proof_data and proof_hash.
 
         Returns:
             Attestation object with signed JWT.
@@ -301,7 +307,11 @@ class AttestationService:
             "query_hash": self._hash_content(original_query),
         }
 
-        if proof_data:
+        if proof_data and proof_hash:
+            raise ValueError("give proof_data or proof_hash, not both")
+        if proof_hash:
+            qwed_claims["proof_hash"] = proof_hash
+        elif proof_data:
             qwed_claims["proof_hash"] = self._hash_content(proof_data)
 
         if chain_id:
@@ -477,6 +487,10 @@ def get_attestation_service() -> AttestationService:
     return _default_service
 
 
+# A DiagnosticResult proof_ref, bound as is by create_verification_attestation (#320).
+_PROOF_HASH = re.compile(r"sha256:[0-9a-f]{64}")
+
+
 def create_verification_attestation(
     status: str,
     verified: bool,
@@ -484,6 +498,7 @@ def create_verification_attestation(
     query: str,
     confidence: float = 1.0,
     proof_data: Optional[str] = None,
+    proof_hash: Optional[str] = None,
 ) -> AttestationResult:
     """Create a signed attestation for a verification result.
 
@@ -507,6 +522,9 @@ def create_verification_attestation(
         query:       The original query string.
         confidence:  Confidence score (0.0–1.0).
         proof_data:  Optional proof artifact string.
+        proof_hash:  Optional ``sha256:<hex>`` proof hash to bind as is, in
+                     place of hashing ``proof_data``: a DiagnosticResult's
+                     ``proof_ref`` (#320). A malformed value is BLOCKED.
 
     Returns:
         AttestationResult with status "ISSUED", "BLOCKED", or "UNVERIFIABLE".
@@ -523,7 +541,19 @@ def create_verification_attestation(
             error="cryptography/PyJWT package not installed",
         )
 
-    if verified and not proof_data:
+    if proof_hash is not None and not _PROOF_HASH.fullmatch(proof_hash):
+        logger.warning(
+            "attestation.blocked query_hash=%s reason=INVALID_PROOF_HASH",
+            hashlib.sha256(query.encode()).hexdigest()[:16],
+        )
+        return AttestationResult(
+            status=AttestationStatus.BLOCKED,
+            token=None,
+            error_code="INVALID_PROOF_HASH",
+            error="proof_hash must be sha256:<64 hex>",
+        )
+
+    if verified and not (proof_data or proof_hash):
         logger.warning(
             "attestation.blocked query_hash=%s reason=VERIFIED_WITHOUT_PROOF",
             hashlib.sha256(query.encode()).hexdigest()[:16],
@@ -543,7 +573,7 @@ def create_verification_attestation(
             engine=engine,
             confidence=confidence,
         )
-        attestation = service.create_attestation(result, query, proof_data)
+        attestation = service.create_attestation(result, query, proof_data, proof_hash=proof_hash)
         return AttestationResult(
             status=AttestationStatus.ISSUED,
             token=attestation.jwt_token,

@@ -19,7 +19,6 @@ from qwed_new.core.diagnostics import (
     AdvisoryCheck,
     DiagnosticResult,
     admission_decision,
-    enforce_trust_decision,
     merge_diagnostic_result,
 )
 from qwed_new.core.verifier import (
@@ -38,6 +37,7 @@ INTERNAL_PROCESSING_ERROR = "Internal processing error"
 
 from qwed_new.core.control_plane import ControlPlane, natural_language_admission
 from qwed_new.core.route_diagnostics import logic_diagnostic, natural_language_diagnostic
+from qwed_new.core.trust import attest_and_enforce
 from qwed_new.core.tenant_context import get_current_tenant, TenantContext
 from qwed_new.core.database import create_db_and_tables, get_session
 from qwed_new.core.audit_logger import get_audit_logger
@@ -371,17 +371,14 @@ def on_startup():
 # Initialize Kernel (Control Plane)
 control_plane = ControlPlane()
 
-# Trust boundary enforcement helper (currently advisory until #265)
-def _enforce_trust(
-    dr: DiagnosticResult, query: str
-) -> DiagnosticResult:
-    """Route a DiagnosticResult through trust boundary enforcement.
+def _enforce_trust(dr: DiagnosticResult, query: str, *, engine: str) -> DiagnosticResult:
+    """Sign a VERIFIED result and enforce its attestation as mandatory (#320).
 
-    Currently operates in advisory mode (require_attestation=False) pending
-    attestation issuance wiring. Callers must use the returned DiagnosticResult
-    for audit logging and response construction.
+    Callers must use the returned DiagnosticResult for audit logging and
+    response construction: a VERIFIED result whose attestation cannot be
+    issued or does not check out comes back BLOCKED (see core/trust.py).
     """
-    return enforce_trust_decision(dr, require_attestation=False, query=query)
+    return attest_and_enforce(dr, engine=engine, query=query)
 
 
 _merge_response = merge_diagnostic_result  # shared merge helper (#271)
@@ -632,7 +629,7 @@ async def verify_natural_language(
 
     if dr is None:
         dr = _natural_language_diagnostic(result)
-    dr = _enforce_trust(dr, query=request.query)
+    dr = _enforce_trust(dr, query=request.query, engine="natural_language")
     # The verdict covers the LLM's translated expression, not the user's
     # question, so it is never admitted for the question while the
     # translation itself is unverified. The verdict stays as produced
@@ -680,7 +677,7 @@ async def verify_logic(
         )
 
         # Shared with /verify/batch (#494).
-        dr = _enforce_trust(logic_diagnostic(result), query=request.query)
+        dr = _enforce_trust(logic_diagnostic(result), query=request.query, engine="logic")
 
         log = VerificationLog(
             organization_id=tenant.organization_id,
@@ -707,7 +704,7 @@ async def verify_logic(
             INTERNAL_VERIFICATION_ERROR,
             {"constraint_id": "api.logic.execution_error", "provider_used": provider_used},
         )
-        dr = _enforce_trust(dr, query=request.query)
+        dr = _enforce_trust(dr, query=request.query, engine="logic")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=request.query,
@@ -830,7 +827,7 @@ async def verify_stats(
         verifier = StatsVerifier()
 
         dr = await asyncio.to_thread(verifier.verify_stats, query, df, None)
-        dr = _enforce_trust(dr, query=query)
+        dr = _enforce_trust(dr, query=query, engine="stats")
 
         # Fail-closed audit semantics (P1 #297): never log a BLOCKED / non-
         # authoritative result as verified. is_authoritative is False for every
@@ -858,7 +855,7 @@ async def verify_stats(
             INTERNAL_PROCESSING_ERROR,
             {"constraint_id": "api.stats.execution_error"},
         )
-        dr = _enforce_trust(dr, query=query)
+        dr = _enforce_trust(dr, query=query, engine="stats")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=query,
@@ -927,7 +924,7 @@ async def verify_fact(
                 "Fact verification inconclusive",
                 developer_fields={"result": str(result)},
             )
-        dr = _enforce_trust(dr, query=claim)
+        dr = _enforce_trust(dr, query=claim, engine="fact")
 
         log = VerificationLog(
             organization_id=tenant.organization_id,
@@ -948,7 +945,7 @@ async def verify_fact(
             INTERNAL_VERIFICATION_ERROR,
             {"constraint_id": "api.fact.execution_error", "verdict": "ERROR"},
         )
-        dr = _enforce_trust(dr, query=claim)
+        dr = _enforce_trust(dr, query=claim, engine="fact")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=claim,
@@ -997,7 +994,7 @@ async def verify_code(
         # AdmissionDecision rather than letting authority-only consumers treat
         # proof_ref as "safe to execute".
         dr = result
-        dr = _enforce_trust(dr, query=code)
+        dr = _enforce_trust(dr, query=code, engine="code")
         admission = admission_decision(dr)
 
         log = VerificationLog(
@@ -1022,7 +1019,7 @@ async def verify_code(
             INTERNAL_VERIFICATION_ERROR,
             {"constraint_id": "api.code.execution_error", "is_safe": False},
         )
-        dr = _enforce_trust(dr, query=code)
+        dr = _enforce_trust(dr, query=code, engine="code")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=(code or "")[:200],
@@ -1163,7 +1160,7 @@ async def verify_math(
         if float_advisory is not None:
             dr.developer_fields.setdefault("advisory_checks", []).append(float_advisory)
 
-        dr = _enforce_trust(dr, query=expression)
+        dr = _enforce_trust(dr, query=expression, engine="math")
         # A proven-false identity is VERIFIED too, so the verdict alone is
         # not "safe to use": expose admission separately (QWED #15).
         admission = admission_decision(dr)
@@ -1190,7 +1187,7 @@ async def verify_math(
             INTERNAL_VERIFICATION_ERROR,
             {"constraint_id": "api.math.execution_error"},
         )
-        dr = _enforce_trust(dr, query=expression)
+        dr = _enforce_trust(dr, query=expression, engine="math")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=expression,
@@ -1236,7 +1233,7 @@ async def verify_sql(
         # SQL must never be admitted, so we expose an explicit AdmissionDecision rather
         # than letting authority-only consumers treat proof_ref as "safe to execute".
         dr = result
-        dr = _enforce_trust(dr, query=query)
+        dr = _enforce_trust(dr, query=query, engine="sql")
         admission = admission_decision(dr)
 
         log = VerificationLog(
@@ -1261,7 +1258,7 @@ async def verify_sql(
             INTERNAL_VERIFICATION_ERROR,
             {"constraint_id": "api.sql.execution_error", "is_valid": False},
         )
-        dr = _enforce_trust(dr, query=query)
+        dr = _enforce_trust(dr, query=query, engine="sql")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=query,
@@ -1315,7 +1312,7 @@ async def verify_image(
         result = verifier.verify_image(image_bytes, claim)
 
         dr = result
-        dr = _enforce_trust(dr, query=claim)
+        dr = _enforce_trust(dr, query=claim, engine="image")
 
         log = VerificationLog(
             organization_id=tenant.organization_id,
@@ -1336,7 +1333,7 @@ async def verify_image(
             INTERNAL_PROCESSING_ERROR,
             {"constraint_id": "api.image.execution_error", "verdict": "INCONCLUSIVE", "confidence": 0.0},
         )
-        dr = _enforce_trust(dr, query=claim)
+        dr = _enforce_trust(dr, query=claim, engine="image")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=f"Image claim: {claim}",
@@ -1412,7 +1409,7 @@ async def verify_rag(
                 "RAG configuration error",
                 developer_fields={"constraint_id": "api.rag.config_error"},
             )
-            dr = _enforce_trust(dr, query=request.target_document_id)
+            dr = _enforce_trust(dr, query=request.target_document_id, engine="rag")
             log = VerificationLog(
                 organization_id=tenant.organization_id,
                 query=f"RAG Document Verify: {request.target_document_id}",
@@ -1435,7 +1432,7 @@ async def verify_rag(
                 "RAG context mismatch detected",
                 developer_fields=result,
             )
-        dr = _enforce_trust(dr, query=request.target_document_id)
+        dr = _enforce_trust(dr, query=request.target_document_id, engine="rag")
 
         log = VerificationLog(
             organization_id=tenant.organization_id,
@@ -1457,7 +1454,7 @@ async def verify_rag(
             INTERNAL_PROCESSING_ERROR,
             {"constraint_id": "api.rag.execution_error", "verified": False},
         )
-        dr = _enforce_trust(dr, query=doc_id)
+        dr = _enforce_trust(dr, query=doc_id, engine="rag")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=f"RAG Document Verify: {doc_id}",
@@ -1520,7 +1517,7 @@ async def verify_process(
                 "Process verification did not pass",
                 developer_fields=result,
             )
-        dr = _enforce_trust(dr, query=request.trace)
+        dr = _enforce_trust(dr, query=request.trace, engine="process")
             
         log = VerificationLog(
             organization_id=tenant.organization_id,
@@ -1541,7 +1538,7 @@ async def verify_process(
             INTERNAL_PROCESSING_ERROR,
             {"constraint_id": "api.process.execution_error", "verified": False},
         )
-        dr = _enforce_trust(dr, query=request.trace)
+        dr = _enforce_trust(dr, query=request.trace, engine="process")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=f"Process Verification ({request.mode})",
@@ -1884,7 +1881,7 @@ async def agent_verify(
     # The same row /verify/natural_language writes, plus the agent id.
     # AgentActivity is neither chained nor signed, so it is not the audit
     # record (#477).
-    dr = _enforce_trust(_natural_language_diagnostic(result), query=request.query)
+    dr = _enforce_trust(_natural_language_diagnostic(result), query=request.query, engine="natural_language")
     admission = natural_language_admission(dr)
     await asyncio.to_thread(_safe_commit_log, VerificationLog(
         organization_id=agent.organization_id,
@@ -2087,7 +2084,7 @@ async def verify_with_consensus(
             "Consensus verification: blocked — secure execution",
             developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
         )
-        dr = _enforce_trust(dr, query=request.query)
+        dr = _enforce_trust(dr, query=request.query, engine="consensus")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=request.query,
@@ -2104,7 +2101,7 @@ async def verify_with_consensus(
             "Consensus verification: all engines blocked",
             developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
         )
-        dr = _enforce_trust(dr, query=request.query)
+        dr = _enforce_trust(dr, query=request.query, engine="consensus")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=request.query,
@@ -2120,7 +2117,7 @@ async def verify_with_consensus(
             f"Confidence ({result.confidence:.1%}) below required minimum ({request.min_confidence:.1%})",
             developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used, "min_confidence": request.min_confidence},
         )
-        dr = _enforce_trust(dr, query=request.query)
+        dr = _enforce_trust(dr, query=request.query, engine="consensus")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=request.query,
@@ -2134,7 +2131,7 @@ async def verify_with_consensus(
     # Convert consensus result via its own to_diagnostic_result() method —
     # it handles proof_ref, attestation evidence, and DiagnosticStatus mapping.
     dr = result.to_diagnostic_result()
-    dr = _enforce_trust(dr, query=request.query)
+    dr = _enforce_trust(dr, query=request.query, engine="consensus")
 
     log = VerificationLog(
         organization_id=tenant.organization_id,

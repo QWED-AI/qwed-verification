@@ -107,7 +107,9 @@ def test_verify_fact_success_path():
                 )
             ],
         },
-        proof_ref="test_ref",
+        # A well-formed proof hash: VERIFIED is now signed and the attestation
+        # binds this value, so a malformed one is blocked (#320).
+        proof_ref="sha256:" + "a" * 64,
     )
     with patch('qwed_new.core.fact_verifier.FactVerifier.verify_fact', return_value=mock_result):
         response = client.post(
@@ -121,7 +123,7 @@ def test_verify_fact_success_path():
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "VERIFIED"
-        assert data["proof_ref"] == "test_ref"
+        assert data["proof_ref"] == "sha256:" + "a" * 64
         assert data["is_authoritative"] is True
         assert "developer_fields" in data
         checks = data["developer_fields"]["advisory_checks"]

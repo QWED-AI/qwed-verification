@@ -6,6 +6,28 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Security
 
+- **Every verify route signs VERIFIED and enforces the attestation (#320).**
+  The control plane's maths path signed each VERIFIED result and enforced
+  the attestation as mandatory, but the other verify routes went through an
+  advisory wrapper (`require_attestation=False`), so they returned an
+  authoritative VERIFIED with a `proof_ref` that no attestation was ever
+  issued for or checked against. A consumer applying the admission rule
+  would admit it.
+  - `_enforce_trust` now calls `attest_and_enforce` (`core/trust.py`), as the
+    control plane does: a VERIFIED result is signed, binding its status,
+    `proof_ref` and the query, and the attestation is enforced as mandatory.
+    This covers `/verify/natural_language`, `logic`, `stats`, `fact`, `code`,
+    `math`, `sql`, `image`, `rag`, `process`, `consensus` and
+    `/agents/{agent_id}/verify`.
+  - A VERIFIED result whose attestation cannot be issued, or does not match
+    the result and the query, is returned BLOCKED (fail closed). A result
+    that is not VERIFIED is unchanged.
+  - `create_verification_attestation` takes `proof_hash`, to bind a
+    DiagnosticResult's `proof_ref` as is (it is already the hash of the
+    evidence); a value that is not `sha256:<64 hex>` is not signed.
+  - The batch, the statistics verifier and the Verification Context route
+    are not in this change (to follow), and the token is not returned to the
+    caller yet (#319).
 - **Role checks on the API-key and audit routes; `rbac.py` removed (#478).**
   The user-session routes under `/auth/api-keys` and `/audit` only required a
   logged-in user, so any role could create keys, list and revoke every key in
