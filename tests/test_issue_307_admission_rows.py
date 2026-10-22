@@ -72,7 +72,9 @@ def test_a_math_row_stores_the_admission_the_route_returned(client, isolated_aud
 
 
 def test_a_code_row_stores_the_admission_the_route_returned(client, isolated_audit_chain):
-    response = client.post("/verify/code", json={"code": "import os\nos.system('rm -rf /')", "language": "python"})
+    # Harmless input: the test checks the row matches the response, whatever
+    # the admission; it needs no dangerous code to do that.
+    response = client.post("/verify/code", json={"code": "def add(a, b):\n    return a + b\n", "language": "python"})
 
     row = _last_row(isolated_audit_chain)
     assert row.admission == response.json()["admission"]
