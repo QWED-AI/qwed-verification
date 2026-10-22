@@ -17,6 +17,7 @@ from qwed_new.auth.middleware import api_key_header, get_api_key
 from qwed_new.auth.roles import ensure_user_role
 from qwed_new.auth.routes import get_current_user_token
 from qwed_new.auth.security import is_api_key_live
+from qwed_new.core.api_key_usage import record_api_key_use
 from qwed_new.core.database import get_session
 from qwed_new.core.models import ApiKey, Organization, User
 
@@ -61,6 +62,9 @@ def _admin_from_api_key(api_key: ApiKey, session: Session, allowed_roles: list[s
         raise HTTPException(status_code=403, detail="Organization is not active")
     if user.role not in allowed_roles:
         raise HTTPException(status_code=403, detail="Insufficient permissions for this operation")
+    # Only now, so a key refused by any check above is never marked as used
+    # (#486). This runs in a worker thread on both admin paths.
+    record_api_key_use(session, api_key)
     return AdminContext(user, api_key)
 
 

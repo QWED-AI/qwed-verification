@@ -15,6 +15,7 @@ These dependencies are async, so the tests are `async def` under the repo's
 `asyncio.run` wrapper adds a second invocation to the block.
 """
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -69,8 +70,9 @@ class TestMiddlewareGetApiKey:
         session = MagicMock()
         # A live row (active, not revoked, no expiry) so it also clears the
         # liveness gate (#389) and the test still exercises the format path.
+        # Used just now, so no last_used_at write is due (#486).
         session.exec.return_value.first.return_value = MagicMock(
-            is_active=True, revoked_at=None, expires_at=None
+            is_active=True, revoked_at=None, expires_at=None, last_used_at=datetime.now(timezone.utc)
         )
         with patch("qwed_new.auth.middleware.hash_api_key", return_value="digest") as mock_hash:
             result = await get_api_key(api_key_header=_fixed_v2_key(), session=session)
@@ -103,7 +105,11 @@ class TestTenantContextGetCurrentTenant:
         session = MagicMock()
         # A live key row (active, not revoked, no expiry) so it clears the
         # liveness gate (#389); the test still exercises the format path.
-        api_key_row = MagicMock(organization_id=1, is_active=True, revoked_at=None, expires_at=None)
+        # Used just now, so no last_used_at write is due (#486).
+        api_key_row = MagicMock(
+            organization_id=1, is_active=True, revoked_at=None, expires_at=None,
+            last_used_at=datetime.now(timezone.utc),
+        )
         org_row = MagicMock(id=1, name="Org", tier="free")
         session.exec.return_value.first.side_effect = [api_key_row, org_row]
 

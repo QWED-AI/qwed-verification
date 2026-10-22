@@ -53,10 +53,6 @@ async def get_api_key(
             detail="Invalid or revoked API Key"
         )
     
-    # Update last used timestamp (optional - might impact performance if done every request)
-    # For high throughput, this should be done asynchronously or in batches
-    # api_key.last_used_at = datetime.utcnow()
-    # session.add(api_key)
-    # session.commit()
-    
+    # last_used_at is recorded by the caller once every check has passed
+    # (#486; see admin_auth._admin_from_api_key).
     return api_key
