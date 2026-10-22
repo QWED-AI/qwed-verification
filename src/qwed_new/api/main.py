@@ -51,6 +51,7 @@ from qwed_new.auth.middleware import get_api_key
 from qwed_new.auth.routes import get_current_user_token
 from qwed_new.auth.security import hash_api_key, is_api_key_live, validate_api_key_format
 from qwed_new.api.secret_scanning_routes import router as secret_scanning_router
+from qwed_new.api.compliance_routes import router as compliance_router
 
 TenantDependency = Annotated[TenantContext, Depends(get_current_tenant)]
 SessionDependency = Annotated[Session, Depends(get_session)]
@@ -291,6 +292,7 @@ app.include_router(auth_router)
 app.include_router(audit_router)
 app.include_router(verification_context_router)
 app.include_router(secret_scanning_router)
+app.include_router(compliance_router)
 
 # Verified leak reports -> auto-revoke + owner notify (#368). Assigned here
 # (not import-time in the routes module) so the production wiring is explicit
@@ -2199,6 +2201,7 @@ from qwed_new.core.compliance_exporter import ComplianceExporter
 from qwed_new.core.threat_detector import threat_detector
 from qwed_new.core.key_rotation import key_manager
 from qwed_new.auth.roles import ROLE_RANK
+from qwed_new.api.admin_auth import AdminContext, require_admin_role
 
 compliance_exporter = ComplianceExporter()
 
@@ -2210,66 +2213,22 @@ _FOREIGN_ORG_DETAIL = "Cannot access another organization's data"
 _ROLE_RANK = ROLE_RANK
 
 
-# Liveness for admin endpoints is the same rule the tenant boundary enforces;
-# import the one shared implementation (qwed_new.auth.security.is_api_key_live)
-# rather than keeping a second copy here (#389).
-_api_key_is_live = is_api_key_live
-
-
-class AdminContext:
-    """The authenticated principal for an admin endpoint: the API key, its owning
-    user (which carries the role) and the organization both are scoped to."""
-
-    def __init__(self, api_key: ApiKey, user: User):
-        self.api_key = api_key
-        self.user = user
-        self.organization_id = api_key.organization_id
-        self.role = user.role
-
-
-def require_admin_role(allowed_roles: list[str]):
-    """Dependency for admin endpoints (#222). get_api_key authenticates the key;
-    this authorizes it by the owning user's role. It replaces the old
-    @require_role decorator, which read request.state.user — never populated, so
-    every admin endpoint returned 401 (dead code). The returned AdminContext
-    carries organization_id so the handler can scope the action to the caller's
-    own org and never act on a caller-supplied id for another tenant (IDOR).
-
-    Fails closed before granting admin access: the key must be live (not expired
-    or revoked), the owning user must be active and in the key's own organization
-    (so a key cannot borrow a role from another tenant), the organization must be
-    active, and the role must be allowed."""
-
-    def dependency(
-        api_key: ApiKey = Depends(get_api_key),
-        session: Session = Depends(get_session),
-    ) -> AdminContext:
-        if not _api_key_is_live(api_key):
-            raise HTTPException(status_code=403, detail="API key is expired or revoked")
-        user = session.get(User, api_key.user_id) if api_key.user_id else None
-        if user is None or not user.is_active or user.organization_id != api_key.organization_id:
-            raise HTTPException(status_code=403, detail="API key is not authorized for admin operations")
-        org = session.get(Organization, api_key.organization_id)
-        if org is None or not org.is_active:
-            raise HTTPException(status_code=403, detail="Organization is not active")
-        if user.role not in allowed_roles:
-            raise HTTPException(status_code=403, detail="Insufficient permissions for this operation")
-        return AdminContext(api_key, user)
-
-    return dependency
+# AdminContext and require_admin_role live in api/admin_auth.py (#485).
 
 
 # Module-level dependency singletons (avoids calling require_admin_role in
 # argument defaults — Ruff B008 — and builds each dependency once).
 _REQUIRE_ADMIN = Depends(require_admin_role(["owner", "admin"]))
 _REQUIRE_ADMIN_OR_MEMBER = Depends(require_admin_role(["owner", "admin", "member"]))
+# The compliance routes also accept a signed-in owner or admin (#485).
+_REQUIRE_ADMIN_OR_SESSION = Depends(require_admin_role(["owner", "admin"], allow_session=True))
 _FOREIGN_ORG_RESPONSE = {403: {"description": _FOREIGN_ORG_DETAIL}}
 
 
 @app.get("/admin/compliance/export/csv", tags=["Compliance"], responses=_FOREIGN_ORG_RESPONSE)
 async def export_audit_csv(
     organization_id: int,
-    ctx: AdminContext = _REQUIRE_ADMIN,
+    ctx: AdminContext = _REQUIRE_ADMIN_OR_SESSION,
 ):
     """Export audit trail as CSV (admin, own organization only)."""
     if organization_id != ctx.organization_id:
@@ -2281,7 +2240,7 @@ async def export_audit_csv(
          responses={404: {"description": "Audit log entry not found"}})
 async def verify_audit_log_entry(
     log_id: int,
-    ctx: AdminContext = _REQUIRE_ADMIN,
+    ctx: AdminContext = _REQUIRE_ADMIN_OR_SESSION,
     session: Session = Depends(get_session)
 ):
     """
@@ -2304,7 +2263,7 @@ async def verify_audit_log_entry(
 )
 async def generate_soc2_report(
     org_id: int,
-    ctx: AdminContext = _REQUIRE_ADMIN,
+    ctx: AdminContext = _REQUIRE_ADMIN_OR_SESSION,
 ):
     """Security activity summary for the caller's organisation (own organisation only).
 

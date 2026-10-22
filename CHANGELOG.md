@@ -515,6 +515,25 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Changed
 
+- **The compliance routes accept a signed-in session, and check the whole
+  chain (#485).** They took an `x-api-key` only, so a dashboard user had to
+  paste an owner or admin key into the browser, and the only check was one
+  entry at a time.
+  - `GET /admin/compliance/verify/{log_id}`, `/admin/compliance/export/csv`,
+    `/admin/compliance/report/soc2/{org_id}` and the new `verify-trail` also
+    accept `Authorization: Bearer <jwt>` for an owner or admin. The session
+    gets the same checks as the user-session routes: an active user in an
+    active organisation, with an allowed role. `x-api-key` works as before
+    and is used when both are sent. The other `/admin/*` routes still take
+    an API key only.
+  - New `GET /admin/compliance/verify-trail?start=&end=` checks the
+    signature and hash chain of every entry of the caller's organisation in
+    the period (open-ended without `start` or `end`; a time without a zone is
+    UTC). It returns the same `audit_trail` fields as the activity summary
+    (#476): `VERIFIED` with a `proof_ref` only when there are entries and all
+    check out, `NO_ENTRIES`, or `NOT_VERIFIED`, with the counts and the new
+    `first_failed_entry_id`. `start` after `end` is 400.
+  - The activity summary's `audit_trail` gains `first_failed_entry_id` too.
 - **Audit rows record the API key that made them and the server version
   (#484).** A row could not say who wrote it or with which release.
   - `VerificationLog` has two new nullable columns: `api_key_id`, the id of
