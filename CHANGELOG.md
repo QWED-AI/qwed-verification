@@ -15,16 +15,30 @@ All notable changes to the QWED Protocol will be documented in this file.
   would admit it.
   - `_enforce_trust` now calls `attest_and_enforce` (`core/trust.py`), as the
     control plane does: a VERIFIED result is signed, binding its status,
-    `proof_ref` and the query, and the attestation is enforced as mandatory.
-    This covers `/verify/natural_language`, `logic`, `stats`, `fact`, `code`,
-    `math`, `sql`, `image`, `rag`, `process`, `consensus` and
-    `/agents/{agent_id}/verify`.
+    `proof_ref` and what the verdict is about, and the attestation is
+    enforced as mandatory. This covers `/verify/natural_language`, `logic`,
+    `stats`, `fact`, `code`, `math`, `sql`, `image`, `rag`, `process`,
+    `consensus` and `/agents/{agent_id}/verify`.
+  - What the verdict is about is the query, except for a natural-language
+    verdict, which covers the expression the question was translated into
+    (`verification_scope: translated_expression_only`): its attestation
+    binds that expression, as the control plane's own does. The signed
+    confidence is the engine's own where it reports one in [0, 1]
+    (consensus), and 1.0 otherwise.
   - A VERIFIED result whose attestation cannot be issued, or does not match
-    the result and the query, is returned BLOCKED (fail closed). A result
-    that is not VERIFIED is unchanged.
+    the result and the query, is returned BLOCKED (fail closed), with the
+    verdict that was not admitted kept beside the block (`verdict_status`,
+    `verdict_proof_ref`). A result that is not VERIFIED is unchanged.
   - `create_verification_attestation` takes `proof_hash`, to bind a
     DiagnosticResult's `proof_ref` as is (it is already the hash of the
-    evidence); a value that is not `sha256:<64 hex>` is not signed.
+    evidence); a value that is not `sha256:<64 hex>` is not signed, here or
+    in `AttestationService.create_attestation`. Tokens signed this way are
+    checked once and not kept in the service's in-memory registry, which
+    would otherwise grow with every VERIFIED response.
+  - **Breaking:** `/agents/{agent_id}/verify` returns the enforced result
+    with its `admission`, in the shape `/verify/natural_language` returns,
+    instead of the control plane's raw response, which still said VERIFIED
+    when enforcement had blocked it. The activity log records the same.
   - The batch, the statistics verifier and the Verification Context route
     are not in this change (to follow), and the token is not returned to the
     caller yet (#319).

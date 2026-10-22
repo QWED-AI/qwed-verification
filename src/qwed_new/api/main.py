@@ -1890,8 +1890,13 @@ async def agent_verify(
         result=_cap_log_result({**dr.to_dict(), "agent_id": agent_id}),
         is_verified=admission is AdmissionDecision.ADMIT,
         domain="MATH",
-        admission=admission.value,  # #307: decided, though not returned here
+        admission=admission.value,  # #307
     ))
+    # The enforced verdict with its admission, as /verify/natural_language
+    # returns: not the control plane's raw dict, which a failed attestation
+    # would not have blocked (#320).
+    response = _merge_response(dr)
+    response["admission"] = admission.value
 
     # 4. Log activity
     latency = (time.time() - start_time) * 1000
@@ -1899,14 +1904,14 @@ async def agent_verify(
         session, agent_id, agent.organization_id,
         "verification_request",
         f"Query: {request.query}",
-        result.get("status", "unknown"),
+        dr.status.value,
         input_data=request.query,
-        output_data=json.dumps(result),
+        output_data=json.dumps(response, default=str),
         cost=0.01,  # Placeholder cost
         latency_ms=latency
     )
-    
-    return result
+
+    return response
 
 @app.post("/agents/{agent_id}/tools/{tool_name}")
 async def agent_tool_call(

@@ -266,6 +266,36 @@ def test_the_agent_append_runs_off_the_event_loop(env, agent, monkeypatch):
     assert seen == ["in a worker thread"]
 
 
+def test_the_agent_response_is_the_enforced_verdict(env, agent, monkeypatch):
+    """#320: the route returns the enforced DiagnosticResult with its
+    admission, as /verify/natural_language does, not the control plane's dict."""
+    from qwed_new.core import trust
+    from qwed_new.core.attestation import AttestationResult, AttestationStatus
+
+    proven = DiagnosticResult.verified(
+        "Identity verified",
+        developer_fields={"is_valid": True, "query_semantics_verified": False},
+        evidence={"left": "2+2", "right": "4"},
+        proof_data="2+2=4",
+    )
+
+    async def nl(query, organization_id=None, preferred_provider=None):
+        return {"diagnostic": proven.to_dict(), "final_answer": "4"}
+
+    monkeypatch.setattr(main.control_plane, "process_natural_language", nl)
+    body = _agent_verify(env, agent).json()
+    assert body["status"] == "VERIFIED"
+    assert body["admission"] == "BLOCKED"  # the translation is not proven to mean the question
+    assert "final_answer" not in body
+
+    def fail(**kwargs):
+        return AttestationResult(status=AttestationStatus.BLOCKED, token=None, error_code="SIGNING_FAILURE", error="x")
+
+    monkeypatch.setattr(trust, "create_verification_attestation", fail)
+    body = _agent_verify(env, agent).json()
+    assert body["status"] == "BLOCKED"  # the raw dict would still have said VERIFIED
+
+
 def test_an_agent_verification_is_not_returned_if_the_append_fails(env, agent, monkeypatch):
     _break_the_audit_append(monkeypatch)
 

@@ -198,6 +198,9 @@ class IssuerKeyPair:
         }
 
 
+# A DiagnosticResult proof_ref, the only proof_hash form that is signed (#320).
+_PROOF_HASH = re.compile(r"sha256:[0-9a-f]{64}")
+
 # (#275) Single source of truth for the generic attestation rejection message.
 # Every caller-sensitive failure returns this exactly, so attackers cannot
 # enumerate trusted issuers, probe expirations, or read implementation state.
@@ -268,6 +271,7 @@ class AttestationService:
         issued_at: Optional[int] = None,
         jti: Optional[str] = None,
         proof_hash: Optional[str] = None,
+        store: bool = True,
     ) -> Attestation:
         """
         Create a signed attestation for a verification result.
@@ -283,7 +287,13 @@ class AttestationService:
             proof_hash:          Optional proof hash to bind as is, in place
                                  of hashing proof_data: a DiagnosticResult's
                                  proof_ref, which is already that hash (#320).
-                                 Give one of proof_data and proof_hash.
+                                 Give one of proof_data and proof_hash; a
+                                 proof_hash that is not sha256:<64 hex> is
+                                 refused.
+            store:               Keep the attestation in this service's
+                                 registry (get_attestation). False for a
+                                 token checked once in this process and not
+                                 returned, so it does not accumulate.
 
         Returns:
             Attestation object with signed JWT.
@@ -307,9 +317,12 @@ class AttestationService:
             "query_hash": self._hash_content(original_query),
         }
 
-        if proof_data and proof_hash:
+        # Checked here, at the signing boundary, not only by the wrapper.
+        if proof_data is not None and proof_hash is not None:
             raise ValueError("give proof_data or proof_hash, not both")
-        if proof_hash:
+        if proof_hash is not None:
+            if not _PROOF_HASH.fullmatch(proof_hash):
+                raise ValueError("proof_hash must be sha256:<64 hex>")
             qwed_claims["proof_hash"] = proof_hash
         elif proof_data:
             qwed_claims["proof_hash"] = self._hash_content(proof_data)
@@ -370,8 +383,8 @@ class AttestationService:
             header=header,
         )
 
-        # Store in registry
-        self._attestations[attestation_id] = attestation
+        if store:
+            self._attestations[attestation_id] = attestation
 
         return attestation
 
@@ -487,9 +500,6 @@ def get_attestation_service() -> AttestationService:
     return _default_service
 
 
-# A DiagnosticResult proof_ref, bound as is by create_verification_attestation (#320).
-_PROOF_HASH = re.compile(r"sha256:[0-9a-f]{64}")
-
 
 def create_verification_attestation(
     status: str,
@@ -573,7 +583,12 @@ def create_verification_attestation(
             engine=engine,
             confidence=confidence,
         )
-        attestation = service.create_attestation(result, query, proof_data, proof_hash=proof_hash)
+        # Not stored: the token is checked once by the caller in this process
+        # and not returned (#319), so keeping it would only grow memory with
+        # every VERIFIED response (#320).
+        attestation = service.create_attestation(
+            result, query, proof_data, proof_hash=proof_hash, store=False
+        )
         return AttestationResult(
             status=AttestationStatus.ISSUED,
             token=attestation.jwt_token,

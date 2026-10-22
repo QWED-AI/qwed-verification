@@ -120,6 +120,102 @@ def test_a_malformed_proof_hash_is_not_signed(bad):
     assert issued.error_code == "INVALID_PROOF_HASH"
 
 
+# ---------------------------------------------------------------- review fixes
+
+def test_issuing_through_the_wrapper_does_not_grow_the_registry():
+    from qwed_new.core.attestation import get_attestation_service
+
+    registry = get_attestation_service()._attestations
+    before = len(registry)
+    for i in range(5):
+        attest_and_enforce(_verified(), engine="logic", query=f"q{i}")
+
+    # The token is checked once and not returned (#319): nothing keeps it.
+    assert len(registry) == before
+
+
+def test_a_direct_signing_call_still_stores_unless_told_not_to():
+    from qwed_new.core.attestation import AttestationService, VerificationResult
+
+    service = AttestationService()
+    result = VerificationResult(status="VERIFIED", verified=True, engine="logic")
+    service.create_attestation(result, "q", proof_hash=PROOF)
+    service.create_attestation(result, "q", proof_hash=PROOF, store=False)
+
+    assert len(service._attestations) == 1
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"proof_hash": "sha256:bad"},
+    {"proof_hash": PROOF, "proof_data": ""},  # presence, not truthiness
+])
+def test_the_signing_boundary_itself_refuses_a_bad_proof_input(kwargs):
+    from qwed_new.core.attestation import AttestationService, VerificationResult
+
+    service = AttestationService()
+    result = VerificationResult(status="VERIFIED", verified=True, engine="logic")
+
+    with pytest.raises(ValueError):
+        service.create_attestation(result, "q", **kwargs)
+
+
+def test_a_signing_failure_keeps_the_verdict_beside_the_block(monkeypatch):
+    _signing_fails(monkeypatch)
+
+    out = attest_and_enforce(_verified(), engine="fact", query="claim")
+
+    assert out.status is DiagnosticStatus.BLOCKED
+    assert out.developer_fields["verdict_status"] == "VERIFIED"
+    assert out.developer_fields["verdict_proof_ref"] == PROOF
+    assert out.developer_fields["engine"] == "fact"
+
+
+def _capture_signing(monkeypatch):
+    seen = {}
+
+    def capture(**kwargs):
+        seen.update(kwargs)
+        return create_verification_attestation(**kwargs)
+
+    monkeypatch.setattr(trust, "create_verification_attestation", capture)
+    return seen
+
+
+def test_a_natural_language_verdict_binds_the_translated_expression(monkeypatch):
+    seen = _capture_signing(monkeypatch)
+    dr = _verified(translated_expression="2+2=4", verification_scope="translated_expression_only")
+
+    out = attest_and_enforce(dr, engine="natural_language", query="what is two plus two")
+
+    assert out.status is DiagnosticStatus.VERIFIED
+    assert seen["query"] == "2+2=4"
+
+
+def test_any_other_verdict_binds_the_query(monkeypatch):
+    seen = _capture_signing(monkeypatch)
+
+    attest_and_enforce(_verified(translated_expression="x"), engine="logic", query="(GT x 5)")
+
+    assert seen["query"] == "(GT x 5)"
+
+
+@pytest.mark.parametrize("reported, signed", [
+    (0.8, 0.8),
+    (1, 1.0),
+    (True, 1.0),
+    (1.5, 1.0),
+    (float("nan"), 1.0),
+    ("0.8", 1.0),
+    (None, 1.0),
+])
+def test_the_signed_confidence_is_the_engines_own(monkeypatch, reported, signed):
+    seen = _capture_signing(monkeypatch)
+
+    attest_and_enforce(_verified(confidence=reported), engine="consensus", query="q")
+
+    assert seen["confidence"] == signed
+
+
 # ---------------------------------------------------------------- the routes
 
 @pytest.fixture
