@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File, F
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
-from typing import Any, Optional, Annotated
+from typing import Optional, Annotated
 from sqlmodel import Session, select
 from datetime import datetime, timezone
 import asyncio
@@ -37,6 +37,7 @@ INTERNAL_VERIFICATION_ERROR = "Internal verification error"
 INTERNAL_PROCESSING_ERROR = "Internal processing error"
 
 from qwed_new.core.control_plane import ControlPlane, natural_language_admission
+from qwed_new.core.route_diagnostics import logic_diagnostic, natural_language_diagnostic
 from qwed_new.core.tenant_context import get_current_tenant, TenantContext
 from qwed_new.core.database import create_db_and_tables, get_session
 from qwed_new.core.audit_logger import get_audit_logger
@@ -656,30 +657,8 @@ async def verify_natural_language(
     return response
 
 
-def _natural_language_diagnostic(result: Any) -> DiagnosticResult:
-    """The verdict for a control-plane result.
-
-    The control plane attaches the DiagnosticResult it enforced (signed and
-    attested for decided verdicts, #437), so it is used as produced. Results
-    without one (security or policy blocks, non-math queries, errors) fall back
-    to the fail-closed legacy mapping, which can never yield VERIFIED.
-    """
-    if isinstance(result, dict) and "diagnostic" in result:
-        try:
-            return DiagnosticResult.from_dict(result["diagnostic"])
-        except (TypeError, ValueError, KeyError, AttributeError):
-            return DiagnosticResult.blocked(
-                "Verification blocked — control plane returned a malformed diagnostic",
-                {"constraint_id": "api.natural_language.malformed_diagnostic"},
-            )
-    verification_result = result.get("verification", {}) if isinstance(result, dict) else {}
-    try:
-        return DiagnosticResult.from_legacy_dict(verification_result, engine="math")
-    except ValueError:
-        return DiagnosticResult.unverifiable(
-            "Verification result unavailable — legacy engine did not retain proof artifacts",
-            {"constraint_id": "api.natural_language.legacy_conversion_failed", "legacy_status": verification_result.get("status")},
-        )
+# Shared with /verify/batch so a batch item gets what its route returns (#494).
+_natural_language_diagnostic = natural_language_diagnostic
 
 @app.post(
     "/verify/logic",
@@ -700,25 +679,8 @@ async def verify_logic(
             preferred_provider=request.provider
         )
 
-        status = result.get("status", "ERROR")
-
-        if status == "SAT":
-            dr = DiagnosticResult.verified(
-                "Logic constraints are satisfiable",
-                developer_fields=result,
-                evidence={"model": str(result.get("model")), "dsl_code": result.get("dsl_code", "")},
-            )
-        elif status == "UNSAT":
-            dr = DiagnosticResult.unverifiable(
-                "Logic constraints are unsatisfiable",
-                developer_fields=result,
-            )
-        else:
-            dr = DiagnosticResult.blocked(
-                result.get("error", "Logic verification failed"),
-                developer_fields=result,
-            )
-        dr = _enforce_trust(dr, query=request.query)
+        # Shared with /verify/batch (#494).
+        dr = _enforce_trust(logic_diagnostic(result), query=request.query)
 
         log = VerificationLog(
             organization_id=tenant.organization_id,

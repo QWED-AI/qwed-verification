@@ -19,6 +19,7 @@ from datetime import datetime
 
 from qwed_new.core.diagnostics import DiagnosticResult, admission_decision, enforce_trust_decision, merge_diagnostic_result
 from qwed_new.core.attestation import create_verification_attestation, AttestationStatus
+from qwed_new.core.route_diagnostics import logic_diagnostic, natural_language_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -270,17 +271,30 @@ class BatchVerificationService:
         Returns:
             Verification result
         """
+        # Logic and natural-language items get the DiagnosticResult their
+        # routes return, built by the same helpers with the same trust step,
+        # not the control plane's raw dict (#494).
         if item.verification_type == VerificationType.NATURAL_LANGUAGE:
-            return await self.control_plane.process_natural_language(
+            from qwed_new.core.control_plane import natural_language_admission
+
+            result = await self.control_plane.process_natural_language(
                 item.query,
                 organization_id=organization_id
             )
-        
+            dr = enforce_trust_decision(
+                natural_language_diagnostic(result), require_attestation=False, query=item.query
+            )
+            # As /verify/natural_language: the verdict covers the translated
+            # expression, so admission is decided by its own rule.
+            return merge_diagnostic_result(dr) | {"admission": natural_language_admission(dr).value}
+
         elif item.verification_type == VerificationType.LOGIC:
-            return await self.control_plane.process_logic_query(
+            result = await self.control_plane.process_logic_query(
                 item.query,
                 organization_id=organization_id
             )
+            dr = logic_diagnostic(result)
+            return merge_diagnostic_result(enforce_trust_decision(dr, require_attestation=False, query=item.query))
         
         elif item.verification_type == VerificationType.MATH:
             # sympy is CPU-bound; run it in a worker thread so a batch does not
