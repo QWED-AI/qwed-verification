@@ -532,6 +532,14 @@ All notable changes to the QWED Protocol will be documented in this file.
     `verificationlog` table at startup (`core/schema_migrations.py`).
     Existing rows read as null, which the API and the dashboard show as not
     recorded.
+  - Upgrade all at once, and do not roll back past this release. An older
+    release hashes a row without the two fields, so it cannot verify a row
+    this release wrote. When such a row is an organisation's chain head,
+    the older release refuses every further append for that organisation
+    (fail closed, so its verify routes return 500). Stop every process on
+    the old release before starting this one, as the single-writer rule
+    already requires, and once this release has written a row, do not go
+    back to an older one.
   - `GET /audit/logs` and `GET /audit/logs/{log_id}` return `api_key_id` (as
     a string, like other ids) and `verifier_version`.
   - `user_id` is unchanged: verify routes still write it as null. The key's

@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, text, update
 from sqlmodel import Session, SQLModel, select
 
 from qwed_new import __version__
@@ -126,9 +126,9 @@ def env(isolated_audit_chain):
         return AuditLogger().verify_log_entry(log_id, session)
 
     def tamper(log_id, **values):
-        sets = ", ".join(f"{name} = :{name}" for name in values)
+        """Change a stored row behind the logger's back, as a database writer could."""
         with engine.begin() as connection:
-            connection.execute(text(f"UPDATE verificationlog SET {sets} WHERE id = :id"), {**values, "id": log_id})
+            connection.execute(update(VerificationLog).where(VerificationLog.id == log_id).values(**values))
 
     yield SimpleNamespace(org=org, key=key, verify=verify, get=get, rows=rows, check=check, tamper=tamper)
     main.app.dependency_overrides.clear()

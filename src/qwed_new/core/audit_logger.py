@@ -15,6 +15,12 @@ unverified, and the first chained row after them opens a new segment.
 Single writer: the in-memory per-organisation chain head assumes one process
 appends to a given database. A second writer makes the next append fail with a
 continuity SecurityError rather than fork the chain.
+
+Releases: since #484 the entry hash covers ``api_key_id`` and
+``verifier_version``. An older release cannot verify a row hashed that way,
+so with such a row as an organisation's chain head it refuses further appends
+for that organisation. Upgrade every process together, and do not run an
+older release against a database a newer one has written to.
 """
 
 import hashlib
