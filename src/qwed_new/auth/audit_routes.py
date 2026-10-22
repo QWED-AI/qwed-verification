@@ -59,7 +59,9 @@ def stored_verdict(result: str) -> str | None:
 
     Reads the three shapes a row can hold: a DiagnosticResult from a
     /verify/* route (``status``), a Verification Context document
-    (``verdict``), and a /verify/batch item row (``details.result.status``).
+    (``verdict``), and a /verify/batch item row (its top-level ``verdict``,
+    kept outside the capped details since #494, or ``details.result.status``
+    on rows written before that).
     Only VERIFIED, UNVERIFIABLE and BLOCKED count; anything else, including
     a truncated result, is None. Nothing is worked out from ``is_verified``.
 
@@ -79,7 +81,7 @@ def stored_verdict(result: str) -> str | None:
     elif "batch_job_id" in value:
         details = value.get("details")
         inner = details.get("result") if isinstance(details, dict) else None
-        candidate = inner.get("status") if isinstance(inner, dict) else None
+        candidate = value.get("verdict") or (inner.get("status") if isinstance(inner, dict) else None)
     else:
         candidate = value.get("status")
     return candidate if isinstance(candidate, str) and candidate in _VERDICTS else None

@@ -72,6 +72,14 @@ def batch_item_admission(item: BatchItem) -> str | None:
     return admission if admission in (AdmissionDecision.ADMIT.value, AdmissionDecision.BLOCKED.value) else None
 
 
+def _verdict(item: BatchItem) -> str | None:
+    """The status of a completed item's DiagnosticResult, or None."""
+    if item.status != "completed" or not isinstance(item.result, dict):
+        return None
+    status = item.result.get("status")
+    return status if isinstance(status, str) else None
+
+
 def batch_audit_hook(
     tenant: Any,
     *,
@@ -94,6 +102,9 @@ def batch_audit_hook(
             "batch_item_id": item.id,
             "batch_item_type": item.verification_type.value,
             "item_status": item.status,
+            # The verdict sits outside the capped details, so /audit/logs can
+            # read it even when a large result is truncated (#494).
+            "verdict": _verdict(item),
             "details": json.loads(cap_result({"result": item.result, "error": item.error})),
         }
         text = json.dumps(row)

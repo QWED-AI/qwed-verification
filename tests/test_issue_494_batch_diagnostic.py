@@ -34,6 +34,14 @@ LOGIC_OUTPUTS = {
 
 NL_OUTPUTS = {
     "diagnostic": {"diagnostic": DiagnosticResult.unverifiable("not proven").to_dict()},
+    # The usual successful path: the translated expression is proven, but the
+    # translation's semantics are not, so VERIFIED is not admitted (#494 review).
+    "proven_translation": {"diagnostic": DiagnosticResult.verified(
+        "Identity verified",
+        developer_fields={"is_valid": True, "query_semantics_verified": False},
+        evidence={"left": "2+2", "right": "4"},
+        proof_data="2+2=4",
+    ).to_dict()},
     "not_math": {"status": "NOT_MATH_QUERY", "verification": {"status": "NOT_MATH_QUERY"}},
     "error": {"status": "ERROR"},
 }
@@ -93,6 +101,29 @@ def test_a_batch_natural_language_item_returns_what_its_route_returns(client, ca
     assert item["status"] == "completed"
     assert item["result"] == route
     assert item["result"]["admission"] in ("ADMIT", "BLOCKED")
+
+
+def test_a_proven_translation_stays_verified_and_is_not_admitted(client):
+    route, item = _route_and_batch(client, "natural_language", NL_OUTPUTS["proven_translation"])
+
+    assert item["result"] == route
+    assert item["result"]["status"] == "VERIFIED"
+    assert item["result"]["proof_ref"]
+    assert item["result"]["admission"] == "BLOCKED"
+
+
+def test_the_verdict_survives_a_truncated_batch_row(client, isolated_audit_chain):
+    # Many fields: past the cap's overall budget the whole result becomes a
+    # truncated preview, and its status with it.
+    huge = dict(LOGIC_OUTPUTS["sat"], model={f"v{i}": "7" * 120 for i in range(3000)})
+    batch_patch = _same_control_plane(huge, "process_logic_query")[1]
+    with batch_patch:
+        client.post("/verify/batch", json={"items": [{"query": "(GT x 5)", "type": "logic"}]})
+
+    (row,) = _batch_rows(isolated_audit_chain)
+    payload = json.loads(row.result)
+    assert payload["details"].get("truncated") is True  # the result itself did not fit
+    assert stored_verdict(row.result) == "VERIFIED"  # the verdict is kept beside the ids
 
 
 def test_a_satisfiable_batch_logic_item_is_verified_not_sat(client):

@@ -530,8 +530,14 @@ All notable changes to the QWED Protocol will be documented in this file.
     `/verify/natural_language` response, with `admission`.
   - Callers that read `status: "SAT"`/`"UNSAT"`, or the control plane's own
     fields at the top level of a batch logic or natural-language result, must
-    move to the DiagnosticResult fields (they remain under
-    `developer_fields`). Math, code, fact and SQL items are unchanged.
+    move to the DiagnosticResult fields. For logic items the control plane's
+    output remains under `developer_fields`. For natural-language items it
+    does not: as on `/verify/natural_language`, only the verdict is kept, and
+    fields such as `final_answer`, `translation` and `trust_boundary` are no
+    longer returned. Math, code, fact and SQL items are unchanged.
+  - A batch audit row keeps the item's verdict beside its ids, outside the
+    capped details, so `/audit/logs` still reads it when a large result is
+    truncated.
   - Their audit rows follow: logic rows now carry a verdict, and
     natural-language rows store the admission. Rows already written keep
     what they stored.
