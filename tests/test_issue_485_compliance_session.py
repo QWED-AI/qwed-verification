@@ -170,6 +170,20 @@ def test_other_admin_routes_still_need_an_api_key(env):
     assert response.status_code == 401
 
 
+def test_openapi_lists_the_bearer_token_as_an_alternative_to_the_key(env):
+    spec = env.client.get("/openapi.json").json()
+    trail = spec["paths"]["/admin/compliance/verify-trail"]["get"]
+    threats = spec["paths"]["/admin/security/threats/{org_id}"]["get"]
+
+    # Separate entries in "security" are alternatives (either one).
+    assert {"APIKeyHeader": []} in trail["security"]
+    assert {"SessionBearer": []} in trail["security"]
+    assert spec["components"]["securitySchemes"]["SessionBearer"]["scheme"] == "bearer"
+    assert all(param["name"].lower() != "authorization" for param in trail.get("parameters", []))
+    # API-key-only admin routes do not advertise the bearer.
+    assert {"SessionBearer": []} not in threats.get("security", [])
+
+
 # ---------------------------------------------------------------- whole chain
 
 def _trail(env, query=""):

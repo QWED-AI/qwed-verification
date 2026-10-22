@@ -7,10 +7,10 @@ dashboard can run the compliance checks without holding an API key in the
 browser. Both paths apply the same role allowlist and active checks.
 """
 
-
 import asyncio
 
-from fastapi import Depends, Header, HTTPException, Security
+from fastapi import Depends, HTTPException, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlmodel import Session
 
 from qwed_new.auth.middleware import api_key_header, get_api_key
@@ -23,7 +23,14 @@ from qwed_new.core.models import ApiKey, Organization, User
 # Dependency singletons (Ruff B008).
 _API_KEY = Depends(get_api_key)
 _API_KEY_HEADER = Security(api_key_header)
-_AUTHORIZATION = Header(None)
+# A security scheme, not a plain header, so OpenAPI lists the bearer token as
+# an alternative to the API key and generated clients can model it.
+_bearer_scheme = HTTPBearer(
+    auto_error=False,
+    scheme_name="SessionBearer",
+    description="A signed-in user's JWT (owner or admin), as an alternative to x-api-key",
+)
+_BEARER = Security(_bearer_scheme)
 _SESSION = Depends(get_session)
 
 
@@ -90,7 +97,7 @@ def require_admin_role(allowed_roles: list[str], *, allow_session: bool = False)
 
     async def api_key_or_session(
         x_api_key: str | None = _API_KEY_HEADER,
-        authorization: str | None = _AUTHORIZATION,
+        bearer: HTTPAuthorizationCredentials | None = _BEARER,
         session: Session = _SESSION,
     ) -> AdminContext:
         # The role and active checks read the database: run them in a worker
@@ -98,7 +105,8 @@ def require_admin_role(allowed_roles: list[str], *, allow_session: bool = False)
         if x_api_key:
             api_key = await get_api_key(x_api_key, session)
             return await asyncio.to_thread(_admin_from_api_key, api_key, session, allowed_roles)
-        if authorization:
+        if bearer is not None:
+            authorization = f"Bearer {bearer.credentials}"
             return await asyncio.to_thread(_admin_from_session, authorization, session, allowed_roles)
         raise HTTPException(status_code=401, detail="Missing x-api-key header or bearer token")
 
