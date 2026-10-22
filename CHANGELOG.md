@@ -523,8 +523,9 @@ All notable changes to the QWED Protocol will be documented in this file.
   - `get_current_tenant` records the key id for the request
     (`core/request_caller.py`), and the audit logger writes it on every row
     that request appends, so no verify route passes it by hand. A row
-    written without an API key, such as a user session or the audit seed,
-    has `api_key_id` null.
+    written without an API key has `api_key_id` null: a user session, the
+    audit seed, and `/agents/{agent_id}/verify`, which authenticates with an
+    agent token (its row's result names the agent, #477).
   - Both fields are covered by the entry hash, so changing or clearing them
     on a stored row fails verification. Rows written before this change
     still verify, and adding a caller to one of them breaks its hash.

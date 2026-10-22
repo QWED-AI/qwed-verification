@@ -7,7 +7,8 @@ its caller without passing the id through each ``VerificationLog`` it builds.
 A ``ContextVar`` is per request: each request runs in its own context, and
 worker threads (``asyncio.to_thread``, Starlette's threadpool) and tasks the
 request starts get a copy of it. A request that never passed through
-``get_current_tenant``, such as a user session or the audit seed, reads None.
+``get_current_tenant`` reads None: a user session, the audit seed, and
+/agents/{agent_id}/verify, which authenticates with an agent token.
 """
 
 from contextvars import ContextVar
