@@ -29,6 +29,17 @@ _READER = Depends(require_user_role(READ_ROLES))
 _ADMIN = Depends(require_user_role(ADMIN_ROLES))
 
 _VERDICTS = frozenset(v.value for v in Verdict)
+# Largest id an SQL BIGINT holds, as for API key ids in routes.py; a larger
+# id would overflow the query and fail with a server error instead of a 404.
+_MAX_LOG_ID = 2**63 - 1
+
+
+def _org_log(session: Session, log_id: int, organization_id: int) -> VerificationLog | None:
+    """The log with this id in this organisation, or None for any other id."""
+    if not 1 <= log_id <= _MAX_LOG_ID:
+        return None
+    log = session.get(VerificationLog, log_id)
+    return log if log and log.organization_id == organization_id else None
 
 
 def stored_verdict(result: str) -> str | None:
@@ -91,8 +102,8 @@ async def get_logs(
     ).order_by(VerificationLog.timestamp.desc(), VerificationLog.id.desc()).limit(limit)
 
     if before is not None:
-        cursor = session.get(VerificationLog, before)
-        if not cursor or cursor.organization_id != current_user.organization_id:
+        cursor = _org_log(session, before, current_user.organization_id)
+        if cursor is None:
             raise HTTPException(status_code=404, detail="Log not found")
         statement = statement.where(or_(
             VerificationLog.timestamp < cursor.timestamp,
@@ -145,9 +156,9 @@ async def get_log_detail(
     HMAC signature, as stored. ``verdict`` and ``status`` are as on the list,
     and neither is an admission decision.
     """
-    log = session.get(VerificationLog, log_id)
+    log = _org_log(session, log_id, current_user.organization_id)
 
-    if not log or log.organization_id != current_user.organization_id:
+    if log is None:
         raise HTTPException(status_code=404, detail="Log not found")
 
     return {

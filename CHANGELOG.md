@@ -527,6 +527,9 @@ All notable changes to the QWED Protocol will be documented in this file.
   - A `before` that is not a log in the caller's organisation returns 404,
     as the detail route does. `limit` and the `status` filter work as
     before, and `total` is still the number of rows on the page.
+  - An id outside the SQL BIGINT range (for example `2**63`) is 404 on
+    both `before` and `GET /audit/logs/{log_id}`. On SQLite the lookup
+    raised `OverflowError` and the route returned 500.
 - **The audit log routes report the stored verdict and the chain entry
   (#484).** `GET /audit/logs` and `GET /audit/logs/{log_id}` returned only
   `status`, derived from `is_verified`, so an UNVERIFIABLE result read

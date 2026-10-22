@@ -49,13 +49,18 @@ def env(tmp_path):
     client = TestClient(main.app)
     token = create_access_token({"sub": str(viewer.id)})
 
+    headers = {"Authorization": f"Bearer {token}"}
+
     def get(**params):
-        return client.get("/audit/logs", params=params, headers={"Authorization": f"Bearer {token}"})
+        return client.get("/audit/logs", params=params, headers=headers)
+
+    def detail(log_id):
+        return client.get(f"/audit/logs/{log_id}", headers=headers)
 
     # Newest first: timestamp descending, then id descending.
     expected = [str(r.id) for r in sorted(rows, key=lambda r: (r.timestamp, r.id), reverse=True)]
 
-    yield SimpleNamespace(get=get, rows=rows, other=other, expected=expected)
+    yield SimpleNamespace(get=get, detail=detail, rows=rows, other=other, expected=expected)
     main.app.dependency_overrides.clear()
     session.close()
 
@@ -104,7 +109,8 @@ def test_a_shared_timestamp_split_across_pages_loses_nothing(env):
     # of them after the cursor, and only the id comparison keeps it.
     first = env.get(limit=1).json()
     second = env.get(limit=1, before=first["next_before"]).json()
-    assert [first["logs"][0]["id"], second["logs"][0]["id"]] == env.expected[:2]
+    pair = [first["logs"][0]["id"], second["logs"][0]["id"]]
+    assert pair == env.expected[:2]
     assert env.rows[5].timestamp == env.rows[6].timestamp
 
 
@@ -123,3 +129,22 @@ def test_a_cursor_from_another_organisation_is_404(env):
 
 def test_an_unknown_cursor_is_404(env):
     assert env.get(before=999_999).status_code == 404
+
+
+# Ids no row can have. 2**63 does not fit an SQL BIGINT: on SQLite it made
+# the lookup raise OverflowError, a 500 instead of a 404.
+OUT_OF_RANGE = [0, -1, 2**63, 10**30]
+
+
+@pytest.mark.parametrize("log_id", OUT_OF_RANGE)
+def test_an_out_of_range_cursor_is_404(env, log_id):
+    response = env.get(before=log_id)
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Log not found"
+
+
+@pytest.mark.parametrize("log_id", OUT_OF_RANGE)
+def test_an_out_of_range_log_id_on_the_detail_route_is_404(env, log_id):
+    response = env.detail(log_id)
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Log not found"
