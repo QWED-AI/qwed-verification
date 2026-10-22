@@ -6,6 +6,7 @@ from sqlalchemy.exc import ArgumentError
 from sqlalchemy.engine.url import make_url
 from sqlmodel import SQLModel, create_engine, Session
 
+from qwed_new.core.schema_migrations import add_missing_columns
 from qwed_new.core.url_safety import sanitize_url
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,9 @@ if parsed_db_url is not None and parsed_db_url.drivername.startswith("sqlite"):
 
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
+    # create_all leaves existing tables as they are; add the columns newer
+    # releases expect (#484).
+    add_missing_columns(engine)
 
 def get_session():
     with Session(engine) as session:

@@ -15,6 +15,12 @@ unverified, and the first chained row after them opens a new segment.
 Single writer: the in-memory per-organisation chain head assumes one process
 appends to a given database. A second writer makes the next append fail with a
 continuity SecurityError rather than fork the chain.
+
+Releases: since #484 the entry hash covers ``api_key_id`` and
+``verifier_version``. An older release cannot verify a row hashed that way,
+so with such a row as an organisation's chain head it refuses further appends
+for that organisation. Upgrade every process together, and do not run an
+older release against a database a newer one has written to.
 """
 
 import hashlib
@@ -29,8 +35,10 @@ from typing import Any, Dict, Optional
 from sqlalchemy import text
 from sqlmodel import Session, create_engine, select
 
+from qwed_new import __version__ as _QWED_VERSION
 from qwed_new.core import database as _database
 from qwed_new.core.models import Organization, VerificationLog
+from qwed_new.core.request_caller import request_api_key_id
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +202,9 @@ class AuditLogger:
                     "Audit chain continuity mismatch: in-memory chain head does not match persisted audit trail"
                 )
 
+            # The caller and the server version (#484), both covered by the
+            # hash: clearing either on a stored row fails verification.
+            api_key_id = request_api_key_id()
             log_data = {
                 "organization_id": organization_id,
                 "user_id": user_id,
@@ -204,6 +215,8 @@ class AuditLogger:
                 "timestamp": timestamp.isoformat(),
                 "previous_hash": previous_hash,
                 "raw_llm_output": raw_llm_output,
+                "api_key_id": api_key_id,
+                "verifier_version": _QWED_VERSION,
             }
 
             entry_hash = self._compute_hash(log_data)
@@ -221,6 +234,8 @@ class AuditLogger:
                 hmac_signature=signature,
                 previous_hash=previous_hash,
                 raw_llm_output=raw_llm_output,
+                api_key_id=api_key_id,
+                verifier_version=_QWED_VERSION,
             )
             session.add(log_entry)
             session.commit()
@@ -455,6 +470,14 @@ class AuditLogger:
     def _reconstruct_log_data(self, log_entry: VerificationLog) -> Dict[str, Any]:
         """Rebuild the canonical payload for integrity verification."""
         return {
+            **self._reconstruct_pre_caller_log_data(log_entry),
+            "api_key_id": log_entry.api_key_id,
+            "verifier_version": log_entry.verifier_version,
+        }
+
+    def _reconstruct_pre_caller_log_data(self, log_entry: VerificationLog) -> dict[str, Any]:
+        """Rebuild the payload for entries hashed before the caller was covered (#484)."""
+        return {
             "organization_id": log_entry.organization_id,
             "user_id": log_entry.user_id,
             "query": log_entry.query,
@@ -532,12 +555,21 @@ class AuditLogger:
         #380, runtime-verified). The extra spellings admit no forgery: the
         HMAC still gates on the stored hash, and without the key no valid
         signature can be minted for any spelling.
+
+        A row that records its caller (``api_key_id`` or ``verifier_version``
+        set, #484) is checked against the current payload only. The older
+        shapes leave both fields out, so accepting them for such a row would
+        let anyone with database write access set or change the caller on a
+        row written before #484 without breaking its hash.
         """
+        payloads = [self._reconstruct_log_data(log_entry)]
+        if log_entry.api_key_id is None and log_entry.verifier_version is None:
+            payloads += [
+                self._reconstruct_pre_caller_log_data(log_entry),
+                self._reconstruct_legacy_log_data(log_entry),
+            ]
         candidates = []
-        for payload in (
-            self._reconstruct_log_data(log_entry),
-            self._reconstruct_legacy_log_data(log_entry),
-        ):
+        for payload in payloads:
             candidates.append(self._compute_hash(payload))
             naive_payload = dict(payload)
             naive_payload["timestamp"] = _naive_ts(log_entry.timestamp).isoformat()
