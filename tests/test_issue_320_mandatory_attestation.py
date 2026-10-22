@@ -14,6 +14,7 @@ attestation cannot be issued, or does not check out, is BLOCKED.
 
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -243,16 +244,55 @@ def _logic_sat():
     return patch.object(api_main.control_plane, "process_logic_query", sat)
 
 
+def _image_proven():
+    class Verifier:
+        def __init__(self, use_vlm_fallback=False):
+            pass
+
+        def verify_image(self, image_bytes, claim):
+            return _verified(verdict="SUPPORTED")
+
+    return patch("qwed_new.core.image_verifier.ImageVerifier", Verifier)
+
+
+def _consensus_proven():
+    result = SimpleNamespace(
+        agreement_status="unanimous",
+        confidence=0.97,
+        engines_used=1,
+        final_answer="4",
+        verification_chain=[],
+        total_latency_ms=1.0,
+        to_diagnostic_result=lambda: _verified(confidence=0.97),
+    )
+
+    async def verify_async(**kwargs):
+        return result
+
+    return patch.object(api_main.consensus_verifier, "verify_async", verify_async)
+
+
 def _post(client, route):
     if route == "logic":
         with _logic_sat():
             return client.post("/verify/logic", json={"query": "(GT x 5)"}).json()
     if route == "math":
         return client.post("/verify/math", json={"expression": "2+2=4"}).json()
+    if route == "image":
+        with _image_proven():
+            # The verifier is replaced, so any non-empty bytes will do.
+            files = {"image": ("i.png", b"not decoded", "image/png")}
+            return client.post("/verify/image", files=files, data={"claim": "800x600"}).json()
+    if route == "consensus":
+        with _consensus_proven():
+            return client.post("/verify/consensus", json={"query": "2+2", "min_confidence": 0.9}).json()
     raise AssertionError(route)
 
 
-@pytest.mark.parametrize("route", ["logic", "math"])
+ROUTES = ["logic", "math", "image", "consensus"]
+
+
+@pytest.mark.parametrize("route", ROUTES)
 def test_a_route_returns_verified_when_the_attestation_checks_out(client, route):
     body = _post(client, route)
 
@@ -260,7 +300,7 @@ def test_a_route_returns_verified_when_the_attestation_checks_out(client, route)
     assert body["proof_ref"]
 
 
-@pytest.mark.parametrize("route", ["logic", "math"])
+@pytest.mark.parametrize("route", ROUTES)
 def test_a_route_blocks_verified_when_signing_fails(client, monkeypatch, route):
     # Before #320 the advisory wrapper returned these VERIFIED regardless.
     _signing_fails(monkeypatch)
@@ -269,6 +309,14 @@ def test_a_route_blocks_verified_when_signing_fails(client, monkeypatch, route):
 
     assert body["status"] == "BLOCKED"
     assert body["proof_ref"] is None
+
+
+def test_a_blocked_consensus_does_not_meet_the_requirement(client, monkeypatch):
+    assert _post(client, "consensus")["meets_requirement"] is True
+
+    _signing_fails(monkeypatch)
+
+    assert _post(client, "consensus")["meets_requirement"] is False
 
 
 def test_no_route_enforces_attestation_as_advisory():
