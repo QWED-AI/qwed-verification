@@ -19,15 +19,28 @@ router = APIRouter(prefix="/admin/compliance", tags=["Compliance"])
 
 # Owners and admins, with an API key or a signed-in session.
 _REQUIRE_ADMIN_OR_SESSION = Depends(require_admin_role(["owner", "admin"], allow_session=True))
-_START = Query(None, description="Check entries at or after this time (UTC if no zone)")
-_END = Query(None, description="Check entries at or before this time (UTC if no zone)")
+_START = Query(None, description="Check entries at or after this time (UTC if no zone; other offsets are converted)")
+_END = Query(None, description="Check entries at or before this time (UTC if no zone; other offsets are converted)")
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
-    """A time without a zone is read as UTC, so it compares with stored times."""
-    if value is None or value.tzinfo is not None:
-        return value
-    return value.replace(tzinfo=timezone.utc)
+    """A time in UTC, so it compares with stored times: one without a zone is
+    read as UTC, and one with another offset is converted (SQLite drops the
+    offset when it compares)."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _check_period(start: datetime | None, end: datetime | None) -> None:
+    """Refuse a period whose start is after its end. An open side (None)
+    cannot be out of order, so it is accepted explicitly."""
+    if start is None or end is None:
+        return
+    if start > end:
+        raise HTTPException(status_code=400, detail="start must not be after end")
 
 
 @router.get(
@@ -54,8 +67,7 @@ async def verify_audit_trail(
     request wrote one.
     """
     start, end = _as_utc(start), _as_utc(end)
-    if start and end and start > end:
-        raise HTTPException(status_code=400, detail="start must not be after end")
+    _check_period(start, end)
     # Off the event loop: the check queries the database for every entry.
     result = await asyncio.to_thread(ComplianceExporter.audit_trail_check, ctx.organization_id, start, end)
     return {

@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine
 
 from qwed_new.api import main
@@ -187,7 +188,8 @@ def test_an_intact_chain_is_verified_with_a_proof_ref(env):
     assert trail["evidence"]["first_entry_id"] == ids[0]
     assert trail["evidence"]["last_entry_id"] == ids[-1]
     assert trail["proof_ref"].startswith("sha256:")
-    assert trail["start"] is None and trail["end"] is None
+    assert trail["start"] is None
+    assert trail["end"] is None
 
 
 def test_a_broken_chain_names_the_first_failing_entry(env):
@@ -215,10 +217,97 @@ def test_the_period_bounds_the_entries_checked(env):
     # A time without a zone is read as UTC.
     naive = _trail(env, f"?end={(now - timedelta(hours=1)).replace(tzinfo=None).isoformat()}")
 
-    assert inside["status"] == "VERIFIED" and inside["total_entries"] == 1
+    assert inside["status"] == "VERIFIED"
+    assert inside["total_entries"] == 1
     assert later["status"] == "NO_ENTRIES"
     assert naive["status"] == "NO_ENTRIES"
     assert naive["end"].endswith("+00:00")
+
+
+def test_a_time_with_another_offset_is_converted_to_utc(env):
+    _log(env.acme.id)
+    india = timezone(timedelta(hours=5, minutes=30))
+    # Two hours ago in UTC, written in +05:30: the entry (now) is after it.
+    start = (datetime.now(timezone.utc) - timedelta(hours=2)).astimezone(india)
+    # Three hours from now in +05:30 would read as earlier than now if the
+    # offset were dropped; converted, it is after the entry.
+    end = (datetime.now(timezone.utc) + timedelta(hours=3)).astimezone(india)
+
+    trail = _trail(env, f"?start={start.isoformat()}&end={end.isoformat()}".replace("+", "%2B"))
+
+    assert trail["status"] == "VERIFIED"
+    assert trail["total_entries"] == 1
+    assert trail["start"] == start.astimezone(timezone.utc).isoformat()
+    assert trail["end"] == end.astimezone(timezone.utc).isoformat()
+
+
+def test_a_token_whose_subject_is_not_a_user_id_is_401(env):
+    headers = {"Authorization": f"Bearer {create_access_token({'sub': 'not-a-number'})}"}
+
+    assert env.client.get("/admin/compliance/verify-trail", headers=headers).status_code == 401
+
+
+# ---------------------------------------------------------------- one ordered pass
+
+def _count_statements(engine, run):
+    statements = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        run()
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    return len(statements)
+
+
+def test_the_trail_check_does_not_query_per_entry(env):
+    check = audit_module.get_audit_logger().verify_audit_trail
+    _log(env.acme.id, "0+0")
+    few = _count_statements(audit_module.engine, lambda: check(env.acme.id))
+    for i in range(1, 30):
+        _log(env.acme.id, f"{i}+{i}")
+
+    many = _count_statements(audit_module.engine, lambda: check(env.acme.id))
+
+    assert many == few
+
+
+def test_the_one_pass_check_agrees_with_checking_each_entry(env):
+    """Legacy rows, another organisation's rows in between, tampered rows and a
+    row whose clock went back: the trail result matches verify_log_entry."""
+    logger = audit_module.get_audit_logger()
+    legacy = VerificationLog(organization_id=env.acme.id, query="old", result="{}", is_verified=True, domain="math")
+    env.session.add(legacy)
+    env.session.commit()
+    env.session.refresh(legacy)
+    ids = []
+    for i in range(6):
+        ids.append(_log(env.acme.id, f"{i}+{i}"))
+        _log(env.globex.id, f"other {i}")
+    tampered = env.session.get(VerificationLog, ids[2])
+    tampered.result = '{"status": "FAILED"}'
+    skewed = env.session.get(VerificationLog, ids[4])
+    skewed.timestamp = skewed.timestamp - timedelta(days=365)
+    env.session.add(tampered)
+    env.session.add(skewed)
+    env.session.commit()
+    start = datetime.now(timezone.utc) - timedelta(days=1)
+
+    trail = logger.verify_audit_trail(env.acme.id, start_date=start)
+
+    with Session(audit_module.engine) as session:
+        expected = {i: logger.verify_log_entry(i, session) for i in [legacy.id, *ids] if i != ids[4]}
+    assert trail["total_entries"] == len(expected)
+    assert trail["verified_entries"] == sum(r["valid"] for r in expected.values())
+    assert trail["failed_entries"] == [i for i, r in expected.items() if not r["valid"] and not r.get("legacy")]
+    assert trail["legacy_entries"] == [legacy.id]
+    assert trail["failed_entries"] == [ids[2]]
+    assert ids[4] not in trail["failed_entries"]
+    assert trail["first_entry_id"] == legacy.id
+    assert trail["last_entry_id"] == ids[-1]
 
 
 def test_start_after_end_is_400(env):

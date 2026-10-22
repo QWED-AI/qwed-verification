@@ -8,6 +8,8 @@ browser. Both paths apply the same role allowlist and active checks.
 """
 
 
+import asyncio
+
 from fastapi import Depends, Header, HTTPException, Security
 from sqlmodel import Session
 
@@ -91,11 +93,13 @@ def require_admin_role(allowed_roles: list[str], *, allow_session: bool = False)
         authorization: str | None = _AUTHORIZATION,
         session: Session = _SESSION,
     ) -> AdminContext:
+        # The role and active checks read the database: run them in a worker
+        # thread, as FastAPI runs a sync dependency, not on the event loop.
         if x_api_key:
             api_key = await get_api_key(x_api_key, session)
-            return _admin_from_api_key(api_key, session, allowed_roles)
+            return await asyncio.to_thread(_admin_from_api_key, api_key, session, allowed_roles)
         if authorization:
-            return _admin_from_session(authorization, session, allowed_roles)
+            return await asyncio.to_thread(_admin_from_session, authorization, session, allowed_roles)
         raise HTTPException(status_code=401, detail="Missing x-api-key header or bearer token")
 
     return api_key_or_session if allow_session else api_key_only
