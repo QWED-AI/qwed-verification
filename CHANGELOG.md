@@ -525,7 +525,9 @@ All notable changes to the QWED Protocol will be documented in this file.
     route): `/verify/natural_language`,
     `/verify/code`, `/verify/math` and `/verify/sql`, the agent route
     `/agents/{agent_id}/verify` (natural-language rule, decided though not
-    returned) and `/verify/batch` code items. Routes that decide none
+    returned), `/verify/batch` code items and
+    `/verification-context/from-diagnostic` (stored as returned, "ADMIT" or
+    "DENY" in the Verification Context spec's terms). Routes that decide none
     (logic, stats, fact, image, RAG, process, consensus, other batch items)
     store null, as do rows written before this release.
   - The entry hash covers `admission`, so it cannot be set or cleared on a

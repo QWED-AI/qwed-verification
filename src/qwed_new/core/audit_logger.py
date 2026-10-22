@@ -142,7 +142,8 @@ class AuditLogger:
         Log a verification event with cryptographic signature.
 
         ``admission`` is the admission decision the route made ("ADMIT" or
-        "BLOCKED"), or None when the route decides none (#307).
+        "BLOCKED"; "ADMIT" or "DENY" from the Verification Context route), or
+        None when the route decides none (#307).
         It is stored and covered by the hash.
 
         ``result`` is either a dict, serialised here, or an already-serialised

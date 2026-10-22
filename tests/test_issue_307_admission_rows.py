@@ -101,6 +101,26 @@ def test_a_natural_language_row_stores_the_admission_the_route_returned(client, 
     assert row.admission == "BLOCKED"
 
 
+def test_a_verification_context_row_stores_the_admission_it_returned(client, isolated_audit_chain):
+    """from-diagnostic decides "ADMIT" or "DENY" (the spec's terms) and returns
+    it in the document; the row stores it as returned (#307 review)."""
+    diagnostic = DiagnosticResult.unverifiable("not proven").to_dict()
+    with patch("qwed_new.api.verification_context_routes.check_rate_limit"):
+        response = client.post(
+            "/verification-context/from-diagnostic",
+            json={"query": "mean of a == 2", "verifier": "TestVerifier", "diagnostic": diagnostic},
+        )
+        returned = response.json()["context"]["decision"]["admission"]
+        row = _last_row(isolated_audit_chain)
+        assert returned in ("ADMIT", "DENY")
+        assert row.admission == returned
+        assert _verify(isolated_audit_chain, row.id)["valid"] is True
+
+        # validate decides no admission: null.
+        client.post("/verification-context/validate", json={"document": {"spec_version": "1.0"}})
+        assert _last_row(isolated_audit_chain).admission is None
+
+
 # ---------------------------------------------------------------- routes that do not
 
 def test_a_route_that_decides_no_admission_stores_null(client, isolated_audit_chain):

@@ -103,8 +103,10 @@ async def get_logs(
     row's ``is_verified``, which each route sets by its own rule. Neither
     is an admission decision.
 
-    ``admission`` is the admission decision the route made, "ADMIT" or
-    "BLOCKED", as stored (#307): the one it returned, except on
+    ``admission`` is the admission decision the route made, as stored
+    (#307): "ADMIT" or "BLOCKED", or "ADMIT" or "DENY" on
+    /verification-context/from-diagnostic (the Verification Context spec's
+    terms). It is the one the route returned, except on
     /agents/{agent_id}/verify, which decides one without returning it. It
     is null where the route
     decides none (logic, stats, fact, image, RAG, process, consensus, and

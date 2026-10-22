@@ -90,7 +90,11 @@ def _safe_commit_context_log(
     query: str,
     result: Dict[str, Any],
     is_verified: bool,
+    admission: Optional[str] = None,
 ) -> None:
+    """``admission`` is the decision the route returned, or None when it
+    decides none (#307): from-diagnostic decides "ADMIT" or "DENY", in the
+    Verification Context spec's terms; validate and resolve decide none."""
     if session is None:
         return
     # Appended to the organisation's signed audit chain (core.audit_logger),
@@ -104,6 +108,7 @@ def _safe_commit_context_log(
             result=json.dumps(_redact_strings(result)),
             is_verified=is_verified,
             domain="VERIFICATION_CONTEXT",
+            admission=admission,
         )
     except (TypeError, ValueError, SQLAlchemyError, SecurityError):
         raise HTTPException(
@@ -147,6 +152,7 @@ def create_verification_context_from_diagnostic(
         document_dict,
         document_dict["verdict"] == "VERIFIED"
         and document_dict["context"]["decision"]["admission"] == "ADMIT",
+        admission=document_dict["context"]["decision"]["admission"],
     )
     return document_dict
 
