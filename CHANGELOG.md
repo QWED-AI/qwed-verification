@@ -515,6 +515,32 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Changed
 
+- **Breaking for `/verify/batch`: logic and natural-language items return
+  what their routes return (#494).** The batch returned the control plane's
+  raw dict for these items, so a batch caller got `SAT` where a
+  `/verify/logic` caller got `VERIFIED`, natural-language items had no
+  `admission`, and batch logic audit rows had no verdict (`verdict: null` in
+  `/audit/logs`).
+  - The routes' mappings moved to `core/route_diagnostics.py`
+    (`logic_diagnostic`, `natural_language_diagnostic`); the routes and the
+    batch both call them and apply the same trust step.
+  - A batch logic item's `result` is now the `/verify/logic` response:
+    `VERIFIED` (with a `proof_ref`) for SAT, `UNVERIFIABLE` for UNSAT,
+    `BLOCKED` otherwise. A natural-language item's is the
+    `/verify/natural_language` response, with `admission`.
+  - Callers that read `status: "SAT"`/`"UNSAT"`, or the control plane's own
+    fields at the top level of a batch logic or natural-language result, must
+    move to the DiagnosticResult fields. For logic items the control plane's
+    output remains under `developer_fields`. For natural-language items it
+    does not: as on `/verify/natural_language`, only the verdict is kept, and
+    fields such as `final_answer`, `translation` and `trust_boundary` are no
+    longer returned. Math, code, fact and SQL items are unchanged.
+  - A batch audit row keeps the item's verdict beside its ids, outside the
+    capped details, so `/audit/logs` still reads it when a large result is
+    truncated.
+  - Their audit rows follow: logic rows now carry a verdict, and
+    natural-language rows store the admission. Rows already written keep
+    what they stored.
 - **Audit rows store the admission decision their route made (part of
   #307).** A row's verdict is not an admission (code proven unsafe is
   VERIFIED and BLOCKED), and the rows stored no admission, so `/audit/logs`
@@ -525,7 +551,7 @@ All notable changes to the QWED Protocol will be documented in this file.
     route): `/verify/natural_language`,
     `/verify/code`, `/verify/math` and `/verify/sql`, the agent route
     `/agents/{agent_id}/verify` (natural-language rule, decided though not
-    returned), `/verify/batch` code items and
+    returned), `/verify/batch` code and natural-language items (#494) and
     `/verification-context/from-diagnostic` (stored as returned, "ADMIT" or
     "DENY" in the Verification Context spec's terms). Routes that decide none
     (logic, stats, fact, image, RAG, process, consensus, other batch items)

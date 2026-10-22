@@ -27,7 +27,8 @@ from qwed_new.core.agent_models import AgentActivity
 from qwed_new.core.agent_registry import agent_registry
 from qwed_new.core.audit_logger import AUDIT_SECRET_ENV_VAR
 from qwed_new.core.batch import BatchItem, VerificationType
-from qwed_new.core.diagnostics import DiagnosticResult
+from qwed_new.core.control_plane import natural_language_admission
+from qwed_new.core.diagnostics import DiagnosticResult, merge_diagnostic_result
 from qwed_new.core.models import ApiKey, Organization, User, VerificationLog
 
 PROOF = "sha256:" + "a" * 64
@@ -152,13 +153,15 @@ def test_an_item_whose_append_fails_is_failed_without_its_result(env, fake_items
 
 
 def _nl(semantics_verified):
+    """A batch natural-language result as the batch now builds it (#494): the
+    merged DiagnosticResult plus the route's admission."""
     dr = DiagnosticResult.verified(
         "Identity verified",
         developer_fields={"query_semantics_verified": semantics_verified, "is_valid": True},
         evidence={"left": "2+2", "right": "4"},
         proof_data="2+2=4",
     )
-    return {"diagnostic": dr.to_dict()}
+    return merge_diagnostic_result(dr) | {"admission": natural_language_admission(dr).value}
 
 
 @pytest.mark.parametrize("vtype, status, result, verified", [
@@ -171,8 +174,10 @@ def _nl(semantics_verified):
     # Code proven unsafe is VERIFIED but not valid.
     ("code", "completed", {"status": "VERIFIED", "proof_ref": PROOF, "developer_fields": {"is_valid": False}}, False),
     # logic: SAT, which /verify/logic turns into VERIFIED with a proof_ref.
-    ("logic", "completed", {"status": "SAT"}, True),
-    ("logic", "completed", {"status": "UNSAT"}, False),
+    # logic: the DiagnosticResult /verify/logic returns (#494): authoritative.
+    ("logic", "completed", {"status": "VERIFIED", "proof_ref": PROOF}, True),
+    ("logic", "completed", {"status": "UNVERIFIABLE", "proof_ref": None}, False),
+    ("logic", "completed", {"status": "SAT"}, False),  # the raw control-plane shape is no longer trusted
     # fact and sql: is_authoritative; a proven-malicious query is VERIFIED.
     ("sql", "completed", {"status": "VERIFIED", "proof_ref": PROOF, "developer_fields": {"is_valid": False}}, True),
     ("sql", "completed", {"status": "VERIFIED", "proof_ref": None}, False),
@@ -181,8 +186,8 @@ def _nl(semantics_verified):
     # natural language: the /verify/natural_language admission rule.
     ("natural_language", "completed", _nl(True), True),
     ("natural_language", "completed", _nl(False), False),
-    ("natural_language", "completed", {"status": "VERIFIED", "proof_ref": PROOF}, False),
-    ("natural_language", "completed", {"diagnostic": {"status": "VERIFIED"}}, False),
+    ("natural_language", "completed", {"status": "VERIFIED", "proof_ref": PROOF}, False),  # no admission
+    ("natural_language", "completed", {"diagnostic": {"status": "VERIFIED"}}, False),  # raw shape
 ])
 def test_a_batch_row_is_verified_as_its_route_records(vtype, status, result, verified):
     item = BatchItem(id="j-0", query="q", verification_type=VerificationType(vtype), status=status, result=result)

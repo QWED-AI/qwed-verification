@@ -12,12 +12,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from qwed_new.core.batch import BatchItem, BatchJob
-from qwed_new.core.control_plane import natural_language_admission
-from qwed_new.core.diagnostics import (
-    AdmissionDecision,
-    DiagnosticResult,
-    enforce_trust_decision,
-)
+from qwed_new.core.diagnostics import AdmissionDecision
 from qwed_new.core.models import VerificationLog
 
 # The audit domain for each batch item type, as its single route records it.
@@ -32,15 +27,16 @@ BATCH_AUDIT_DOMAIN = {
 
 
 def batch_item_is_verified(item: BatchItem) -> bool:
-    """is_verified for a batch item's row: never more than its single route records.
+    """is_verified for a batch item's row: what its single route records.
 
-    - logic: SAT, which /verify/logic turns into VERIFIED with a proof_ref;
+    Each item's result is the DiagnosticResult (merged) its route returns
+    (#494), so the routes' own rules apply:
+    - logic, fact and sql: VERIFIED with a proof_ref (is_authoritative, as on
+      their routes; a proven-malicious query is VERIFIED);
     - math and code: VERIFIED with is_valid True (/verify/math and
       /verify/code record is_valid; code proven unsafe is VERIFIED but not
       valid);
-    - fact and sql: VERIFIED with a proof_ref (is_authoritative, as on their
-      routes; a proven-malicious query is VERIFIED);
-    - natural language: admitted by the same rule as /verify/natural_language.
+    - natural language: admitted, as /verify/natural_language records it.
     A failed item, or a type not listed, is never verified.
     """
     if item.status != "completed" or not isinstance(item.result, dict):
@@ -48,24 +44,27 @@ def batch_item_is_verified(item: BatchItem) -> bool:
     result = item.result
     kind = item.verification_type.value
     fields = result.get("developer_fields") or {}
-    if kind == "logic":
-        return result.get("status") == "SAT"
+    if kind in ("logic", "fact", "sql"):
+        return result.get("status") == "VERIFIED" and bool(result.get("proof_ref"))
     if kind in ("math", "code"):
         return result.get("status") == "VERIFIED" and fields.get("is_valid") is True
-    if kind in ("fact", "sql"):
-        return result.get("status") == "VERIFIED" and bool(result.get("proof_ref"))
     if kind == "natural_language":
-        return _natural_language_admitted(result, item.query)
+        return result.get("admission") == AdmissionDecision.ADMIT.value
     return False
+
+
+# Batch item types whose route decides an admission and returns it (#307, #494).
+_ADMISSION_TYPES = ("code", "natural_language")
 
 
 def batch_item_admission(item: BatchItem) -> str | None:
     """The admission a batch item's result carries, or None (#307).
 
-    Only code items decide one in a batch today (as /verify/code does); a
-    failed item, or any other type, stores None: no admission was decided.
+    Code and natural-language items decide one in a batch, as /verify/code
+    and /verify/natural_language do (#494); a failed item, or any other type,
+    stores None: no admission was decided.
     """
-    if item.status != "completed" or item.verification_type.value != "code":
+    if item.status != "completed" or item.verification_type.value not in _ADMISSION_TYPES:
         return None
     if not isinstance(item.result, dict):
         return None
@@ -73,19 +72,12 @@ def batch_item_admission(item: BatchItem) -> str | None:
     return admission if admission in (AdmissionDecision.ADMIT.value, AdmissionDecision.BLOCKED.value) else None
 
 
-def _natural_language_admitted(result: dict[str, Any], query: str) -> bool:
-    """The /verify/natural_language rule: the control plane's diagnostic, trust
-    enforcement, then natural_language_admission. Without a diagnostic the route
-    falls back to a legacy mapping that can never yield VERIFIED."""
-    diagnostic = result.get("diagnostic")
-    if not isinstance(diagnostic, dict):
-        return False
-    try:
-        dr = DiagnosticResult.from_dict(diagnostic)
-    except (TypeError, ValueError, KeyError, AttributeError):
-        return False
-    dr = enforce_trust_decision(dr, require_attestation=False, query=query)
-    return natural_language_admission(dr) is AdmissionDecision.ADMIT
+def _verdict(item: BatchItem) -> str | None:
+    """The status of a completed item's DiagnosticResult, or None."""
+    if item.status != "completed" or not isinstance(item.result, dict):
+        return None
+    status = item.result.get("status")
+    return status if isinstance(status, str) else None
 
 
 def batch_audit_hook(
@@ -110,6 +102,9 @@ def batch_audit_hook(
             "batch_item_id": item.id,
             "batch_item_type": item.verification_type.value,
             "item_status": item.status,
+            # The verdict sits outside the capped details, so /audit/logs can
+            # read it even when a large result is truncated (#494).
+            "verdict": _verdict(item),
             "details": json.loads(cap_result({"result": item.result, "error": item.error})),
         }
         text = json.dumps(row)
