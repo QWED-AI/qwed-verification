@@ -32,7 +32,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from sqlalchemy import text
+from sqlalchemy import and_, case, func, literal, text
 from sqlmodel import Session, create_engine, select
 
 from qwed_new import __version__ as _QWED_VERSION
@@ -43,6 +43,9 @@ from qwed_new.core.request_caller import request_api_key_id
 logger = logging.getLogger(__name__)
 
 AUDIT_SECRET_ENV_VAR = "QWED_AUDIT_SECRET_KEY"
+
+# Rows per page when verify_audit_trail walks the chain.
+_TRAIL_PAGE_ROWS = 500
 
 # Namespace for the per-organisation PostgreSQL advisory lock ("QWED").
 _ADVISORY_LOCK_NAMESPACE = 0x51574544
@@ -418,6 +421,37 @@ class AuditLogger:
         chained_before = self._has_chained_entry_before(
             session, log_entry.organization_id, log_id
         )
+        prev_log = self._previous_entry(session, log_entry.organization_id, log_id)
+        return self._check_entry(log_entry, prev_log, chained_before)
+
+    def _previous_entry(
+        self, session: Session, organization_id: int, log_id: int
+    ) -> Optional[VerificationLog]:
+        """The organisation's row just before ``log_id``, or None."""
+        return self._run_select(
+            session,
+            select(VerificationLog)
+            .where(VerificationLog.organization_id == organization_id)
+            .where(VerificationLog.id < log_id)
+            .order_by(VerificationLog.id.desc())
+            # Result.first() does not add a LIMIT: without it every earlier
+            # row is fetched to read one.
+            .limit(1),
+        ).first()
+
+    def _check_entry(
+        self,
+        log_entry: VerificationLog,
+        prev_log: Optional[VerificationLog],
+        chained_before: bool,
+    ) -> Dict[str, Any]:
+        """Check one entry against the row before it (see verify_log_entry).
+
+        ``chained_before`` says whether the organisation has a chained row
+        (one with an entry hash) before this one. verify_log_entry looks both
+        up; verify_audit_trail carries them along as it walks the chain.
+        """
+        log_id = log_entry.id
         if _is_unchained(log_entry) and not chained_before:
             # Written before the chain was wired in: nothing to verify, and
             # never reported valid.
@@ -438,16 +472,6 @@ class AuditLogger:
 
         errors = []
         hash_valid, signature_valid = self._verify_hash_and_signature(log_entry, errors)
-        prev_log = self._run_select(
-            session,
-            select(VerificationLog)
-            .where(VerificationLog.organization_id == log_entry.organization_id)
-            .where(VerificationLog.id < log_id)
-            .order_by(VerificationLog.id.desc())
-            # Result.first() does not add a LIMIT: without it every earlier
-            # row is fetched to read one, quadratic over a whole trail.
-            .limit(1),
-        ).first()
         chain_valid = self._verify_chain_link(
             log_entry, prev_log, errors, chained_before=chained_before
         )
@@ -633,55 +657,108 @@ class AuditLogger:
                 "head_hash": str | None,
             }
         """
+        in_period = []
+        if start_date:
+            in_period.append(VerificationLog.timestamp >= start_date)
+        if end_date:
+            in_period.append(VerificationLog.timestamp <= end_date)
+
+        # One ordered pass (#485): find the id range of the period's entries,
+        # then walk the organisation's rows over that range, carrying the
+        # previous row and whether a chained row came before, instead of two
+        # lookups per entry. Rows in the range but outside the period (a clock
+        # that went back) are walked for the chain but not counted, as before.
+        tally = _TrailTally()
         with Session(engine) as session:
-            query = select(VerificationLog).where(
-                VerificationLog.organization_id == organization_id
+            low, high = self._run_select(
+                session,
+                select(func.min(VerificationLog.id), func.max(VerificationLog.id)).where(
+                    VerificationLog.organization_id == organization_id, *in_period
+                ),
+            ).one()
+            if low is not None:
+                prev_log = self._previous_entry(session, organization_id, low)
+                chained_before = self._has_chained_entry_before(session, organization_id, low)
+                for log, counts in self._trail_rows(session, organization_id, low, high, in_period):
+                    if counts:
+                        tally.add(log, self._check_entry(log, prev_log, chained_before))
+                    chained_before = chained_before or bool(log.entry_hash)
+                    prev_log = log
+        return tally.result(organization_id)
+
+    def _trail_rows(self, session: Session, organization_id: int, low: int, high: int, in_period: list):
+        """The organisation's rows with ids from ``low`` to ``high``, in id order,
+        each with whether it falls in the period, a page at a time.
+
+        Each page is read in full before its rows are checked, so no SELECT
+        stays open during the walk: on SQLite an open cursor holds a shared
+        lock, which would make a concurrent audit append wait and fail.
+        """
+        counted = case((and_(*in_period), True), else_=False) if in_period else literal(True)
+        after = low - 1
+        while True:
+            page = self._run_select(
+                session,
+                select(VerificationLog, counted.label("in_period"))
+                .where(VerificationLog.organization_id == organization_id)
+                .where(VerificationLog.id > after, VerificationLog.id <= high)
+                .order_by(VerificationLog.id)
+                .limit(_TRAIL_PAGE_ROWS),
+            ).all()
+            yield from page
+            if len(page) < _TRAIL_PAGE_ROWS:
+                return
+            after = page[-1][0].id
+
+
+class _TrailTally:
+    """What verify_audit_trail counts as it walks the chain."""
+
+    def __init__(self) -> None:
+        self.total = 0
+        self.verified = 0
+        self.failed: list[int] = []
+        self.legacy: list[int] = []
+        self.errors: list[str] = []
+        self.first_id: Optional[int] = None
+        self.last_id: Optional[int] = None
+        self.head_hash: Optional[str] = None
+
+    def add(self, log: VerificationLog, result: Dict[str, Any]) -> None:
+        self.total += 1
+        if self.first_id is None:
+            self.first_id = log.id
+        self.last_id, self.head_hash = log.id, log.entry_hash
+        if result["valid"]:
+            self.verified += 1
+        elif result.get("legacy"):
+            self.legacy.append(log.id)
+        else:
+            self.failed.append(log.id)
+            self.errors.extend(result["errors"])
+
+    def result(self, organization_id: int) -> Dict[str, Any]:
+        errors = list(self.errors)
+        if self.legacy:
+            # Unverified, not failed: they predate the chain. The trail is
+            # still not reported valid while they are in range.
+            errors.append(
+                f"{len(self.legacy)} entries predate the audit chain and cannot be verified"
             )
-
-            if start_date:
-                query = query.where(VerificationLog.timestamp >= start_date)
-            if end_date:
-                query = query.where(VerificationLog.timestamp <= end_date)
-
-            logs = self._run_select(session, query.order_by(VerificationLog.id)).all()
-
-            total = len(logs)
-            verified = 0
-            failed = []
-            legacy = []
-            errors = []
-
-            for log in logs:
-                result = self.verify_log_entry(log.id, session)
-                if result["valid"]:
-                    verified += 1
-                elif result.get("legacy"):
-                    legacy.append(log.id)
-                else:
-                    failed.append(log.id)
-                    errors.extend(result["errors"])
-
-            if legacy:
-                # Unverified, not failed: they predate the chain. The trail is
-                # still not reported valid while they are in range.
-                errors.append(
-                    f"{len(legacy)} entries predate the audit chain and cannot be verified"
-                )
-
-            return {
-                "valid": verified == total,
-                "total_entries": total,
-                "verified_entries": verified,
-                "failed_entries": failed,
-                "legacy_entries": legacy,
-                "errors": errors,
-                "organization_id": organization_id,
-                # The range checked. Each entry hash covers the previous one,
-                # so the head hash commits to the whole chain up to it.
-                "first_entry_id": logs[0].id if logs else None,
-                "last_entry_id": logs[-1].id if logs else None,
-                "head_hash": logs[-1].entry_hash if logs else None,
-            }
+        return {
+            "valid": self.verified == self.total,
+            "total_entries": self.total,
+            "verified_entries": self.verified,
+            "failed_entries": self.failed,
+            "legacy_entries": self.legacy,
+            "errors": errors,
+            "organization_id": organization_id,
+            # The range checked. Each entry hash covers the previous one, so
+            # the head hash commits to the whole chain up to it.
+            "first_entry_id": self.first_id,
+            "last_entry_id": self.last_id,
+            "head_hash": self.head_hash,
+        }
 
 
 class SecurityError(Exception):

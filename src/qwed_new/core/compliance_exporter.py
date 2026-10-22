@@ -221,22 +221,29 @@ class ComplianceExporter:
                     "active_users": len([u for u in users if u.is_active]),
                     "active_api_keys": len(active_keys)
                 },
-                "audit_trail": self._audit_trail_check(organization_id, start_date, end_date),
+                "audit_trail": self.audit_trail_check(organization_id, start_date, end_date),
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "report_version": "2.0"
             }
 
     @staticmethod
-    def _audit_trail_check(
-        organization_id: int, start_date: datetime, end_date: datetime
+    def audit_trail_check(
+        organization_id: int,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         """Verify the organisation's audit entries in the period (#476).
+
+        Used by the activity summary and by GET /admin/compliance/verify-trail
+        (#485). A missing start or end leaves that side of the period open, so
+        with neither the whole chain is checked. ``first_failed_entry_id`` is
+        the lowest id that failed its signature or chain check.
 
         VERIFIED only when there are entries and every one checks out
         (signature and chain), and then with a proof_ref over the evidence
         (the range checked and its head hash). It covers the entries that
-        were recorded; it cannot show that every request wrote one. Fails closed: if the check
-        cannot run (for example QWED_AUDIT_SECRET_KEY is unset), the result
+        were recorded; it cannot show that every request wrote one. Fails
+        closed: if the check cannot run (for example QWED_AUDIT_SECRET_KEY is unset), the result
         is NOT_VERIFIED.
         """
         scope = (
@@ -259,6 +266,7 @@ class ComplianceExporter:
                 "total_entries": None,
                 "verified_entries": None,
                 "failed_entries": None,
+                "first_failed_entry_id": None,
                 "legacy_entries": None,
                 "errors": [f"The audit trail could not be checked ({type(exc).__name__})."],
                 "total_errors": 1,
@@ -275,8 +283,8 @@ class ComplianceExporter:
             status = "VERIFIED"
             evidence = {
                 "organization_id": organization_id,
-                "period_start": start_date.isoformat(),
-                "period_end": end_date.isoformat(),
+                "period_start": start_date.isoformat() if start_date else None,
+                "period_end": end_date.isoformat() if end_date else None,
                 "first_entry_id": trail["first_entry_id"],
                 "last_entry_id": trail["last_entry_id"],
                 "entries": trail["total_entries"],
@@ -293,6 +301,7 @@ class ComplianceExporter:
             "total_entries": trail["total_entries"],
             "verified_entries": trail["verified_entries"],
             "failed_entries": len(trail["failed_entries"]),
+            "first_failed_entry_id": min(trail["failed_entries"], default=None),
             "legacy_entries": len(trail.get("legacy_entries", [])),
             "errors": trail["errors"][:_MAX_REPORTED_ERRORS],
             "total_errors": len(trail["errors"]),
