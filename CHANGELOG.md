@@ -515,6 +515,18 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Changed
 
+- **`GET /audit/logs` pages through every row (#484).** `limit` was capped
+  at 200 with no offset or cursor, so a client could only read the newest
+  200 rows.
+  - Rows come newest first, by timestamp and then id, so the order is
+    stable when two rows share a timestamp. Before, only the timestamp
+    ordered them.
+  - The response adds `next_before`: the last row's id when the page is
+    full, or `null`. Pass it back as `before` for the rows after that one.
+    A full last page is followed by an empty page with `next_before: null`.
+  - A `before` that is not a log in the caller's organisation returns 404,
+    as the detail route does. `limit` and the `status` filter work as
+    before, and `total` is still the number of rows on the page.
 - **The audit log routes report the stored verdict and the chain entry
   (#484).** `GET /audit/logs` and `GET /audit/logs/{log_id}` returned only
   `status`, derived from `is_verified`, so an UNVERIFIABLE result read

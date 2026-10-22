@@ -10,6 +10,7 @@ from typing import Any, Optional
 import csv
 import io
 from fastapi.responses import StreamingResponse
+from sqlalchemy import and_, or_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, select
 
@@ -60,10 +61,14 @@ def stored_verdict(result: str) -> str | None:
         candidate = value.get("status")
     return candidate if isinstance(candidate, str) and candidate in _VERDICTS else None
 
-@router.get("/logs", responses=ROLE_REFUSED)
+@router.get(
+    "/logs",
+    responses={**ROLE_REFUSED, 404: {"description": "The before cursor is not a log in the organisation"}},
+)
 async def get_logs(
     limit: int = Query(50, le=200),
     status: Optional[str] = Query(None),
+    before: int | None = Query(None, description="Return logs older than this log id (from next_before)"),
     current_user: User = _READER,
     session: Session = Depends(get_session)
 ):
@@ -74,11 +79,26 @@ async def get_logs(
     ``status``. ``status`` is unchanged: "verified" or "blocked" from the
     row's ``is_verified``, which each route sets by its own rule. Neither
     is an admission decision; these rows do not store one yet (#307).
+
+    Paging (#484): logs come newest first, by timestamp and then id, so
+    the order is stable when two rows share a timestamp. ``next_before`` is
+    the last row's id when the page is full; pass it as ``before`` for the
+    next page. It is null on a page that is not full. ``total`` is the
+    number of rows on this page.
     """
     statement = select(VerificationLog).where(
         VerificationLog.organization_id == current_user.organization_id
-    ).order_by(VerificationLog.timestamp.desc()).limit(limit)
-    
+    ).order_by(VerificationLog.timestamp.desc(), VerificationLog.id.desc()).limit(limit)
+
+    if before is not None:
+        cursor = session.get(VerificationLog, before)
+        if not cursor or cursor.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=404, detail="Log not found")
+        statement = statement.where(or_(
+            VerificationLog.timestamp < cursor.timestamp,
+            and_(VerificationLog.timestamp == cursor.timestamp, VerificationLog.id < cursor.id),
+        ))
+
     if status:
         # Filter by status (verified/blocked/failed)
         if status == "verified":
@@ -89,9 +109,11 @@ async def get_logs(
             # For now, is_verified=False implies failed/blocked
     
     logs = session.exec(statement).all()
-    
+    full = bool(logs) and len(logs) == limit
+
     return {
         "total": len(logs),
+        "next_before": str(logs[-1].id) if full else None,
         "logs": [
             {
                 "id": str(log.id),
