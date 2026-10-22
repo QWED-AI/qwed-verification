@@ -535,10 +535,12 @@ All notable changes to the QWED Protocol will be documented in this file.
     or `NOT_VERIFIED`, with the counts and the new `first_failed_entry_id`.
     `start` after `end` is 400.
   - The activity summary's `audit_trail` gains `first_failed_entry_id` too.
-  - `verify_audit_trail` checks the chain in one ordered pass, streaming the
-    rows in batches, instead of two database lookups per entry, so the
-    number of queries no longer grows with the trail. The result per entry
-    is the same as checking each entry on its own.
+  - `verify_audit_trail` checks the chain in one ordered pass, reading the
+    rows a page of 500 at a time, instead of two database lookups per entry,
+    so it makes one query per page rather than two per entry. Each page is
+    read in full before it is checked, so no SELECT stays open to hold a
+    SQLite lock against appends. The result per entry is the same as
+    checking each entry on its own.
 - **Audit rows record the API key that made them and the server version
   (#484).** A row could not say who wrote it or with which release.
   - `VerificationLog` has two new nullable columns: `api_key_id`, the id of

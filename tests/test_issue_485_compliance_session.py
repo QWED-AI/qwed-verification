@@ -275,6 +275,31 @@ def test_the_trail_check_does_not_query_per_entry(env):
     assert many == few
 
 
+def test_the_walk_reads_whole_pages_across_page_boundaries(env, monkeypatch):
+    """The rows are read a page at a time (no SELECT stays open while they
+    are checked; on SQLite that would hold a lock against appends), and the
+    chain still links across pages."""
+    monkeypatch.setattr(audit_module, "_TRAIL_PAGE_ROWS", 2)
+    ids = [_log(env.acme.id, f"{i}+{i}") for i in range(5)]
+    statements = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(" ".join(statement.split()).upper())
+
+    event.listen(audit_module.engine, "before_cursor_execute", capture)
+    try:
+        trail = audit_module.get_audit_logger().verify_audit_trail(env.acme.id)
+    finally:
+        event.remove(audit_module.engine, "before_cursor_execute", capture)
+
+    pages = [st for st in statements if "AS IN_PERIOD" in st]
+    assert len(pages) == 3
+    assert all(" LIMIT " in st for st in pages)
+    assert trail["valid"] is True
+    assert trail["total_entries"] == trail["verified_entries"] == 5
+    assert trail["last_entry_id"] == ids[-1]
+
+
 def test_the_one_pass_check_agrees_with_checking_each_entry(env):
     """Legacy rows, another organisation's rows in between, tampered rows and a
     row whose clock went back: the trail result matches verify_log_entry."""
