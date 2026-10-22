@@ -101,7 +101,16 @@ async def get_logs(
     is not an admission: a disproven claim is VERIFIED, with a "blocked"
     ``status``. ``status`` is unchanged: "verified" or "blocked" from the
     row's ``is_verified``, which each route sets by its own rule. Neither
-    is an admission decision; these rows do not store one yet (#307).
+    is an admission decision.
+
+    ``admission`` is the admission decision the route made, as stored
+    (#307): "ADMIT" or "BLOCKED", or "ADMIT" or "DENY" on
+    /verification-context/from-diagnostic (the Verification Context spec's
+    terms). It is the one the route returned, except on
+    /agents/{agent_id}/verify, which decides one without returning it. It
+    is null where the route
+    decides none (logic, stats, fact, image, RAG, process, consensus, and
+    batch items other than code) and on rows written before it was stored.
 
     Paging (#484): logs come newest first, by timestamp and then id, so
     the order is stable when two rows share a timestamp. ``next_before`` is
@@ -148,6 +157,7 @@ async def get_logs(
                 "engine_used": log.domain,
                 "verdict": stored_verdict(log.result),
                 "status": "verified" if log.is_verified else "blocked",
+                "admission": log.admission,
                 "latency_ms": 0, # Placeholder, add latency to model if needed
                 "created_at": log.timestamp.isoformat(),
                 "entry_hash": log.entry_hash,
@@ -169,9 +179,9 @@ async def get_log_detail(
     """Get detailed information for a single audit log.
 
     Adds the row's chain entry: its own hash, the hash it links to, and its
-    HMAC signature, as stored. ``verdict``, ``status``, ``api_key_id`` and
-    ``verifier_version`` are as on the list; neither of the first two is an
-    admission decision.
+    HMAC signature, as stored. ``verdict``, ``status``, ``admission``,
+    ``api_key_id`` and ``verifier_version`` are as on the list; neither of
+    the first two is an admission decision.
     """
     log = _org_log(session, log_id, current_user.organization_id)
 
@@ -185,6 +195,7 @@ async def get_log_detail(
         "engine_used": log.domain,
         "verdict": stored_verdict(log.result),
         "status": "verified" if log.is_verified else "blocked",
+        "admission": log.admission,
         "created_at": log.timestamp.isoformat(),
         "entry_hash": log.entry_hash,
         "previous_hash": log.previous_hash,

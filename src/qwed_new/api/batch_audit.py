@@ -59,6 +59,20 @@ def batch_item_is_verified(item: BatchItem) -> bool:
     return False
 
 
+def batch_item_admission(item: BatchItem) -> str | None:
+    """The admission a batch item's result carries, or None (#307).
+
+    Only code items decide one in a batch today (as /verify/code does); a
+    failed item, or any other type, stores None: no admission was decided.
+    """
+    if item.status != "completed" or item.verification_type.value != "code":
+        return None
+    if not isinstance(item.result, dict):
+        return None
+    admission = item.result.get("admission")
+    return admission if admission in (AdmissionDecision.ADMIT.value, AdmissionDecision.BLOCKED.value) else None
+
+
 def _natural_language_admitted(result: dict[str, Any], query: str) -> bool:
     """The /verify/natural_language rule: the control plane's diagnostic, trust
     enforcement, then natural_language_admission. Without a diagnostic the route
@@ -103,6 +117,7 @@ def batch_audit_hook(
             row["details"] = {"truncated": True}
             text = json.dumps(row)
         log = VerificationLog(
+            admission=batch_item_admission(item),
             organization_id=job.organization_id,
             user_id=tenant.user_id if hasattr(tenant, "user_id") else None,
             query=item.query,

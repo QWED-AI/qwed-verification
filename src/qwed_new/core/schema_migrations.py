@@ -20,6 +20,7 @@ ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "verificationlog": [
         ("api_key_id", "INTEGER"),
         ("verifier_version", "VARCHAR"),
+        ("admission", "VARCHAR"),  # #307
     ],
 }
 
