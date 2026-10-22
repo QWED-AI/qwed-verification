@@ -36,7 +36,12 @@ ORG_ID = 1
 def client(isolated_audit_chain):
     tenant = TenantContext(organization_id=ORG_ID, organization_name="Org", tier="free", api_key="k")
     api_main.app.dependency_overrides[api_main.get_current_tenant] = lambda: tenant
-    api_main.app.dependency_overrides[api_main.get_session] = lambda: MagicMock()
+    def _mock_session():
+        # A plain function, not MagicMock itself: FastAPI would read MagicMock's
+        # constructor parameters as query parameters.
+        return MagicMock()
+
+    api_main.app.dependency_overrides[api_main.get_session] = _mock_session
     try:
         with patch("qwed_new.api.main.check_rate_limit"):
             yield TestClient(api_main.app)
@@ -118,6 +123,7 @@ def test_a_route_that_decides_no_admission_stores_null(client, isolated_audit_ch
     ("code", "completed", {"status": "VERIFIED", "admission": "ADMIT"}, "ADMIT"),
     ("code", "completed", {"status": "VERIFIED", "admission": "MAYBE"}, None),
     ("code", "failed", None, None),
+    ("code", "completed", "not a dict", None),
     ("math", "completed", {"status": "VERIFIED", "admission": "ADMIT"}, None),
     ("logic", "completed", {"status": "SAT"}, None),
 ])
@@ -168,6 +174,36 @@ def test_a_row_hashed_before_admission_was_covered_still_verifies(isolated_audit
         session.exec(text("UPDATE verificationlog SET admission = 'ADMIT' WHERE id = :i").bindparams(i=row_id))
         session.commit()
     assert _verify(isolated_audit_chain, row_id)["valid"] is False
+
+
+@pytest.mark.parametrize("shape", ["pre_caller", "legacy"])
+def test_a_row_from_before_484_cannot_be_given_an_admission(isolated_audit_chain, shape):
+    """Both caller fields null and hashed from an older shape: it verifies as
+    it is, and setting an admission on it breaks it (#307 review)."""
+    logger = get_audit_logger()
+    row_id = _append(None)
+    with Session(isolated_audit_chain) as session:
+        row = session.get(VerificationLog, row_id)
+        row.api_key_id = None
+        row.verifier_version = None
+        payload = (
+            logger._reconstruct_pre_caller_log_data(row)
+            if shape == "pre_caller"
+            else logger._reconstruct_legacy_log_data(row)
+        )
+        row.entry_hash = logger._compute_hash(payload)
+        row.hmac_signature = logger._compute_hmac(row.entry_hash)
+        session.add(row)
+        session.commit()
+
+    assert _verify(isolated_audit_chain, row_id)["valid"] is True
+
+    with Session(isolated_audit_chain) as session:
+        session.exec(text("UPDATE verificationlog SET admission = 'ADMIT' WHERE id = :i").bindparams(i=row_id))
+        session.commit()
+    result = _verify(isolated_audit_chain, row_id)
+    assert result["valid"] is False
+    assert result["checks"]["hash_valid"] is False
 
 
 # ---------------------------------------------------------------- reading it back

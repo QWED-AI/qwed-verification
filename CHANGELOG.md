@@ -521,7 +521,8 @@ All notable changes to the QWED Protocol will be documented in this file.
   could not show one.
   - `VerificationLog` has a new nullable column, `admission` ("ADMIT" or
     "BLOCKED"), added to an existing table at startup. It holds the
-    admission the route decided and returned: `/verify/natural_language`,
+    admission the route decided (and returned, except on the agent
+    route): `/verify/natural_language`,
     `/verify/code`, `/verify/math` and `/verify/sql`, the agent route
     `/agents/{agent_id}/verify` (natural-language rule, decided though not
     returned) and `/verify/batch` code items. Routes that decide none

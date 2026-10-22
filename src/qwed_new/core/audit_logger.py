@@ -141,8 +141,8 @@ class AuditLogger:
         """
         Log a verification event with cryptographic signature.
 
-        ``admission`` is the admission decision the route made and returned
-        ("ADMIT" or "BLOCKED"), or None when the route decides none (#307).
+        ``admission`` is the admission decision the route made ("ADMIT" or
+        "BLOCKED"), or None when the route decides none (#307).
         It is stored and covered by the hash.
 
         ``result`` is either a dict, serialised here, or an already-serialised
@@ -606,19 +606,19 @@ class AuditLogger:
         row written before #484 without breaking its hash.
 
         The same holds for ``admission`` (#307): a row that records one is
-        checked against the current payload only; a row without one may also
-        be a #484 row, hashed before admission was covered. Setting an
-        admission on such a row, or clearing one, changes the payload its
-        stored hash was made from, so it fails.
+        checked against the current payload only. No older shape covers
+        admission, so every older shape (the #484 one and the ones before
+        it) is a candidate only while ``admission`` is null; otherwise
+        setting an admission on an older row would leave its hash matching.
         """
         payloads = [self._reconstruct_log_data(log_entry)]
         if log_entry.admission is None:
             payloads.append(self._reconstruct_pre_admission_log_data(log_entry))
-        if log_entry.api_key_id is None and log_entry.verifier_version is None:
-            payloads += [
-                self._reconstruct_pre_caller_log_data(log_entry),
-                self._reconstruct_legacy_log_data(log_entry),
-            ]
+            if log_entry.api_key_id is None and log_entry.verifier_version is None:
+                payloads += [
+                    self._reconstruct_pre_caller_log_data(log_entry),
+                    self._reconstruct_legacy_log_data(log_entry),
+                ]
         candidates = []
         for payload in payloads:
             candidates.append(self._compute_hash(payload))

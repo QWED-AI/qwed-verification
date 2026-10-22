@@ -98,8 +98,9 @@ class VerificationLog(SQLModel, table=True):
     # adds both columns to an existing table at startup.
     api_key_id: int | None = None  # ApiKey.id of the key that made the request
     verifier_version: str | None = None  # qwed_new.__version__ when the row was written
-    # The admission decision the route made and returned, "ADMIT" or
-    # "BLOCKED" (#307). Null when the route decides none, and on rows written
+    # The admission decision the route made, "ADMIT" or "BLOCKED" (#307):
+    # the one it returned, except on the agent route, which decides one
+    # without returning it. Null when the route decides none, and on rows written
     # before the column existed. Not the verdict: a VERIFIED row can be BLOCKED.
     admission: str | None = None
 
