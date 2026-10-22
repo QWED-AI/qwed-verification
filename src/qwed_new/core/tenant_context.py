@@ -10,6 +10,7 @@ from sqlmodel import Session, select
 
 from qwed_new.auth.security import hash_api_key, is_api_key_live, validate_api_key_format
 from qwed_new.core.database import get_session
+from qwed_new.core.api_key_usage import record_api_key_use
 from qwed_new.core.models import ApiKey, Organization
 from qwed_new.core.request_caller import set_request_api_key_id
 
@@ -77,18 +78,16 @@ async def get_current_tenant(
             detail="Organization is inactive or does not exist"
         )
     
-    # Update last used timestamp (optional, maybe async in prod)
-    # api_key.last_used_at = datetime.utcnow()
-    # session.add(api_key)
-    # session.commit()
-    
     # Only after every check: a key that was refused is never recorded (#484).
     set_request_api_key_id(api_key.id)
 
-    return TenantContext(
+    tenant = TenantContext(
         organization_id=organization.id,
         organization_name=organization.name,
         tier=organization.tier,
         api_key=x_api_key,
         api_key_id=api_key.id,
     )
+    # Last, so a refused key is never marked as used (#486).
+    record_api_key_use(session, api_key)
+    return tenant

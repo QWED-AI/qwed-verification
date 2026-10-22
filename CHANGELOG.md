@@ -515,6 +515,23 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Changed
 
+- **Security events can be listed, and API keys record when they were last
+  used (#486).** Security events could only be read as a summary, and
+  `ApiKey.last_used_at` was never set (both places that would set it were
+  commented out).
+  - New `GET /admin/security/events` lists the organisation's events for
+    owners and admins (API key or signed-in session), newest first by
+    timestamp and id, with a `before` cursor and `next_before` as on
+    `/audit/logs`, `limit` 1 to 200 (default 50) and an optional
+    `event_type`. A cursor that is not an event in the organisation is 404.
+    Anything shaped like an API key or agent token in `reason` or `query` is
+    masked; the writers already store a preview only.
+  - An API key's `last_used_at` is set when it authenticates, on the
+    `/verify/*` routes and the admin routes, after every check passes, so a
+    refused key is never recorded. It is written at most once a minute per
+    key: a key used within the minute costs no query, and the write only
+    applies if the stored value is still stale, so two workers write it
+    once. A failed write is logged and never fails the request.
 - **The compliance routes accept a signed-in session, and check the whole
   chain (#485).** They took an `x-api-key` only, so a dashboard user had to
   paste an owner or admin key into the browser, and the only check was one
