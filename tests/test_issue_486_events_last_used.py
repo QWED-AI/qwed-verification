@@ -23,7 +23,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from qwed_new.api import main
 from qwed_new.auth.security import create_access_token, generate_api_key
-from qwed_new.core import api_key_usage
+from qwed_new.core import api_key_usage, tenant_context
 from qwed_new.core.models import ApiKey, Organization, SecurityEvent, User
 from qwed_new.core.tenant_context import get_current_tenant
 
@@ -152,6 +152,11 @@ def test_filters_by_event_type(env):
     assert [e["id"] for e in body["events"]] == [str(wanted.id)]
 
 
+@pytest.mark.parametrize("before", ["0", "-1", "9223372036854775808"])
+def test_a_cursor_out_of_range_is_404_not_a_server_error(env, before):
+    assert _events(env, f"?before={before}").status_code == 404
+
+
 @pytest.mark.parametrize("limit", [0, 201])
 def test_the_limit_is_bounded(env, limit):
     assert _events(env, f"?limit={limit}").status_code == 422
@@ -160,11 +165,13 @@ def test_the_limit_is_bounded(env, limit):
 def test_a_credential_in_an_event_is_masked(env):
     raw, _ = env.key_for(env.users["member"])
     token = "agent_" + "ab" * 32
-    _event(env, env.acme, reason=f"found {raw} in a gist", query=f"agent token {token}")
+    _event(env, env.acme, reason=f"found {raw} in a gist, also id_{raw} and 7{raw}", query=f"agent token x_{token}")
 
     (shown,) = _events(env).json()["events"]
 
+    # Masked even right after "_" or a digit (no word boundary needed).
     assert raw not in shown["reason"]
+    assert shown["reason"].count("[redacted credential]") == 3
     assert token not in shown["query"]
     assert "[redacted credential]" in shown["reason"]
     assert "[redacted credential]" in shown["query"]
@@ -240,6 +247,42 @@ def test_a_refused_key_is_not_recorded(env):
     assert _stored_last_used(env, key) is None
 
 
+@pytest.mark.parametrize("refusal", ["member_role", "inactive_user", "inactive_org"])
+def test_a_key_refused_by_the_admin_checks_is_not_recorded(env, refusal):
+    """get_api_key accepts these keys; the admin checks after it refuse them,
+    so nothing may be recorded (#486 review)."""
+    who = "member" if refusal == "member_role" else "owner"
+    raw, key = env.key_for(env.users[who])
+    if refusal == "inactive_user":
+        env.users[who].is_active = False
+        env.session.add(env.users[who])
+    if refusal == "inactive_org":
+        env.acme.is_active = False
+        env.session.add(env.acme)
+    env.session.commit()
+
+    assert _events(env, headers={"x-api-key": raw}).status_code == 403
+    assert _stored_last_used(env, key) is None
+
+
+def test_the_tenant_check_records_use_off_the_event_loop(env, monkeypatch):
+    raw, _ = env.key_for(env.users["member"])
+    seen = []
+
+    def record(session, api_key):
+        try:
+            asyncio.get_running_loop()
+            seen.append("on the event loop")
+        except RuntimeError:
+            seen.append("in a worker thread")
+
+    monkeypatch.setattr(tenant_context, "record_api_key_use", record)
+
+    asyncio.run(get_current_tenant(x_api_key=raw, session=env.session))
+
+    assert seen == ["in a worker thread"]
+
+
 def test_another_worker_that_wrote_first_wins(env):
     _, key = env.key_for(env.users["owner"])
     stale_copy = SimpleNamespace(id=key.id, last_used_at=None)
@@ -254,11 +297,31 @@ def test_another_worker_that_wrote_first_wins(env):
     assert api_key_usage._as_utc(_stored_last_used(env, key)) == fresh
 
 
+class _ExpiresOnRollback:
+    """A key whose attributes cannot be read after a rollback, like an
+    expired ORM object whose reload would fail."""
+
+    last_used_at = None
+
+    def __init__(self):
+        self.rolled_back = False
+
+    @property
+    def id(self):
+        if self.rolled_back:
+            raise OperationalError("SELECT apikey", {}, Exception("connection lost"))
+        return 1
+
+
 def test_a_failed_write_never_fails_the_request():
+    key = _ExpiresOnRollback()
     session = MagicMock()
     session.exec.side_effect = OperationalError("UPDATE apikey", {}, Exception("database is locked"))
+    session.rollback.side_effect = lambda: setattr(key, "rolled_back", True)
 
-    wrote = api_key_usage.record_api_key_use(session, SimpleNamespace(id=1, last_used_at=None))
+    # The id is read before the write, so logging after the rollback does
+    # not touch the expired key.
+    wrote = api_key_usage.record_api_key_use(session, key)
 
     assert wrote is False
     session.rollback.assert_called_once()

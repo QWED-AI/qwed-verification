@@ -37,6 +37,9 @@ def record_api_key_use(session: Session, api_key: ApiKey, now: datetime | None =
     request: the key has already been accepted. Returns whether it wrote.
     """
     now = now or datetime.now(timezone.utc)
+    # Read before the write: a rollback expires the loaded key, and reading
+    # it again for the log line could query, and fail, a second time.
+    key_id = api_key.id
     stale_before = now - LAST_USED_INTERVAL
     if api_key.last_used_at is not None and _as_utc(api_key.last_used_at) > stale_before:
         return False
@@ -44,7 +47,7 @@ def record_api_key_use(session: Session, api_key: ApiKey, now: datetime | None =
         result = session.exec(
             update(ApiKey)
             .where(
-                ApiKey.id == api_key.id,
+                ApiKey.id == key_id,
                 or_(ApiKey.last_used_at.is_(None), ApiKey.last_used_at <= stale_before),
             )
             .values(last_used_at=now)
@@ -56,7 +59,7 @@ def record_api_key_use(session: Session, api_key: ApiKey, now: datetime | None =
         session.commit()
     except SQLAlchemyError as exc:
         session.rollback()
-        logger.warning("Could not record API key use for key %s: %s", api_key.id, type(exc).__name__)
+        logger.warning("Could not record API key use for key %s: %s", key_id, type(exc).__name__)
         return False
     wrote = bool(result.rowcount)
     if wrote and isinstance(api_key, ApiKey):

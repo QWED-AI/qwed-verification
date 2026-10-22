@@ -29,8 +29,12 @@ _EVENT_TYPE = Query(None, description="Only events of this type, for example SEC
 # Anything shaped like a credential is masked before it leaves the server: an
 # API key (qwed_live_/qwed_test_ and its body) or an agent token. Writers
 # store a preview only; this keeps a token out of the response even if a
-# future writer does not.
-_CREDENTIAL = re.compile(r"\bqwed_(?:live|test)_[A-Za-z0-9_-]{8,}|\bagent_[0-9a-f]{32,}")
+# future writer does not. No word boundary before them: a credential right
+# after "_" or a digit is masked too.
+_CREDENTIAL = re.compile(r"qwed_(?:live|test)_[A-Za-z0-9_-]{8,}|agent_[0-9a-f]{32,}")
+# Largest id an SQL BIGINT holds, as on /audit/logs; a larger cursor would
+# overflow the query and fail with a server error instead of a 404.
+_MAX_EVENT_ID = 2**63 - 1
 
 
 def _mask(text: str | None) -> str | None:
@@ -81,7 +85,7 @@ def list_security_events(
         .limit(limit)
     )
     if before is not None:
-        cursor = session.get(SecurityEvent, before)
+        cursor = session.get(SecurityEvent, before) if 1 <= before <= _MAX_EVENT_ID else None
         if cursor is None or cursor.organization_id != ctx.organization_id:
             # 404 either way: do not confirm an event in another organisation.
             raise HTTPException(status_code=404, detail="Event not found")

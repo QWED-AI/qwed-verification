@@ -3,7 +3,6 @@ from fastapi.security import APIKeyHeader
 from sqlmodel import Session, select
 
 from qwed_new.auth.security import hash_api_key, is_api_key_live, validate_api_key_format
-from qwed_new.core.api_key_usage import record_api_key_use
 from qwed_new.core.database import get_session
 from qwed_new.core.models import ApiKey
 
@@ -54,6 +53,6 @@ async def get_api_key(
             detail="Invalid or revoked API Key"
         )
     
-    # The key authenticated: record it, at most once a minute (#486).
-    record_api_key_use(session, api_key)
+    # last_used_at is recorded by the caller once every check has passed
+    # (#486; see admin_auth._admin_from_api_key).
     return api_key

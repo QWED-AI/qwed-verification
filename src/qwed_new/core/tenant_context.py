@@ -5,6 +5,8 @@ This module handles API key validation and tenant identification.
 It's the "authentication layer" of the QWED OS.
 """
 
+import asyncio
+
 from fastapi import Depends, Header, HTTPException
 from sqlmodel import Session, select
 
@@ -88,6 +90,7 @@ async def get_current_tenant(
         api_key=x_api_key,
         api_key_id=api_key.id,
     )
-    # Last, so a refused key is never marked as used (#486).
-    record_api_key_use(session, api_key)
+    # Last, so a refused key is never marked as used (#486); in a worker
+    # thread, so a write waiting on a lock does not stall the event loop.
+    await asyncio.to_thread(record_api_key_use, session, api_key)
     return tenant
