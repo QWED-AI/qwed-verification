@@ -515,6 +515,27 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Changed
 
+- **Audit rows record the API key that made them and the server version
+  (#484).** A row could not say who wrote it or with which release.
+  - `VerificationLog` has two new nullable columns: `api_key_id`, the id of
+    the API key that authenticated the request, and `verifier_version`,
+    `qwed_new.__version__` when the row was written.
+  - `get_current_tenant` records the key id for the request
+    (`core/request_caller.py`), and the audit logger writes it on every row
+    that request appends, so no verify route passes it by hand. A row
+    written without an API key, such as a user session or the audit seed,
+    has `api_key_id` null.
+  - Both fields are covered by the entry hash, so changing or clearing them
+    on a stored row fails verification. Rows written before this change
+    still verify, and adding a caller to one of them breaks its hash.
+  - Upgrading: `create_db_and_tables` adds the two columns to an existing
+    `verificationlog` table at startup (`core/schema_migrations.py`).
+    Existing rows read as null, which the API and the dashboard show as not
+    recorded.
+  - `GET /audit/logs` and `GET /audit/logs/{log_id}` return `api_key_id` (as
+    a string, like other ids) and `verifier_version`.
+  - `user_id` is unchanged: verify routes still write it as null. The key's
+    owner is not always the caller, and `api_key_id` leads to the owner.
 - **`GET /audit/logs` pages through every row (#484).** `limit` was capped
   at 200 with no offset or cursor, so a client could only read the newest
   200 rows.

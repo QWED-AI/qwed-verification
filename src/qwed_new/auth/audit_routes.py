@@ -34,6 +34,18 @@ _VERDICTS = frozenset(v.value for v in Verdict)
 _MAX_LOG_ID = 2**63 - 1
 
 
+def _caller(log: VerificationLog) -> dict[str, str | None]:
+    """Who wrote the row and with what (#484), as stored; null when not recorded.
+
+    ``api_key_id`` is the ApiKey id as a string, like every other id here.
+    It is null on rows written before #484 and on rows no API key made.
+    """
+    return {
+        "api_key_id": None if log.api_key_id is None else str(log.api_key_id),
+        "verifier_version": log.verifier_version,
+    }
+
+
 def _org_log(session: Session, log_id: int, organization_id: int) -> VerificationLog | None:
     """The log with this id in this organisation, or None for any other id."""
     if not 1 <= log_id <= _MAX_LOG_ID:
@@ -96,6 +108,9 @@ async def get_logs(
     the last row's id when the page is full; pass it as ``before`` for the
     next page. It is null on a page that is not full. ``total`` is the
     number of rows on this page.
+
+    ``api_key_id`` and ``verifier_version`` say who wrote each row and with
+    what server version (see ``_caller``).
     """
     statement = select(VerificationLog).where(
         VerificationLog.organization_id == current_user.organization_id
@@ -136,6 +151,7 @@ async def get_logs(
                 "latency_ms": 0, # Placeholder, add latency to model if needed
                 "created_at": log.timestamp.isoformat(),
                 "entry_hash": log.entry_hash,
+                **_caller(log),
             }
             for log in logs
         ]
@@ -153,8 +169,9 @@ async def get_log_detail(
     """Get detailed information for a single audit log.
 
     Adds the row's chain entry: its own hash, the hash it links to, and its
-    HMAC signature, as stored. ``verdict`` and ``status`` are as on the list,
-    and neither is an admission decision.
+    HMAC signature, as stored. ``verdict``, ``status``, ``api_key_id`` and
+    ``verifier_version`` are as on the list; neither of the first two is an
+    admission decision.
     """
     log = _org_log(session, log_id, current_user.organization_id)
 
@@ -172,6 +189,7 @@ async def get_log_detail(
         "entry_hash": log.entry_hash,
         "previous_hash": log.previous_hash,
         "hmac_signature": log.hmac_signature,
+        **_caller(log),
     }
 
 @router.get("/export", responses=ROLE_REFUSED)

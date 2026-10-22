@@ -92,6 +92,13 @@ class VerificationLog(SQLModel, table=True):
     previous_hash: Optional[str] = None  # Hash of previous entry (chain)
     raw_llm_output: Optional[str] = None  # Preserve raw LLM response
 
+    # Who wrote the row and with what (#484). Null on rows written before
+    # these columns existed, and api_key_id is null when no API key made the
+    # request (a user session, the audit seed). core/schema_migrations.py
+    # adds both columns to an existing table at startup.
+    api_key_id: int | None = None  # ApiKey.id of the key that made the request
+    verifier_version: str | None = None  # qwed_new.__version__ when the row was written
+
 class SecurityEvent(SQLModel, table=True):
     """
     Security audit log for tracking blocked/sanitized requests.
