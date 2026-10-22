@@ -145,15 +145,15 @@ def test_the_list_reports_the_stored_verdict_and_the_entry_hash(env):
 
 def test_a_disproven_claim_is_verified_but_not_admitted(env):
     # The verdict is not an admission: a false identity is VERIFIED, and the
-    # route's own flag still says "blocked". Neither route claims to return
-    # an admission, since these rows do not store one.
+    # route's own flag still says "blocked". The admission is its own field
+    # (#307), null on this row because none was stored with it.
     row = next(r for r in env.get("/audit/logs")["logs"] if r["id"] == str(env.disproven.id))
     detail = env.get(f"/audit/logs/{env.disproven.id}")
 
     for body in (row, detail):
         assert body["verdict"] == "VERIFIED"
         assert body["status"] == "blocked"
-        assert "admission" not in body
+        assert body["admission"] is None
 
 
 def test_the_list_does_not_return_the_link_or_signature(env):

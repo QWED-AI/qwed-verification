@@ -17,7 +17,8 @@ appends to a given database. A second writer makes the next append fail with a
 continuity SecurityError rather than fork the chain.
 
 Releases: since #484 the entry hash covers ``api_key_id`` and
-``verifier_version``. An older release cannot verify a row hashed that way,
+``verifier_version``, and since #307 ``admission``. An older release cannot
+verify a row hashed that way,
 so with such a row as an organisation's chain head it refuses further appends
 for that organisation. Upgrade every process together, and do not run an
 older release against a database a newer one has written to.
@@ -135,9 +136,14 @@ class AuditLogger:
         is_verified: bool,
         domain: str,
         raw_llm_output: Optional[str] = None,
+        admission: Optional[str] = None,
     ) -> str:
         """
         Log a verification event with cryptographic signature.
+
+        ``admission`` is the admission decision the route made and returned
+        ("ADMIT" or "BLOCKED"), or None when the route decides none (#307).
+        It is stored and covered by the hash.
 
         ``result`` is either a dict, serialised here, or an already-serialised
         JSON string, stored as given so a caller's size cap holds. The hash
@@ -170,6 +176,7 @@ class AuditLogger:
                 is_verified=is_verified,
                 domain=domain,
                 raw_llm_output=raw_llm_output,
+                admission=admission,
             )
 
     def _append(
@@ -183,6 +190,7 @@ class AuditLogger:
         is_verified: bool,
         domain: str,
         raw_llm_output: Optional[str],
+        admission: Optional[str] = None,
     ) -> str:
         """Append one entry under the chain lock (see log_verification)."""
         timestamp = datetime.now(timezone.utc)
@@ -220,6 +228,9 @@ class AuditLogger:
                 "raw_llm_output": raw_llm_output,
                 "api_key_id": api_key_id,
                 "verifier_version": _QWED_VERSION,
+                # The admission the route decided (#307); None when it
+                # decided none. Covered, so it cannot be set or cleared later.
+                "admission": admission,
             }
 
             entry_hash = self._compute_hash(log_data)
@@ -239,6 +250,7 @@ class AuditLogger:
                 raw_llm_output=raw_llm_output,
                 api_key_id=api_key_id,
                 verifier_version=_QWED_VERSION,
+                admission=admission,
             )
             session.add(log_entry)
             session.commit()
@@ -494,6 +506,13 @@ class AuditLogger:
     def _reconstruct_log_data(self, log_entry: VerificationLog) -> Dict[str, Any]:
         """Rebuild the canonical payload for integrity verification."""
         return {
+            **self._reconstruct_pre_admission_log_data(log_entry),
+            "admission": log_entry.admission,
+        }
+
+    def _reconstruct_pre_admission_log_data(self, log_entry: VerificationLog) -> dict[str, Any]:
+        """Rebuild the payload for entries hashed before admission was covered (#307)."""
+        return {
             **self._reconstruct_pre_caller_log_data(log_entry),
             "api_key_id": log_entry.api_key_id,
             "verifier_version": log_entry.verifier_version,
@@ -585,8 +604,16 @@ class AuditLogger:
         shapes leave both fields out, so accepting them for such a row would
         let anyone with database write access set or change the caller on a
         row written before #484 without breaking its hash.
+
+        The same holds for ``admission`` (#307): a row that records one is
+        checked against the current payload only; a row without one may also
+        be a #484 row, hashed before admission was covered. Setting an
+        admission on such a row, or clearing one, changes the payload its
+        stored hash was made from, so it fails.
         """
         payloads = [self._reconstruct_log_data(log_entry)]
+        if log_entry.admission is None:
+            payloads.append(self._reconstruct_pre_admission_log_data(log_entry))
         if log_entry.api_key_id is None and log_entry.verifier_version is None:
             payloads += [
                 self._reconstruct_pre_caller_log_data(log_entry),

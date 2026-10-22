@@ -515,6 +515,25 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Changed
 
+- **Audit rows store the admission decision their route made (part of
+  #307).** A row's verdict is not an admission (code proven unsafe is
+  VERIFIED and BLOCKED), and the rows stored no admission, so `/audit/logs`
+  could not show one.
+  - `VerificationLog` has a new nullable column, `admission` ("ADMIT" or
+    "BLOCKED"), added to an existing table at startup. It holds the
+    admission the route decided and returned: `/verify/natural_language`,
+    `/verify/code`, `/verify/math` and `/verify/sql`, the agent route
+    `/agents/{agent_id}/verify` (natural-language rule, decided though not
+    returned) and `/verify/batch` code items. Routes that decide none
+    (logic, stats, fact, image, RAG, process, consensus, other batch items)
+    store null, as do rows written before this release.
+  - The entry hash covers `admission`, so it cannot be set or cleared on a
+    stored row. A row without one is also checked against the payload
+    hashed before admission was covered, so rows written by earlier
+    releases still verify.
+  - `GET /audit/logs` and `GET /audit/logs/{log_id}` return `admission`.
+  - As with #484, an older release cannot verify a row hashed this way:
+    upgrade every process together.
 - **Security events can be listed, and API keys record when they were last
   used (#486).** Security events could only be read as a summary, and
   `ApiKey.last_used_at` was never set (both places that would set it were

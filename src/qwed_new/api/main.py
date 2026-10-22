@@ -420,6 +420,7 @@ def _safe_commit_log(log):
             is_verified=log.is_verified,
             domain=log.domain,
             raw_llm_output=log.raw_llm_output,
+            admission=log.admission,
         )
     except Exception as exc:
         logger.error("Audit persistence failed: %s", type(exc).__name__)
@@ -645,7 +646,8 @@ async def verify_natural_language(
         # The log row is keyed by the user's question, which is only
         # verified when it is admitted.
         is_verified=admission is AdmissionDecision.ADMIT,
-        domain="MATH"
+        domain="MATH",
+        admission=admission.value,  # #307: as returned
     )
     _safe_commit_log(log)
 
@@ -1041,7 +1043,8 @@ async def verify_code(
             query=code[:200],
             result=_cap_log_result(dr.to_dict()),
             is_verified=dr.developer_fields.get("is_valid") is True,
-            domain="CODE"
+            domain="CODE",
+            admission=admission.value,  # #307: as returned
         )
         _safe_commit_log(log)
 
@@ -1063,7 +1066,8 @@ async def verify_code(
             query=(code or "")[:200],
             result=_cap_log_result(dr.to_dict()),
             is_verified=False,
-            domain="CODE"
+            domain="CODE",
+            admission=admission_decision(dr).value,  # #307: as returned
         )
         _safe_commit_log(log)
         response = _merge_response(dr)
@@ -1207,7 +1211,8 @@ async def verify_math(
             query=expression,
             result=_cap_log_result(dr.to_dict()),
             is_verified=dr.developer_fields.get("is_valid") is True,
-            domain="MATH"
+            domain="MATH",
+            admission=admission.value,  # #307: as returned
         )
         _safe_commit_log(log)
 
@@ -1229,7 +1234,8 @@ async def verify_math(
             query=expression,
             result=_cap_log_result(dr.to_dict()),
             is_verified=False,
-            domain="MATH"
+            domain="MATH",
+            admission=admission_decision(dr).value,  # #307: as returned
         )
         _safe_commit_log(log)
         response = _merge_response(dr)
@@ -1276,7 +1282,8 @@ async def verify_sql(
             query=query,
             result=_cap_log_result(dr.to_dict()),
             is_verified=dr.is_authoritative,
-            domain="SQL"
+            domain="SQL",
+            admission=admission.value,  # #307: as returned
         )
         _safe_commit_log(log)
 
@@ -1298,7 +1305,8 @@ async def verify_sql(
             query=query,
             result=_cap_log_result(dr.to_dict()),
             is_verified=False,
-            domain="SQL"
+            domain="SQL",
+            admission=admission_decision(dr).value,  # #307: as returned
         )
         _safe_commit_log(log)
         response = _merge_response(dr)
@@ -1915,13 +1923,15 @@ async def agent_verify(
     # AgentActivity is neither chained nor signed, so it is not the audit
     # record (#477).
     dr = _enforce_trust(_natural_language_diagnostic(result), query=request.query)
+    admission = natural_language_admission(dr)
     await asyncio.to_thread(_safe_commit_log, VerificationLog(
         organization_id=agent.organization_id,
         user_id=None,
         query=request.query,
         result=_cap_log_result({**dr.to_dict(), "agent_id": agent_id}),
-        is_verified=natural_language_admission(dr) is AdmissionDecision.ADMIT,
+        is_verified=admission is AdmissionDecision.ADMIT,
         domain="MATH",
+        admission=admission.value,  # #307: decided, though not returned here
     ))
 
     # 4. Log activity

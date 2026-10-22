@@ -53,7 +53,8 @@ def test_the_migration_adds_both_columns_to_an_existing_table(tmp_path):
 
     added = add_missing_columns(engine)
 
-    assert added == ["verificationlog.api_key_id", "verificationlog.verifier_version"]
+    # Later releases add more columns (#307 adds admission); these two must be among them.
+    assert {"verificationlog.api_key_id", "verificationlog.verifier_version"} <= set(added)
     columns = {c["name"] for c in inspect(engine).get_columns("verificationlog")}
     assert {"api_key_id", "verifier_version"} <= columns
     with engine.connect() as connection:

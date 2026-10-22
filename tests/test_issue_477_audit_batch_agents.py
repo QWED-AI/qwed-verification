@@ -239,6 +239,8 @@ def test_an_agent_verification_appends_a_chained_row(env, agent):
     assert row.query == "what is 2+2"
     assert row.is_verified is False
     assert row.domain == "MATH"
+    # The natural-language admission the route decided (#307).
+    assert row.admission == "BLOCKED"
 
 
 def test_the_agent_append_runs_off_the_event_loop(env, agent, monkeypatch):
