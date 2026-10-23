@@ -2,11 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 from sqlalchemy.exc import SQLAlchemyError
+from dataclasses import replace
 from typing import Any, Dict, Optional
 import json
 
 from qwed_new.core.database import get_session
-from qwed_new.core.diagnostics import DiagnosticResult
+from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus, enforce_trust_decision
 from qwed_new.core.audit_logger import SecurityError, get_audit_logger
 from qwed_new.core.rate_limiter import check_rate_limit
 from qwed_new.core.security import redact_pii
@@ -163,10 +164,29 @@ def create_verification_context_from_diagnostic(
     verdict is the diagnostic's status, which for VERIFIED must be backed by
     an attestation token binding the status, ``proof_ref`` and ``query``
     (BLOCKED otherwise). The caller's message and developer fields are kept
-    under ``developer_fields.caller_supplied`` and the admission is always
-    DENY: nothing the caller wrote is taken as a server verdict (#321).
+    under ``developer_fields.caller_supplied``, a blocked one's included, and
+    the admission is always DENY: nothing the caller wrote is taken as a
+    server verdict (#321).
     """
     result = _diagnostic_result_from_payload(payload.diagnostic)
+    if result.status is DiagnosticStatus.VERIFIED:
+        # The bridge enforces this too, but its BLOCKED replacement carries
+        # the gate's fields only. Enforce here first so a blocked diagnostic
+        # keeps the caller's record beside the reason it was blocked.
+        enforced = enforce_trust_decision(
+            result,
+            attestation_token=payload.attestation_token,
+            require_attestation=True,
+            query=payload.query,
+        )
+        if enforced.status is not DiagnosticStatus.VERIFIED:
+            result = replace(
+                enforced,
+                developer_fields={
+                    **enforced.developer_fields,
+                    "caller_supplied": result.developer_fields["caller_supplied"],
+                },
+            )
     try:
         document = verification_context_from_diagnostic_result(
             result,

@@ -93,15 +93,23 @@ def test_an_attested_verified_diagnostic_is_not_admitted_on_the_callers_is_valid
     assert _evidence(document)["agent_message"] != PERSUASIVE
 
 
-@pytest.mark.parametrize("token", [None, "not-a-token"])
-def test_a_verified_diagnostic_without_a_valid_token_is_blocked(token):
+@pytest.mark.parametrize("token, reason", [
+    (None, "trust_gate.mandatory_attestation_missing"),
+    ("not-a-token", "trust_gate.invalid_attestation_token"),
+])
+def test_a_verified_diagnostic_without_a_valid_token_is_blocked(token, reason):
     document = _document(
         {"status": "VERIFIED", "agent_message": PERSUASIVE, "developer_fields": {"is_valid": True}, "proof_ref": PROOF},
         attestation_token=token,
     )
+    fields = _evidence(document)["developer_fields"]
 
     assert document["verdict"] == "BLOCKED"
     assert document["context"]["decision"]["admission"] == "DENY"
+    # The gate's reason, and the caller's record beside it (#509 review).
+    assert fields["constraint_id"] == reason
+    assert fields["caller_supplied"] == {"agent_message": PERSUASIVE, "developer_fields": {"is_valid": True}}
+    assert "is_valid" not in fields
 
 
 def test_a_token_for_another_query_does_not_carry_over():
@@ -110,11 +118,14 @@ def test_a_token_for_another_query_does_not_carry_over():
     ).token
 
     document = _document(
-        {"status": "VERIFIED", "agent_message": "x", "developer_fields": {}, "proof_ref": PROOF},
+        {"status": "VERIFIED", "agent_message": "x", "developer_fields": {"note": "n"}, "proof_ref": PROOF},
         attestation_token=other,
     )
+    fields = _evidence(document)["developer_fields"]
 
     assert document["verdict"] == "BLOCKED"
+    assert fields["constraint_id"] == "trust_gate.claims_query_mismatch"
+    assert fields["caller_supplied"] == {"agent_message": "x", "developer_fields": {"note": "n"}}
 
 
 def test_a_malformed_diagnostic_is_still_blocked():
