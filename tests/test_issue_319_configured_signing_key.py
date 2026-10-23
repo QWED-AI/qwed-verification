@@ -270,6 +270,20 @@ def test_a_key_file_must_be_a_regular_file(fresh_service, tmp_path):
         attestation.configured_signing_key_pem()
 
 
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="counts descriptors through /proc")
+def test_a_refused_key_file_leaves_no_descriptor_open(fresh_service, tmp_path):
+    # POSIX opens a directory, and os.fdopen would raise on it without
+    # closing the descriptor it was handed (#510 review, Sentry).
+    fresh_service.setenv(SIGNING_KEY_FILE_ENV, str(tmp_path))
+    before = len(os.listdir("/proc/self/fd"))
+
+    for _ in range(20):
+        with pytest.raises(SigningKeyError):
+            attestation.configured_signing_key_pem()
+
+    assert len(os.listdir("/proc/self/fd")) == before
+
+
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs are POSIX")
 def test_a_fifo_is_refused_without_blocking(fresh_service, tmp_path):
     # Opened without blocking and checked once opened, so a FIFO (or a path

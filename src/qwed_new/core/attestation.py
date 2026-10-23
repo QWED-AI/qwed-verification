@@ -103,12 +103,23 @@ def _read_key_file(path: str) -> bytes:
     """
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
-        with os.fdopen(fd, "rb") as handle:
-            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-                raise SigningKeyError(f"{SIGNING_KEY_FILE_ENV} is not a regular file")
+    except OSError:
+        raise SigningKeyError(f"{SIGNING_KEY_FILE_ENV} could not be read") from None
+    # The raw descriptor is checked before it is wrapped: os.fdopen raises on
+    # a directory without closing a descriptor it was handed, so it would
+    # leak. Until the file object owns it, this function closes it (#510).
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise SigningKeyError(f"{SIGNING_KEY_FILE_ENV} is not a regular file")
+        handle = os.fdopen(fd, "rb")
+        fd = -1  # owned, and closed, by the file object from here
+        with handle:
             data = handle.read(_MAX_KEY_FILE_BYTES + 1)
     except OSError:
         raise SigningKeyError(f"{SIGNING_KEY_FILE_ENV} could not be read") from None
+    finally:
+        if fd >= 0:
+            os.close(fd)
     if len(data) > _MAX_KEY_FILE_BYTES:
         raise SigningKeyError(f"{SIGNING_KEY_FILE_ENV} is too large to be a key file")
     return data
