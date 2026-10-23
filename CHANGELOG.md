@@ -21,6 +21,12 @@ All notable changes to the QWED Protocol will be documented in this file.
     the document's message is the server's.
   - The admission is always DENY, and the audit row's `is_verified` false.
     An ADMIT would need the token to bind `is_valid` (#319).
+  - `DiagnosticResult.from_dict` raises `TypeError` for a status that is not
+    a string (`null`, a number, a bool, a list). It passed one through
+    unconverted, so the route's `to_dict()` raised `AttributeError` and
+    answered 500 instead of the malformed-diagnostic BLOCKED. A
+    `DiagnosticStatus` value is still accepted, and a missing status still
+    means UNVERIFIABLE.
 - **Batch items and the statistics Verification Context enforce the
   attestation (#320).** After the verify routes (below), `/verify/batch`
   still returned natural-language and logic items through the advisory
