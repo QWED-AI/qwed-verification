@@ -91,8 +91,9 @@ def test_verified_is_blocked_when_the_attestation_is_for_another_query(monkeypat
     assert out.status is DiagnosticStatus.BLOCKED
 
 
-def test_verified_with_a_malformed_proof_ref_is_blocked():
-    out = attest_and_enforce(_verified(proof_ref="not-a-hash"), engine="code", query="x = 1")
+@pytest.mark.parametrize("proof_ref", ["not-a-hash", 123])
+def test_verified_with_a_malformed_proof_ref_is_blocked(proof_ref):
+    out = attest_and_enforce(_verified(proof_ref=proof_ref), engine="code", query="x = 1")
 
     assert out.status is DiagnosticStatus.BLOCKED
 
@@ -111,7 +112,10 @@ def test_an_attestation_binds_a_given_proof_hash_as_is():
     assert claims["qwed"]["proof_hash"] == PROOF
 
 
-@pytest.mark.parametrize("bad", ["sha256:xyz", "md5:" + "a" * 32, "sha256:" + "A" * 64])
+@pytest.mark.parametrize("bad", [
+    "sha256:xyz", "md5:" + "a" * 32, "sha256:" + "A" * 64,
+    123, ["sha256:" + "b" * 64], b"sha256:" + b"b" * 64,  # not a string: BLOCKED, not TypeError
+])
 def test_a_malformed_proof_hash_is_not_signed(bad):
     issued = create_verification_attestation(
         status="VERIFIED", verified=True, engine="logic", query="q", proof_hash=bad,
@@ -148,6 +152,7 @@ def test_a_direct_signing_call_still_stores_unless_told_not_to():
 
 @pytest.mark.parametrize("kwargs", [
     {"proof_hash": "sha256:bad"},
+    {"proof_hash": 123},
     {"proof_hash": PROOF, "proof_data": ""},  # presence, not truthiness
 ])
 def test_the_signing_boundary_itself_refuses_a_bad_proof_input(kwargs):

@@ -201,6 +201,12 @@ class IssuerKeyPair:
 # A DiagnosticResult proof_ref, the only proof_hash form that is signed (#320).
 _PROOF_HASH = re.compile(r"sha256:[0-9a-f]{64}")
 
+
+def _is_proof_hash(value: Any) -> bool:
+    """True for a well-formed proof hash; False for anything else, a
+    non-string included, so it is refused rather than raising TypeError."""
+    return isinstance(value, str) and _PROOF_HASH.fullmatch(value) is not None
+
 # (#275) Single source of truth for the generic attestation rejection message.
 # Every caller-sensitive failure returns this exactly, so attackers cannot
 # enumerate trusted issuers, probe expirations, or read implementation state.
@@ -321,7 +327,7 @@ class AttestationService:
         if proof_data is not None and proof_hash is not None:
             raise ValueError("give proof_data or proof_hash, not both")
         if proof_hash is not None:
-            if not _PROOF_HASH.fullmatch(proof_hash):
+            if not _is_proof_hash(proof_hash):
                 raise ValueError("proof_hash must be sha256:<64 hex>")
             qwed_claims["proof_hash"] = proof_hash
         elif proof_data:
@@ -551,7 +557,7 @@ def create_verification_attestation(
             error="cryptography/PyJWT package not installed",
         )
 
-    if proof_hash is not None and not _PROOF_HASH.fullmatch(proof_hash):
+    if proof_hash is not None and not _is_proof_hash(proof_hash):
         logger.warning(
             "attestation.blocked query_hash=%s reason=INVALID_PROOF_HASH",
             hashlib.sha256(query.encode()).hexdigest()[:16],
