@@ -135,6 +135,31 @@ def test_a_malformed_diagnostic_is_still_blocked():
     assert _evidence(document)["developer_fields"]["constraint_id"] == "verification_context.malformed_diagnostic"
 
 
+@pytest.mark.parametrize("status", [None, 1, True, ["VERIFIED"], {"value": "VERIFIED"}])
+def test_a_non_string_status_is_a_malformed_diagnostic_not_an_error(status):
+    # from_dict passed a non-string status through unconverted, and the
+    # document's to_dict() then raised AttributeError: a 500 (#509 review).
+    document = _document({"status": status, "agent_message": PERSUASIVE, "developer_fields": {}})
+
+    assert document["verdict"] == "BLOCKED"
+    assert _evidence(document)["developer_fields"]["constraint_id"] == "verification_context.malformed_diagnostic"
+
+
+@pytest.mark.parametrize("status", [None, 1, ["VERIFIED"]])
+def test_from_dict_refuses_a_non_string_status(status):
+    from qwed_new.core.diagnostics import DiagnosticResult
+
+    with pytest.raises(TypeError, match="status must be a string"):
+        DiagnosticResult.from_dict({"status": status, "agent_message": "m"})
+
+
+def test_from_dict_still_takes_a_status_enum_and_a_missing_status():
+    from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
+
+    assert DiagnosticResult.from_dict({"status": DiagnosticStatus.BLOCKED, "agent_message": "m"}).status is DiagnosticStatus.BLOCKED
+    assert DiagnosticResult.from_dict({"agent_message": "m"}).status is DiagnosticStatus.UNVERIFIABLE
+
+
 def test_the_audit_row_records_the_document_as_returned(isolated_audit_chain):
     api_main.app.dependency_overrides[api_main.get_current_tenant] = lambda: TENANT
 
