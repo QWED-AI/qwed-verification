@@ -54,15 +54,15 @@ def batch_item_is_verified(item: BatchItem) -> bool:
 
 
 # Batch item types whose route decides an admission and returns it (#307, #494).
-_ADMISSION_TYPES = ("code", "natural_language")
+_ADMISSION_TYPES = ("code", "natural_language", "math", "sql")
 
 
 def batch_item_admission(item: BatchItem) -> str | None:
     """The admission a batch item's result carries, or None (#307).
 
-    Code and natural-language items decide one in a batch, as /verify/code
-    and /verify/natural_language do (#494); a failed item, or any other type,
-    stores None: no admission was decided.
+    Code, natural-language, maths and SQL items decide one in a batch, as
+    their routes do (#494); a failed item, or a logic or fact item, stores
+    None: no admission was decided.
     """
     if item.status != "completed" or item.verification_type.value not in _ADMISSION_TYPES:
         return None

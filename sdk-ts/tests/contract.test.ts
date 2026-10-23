@@ -106,12 +106,11 @@ describe('captured server responses', () => {
         ]);
         expect(batch.items[0].result?.proof_ref).toMatch(/^sha256:/);
 
-        // Batch math items carry no admission decision today, so none is admitted.
-        for (const item of batch.items) {
-            expect(item.result?.admission).toBeUndefined();
-            expect(isAdmitted(item.result)).toBe(false);
-            expect(item.verified).toBe(false);
-        }
+        // Batch math items carry the admission /verify/math decides: the proven
+        // identity is admitted, the disproven one is not.
+        expect(batch.items.map(item => item.result?.admission)).toEqual([Admission.Admit, Admission.Blocked]);
+        expect(batch.items.map(item => isAdmitted(item.result))).toEqual([true, false]);
+        expect(batch.items.map(item => item.verified)).toEqual([true, false]);
     });
 });
 
@@ -433,6 +432,6 @@ describe('client', () => {
         ]);
         expect(batch.items).toHaveLength(2);
         expect(batch.items[0].result?.status).toBe(VerificationStatus.Verified);
-        expect(batch.items.some(item => isAdmitted(item.result))).toBe(false);
+        expect(batch.items.map(item => isAdmitted(item.result))).toEqual([true, false]);
     });
 });

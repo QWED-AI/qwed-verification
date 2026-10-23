@@ -343,7 +343,12 @@ class BatchVerificationService:
                     item.params.get("schema_ddl", ""),
                     dialect=item.params.get("dialect", "sqlite")
                 )
-                return attest_and_enforce(result, engine="sql", query=item.query).to_dict()
+                dr = attest_and_enforce(result, engine="sql", query=item.query)
+                serialized = dr.to_dict()
+                # As /verify/sql: a proven-malicious query is VERIFIED but
+                # must not be admitted (#307).
+                serialized["admission"] = admission_decision(dr).value
+                return serialized
 
             return await asyncio.to_thread(_verify_sql)
         
@@ -383,8 +388,10 @@ class BatchVerificationService:
                 )
 
         # As /verify/math: a VERIFIED identity is signed and its attestation
-        # enforced, and is BLOCKED if signing fails (#271, #320).
-        return merge_diagnostic_result(attest_and_enforce(dr, engine="math", query=item.query))
+        # enforced, and is BLOCKED if signing fails (#271, #320). Admission is
+        # decided apart from the verdict, as there (#307).
+        dr = attest_and_enforce(dr, engine="math", query=item.query)
+        return merge_diagnostic_result(dr) | {"admission": admission_decision(dr).value}
 
     def get_job(self, job_id: str) -> Optional[BatchJob]:
         """Get a batch job by ID."""

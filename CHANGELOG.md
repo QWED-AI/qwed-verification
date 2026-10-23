@@ -575,6 +575,20 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Changed
 
+- **Batch maths and SQL items return and store their admission (#307).**
+  `/verify/math` and `/verify/sql` return an `admission` beside the verdict,
+  because a proven-false identity and a proven-malicious query are both
+  VERIFIED and neither is admitted. Their batch items returned the verdict
+  only, and their audit rows stored no admission.
+  - A batch maths or SQL item's `result` has `admission` (`ADMIT` or
+    `BLOCKED`), decided on the enforced verdict as on its route, and its
+    audit row stores it. Batch logic and fact items still store null, as
+    their routes decide none.
+  - `sdk-fixtures/batch.json` carries the two items' admissions, and the Go,
+    Rust and TypeScript SDKs' contract tests and docs say which batch items
+    carry one (they said none did, already out of date for code and
+    natural-language items). The proven batch item now counts as admitted
+    by the SDKs' `is_admitted`.
 - **Breaking for `/verify/batch`: logic and natural-language items return
   what their routes return (#494).** The batch returned the control plane's
   raw dict for these items, so a batch caller got `SAT` where a

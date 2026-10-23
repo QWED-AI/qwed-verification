@@ -59,7 +59,7 @@ Every verification returns the server's DiagnosticResult envelope:
 
 **Gate on `IsAdmitted()`, not on `Status`.** `VERIFIED` means the engine reached a deterministic answer, not that the claim holds: `2 + 2 = 5` is `VERIFIED · BLOCKED` (proven false), and unsafe code is `VERIFIED · BLOCKED` (proven unsafe). `IsAdmitted()` is true only for `ADMIT` together with `VERIFIED` and a `ProofRef`; a missing or unknown admission is never admitted.
 
-The `Verified` field and `IsVerified()` are deprecated. Decoding always sets `Verified` to `IsAdmitted()`, whatever the body says, and `IsVerified()` returns `IsAdmitted()`. Endpoints that make no admission decision (`/verify/logic`, `/verify/fact`, `/verify/rag`, `/verify/process` and batch items today) are therefore never admitted. `/verify/rag` and `/verify/process` do send a top-level `verified`, which is their guard's own result; it is kept in `Extra["verified"]` and `DeveloperFields["verified"]`.
+The `Verified` field and `IsVerified()` are deprecated. Decoding always sets `Verified` to `IsAdmitted()`, whatever the body says, and `IsVerified()` returns `IsAdmitted()`. Endpoints that make no admission decision (`/verify/logic`, `/verify/fact`, `/verify/rag`, `/verify/process`, and batch logic and fact items) are therefore never admitted. `/verify/rag` and `/verify/process` do send a top-level `verified`, which is their guard's own result; it is kept in `Extra["verified"]` and `DeveloperFields["verified"]`.
 
 ## Features
 

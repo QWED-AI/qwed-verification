@@ -17,7 +17,7 @@ fails if the server's answers to the deterministic requests drift from them.
 | `natural_language.json` | `/verify/natural_language`, no provider | `UNVERIFIABLE · BLOCKED` |
 | `logic.json` | `/verify/logic`, no provider | `BLOCKED`, no admission |
 | `fact.json` | `/verify/fact` | `UNVERIFIABLE`, no admission |
-| `batch.json` | `/verify/batch`, two math items | job `completed`; items `VERIFIED` and `UNVERIFIABLE`, no admission |
+| `batch.json` | `/verify/batch`, two math items | job `completed`; items `VERIFIED · ADMIT` and `UNVERIFIABLE · BLOCKED` |
 
 The natural-language, logic and fact answers depend on the configured LLM
 provider, so the Python test checks only their envelope rules.

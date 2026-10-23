@@ -110,8 +110,8 @@ async def get_logs(
     /verification-context/from-diagnostic (the Verification Context spec's
     terms). It is the one the route returned (/agents/{agent_id}/verify
     returns it too since #320). It is null where the route decides none
-    (logic, stats, fact, image, RAG, process, consensus, and batch items
-    other than code) and on rows written before it was stored.
+    (logic, stats, fact, image, RAG, process, consensus, and batch logic and
+    fact items) and on rows written before it was stored.
 
     Paging (#484): logs come newest first, by timestamp and then id, so
     the order is stable when two rows share a timestamp. ``next_before`` is
