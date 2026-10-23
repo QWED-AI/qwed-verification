@@ -17,9 +17,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
 
-from qwed_new.core.diagnostics import DiagnosticResult, admission_decision, enforce_trust_decision, merge_diagnostic_result
-from qwed_new.core.attestation import create_verification_attestation, AttestationStatus
+from qwed_new.core.diagnostics import DiagnosticResult, admission_decision, merge_diagnostic_result
 from qwed_new.core.route_diagnostics import logic_diagnostic, natural_language_diagnostic
+from qwed_new.core.trust import attest_and_enforce
 
 logger = logging.getLogger(__name__)
 
@@ -272,8 +272,9 @@ class BatchVerificationService:
             Verification result
         """
         # Logic and natural-language items get the DiagnosticResult their
-        # routes return, built by the same helpers with the same trust step,
-        # not the control plane's raw dict (#494).
+        # routes return, built by the same helpers, not the control plane's
+        # raw dict (#494). Every item type takes its route's trust step: a
+        # VERIFIED result is signed and its attestation enforced (#320).
         if item.verification_type == VerificationType.NATURAL_LANGUAGE:
             from qwed_new.core.control_plane import natural_language_admission
 
@@ -281,8 +282,8 @@ class BatchVerificationService:
                 item.query,
                 organization_id=organization_id
             )
-            dr = enforce_trust_decision(
-                natural_language_diagnostic(result), require_attestation=False, query=item.query
+            dr = attest_and_enforce(
+                natural_language_diagnostic(result), engine="natural_language", query=item.query
             )
             # As /verify/natural_language: the verdict covers the translated
             # expression, so admission is decided by its own rule.
@@ -293,8 +294,8 @@ class BatchVerificationService:
                 item.query,
                 organization_id=organization_id
             )
-            dr = logic_diagnostic(result)
-            return merge_diagnostic_result(enforce_trust_decision(dr, require_attestation=False, query=item.query))
+            dr = attest_and_enforce(logic_diagnostic(result), engine="logic", query=item.query)
+            return merge_diagnostic_result(dr)
         
         elif item.verification_type == VerificationType.MATH:
             # sympy is CPU-bound; run it in a worker thread so a batch does not
@@ -310,10 +311,11 @@ class BatchVerificationService:
                     item.query,
                     language=item.params.get("language", "python")
                 )
-                serialized = result.to_dict()
+                dr = attest_and_enforce(result, engine="code", query=item.query)
+                serialized = dr.to_dict()
                 # Gate on admission like /verify/code: VERIFIED-as-unsafe code
                 # must never be admitted by authority-only consumers (#254).
-                serialized["admission"] = admission_decision(result).value
+                serialized["admission"] = admission_decision(dr).value
                 return serialized
 
             return await asyncio.to_thread(_verify_code)
@@ -327,7 +329,7 @@ class BatchVerificationService:
                     item.query,
                     item.params.get("context", "")
                 )
-                return result.to_dict()
+                return attest_and_enforce(result, engine="fact", query=item.query).to_dict()
 
             return await asyncio.to_thread(_verify_fact)
 
@@ -336,11 +338,12 @@ class BatchVerificationService:
 
             def _verify_sql() -> Dict[str, Any]:
                 verifier = SQLVerifier()
-                return verifier.verify_sql(
+                result = verifier.verify_sql(
                     item.query,
                     item.params.get("schema_ddl", ""),
                     dialect=item.params.get("dialect", "sqlite")
-                ).to_dict()
+                )
+                return attest_and_enforce(result, engine="sql", query=item.query).to_dict()
 
             return await asyncio.to_thread(_verify_sql)
         
@@ -360,53 +363,28 @@ class BatchVerificationService:
                 "Expression simplified, but no equality or proof claim was provided",
                 developer_fields={"simplified": str(simplified), "type": "math", "is_valid": False, "query": expression},
             )
-            return merge_diagnostic_result(enforce_trust_decision(dr, require_attestation=False, query=item.query))
+        else:
+            left, right = expression.split("=", 1)
+            left_expr = safe_parse_expr(left)
+            right_expr = safe_parse_expr(right)
+            diff = simplify(left_expr - right_expr)
+            if diff != 0:
+                dr = DiagnosticResult.unverifiable(
+                    f"Not equal: {left_expr} != {right_expr}",
+                    developer_fields={"query": expression, "type": "math", "is_valid": False, "diff": str(diff)},
+                )
+            else:
+                evidence = {"left": left.strip(), "right": right.strip(), "diff": str(diff)}
+                dr = DiagnosticResult.verified(
+                    "Identity verified",
+                    developer_fields={"query": expression, "type": "math", "is_valid": True, "diff": str(diff)},
+                    evidence=evidence,
+                    proof_data=str(evidence),
+                )
 
-        left, right = expression.split("=", 1)
-        left_expr = safe_parse_expr(left)
-        right_expr = safe_parse_expr(right)
-        diff = simplify(left_expr - right_expr)
-        is_valid = diff == 0
-        evidence = {"left": left.strip(), "right": right.strip(), "diff": str(diff)}
-
-        if not is_valid:
-            dr = DiagnosticResult.unverifiable(
-                f"Not equal: {left_expr} != {right_expr}",
-                developer_fields={"query": expression, "type": "math", "is_valid": False, "diff": str(diff)},
-            )
-            return merge_diagnostic_result(enforce_trust_decision(dr, require_attestation=False, query=item.query))
-
-        # VERIFIED math identity: proof_ref + attestation are mandatory (#271)
-        developer_fields = {"query": expression, "type": "math", "is_valid": True, "diff": str(diff)}
-        att_result = create_verification_attestation(
-            status="VERIFIED",
-            verified=True,
-            engine="batch_math",
-            query=item.query,
-            confidence=1.0,
-            proof_data=str(evidence),
-        )
-        if att_result.status is not AttestationStatus.ISSUED:
-            developer_fields["constraint_id"] = "api.attestation.signing_error"
-            developer_fields["attestation_error"] = att_result.error_code
-            dr = DiagnosticResult.unverifiable(
-                "Attestation unavailable — cannot sign batch VERIFIED result",
-                developer_fields=developer_fields,
-            )
-            return merge_diagnostic_result(enforce_trust_decision(dr, require_attestation=False, query=item.query))
-
-        dr = DiagnosticResult.verified(
-            "Identity verified",
-            developer_fields=developer_fields,
-            evidence=evidence,
-            proof_data=str(evidence),
-        )
-        return merge_diagnostic_result(enforce_trust_decision(
-            dr,
-            require_attestation=True,
-            attestation_token=att_result.token,
-            query=item.query,
-        ))
+        # As /verify/math: a VERIFIED identity is signed and its attestation
+        # enforced, and is BLOCKED if signing fails (#271, #320).
+        return merge_diagnostic_result(attest_and_enforce(dr, engine="math", query=item.query))
 
     def get_job(self, job_id: str) -> Optional[BatchJob]:
         """Get a batch job by ID."""

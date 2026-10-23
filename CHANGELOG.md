@@ -6,6 +6,30 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Security
 
+- **Batch items and the statistics Verification Context enforce the
+  attestation (#320).** After the verify routes (below), `/verify/batch`
+  still returned natural-language and logic items through the advisory
+  wrapper, and code, fact and SQL items with no trust step at all, so a
+  batch caller got an authoritative VERIFIED that no attestation was ever
+  issued for. Only maths items were signed (#271).
+  - Every batch item type now takes its route's trust step
+    (`attest_and_enforce`), with the route's engine name and statement. A
+    VERIFIED item whose attestation cannot be issued, or does not check
+    out, is BLOCKED with no `proof_ref`, and a code item's admission is
+    decided on that enforced verdict.
+  - A maths identity whose signing fails is BLOCKED, as on `/verify/math`,
+    with `verdict_status`, `verdict_proof_ref` and `engine` beside the block;
+    it was UNVERIFIABLE with its maths fields (#271). The token's engine is
+    `math` (was `batch_math`).
+  - `StatsVerifier.to_verification_context` decides the document by
+    mandatory enforcement, as the shared bridge does, where it used the
+    advisory wrapper and a hard-coded branch. It does not sign what it is
+    handed. The document is unchanged: BLOCKED and DENY for a VERIFIED
+    result, with the verifier's own result as evidence.
+  - `get_attestation_service()` creates the shared service under a lock.
+    Batch code, fact and SQL items sign from worker threads, and two first
+    calls racing could each build a service with its own key, so a token
+    signed by one failed the other's check and a valid item was BLOCKED.
 - **Every verify route signs VERIFIED and enforces the attestation (#320).**
   The control plane's maths path signed each VERIFIED result and enforced
   the attestation as mandatory, but the other verify routes went through an
@@ -39,9 +63,9 @@ All notable changes to the QWED Protocol will be documented in this file.
     with its `admission`, in the shape `/verify/natural_language` returns,
     instead of the control plane's raw response, which still said VERIFIED
     when enforcement had blocked it. The activity log records the same.
-  - The batch, the statistics verifier and the Verification Context route
-    are not in this change (to follow), and the token is not returned to the
-    caller yet (#319).
+  - The batch and the statistics verifier follow (above); the Verification
+    Context route is not in this change (#321), and the token is not
+    returned to the caller yet (#319).
 - **Role checks on the API-key and audit routes; `rbac.py` removed (#478).**
   The user-session routes under `/auth/api-keys` and `/audit` only required a
   logged-in user, so any role could create keys, list and revoke every key in

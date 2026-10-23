@@ -774,48 +774,40 @@ class StatsVerifier:
             translator="StatsVerifier",
         )
 
+        # The verdict comes from mandatory enforcement, as in the shared
+        # bridge (#320): this builds a document from a result it is handed and
+        # has no token for, so a VERIFIED result is BLOCKED. It is not signed
+        # here: that would stamp whatever it was handed as a server verdict.
+        # The evidence stays the verifier's own result, so what it observed
+        # (the result, the dataset fingerprint, the code) is kept for review.
+        enforced = result
         if result.status is DiagnosticStatus.VERIFIED:
-            result = enforce_trust_decision(
+            enforced = enforce_trust_decision(
                 result,
-                require_attestation=False,
+                require_attestation=True,
                 query=query,
-            )
-
-        evidence_payload = result.to_dict()
-
-        if result.status is DiagnosticStatus.VERIFIED:
-            context = VerificationContext(
-                interpretation=interpretation,
-                proof=proof,
-                evidence=Evidence(payload=evidence_payload, proof_ref=None),
-                decision=Decision(admission=Admission.DENY),
-            )
-            return VerificationContextDocument.blocked(
-                formal_statement=query,
-                context=context,
-                formalization=formalization,
             )
 
         context = VerificationContext(
             interpretation=interpretation,
             proof=proof,
-            evidence=Evidence(payload=evidence_payload, proof_ref=None),
+            evidence=Evidence(payload=result.to_dict(), proof_ref=None),
             decision=Decision(admission=Admission.DENY),
         )
-        if result.status is DiagnosticStatus.UNVERIFIABLE:
+        if enforced.status is DiagnosticStatus.UNVERIFIABLE:
             return VerificationContextDocument.unverifiable(
                 formal_statement=query,
                 context=context,
                 formalization=formalization,
             )
-        if result.status is DiagnosticStatus.BLOCKED:
+        if enforced.status is DiagnosticStatus.BLOCKED:
             return VerificationContextDocument.blocked(
                 formal_statement=query,
                 context=context,
                 formalization=formalization,
             )
         raise VerificationContextValidationError(
-            f"unsupported DiagnosticResult status: {result.status!r}"
+            f"unsupported DiagnosticResult status: {enforced.status!r}"
         )
 
     def _validate_security(self, code: str) -> SecurityReport:
