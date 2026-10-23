@@ -285,14 +285,14 @@ def test_a_fifo_is_refused_without_blocking(fresh_service, tmp_path):
         try:
             attestation.configured_signing_key_pem()
         except SigningKeyError as exc:
-            raised.append(str(exc))
+            raised.append(exc)
 
     worker = threading.Thread(target=read, daemon=True)
     worker.start()
     worker.join(timeout=5)
 
     assert not worker.is_alive(), "reading a FIFO blocked"
-    assert raised == [f"{SIGNING_KEY_FILE_ENV} is not a regular file"]
+    assert [exc.args for exc in raised] == [(f"{SIGNING_KEY_FILE_ENV} is not a regular file",)]
 
 
 def test_a_key_file_larger_than_a_key_is_refused(fresh_service, tmp_path):
