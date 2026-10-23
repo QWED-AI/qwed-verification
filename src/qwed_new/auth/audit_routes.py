@@ -108,11 +108,10 @@ async def get_logs(
     ``admission`` is the admission decision the route made, as stored
     (#307): "ADMIT" or "BLOCKED", or "ADMIT" or "DENY" on
     /verification-context/from-diagnostic (the Verification Context spec's
-    terms). It is the one the route returned, except on
-    /agents/{agent_id}/verify, which decides one without returning it. It
-    is null where the route
-    decides none (logic, stats, fact, image, RAG, process, consensus, and
-    batch items other than code) and on rows written before it was stored.
+    terms). It is the one the route returned (/agents/{agent_id}/verify
+    returns it too since #320). It is null where the route decides none
+    (logic, stats, fact, image, RAG, process, consensus, and batch items
+    other than code) and on rows written before it was stored.
 
     Paging (#484): logs come newest first, by timestamp and then id, so
     the order is stable when two rows share a timestamp. ``next_before`` is

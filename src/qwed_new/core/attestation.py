@@ -12,6 +12,7 @@ Security contract (Issue #188):
 """
 
 import hashlib
+import re
 import json
 import base64
 import logging
@@ -197,6 +198,15 @@ class IssuerKeyPair:
         }
 
 
+# A DiagnosticResult proof_ref, the only proof_hash form that is signed (#320).
+_PROOF_HASH = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def _is_proof_hash(value: Any) -> bool:
+    """True for a well-formed proof hash; False for anything else, a
+    non-string included, so it is refused rather than raising TypeError."""
+    return isinstance(value, str) and _PROOF_HASH.fullmatch(value) is not None
+
 # (#275) Single source of truth for the generic attestation rejection message.
 # Every caller-sensitive failure returns this exactly, so attackers cannot
 # enumerate trusted issuers, probe expirations, or read implementation state.
@@ -266,6 +276,8 @@ class AttestationService:
         chain_index: Optional[int] = None,
         issued_at: Optional[int] = None,
         jti: Optional[str] = None,
+        proof_hash: Optional[str] = None,
+        store: bool = True,
     ) -> Attestation:
         """
         Create a signed attestation for a verification result.
@@ -278,6 +290,16 @@ class AttestationService:
             chain_index:         Optional index in the chain.
             issued_at:           Optional issuance epoch (injectable for determinism).
             jti:                 Optional attestation ID (injectable for determinism).
+            proof_hash:          Optional proof hash to bind as is, in place
+                                 of hashing proof_data: a DiagnosticResult's
+                                 proof_ref, which is already that hash (#320).
+                                 Give one of proof_data and proof_hash; a
+                                 proof_hash that is not sha256:<64 hex> is
+                                 refused.
+            store:               Keep the attestation in this service's
+                                 registry (get_attestation). False for a
+                                 token checked once in this process and not
+                                 returned, so it does not accumulate.
 
         Returns:
             Attestation object with signed JWT.
@@ -301,7 +323,14 @@ class AttestationService:
             "query_hash": self._hash_content(original_query),
         }
 
-        if proof_data:
+        # Checked here, at the signing boundary, not only by the wrapper.
+        if proof_data is not None and proof_hash is not None:
+            raise ValueError("give proof_data or proof_hash, not both")
+        if proof_hash is not None:
+            if not _is_proof_hash(proof_hash):
+                raise ValueError("proof_hash must be sha256:<64 hex>")
+            qwed_claims["proof_hash"] = proof_hash
+        elif proof_data:
             qwed_claims["proof_hash"] = self._hash_content(proof_data)
 
         if chain_id:
@@ -360,8 +389,8 @@ class AttestationService:
             header=header,
         )
 
-        # Store in registry
-        self._attestations[attestation_id] = attestation
+        if store:
+            self._attestations[attestation_id] = attestation
 
         return attestation
 
@@ -477,6 +506,7 @@ def get_attestation_service() -> AttestationService:
     return _default_service
 
 
+
 def create_verification_attestation(
     status: str,
     verified: bool,
@@ -484,6 +514,7 @@ def create_verification_attestation(
     query: str,
     confidence: float = 1.0,
     proof_data: Optional[str] = None,
+    proof_hash: Optional[str] = None,
 ) -> AttestationResult:
     """Create a signed attestation for a verification result.
 
@@ -507,6 +538,9 @@ def create_verification_attestation(
         query:       The original query string.
         confidence:  Confidence score (0.0–1.0).
         proof_data:  Optional proof artifact string.
+        proof_hash:  Optional ``sha256:<hex>`` proof hash to bind as is, in
+                     place of hashing ``proof_data``: a DiagnosticResult's
+                     ``proof_ref`` (#320). A malformed value is BLOCKED.
 
     Returns:
         AttestationResult with status "ISSUED", "BLOCKED", or "UNVERIFIABLE".
@@ -523,7 +557,19 @@ def create_verification_attestation(
             error="cryptography/PyJWT package not installed",
         )
 
-    if verified and not proof_data:
+    if proof_hash is not None and not _is_proof_hash(proof_hash):
+        logger.warning(
+            "attestation.blocked query_hash=%s reason=INVALID_PROOF_HASH",
+            hashlib.sha256(query.encode()).hexdigest()[:16],
+        )
+        return AttestationResult(
+            status=AttestationStatus.BLOCKED,
+            token=None,
+            error_code="INVALID_PROOF_HASH",
+            error="proof_hash must be sha256:<64 hex>",
+        )
+
+    if verified and not (proof_data or proof_hash):
         logger.warning(
             "attestation.blocked query_hash=%s reason=VERIFIED_WITHOUT_PROOF",
             hashlib.sha256(query.encode()).hexdigest()[:16],
@@ -543,7 +589,12 @@ def create_verification_attestation(
             engine=engine,
             confidence=confidence,
         )
-        attestation = service.create_attestation(result, query, proof_data)
+        # Not stored: the token is checked once by the caller in this process
+        # and not returned (#319), so keeping it would only grow memory with
+        # every VERIFIED response (#320).
+        attestation = service.create_attestation(
+            result, query, proof_data, proof_hash=proof_hash, store=False
+        )
         return AttestationResult(
             status=AttestationStatus.ISSUED,
             token=attestation.jwt_token,
