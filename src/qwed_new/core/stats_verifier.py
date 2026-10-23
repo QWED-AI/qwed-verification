@@ -774,10 +774,15 @@ class StatsVerifier:
             translator="StatsVerifier",
         )
 
+        # Mandatory, as in the shared bridge (#320): this builds a document
+        # from a result it is handed and has no token for, so a VERIFIED
+        # result is BLOCKED here, with its verdict kept beside the block. It
+        # is not signed here: that would stamp whatever it was handed as a
+        # server verdict.
         if result.status is DiagnosticStatus.VERIFIED:
             result = enforce_trust_decision(
                 result,
-                require_attestation=False,
+                require_attestation=True,
                 query=query,
             )
 
