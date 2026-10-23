@@ -39,7 +39,7 @@ Every verification returns the server's DiagnosticResult envelope:
 |-------|---------|
 | `status` | `VERIFIED`, `UNVERIFIABLE` or `BLOCKED` (`UNKNOWN` for a missing value or one this SDK does not know) |
 | `rawStatus` | The server's status text exactly as sent, such as `SAT` where `status` is `UNKNOWN`; never used for admission |
-| `admission` | `ADMIT` or `BLOCKED` where the endpoint decides (`UNKNOWN` for a value this SDK does not know); absent where it does not, as on `/verify/logic`, `/verify/fact` and batch items |
+| `admission` | `ADMIT` or `BLOCKED` where the endpoint decides (`UNKNOWN` for a value this SDK does not know); absent where it does not, as on `/verify/logic`, `/verify/fact` and batch logic and fact items |
 | `proof_ref` | Set only when `status` is `VERIFIED` |
 | `agent_message`, `developer_fields`, `is_authoritative`, `constraint_id` | Explanation and detail |
 | any other key | The endpoint's own fields, such as `is_valid`, `issues` or `error`. Numbers come from `JSON.parse`, so an integer above 2^53 or a long decimal is rounded |

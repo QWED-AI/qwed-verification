@@ -584,6 +584,13 @@ All notable changes to the QWED Protocol will be documented in this file.
     `BLOCKED`), decided on the enforced verdict as on its route, and its
     audit row stores it. Batch logic and fact items still store null, as
     their routes decide none.
+  - Two route rules the batch skipped, which would have let a batch item be
+    admitted where the route does not: a maths identity that holds only on
+    a restricted domain (`x/x = 1`) is UNVERIFIABLE with
+    `math.domain_restricted_identity`, as on `/verify/math` (#429; it was
+    VERIFIED), and a SQL item without `params.schema_ddl` fails with
+    `Missing 'schema_ddl'`, as `/verify/sql` answers 400 (it was verified
+    with an empty schema, which skips the table check).
   - `sdk-fixtures/batch.json` carries the two items' admissions, and the Go,
     Rust and TypeScript SDKs' contract tests and docs say which batch items
     carry one (they said none did, already out of date for code and

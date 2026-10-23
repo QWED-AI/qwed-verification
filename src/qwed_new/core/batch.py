@@ -336,11 +336,17 @@ class BatchVerificationService:
         elif item.verification_type == VerificationType.SQL:
             from qwed_new.core.sql_verifier import SQLVerifier
 
+            # As /verify/sql, which answers 400: without a schema the verifier
+            # skips the table check, so the item fails with no verdict.
+            schema_ddl = item.params.get("schema_ddl")
+            if not schema_ddl:
+                raise ValueError("Missing 'schema_ddl'")
+
             def _verify_sql() -> Dict[str, Any]:
                 verifier = SQLVerifier()
                 result = verifier.verify_sql(
                     item.query,
-                    item.params.get("schema_ddl", ""),
+                    schema_ddl,
                     dialect=item.params.get("dialect", "sqlite")
                 )
                 dr = attest_and_enforce(result, engine="sql", query=item.query)
@@ -358,6 +364,7 @@ class BatchVerificationService:
     def _verify_batch_math(self, item: BatchItem) -> Dict[str, Any]:
         """Verify a MATH batch item through the DiagnosticResult + attestation trust boundary (#271)."""
         from qwed_new.core.safe_parser import safe_parse_expr
+        from qwed_new.core.verifier import DOMAIN_RESTRICTED_IDENTITY, identity_domains_match
         from sympy import simplify
 
         expression = item.query.strip()
@@ -377,6 +384,17 @@ class BatchVerificationService:
                 dr = DiagnosticResult.unverifiable(
                     f"Not equal: {left_expr} != {right_expr}",
                     developer_fields={"query": expression, "type": "math", "is_valid": False, "diff": str(diff)},
+                )
+            elif not identity_domains_match(left, right):
+                # As /verify/math: simplify cancelled a removable singularity
+                # (x/x = 1 is false at x = 0), so the identity holds only on a
+                # restricted domain and is not proven (#429).
+                dr = DiagnosticResult.unverifiable(
+                    "Identity holds only where both sides are defined",
+                    developer_fields={
+                        "query": expression, "type": "math", "is_valid": False, "diff": str(diff),
+                        "constraint_id": DOMAIN_RESTRICTED_IDENTITY,
+                    },
                 )
             else:
                 evidence = {"left": left.strip(), "right": right.strip(), "diff": str(diff)}

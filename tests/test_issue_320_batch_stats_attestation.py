@@ -72,7 +72,9 @@ ITEMS = {
 def _verify(kind):
     service = BatchVerificationService()
     service._control_plane = _ControlPlane()  # the property builds one lazily
-    item = BatchItem(id=kind.value, query=ITEMS[kind], verification_type=kind)
+    # A SQL item needs a schema, as /verify/sql does (#503).
+    params = {"schema_ddl": "CREATE TABLE t (id INT)"} if kind is VerificationType.SQL else {}
+    item = BatchItem(id=kind.value, query=ITEMS[kind], verification_type=kind, params=params)
     return asyncio.run(service._verify_item(item, organization_id=1))
 
 

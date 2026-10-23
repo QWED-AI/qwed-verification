@@ -184,8 +184,8 @@ export interface BatchItemResult {
     error?: string | null;
     latency_ms?: number;
     /**
-     * Set by the parser to `isAdmitted(item.result)`. Batch items carry no
-     * admission decision today, so it is false.
+     * Set by the parser to `isAdmitted(item.result)`. Batch logic and fact
+     * items carry no admission decision, so it is false for them.
      * @deprecated Use `isAdmitted(item.result)`.
      */
     verified?: boolean;
