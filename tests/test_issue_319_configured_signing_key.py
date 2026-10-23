@@ -14,6 +14,7 @@ generated as before, with a warning.
 """
 
 import logging
+import os
 
 import jwt
 import pytest
@@ -264,8 +265,34 @@ def test_a_configured_key_needs_the_crypto_package(monkeypatch):
 def test_a_key_file_must_be_a_regular_file(fresh_service, tmp_path):
     fresh_service.setenv(SIGNING_KEY_FILE_ENV, str(tmp_path))  # a directory
 
-    with pytest.raises(SigningKeyError, match="not a regular file"):
+    # POSIX opens a directory and fstat refuses it; Windows refuses the open.
+    with pytest.raises(SigningKeyError, match="not a regular file|could not be read"):
         attestation.configured_signing_key_pem()
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs are POSIX")
+def test_a_fifo_is_refused_without_blocking(fresh_service, tmp_path):
+    # Opened without blocking and checked once opened, so a FIFO (or a path
+    # swapped for one) cannot hang the service lock (#510 review).
+    import threading
+
+    fifo = tmp_path / "attestation-key.pem"
+    os.mkfifo(fifo)
+    fresh_service.setenv(SIGNING_KEY_FILE_ENV, str(fifo))
+    raised = []
+
+    def read():
+        try:
+            attestation.configured_signing_key_pem()
+        except SigningKeyError as exc:
+            raised.append(str(exc))
+
+    worker = threading.Thread(target=read, daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive(), "reading a FIFO blocked"
+    assert raised == [f"{SIGNING_KEY_FILE_ENV} is not a regular file"]
 
 
 def test_a_key_file_larger_than_a_key_is_refused(fresh_service, tmp_path):
@@ -275,6 +302,34 @@ def test_a_key_file_larger_than_a_key_is_refused(fresh_service, tmp_path):
 
     with pytest.raises(SigningKeyError, match="too large"):
         attestation.configured_signing_key_pem()
+
+
+# ---------------------------------------------------------------- startup
+
+def test_the_server_does_not_start_with_an_unusable_key(fresh_service):
+    # Loaded at startup, beside the audit secret, so a bad key stops the
+    # server rather than surfacing as BLOCKED results under traffic (#510
+    # review). The other startup steps are not under test here.
+    from qwed_new.api import main as api_main
+
+    fresh_service.setenv(SIGNING_KEY_ENV, "not a key")
+    for step in ("_enforce_environment_integrity", "create_db_and_tables", "get_audit_logger", "_migrate_agent_tokens"):
+        fresh_service.setattr(api_main, step, lambda: None)
+
+    with pytest.raises(SigningKeyError):
+        api_main.on_startup()
+
+
+def test_the_server_starts_and_loads_a_usable_key(fresh_service):
+    from qwed_new.api import main as api_main
+
+    fresh_service.setenv(SIGNING_KEY_ENV, _pem().decode())
+    for step in ("_enforce_environment_integrity", "create_db_and_tables", "get_audit_logger", "_migrate_agent_tokens"):
+        fresh_service.setattr(api_main, step, lambda: None)
+
+    api_main.on_startup()
+
+    assert attestation._default_service.key_continuity_policy == "configured"
 
 
 # ---------------------------------------------------------------- revocation

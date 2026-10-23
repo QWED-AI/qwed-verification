@@ -41,6 +41,7 @@ from qwed_new.core.trust import attest_and_enforce
 from qwed_new.core.tenant_context import get_current_tenant, TenantContext
 from qwed_new.core.database import create_db_and_tables, get_session
 from qwed_new.core.audit_logger import get_audit_logger
+from qwed_new.core.attestation import get_attestation_service
 from qwed_new.core.models import VerificationLog, ApiKey, User, Organization
 from qwed_new.core.rate_limiter import check_rate_limit
 from qwed_new.core.json_bounding import bound_json_value
@@ -364,6 +365,9 @@ def on_startup():
     # Fail closed at boot: every verify endpoint appends to the signed audit
     # chain, so the server does not start without QWED_AUDIT_SECRET_KEY.
     get_audit_logger()
+    # Likewise a configured signing key that cannot be used (#319), which
+    # would otherwise surface only as BLOCKED results once traffic arrives.
+    get_attestation_service()
     # After the fail-closed checks: a server that refuses to start does not
     # touch stored data.
     _migrate_agent_tokens()

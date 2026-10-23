@@ -17,11 +17,11 @@ import re
 import json
 import base64
 import logging
+import stat
 import threading
 import time
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 from enum import Enum
 
@@ -95,12 +95,17 @@ def _read_key_file(path: str) -> bytes:
     The path is the operator's own setting, as trusted as the key, so this
     is not a traversal boundary; it refuses what cannot be a key file (a
     directory, a device, a stream that never ends) before reading it.
+
+    The path is opened once, without blocking, and the open file is the one
+    checked, so it cannot be swapped for a FIFO between a check and the open
+    (which would block while the service lock is held). Symlinks are
+    followed, as mounted secrets often are links.
     """
-    file = Path(path)
     try:
-        if not file.is_file():
-            raise SigningKeyError(f"{SIGNING_KEY_FILE_ENV} is not a regular file")
-        with file.open("rb") as handle:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise SigningKeyError(f"{SIGNING_KEY_FILE_ENV} is not a regular file")
             data = handle.read(_MAX_KEY_FILE_BYTES + 1)
     except OSError:
         raise SigningKeyError(f"{SIGNING_KEY_FILE_ENV} could not be read") from None
