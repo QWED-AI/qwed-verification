@@ -87,7 +87,8 @@ func (s *VerificationStatus) UnmarshalJSON(data []byte) error {
 // Admission is the server's decision at its enforcement boundary.
 //
 // The empty value means the endpoint made no admission decision, as
-// /verify/logic, /verify/fact and batch items do today. It is never admitted.
+// /verify/logic, /verify/fact and batch logic and fact items do. It is never
+// admitted.
 type Admission string
 
 const (
@@ -159,7 +160,7 @@ type VerificationResponse struct {
 
 	// Verified is set to IsAdmitted() on every decode, whatever the body
 	// says. Endpoints that make no admission decision (logic, fact, rag,
-	// process and batch items today) are never admitted. The verified field
+	// process, and batch logic and fact items) are never admitted. The verified field
 	// /verify/rag and /verify/process send is their guard's own result; it is
 	// kept in Extra["verified"] and DeveloperFields["verified"].
 	//
@@ -328,8 +329,8 @@ type BatchResult struct {
 	Error     string                `json:"error,omitempty"`
 	LatencyMs float64               `json:"latency_ms,omitempty"`
 
-	// Verified is set to IsAdmitted() when an item is decoded. Batch items
-	// carry no admission decision today, so it is false.
+	// Verified is set to IsAdmitted() when an item is decoded. Batch logic
+	// and fact items carry no admission decision, so it is false for them.
 	//
 	// Deprecated: use IsAdmitted.
 	Verified bool `json:"-"`

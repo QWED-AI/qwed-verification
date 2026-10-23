@@ -7,7 +7,7 @@ and BLOCKED), so the dashboard needs both.
 
 Now a row stores the admission its route decided and returned: the
 natural-language, code, math and SQL routes, the agent route (which decides
-one by the natural-language rule) and batch code items. Routes that decide
+one by the natural-language rule) and the batch items of those types. Routes that decide
 none store null. The admission is covered by the entry hash, so it cannot be
 set or cleared on a stored row; rows written before it was stored still
 verify.
@@ -146,10 +146,13 @@ def test_a_route_that_decides_no_admission_stores_null(client, isolated_audit_ch
     ("code", "completed", {"status": "VERIFIED", "admission": "MAYBE"}, None),
     ("code", "failed", None, None),
     ("code", "completed", "not a dict", None),
-    ("math", "completed", {"status": "VERIFIED", "admission": "ADMIT"}, None),
+    # Maths and SQL items decide one too, as their routes do (#307 follow-up).
+    ("math", "completed", {"status": "VERIFIED", "admission": "ADMIT"}, "ADMIT"),
+    ("sql", "completed", {"status": "VERIFIED", "admission": "BLOCKED"}, "BLOCKED"),
     ("logic", "completed", {"status": "SAT"}, None),
+    ("fact", "completed", {"status": "VERIFIED", "admission": "ADMIT"}, None),
 ])
-def test_a_batch_row_stores_only_a_code_items_admission(vtype, status, result, expected):
+def test_a_batch_row_stores_the_admission_its_route_decides(vtype, status, result, expected):
     item = BatchItem(id="j-0", query="q", verification_type=VerificationType(vtype), status=status, result=result)
 
     assert batch_audit.batch_item_admission(item) == expected

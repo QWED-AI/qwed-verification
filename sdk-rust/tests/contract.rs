@@ -104,6 +104,14 @@ fn a_batch_job_and_its_items_parse() {
     assert_eq!(statuses, [VerificationStatus::Verified, VerificationStatus::Unverifiable]);
     assert_eq!(batch.items[0].item_type.as_deref(), Some("math"));
 
-    // Batch math items carry no admission decision today, so none is admitted.
-    assert!(batch.items.iter().all(|item| !item.is_admitted()));
+    // Batch math items carry the admission /verify/math decides: the proven
+    // identity is admitted, the disproven one is not.
+    let admissions: Vec<_> = batch
+        .items
+        .iter()
+        .map(|item| item.result.as_ref().unwrap().admission.clone())
+        .collect();
+    assert_eq!(admissions, [Some(Admission::Admit), Some(Admission::Blocked)]);
+    let admitted: Vec<_> = batch.items.iter().map(|item| item.is_admitted()).collect();
+    assert_eq!(admitted, [true, false]);
 }

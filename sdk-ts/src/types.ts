@@ -43,7 +43,7 @@ export enum VerificationStatus {
 /**
  * The server's decision at its enforcement boundary. Absent (`undefined`)
  * where the endpoint makes no decision, as `/verify/logic`, `/verify/fact`
- * and batch items do today; absent is never admitted.
+ * and batch logic and fact items do; absent is never admitted.
  */
 export enum Admission {
     /** The boundary may proceed with the verdict. */
@@ -159,7 +159,7 @@ export interface VerificationResponse {
     /**
      * Set by the parser to `isAdmitted(response)`, whatever the body says.
      * Endpoints that make no admission decision (logic, fact, rag, process
-     * and batch items today) are never admitted. The `verified` that
+     * and batch logic and fact items) are never admitted. The `verified` that
      * `/verify/rag` and `/verify/process` send is their guard's own result;
      * it stays in `developer_fields.verified`.
      * @deprecated Use {@link isAdmitted}.
@@ -184,8 +184,8 @@ export interface BatchItemResult {
     error?: string | null;
     latency_ms?: number;
     /**
-     * Set by the parser to `isAdmitted(item.result)`. Batch items carry no
-     * admission decision today, so it is false.
+     * Set by the parser to `isAdmitted(item.result)`. Batch logic and fact
+     * items carry no admission decision, so it is false for them.
      * @deprecated Use `isAdmitted(item.result)`.
      */
     verified?: boolean;
