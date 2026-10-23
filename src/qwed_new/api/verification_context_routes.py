@@ -2,11 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 from sqlalchemy.exc import SQLAlchemyError
+from dataclasses import replace
 from typing import Any, Dict, Optional
 import json
 
 from qwed_new.core.database import get_session
-from qwed_new.core.diagnostics import DiagnosticResult
+from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus, enforce_trust_decision
 from qwed_new.core.audit_logger import SecurityError, get_audit_logger
 from qwed_new.core.rate_limiter import check_rate_limit
 from qwed_new.core.security import redact_pii
@@ -56,14 +57,42 @@ def _malformed_diagnostic_result() -> DiagnosticResult:
     )
 
 
+CALLER_SUPPLIED_DIAGNOSTIC = "verification_context.caller_supplied_diagnostic"
+_CALLER_SUPPLIED_MESSAGE = (
+    "Built from a diagnostic the caller supplied; QWED did not produce its "
+    "message or fields"
+)
+
+
 def _diagnostic_result_from_payload(diagnostic: Any) -> DiagnosticResult:
+    """The diagnostic the document is built from (#321).
+
+    The caller wrote every field of ``diagnostic``. Only the status and
+    ``proof_ref`` are kept as the result's own, because only they are checked:
+    a VERIFIED result needs an attestation that binds them and the query.
+    The caller's message and developer fields are recorded as given, under
+    ``caller_supplied``, and decide nothing; in particular there is no
+    ``is_valid``, so the document's admission is DENY.
+    """
     if not isinstance(diagnostic, dict):
         return _malformed_diagnostic_result()
     developer_fields = diagnostic.get("developer_fields", {})
     if not isinstance(developer_fields, dict):
         return _malformed_diagnostic_result()
     try:
-        return DiagnosticResult.from_dict(diagnostic)
+        supplied = DiagnosticResult.from_dict(diagnostic)
+        return DiagnosticResult(
+            status=supplied.status,
+            agent_message=_CALLER_SUPPLIED_MESSAGE,
+            developer_fields={
+                "constraint_id": CALLER_SUPPLIED_DIAGNOSTIC,
+                "caller_supplied": {
+                    "agent_message": supplied.agent_message,
+                    "developer_fields": supplied.developer_fields,
+                },
+            },
+            proof_ref=supplied.proof_ref,
+        )
     except (ValueError, TypeError, AttributeError):
         return _malformed_diagnostic_result()
 
@@ -129,7 +158,35 @@ def create_verification_context_from_diagnostic(
     tenant: TenantContext = Depends(_enforce_tenant_access),
     session: Optional[Session] = Depends(get_session),
 ) -> Dict[str, Any]:
+    """Build a Verification Context document from a caller-supplied diagnostic.
+
+    The document records the diagnostic; it does not vouch for it. Its
+    verdict is the diagnostic's status, which for VERIFIED must be backed by
+    an attestation token binding the status, ``proof_ref`` and ``query``
+    (BLOCKED otherwise). The caller's message and developer fields are kept
+    under ``developer_fields.caller_supplied``, a blocked one's included, and
+    the admission is always DENY: nothing the caller wrote is taken as a
+    server verdict (#321).
+    """
     result = _diagnostic_result_from_payload(payload.diagnostic)
+    if result.status is DiagnosticStatus.VERIFIED:
+        # The bridge enforces this too, but its BLOCKED replacement carries
+        # the gate's fields only. Enforce here first so a blocked diagnostic
+        # keeps the caller's record beside the reason it was blocked.
+        enforced = enforce_trust_decision(
+            result,
+            attestation_token=payload.attestation_token,
+            require_attestation=True,
+            query=payload.query,
+        )
+        if enforced.status is not DiagnosticStatus.VERIFIED:
+            result = replace(
+                enforced,
+                developer_fields={
+                    **enforced.developer_fields,
+                    "caller_supplied": result.developer_fields["caller_supplied"],
+                },
+            )
     try:
         document = verification_context_from_diagnostic_result(
             result,

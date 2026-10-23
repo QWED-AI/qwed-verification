@@ -44,6 +44,13 @@ QWED Security surfaces should render this envelope:
   - `qwed context resolve <file>`
   - `qwed context from-diagnostic --diagnostic-file <file> --query <query> --verifier <verifier>`
 
+`POST /verification-context/from-diagnostic` records a diagnostic the caller
+supplies; it does not vouch for it. The document's verdict is the
+diagnostic's status (a `VERIFIED` one needs an attestation token that binds
+the status, `proof_ref` and query, or the document is `BLOCKED`). The
+caller's message and developer fields are kept under
+`developer_fields.caller_supplied`, and the admission is always `DENY`.
+
 ## Conformance expectations for other language SDKs
 
 Other SDKs MUST:

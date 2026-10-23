@@ -600,18 +600,24 @@ class DiagnosticResult:
                         during deserialization.
             ValueError: If status is a string not in DiagnosticStatus —
                         use from_legacy_dict() for pre-#204 engine data.
+            TypeError: If status is not a string (None, a number, a list):
+                       it would otherwise pass through unconverted and fail
+                       later, wherever ``status.value`` is read (#509).
         """
         status = data.get("status", "UNVERIFIABLE")
-        if isinstance(status, str):
-            try:
-                status = DiagnosticStatus(status)
-            except ValueError:
-                valid = ", ".join(s.value for s in DiagnosticStatus)
-                raise ValueError(
-                    f"from_dict: invalid status {status!r} — "
-                    f"must be one of: {valid}. "
-                    "Use from_legacy_dict() for pre-#204 engine data."
-                ) from None
+        if not isinstance(status, str):
+            raise TypeError(
+                f"from_dict: status must be a string, not {type(status).__name__}"
+            )
+        try:
+            status = DiagnosticStatus(status)
+        except ValueError:
+            valid = ", ".join(s.value for s in DiagnosticStatus)
+            raise ValueError(
+                f"from_dict: invalid status {status!r} — "
+                f"must be one of: {valid}. "
+                "Use from_legacy_dict() for pre-#204 engine data."
+            ) from None
 
         agent_message = data.get("agent_message")
         if not agent_message or not str(agent_message).strip():
