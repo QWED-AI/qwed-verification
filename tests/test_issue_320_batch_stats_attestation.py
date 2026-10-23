@@ -7,10 +7,15 @@ fact and SQL items returned the verifier's result with no trust step at all,
 so a batch caller got an authoritative VERIFIED that no attestation was ever
 issued for. Every item type now takes its route's trust step.
 
+Batch code, fact and SQL items sign from worker threads, so the shared
+attestation service is created under a lock: two first calls racing must not
+each build a service with its own key.
+
 ``StatsVerifier.to_verification_context`` builds a document from a result it
-is handed and has no token for. It enforced the attestation as optional, so
-the document's evidence recorded an unattested VERIFIED. It now enforces it
-as mandatory, as the shared bridge does, without signing.
+is handed and has no token for. It used the advisory wrapper and blocked a
+VERIFIED result by a hard-coded branch; mandatory enforcement now decides the
+document, as in the shared bridge, without signing, and the evidence stays
+the verifier's own result.
 """
 
 import asyncio
