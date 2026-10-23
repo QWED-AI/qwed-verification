@@ -31,8 +31,10 @@ services:
       - QWED_API_KEY_LOOKUP_SECRET=${QWED_API_KEY_LOOKUP_SECRET:?set QWED_API_KEY_LOOKUP_SECRET}
       - QWED_AUDIT_SECRET_KEY=${QWED_AUDIT_SECRET_KEY:?set QWED_AUDIT_SECRET_KEY}
       # Attestation signing key (#319), optional: unset, the server generates
-      # one per process and its attestations do not survive a restart.
-      - QWED_ATTESTATION_SIGNING_KEY=${QWED_ATTESTATION_SIGNING_KEY:-}
+      # one per process and its attestations do not survive a restart. Set
+      # one: the PEM, or the path of a key file mounted into the container.
+      - QWED_SIGNING_KEY=${QWED_SIGNING_KEY:-}
+      - QWED_SIGNING_KEY_FILE=${QWED_SIGNING_KEY_FILE:-}
       # All-tenant metrics operator allowlist (issue #337): user IDs permitted
       # to read /metrics and /metrics/prometheus. Unset = deny every caller,
       # including the Prometheus scraper. Set it to the scraper identity's

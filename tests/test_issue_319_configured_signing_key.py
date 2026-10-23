@@ -6,7 +6,7 @@ different key, so no token could be verified outside the process that issued
 it. Delivering tokens to consumers (the rest of #319) is pointless until a
 token outlives its process.
 
-The operator can now configure the key (``QWED_ATTESTATION_SIGNING_KEY`` or
+The operator can now configure the key (``QWED_SIGNING_KEY`` or
 ``..._FILE``, an EC P-256 PEM). Its key ID is its RFC 7638 thumbprint. A
 configured key that cannot be used is never replaced by a generated one:
 signing fails, so every VERIFIED result is BLOCKED. Unset, the key is
@@ -220,11 +220,75 @@ def test_the_error_never_carries_the_key():
 # ---------------------------------------------------------------- the key pair
 
 def test_a_configured_policy_needs_a_key_and_an_ephemeral_one_takes_none():
+    key, pem = ec.generate_private_key(ec.SECP256R1()), _pem()
+
     with pytest.raises(ValueError):
         IssuerKeyPair("did:test", "k", key_continuity_policy="configured")
     with pytest.raises(ValueError):
-        IssuerKeyPair("did:test", "k", private_key=ec.generate_private_key(ec.SECP256R1()))
+        IssuerKeyPair("did:test", "k", private_key=key)
     with pytest.raises(ValueError):
         AttestationService(key_continuity_policy="configured")
     with pytest.raises(ValueError):
-        AttestationService(private_key_pem=_pem())
+        AttestationService(private_key_pem=pem)
+
+
+def test_a_key_pair_refuses_another_curve_at_construction():
+    # It used to accept one and fail later, building the JWK (#510 review).
+    p384 = ec.generate_private_key(ec.SECP384R1())
+
+    with pytest.raises(ValueError, match="P-256"):
+        IssuerKeyPair("did:test", "k", key_continuity_policy="configured", private_key=p384)
+
+
+def test_a_configured_key_is_loaded_when_the_service_is_built(caplog):
+    # key_loaded_at and the log line are the load, not the first signing
+    # (#510 review).
+    with caplog.at_level(logging.INFO, logger="qwed_new.core.attestation"):
+        service = AttestationService(key_continuity_policy="configured", private_key_pem=_pem())
+
+    assert "attestation.key_loaded" in caplog.text
+    assert service._key_pair is not None
+    assert service.get_issuer_info()["key_loaded_at"] == service._key_pair.loaded_at
+
+
+def test_a_configured_key_needs_the_crypto_package(monkeypatch):
+    monkeypatch.setattr(attestation, "HAS_CRYPTO", False)
+    pem = _pem()
+
+    with pytest.raises(RuntimeError, match="cryptography"):
+        AttestationService(key_continuity_policy="configured", private_key_pem=pem)
+
+
+# ---------------------------------------------------------------- the key file
+
+def test_a_key_file_must_be_a_regular_file(fresh_service, tmp_path):
+    fresh_service.setenv(SIGNING_KEY_FILE_ENV, str(tmp_path))  # a directory
+
+    with pytest.raises(SigningKeyError, match="not a regular file"):
+        attestation.configured_signing_key_pem()
+
+
+def test_a_key_file_larger_than_a_key_is_refused(fresh_service, tmp_path):
+    path = tmp_path / "huge.pem"
+    path.write_bytes(b"x" * (attestation._MAX_KEY_FILE_BYTES + 1))
+    fresh_service.setenv(SIGNING_KEY_FILE_ENV, str(path))
+
+    with pytest.raises(SigningKeyError, match="too large"):
+        attestation.configured_signing_key_pem()
+
+
+# ---------------------------------------------------------------- revocation
+
+def test_revocation_is_per_service_until_it_is_shared():
+    """Pins a known limit (#510 review): revocation is held in memory, so a
+    service sharing the key still accepts a token another revoked. Nothing
+    revokes today and no token leaves the server; this must change before
+    tokens are delivered (#319), and this test with it."""
+    pem = _pem()
+    a = AttestationService(key_continuity_policy="configured", private_key_pem=pem)
+    b = AttestationService(key_continuity_policy="configured", private_key_pem=pem)
+    token = _sign(a)
+    a.revoke_attestation(jwt.decode(token, options={"verify_signature": False})["jti"])
+
+    assert a.verify_attestation(token)[0] is False
+    assert b.verify_attestation(token)[0] is True

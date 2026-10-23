@@ -55,9 +55,13 @@ class AttestationStatus(Enum):
 # provides, which survives restarts and is shared by replicas (#319).
 ALLOWED_KEY_CONTINUITY_POLICIES = {"ephemeral", "configured"}
 
-# The configured signing key, as PEM text or as a path to a PEM file (#319).
-SIGNING_KEY_ENV = "QWED_ATTESTATION_SIGNING_KEY"
-SIGNING_KEY_FILE_ENV = "QWED_ATTESTATION_SIGNING_KEY_FILE"
+# The configured attestation signing key, as PEM text or as a path to a PEM
+# file (#319).
+SIGNING_KEY_ENV = "QWED_SIGNING_KEY"
+SIGNING_KEY_FILE_ENV = "QWED_SIGNING_KEY_FILE"
+
+# A P-256 private key in PEM is about 250 bytes; a file far larger is not one.
+_MAX_KEY_FILE_BYTES = 16 * 1024
 
 
 class SigningKeyError(RuntimeError):
@@ -68,6 +72,10 @@ class SigningKeyError(RuntimeError):
     """
 
 
+def _is_p256_private_key(key: Any) -> bool:
+    return isinstance(key, ec.EllipticCurvePrivateKey) and isinstance(key.curve, ec.SECP256R1)
+
+
 def load_signing_key(pem: bytes) -> "ec.EllipticCurvePrivateKey":
     """An unencrypted EC P-256 private key (ES256) from PEM, or SigningKeyError."""
     try:
@@ -76,28 +84,45 @@ def load_signing_key(pem: bytes) -> "ec.EllipticCurvePrivateKey":
         raise SigningKeyError(
             "attestation signing key is not an unencrypted PEM private key"
         ) from None
-    if not isinstance(key, ec.EllipticCurvePrivateKey) or not isinstance(key.curve, ec.SECP256R1):
+    if not _is_p256_private_key(key):
         raise SigningKeyError("attestation signing key must be an EC P-256 key (ES256)")
     return key
+
+
+def _read_key_file(path: str) -> bytes:
+    """The key file's bytes: a regular file, no larger than a key could be.
+
+    The path is the operator's own setting, as trusted as the key, so this
+    is not a traversal boundary; it refuses what cannot be a key file (a
+    directory, a device, a stream that never ends) before reading it.
+    """
+    file = Path(path)
+    try:
+        if not file.is_file():
+            raise SigningKeyError(f"{SIGNING_KEY_FILE_ENV} is not a regular file")
+        with file.open("rb") as handle:
+            data = handle.read(_MAX_KEY_FILE_BYTES + 1)
+    except OSError:
+        raise SigningKeyError(f"{SIGNING_KEY_FILE_ENV} could not be read") from None
+    if len(data) > _MAX_KEY_FILE_BYTES:
+        raise SigningKeyError(f"{SIGNING_KEY_FILE_ENV} is too large to be a key file")
+    return data
 
 
 def configured_signing_key_pem() -> Optional[bytes]:
     """The configured signing key's PEM, or None when neither setting is set.
 
-    ``QWED_ATTESTATION_SIGNING_KEY`` holds the PEM itself (``\\n`` escapes are
-    read as newlines, for env files); ``QWED_ATTESTATION_SIGNING_KEY_FILE``
-    names a file holding it, such as a mounted secret. Setting both is an
-    error rather than a choice between them.
+    ``QWED_SIGNING_KEY`` holds the PEM itself (``\\n`` escapes are read as
+    newlines, for env files); ``QWED_SIGNING_KEY_FILE`` names a file holding
+    it, such as a mounted secret. Setting both is an error rather than a
+    choice between them.
     """
     pem = os.environ.get(SIGNING_KEY_ENV, "").strip()
     path = os.environ.get(SIGNING_KEY_FILE_ENV, "").strip()
     if pem and path:
         raise SigningKeyError(f"set {SIGNING_KEY_ENV} or {SIGNING_KEY_FILE_ENV}, not both")
     if path:
-        try:
-            return Path(path).read_bytes()
-        except OSError:
-            raise SigningKeyError(f"{SIGNING_KEY_FILE_ENV} could not be read") from None
+        return _read_key_file(path)
     if pem:
         return pem.replace("\\n", "\n").encode()
     return None
@@ -219,6 +244,10 @@ class IssuerKeyPair:
             )
         if (key_continuity_policy == "configured") != (private_key is not None):
             raise ValueError("a configured key needs private_key; an ephemeral one takes none")
+        if private_key is not None and not _is_p256_private_key(private_key):
+            # Checked here too, for direct callers: another curve would fail
+            # later, wherever the JWK is built (#510 review).
+            raise ValueError("private_key must be an EC P-256 key (ES256)")
 
         self.issuer_did = issuer_did
         self.key_id = key_id
@@ -300,10 +329,11 @@ class AttestationService:
         private_key_pem: Optional[bytes] = None,
     ):
         """``private_key_pem`` is the configured key (policy "configured"),
-        loaded and checked here, so an unusable key fails at once rather than
-        at the first signing. Its key ID is the key's RFC 7638 thumbprint,
-        the same on every restart and replica; ``key_suffix`` names only a
-        generated key."""
+        loaded, checked and put in use here, so an unusable key fails at once
+        rather than at the first signing, and ``key_loaded_at`` is when it
+        was loaded. Its key ID is the key's RFC 7638 thumbprint, the same on
+        every restart and replica; ``key_suffix`` names only a generated
+        key."""
         self.issuer_did = issuer_did
         self.validity_days = validity_days
 
@@ -316,17 +346,19 @@ class AttestationService:
             raise ValueError("a configured key needs private_key_pem; an ephemeral one takes none")
         self.key_continuity_policy = key_continuity_policy
 
-        self._configured_key = None
+        self._key_pair: Optional[IssuerKeyPair] = None
         if private_key_pem is not None:
             if not HAS_CRYPTO:
                 raise RuntimeError("cryptography package required for attestations")
-            self._configured_key = load_signing_key(private_key_pem)
-            self.key_id = f"{issuer_did}#{jwk_thumbprint(self._configured_key.public_key())}"
+            key = load_signing_key(private_key_pem)
+            self.key_id = f"{issuer_did}#{jwk_thumbprint(key.public_key())}"
+            self._key_pair = IssuerKeyPair(
+                issuer_did, self.key_id, key_continuity_policy="configured", private_key=key,
+            )
         else:
             # Key management - deterministic if key_suffix provided
             suffix = key_suffix or "v1"
             self.key_id = f"{issuer_did}#signing-key-{suffix}"
-        self._key_pair: Optional[IssuerKeyPair] = None
 
         # Revocation tracking
         self._revoked_attestations: set = set()
@@ -342,18 +374,19 @@ class AttestationService:
         if self._key_pair is None:
             with self._key_lock:
                 if self._key_pair is None:
+                    # A configured key pair is built in __init__; this
+                    # generates the ephemeral one on first use.
                     self._key_pair = IssuerKeyPair(
                         self.issuer_did,
                         self.key_id,
                         key_continuity_policy=self.key_continuity_policy,
-                        private_key=self._configured_key,
                     )
         return self._key_pair
 
     @classmethod
     def from_environment(cls) -> "AttestationService":
         """The service the server signs with: the configured key when one is
-        set (``QWED_ATTESTATION_SIGNING_KEY`` or ``..._FILE``), otherwise a
+        set (``QWED_SIGNING_KEY`` or ``QWED_SIGNING_KEY_FILE``), otherwise a
         generated one.
 
         A configured key that cannot be read or used raises SigningKeyError:
@@ -577,7 +610,15 @@ class AttestationService:
             return False, None, _GENERIC_REJECTION_MSG
 
     def revoke_attestation(self, attestation_id: str) -> bool:
-        """Revoke an attestation by ID."""
+        """Revoke an attestation by ID, in this service only.
+
+        The revoked IDs are held in memory. With a configured key, which
+        other replicas and later processes share, they still accept the
+        token: revocation is not yet shared or durable. Nothing in the
+        server revokes today and no token leaves it; a shared, durable
+        store, or short-lived tokens, must come before tokens are delivered
+        (#319).
+        """
         self._revoked_attestations.add(attestation_id)
         return True
 

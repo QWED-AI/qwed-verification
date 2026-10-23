@@ -9,8 +9,8 @@ All notable changes to the QWED Protocol will be documented in this file.
 - **A configured attestation signing key (#319, #188).** Every VERIFIED
   result is signed, but with a key generated per process, so after a restart
   or on another replica no token could be verified. Set
-  `QWED_ATTESTATION_SIGNING_KEY` (the PEM) or
-  `QWED_ATTESTATION_SIGNING_KEY_FILE` (a path) to an unencrypted EC P-256
+  `QWED_SIGNING_KEY` (the PEM) or
+  `QWED_SIGNING_KEY_FILE` (a path) to an unencrypted EC P-256
   private key, and every process and replica signs and verifies with it.
   - The key ID is the key's RFC 7638 thumbprint, the same everywhere.
   - A configured key that cannot be read or used (not P-256, encrypted,
