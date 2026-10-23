@@ -12,6 +12,7 @@ Security contract (Issue #188):
 """
 
 import hashlib
+import os
 import re
 import json
 import base64
@@ -20,6 +21,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 from enum import Enum
 
@@ -28,6 +30,7 @@ logger = logging.getLogger(__name__)
 # Cryptographic imports - using PyJWT with cryptography backend
 try:
     import jwt
+    from cryptography.exceptions import UnsupportedAlgorithm
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.hazmat.backends import default_backend
@@ -47,8 +50,75 @@ class AttestationStatus(Enum):
     UNVERIFIABLE = "unverifiable"   # Cannot attempt signing (e.g. crypto unavailable)
 
 
-# Allowlist for key continuity policy values — typos silently degrade auditability
-ALLOWED_KEY_CONTINUITY_POLICIES = {"ephemeral"}
+# Allowlist for key continuity policy values — typos silently degrade auditability.
+# "ephemeral": a key generated per process. "configured": a key the operator
+# provides, which survives restarts and is shared by replicas (#319).
+ALLOWED_KEY_CONTINUITY_POLICIES = {"ephemeral", "configured"}
+
+# The configured signing key, as PEM text or as a path to a PEM file (#319).
+SIGNING_KEY_ENV = "QWED_ATTESTATION_SIGNING_KEY"
+SIGNING_KEY_FILE_ENV = "QWED_ATTESTATION_SIGNING_KEY_FILE"
+
+
+class SigningKeyError(RuntimeError):
+    """The configured signing key is missing, unreadable or unusable.
+
+    Its message never includes key material: it can reach a log line and a
+    BLOCKED result's developer fields.
+    """
+
+
+def load_signing_key(pem: bytes) -> "ec.EllipticCurvePrivateKey":
+    """An unencrypted EC P-256 private key (ES256) from PEM, or SigningKeyError."""
+    try:
+        key = serialization.load_pem_private_key(pem, password=None)
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        raise SigningKeyError(
+            "attestation signing key is not an unencrypted PEM private key"
+        ) from None
+    if not isinstance(key, ec.EllipticCurvePrivateKey) or not isinstance(key.curve, ec.SECP256R1):
+        raise SigningKeyError("attestation signing key must be an EC P-256 key (ES256)")
+    return key
+
+
+def configured_signing_key_pem() -> Optional[bytes]:
+    """The configured signing key's PEM, or None when neither setting is set.
+
+    ``QWED_ATTESTATION_SIGNING_KEY`` holds the PEM itself (``\\n`` escapes are
+    read as newlines, for env files); ``QWED_ATTESTATION_SIGNING_KEY_FILE``
+    names a file holding it, such as a mounted secret. Setting both is an
+    error rather than a choice between them.
+    """
+    pem = os.environ.get(SIGNING_KEY_ENV, "").strip()
+    path = os.environ.get(SIGNING_KEY_FILE_ENV, "").strip()
+    if pem and path:
+        raise SigningKeyError(f"set {SIGNING_KEY_ENV} or {SIGNING_KEY_FILE_ENV}, not both")
+    if path:
+        try:
+            return Path(path).read_bytes()
+        except OSError:
+            raise SigningKeyError(f"{SIGNING_KEY_FILE_ENV} could not be read") from None
+    if pem:
+        return pem.replace("\\n", "\n").encode()
+    return None
+
+
+def _jwk_coordinates(public_key: "ec.EllipticCurvePublicKey") -> Dict[str, str]:
+    """The public JWK members of a P-256 key (RFC 7517), without ``kid``."""
+    numbers = public_key.public_numbers()
+
+    def int_to_base64url(n: int) -> str:
+        return base64.urlsafe_b64encode(n.to_bytes(32, "big")).decode().rstrip("=")
+
+    return {"crv": "P-256", "kty": "EC", "x": int_to_base64url(numbers.x), "y": int_to_base64url(numbers.y)}
+
+
+def jwk_thumbprint(public_key: "ec.EllipticCurvePublicKey") -> str:
+    """The RFC 7638 thumbprint of a P-256 public key: the same key gives the
+    same value on every restart and every replica, so it names the key."""
+    canonical = json.dumps(_jwk_coordinates(public_key), sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode()).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
 @dataclass
@@ -120,13 +190,16 @@ class Attestation:
 class IssuerKeyPair:
     """ECDSA P-256 key pair for attestation signing.
 
-    Key lifecycle policy (Issue #188):
-    - Every instance records generated_at and key_continuity_policy.
-    - A structured log entry is emitted on every new key generation so
-      continuity events are auditable.
-    - The only supported policy is "ephemeral" (in-memory, non-persistent).
-      Restarting the process generates a new key; previously issued
-      attestations cannot be verified after restart.
+    Key lifecycle policy (Issue #188, #319):
+    - Every instance records key_continuity_policy, loaded_at, and for a
+      generated key generated_at.
+    - A structured log entry is emitted whenever a key is generated or
+      loaded, so continuity events are auditable.
+    - "ephemeral": a key generated in memory. Restarting the process
+      generates a new key, and attestations issued before cannot be verified
+      after the restart or by another replica.
+    - "configured": the operator's key (``private_key``), which survives
+      restarts and is shared by replicas.
     """
 
     def __init__(
@@ -134,6 +207,7 @@ class IssuerKeyPair:
         issuer_did: str,
         key_id: str,
         key_continuity_policy: str = "ephemeral",
+        private_key: Optional["ec.EllipticCurvePrivateKey"] = None,
     ):
         if not HAS_CRYPTO:
             raise RuntimeError("cryptography package required for attestations")
@@ -143,23 +217,33 @@ class IssuerKeyPair:
                 f"Invalid key_continuity_policy: {key_continuity_policy!r}. "
                 f"Must be one of {sorted(ALLOWED_KEY_CONTINUITY_POLICIES)}"
             )
+        if (key_continuity_policy == "configured") != (private_key is not None):
+            raise ValueError("a configured key needs private_key; an ephemeral one takes none")
 
         self.issuer_did = issuer_did
         self.key_id = key_id
         self.key_continuity_policy = key_continuity_policy
-        self.generated_at: int = int(time.time())
+        self.loaded_at: int = int(time.time())
 
-        # Generate ECDSA P-256 key pair
-        self._private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
+        if private_key is None:
+            # Generate ECDSA P-256 key pair
+            self._private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
+            self.generated_at: Optional[int] = self.loaded_at
+            event = "attestation.key_generated"
+        else:
+            self._private_key = private_key
+            self.generated_at = None  # the operator's key: not generated here
+            event = "attestation.key_loaded"
         self._public_key = self._private_key.public_key()
 
-        # Auditable key generation event
+        # Auditable key lifecycle event
         logger.info(
-            "attestation.key_generated issuer=%s key_id=%s policy=%s generated_at=%d",
+            "%s issuer=%s key_id=%s policy=%s at=%d",
+            event,
             issuer_did,
             key_id,
             key_continuity_policy,
-            self.generated_at,
+            self.loaded_at,
         )
 
     @property
@@ -182,20 +266,7 @@ class IssuerKeyPair:
     @property
     def jwk(self) -> Dict[str, Any]:
         """Get public key as JWK for verification."""
-        numbers = self._public_key.public_numbers()
-
-        def int_to_base64url(n: int, length: int) -> str:
-            return base64.urlsafe_b64encode(
-                n.to_bytes(length, 'big')
-            ).decode().rstrip('=')
-
-        return {
-            "kty": "EC",
-            "crv": "P-256",
-            "x": int_to_base64url(numbers.x, 32),
-            "y": int_to_base64url(numbers.y, 32),
-            "kid": self.key_id,
-        }
+        return {**_jwk_coordinates(self._public_key), "kid": self.key_id}
 
 
 # A DiagnosticResult proof_ref, the only proof_hash form that is signed (#320).
@@ -226,7 +297,13 @@ class AttestationService:
         validity_days: int = 365,
         key_suffix: Optional[str] = None,
         key_continuity_policy: str = "ephemeral",
+        private_key_pem: Optional[bytes] = None,
     ):
+        """``private_key_pem`` is the configured key (policy "configured"),
+        loaded and checked here, so an unusable key fails at once rather than
+        at the first signing. Its key ID is the key's RFC 7638 thumbprint,
+        the same on every restart and replica; ``key_suffix`` names only a
+        generated key."""
         self.issuer_did = issuer_did
         self.validity_days = validity_days
 
@@ -235,11 +312,20 @@ class AttestationService:
                 f"Invalid key_continuity_policy: {key_continuity_policy!r}. "
                 f"Must be one of {sorted(ALLOWED_KEY_CONTINUITY_POLICIES)}"
             )
+        if (key_continuity_policy == "configured") != (private_key_pem is not None):
+            raise ValueError("a configured key needs private_key_pem; an ephemeral one takes none")
         self.key_continuity_policy = key_continuity_policy
 
-        # Key management - deterministic if key_suffix provided
-        suffix = key_suffix or "v1"
-        self.key_id = f"{issuer_did}#signing-key-{suffix}"
+        self._configured_key = None
+        if private_key_pem is not None:
+            if not HAS_CRYPTO:
+                raise RuntimeError("cryptography package required for attestations")
+            self._configured_key = load_signing_key(private_key_pem)
+            self.key_id = f"{issuer_did}#{jwk_thumbprint(self._configured_key.public_key())}"
+        else:
+            # Key management - deterministic if key_suffix provided
+            suffix = key_suffix or "v1"
+            self.key_id = f"{issuer_did}#signing-key-{suffix}"
         self._key_pair: Optional[IssuerKeyPair] = None
 
         # Revocation tracking
@@ -260,8 +346,31 @@ class AttestationService:
                         self.issuer_did,
                         self.key_id,
                         key_continuity_policy=self.key_continuity_policy,
+                        private_key=self._configured_key,
                     )
         return self._key_pair
+
+    @classmethod
+    def from_environment(cls) -> "AttestationService":
+        """The service the server signs with: the configured key when one is
+        set (``QWED_ATTESTATION_SIGNING_KEY`` or ``..._FILE``), otherwise a
+        generated one.
+
+        A configured key that cannot be read or used raises SigningKeyError:
+        it is never replaced by a generated key, because that would issue
+        tokens no other replica, and no restart, could verify (#188, #319).
+        """
+        pem = configured_signing_key_pem()
+        if pem is None:
+            logger.warning(
+                "attestation.ephemeral_key: no %s or %s is set, so a key is generated "
+                "for this process; its tokens cannot be verified after a restart or "
+                "by another replica",
+                SIGNING_KEY_ENV,
+                SIGNING_KEY_FILE_ENV,
+            )
+            return cls()
+        return cls(key_continuity_policy="configured", private_key_pem=pem)
 
     def _hash_content(self, content: str) -> str:
         """Create SHA-256 hash of content."""
@@ -485,8 +594,10 @@ class AttestationService:
             "public_keys": [key_pair.jwk],
             "status": "active",
             "certification_level": "basic",
-            # Key lifecycle fields (Issue #188)
+            # Key lifecycle fields (Issue #188). key_generated_at is null
+            # for a configured key, which was not generated here (#319).
             "key_generated_at": key_pair.generated_at,
+            "key_loaded_at": key_pair.loaded_at,
             "key_continuity_policy": key_pair.key_continuity_policy,
         }
 
@@ -506,12 +617,16 @@ def get_attestation_service() -> AttestationService:
     service's key (#320), some from worker threads. Two first calls racing
     without the lock could each build a service with its own key, and a
     token signed by one would fail the other's check.
+
+    The key is the configured one when set (#319). If it cannot be used,
+    this raises SigningKeyError and keeps no service, so every call fails
+    the same way: both callers turn that into a BLOCKED result.
     """
     global _default_service
     if _default_service is None:
         with _default_service_lock:
             if _default_service is None:
-                _default_service = AttestationService()
+                _default_service = AttestationService.from_environment()
     return _default_service
 
 
