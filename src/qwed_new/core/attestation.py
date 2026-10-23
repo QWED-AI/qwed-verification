@@ -496,13 +496,22 @@ class AttestationService:
 # ---------------------------------------------------------------------------
 
 _default_service: Optional[AttestationService] = None
+_default_service_lock = threading.Lock()
 
 
 def get_attestation_service() -> AttestationService:
-    """Get the default attestation service."""
+    """Get the default attestation service (thread-safe).
+
+    Every VERIFIED result is signed and its token checked against this one
+    service's key (#320), some from worker threads. Two first calls racing
+    without the lock could each build a service with its own key, and a
+    token signed by one would fail the other's check.
+    """
     global _default_service
     if _default_service is None:
-        _default_service = AttestationService()
+        with _default_service_lock:
+            if _default_service is None:
+                _default_service = AttestationService()
     return _default_service
 
 

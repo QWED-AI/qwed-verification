@@ -21,10 +21,15 @@ All notable changes to the QWED Protocol will be documented in this file.
     with `verdict_status`, `verdict_proof_ref` and `engine` beside the block;
     it was UNVERIFIABLE with its maths fields (#271). The token's engine is
     `math` (was `batch_math`).
-  - `StatsVerifier.to_verification_context` enforces the attestation as
-    mandatory, as the shared bridge does, without signing what it is handed:
-    a VERIFIED result is BLOCKED in the document's evidence, with its verdict
-    kept beside the block. The document itself was already BLOCKED and DENY.
+  - `StatsVerifier.to_verification_context` decides the document by
+    mandatory enforcement, as the shared bridge does, where it used the
+    advisory wrapper and a hard-coded branch. It does not sign what it is
+    handed. The document is unchanged: BLOCKED and DENY for a VERIFIED
+    result, with the verifier's own result as evidence.
+  - `get_attestation_service()` creates the shared service under a lock.
+    Batch code, fact and SQL items sign from worker threads, and two first
+    calls racing could each build a service with its own key, so a token
+    signed by one failed the other's check and a valid item was BLOCKED.
 - **Every verify route signs VERIFIED and enforces the attestation (#320).**
   The control plane's maths path signed each VERIFIED result and enforced
   the attestation as mandatory, but the other verify routes went through an

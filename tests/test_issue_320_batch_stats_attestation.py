@@ -144,6 +144,39 @@ def test_a_code_item_is_admitted_on_the_enforced_verdict(stand_ins, monkeypatch)
     assert out["admission"] == "BLOCKED"
 
 
+def test_concurrent_first_signers_share_one_attestation_service(monkeypatch):
+    """Batch code, fact and SQL items sign from worker threads. Two first
+    calls racing must not each build a service with its own key, or a token
+    signed by one fails the other's check (#502 review)."""
+    import threading
+    import time
+
+    from qwed_new.core import attestation
+
+    class SlowService(attestation.AttestationService):
+        def __init__(self, *args, **kwargs):
+            time.sleep(0.05)  # widen the window the race needs
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(attestation, "AttestationService", SlowService)
+    monkeypatch.setattr(attestation, "_default_service", None)
+
+    start = threading.Barrier(8)
+    services = []
+
+    def first_call():
+        start.wait()
+        services.append(attestation.get_attestation_service())
+
+    threads = [threading.Thread(target=first_call) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len({id(s) for s in services}) == 1
+
+
 def test_the_batch_has_no_advisory_trust_step():
     source = Path(batch_module.__file__).read_text(encoding="utf-8")
 
@@ -153,18 +186,39 @@ def test_the_batch_has_no_advisory_trust_step():
 
 # ---------------------------------------------------------------- statistics
 
-def test_a_verified_stats_result_is_not_recorded_as_an_unattested_verdict():
-    doc = StatsVerifier().to_verification_context(_proven(observed_result=2.0), "mean of a == 2")
+def test_a_verified_stats_result_is_blocked_by_mandatory_enforcement(monkeypatch):
+    from qwed_new.core import stats_verifier
+
+    calls = []
+    original = stats_verifier.enforce_trust_decision
+
+    def capture(result, **kwargs):
+        calls.append(kwargs)
+        return original(result, **kwargs)
+
+    monkeypatch.setattr(stats_verifier, "enforce_trust_decision", capture)
+
+    doc = StatsVerifier().to_verification_context(_proven(), "mean of a == 2")
     doc.validate()
     payload = doc.to_dict()
 
+    assert calls == [{"require_attestation": True, "query": "mean of a == 2"}]
     assert payload["verdict"] == "BLOCKED"
     assert payload["context"]["decision"]["admission"] == "DENY"
-    evidence = payload["context"]["evidence"]["evidence"]
-    # The evidence said VERIFIED, with its proof_ref, before #320.
-    assert evidence["status"] == "BLOCKED"
-    assert evidence["proof_ref"] is None
-    assert evidence["developer_fields"]["verdict_status"] == "VERIFIED"
+    assert payload["context"]["evidence"]["proof_ref"] is None
+
+
+def test_the_stats_evidence_keeps_what_the_verifier_observed():
+    observed = {"observed_result": 2.0, "dataset_sha256": "a" * 64, "generated_code": "result = df['a'].mean()"}
+
+    doc = StatsVerifier().to_verification_context(_proven(**observed), "mean of a == 2")
+    evidence = doc.to_dict()["context"]["evidence"]["evidence"]
+
+    # The enforcement's BLOCKED result carries gate fields only; the
+    # document keeps the verifier's own report for review (#502 review).
+    for key, value in observed.items():
+        assert evidence["developer_fields"][key] == value
+    assert evidence["agent_message"] == "proven"
 
 
 def test_the_stats_document_is_not_signed(monkeypatch):
