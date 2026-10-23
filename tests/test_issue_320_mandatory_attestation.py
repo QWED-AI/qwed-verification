@@ -250,7 +250,7 @@ def _image_proven():
             pass
 
         def verify_image(self, image_bytes, claim):
-            return _verified(verdict="SUPPORTED")
+            return _verified(verdict="SUPPORTED", claim=claim)
 
     return patch("qwed_new.core.image_verifier.ImageVerifier", Verifier)
 
@@ -291,6 +291,16 @@ def _post(client, route):
 
 ROUTES = ["logic", "math", "image", "consensus"]
 
+# What only each route's engine (or its stand-in) puts in the response, so
+# the test fails if the route stops reaching it: the image stand-in echoes
+# the claim the route passed it.
+ENGINE_OUTPUT = {
+    "logic": {"model": {"x": "6"}, "dsl_code": "(GT x 5)"},
+    "math": {"left_side": "4", "right_side": "4"},
+    "image": {"verdict": "SUPPORTED", "claim": "800x600"},
+    "consensus": {"agreement_status": "unanimous", "final_answer": "4", "confidence": 0.97},
+}
+
 
 @pytest.mark.parametrize("route", ROUTES)
 def test_a_route_returns_verified_when_the_attestation_checks_out(client, route):
@@ -298,6 +308,7 @@ def test_a_route_returns_verified_when_the_attestation_checks_out(client, route)
 
     assert body["status"] == "VERIFIED"
     assert body["proof_ref"]
+    assert {k: body.get(k) for k in ENGINE_OUTPUT[route]} == ENGINE_OUTPUT[route]
 
 
 @pytest.mark.parametrize("route", ROUTES)
