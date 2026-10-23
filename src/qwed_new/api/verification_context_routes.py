@@ -56,14 +56,42 @@ def _malformed_diagnostic_result() -> DiagnosticResult:
     )
 
 
+CALLER_SUPPLIED_DIAGNOSTIC = "verification_context.caller_supplied_diagnostic"
+_CALLER_SUPPLIED_MESSAGE = (
+    "Built from a diagnostic the caller supplied; QWED did not produce its "
+    "message or fields"
+)
+
+
 def _diagnostic_result_from_payload(diagnostic: Any) -> DiagnosticResult:
+    """The diagnostic the document is built from (#321).
+
+    The caller wrote every field of ``diagnostic``. Only the status and
+    ``proof_ref`` are kept as the result's own, because only they are checked:
+    a VERIFIED result needs an attestation that binds them and the query.
+    The caller's message and developer fields are recorded as given, under
+    ``caller_supplied``, and decide nothing; in particular there is no
+    ``is_valid``, so the document's admission is DENY.
+    """
     if not isinstance(diagnostic, dict):
         return _malformed_diagnostic_result()
     developer_fields = diagnostic.get("developer_fields", {})
     if not isinstance(developer_fields, dict):
         return _malformed_diagnostic_result()
     try:
-        return DiagnosticResult.from_dict(diagnostic)
+        supplied = DiagnosticResult.from_dict(diagnostic)
+        return DiagnosticResult(
+            status=supplied.status,
+            agent_message=_CALLER_SUPPLIED_MESSAGE,
+            developer_fields={
+                "constraint_id": CALLER_SUPPLIED_DIAGNOSTIC,
+                "caller_supplied": {
+                    "agent_message": supplied.agent_message,
+                    "developer_fields": supplied.developer_fields,
+                },
+            },
+            proof_ref=supplied.proof_ref,
+        )
     except (ValueError, TypeError, AttributeError):
         return _malformed_diagnostic_result()
 
@@ -129,6 +157,15 @@ def create_verification_context_from_diagnostic(
     tenant: TenantContext = Depends(_enforce_tenant_access),
     session: Optional[Session] = Depends(get_session),
 ) -> Dict[str, Any]:
+    """Build a Verification Context document from a caller-supplied diagnostic.
+
+    The document records the diagnostic; it does not vouch for it. Its
+    verdict is the diagnostic's status, which for VERIFIED must be backed by
+    an attestation token binding the status, ``proof_ref`` and ``query``
+    (BLOCKED otherwise). The caller's message and developer fields are kept
+    under ``developer_fields.caller_supplied`` and the admission is always
+    DENY: nothing the caller wrote is taken as a server verdict (#321).
+    """
     result = _diagnostic_result_from_payload(payload.diagnostic)
     try:
         document = verification_context_from_diagnostic_result(

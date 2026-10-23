@@ -78,7 +78,12 @@ class QWEDClient:
         verifier_version: Optional[str] = None,
         attestation_token: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Create a schema-valid Verification Context from a DiagnosticResult."""
+        """Create a schema-valid Verification Context from a DiagnosticResult.
+
+        The server records the diagnostic without vouching for it: the
+        message and developer fields are kept under
+        ``developer_fields.caller_supplied`` and the admission is always DENY.
+        """
         return self._request(
             "POST",
             "/verification-context/from-diagnostic",
@@ -472,7 +477,12 @@ class QWEDAsyncClient:
         verifier_version: Optional[str] = None,
         attestation_token: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Create a schema-valid Verification Context from a DiagnosticResult."""
+        """Create a schema-valid Verification Context from a DiagnosticResult.
+
+        The server records the diagnostic without vouching for it: the
+        message and developer fields are kept under
+        ``developer_fields.caller_supplied`` and the admission is always DENY.
+        """
         return await self._request(
             "POST",
             "/verification-context/from-diagnostic",

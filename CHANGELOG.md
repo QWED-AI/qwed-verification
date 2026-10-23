@@ -6,6 +6,21 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Security
 
+- **`/verification-context/from-diagnostic` records a caller's diagnostic
+  without vouching for it (#321).** The route built a hash-bound document,
+  logged to the audit chain, from a diagnostic the caller wrote in full, and
+  decided the admission from the caller's `is_valid`, which the attestation
+  for a VERIFIED diagnostic does not bind. So the caller chose the document's
+  message and evidence fields, and with a token, an ADMIT.
+  - Only the status and `proof_ref` stay the result's own, as only they are
+    checked (a VERIFIED one still needs an attestation binding them and the
+    query, or the document is BLOCKED).
+  - The caller's `agent_message` and `developer_fields` are kept as given
+    under `developer_fields.caller_supplied`
+    (`verification_context.caller_supplied_diagnostic`) and decide nothing;
+    the document's message is the server's.
+  - The admission is always DENY, and the audit row's `is_verified` false.
+    An ADMIT would need the token to bind `is_valid` (#319).
 - **Batch items and the statistics Verification Context enforce the
   attestation (#320).** After the verify routes (below), `/verify/batch`
   still returned natural-language and logic items through the advisory
