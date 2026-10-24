@@ -253,10 +253,13 @@ def test_with_attestation_keeps_every_other_field():
     original = _verified(note="n")
     delivered = original.with_attestation("token")
 
+    def every_field_but_the_token(result):
+        return {name: value for name, value in dataclasses.asdict(result).items() if name != "attestation"}
+
     assert delivered.attestation == "token"
-    for f in dataclasses.fields(DiagnosticResult):
-        if f.name != "attestation":
-            assert getattr(delivered, f.name) == getattr(original, f.name), f.name
+    assert every_field_but_the_token(delivered) == every_field_but_the_token(original)
+    # Every field is compared, so an added one that is not copied fails here.
+    assert set(dataclasses.asdict(delivered)) == {f.name for f in dataclasses.fields(DiagnosticResult)}
 
 
 def test_with_attestation_still_refuses_a_result_that_is_not_verified():
