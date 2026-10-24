@@ -54,7 +54,7 @@ Every verification returns the server's DiagnosticResult envelope:
 | `RawStatus` | The server's status text exactly as sent, such as `SAT` where `Status` is `StatusUnknown`; never used for admission |
 | `Admission` | `AdmissionAdmit` or `AdmissionBlocked` where the endpoint decides (`AdmissionUnknown` for a value this SDK does not know); empty where it does not, as on `/verify/logic`, `/verify/fact` and batch logic and fact items |
 | `ProofRef` | Set only when `Status` is `StatusVerified` |
-| `Attestation` | On a `StatusVerified` answer, the server's signed token: an ES256 JWT whose header `kid` names a key at `GET /.well-known/jwks.json`, and whose `qwed.proof_hash` claim is the answer's `ProofRef`. This SDK keeps it but does not verify it yet; the Python and TypeScript SDKs do. |
+| `Attestation` | On a `StatusVerified` answer, the server's signed token: an ES256 JWT whose header `kid` names a key at `GET /.well-known/jwks.json`, and whose `qwed.proof_hash` claim is the answer's `ProofRef`. Verify it with `client.VerifyAttestation` (below). |
 | `AgentMessage`, `DeveloperFields`, `IsAuthoritative`, `ConstraintID` | Explanation and detail |
 | `Extra` | The endpoint's own fields, such as `is_valid`, `issues` or `error`. Numbers here and in `DeveloperFields` are `json.Number`, so they keep their exact text |
 
@@ -62,9 +62,43 @@ Every verification returns the server's DiagnosticResult envelope:
 
 The `Verified` field and `IsVerified()` are deprecated. Decoding always sets `Verified` to `IsAdmitted()`, whatever the body says, and `IsVerified()` returns `IsAdmitted()`. Endpoints that make no admission decision (`/verify/logic`, `/verify/fact`, `/verify/rag`, `/verify/process`, and batch logic and fact items) are therefore never admitted. `/verify/rag` and `/verify/process` do send a top-level `verified`, which is their guard's own result; it is kept in `Extra["verified"]` and `DeveloperFields["verified"]`.
 
+### Verifying the attestation
+
+Every `StatusVerified` answer carries `Attestation`, an ES256 JWT the server
+signed after checking the verdict. Verifying it shows that server issued a
+VERIFIED verdict for this answer's `ProofRef` (and, when you pass `Query`,
+for that statement). It covers only what the token signs, not other fields
+of the response such as `Admission` or `AgentMessage`:
+
+```go
+result, err := client.VerifyMath(ctx, "2+2=4")
+if err != nil {
+    log.Fatal(err)
+}
+// Fetches /.well-known/jwks.json (cached for five minutes), then checks the
+// signature, issuer, expiry (and any nbf), a VERIFIED status, and that the
+// token is this answer's (its proof_hash is result.ProofRef). If no cached
+// key verifies it, the keys are fetched once more, at most once every 30 s,
+// to pick up a rotated key or a restarted server's new one.
+claims, err := client.VerifyAttestation(ctx, result, qwed.AttestationOptions{Query: "2+2=4"})
+if err != nil {
+    log.Printf("attestation does not verify for this answer: %v", err)
+} else {
+    log.Printf("attested by %s", claims.Issuer)
+}
+```
+
+Every error wraps `ErrAttestation`. `ErrKeysUnavailable` says the keys could
+not be fetched; that failure is returned to every caller for 30 seconds
+without another request, and keys past their five minutes are not used
+instead. To verify offline, or against keys you pinned, call
+`qwed.VerifyAttestation(token, &jwks, proofRef, opts)` with the JWKS you
+hold. A token says the server reached the verdict; whether to act on it is
+still `IsAdmitted()`.
+
 ## Features
 
-- **Zero Dependencies** - Uses only Go standard library
+- **Zero Dependencies** - Uses only Go standard library, attestation checks included
 - **Context Support** - All methods accept `context.Context` for cancellation
 - **Mockable** - Implements `Verifier` interface for easy testing
 - **Type Safe** - Full type definitions for all requests/responses

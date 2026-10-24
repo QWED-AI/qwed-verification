@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -405,6 +406,15 @@ type Client struct {
 	apiKey     string
 	baseURL    string
 	httpClient *http.Client
+
+	// The server's attestation keys (#319), fetched one caller at a time:
+	// callers that wait reuse what the fetch before them got.
+	jwksMu          sync.Mutex
+	jwks            *JWKS
+	jwksFetchedAt   time.Time
+	jwksAttemptedAt time.Time
+	jwksErr         error
+	now             func() time.Time // tests; time.Now when nil
 }
 
 // ClientOption configures the client.
