@@ -108,4 +108,5 @@ def attest_and_enforce(dr: DiagnosticResult, *, engine: str, query: str) -> Diag
     # Delivered with the result, so a consumer can check the verdict against
     # the server's JWKS (#319). Only a token that has just passed the checks
     # above is attached.
-    return replace(enforced, attestation=attestation.token)
+    delivered: DiagnosticResult = replace(enforced, attestation=attestation.token)
+    return delivered
