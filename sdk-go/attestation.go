@@ -227,8 +227,8 @@ func VerifyAttestation(token string, jwks *JWKS, proofRef string, opts Attestati
 	if kid == "" {
 		return nil, rejected("token header names no key (kid)")
 	}
-	if jwks == nil || jwks.Keys == nil {
-		return nil, rejected("JWKS has no keys")
+	if jwks == nil {
+		return nil, rejected("no JWKS")
 	}
 	var key *ecdsa.PublicKey
 	for _, jwk := range jwks.Keys {
@@ -279,13 +279,14 @@ func VerifyAttestation(token string, jwks *JWKS, proofRef string, opts Attestati
 	if opts.Now != nil {
 		now = opts.Now
 	}
-	nowSeconds, leeway := now().Unix(), int64(opts.Leeway/time.Second)
 	// As RFC 7519, PyJWT and the TypeScript SDK: expired once now reaches
-	// exp, and not valid while now is before an nbf the token carries.
-	if nowSeconds >= claims.Expiry+leeway {
+	// exp, and not valid while now is before an nbf the token carries. The
+	// leeway counts in full, a fraction of a second included.
+	current := now()
+	if !current.Before(time.Unix(claims.Expiry, 0).Add(opts.Leeway)) {
 		return nil, rejected("attestation has expired")
 	}
-	if claims.NotBefore != nil && nowSeconds+leeway < *claims.NotBefore {
+	if claims.NotBefore != nil && current.Add(opts.Leeway).Before(time.Unix(*claims.NotBefore, 0)) {
 		return nil, rejected("attestation is not yet valid (nbf)")
 	}
 	if claims.QWED.Result.Status != string(StatusVerified) {
@@ -311,82 +312,143 @@ func (c *Client) clock() time.Time {
 	return time.Now()
 }
 
-func (c *Client) jwksFresh() bool {
-	return c.jwks != nil && c.clock().Sub(c.jwksFetchedAt) <= jwksMaxAge
+func (c *Client) slot() chan struct{} {
+	c.jwksSlotOnce.Do(func() { c.jwksSlot = make(chan struct{}, 1) })
+	return c.jwksSlot
 }
 
-// fetchJWKS fetches the keys; c.jwksMu is held.
+// acquireFetch waits for the one fetch slot, or until ctx ends.
+func (c *Client) acquireFetch(ctx context.Context) error {
+	select {
+	case c.slot() <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("%w: %w", ErrKeysUnavailable, ctx.Err())
+	}
+}
+
+func (c *Client) releaseFetch() { <-c.slot() }
+
+// cached returns the keys if they are fresh, and the last fetch's failure
+// if it ended less than 30 seconds ago.
+func (c *Client) cached() (fresh *JWKS, recentErr error) {
+	c.jwksMu.Lock()
+	defer c.jwksMu.Unlock()
+	now := c.clock()
+	if c.jwks != nil && now.Sub(c.jwksFetchedAt) <= jwksMaxAge {
+		fresh = c.jwks
+	}
+	if c.jwksErr != nil && now.Sub(c.jwksAttemptedAt) < jwksMinRefresh {
+		recentErr = c.jwksErr
+	}
+	return fresh, recentErr
+}
+
+// fetchJWKS fetches the keys; the caller holds the fetch slot.
 func (c *Client) fetchJWKS(ctx context.Context) (*JWKS, error) {
-	c.jwksAttemptedAt = c.clock()
 	jwks, err := c.requestJWKS(ctx)
+	c.jwksMu.Lock()
+	defer c.jwksMu.Unlock()
+	// The attempt is recorded when the fetch ends, so a slow failure is
+	// still shared for the full 30 seconds. The caller's own cancellation
+	// says nothing about the server, so it changes nothing.
 	if err != nil {
-		// The caller's own cancellation says nothing about the server, so
-		// it is not given to the other callers.
 		if ctx.Err() == nil {
-			c.jwksErr = err
+			c.jwksErr, c.jwksAttemptedAt = err, c.clock()
 		}
 		return nil, err
 	}
-	c.jwks, c.jwksErr, c.jwksFetchedAt = jwks, nil, c.clock()
+	now := c.clock()
+	c.jwks, c.jwksErr, c.jwksFetchedAt, c.jwksAttemptedAt = jwks, nil, now, now
 	return jwks, nil
 }
 
 func (c *Client) requestJWKS(ctx context.Context) (*JWKS, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+JWKSPath, nil)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrKeysUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", ErrKeysUnavailable, err)
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrKeysUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", ErrKeysUnavailable, err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrKeysUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", ErrKeysUnavailable, err)
 	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("%w: HTTP %d", ErrKeysUnavailable, resp.StatusCode)
 	}
 	var jwks JWKS
 	if err := json.Unmarshal(data, &jwks); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrKeysUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", ErrKeysUnavailable, err)
 	}
 	return &jwks, nil
 }
 
-// GetJWKS returns the server's attestation keys (GET /.well-known/jwks.json,
-// no API key), reused for five minutes as the server's Cache-Control says.
-// Callers that need keys while a fetch is in flight wait for it and share
-// what it got. A failed fetch's error, which wraps ErrKeysUnavailable, is
-// returned again for 30 seconds without a request, unless refresh. Keys past
-// their age are not used instead: a key the server has since withdrawn would
-// still verify.
-func (c *Client) GetJWKS(ctx context.Context, refresh bool) (*JWKS, error) {
-	c.jwksMu.Lock()
-	defer c.jwksMu.Unlock()
+// cachedJWKS returns the keys the client holds, fetching them when they are
+// missing or past their age (or when refresh). Fresh keys are returned
+// without waiting for a fetch in flight.
+func (c *Client) cachedJWKS(ctx context.Context, refresh bool) (*JWKS, error) {
 	if !refresh {
-		if c.jwksFresh() {
-			return c.jwks, nil
+		if fresh, _ := c.cached(); fresh != nil {
+			return fresh, nil
 		}
-		if c.jwksErr != nil && c.clock().Sub(c.jwksAttemptedAt) < jwksMinRefresh {
-			return nil, c.jwksErr
+	}
+	if err := c.acquireFetch(ctx); err != nil {
+		return nil, err
+	}
+	defer c.releaseFetch()
+	if !refresh {
+		// Callers that waited get what the fetch before them got.
+		fresh, recentErr := c.cached()
+		if fresh != nil {
+			return fresh, nil
+		}
+		if recentErr != nil {
+			return nil, recentErr
 		}
 	}
 	return c.fetchJWKS(ctx)
 }
 
+// GetJWKS returns a copy of the server's attestation keys (GET
+// /.well-known/jwks.json, no API key), reused for five minutes as the
+// server's Cache-Control says. Callers that need keys while a fetch is in
+// flight wait for it, or until their context ends, and share what it got. A
+// failed fetch's error, which wraps ErrKeysUnavailable, is returned again
+// for 30 seconds without a request, unless refresh. Keys past their age are
+// not used instead: a key the server has since withdrawn would still verify.
+func (c *Client) GetJWKS(ctx context.Context, refresh bool) (*JWKS, error) {
+	jwks, err := c.cachedJWKS(ctx, refresh)
+	if err != nil {
+		return nil, err
+	}
+	// A copy: changing it does not change the keys the client trusts.
+	return &JWKS{Keys: append([]JWK(nil), jwks.Keys...)}, nil
+}
+
 // jwksAfterMismatch returns the keys to try once more after none in used
 // verified a token: those another caller fetched meanwhile, else a fresh
-// fetch if the last attempt was at least 30 seconds ago; else nil.
+// fetch if the last one ended at least 30 seconds ago. Within those 30
+// seconds it returns the last fetch's failure if it failed, else nil.
 func (c *Client) jwksAfterMismatch(ctx context.Context, used *JWKS) (*JWKS, error) {
-	c.jwksMu.Lock()
-	defer c.jwksMu.Unlock()
-	if c.jwks != nil && c.jwks != used {
-		return c.jwks, nil
+	if err := c.acquireFetch(ctx); err != nil {
+		return nil, err
 	}
-	if c.clock().Sub(c.jwksAttemptedAt) < jwksMinRefresh {
-		return nil, nil
+	defer c.releaseFetch()
+	c.jwksMu.Lock()
+	current, lastErr := c.jwks, c.jwksErr
+	recent := c.clock().Sub(c.jwksAttemptedAt) < jwksMinRefresh
+	c.jwksMu.Unlock()
+	if current != nil && current != used {
+		return current, nil
+	}
+	if recent {
+		// A refresh that just failed is reported as such, not as a token
+		// whose key is missing.
+		return nil, lastErr
 	}
 	return c.fetchJWKS(ctx)
 }
@@ -407,7 +469,7 @@ func (c *Client) VerifyAttestation(ctx context.Context, resp *VerificationRespon
 	if opts.Now == nil {
 		opts.Now = c.clock
 	}
-	jwks, err := c.GetJWKS(ctx, false)
+	jwks, err := c.cachedJWKS(ctx, false)
 	if err != nil {
 		return nil, err
 	}

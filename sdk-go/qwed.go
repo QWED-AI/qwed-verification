@@ -407,12 +407,15 @@ type Client struct {
 	baseURL    string
 	httpClient *http.Client
 
-	// The server's attestation keys (#319), fetched one caller at a time:
-	// callers that wait reuse what the fetch before them got.
+	// The server's attestation keys (#319). jwksMu guards the fields after
+	// it and is held only briefly; jwksSlot lets one caller fetch at a time,
+	// and waiting for it ends with the waiter's context.
+	jwksSlot        chan struct{}
+	jwksSlotOnce    sync.Once
 	jwksMu          sync.Mutex
 	jwks            *JWKS
 	jwksFetchedAt   time.Time
-	jwksAttemptedAt time.Time
+	jwksAttemptedAt time.Time // when the last fetch the server answered ended
 	jwksErr         error
 	now             func() time.Time // tests; time.Now when nil
 }

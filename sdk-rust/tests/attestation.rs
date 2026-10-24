@@ -460,6 +460,44 @@ fn expiry_is_reached_at_exp_and_leeway_allows_skew() {
 }
 
 #[test]
+fn a_sub_second_leeway_counts_in_full() {
+    // #513 review: a leeway of 1.5 s was 1 s.
+    let (signing, jwks) = key("genuine", KID);
+    let exp = now() + 100;
+    let token = sign(
+        &signing,
+        &header(),
+        &with(with(claims(), "exp", json!(exp)), "nbf", json!(exp - 50)),
+        false,
+    );
+    let expiry = UNIX_EPOCH + Duration::from_secs(exp as u64);
+    let not_before = UNIX_EPOCH + Duration::from_secs((exp - 50) as u64);
+    let (late, early) = (
+        expiry + Duration::from_millis(1200),
+        not_before - Duration::from_millis(1200),
+    );
+    let within = |at, leeway_ms| {
+        AttestationOptions::new()
+            .now(at)
+            .leeway(Duration::from_millis(leeway_ms))
+    };
+
+    assert!(verify_attestation(&token, &jwks, PROOF, &within(late, 1500)).is_ok());
+    assert!(verify_attestation(&token, &jwks, PROOF, &within(early, 1500)).is_ok());
+    // A microsecond: Windows keeps SystemTime in 100 ns steps.
+    let just_before = AttestationOptions::new().now(expiry - Duration::from_micros(1));
+    assert!(verify_attestation(&token, &jwks, PROOF, &just_before).is_ok());
+    rejected(
+        verify_attestation(&token, &jwks, PROOF, &within(late, 1000)),
+        "expired",
+    );
+    rejected(
+        verify_attestation(&token, &jwks, PROOF, &within(early, 1000)),
+        "not yet valid",
+    );
+}
+
+#[test]
 fn jwks_keys_that_cannot_verify() {
     let (signing, jwks) = key("genuine", KID);
     let token = sign(&signing, &header(), &claims(), false);

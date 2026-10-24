@@ -241,10 +241,13 @@ fn verifying_key(jwk: &Jwk) -> Result<VerifyingKey, AttestationError> {
     VerifyingKey::from_sec1_bytes(&point).map_err(|_| rejected("JWKS key is unusable"))
 }
 
-fn unix_seconds(time: SystemTime) -> i64 {
+const NANOS: i128 = 1_000_000_000;
+
+/// `time` in nanoseconds since the Unix epoch.
+fn unix_nanos(time: SystemTime) -> i128 {
     match time.duration_since(UNIX_EPOCH) {
-        Ok(since) => since.as_secs() as i64,
-        Err(before) => -(before.duration().as_secs() as i64),
+        Ok(since) => since.as_nanos() as i128,
+        Err(before) => -(before.duration().as_nanos() as i128),
     }
 }
 
@@ -307,16 +310,17 @@ pub fn verify_attestation(
     if claims.iss != issuer {
         return Err(rejected("claims do not verify (issuer differs)"));
     }
-    let now = unix_seconds(options.now.unwrap_or_else(SystemTime::now));
-    let leeway = options.leeway.as_secs() as i64;
     // As RFC 7519, PyJWT and the other SDKs: expired once now reaches exp,
-    // and not valid while now is before an nbf the token carries.
-    if now >= claims.exp.saturating_add(leeway) {
+    // and not valid while now is before an nbf the token carries. The leeway
+    // counts in full, a fraction of a second included.
+    let now = unix_nanos(options.now.unwrap_or_else(SystemTime::now));
+    let leeway = options.leeway.as_nanos() as i128;
+    if now >= i128::from(claims.exp) * NANOS + leeway {
         return Err(rejected("attestation has expired"));
     }
     if claims
         .nbf
-        .is_some_and(|nbf| now.saturating_add(leeway) < nbf)
+        .is_some_and(|nbf| now + leeway < i128::from(nbf) * NANOS)
     {
         return Err(rejected("attestation is not yet valid (nbf)"));
     }
@@ -347,8 +351,17 @@ pub fn verify_attestation(
 pub(crate) struct JwksCache {
     jwks: Option<Arc<Jwks>>,
     fetched_at: Option<Instant>,
+    /// When the last fetch the server answered ended.
     attempted_at: Option<Instant>,
     error: Option<AttestationError>,
+}
+
+/// The client's keys: the state, held only briefly, and one fetch at a
+/// time. A caller waiting for the fetch stops when its future is dropped.
+#[derive(Debug, Default)]
+pub(crate) struct KeyCache {
+    state: std::sync::Mutex<JwksCache>,
+    fetch: tokio::sync::Mutex<()>,
 }
 
 fn within(at: Option<Instant>, limit: Duration) -> bool {
@@ -367,6 +380,16 @@ impl JwksCache {
         self.error
             .clone()
             .filter(|_| within(self.attempted_at, JWKS_MIN_REFRESH))
+    }
+}
+
+impl KeyCache {
+    fn state(&self) -> std::sync::MutexGuard<'_, JwksCache> {
+        // The state is only ever assigned whole fields, so a panic elsewhere
+        // cannot leave it half written.
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -389,28 +412,37 @@ impl QWEDClient {
         serde_json::from_str(&text).map_err(unavailable)
     }
 
-    /// Fetch the keys; the cache's lock is held.
-    async fn fetch_jwks(&self, cache: &mut JwksCache) -> Result<Arc<Jwks>, AttestationError> {
+    /// Fetch the keys; the caller holds the fetch lock. The attempt is
+    /// recorded when the fetch ends, so a slow failure is still shared for
+    /// the full 30 seconds, and a caller dropped mid-fetch records nothing.
+    async fn fetch_jwks(&self) -> Result<Arc<Jwks>, AttestationError> {
+        let fetched = self.request_jwks().await.map(Arc::new);
+        let mut cache = self.jwks.state();
         cache.attempted_at = Some(Instant::now());
-        match self.request_jwks().await {
+        match &fetched {
             Ok(jwks) => {
-                let jwks = Arc::new(jwks);
-                cache.jwks = Some(Arc::clone(&jwks));
-                cache.fetched_at = Some(Instant::now());
+                cache.jwks = Some(Arc::clone(jwks));
+                cache.fetched_at = cache.attempted_at;
                 cache.error = None;
-                Ok(jwks)
             }
-            Err(error) => {
-                cache.error = Some(error.clone());
-                Err(error)
-            }
+            Err(error) => cache.error = Some(error.clone()),
         }
+        fetched
     }
 
+    /// The keys the client holds, fetched when they are missing or past their
+    /// age (or when `refresh`). Fresh keys are returned without waiting for a
+    /// fetch in flight.
     async fn cached_jwks(&self, refresh: bool) -> Result<Arc<Jwks>, AttestationError> {
-        // One fetch at a time: callers that wait reuse what it got.
-        let mut cache = self.jwks.lock().await;
         if !refresh {
+            if let Some(jwks) = self.jwks.state().fresh() {
+                return Ok(jwks);
+            }
+        }
+        let _fetching = self.jwks.fetch.lock().await;
+        if !refresh {
+            // Callers that waited get what the fetch before them got.
+            let cache = self.jwks.state();
             if let Some(jwks) = cache.fresh() {
                 return Ok(jwks);
             }
@@ -418,7 +450,7 @@ impl QWEDClient {
                 return Err(error);
             }
         }
-        self.fetch_jwks(&mut cache).await
+        self.fetch_jwks().await
     }
 
     /// The server's attestation keys (`GET /.well-known/jwks.json`, no API
@@ -434,20 +466,26 @@ impl QWEDClient {
     }
 
     /// The keys to try once more after none in `used` verified a token: those
-    /// another caller fetched meanwhile, else a fresh fetch if the last
-    /// attempt was at least 30 seconds ago; else `None`.
+    /// another caller fetched meanwhile, else a fresh fetch if the last one
+    /// ended at least 30 seconds ago. Within those 30 seconds, the last
+    /// fetch's failure if it failed, else `None`.
     async fn jwks_after_mismatch(
         &self,
         used: &Arc<Jwks>,
     ) -> Result<Option<Arc<Jwks>>, AttestationError> {
-        let mut cache = self.jwks.lock().await;
-        if let Some(jwks) = cache.jwks.as_ref().filter(|jwks| !Arc::ptr_eq(jwks, used)) {
-            return Ok(Some(Arc::clone(jwks)));
+        let _fetching = self.jwks.fetch.lock().await;
+        {
+            let cache = self.jwks.state();
+            if let Some(jwks) = cache.jwks.as_ref().filter(|jwks| !Arc::ptr_eq(jwks, used)) {
+                return Ok(Some(Arc::clone(jwks)));
+            }
+            if within(cache.attempted_at, JWKS_MIN_REFRESH) {
+                // A refresh that just failed is reported as such, not as a
+                // token whose key is missing.
+                return cache.error.clone().map_or(Ok(None), Err);
+            }
         }
-        if within(cache.attempted_at, JWKS_MIN_REFRESH) {
-            return Ok(None);
-        }
-        self.fetch_jwks(&mut cache).await.map(Some)
+        self.fetch_jwks().await.map(Some)
     }
 
     /// Verify `response`'s attestation against this server's keys and return

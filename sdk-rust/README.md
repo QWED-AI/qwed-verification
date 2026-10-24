@@ -74,7 +74,8 @@ match client.verify_attestation(&result, &AttestationOptions::new().query("2+2=4
 ```
 
 `AttestationError::KeysUnavailable` says the keys could not be fetched; that
-failure is returned to every caller for 30 seconds without another request,
+failure is returned to every caller for 30 seconds after the fetch ends,
+without another request (a token the cached keys do not verify gets it too),
 and keys past their five minutes are not used instead. To verify offline, or
 against keys you pinned, call `qwed::verify_attestation(token, &jwks,
 proof_ref, &options)` with the JWKS you hold. A token says the server reached

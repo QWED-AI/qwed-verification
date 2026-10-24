@@ -29,7 +29,8 @@ import {
 
 // How long a fetched JWKS is reused, as the server's Cache-Control says.
 const JWKS_MAX_AGE_MS = 300_000;
-// The least time since the last attempt to fetch the JWKS before another:
+// The least time since the last fetch ended before another (counted from the
+// end, so a fetch that is slow to fail is still shared for all of it, #513):
 // after a token whose key it lacks (an unknown kid, or a signature that does
 // not verify with the kid's key; a key rotation or a restart with a new
 // ephemeral key is picked up within this, but a stream of made-up or forged
@@ -129,7 +130,6 @@ export class QWEDClient {
     }
 
     private async fetchJwks(): Promise<Jwks> {
-        this.jwksAttemptedAt = Date.now();
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), this.timeout);
         try {
@@ -140,7 +140,7 @@ export class QWEDClient {
             const jwks = await response.json() as Jwks;
             this.jwks = jwks;
             this.jwksError = undefined;
-            this.jwksFetchedAt = Date.now();
+            this.jwksFetchedAt = this.jwksAttemptedAt = Date.now();
             return jwks;
         } catch (error) {
             // As request() does: a QWEDError whatever failed (a network
@@ -155,6 +155,7 @@ export class QWEDClient {
                         'QWED-ATTEST-001',
                     );
             this.jwksError = wrapped;
+            this.jwksAttemptedAt = Date.now();
             throw wrapped;
         } finally {
             clearTimeout(timeoutId);
@@ -199,12 +200,17 @@ export class QWEDClient {
     /**
      * Keys to try once more after none in `used` verified a token: those
      * another caller fetched, or is fetching, meanwhile; else a fresh fetch
-     * if the last attempt was at least JWKS_MIN_REFRESH_MS ago; else none.
+     * if the last one ended at least JWKS_MIN_REFRESH_MS ago. Within that,
+     * the last fetch's failure if it failed (not a missing key, #513), else
+     * none.
      */
     private async jwksAfterMismatch(used: Jwks): Promise<Jwks | undefined> {
         if (this.jwksFetch) return this.jwksFetch;
         if (this.jwks && this.jwks !== used) return this.jwks;
-        if (Date.now() - this.jwksAttemptedAt < JWKS_MIN_REFRESH_MS) return undefined;
+        if (Date.now() - this.jwksAttemptedAt < JWKS_MIN_REFRESH_MS) {
+            if (this.jwksError !== undefined) throw this.jwksError;
+            return undefined;
+        }
         return this.getJwks(true);
     }
 

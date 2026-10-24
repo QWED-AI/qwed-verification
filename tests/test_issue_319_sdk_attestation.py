@@ -14,6 +14,7 @@ the repository.
 import asyncio
 import base64
 import time
+import types
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
@@ -35,6 +36,7 @@ from qwed_sdk import (
     VerificationResult,
     verify_attestation,
 )
+from qwed_sdk import client as client_module
 from qwed_sdk.attestation import KeyMismatchError, KeysUnavailableError, statement_hash
 
 PROOF = "sha256:" + "e" * 64
@@ -452,8 +454,33 @@ def test_a_failed_refresh_also_waits_30_seconds(server):
 
     with pytest.raises(KeysUnavailableError):
         client.verify_attestation(answer)
-    with pytest.raises(KeyMismatchError):
+    # Within the next 30 s, the refresh's failure, not a missing key (#513
+    # review), and no request.
+    with pytest.raises(KeysUnavailableError):
         client.verify_attestation(answer)
+    assert calls == ["/.well-known/jwks.json"]
+
+
+def test_a_slow_failure_is_shared_for_the_full_30_seconds(server, monkeypatch):
+    # #513 review: the 30 s counted from the start of a fetch, so one that
+    # took 30 s to fail was already past them. Now they count from its end.
+    service, _ = server
+    now = [1000.0]
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        now[0] += 40  # the fetch takes 40 s to fail
+        return httpx.Response(503)
+
+    monkeypatch.setattr(client_module, "time", types.SimpleNamespace(monotonic=lambda: now[0], time=time.time))
+    client = QWEDClient(api_key="k", base_url="http://qwed.test")
+    client._client = httpx.Client(transport=httpx.MockTransport(handler))
+    answer = {"attestation": _token(service), "proof_ref": PROOF}
+
+    for _ in range(2):
+        with pytest.raises(KeysUnavailableError):
+            client.verify_attestation(answer)
     assert calls == ["/.well-known/jwks.json"]
 
 

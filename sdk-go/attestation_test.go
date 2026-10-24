@@ -235,6 +235,30 @@ func TestExpiryLeewayAndBoundary(t *testing.T) {
 	}
 }
 
+func TestASubSecondLeewayCountsInFull(t *testing.T) {
+	// #513 review: a leeway of 1.5 s was 1 s.
+	key := newTestKey(t)
+	exp := time.Now().Unix() + 100
+	token := sign(t, key.private, defaultHeader(), testClaims(map[string]interface{}{"exp": exp, "nbf": exp - 50}), false)
+	at := func(t time.Time) func() time.Time { return func() time.Time { return t } }
+	expiry, notBefore := time.Unix(exp, 0), time.Unix(exp-50, 0)
+
+	ok := []AttestationOptions{
+		{Now: at(expiry.Add(1200 * time.Millisecond)), Leeway: 1500 * time.Millisecond},
+		{Now: at(notBefore.Add(-1200 * time.Millisecond)), Leeway: 1500 * time.Millisecond},
+		{Now: at(expiry.Add(-time.Nanosecond))},
+	}
+	for _, opts := range ok {
+		if _, err := VerifyAttestation(token, key.jwks, testProof, opts); err != nil {
+			t.Fatalf("%v", err)
+		}
+	}
+	_, err := VerifyAttestation(token, key.jwks, testProof, AttestationOptions{Now: at(expiry.Add(1200 * time.Millisecond)), Leeway: time.Second})
+	mustReject(t, err, ErrAttestation, "expired")
+	_, err = VerifyAttestation(token, key.jwks, testProof, AttestationOptions{Now: at(notBefore.Add(-1200 * time.Millisecond)), Leeway: time.Second})
+	mustReject(t, err, ErrAttestation, "not yet valid")
+}
+
 func TestJWKSKeysThatCannotVerify(t *testing.T) {
 	key := newTestKey(t)
 	token := sign(t, key.private, defaultHeader(), testClaims(nil), false)
@@ -244,18 +268,21 @@ func TestJWKSKeysThatCannotVerify(t *testing.T) {
 
 	for name, tc := range map[string]struct {
 		jwks     *JWKS
+		want     error
 		fragment string
 	}{
-		"P-384":           {&JWKS{Keys: []JWK{{Kty: "EC", Crv: "P-384", Kid: testKid, X: good.X, Y: good.Y}}}, "ES256 P-256"},
-		"RSA":             {&JWKS{Keys: []JWK{{Kty: "RSA", Kid: testKid}}}, "ES256 P-256"},
-		"off the curve":   {&JWKS{Keys: []JWK{offCurve}}, "unusable"},
-		"bad coordinates": {&JWKS{Keys: []JWK{{Kty: "EC", Crv: "P-256", Kid: testKid, X: "not-a-coordinate", Y: good.Y}}}, "unusable"},
-		"no key list":     {&JWKS{}, "no keys"},
-		"nil":             {nil, "no keys"},
+		"P-384":           {&JWKS{Keys: []JWK{{Kty: "EC", Crv: "P-384", Kid: testKid, X: good.X, Y: good.Y}}}, ErrAttestation, "ES256 P-256"},
+		"RSA":             {&JWKS{Keys: []JWK{{Kty: "RSA", Kid: testKid}}}, ErrAttestation, "ES256 P-256"},
+		"off the curve":   {&JWKS{Keys: []JWK{offCurve}}, ErrAttestation, "unusable"},
+		"bad coordinates": {&JWKS{Keys: []JWK{{Kty: "EC", Crv: "P-256", Kid: testKid, X: "not-a-coordinate", Y: good.Y}}}, ErrAttestation, "unusable"},
+		// {} and {"keys": null} from the server: out of date, so a refetch may
+		// help (#513 review).
+		"no key list": {&JWKS{}, ErrKeyMismatch, "kid"},
+		"nil":         {nil, ErrAttestation, "no JWKS"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := VerifyAttestation(token, tc.jwks, testProof, AttestationOptions{})
-			mustReject(t, err, ErrAttestation, tc.fragment)
+			mustReject(t, err, tc.want, tc.fragment)
 		})
 	}
 }
@@ -269,6 +296,7 @@ type keyServer struct {
 	mu      sync.Mutex
 	respond func(n int32) (int, interface{})
 	delay   time.Duration
+	started chan struct{} // when set, told of each request as it arrives
 }
 
 func (k *keyServer) handler(t *testing.T) http.HandlerFunc {
@@ -277,6 +305,9 @@ func (k *keyServer) handler(t *testing.T) http.HandlerFunc {
 			t.Errorf("unexpected request %s", r.URL.Path)
 		}
 		n := k.fetches.Add(1)
+		if k.started != nil {
+			k.started <- struct{}{}
+		}
 		time.Sleep(k.delay)
 		k.mu.Lock()
 		status, body := k.respond(n)
@@ -290,12 +321,19 @@ func (k *keyServer) handler(t *testing.T) http.HandlerFunc {
 	}
 }
 
-// clockClient is a client of server whose clock the test moves.
-func clockClient(server *httptest.Server) (*Client, *time.Time) {
-	now := time.Now()
+// fakeClock is a clock the test, or the key server, moves.
+type fakeClock struct{ ns atomic.Int64 }
+
+func (f *fakeClock) now() time.Time           { return time.Unix(0, f.ns.Load()) }
+func (f *fakeClock) advance(by time.Duration) { f.ns.Add(int64(by)) }
+
+// clockClient is a client of server on a clock the test moves.
+func clockClient(server *httptest.Server) (*Client, *fakeClock) {
+	clock := &fakeClock{}
+	clock.ns.Store(time.Now().UnixNano())
 	client := NewClient("k", WithBaseURL(server.URL))
-	client.now = func() time.Time { return now }
-	return client, &now
+	client.now = clock.now
+	return client, clock
 }
 
 func answer(token string) *VerificationResponse {
@@ -348,7 +386,7 @@ func TestTheClientRefetchesForANewKeyButNotWithin30Seconds(t *testing.T) {
 				t.Fatalf("fetches within 30 s = %d, want 1", got)
 			}
 
-			*now = now.Add(time.Minute) // still within the five-minute cache
+			now.advance(time.Minute) // still within the five-minute cache
 			if _, err := client.VerifyAttestation(context.Background(), resp, AttestationOptions{}); err != nil {
 				t.Fatal(err)
 			}
@@ -417,7 +455,7 @@ func TestAFailedFetchIsSharedFor30Seconds(t *testing.T) {
 		t.Fatalf("fetches = %d, want 1", got)
 	}
 
-	*now = now.Add(31 * time.Second)
+	now.advance(31 * time.Second)
 	if _, err := client.VerifyAttestation(context.Background(), resp, AttestationOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -442,8 +480,151 @@ func TestAFailedRefreshAfterAKeyMismatchIsKeysUnavailable(t *testing.T) {
 	_, err := client.VerifyAttestation(context.Background(), resp, AttestationOptions{})
 
 	mustReject(t, err, ErrKeysUnavailable, "503")
+	// Within the next 30 s the refresh's failure, not a missing key, and no
+	// request (#513 review).
+	_, err = client.VerifyAttestation(context.Background(), resp, AttestationOptions{})
+	mustReject(t, err, ErrKeysUnavailable, "503")
 	if got := keys.fetches.Load(); got != 1 {
 		t.Fatalf("fetches = %d, want 1", got)
+	}
+}
+
+func TestASlowFailureIsSharedForTheFull30Seconds(t *testing.T) {
+	// #513 review: the 30 s counted from the start of a fetch, so one that
+	// took 30 s to fail was already past them.
+	key := newTestKey(t)
+	var clock *fakeClock
+	keys := &keyServer{respond: func(n int32) (int, interface{}) {
+		if n == 1 {
+			clock.advance(40 * time.Second) // the fetch takes 40 s to fail
+			return 503, "down"
+		}
+		return 200, key.jwks
+	}}
+	server := httptest.NewServer(keys.handler(t))
+	defer server.Close()
+	client, clock := clockClient(server)
+	resp := answer(sign(t, key.private, defaultHeader(), testClaims(nil), false))
+
+	_, err := client.VerifyAttestation(context.Background(), resp, AttestationOptions{})
+	mustReject(t, err, ErrKeysUnavailable, "503")
+	_, err = client.VerifyAttestation(context.Background(), resp, AttestationOptions{})
+	mustReject(t, err, ErrKeysUnavailable, "503")
+	if got := keys.fetches.Load(); got != 1 {
+		t.Fatalf("fetches = %d, want 1", got)
+	}
+}
+
+func TestACancelledCallerDoesNotExtendACachedFailure(t *testing.T) {
+	// #513 review: a cancelled caller moved the 30 s window on and left the
+	// old failure in place, so a recovered server was not asked again.
+	key := newTestKey(t)
+	keys := &keyServer{respond: func(n int32) (int, interface{}) {
+		if n == 1 {
+			return 503, "down"
+		}
+		return 200, key.jwks
+	}}
+	server := httptest.NewServer(keys.handler(t))
+	defer server.Close()
+	client, clock := clockClient(server)
+	if _, err := client.GetJWKS(context.Background(), false); !errors.Is(err, ErrKeysUnavailable) {
+		t.Fatalf("got %v", err)
+	}
+	clock.advance(31 * time.Second)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := client.GetJWKS(cancelled, false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("the cancelled caller: %v", err)
+	}
+	if _, err := client.GetJWKS(context.Background(), false); err != nil {
+		t.Fatalf("the next caller: %v", err)
+	}
+}
+
+func TestAWaitingCallerStopsWithItsContext(t *testing.T) {
+	// #513 review: a caller waiting for another's fetch waited for all of it.
+	key := newTestKey(t)
+	keys := &keyServer{delay: 300 * time.Millisecond, started: make(chan struct{}, 1),
+		respond: func(int32) (int, interface{}) { return 200, key.jwks }}
+	server := httptest.NewServer(keys.handler(t))
+	defer server.Close()
+	client, _ := clockClient(server)
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.GetJWKS(context.Background(), false)
+		done <- err
+	}()
+	<-keys.started
+
+	short, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	began := time.Now()
+	_, err := client.GetJWKS(short, false)
+
+	if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, ErrKeysUnavailable) {
+		t.Fatalf("got %v", err)
+	}
+	if waited := time.Since(began); waited > 200*time.Millisecond {
+		t.Fatalf("waited %v for another caller's fetch", waited)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFreshKeysDoNotWaitForAFetchInFlight(t *testing.T) {
+	// #513 review: a refresh after a key mismatch held up every caller,
+	// though the keys they needed were cached and fresh.
+	key := newTestKey(t)
+	keys := &keyServer{delay: 300 * time.Millisecond, started: make(chan struct{}, 1),
+		respond: func(int32) (int, interface{}) { return 200, key.jwks }}
+	server := httptest.NewServer(keys.handler(t))
+	defer server.Close()
+	client, clock := clockClient(server)
+	client.jwks, client.jwksFetchedAt = key.jwks, clock.now()
+	client.jwksAttemptedAt = clock.now().Add(-time.Minute)
+	refreshed := make(chan error, 1)
+	go func() {
+		_, err := client.jwksAfterMismatch(context.Background(), key.jwks)
+		refreshed <- err
+	}()
+	<-keys.started
+
+	began := time.Now()
+	jwks, err := client.GetJWKS(context.Background(), false)
+
+	if err != nil || len(jwks.Keys) != 1 {
+		t.Fatalf("%v %v", jwks, err)
+	}
+	if waited := time.Since(began); waited > 200*time.Millisecond {
+		t.Fatalf("waited %v for the refresh", waited)
+	}
+	if err := <-refreshed; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetJWKSReturnsACopy(t *testing.T) {
+	// #513 review: changing the returned keys changed the keys the client
+	// trusts.
+	key := newTestKey(t)
+	keys := &keyServer{respond: func(int32) (int, interface{}) { return 200, key.jwks }}
+	server := httptest.NewServer(keys.handler(t))
+	defer server.Close()
+	client, _ := clockClient(server)
+	resp := answer(sign(t, key.private, defaultHeader(), testClaims(nil), false))
+
+	got, err := client.GetJWKS(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.Keys[0].X = b64(make([]byte, 32))
+	got.Keys = nil
+
+	if _, err := client.VerifyAttestation(context.Background(), resp, AttestationOptions{}); err != nil {
+		t.Fatalf("the cached keys changed: %v", err)
 	}
 }
 

@@ -90,8 +90,11 @@ if err != nil {
 
 Every error wraps `ErrAttestation`. `ErrKeysUnavailable` says the keys could
 not be fetched; that failure is returned to every caller for 30 seconds
-without another request, and keys past their five minutes are not used
-instead. To verify offline, or against keys you pinned, call
+after the fetch ends, without another request (a token the cached keys do
+not verify gets it too), and keys past their five minutes are not used
+instead. A caller waiting for another's fetch stops when its own context
+ends. `GetJWKS` returns a copy of the keys. To verify offline, or against
+keys you pinned, call
 `qwed.VerifyAttestation(token, &jwks, proofRef, opts)` with the JWKS you
 hold. A token says the server reached the verdict; whether to act on it is
 still `IsAdmitted()`.

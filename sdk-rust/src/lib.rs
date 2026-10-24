@@ -280,7 +280,7 @@ pub struct QWEDClient {
     base_url: String,
     client: Client,
     /// The server's attestation keys (#319), fetched one caller at a time.
-    jwks: tokio::sync::Mutex<attestation::JwksCache>,
+    jwks: attestation::KeyCache,
 }
 
 impl QWEDClient {
