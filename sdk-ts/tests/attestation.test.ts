@@ -189,6 +189,14 @@ describe('verifyAttestation', () => {
         await expect(verifyAttestation(token, jwks, { proofRef: PROOF })).rejects.toBeInstanceOf(AttestationError);
     });
 
+    it('reports a malformed signature as such, not as an unusable key', async () => {
+        const { privateKey, jwks } = await keyPair();
+        const [header, payload] = (await sign(privateKey, await claims())).split('.');
+
+        await expect(verifyAttestation(`${header}.${payload}.%%%`, jwks, { proofRef: PROOF }))
+            .rejects.toThrow(/not a JWT/);
+    });
+
     it('verifies through node:crypto where there is no global crypto (Node 18)', async () => {
         const { privateKey, jwks } = await keyPair();
         const token = await sign(privateKey, await claims());
@@ -269,6 +277,52 @@ describe('the response and the client', () => {
         const verified = await client.verifyAttestation(answer);
 
         expect(verified.qwed.proof_hash).toBe(PROOF);
+        expect(fetches).toBe(2);
+    });
+
+    it('tries keys another caller fetched meanwhile, without fetching', async () => {
+        // One call checks the old keys while another refreshes them (#512
+        // review): it retries with the new keys although they were just fetched.
+        const { privateKey, jwks } = await keyPair();
+        const before = await keyPair();
+        const token = await sign(privateKey, await claims());
+        let fetches = 0;
+        vi.stubGlobal('fetch', async () => {
+            fetches += 1;
+            return new Response(JSON.stringify(jwks), { status: 200 });
+        });
+        const client = new QWEDClient({ apiKey: 'k', baseUrl: 'http://qwed.test' });
+        await client.getJwks();
+        vi.spyOn(client, 'getJwks').mockResolvedValueOnce(before.jwks);
+
+        const verified = await client.verifyAttestation({ attestation: token, proof_ref: PROOF });
+
+        expect(verified.qwed.proof_hash).toBe(PROOF);
+        expect(fetches).toBe(1);
+    });
+
+    it('waits 30 s after a failed refresh too', async () => {
+        // An unreachable key endpoint is not asked again for every token the
+        // cached keys do not verify (#512 review).
+        const { privateKey } = await keyPair();
+        const before = await keyPair();
+        const token = await sign(privateKey, await claims());
+        let fetches = 0;
+        vi.stubGlobal('fetch', async () => {
+            fetches += 1;
+            return fetches === 1
+                ? new Response(JSON.stringify(before.jwks), { status: 200 })
+                : new Response('', { status: 503 });
+        });
+        let now = Date.now();
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
+        const client = new QWEDClient({ apiKey: 'k', baseUrl: 'http://qwed.test' });
+        await client.getJwks();
+        now += 60_000;
+        const answer = { attestation: token, proof_ref: PROOF };
+
+        await expect(client.verifyAttestation(answer)).rejects.toThrow(/keys unavailable/);
+        await expect(client.verifyAttestation(answer)).rejects.toBeInstanceOf(KeyMismatchError);
         expect(fetches).toBe(2);
     });
 

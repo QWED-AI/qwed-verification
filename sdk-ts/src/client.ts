@@ -29,11 +29,12 @@ import {
 
 // How long a fetched JWKS is reused, as the server's Cache-Control says.
 const JWKS_MAX_AGE_MS = 300_000;
-// The least age a cached JWKS must reach before a token whose key it lacks
-// (an unknown kid, or a signature that does not verify with the kid's key)
-// may fetch it again: a key rotation or a restart with a new ephemeral key is
-// picked up within this, but a stream of made-up or forged tokens cannot turn
-// each one into a request (#512).
+// The least time since the last attempt to fetch the JWKS, successful or not,
+// before a token whose key it lacks (an unknown kid, or a signature that does
+// not verify with the kid's key) may fetch it again: a key rotation or a
+// restart with a new ephemeral key is picked up within this, but a stream of
+// made-up or forged tokens cannot turn each one into a request, nor can an
+// unreachable key endpoint (#512).
 const JWKS_MIN_REFRESH_MS = 30_000;
 
 // ============================================================================
@@ -77,6 +78,7 @@ export class QWEDClient {
     private headers: Record<string, string>;
     private jwks?: Jwks;
     private jwksFetchedAt = 0;
+    private jwksAttemptedAt = 0;
     private jwksFetch?: Promise<Jwks>;
 
     constructor(options: QWEDClientOptions) {
@@ -117,6 +119,7 @@ export class QWEDClient {
     }
 
     private async fetchJwks(): Promise<Jwks> {
+        this.jwksAttemptedAt = Date.now();
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), this.timeout);
         try {
@@ -154,18 +157,30 @@ export class QWEDClient {
             issuer: options.issuer ?? DEFAULT_ISSUER,
             leewaySeconds: options.leewaySeconds,
         });
+        const jwks = await this.getJwks();
         try {
-            return await verify(await this.getJwks());
+            return await verify(jwks);
         } catch (error) {
             if (!(error instanceof KeyMismatchError)) throw error;
             // The key may have rotated, or the server restarted with a new
-            // key under the same kid, since the JWKS was cached: fetch it
-            // once more, but not within JWKS_MIN_REFRESH_MS of the last
-            // fetch, so a made-up kid or a forged token cannot bypass the
-            // cache.
-            if (Date.now() - this.jwksFetchedAt < JWKS_MIN_REFRESH_MS) throw error;
-            return verify(await this.getJwks(true));
+            // key under the same kid, since the JWKS was cached: try the
+            // keys once more (see jwksAfterMismatch).
+            const newer = await this.jwksAfterMismatch(jwks);
+            if (!newer) throw error;
+            return verify(newer);
         }
+    }
+
+    /**
+     * Keys to try once more after none in `used` verified a token: those
+     * another caller fetched, or is fetching, meanwhile; else a fresh fetch
+     * if the last attempt was at least JWKS_MIN_REFRESH_MS ago; else none.
+     */
+    private async jwksAfterMismatch(used: Jwks): Promise<Jwks | undefined> {
+        if (this.jwksFetch) return this.jwksFetch;
+        if (this.jwks && this.jwks !== used) return this.jwks;
+        if (Date.now() - this.jwksAttemptedAt < JWKS_MIN_REFRESH_MS) return undefined;
+        return this.getJwks(true);
     }
 
     // --------------------------------------------------------------------------

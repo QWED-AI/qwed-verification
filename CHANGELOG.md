@@ -15,16 +15,20 @@ All notable changes to the QWED Protocol will be documented in this file.
     and Rust no longer put the token among the endpoint's own fields.
   - Python (`qwed_sdk.verify_attestation`, `QWEDClient.verify_attestation`)
     and TypeScript (`verifyAttestation`, `client.verifyAttestation`) verify
-    it: the ES256 signature with the key its `kid` names in the server's
-    JWKS, the issuer, expiry and any `nbf`, a VERIFIED status, and that it
+    it: the ES256 signature with a key in the server's JWKS, which the
+    token's `kid` must name (Python tries each ES256 key and reads nothing
+    from the token before one verifies it), the issuer, expiry and any
+    `nbf`, a VERIFIED status, and that it
     is this answer's token (`proof_hash` is the answer's `proof_ref`), and
     optionally the statement's hash. Any algorithm but ES256 is refused
     before a key is used. A token covers what it signs, not other fields of
     the response such as `admission`.
   - The clients fetch `/.well-known/jwks.json` and reuse it for five
-    minutes. When the token's `kid` is missing from it, or its key does not
-    verify the token (a server restarted with a new ephemeral key under the
-    same `kid`), they fetch it once more, at most every 30 seconds.
+    minutes. When no key in it verifies the token (the key rotated, or a
+    server restarted with a new ephemeral key under the same `kid`), they
+    try keys another caller fetched meanwhile, else fetch it once more, at
+    most once every 30 seconds, failed fetches included. Concurrent callers
+    share one fetch.
   - The TypeScript verifier has no dependency (WebCrypto, Node 18+ and
     browsers); CI verifies a token with the built package on Node 18. Go
     and Rust verifiers follow.

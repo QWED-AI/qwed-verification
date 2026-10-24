@@ -190,6 +190,9 @@ export async function verifyAttestation(
     }
     const jwk = keyFor(header.kid, jwks);
 
+    // Decoded before the key is imported, so a malformed signature is
+    // reported as such, not as an unusable key.
+    const signature = base64UrlBytes(signatureSegment);
     const subtle = await subtleCrypto();
     let valid: boolean;
     try {
@@ -200,7 +203,6 @@ export async function verifyAttestation(
             false,
             ['verify'],
         );
-        const signature = base64UrlBytes(signatureSegment);
         // JWS ES256 is the raw r || s pair, 64 bytes, as WebCrypto expects.
         valid = signature.length === 64 && await subtle.verify(
             { name: 'ECDSA', hash: 'SHA-256' },

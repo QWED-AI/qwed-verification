@@ -4,6 +4,9 @@ QWED SDK Client.
 Provides synchronous and asynchronous clients for the QWED API.
 """
 
+import asyncio
+import functools
+import threading
 import httpx
 import time
 from typing import List, Dict, Any, Optional
@@ -20,11 +23,11 @@ from qwed_sdk.models import VerificationResult, BatchResult, token_fields
 
 # How long a fetched JWKS is reused, as the server's Cache-Control says.
 _JWKS_MAX_AGE_SECONDS = 300.0
-# The least age a cached JWKS must reach before a token whose key it lacks
-# (an unknown kid, or a signature that does not verify with the kid's key)
-# may fetch it again: a key rotation or a restart with a new ephemeral key is
-# picked up within this, but a stream of made-up or forged tokens cannot turn
-# each one into a request (#512).
+# The least time since the last attempt to fetch the JWKS, successful or not,
+# before a token none of its keys verifies may fetch it again: a key rotation
+# or a restart with a new ephemeral key is picked up within this, but a stream
+# of forged tokens cannot turn each one into a request, nor can an
+# unreachable key endpoint (#512).
 _JWKS_MIN_REFRESH_SECONDS = 30.0
 
 
@@ -76,17 +79,41 @@ class QWEDClient:
         self._client = httpx.Client(timeout=timeout)
         self._jwks: Optional[Dict[str, Any]] = None
         self._jwks_fetched_at = 0.0
+        self._jwks_attempted_at = 0.0
+        # One fetch at a time: callers that wait reuse what it fetched.
+        self._jwks_lock = threading.Lock()
+
+    def _jwks_fresh(self) -> bool:
+        return self._jwks is not None and time.monotonic() - self._jwks_fetched_at <= _JWKS_MAX_AGE_SECONDS
+
+    def _fetch_jwks(self) -> dict[str, Any]:
+        self._jwks_attempted_at = time.monotonic()
+        response = self._client.get(f"{self.base_url}{JWKS_PATH}")
+        response.raise_for_status()
+        self._jwks = response.json()
+        self._jwks_fetched_at = time.monotonic()
+        return self._jwks
 
     def get_jwks(self, refresh: bool = False) -> Dict[str, Any]:
         """The server's attestation keys (GET /.well-known/jwks.json, no API
         key), reused for five minutes as the server's Cache-Control says."""
-        stale = time.monotonic() - self._jwks_fetched_at > _JWKS_MAX_AGE_SECONDS
-        if refresh or self._jwks is None or stale:
-            response = self._client.get(f"{self.base_url}{JWKS_PATH}")
-            response.raise_for_status()
-            self._jwks = response.json()
-            self._jwks_fetched_at = time.monotonic()
-        return self._jwks
+        if not refresh and self._jwks_fresh():
+            return self._jwks
+        with self._jwks_lock:
+            if not refresh and self._jwks_fresh():
+                return self._jwks
+            return self._fetch_jwks()
+
+    def _jwks_after_mismatch(self, used: dict[str, Any]) -> dict[str, Any] | None:
+        """Keys to try once more after none in ``used`` verified a token:
+        those another caller fetched meanwhile, else a fresh fetch if the
+        last attempt was at least _JWKS_MIN_REFRESH_SECONDS ago; else None."""
+        with self._jwks_lock:
+            if self._jwks is not None and self._jwks is not used:
+                return self._jwks
+            if time.monotonic() - self._jwks_attempted_at < _JWKS_MIN_REFRESH_SECONDS:
+                return None
+            return self._fetch_jwks()
 
     def verify_attestation(
         self,
@@ -105,21 +132,20 @@ class QWEDClient:
         qwed_sdk.attestation.verify_attestation with your JWKS.
         """
         token, proof_ref = _attestation_of(result)
+        verify = functools.partial(
+            verify_attestation, token, proof_ref=proof_ref, query=query, issuer=issuer, leeway=leeway,
+        )
+        jwks = self.get_jwks()
         try:
-            return verify_attestation(
-                token, self.get_jwks(), proof_ref=proof_ref, query=query, issuer=issuer, leeway=leeway,
-            )
+            return verify(jwks)
         except KeyMismatchError:
             # The key may have rotated, or the server restarted with a new
-            # key under the same kid, since the JWKS was cached: fetch it
-            # once more, but not within _JWKS_MIN_REFRESH_SECONDS of the
-            # last fetch, so a made-up kid or a forged token cannot bypass
-            # the cache.
-            if time.monotonic() - self._jwks_fetched_at < _JWKS_MIN_REFRESH_SECONDS:
+            # key under the same kid, since the JWKS was cached: try the
+            # keys once more (see _jwks_after_mismatch).
+            newer = self._jwks_after_mismatch(jwks)
+            if newer is None:
                 raise
-            return verify_attestation(
-                token, self.get_jwks(refresh=True), proof_ref=proof_ref, query=query, issuer=issuer, leeway=leeway,
-            )
+            return verify(newer)
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -513,18 +539,40 @@ class QWEDAsyncClient:
         self._client: Optional[httpx.AsyncClient] = None
         self._jwks: Optional[Dict[str, Any]] = None
         self._jwks_fetched_at = 0.0
+        self._jwks_attempted_at = 0.0
+        # One fetch at a time: callers that wait reuse what it fetched.
+        self._jwks_lock = asyncio.Lock()
+
+    def _jwks_fresh(self) -> bool:
+        return self._jwks is not None and time.monotonic() - self._jwks_fetched_at <= _JWKS_MAX_AGE_SECONDS
+
+    async def _fetch_jwks(self) -> dict[str, Any]:
+        if not self._client:
+            raise RuntimeError("Client not initialized. Use 'async with' context.")
+        self._jwks_attempted_at = time.monotonic()
+        response = await self._client.get(f"{self.base_url}{JWKS_PATH}")
+        response.raise_for_status()
+        self._jwks = response.json()
+        self._jwks_fetched_at = time.monotonic()
+        return self._jwks
 
     async def get_jwks(self, refresh: bool = False) -> Dict[str, Any]:
         """The server's attestation keys; see QWEDClient.get_jwks."""
-        if not self._client:
-            raise RuntimeError("Client not initialized. Use 'async with' context.")
-        stale = time.monotonic() - self._jwks_fetched_at > _JWKS_MAX_AGE_SECONDS
-        if refresh or self._jwks is None or stale:
-            response = await self._client.get(f"{self.base_url}{JWKS_PATH}")
-            response.raise_for_status()
-            self._jwks = response.json()
-            self._jwks_fetched_at = time.monotonic()
-        return self._jwks
+        if not refresh and self._jwks_fresh():
+            return self._jwks
+        async with self._jwks_lock:
+            if not refresh and self._jwks_fresh():
+                return self._jwks
+            return await self._fetch_jwks()
+
+    async def _jwks_after_mismatch(self, used: dict[str, Any]) -> dict[str, Any] | None:
+        """See QWEDClient._jwks_after_mismatch."""
+        async with self._jwks_lock:
+            if self._jwks is not None and self._jwks is not used:
+                return self._jwks
+            if time.monotonic() - self._jwks_attempted_at < _JWKS_MIN_REFRESH_SECONDS:
+                return None
+            return await self._fetch_jwks()
 
     async def verify_attestation(
         self,
@@ -536,16 +584,17 @@ class QWEDAsyncClient:
     ) -> Dict[str, Any]:
         """Verify an answer's attestation; see QWEDClient.verify_attestation."""
         token, proof_ref = _attestation_of(result)
+        verify = functools.partial(
+            verify_attestation, token, proof_ref=proof_ref, query=query, issuer=issuer, leeway=leeway,
+        )
+        jwks = await self.get_jwks()
         try:
-            return verify_attestation(
-                token, await self.get_jwks(), proof_ref=proof_ref, query=query, issuer=issuer, leeway=leeway,
-            )
+            return verify(jwks)
         except KeyMismatchError:
-            if time.monotonic() - self._jwks_fetched_at < _JWKS_MIN_REFRESH_SECONDS:
+            newer = await self._jwks_after_mismatch(jwks)
+            if newer is None:
                 raise
-            return verify_attestation(
-                token, await self.get_jwks(refresh=True), proof_ref=proof_ref, query=query, issuer=issuer, leeway=leeway,
-            )
+            return verify(newer)
 
     async def __aenter__(self):
         self._client = httpx.AsyncClient(timeout=self.timeout)
