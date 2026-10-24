@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
     AttestationError,
+    KeyMismatchError,
     QWEDClient,
     UnknownKeyError,
     parseVerificationResponse,
@@ -110,6 +111,31 @@ describe('verifyAttestation', () => {
         await expect(verifyAttestation(token, jwks, { proofRef: PROOF, leewaySeconds: 60 })).resolves.toBeTruthy();
     });
 
+    it('treats a token as expired from the second its exp names, as PyJWT does', async () => {
+        const { privateKey, jwks } = await keyPair();
+        const exp = Math.floor(Date.now() / 1000) + 100;
+        const token = await sign(privateKey, await claims({ exp }));
+
+        await expect(verifyAttestation(token, jwks, { proofRef: PROOF, now: exp - 1 })).resolves.toBeTruthy();
+        await expect(verifyAttestation(token, jwks, { proofRef: PROOF, now: exp })).rejects.toThrow(/expired/);
+    });
+
+    it('refuses a token before its nbf, within the leeway it is accepted', async () => {
+        const { privateKey, jwks } = await keyPair();
+        const now = Math.floor(Date.now() / 1000);
+        const token = await sign(privateKey, await claims({ nbf: now + 30 }));
+
+        await expect(verifyAttestation(token, jwks, { proofRef: PROOF, now })).rejects.toThrow(/not yet valid/);
+        await expect(verifyAttestation(token, jwks, { proofRef: PROOF, now, leewaySeconds: 60 })).resolves.toBeTruthy();
+    });
+
+    it('refuses a token whose nbf is not a number', async () => {
+        const { privateKey, jwks } = await keyPair();
+        const token = await sign(privateKey, await claims({ nbf: 'soon' }));
+
+        await expect(verifyAttestation(token, jwks, { proofRef: PROOF })).rejects.toThrow(/not yet valid/);
+    });
+
     it('refuses another issuer', async () => {
         const { privateKey, jwks } = await keyPair();
         const token = await sign(privateKey, await claims({ iss: 'did:example:other' }));
@@ -122,7 +148,9 @@ describe('verifyAttestation', () => {
         const forger = await keyPair();
         const token = await sign(forger.privateKey, await claims());
 
-        await expect(verifyAttestation(token, jwks, { proofRef: PROOF })).rejects.toThrow(/signature/);
+        const refused = verifyAttestation(token, jwks, { proofRef: PROOF });
+        await expect(refused).rejects.toThrow(/signature/);
+        await expect(refused).rejects.toBeInstanceOf(KeyMismatchError);
     });
 
     it('refuses a token whose payload was changed after signing', async () => {
@@ -160,10 +188,28 @@ describe('verifyAttestation', () => {
 
         await expect(verifyAttestation(token, jwks, { proofRef: PROOF })).rejects.toBeInstanceOf(AttestationError);
     });
+
+    it('verifies through node:crypto where there is no global crypto (Node 18)', async () => {
+        const { privateKey, jwks } = await keyPair();
+        const token = await sign(privateKey, await claims());
+        vi.stubGlobal('crypto', undefined);
+        try {
+            expect(globalThis.crypto).toBeUndefined();
+
+            const verified = await verifyAttestation(token, jwks, { proofRef: PROOF, query: QUERY });
+
+            expect(verified.qwed.proof_hash).toBe(PROOF);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
 });
 
 describe('the response and the client', () => {
-    afterEach(() => vi.unstubAllGlobals());
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
 
     it('keeps a string attestation and drops any other', () => {
         expect(parseVerificationResponse({ status: 'VERIFIED', attestation: 't' }).attestation).toBe('t');
@@ -171,22 +217,110 @@ describe('the response and the client', () => {
         expect(parseVerificationResponse({ status: 'VERIFIED', attestation: '' })).not.toHaveProperty('attestation');
     });
 
-    it('verifies against the JWKS it fetches, and fetches again when the kid is unknown', async () => {
+    it('fetches the JWKS again for an unknown kid, but not within 30 s of the last fetch', async () => {
         const { privateKey, jwks } = await keyPair();
         const token = await sign(privateKey, await claims());
         const fetched: string[] = [];
         vi.stubGlobal('fetch', async (url: string) => {
             fetched.push(url);
-            // The first fetch is stale (an old key); the second has the new one.
+            // The first fetch is stale (an old key); the next has the new one.
             const body = fetched.length === 1 ? { keys: [] } : jwks;
             return new Response(JSON.stringify(body), { status: 200 });
         });
+        let now = Date.now();
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
         const client = new QWEDClient({ apiKey: 'k', baseUrl: 'http://qwed.test' });
+        const answer = { attestation: token, proof_ref: PROOF };
 
-        const verified = await client.verifyAttestation({ attestation: token, proof_ref: PROOF }, QUERY);
+        // Just fetched: an unknown kid is refused without another request, so
+        // a stream of made-up kids cannot bypass the cache (#512 review).
+        await expect(client.verifyAttestation(answer, QUERY)).rejects.toBeInstanceOf(UnknownKeyError);
+        await expect(client.verifyAttestation(answer, QUERY)).rejects.toBeInstanceOf(UnknownKeyError);
+        expect(fetched).toHaveLength(1);
+
+        // A minute later (still within the five-minute cache): one more fetch.
+        now += 60_000;
+        const verified = await client.verifyAttestation(answer, QUERY);
 
         expect(verified.qwed.proof_hash).toBe(PROOF);
         expect(fetched).toEqual(['http://qwed.test/.well-known/jwks.json', 'http://qwed.test/.well-known/jwks.json']);
+    });
+
+    it('fetches the JWKS again when the kid now names another key, but not within 30 s', async () => {
+        // A server restarted with a new ephemeral key under the same kid
+        // (#512 review): the cached key no longer verifies its tokens.
+        const { privateKey, jwks } = await keyPair();
+        const before = await keyPair();
+        const token = await sign(privateKey, await claims());
+        let fetches = 0;
+        vi.stubGlobal('fetch', async () => {
+            fetches += 1;
+            return new Response(JSON.stringify(fetches === 1 ? before.jwks : jwks), { status: 200 });
+        });
+        let now = Date.now();
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
+        const client = new QWEDClient({ apiKey: 'k', baseUrl: 'http://qwed.test' });
+        const answer = { attestation: token, proof_ref: PROOF };
+
+        await expect(client.verifyAttestation(answer)).rejects.toBeInstanceOf(KeyMismatchError);
+        expect(fetches).toBe(1);
+
+        now += 60_000;
+        const verified = await client.verifyAttestation(answer);
+
+        expect(verified.qwed.proof_hash).toBe(PROOF);
+        expect(fetches).toBe(2);
+    });
+
+    it.each([
+        [{ proof_ref: PROOF }, /no attestation/],
+        [{ attestation: 't' }, /no proof_ref/],
+    ])('checks the answer before fetching keys (%j)', async (answer, message) => {
+        let fetches = 0;
+        vi.stubGlobal('fetch', async () => {
+            fetches += 1;
+            return new Response('', { status: 503 });
+        });
+        const client = new QWEDClient({ apiKey: 'k', baseUrl: 'http://qwed.test' });
+
+        await expect(client.verifyAttestation(answer)).rejects.toThrow(message);
+        expect(fetches).toBe(0);
+    });
+
+    it('shares one JWKS fetch among concurrent callers', async () => {
+        const { privateKey, jwks } = await keyPair();
+        const token = await sign(privateKey, await claims());
+        let fetches = 0;
+        vi.stubGlobal('fetch', async () => {
+            fetches += 1;
+            await new Promise(resolve => setTimeout(resolve, 10));
+            return new Response(JSON.stringify(jwks), { status: 200 });
+        });
+        const client = new QWEDClient({ apiKey: 'k', baseUrl: 'http://qwed.test' });
+        const answer = { attestation: token, proof_ref: PROOF };
+
+        const verified = await Promise.all([1, 2, 3].map(() => client.verifyAttestation(answer)));
+
+        expect(verified).toHaveLength(3);
+        expect(fetches).toBe(1);
+    });
+
+    it('lets the next caller fetch again after a failed fetch', async () => {
+        const { privateKey, jwks } = await keyPair();
+        const token = await sign(privateKey, await claims());
+        let fetches = 0;
+        vi.stubGlobal('fetch', async () => {
+            fetches += 1;
+            return fetches === 1
+                ? new Response('', { status: 503 })
+                : new Response(JSON.stringify(jwks), { status: 200 });
+        });
+        const client = new QWEDClient({ apiKey: 'k', baseUrl: 'http://qwed.test' });
+        const answer = { attestation: token, proof_ref: PROOF };
+
+        await expect(client.verifyAttestation(answer)).rejects.toThrow(/keys unavailable/);
+        await expect(client.verifyAttestation(answer)).resolves.toBeTruthy();
+        expect(fetches).toBe(2);
     });
 
     it('reuses the JWKS within its lifetime', async () => {

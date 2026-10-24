@@ -16,13 +16,22 @@ All notable changes to the QWED Protocol will be documented in this file.
   - Python (`qwed_sdk.verify_attestation`, `QWEDClient.verify_attestation`)
     and TypeScript (`verifyAttestation`, `client.verifyAttestation`) verify
     it: the ES256 signature with the key its `kid` names in the server's
-    JWKS, the issuer and expiry, a VERIFIED status, and that it is this
-    answer's token (`proof_hash` is the answer's `proof_ref`), and
+    JWKS, the issuer, expiry and any `nbf`, a VERIFIED status, and that it
+    is this answer's token (`proof_hash` is the answer's `proof_ref`), and
     optionally the statement's hash. Any algorithm but ES256 is refused
-    before a key is used. The clients fetch `/.well-known/jwks.json`, reuse
-    it for five minutes, and fetch it again once for an unknown `kid`.
+    before a key is used. A token covers what it signs, not other fields of
+    the response such as `admission`.
+  - The clients fetch `/.well-known/jwks.json` and reuse it for five
+    minutes. When the token's `kid` is missing from it, or its key does not
+    verify the token (a server restarted with a new ephemeral key under the
+    same `kid`), they fetch it once more, at most every 30 seconds.
   - The TypeScript verifier has no dependency (WebCrypto, Node 18+ and
-    browsers). Go and Rust verifiers follow.
+    browsers); CI verifies a token with the built package on Node 18. Go
+    and Rust verifiers follow.
+  - **Breaking for the `qwed` crate's types:** `VerificationResponse` has a
+    new public field, `attestation`, so code that builds one with a struct
+    literal must add `attestation: None`. Code that only reads responses is
+    unaffected.
 
 - **Attestations are delivered, with a JWKS to verify them (#319).** Every
   VERIFIED result was signed and checked inside the server, then the token

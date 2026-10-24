@@ -6,30 +6,42 @@ Provides synchronous and asynchronous clients for the QWED API.
 
 import httpx
 import time
-from typing import List, Dict, Any, Optional, Tuple, Union
+from typing import List, Dict, Any, Optional
 import os
 
 from qwed_sdk.attestation import (
     DEFAULT_ISSUER,
     JWKS_PATH,
-    UnknownKeyError,
+    KeyMismatchError,
+    require_answer,
     verify_attestation,
 )
-from qwed_sdk.models import VerificationResult, BatchResult
+from qwed_sdk.models import VerificationResult, BatchResult, token_fields
 
 # How long a fetched JWKS is reused, as the server's Cache-Control says.
 _JWKS_MAX_AGE_SECONDS = 300.0
+# The least age a cached JWKS must reach before a token whose key it lacks
+# (an unknown kid, or a signature that does not verify with the kid's key)
+# may fetch it again: a key rotation or a restart with a new ephemeral key is
+# picked up within this, but a stream of made-up or forged tokens cannot turn
+# each one into a request (#512).
+_JWKS_MIN_REFRESH_SECONDS = 30.0
 
 
 def _attestation_of(
-    result: Union[VerificationResult, Dict[str, Any]],
-) -> Tuple[Optional[str], Optional[str]]:
-    """The token and proof_ref of an answer, typed or as the response dict."""
+    result: VerificationResult | dict[str, Any],
+) -> tuple[str | None, str | None]:
+    """The token and proof_ref of an answer, typed or as the response dict,
+    checked before any key is fetched so a missing one is an
+    AttestationError, not a network error."""
     if isinstance(result, VerificationResult):
-        return result.attestation, result.proof_ref
-    if isinstance(result, dict):
-        return result.get("attestation"), result.get("proof_ref")
-    raise TypeError("expected a VerificationResult or a response dict")
+        token, proof_ref = result.attestation, result.proof_ref
+    elif isinstance(result, dict):
+        token, proof_ref = result.get("attestation"), result.get("proof_ref")
+    else:
+        raise TypeError("expected a VerificationResult or a response dict")
+    require_answer(token, proof_ref)
+    return token, proof_ref
 
 
 class QWEDClient:
@@ -78,7 +90,7 @@ class QWEDClient:
 
     def verify_attestation(
         self,
-        result: Union[VerificationResult, Dict[str, Any]],
+        result: VerificationResult | dict[str, Any],
         query: Optional[str] = None,
         *,
         issuer: str = DEFAULT_ISSUER,
@@ -97,8 +109,14 @@ class QWEDClient:
             return verify_attestation(
                 token, self.get_jwks(), proof_ref=proof_ref, query=query, issuer=issuer, leeway=leeway,
             )
-        except UnknownKeyError:
-            # The key may have rotated since the JWKS was cached: once more.
+        except KeyMismatchError:
+            # The key may have rotated, or the server restarted with a new
+            # key under the same kid, since the JWKS was cached: fetch it
+            # once more, but not within _JWKS_MIN_REFRESH_SECONDS of the
+            # last fetch, so a made-up kid or a forged token cannot bypass
+            # the cache.
+            if time.monotonic() - self._jwks_fetched_at < _JWKS_MIN_REFRESH_SECONDS:
+                raise
             return verify_attestation(
                 token, self.get_jwks(refresh=True), proof_ref=proof_ref, query=query, issuer=issuer, leeway=leeway,
             )
@@ -393,7 +411,9 @@ class QWEDClient:
             status="VERIFIED" if data.get("meets_requirement", False) else "UNVERIFIED",
             is_verified=data.get("meets_requirement", False),
             result=data,
-            latency_ms=data.get("latency_ms", 0.0) or (time.time() - start) * 1000
+            latency_ms=data.get("latency_ms", 0.0) or (time.time() - start) * 1000,
+            # So verify_attestation works on a consensus answer too (#319).
+            **token_fields(data),
         )
     
     def verify_image(
@@ -508,7 +528,7 @@ class QWEDAsyncClient:
 
     async def verify_attestation(
         self,
-        result: Union[VerificationResult, Dict[str, Any]],
+        result: VerificationResult | dict[str, Any],
         query: Optional[str] = None,
         *,
         issuer: str = DEFAULT_ISSUER,
@@ -520,7 +540,9 @@ class QWEDAsyncClient:
             return verify_attestation(
                 token, await self.get_jwks(), proof_ref=proof_ref, query=query, issuer=issuer, leeway=leeway,
             )
-        except UnknownKeyError:
+        except KeyMismatchError:
+            if time.monotonic() - self._jwks_fetched_at < _JWKS_MIN_REFRESH_SECONDS:
+                raise
             return verify_attestation(
                 token, await self.get_jwks(refresh=True), proof_ref=proof_ref, query=query, issuer=issuer, leeway=leeway,
             )
@@ -705,7 +727,9 @@ class QWEDAsyncClient:
             status="VERIFIED" if data.get("meets_requirement", False) else "UNVERIFIED",
             is_verified=data.get("meets_requirement", False),
             result=data,
-            latency_ms=data.get("latency_ms", 0.0) or (time.time() - start) * 1000
+            latency_ms=data.get("latency_ms", 0.0) or (time.time() - start) * 1000,
+            # So verify_attestation works on a consensus answer too (#319).
+            **token_fields(data),
         )
 
     async def verify_image(

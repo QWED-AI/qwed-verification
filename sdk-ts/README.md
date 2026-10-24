@@ -131,14 +131,19 @@ for (const item of batch.items) {
 
 Every `VERIFIED` answer carries `attestation`: an ES256 JWT the server signed
 after checking the verdict (no request option is needed). Verifying it shows
-the answer came from that server and was not changed:
+that server issued a VERIFIED verdict for this answer's `proof_ref` (and,
+when you pass the query, for that statement). It covers only what the token
+signs, not other fields of the response such as `admission` or
+`agent_message`:
 
 ```typescript
 const result = await client.verifyMath('2 + 2 = 4');
 if (result.attestation) {
   // Fetches the server's keys from /.well-known/jwks.json (cached for five
-  // minutes) and checks the signature, issuer, expiry, a VERIFIED status,
-  // and that the token is this answer's (its proof_hash is result.proof_ref).
+  // minutes) and checks the signature, issuer, expiry (and any nbf), a
+  // VERIFIED status, and that the token is this answer's (its proof_hash is
+  // result.proof_ref). If the key the token names is missing or does not
+  // verify it, the keys are fetched once more, at most every 30 s.
   const claims = await client.verifyAttestation(result, '2 + 2 = 4');
   console.log(claims.exp); // when the token expires
 }

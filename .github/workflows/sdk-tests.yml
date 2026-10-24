@@ -132,6 +132,13 @@ jobs:
           cd sdk-ts
           node -e "import('./dist/index.mjs').then(m => { new m.QWEDClient({}); console.log('consumer smoke OK'); })"
 
+      - name: Verify an attestation on Node 18
+        # Node 18 has no global crypto: this runs the SDK's node:crypto
+        # fallback, with a token signed at run time (#319).
+        run: |
+          cd sdk-ts
+          node tests/node18-smoke.mjs
+
   # ============================================
   # Go SDK
   # ============================================

@@ -33,7 +33,7 @@ from qwed_sdk import (
     VerificationResult,
     verify_attestation,
 )
-from qwed_sdk.attestation import UnknownKeyError, statement_hash
+from qwed_sdk.attestation import KeyMismatchError, UnknownKeyError, statement_hash
 
 PROOF = "sha256:" + "e" * 64
 QUERY = "2+2=4"
@@ -71,22 +71,28 @@ def test_a_genuine_attestation_verifies(server):
 def test_another_answers_token_is_refused(server):
     service, jwks = server
 
+    token = _token(service)
+
     with pytest.raises(AttestationError, match="another answer"):
-        verify_attestation(_token(service), jwks, proof_ref="sha256:" + "f" * 64)
+        verify_attestation(token, jwks, proof_ref="sha256:" + "f" * 64)
 
 
 def test_a_token_for_another_statement_is_refused(server):
     service, jwks = server
 
+    token = _token(service)
+
     with pytest.raises(AttestationError, match="another statement"):
-        verify_attestation(_token(service), jwks, proof_ref=PROOF, query="2+2=5")
+        verify_attestation(token, jwks, proof_ref=PROOF, query="2+2=5")
 
 
 def test_a_token_that_does_not_attest_verified_is_refused(server):
     service, jwks = server
 
+    token = _token(service, status="BLOCKED")
+
     with pytest.raises(AttestationError, match="VERIFIED"):
-        verify_attestation(_token(service, status="BLOCKED"), jwks, proof_ref=PROOF)
+        verify_attestation(token, jwks, proof_ref=PROOF)
 
 
 def test_an_expired_token_is_refused(server):
@@ -101,26 +107,39 @@ def test_a_token_from_another_key_is_refused(server):
     _, jwks = server
     stranger = AttestationService(key_continuity_policy="configured", private_key_pem=_pem())
 
-    # Its kid is its own thumbprint, which this JWKS does not hold.
+    token = _token(stranger)  # its kid is its own thumbprint, not in this JWKS
+
     with pytest.raises(UnknownKeyError):
-        verify_attestation(_token(stranger), jwks, proof_ref=PROOF)
+        verify_attestation(token, jwks, proof_ref=PROOF)
 
 
 def test_a_token_signed_by_another_key_under_the_right_kid_is_refused(server):
     service, jwks = server
     forger = ec.generate_private_key(ec.SECP256R1())
-    claims = jwt.decode(_token(service), options={"verify_signature": False})
+    claims = verify_attestation(_token(service), jwks, proof_ref=PROOF)
     forged = jwt.encode(claims, forger, algorithm="ES256",
                         headers={"kid": service.key_id, "typ": "qwed-attestation+jwt"})
 
-    with pytest.raises(AttestationError, match="signature"):
+    with pytest.raises(KeyMismatchError, match="signature"):
         verify_attestation(forged, jwks, proof_ref=PROOF)
+
+
+def test_a_token_used_before_its_nbf_is_refused(server):
+    # The server sets no nbf, but a token that carries one is held to it, as
+    # in the TypeScript SDK (#512 review).
+    service, jwks = server
+    claims = verify_attestation(_token(service), jwks, proof_ref=PROOF)
+    early = jwt.encode({**claims, "nbf": int(time.time()) + 600}, service._key_pair._private_key,
+                       algorithm="ES256", headers={"kid": service.key_id, "typ": "qwed-attestation+jwt"})
+
+    with pytest.raises(AttestationError, match="not yet valid"):
+        verify_attestation(early, jwks, proof_ref=PROOF)
 
 
 @pytest.mark.parametrize("alg", ["none", "HS256"])
 def test_a_token_naming_another_algorithm_is_refused_before_any_key_is_used(server, alg):
     service, jwks = server
-    claims = jwt.decode(_token(service), options={"verify_signature": False})
+    claims = verify_attestation(_token(service), jwks, proof_ref=PROOF)
     header = {"kid": service.key_id, "typ": "qwed-attestation+jwt"}
     token = jwt.encode(claims, "k" * 32, algorithm="HS256", headers=header) if alg == "HS256" else \
         jwt.encode(claims, None, algorithm="none", headers=header)
@@ -132,11 +151,13 @@ def test_a_token_naming_another_algorithm_is_refused_before_any_key_is_used(serv
 def test_another_issuer_is_refused(server):
     service, jwks = server
 
+    token = _token(service)
+
     with pytest.raises(AttestationError, match="claims"):
-        verify_attestation(_token(service), jwks, proof_ref=PROOF, issuer="did:example:other")
+        verify_attestation(token, jwks, proof_ref=PROOF, issuer="did:example:other")
 
 
-@pytest.mark.parametrize("token", ["", "not.a.jwt", None])
+@pytest.mark.parametrize("token", ["", "not.a.jwt", None, "W10.e30.c2ln"])  # W10: a header of []
 def test_no_token_or_a_malformed_one_is_refused(server, token):
     _, jwks = server
 
@@ -147,9 +168,66 @@ def test_no_token_or_a_malformed_one_is_refused(server, token):
 def test_a_jwks_key_that_is_not_es256_p256_is_refused(server):
     service, jwks = server
     bad = {"keys": [{**jwks["keys"][0], "crv": "P-384"}]}
+    token = _token(service)
 
     with pytest.raises(AttestationError, match="ES256 P-256"):
-        verify_attestation(_token(service), bad, proof_ref=PROOF)
+        verify_attestation(token, bad, proof_ref=PROOF)
+
+
+def test_a_token_issued_a_moment_in_the_future_still_verifies(server):
+    # A client whose clock is behind the server's: iat is required but not
+    # compared with the clock, as in the TypeScript SDK (#512 review).
+    service, jwks = server
+    token = _token(service, issued_at=int(time.time()) + 120)
+
+    assert verify_attestation(token, jwks, proof_ref=PROOF)["iat"] > time.time()
+
+
+def test_a_signed_token_that_is_not_a_qwed_attestation_is_refused(server):
+    service, jwks = server
+    claims = verify_attestation(_token(service), jwks, proof_ref=PROOF)
+    private = service._key_pair._private_key
+    other = jwt.encode(claims, private, algorithm="ES256", headers={"kid": service.key_id, "typ": "JWT"})
+
+    with pytest.raises(AttestationError, match="not a QWED attestation"):
+        verify_attestation(other, jwks, proof_ref=PROOF)
+
+
+@pytest.mark.parametrize("header", [{"alg": "ES256"}, {"alg": "ES256", "kid": ""}])
+def test_a_token_that_names_no_key_is_refused(server, header):
+    service, jwks = server
+    claims = verify_attestation(_token(service), jwks, proof_ref=PROOF)
+    token = jwt.encode(claims, service._key_pair._private_key, algorithm="ES256", headers=header)
+
+    with pytest.raises(AttestationError, match="no key"):
+        verify_attestation(token, jwks, proof_ref=PROOF)
+
+
+@pytest.mark.parametrize("jwks", [{}, {"keys": "x"}, []])
+def test_a_jwks_without_a_key_list_is_refused(server, jwks):
+    service, _ = server
+    token = _token(service)
+
+    with pytest.raises(AttestationError, match="no keys"):
+        verify_attestation(token, jwks, proof_ref=PROOF)
+
+
+def test_an_unusable_jwks_key_is_refused(server):
+    service, jwks = server
+    broken = {"keys": [{**jwks["keys"][0], "x": "not-a-coordinate"}]}
+    token = _token(service)
+
+    with pytest.raises(AttestationError, match="unusable"):
+        verify_attestation(token, broken, proof_ref=PROOF)
+
+
+@pytest.mark.parametrize("proof_ref", ["", None])
+def test_an_answer_without_a_proof_ref_cannot_be_bound(server, proof_ref):
+    service, jwks = server
+    token = _token(service)
+
+    with pytest.raises(AttestationError, match="no proof_ref"):
+        verify_attestation(token, jwks, proof_ref=proof_ref)
 
 
 # ---------------------------------------------------------------- the result type
@@ -202,23 +280,127 @@ def test_the_client_refuses_a_live_answer_whose_proof_ref_was_changed(live):
         live.verify_attestation(answer)
 
 
+def _client_with_cached(jwks_cached, age, handler):
+    """A client holding ``jwks_cached`` as fetched ``age`` seconds ago."""
+    client = QWEDClient(api_key="k", base_url="http://qwed.test")
+    client._client = httpx.Client(transport=httpx.MockTransport(handler))
+    client._jwks = jwks_cached
+    client._jwks_fetched_at = time.monotonic() - age
+    return client
+
+
 def test_the_client_fetches_the_jwks_again_when_the_kid_is_unknown(server):
+    # The cache is older than the 30 s minimum (an old key; the server has
+    # rotated): one more fetch picks up the new key.
     service, jwks = server
     calls = []
 
     def handler(request):
         calls.append(request.url.path)
-        # The first fetch is stale (an old key); the second has the new one.
-        body = {"keys": []} if len(calls) == 1 else jwks
-        return httpx.Response(200, json=body)
+        return httpx.Response(200, json=jwks)
 
-    client = QWEDClient(api_key="k", base_url="http://qwed.test")
-    client._client = httpx.Client(transport=httpx.MockTransport(handler))
-
+    client = _client_with_cached({"keys": []}, 60, handler)
     claims = client.verify_attestation({"attestation": _token(service), "proof_ref": PROOF})
 
     assert claims["qwed"]["proof_hash"] == PROOF
-    assert calls == ["/.well-known/jwks.json", "/.well-known/jwks.json"]
+    assert calls == ["/.well-known/jwks.json"]
+
+
+def test_an_unknown_kid_does_not_refetch_a_fresh_jwks(server):
+    # A stream of tokens with made-up kids cannot turn each into a request
+    # (#512 review): within 30 s of the last fetch, no refetch.
+    service, _ = server
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json={"keys": []})
+
+    client = _client_with_cached({"keys": []}, 5, handler)
+    answer = {"attestation": _token(service), "proof_ref": PROOF}
+
+    for _ in range(3):
+        with pytest.raises(UnknownKeyError):
+            client.verify_attestation(answer)
+    assert calls == []
+
+
+def _replaced_key(service, jwks):
+    """The JWKS a server published before it restarted with a new
+    ephemeral key: the same kid, another key (#512 review)."""
+    other = AttestationService(key_continuity_policy="configured", private_key_pem=_pem())
+    old = {**other.get_issuer_info()["public_keys"][0], "kid": service.key_id, "alg": "ES256", "use": "sig"}
+    return {"keys": [old]}
+
+
+def test_the_client_fetches_the_jwks_again_when_the_kids_key_was_replaced(server):
+    service, jwks = server
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json=jwks)
+
+    client = _client_with_cached(_replaced_key(service, jwks), 60, handler)
+    claims = client.verify_attestation({"attestation": _token(service), "proof_ref": PROOF})
+
+    assert claims["qwed"]["proof_hash"] == PROOF
+    assert calls == ["/.well-known/jwks.json"]
+
+
+def test_a_signature_failure_does_not_refetch_a_fresh_jwks(server):
+    # A stream of forged tokens under a real kid cannot turn each into a
+    # request either.
+    service, jwks = server
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json=jwks)
+
+    client = _client_with_cached(_replaced_key(service, jwks), 5, handler)
+    answer = {"attestation": _token(service), "proof_ref": PROOF}
+
+    for _ in range(3):
+        with pytest.raises(KeyMismatchError):
+            client.verify_attestation(answer)
+    assert calls == []
+
+
+@pytest.mark.parametrize("answer", [{"proof_ref": PROOF}, {"attestation": "t"}])
+def test_the_client_checks_the_answer_before_fetching_keys(answer):
+    # A missing token or proof_ref is an AttestationError, not a network
+    # error from the JWKS fetch (#512 review).
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(503)
+
+    client = _client_with_cached(None, 0, handler)
+
+    with pytest.raises(AttestationError, match="^no "):
+        client.verify_attestation(answer)
+    assert calls == []
+
+
+def test_the_client_takes_only_a_result_or_a_response_dict():
+    client = QWEDClient(api_key="k", base_url="http://qwed.test")
+
+    with pytest.raises(TypeError):
+        client.verify_attestation("a token on its own")
+
+
+def test_a_consensus_answer_keeps_its_token():
+    # verify_consensus builds its result by hand; it carries the token too
+    # (#512 review).
+    data = {"meets_requirement": True, "status": "VERIFIED", "attestation": "t", "proof_ref": PROOF}
+    client = QWEDClient(api_key="k", base_url="http://qwed.test")
+    client._client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=data)))
+
+    result = client.verify_consensus("2+2")
+
+    assert (result.attestation, result.proof_ref) == ("t", PROOF)
 
 
 def test_the_client_reuses_the_jwks_within_its_lifetime(server):
@@ -249,3 +431,89 @@ def test_the_async_client_verifies_too(server):
             return await client.verify_attestation({"attestation": _token(service), "proof_ref": PROOF}, query=QUERY)
 
     assert asyncio.run(run())["qwed"]["proof_hash"] == PROOF
+
+
+def _async_run(jwks_cached, age, handler, call):
+    """Run ``call(client)`` on an async client holding ``jwks_cached`` as
+    fetched ``age`` seconds ago."""
+    async def run():
+        async with QWEDAsyncClient(api_key="k", base_url="http://qwed.test") as client:
+            await client._client.aclose()
+            client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            client._jwks = jwks_cached
+            client._jwks_fetched_at = time.monotonic() - age
+            return await call(client)
+
+    return asyncio.run(run())
+
+
+def test_the_async_client_refetches_a_stale_jwks_for_an_unknown_kid(server):
+    service, jwks = server
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json=jwks)
+
+    answer = {"attestation": _token(service), "proof_ref": PROOF}
+    claims = _async_run({"keys": []}, 60, handler, lambda client: client.verify_attestation(answer))
+
+    assert claims["qwed"]["proof_hash"] == PROOF
+    assert calls == ["/.well-known/jwks.json"]
+
+
+def test_the_async_client_does_not_refetch_a_fresh_jwks(server):
+    service, _ = server
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json={"keys": []})
+
+    answer = {"attestation": _token(service), "proof_ref": PROOF}
+
+    with pytest.raises(UnknownKeyError):
+        _async_run({"keys": []}, 5, handler, lambda client: client.verify_attestation(answer))
+    assert calls == []
+
+
+def test_the_async_client_refetches_when_the_kids_key_was_replaced(server):
+    service, jwks = server
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json=jwks)
+
+    answer = {"attestation": _token(service), "proof_ref": PROOF}
+    claims = _async_run(_replaced_key(service, jwks), 60, handler, lambda client: client.verify_attestation(answer))
+
+    assert claims["qwed"]["proof_hash"] == PROOF
+    assert calls == ["/.well-known/jwks.json"]
+
+
+def test_the_async_client_checks_the_answer_before_fetching_keys():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(503)
+
+    with pytest.raises(AttestationError, match="no proof_ref"):
+        _async_run(None, 0, handler, lambda client: client.verify_attestation({"attestation": "t"}))
+    assert calls == []
+
+
+def test_the_async_client_needs_its_context_to_fetch_keys():
+    client = QWEDAsyncClient(api_key="k", base_url="http://qwed.test")
+
+    with pytest.raises(RuntimeError, match="async with"):
+        asyncio.run(client.get_jwks())
+
+
+def test_an_async_consensus_answer_keeps_its_token():
+    data = {"meets_requirement": True, "status": "VERIFIED", "attestation": "t", "proof_ref": PROOF}
+
+    result = _async_run(None, 0, lambda r: httpx.Response(200, json=data), lambda client: client.verify_consensus("2+2"))
+
+    assert (result.attestation, result.proof_ref) == ("t", PROOF)

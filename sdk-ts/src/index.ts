@@ -35,6 +35,7 @@ export {
 // Verify attestations (#319)
 export {
     AttestationError,
+    KeyMismatchError,
     UnknownKeyError,
     verifyAttestation,
     statementHash,

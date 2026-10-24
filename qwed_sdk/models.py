@@ -45,8 +45,6 @@ class VerificationResult:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "VerificationResult":
-        attestation = data.get("attestation")
-        proof_ref = data.get("proof_ref")
         return cls(
             status=data.get("status", "UNKNOWN"),
             is_verified=data.get("is_verified", data.get("is_valid", False)),
@@ -54,9 +52,19 @@ class VerificationResult:
             error=data.get("error"),
             provider_used=data.get("provider_used"),
             latency_ms=data.get("latency_ms", 0.0),
-            attestation=attestation if isinstance(attestation, str) and attestation else None,
-            proof_ref=proof_ref if isinstance(proof_ref, str) and proof_ref else None,
+            **token_fields(data),
         )
+
+
+def token_fields(data: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    """A response's ``attestation`` and ``proof_ref``, each a non-empty
+    string or None, for every VerificationResult built from a server
+    response (#319)."""
+    fields: Dict[str, Optional[str]] = {}
+    for name in ("attestation", "proof_ref"):
+        value = data.get(name)
+        fields[name] = value if isinstance(value, str) and value else None
+    return fields
 
 
 @dataclass
