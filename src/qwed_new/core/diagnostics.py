@@ -527,6 +527,22 @@ class DiagnosticResult:
                 "non-VERIFIED states are non-authoritative by construction."
             )
 
+    def with_attestation(self, token: str) -> "DiagnosticResult":
+        """This result, carrying ``token`` as its attestation (#319).
+
+        For the trust step only, once the token has passed its checks; the
+        constructor still refuses a token on a result that is not VERIFIED.
+        Built field by field rather than with dataclasses.replace, so a
+        field added to this class is added here too.
+        """
+        return DiagnosticResult(
+            status=self.status,
+            agent_message=self.agent_message,
+            developer_fields=self.developer_fields,
+            proof_ref=self.proof_ref,
+            attestation=token,
+        )
+
     @property
     def is_verified(self) -> bool:
         """True only when status is VERIFIED (which implies proof_ref is not None)."""

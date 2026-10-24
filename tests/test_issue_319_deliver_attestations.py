@@ -243,3 +243,24 @@ def test_a_caller_diagnostic_never_brings_its_own_token():
 
     assert "attestation" not in evidence
     assert evidence["developer_fields"]["caller_supplied"]["developer_fields"] == {"attestation": "forged"}
+
+
+def test_with_attestation_keeps_every_other_field():
+    # Built field by field (Sonar could not type dataclasses.replace), so a
+    # field added to DiagnosticResult and not copied there fails this.
+    import dataclasses
+
+    original = _verified(note="n")
+    delivered = original.with_attestation("token")
+
+    assert delivered.attestation == "token"
+    for f in dataclasses.fields(DiagnosticResult):
+        if f.name != "attestation":
+            assert getattr(delivered, f.name) == getattr(original, f.name), f.name
+
+
+def test_with_attestation_still_refuses_a_result_that_is_not_verified():
+    unverified = DiagnosticResult(status=DiagnosticStatus.UNVERIFIABLE, agent_message="m")
+
+    with pytest.raises(ValueError):
+        unverified.with_attestation("token")

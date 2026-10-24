@@ -18,7 +18,6 @@ response delivers it and a consumer can check it against the server's JWKS
 
 import logging
 import math
-from dataclasses import replace
 
 from qwed_new.core.attestation import AttestationStatus, create_verification_attestation
 from qwed_new.core.diagnostics import (
@@ -108,5 +107,4 @@ def attest_and_enforce(dr: DiagnosticResult, *, engine: str, query: str) -> Diag
     # Delivered with the result, so a consumer can check the verdict against
     # the server's JWKS (#319). Only a token that has just passed the checks
     # above is attached.
-    delivered: DiagnosticResult = replace(enforced, attestation=attestation.token)
-    return delivered
+    return enforced.with_attestation(attestation.token)
