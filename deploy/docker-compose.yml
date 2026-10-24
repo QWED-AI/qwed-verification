@@ -35,6 +35,9 @@ services:
       # one: the PEM, or the path of a key file mounted into the container.
       - QWED_SIGNING_KEY=${QWED_SIGNING_KEY:-}
       - QWED_SIGNING_KEY_FILE=${QWED_SIGNING_KEY_FILE:-}
+      # How long an attestation stays valid, in seconds (#319): unset is 24
+      # hours; 60 to 2592000 (30 days), anything else stops the server.
+      - QWED_ATTESTATION_TTL_SECONDS=${QWED_ATTESTATION_TTL_SECONDS:-}
       # All-tenant metrics operator allowlist (issue #337): user IDs permitted
       # to read /metrics and /metrics/prometheus. Unset = deny every caller,
       # including the Prometheus scraper. Set it to the scraper identity's

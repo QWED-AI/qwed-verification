@@ -19,7 +19,8 @@ All notable changes to the QWED Protocol will be documented in this file.
   - Revocation is per process, so the server's tokens are short-lived:
     `QWED_ATTESTATION_TTL_SECONDS`, 24 hours by default (was 365 days), from
     60 seconds to 30 days. Rotating the key ends every token issued before.
-    An unusable value stops the server at startup.
+    An unusable value stops the server at startup. `deploy/docker-compose.yml`
+    passes it through, and the Kubernetes configmap sets the default.
   - Only the trust step attaches a token: a result never takes one from
     input, and developer fields cannot put one in a response.
   - Audit rows store the result as returned, so a VERIFIED row includes its
