@@ -1,6 +1,7 @@
 {
   "admission": "ADMIT",
   "agent_message": "The SQL query passed verification and is safe to execute.",
+  "attestation": "SAMPLE-ATTESTATION: an ES256 JWT in a live response; see README",
   "complexity": {
     "aggregate_count": 0,
     "column_count": 1,

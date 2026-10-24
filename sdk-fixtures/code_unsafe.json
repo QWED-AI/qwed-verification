@@ -1,6 +1,7 @@
 {
   "admission": "BLOCKED",
   "agent_message": "The code failed security verification and is not safe to use.",
+  "attestation": "SAMPLE-ATTESTATION: an ES256 JWT in a live response; see README",
   "constraint_id": "code_verifier.code_unsafe",
   "critical_count": 1,
   "developer_fields": {

@@ -21,3 +21,10 @@ fails if the server's answers to the deterministic requests drift from them.
 
 The natural-language, logic and fact answers depend on the configured LLM
 provider, so the Python test checks only their envelope rules.
+
+Every `VERIFIED` answer carries `attestation`, its signed token (an ES256
+JWT, #319). Here it is a placeholder string, not a token: the fixtures pin
+where the field is and that it is a string, and a real JWT in the repository
+reads as a leaked secret to secret scanners. Tests that need a real token
+issue one at test time (`tests/test_issue_319_deliver_attestations.py`) and
+verify it against `/.well-known/jwks.json`.

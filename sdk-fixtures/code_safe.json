@@ -1,6 +1,7 @@
 {
   "admission": "ADMIT",
   "agent_message": "The code passed security verification and is safe to use.",
+  "attestation": "SAMPLE-ATTESTATION: an ES256 JWT in a live response; see README",
   "constraint_id": "code_verifier.code_safe",
   "critical_count": 0,
   "developer_fields": {

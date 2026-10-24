@@ -1,6 +1,7 @@
 {
   "admission": "BLOCKED",
   "agent_message": "Identity is false",
+  "attestation": "SAMPLE-ATTESTATION: an ES256 JWT in a live response; see README",
   "developer_fields": {
     "is_valid": false,
     "left_side": "4",

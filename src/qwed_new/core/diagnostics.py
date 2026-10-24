@@ -493,11 +493,25 @@ class DiagnosticResult:
     agent_message: str
     developer_fields: Dict[str, Any] = field(default_factory=dict)
     proof_ref: Optional[str] = None
+    # The signed attestation (an ES256 JWT) for a VERIFIED result, set by the
+    # trust step once it is enforced (core/trust.py) and delivered with the
+    # response, so a consumer can check it against the server's JWKS (#319).
+    # Never read from input: from_dict leaves it out.
+    attestation: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.agent_message or not self.agent_message.strip():
             raise ValueError(
                 "agent_message must be non-empty — Layer 1 diagnostics are mandatory"
+            )
+
+        if self.attestation is not None and (
+            self.status is not DiagnosticStatus.VERIFIED
+            or not isinstance(self.attestation, str)
+            or not self.attestation
+        ):
+            raise ValueError(
+                "attestation is a non-empty token, and only a VERIFIED result carries one"
             )
 
         if self.status is DiagnosticStatus.VERIFIED and not self.proof_ref:
@@ -512,6 +526,22 @@ class DiagnosticResult:
                 f"{self.status.value} status requires proof_ref is None — "
                 "non-VERIFIED states are non-authoritative by construction."
             )
+
+    def with_attestation(self, token: str) -> "DiagnosticResult":
+        """This result, carrying ``token`` as its attestation (#319).
+
+        For the trust step only, once the token has passed its checks; the
+        constructor still refuses a token on a result that is not VERIFIED.
+        Built field by field rather than with dataclasses.replace, so a
+        field added to this class is added here too.
+        """
+        return DiagnosticResult(
+            status=self.status,
+            agent_message=self.agent_message,
+            developer_fields=self.developer_fields,
+            proof_ref=self.proof_ref,
+            attestation=token,
+        )
 
     @property
     def is_verified(self) -> bool:
@@ -579,20 +609,26 @@ class DiagnosticResult:
                 item.to_dict() if isinstance(item, AdvisoryCheck) else item
                 for item in checks
             ]
-        return {
+        serialized = {
             "status": self.status.value,
             "agent_message": self.agent_message,
             "developer_fields": fields,
             "proof_ref": self.proof_ref,
             "is_authoritative": self.is_authoritative,
         }
+        # Only where there is one, so other results keep their shape (#319).
+        if self.attestation is not None:
+            serialized["attestation"] = self.attestation
+        return serialized
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "DiagnosticResult":
         """Deserialize from dict (e.g., API response, attestation claim).
 
         Tolerates status as str or DiagnosticStatus. Tolerates missing
-        developer_fields (defaults to empty dict).
+        developer_fields (defaults to empty dict). An ``attestation`` in the
+        input is not read: a token is only ever attached by the trust step
+        that issued and checked it (#319).
 
         Raises:
             ValueError: If agent_message is missing or empty — Layer 1
@@ -1146,8 +1182,11 @@ def enforce_trust_decision(
     return result
 
 
+# "attestation" too, so developer fields, which a caller can author (#321),
+# never put a token in a response the trust step did not issue (#319).
 DIAGNOSTIC_RESPONSE_KEYS = frozenset({
     "status", "agent_message", "developer_fields", "proof_ref", "is_authoritative",
+    "attestation",
 })
 
 

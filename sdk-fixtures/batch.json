@@ -12,6 +12,7 @@
       "result": {
         "admission": "ADMIT",
         "agent_message": "Identity verified",
+        "attestation": "SAMPLE-ATTESTATION: an ES256 JWT in a live response; see README",
         "developer_fields": {
           "diff": "0",
           "is_valid": true,

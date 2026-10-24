@@ -55,6 +55,7 @@ from qwed_new.auth.security import hash_api_key, is_api_key_live, validate_api_k
 from qwed_new.api.secret_scanning_routes import router as secret_scanning_router
 from qwed_new.api.compliance_routes import router as compliance_router
 from qwed_new.api.security_routes import router as security_router
+from qwed_new.api.attestation_routes import router as attestation_router
 
 TenantDependency = Annotated[TenantContext, Depends(get_current_tenant)]
 SessionDependency = Annotated[Session, Depends(get_session)]
@@ -297,6 +298,7 @@ app.include_router(verification_context_router)
 app.include_router(secret_scanning_router)
 app.include_router(compliance_router)
 app.include_router(security_router)
+app.include_router(attestation_router)
 
 # Verified leak reports -> auto-revoke + owner notify (#368). Assigned here
 # (not import-time in the routes module) so the production wiring is explicit

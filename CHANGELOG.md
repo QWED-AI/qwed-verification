@@ -6,6 +6,25 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Security
 
+- **Attestations are delivered, with a JWKS to verify them (#319).** Every
+  VERIFIED result was signed and checked inside the server, then the token
+  was dropped, so a consumer could not tell a genuine verdict from a forged
+  one.
+  - A VERIFIED response, and a VERIFIED batch item's result, carries its
+    token as `attestation`, an ES256 JWT binding the status, the
+    `proof_ref` and the statement (the query, or for natural language the
+    translated expression). Other responses are unchanged.
+  - `GET /.well-known/jwks.json` (public) publishes the key that verifies
+    it; the token header's `kid` names the key.
+  - Revocation is per process, so the server's tokens are short-lived:
+    `QWED_ATTESTATION_TTL_SECONDS`, 24 hours by default (was 365 days), from
+    60 seconds to 30 days. Rotating the key ends every token issued before.
+    An unusable value stops the server at startup. `deploy/docker-compose.yml`
+    passes it through, and the Kubernetes configmap sets the default.
+  - Only the trust step attaches a token: a result never takes one from
+    input, and developer fields cannot put one in a response.
+  - Audit rows store the result as returned, so a VERIFIED row includes its
+    token.
 - **A configured attestation signing key (#319, #188).** Every VERIFIED
   result is signed, but with a key generated per process, so after a restart
   or on another replica no token could be verified. Set
