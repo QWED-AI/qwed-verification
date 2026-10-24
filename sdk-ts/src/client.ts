@@ -16,7 +16,18 @@ import {
     AgentRegistration,
     AgentVerificationRequest,
     AgentVerificationResponse,
+    AttestationClaims,
 } from './types';
+import {
+    DEFAULT_ISSUER,
+    JWKS_PATH,
+    Jwks,
+    UnknownKeyError,
+    verifyAttestation,
+} from './attestation';
+
+// How long a fetched JWKS is reused, as the server's Cache-Control says.
+const JWKS_MAX_AGE_MS = 300_000;
 
 // ============================================================================
 // Errors
@@ -57,6 +68,8 @@ export class QWEDClient {
     private apiKey: string;
     private timeout: number;
     private headers: Record<string, string>;
+    private jwks?: Jwks;
+    private jwksFetchedAt = 0;
 
     constructor(options: QWEDClientOptions) {
         this.apiKey = options.apiKey;
@@ -67,6 +80,60 @@ export class QWEDClient {
             'X-API-Key': this.apiKey,
             ...options.headers,
         };
+    }
+
+    // --------------------------------------------------------------------------
+    // Attestations (#319)
+    // --------------------------------------------------------------------------
+
+    /**
+     * The server's attestation keys (`GET /.well-known/jwks.json`, public),
+     * reused for five minutes as the server's Cache-Control says.
+     */
+    async getJwks(refresh = false): Promise<Jwks> {
+        const stale = Date.now() - this.jwksFetchedAt > JWKS_MAX_AGE_MS;
+        if (refresh || !this.jwks || stale) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+            try {
+                const response = await fetch(`${this.baseUrl}${JWKS_PATH}`, { signal: controller.signal });
+                if (!response.ok) {
+                    throw new QWEDError('Attestation keys unavailable', 'QWED-ATTEST-001', response.status);
+                }
+                this.jwks = await response.json() as Jwks;
+                this.jwksFetchedAt = Date.now();
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        }
+        return this.jwks as Jwks;
+    }
+
+    /**
+     * Verify an answer's attestation against this server's keys and return
+     * its claims; throws AttestationError if it does not verify or is not
+     * this answer's. `query`, when given, must be the statement the verdict
+     * covers. To verify against keys you pinned, call `verifyAttestation`
+     * with your JWKS.
+     */
+    async verifyAttestation(
+        result: Pick<VerificationResponse, 'attestation' | 'proof_ref'>,
+        query?: string,
+        options: { issuer?: string; leewaySeconds?: number } = {},
+    ): Promise<AttestationClaims> {
+        const verify = async (jwks: Jwks) => verifyAttestation(result.attestation as string, jwks, {
+            proofRef: result.proof_ref as string,
+            query,
+            issuer: options.issuer ?? DEFAULT_ISSUER,
+            leewaySeconds: options.leewaySeconds,
+        });
+        try {
+            return await verify(await this.getJwks());
+        } catch (error) {
+            if (!(error instanceof UnknownKeyError)) throw error;
+            // The key may have rotated since the JWKS was cached: once more.
+            return verify(await this.getJwks(true));
+        }
     }
 
     // --------------------------------------------------------------------------
@@ -449,6 +516,10 @@ export function parseVerificationResponse(body: unknown): VerificationResponse {
         response.admission = KNOWN_ADMISSIONS.has(body.admission)
             ? (body.admission as Admission)
             : Admission.Unknown;
+    }
+    // A token is a non-empty string or nothing (#319).
+    if (typeof body.attestation !== 'string' || body.attestation.length === 0) {
+        delete response.attestation;
     }
     response.verified = isAdmitted(response);
     Object.defineProperty(response, 'toJSON', {

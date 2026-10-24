@@ -91,6 +91,17 @@ func TestContractEnvelopeDetails(t *testing.T) {
 	if verified.IsAuthoritative == nil || !*verified.IsAuthoritative {
 		t.Error("a deterministic proof should be authoritative")
 	}
+	// A VERIFIED answer carries its attestation in the typed field (#319);
+	// a BLOCKED one has none.
+	if verified.Attestation == "" {
+		t.Error("attestation: missing on a VERIFIED answer")
+	}
+	if _, ok := verified.Extra["attestation"]; ok {
+		t.Error("attestation is in Extra; it is an envelope field")
+	}
+	if ambiguous := response(t, "math_ambiguous"); ambiguous.Attestation != "" {
+		t.Errorf("attestation on a BLOCKED answer: %q", ambiguous.Attestation)
+	}
 
 	// Endpoint fields go to Extra; envelope fields do not.
 	falseIdentity := response(t, "math_false")

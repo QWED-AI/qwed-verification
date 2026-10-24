@@ -42,6 +42,7 @@ Every verification returns the server's DiagnosticResult envelope:
 | `raw_status` | The server's status text exactly as sent, such as `SAT` where `status` is `Unknown`; never used for admission |
 | `admission` | `Some(Admit)` or `Some(Blocked)` where the endpoint decides; `None` where it does not |
 | `proof_ref` | Set only when `status` is `Verified` |
+| `attestation` | On a `Verified` answer, the server's signed token: an ES256 JWT whose header `kid` names a key at `GET /.well-known/jwks.json`, and whose `qwed.proof_hash` claim is the answer's `proof_ref`. This crate keeps it but does not verify it yet; the Python and TypeScript SDKs do. |
 | `agent_message`, `developer_fields`, `is_authoritative`, `constraint_id` | Explanation and detail |
 | `extra` | Endpoint-specific fields, such as `is_valid` or `issues` |
 

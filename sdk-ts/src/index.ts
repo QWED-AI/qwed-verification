@@ -32,3 +32,14 @@ export {
     parseAttestation,
 } from './client';
 
+// Verify attestations (#319)
+export {
+    AttestationError,
+    UnknownKeyError,
+    verifyAttestation,
+    statementHash,
+    DEFAULT_ISSUER,
+    JWKS_PATH,
+} from './attestation';
+export type { Jwk, Jwks, VerifyAttestationOptions } from './attestation';
+

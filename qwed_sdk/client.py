@@ -6,10 +6,30 @@ Provides synchronous and asynchronous clients for the QWED API.
 
 import httpx
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple, Union
 import os
 
+from qwed_sdk.attestation import (
+    DEFAULT_ISSUER,
+    JWKS_PATH,
+    UnknownKeyError,
+    verify_attestation,
+)
 from qwed_sdk.models import VerificationResult, BatchResult
+
+# How long a fetched JWKS is reused, as the server's Cache-Control says.
+_JWKS_MAX_AGE_SECONDS = 300.0
+
+
+def _attestation_of(
+    result: Union[VerificationResult, Dict[str, Any]],
+) -> Tuple[Optional[str], Optional[str]]:
+    """The token and proof_ref of an answer, typed or as the response dict."""
+    if isinstance(result, VerificationResult):
+        return result.attestation, result.proof_ref
+    if isinstance(result, dict):
+        return result.get("attestation"), result.get("proof_ref")
+    raise TypeError("expected a VerificationResult or a response dict")
 
 
 class QWEDClient:
@@ -42,7 +62,47 @@ class QWEDClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._client = httpx.Client(timeout=timeout)
-    
+        self._jwks: Optional[Dict[str, Any]] = None
+        self._jwks_fetched_at = 0.0
+
+    def get_jwks(self, refresh: bool = False) -> Dict[str, Any]:
+        """The server's attestation keys (GET /.well-known/jwks.json, no API
+        key), reused for five minutes as the server's Cache-Control says."""
+        stale = time.monotonic() - self._jwks_fetched_at > _JWKS_MAX_AGE_SECONDS
+        if refresh or self._jwks is None or stale:
+            response = self._client.get(f"{self.base_url}{JWKS_PATH}")
+            response.raise_for_status()
+            self._jwks = response.json()
+            self._jwks_fetched_at = time.monotonic()
+        return self._jwks
+
+    def verify_attestation(
+        self,
+        result: Union[VerificationResult, Dict[str, Any]],
+        query: Optional[str] = None,
+        *,
+        issuer: str = DEFAULT_ISSUER,
+        leeway: int = 0,
+    ) -> Dict[str, Any]:
+        """Verify an answer's attestation against this server's keys and
+        return its claims; raise qwed_sdk.attestation.AttestationError if it
+        does not verify or is not this answer's (#319).
+
+        ``query``, when given, must be the statement the verdict covers. To
+        verify against keys you pinned, use
+        qwed_sdk.attestation.verify_attestation with your JWKS.
+        """
+        token, proof_ref = _attestation_of(result)
+        try:
+            return verify_attestation(
+                token, self.get_jwks(), proof_ref=proof_ref, query=query, issuer=issuer, leeway=leeway,
+            )
+        except UnknownKeyError:
+            # The key may have rotated since the JWKS was cached: once more.
+            return verify_attestation(
+                token, self.get_jwks(refresh=True), proof_ref=proof_ref, query=query, issuer=issuer, leeway=leeway,
+            )
+
     def _headers(self) -> Dict[str, str]:
         return {
             "X-API-Key": self.api_key,
@@ -431,7 +491,40 @@ class QWEDAsyncClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._client: Optional[httpx.AsyncClient] = None
-    
+        self._jwks: Optional[Dict[str, Any]] = None
+        self._jwks_fetched_at = 0.0
+
+    async def get_jwks(self, refresh: bool = False) -> Dict[str, Any]:
+        """The server's attestation keys; see QWEDClient.get_jwks."""
+        if not self._client:
+            raise RuntimeError("Client not initialized. Use 'async with' context.")
+        stale = time.monotonic() - self._jwks_fetched_at > _JWKS_MAX_AGE_SECONDS
+        if refresh or self._jwks is None or stale:
+            response = await self._client.get(f"{self.base_url}{JWKS_PATH}")
+            response.raise_for_status()
+            self._jwks = response.json()
+            self._jwks_fetched_at = time.monotonic()
+        return self._jwks
+
+    async def verify_attestation(
+        self,
+        result: Union[VerificationResult, Dict[str, Any]],
+        query: Optional[str] = None,
+        *,
+        issuer: str = DEFAULT_ISSUER,
+        leeway: int = 0,
+    ) -> Dict[str, Any]:
+        """Verify an answer's attestation; see QWEDClient.verify_attestation."""
+        token, proof_ref = _attestation_of(result)
+        try:
+            return verify_attestation(
+                token, await self.get_jwks(), proof_ref=proof_ref, query=query, issuer=issuer, leeway=leeway,
+            )
+        except UnknownKeyError:
+            return verify_attestation(
+                token, await self.get_jwks(refresh=True), proof_ref=proof_ref, query=query, issuer=issuer, leeway=leeway,
+            )
+
     async def __aenter__(self):
         self._client = httpx.AsyncClient(timeout=self.timeout)
         return self

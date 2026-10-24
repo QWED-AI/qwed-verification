@@ -152,6 +152,13 @@ export interface VerificationResponse {
     admission?: Admission;
     /** Set only when `status` is VERIFIED. */
     proof_ref?: string | null;
+    /**
+     * The server's signed attestation, an ES256 JWT, on a VERIFIED answer
+     * that passed its trust step (#319). Check it with
+     * `client.verifyAttestation(result)` or `verifyAttestation`. Absent
+     * otherwise, and never a non-string.
+     */
+    attestation?: string;
     agent_message?: string | null;
     is_authoritative?: boolean | null;
     constraint_id?: string | null;

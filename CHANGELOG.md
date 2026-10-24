@@ -6,6 +6,24 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Security
 
+- **The SDKs read attestations, and the Python and TypeScript SDKs verify
+  them (#319).** Every VERIFIED answer carries its attestation, but no SDK
+  read it, so no client could tell a genuine verdict from a forged one.
+  - Python (`VerificationResult.attestation`, `.proof_ref`), TypeScript
+    (`VerificationResponse.attestation`), Go (`VerificationResponse.Attestation`)
+    and Rust (`VerificationResponse::attestation`) have a typed field; Go
+    and Rust no longer put the token among the endpoint's own fields.
+  - Python (`qwed_sdk.verify_attestation`, `QWEDClient.verify_attestation`)
+    and TypeScript (`verifyAttestation`, `client.verifyAttestation`) verify
+    it: the ES256 signature with the key its `kid` names in the server's
+    JWKS, the issuer and expiry, a VERIFIED status, and that it is this
+    answer's token (`proof_hash` is the answer's `proof_ref`), and
+    optionally the statement's hash. Any algorithm but ES256 is refused
+    before a key is used. The clients fetch `/.well-known/jwks.json`, reuse
+    it for five minutes, and fetch it again once for an unknown `kid`.
+  - The TypeScript verifier has no dependency (WebCrypto, Node 18+ and
+    browsers). Go and Rust verifiers follow.
+
 - **Attestations are delivered, with a JWKS to verify them (#319).** Every
   VERIFIED result was signed and checked inside the server, then the token
   was dropped, so a consumer could not tell a genuine verdict from a forged

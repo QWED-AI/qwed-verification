@@ -149,7 +149,11 @@ type VerificationResponse struct {
 	// admitted.
 	Admission Admission `json:"admission,omitempty"`
 	// ProofRef is set only when Status is StatusVerified.
-	ProofRef        string                 `json:"proof_ref,omitempty"`
+	ProofRef string `json:"proof_ref,omitempty"`
+	// Attestation is the server's signed attestation, an ES256 JWT, on a
+	// VERIFIED answer that passed its trust step (#319). Verify it against
+	// the server's keys at /.well-known/jwks.json. Empty otherwise.
+	Attestation     string                 `json:"attestation,omitempty"`
 	AgentMessage    string                 `json:"agent_message,omitempty"`
 	IsAuthoritative *bool                  `json:"is_authoritative,omitempty"`
 	ConstraintID    string                 `json:"constraint_id,omitempty"`
@@ -173,6 +177,7 @@ type VerificationResponse struct {
 var envelopeFields = map[string]bool{
 	"status": true, "admission": true, "proof_ref": true, "agent_message": true,
 	"is_authoritative": true, "constraint_id": true, "developer_fields": true,
+	"attestation": true,
 }
 
 // decodeKeepingNumbers decodes with UseNumber, so a JSON number in an
