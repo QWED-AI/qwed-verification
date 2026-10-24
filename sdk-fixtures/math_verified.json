@@ -1,7 +1,7 @@
 {
   "admission": "ADMIT",
   "agent_message": "Identity is true",
-  "attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImRpZDpxd2VkOm5vZGU6bG9jYWwjc2lnbmluZy1rZXktdjEiLCJ0eXAiOiJxd2VkLWF0dGVzdGF0aW9uK2p3dCJ9.eyJpc3MiOiJkaWQ6cXdlZDpub2RlOmxvY2FsIiwic3ViIjoic2hhMjU2OmU5M2RmZjBkMTA3NmI1MzdjZDFiZDY1OWQxNGJiNzdkNWZkNDdkYjEzMjA0YTIyN2NiM2NkNjZlODFkZDQ1NGMiLCJpYXQiOjE3OTI4MDY0ODEsImV4cCI6MTc5Mjg5Mjg4MSwianRpIjoiYXR0X2I1ZWFiZTI2N2I4MCIsInF3ZWQiOnsidmVyc2lvbiI6IjEuMCIsInJlc3VsdCI6eyJzdGF0dXMiOiJWRVJJRklFRCIsInZlcmlmaWVkIjp0cnVlLCJlbmdpbmUiOiJtYXRoIiwiY29uZmlkZW5jZSI6MS4wfSwicXVlcnlfaGFzaCI6InNoYTI1NjplOTNkZmYwZDEwNzZiNTM3Y2QxYmQ2NTlkMTRiYjc3ZDVmZDQ3ZGIxMzIwNGEyMjdjYjNjZDY2ZTgxZGQ0NTRjIiwicHJvb2ZfaGFzaCI6InNoYTI1NjphNWYzZWIxMTc1NDM3ZDUwN2QyOGJlYTFkMmJjMjI5Y2U1MThmZDBlNGViODYxYzVmNjllOGNjZWY4YTBlOGVjIn19.B5zOywhpWOtJ_Alhfate4A6RmjgUTiBB8gMLfXCpHcwKKmNPIrXyMxc-HcL3YC29p9Go52ZKGDNqML37h-AUzw",
+  "attestation": "SAMPLE-ATTESTATION: an ES256 JWT in a live response; see README",
   "developer_fields": {
     "is_valid": true,
     "left_side": "4",

@@ -1,7 +1,7 @@
 {
   "admission": "BLOCKED",
   "agent_message": "The code failed security verification and is not safe to use.",
-  "attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImRpZDpxd2VkOm5vZGU6bG9jYWwjc2lnbmluZy1rZXktdjEiLCJ0eXAiOiJxd2VkLWF0dGVzdGF0aW9uK2p3dCJ9.eyJpc3MiOiJkaWQ6cXdlZDpub2RlOmxvY2FsIiwic3ViIjoic2hhMjU2OjI2ZjRjZGM3ODg2NjcyMTIwNTg4YWZkYWRiNjUxYTRlMjEyNGZiNzYxZWE2MWQ5MGI1Y2JhZjI1MzIzNTg3OWYiLCJpYXQiOjE3OTI4MDY0ODIsImV4cCI6MTc5Mjg5Mjg4MiwianRpIjoiYXR0XzZmMDczMWFmMGQ0NiIsInF3ZWQiOnsidmVyc2lvbiI6IjEuMCIsInJlc3VsdCI6eyJzdGF0dXMiOiJWRVJJRklFRCIsInZlcmlmaWVkIjpmYWxzZSwiZW5naW5lIjoiY29kZSIsImNvbmZpZGVuY2UiOjEuMH0sInF1ZXJ5X2hhc2giOiJzaGEyNTY6MjZmNGNkYzc4ODY2NzIxMjA1ODhhZmRhZGI2NTFhNGUyMTI0ZmI3NjFlYTYxZDkwYjVjYmFmMjUzMjM1ODc5ZiIsInByb29mX2hhc2giOiJzaGEyNTY6N2FmOTc4M2JhZTRmMzRiN2Q5ODYyMDNmOWVmMjdkMmViZjMyM2NiYWQ4ZGFlMGEwYTlhZmRhZDUxMzNiMjY0YSJ9fQ.LCXz_KyXN016A0AZvnW7kIa21R14zbeJhSEaW7olOYUUXaeKFSZKg4CCNp-zSTrJfDw3c-knHr9BI9epZriIeQ",
+  "attestation": "SAMPLE-ATTESTATION: an ES256 JWT in a live response; see README",
   "constraint_id": "code_verifier.code_unsafe",
   "critical_count": 1,
   "developer_fields": {

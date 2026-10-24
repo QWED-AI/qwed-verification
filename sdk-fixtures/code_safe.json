@@ -1,7 +1,7 @@
 {
   "admission": "ADMIT",
   "agent_message": "The code passed security verification and is safe to use.",
-  "attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImRpZDpxd2VkOm5vZGU6bG9jYWwjc2lnbmluZy1rZXktdjEiLCJ0eXAiOiJxd2VkLWF0dGVzdGF0aW9uK2p3dCJ9.eyJpc3MiOiJkaWQ6cXdlZDpub2RlOmxvY2FsIiwic3ViIjoic2hhMjU2OjgwZThkOWJlZDg2MDFkMDQwZDdiYWQwNTQyOTcxNmRmOTFhMjc4MDA5MWZjM2Y5NTlhYmMwMzAwNGEwZDAwY2QiLCJpYXQiOjE3OTI4MDY0ODIsImV4cCI6MTc5Mjg5Mjg4MiwianRpIjoiYXR0XzdiNGY0YjU5MzE4MCIsInF3ZWQiOnsidmVyc2lvbiI6IjEuMCIsInJlc3VsdCI6eyJzdGF0dXMiOiJWRVJJRklFRCIsInZlcmlmaWVkIjp0cnVlLCJlbmdpbmUiOiJjb2RlIiwiY29uZmlkZW5jZSI6MS4wfSwicXVlcnlfaGFzaCI6InNoYTI1Njo4MGU4ZDliZWQ4NjAxZDA0MGQ3YmFkMDU0Mjk3MTZkZjkxYTI3ODAwOTFmYzNmOTU5YWJjMDMwMDRhMGQwMGNkIiwicHJvb2ZfaGFzaCI6InNoYTI1Njo5ZGFiM2VmZWU4MmUyNmE4ODM5Yzk4NzIyYmIxOTQ1OGQ1MmI5YTczNTg3OWFkNTc5YzUzMDQ1OGY0MDk2MTJlIn19.Z_7wh7XrfSuoLugJ4EqJCyLlx_an_KSKYTjh8bFnvk6X5xg_wUdDL7D051yky8VNkeu5XiavidYvtuYfMfmcrA",
+  "attestation": "SAMPLE-ATTESTATION: an ES256 JWT in a live response; see README",
   "constraint_id": "code_verifier.code_safe",
   "critical_count": 0,
   "developer_fields": {

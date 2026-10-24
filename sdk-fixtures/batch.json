@@ -12,7 +12,7 @@
       "result": {
         "admission": "ADMIT",
         "agent_message": "Identity verified",
-        "attestation": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImRpZDpxd2VkOm5vZGU6bG9jYWwjc2lnbmluZy1rZXktdjEiLCJ0eXAiOiJxd2VkLWF0dGVzdGF0aW9uK2p3dCJ9.eyJpc3MiOiJkaWQ6cXdlZDpub2RlOmxvY2FsIiwic3ViIjoic2hhMjU2OmU5M2RmZjBkMTA3NmI1MzdjZDFiZDY1OWQxNGJiNzdkNWZkNDdkYjEzMjA0YTIyN2NiM2NkNjZlODFkZDQ1NGMiLCJpYXQiOjE3OTI4MDY0ODMsImV4cCI6MTc5Mjg5Mjg4MywianRpIjoiYXR0XzliNTFmYjE1ODczZSIsInF3ZWQiOnsidmVyc2lvbiI6IjEuMCIsInJlc3VsdCI6eyJzdGF0dXMiOiJWRVJJRklFRCIsInZlcmlmaWVkIjp0cnVlLCJlbmdpbmUiOiJtYXRoIiwiY29uZmlkZW5jZSI6MS4wfSwicXVlcnlfaGFzaCI6InNoYTI1NjplOTNkZmYwZDEwNzZiNTM3Y2QxYmQ2NTlkMTRiYjc3ZDVmZDQ3ZGIxMzIwNGEyMjdjYjNjZDY2ZTgxZGQ0NTRjIiwicHJvb2ZfaGFzaCI6InNoYTI1NjpmNjE1NGM0ZmZiNzFkOWE5NmI2ZGMwY2I3MThjYjdmMDk0Njk2YjBjMmVmZTk4NDFhNjc4N2EwOWQxMzhjZGY4In19.3_4lH9pnAHB-p0JR6-Y9b6Bp8X8tYy6kgwlce6RI2MoZEyhU0tqNC-ugPaO6b-fsMhisfT_tia1g6TLlQ951XQ",
+        "attestation": "SAMPLE-ATTESTATION: an ES256 JWT in a live response; see README",
         "developer_fields": {
           "diff": "0",
           "is_valid": true,
