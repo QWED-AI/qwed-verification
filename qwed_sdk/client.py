@@ -16,6 +16,7 @@ from qwed_sdk.attestation import (
     DEFAULT_ISSUER,
     JWKS_PATH,
     KeyMismatchError,
+    KeysUnavailableError,
     require_answer,
     verify_attestation,
 )
@@ -23,11 +24,11 @@ from qwed_sdk.models import VerificationResult, BatchResult, token_fields
 
 # How long a fetched JWKS is reused, as the server's Cache-Control says.
 _JWKS_MAX_AGE_SECONDS = 300.0
-# The least time since the last attempt to fetch the JWKS, successful or not,
-# before a token none of its keys verifies may fetch it again: a key rotation
-# or a restart with a new ephemeral key is picked up within this, but a stream
-# of forged tokens cannot turn each one into a request, nor can an
-# unreachable key endpoint (#512).
+# The least time since the last attempt to fetch the JWKS before another:
+# after a token none of the cached keys verifies (a key rotation or a restart
+# with a new ephemeral key is picked up within this, but a stream of forged
+# tokens cannot turn each one into a request), and after a failed fetch,
+# whose failure every caller gets meanwhile instead of a request each (#512).
 _JWKS_MIN_REFRESH_SECONDS = 30.0
 
 
@@ -80,28 +81,48 @@ class QWEDClient:
         self._jwks: Optional[Dict[str, Any]] = None
         self._jwks_fetched_at = 0.0
         self._jwks_attempted_at = 0.0
+        self._jwks_error: Exception | None = None
         # One fetch at a time: callers that wait reuse what it fetched.
         self._jwks_lock = threading.Lock()
 
     def _jwks_fresh(self) -> bool:
         return self._jwks is not None and time.monotonic() - self._jwks_fetched_at <= _JWKS_MAX_AGE_SECONDS
 
+    def _raise_recent_failure(self) -> None:
+        """Within _JWKS_MIN_REFRESH_SECONDS of a failed fetch, its failure
+        again, without a request. Keys past their age are not used instead:
+        a key the server has since withdrawn would still verify."""
+        if self._jwks_error is not None and \
+                time.monotonic() - self._jwks_attempted_at < _JWKS_MIN_REFRESH_SECONDS:
+            raise KeysUnavailableError("attestation keys unavailable; the last fetch failed") \
+                from self._jwks_error
+
     def _fetch_jwks(self) -> dict[str, Any]:
         self._jwks_attempted_at = time.monotonic()
-        response = self._client.get(f"{self.base_url}{JWKS_PATH}")
-        response.raise_for_status()
-        self._jwks = response.json()
+        try:
+            response = self._client.get(f"{self.base_url}{JWKS_PATH}")
+            response.raise_for_status()
+            jwks = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            self._jwks_error = exc
+            raise KeysUnavailableError("attestation keys unavailable") from exc
+        self._jwks, self._jwks_error = jwks, None
         self._jwks_fetched_at = time.monotonic()
-        return self._jwks
+        return jwks
 
     def get_jwks(self, refresh: bool = False) -> Dict[str, Any]:
         """The server's attestation keys (GET /.well-known/jwks.json, no API
-        key), reused for five minutes as the server's Cache-Control says."""
+        key), reused for five minutes as the server's Cache-Control says.
+        Raises KeysUnavailableError if they cannot be fetched, and for
+        _JWKS_MIN_REFRESH_SECONDS after, unless ``refresh``."""
         if not refresh and self._jwks_fresh():
             return self._jwks
         with self._jwks_lock:
-            if not refresh and self._jwks_fresh():
-                return self._jwks
+            # Callers that waited get what the fetch before them got.
+            if not refresh:
+                if self._jwks_fresh():
+                    return self._jwks
+                self._raise_recent_failure()
             return self._fetch_jwks()
 
     def _jwks_after_mismatch(self, used: dict[str, Any]) -> dict[str, Any] | None:
@@ -540,29 +561,46 @@ class QWEDAsyncClient:
         self._jwks: Optional[Dict[str, Any]] = None
         self._jwks_fetched_at = 0.0
         self._jwks_attempted_at = 0.0
+        self._jwks_error: Exception | None = None
         # One fetch at a time: callers that wait reuse what it fetched.
         self._jwks_lock = asyncio.Lock()
 
     def _jwks_fresh(self) -> bool:
         return self._jwks is not None and time.monotonic() - self._jwks_fetched_at <= _JWKS_MAX_AGE_SECONDS
 
+    def _raise_recent_failure(self) -> None:
+        """Within _JWKS_MIN_REFRESH_SECONDS of a failed fetch, its failure
+        again, without a request. Keys past their age are not used instead:
+        a key the server has since withdrawn would still verify."""
+        if self._jwks_error is not None and \
+                time.monotonic() - self._jwks_attempted_at < _JWKS_MIN_REFRESH_SECONDS:
+            raise KeysUnavailableError("attestation keys unavailable; the last fetch failed") \
+                from self._jwks_error
+
     async def _fetch_jwks(self) -> dict[str, Any]:
         if not self._client:
             raise RuntimeError("Client not initialized. Use 'async with' context.")
         self._jwks_attempted_at = time.monotonic()
-        response = await self._client.get(f"{self.base_url}{JWKS_PATH}")
-        response.raise_for_status()
-        self._jwks = response.json()
+        try:
+            response = await self._client.get(f"{self.base_url}{JWKS_PATH}")
+            response.raise_for_status()
+            jwks = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            self._jwks_error = exc
+            raise KeysUnavailableError("attestation keys unavailable") from exc
+        self._jwks, self._jwks_error = jwks, None
         self._jwks_fetched_at = time.monotonic()
-        return self._jwks
+        return jwks
 
     async def get_jwks(self, refresh: bool = False) -> Dict[str, Any]:
         """The server's attestation keys; see QWEDClient.get_jwks."""
         if not refresh and self._jwks_fresh():
             return self._jwks
         async with self._jwks_lock:
-            if not refresh and self._jwks_fresh():
-                return self._jwks
+            if not refresh:
+                if self._jwks_fresh():
+                    return self._jwks
+                self._raise_recent_failure()
             return await self._fetch_jwks()
 
     async def _jwks_after_mismatch(self, used: dict[str, Any]) -> dict[str, Any] | None:

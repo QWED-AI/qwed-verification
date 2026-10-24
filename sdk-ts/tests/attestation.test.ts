@@ -189,12 +189,15 @@ describe('verifyAttestation', () => {
         await expect(verifyAttestation(token, jwks, { proofRef: PROOF })).rejects.toBeInstanceOf(AttestationError);
     });
 
-    it('reports a malformed signature as such, not as an unusable key', async () => {
+    it.each(['%%%', 'A', 'AAAAA'])('reports a malformed signature %j as such, not as an unusable key', async bad => {
+        // 'A' and 'AAAAA' pass the alphabet check but are no base64: atob
+        // throws, and that is an AttestationError too (#512 review).
         const { privateKey, jwks } = await keyPair();
         const [header, payload] = (await sign(privateKey, await claims())).split('.');
 
-        await expect(verifyAttestation(`${header}.${payload}.%%%`, jwks, { proofRef: PROOF }))
-            .rejects.toThrow(/not a JWT/);
+        const refused = verifyAttestation(`${header}.${payload}.${bad}`, jwks, { proofRef: PROOF });
+        await expect(refused).rejects.toBeInstanceOf(AttestationError);
+        await expect(refused).rejects.toThrow(/not a JWT/);
     });
 
     it('verifies through node:crypto where there is no global crypto (Node 18)', async () => {
@@ -359,7 +362,9 @@ describe('the response and the client', () => {
         expect(fetches).toBe(1);
     });
 
-    it('lets the next caller fetch again after a failed fetch', async () => {
+    it('gives a failed fetch to every caller for 30 s, then fetches again', async () => {
+        // An unreachable key endpoint is not asked for every token (#512
+        // review); concurrent callers share the failing fetch.
         const { privateKey, jwks } = await keyPair();
         const token = await sign(privateKey, await claims());
         let fetches = 0;
@@ -369,10 +374,17 @@ describe('the response and the client', () => {
                 ? new Response('', { status: 503 })
                 : new Response(JSON.stringify(jwks), { status: 200 });
         });
+        let now = Date.now();
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
         const client = new QWEDClient({ apiKey: 'k', baseUrl: 'http://qwed.test' });
         const answer = { attestation: token, proof_ref: PROOF };
 
+        const first = await Promise.allSettled([1, 2, 3].map(() => client.verifyAttestation(answer)));
         await expect(client.verifyAttestation(answer)).rejects.toThrow(/keys unavailable/);
+        expect(first.every(outcome => outcome.status === 'rejected')).toBe(true);
+        expect(fetches).toBe(1);
+
+        now += 31_000;
         await expect(client.verifyAttestation(answer)).resolves.toBeTruthy();
         expect(fetches).toBe(2);
     });

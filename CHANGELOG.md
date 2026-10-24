@@ -28,7 +28,10 @@ All notable changes to the QWED Protocol will be documented in this file.
     server restarted with a new ephemeral key under the same `kid`), they
     try keys another caller fetched meanwhile, else fetch it once more, at
     most once every 30 seconds, failed fetches included. Concurrent callers
-    share one fetch.
+    share one fetch. When a fetch fails, every caller gets that failure for
+    30 seconds without another request (`KeysUnavailableError` in Python);
+    keys past their five minutes are not used instead, since a key the
+    server has withdrawn would still verify.
   - The TypeScript verifier has no dependency (WebCrypto, Node 18+ and
     browsers); CI verifies a token with the built package on Node 18. Go
     and Rust verifiers follow.

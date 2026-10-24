@@ -197,7 +197,8 @@ if result.attestation:
         # status, and that the token is this answer's (its proof_hash is
         # result.proof_ref). If no cached key verifies it, the keys are
         # fetched once more, at most once every 30 s, to pick up a rotated
-        # key or a restarted server's new one.
+        # key or a restarted server's new one. If the keys cannot be
+        # fetched it raises KeysUnavailableError (an AttestationError).
         claims = client.verify_attestation(result, query="2+2=4")
     except AttestationError as exc:
         print("attestation does not verify for this answer:", exc)

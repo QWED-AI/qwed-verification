@@ -104,7 +104,13 @@ function base64UrlBytes(segment: string): Uint8Array {
         throw new AttestationError('attestation is not a JWT');
     }
     const padded = segment.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (segment.length % 4)) % 4);
-    const binary = atob(padded);
+    let binary: string;
+    try {
+        binary = atob(padded);
+    } catch {
+        // A length that is 1 more than a multiple of 4 is no base64.
+        throw new AttestationError('attestation is not a JWT');
+    }
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) {
         bytes[i] = binary.charCodeAt(i);

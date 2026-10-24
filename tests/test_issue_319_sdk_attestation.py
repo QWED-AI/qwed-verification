@@ -35,7 +35,7 @@ from qwed_sdk import (
     VerificationResult,
     verify_attestation,
 )
-from qwed_sdk.attestation import KeyMismatchError, statement_hash
+from qwed_sdk.attestation import KeyMismatchError, KeysUnavailableError, statement_hash
 
 PROOF = "sha256:" + "e" * 64
 QUERY = "2+2=4"
@@ -217,10 +217,11 @@ def test_a_recursion_error_from_pyjwt_is_an_attestation_error(server, monkeypatc
     def deep(*args, **kwargs):
         raise RecursionError("maximum recursion depth exceeded")
 
+    token = _token(service)
     monkeypatch.setattr(jwt, "decode_complete", deep)
 
     with pytest.raises(AttestationError, match="not a JWT"):
-        verify_attestation(_token(service), jwks, proof_ref=PROOF)
+        verify_attestation(token, jwks, proof_ref=PROOF)
 
 
 def test_a_token_issued_a_moment_in_the_future_still_verifies(server):
@@ -449,11 +450,48 @@ def test_a_failed_refresh_also_waits_30_seconds(server):
     client = _client_with_cached(_replaced_key(service, jwks), 60, handler)
     answer = {"attestation": _token(service), "proof_ref": PROOF}
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(KeysUnavailableError):
         client.verify_attestation(answer)
     with pytest.raises(KeyMismatchError):
         client.verify_attestation(answer)
     assert calls == ["/.well-known/jwks.json"]
+
+
+def test_a_failed_fetch_is_shared_for_30_seconds(server):
+    # Callers queued behind a failed fetch, and those after it, get its
+    # failure without a request each (#512 review); after 30 s, one more.
+    service, jwks = server
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        time.sleep(0.05)
+        return httpx.Response(503) if len(calls) == 1 else httpx.Response(200, json=jwks)
+
+    client = _client_with_cached(None, 0, handler)
+    answer = {"attestation": _token(service), "proof_ref": PROOF}
+
+    def attempt(_):
+        try:
+            return client.verify_attestation(answer)
+        except KeysUnavailableError as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        outcomes = list(pool.map(attempt, range(4)))
+
+    assert all(isinstance(outcome, KeysUnavailableError) for outcome in outcomes)
+    assert len(calls) == 1
+    client._jwks_attempted_at -= 60
+    assert client.verify_attestation(answer)["qwed"]["proof_hash"] == PROOF
+    assert len(calls) == 2
+
+
+def test_an_unreadable_jwks_is_unavailable_keys():
+    client = _client_with_cached(None, 0, lambda request: httpx.Response(200, text="not json"))
+
+    with pytest.raises(KeysUnavailableError):
+        client.get_jwks()
 
 
 def test_concurrent_callers_share_one_fetch(server):
@@ -649,6 +687,26 @@ def test_the_async_client_tries_keys_another_caller_fetched_meanwhile(server):
 
     assert _async_run(jwks, 0, handler, call)["qwed"]["proof_hash"] == PROOF
     assert calls == []
+
+
+def test_a_failed_async_fetch_is_shared_for_30_seconds(server):
+    service, _ = server
+    calls = []
+
+    async def handler(request):
+        calls.append(request.url.path)
+        await asyncio.sleep(0.05)
+        return httpx.Response(503)
+
+    answer = {"attestation": _token(service), "proof_ref": PROOF}
+
+    async def verify_four(client):
+        return await asyncio.gather(*(client.verify_attestation(answer) for _ in range(4)), return_exceptions=True)
+
+    outcomes = _async_run(None, 0, handler, verify_four)
+
+    assert all(isinstance(outcome, KeysUnavailableError) for outcome in outcomes)
+    assert calls == ["/.well-known/jwks.json"]
 
 
 def test_the_async_client_needs_its_context_to_fetch_keys():

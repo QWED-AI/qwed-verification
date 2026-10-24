@@ -47,6 +47,11 @@ class KeyMismatchError(AttestationError):
     restarted with a new ephemeral key under the same kid."""
 
 
+class KeysUnavailableError(AttestationError):
+    """The server's keys could not be fetched, so nothing can be verified;
+    the clients ask again at most once every 30 seconds."""
+
+
 def require_answer(token: Any, proof_ref: Any) -> None:
     """Raise AttestationError unless there is a token and a proof_ref to
     bind it to; checked before any key is fetched."""
