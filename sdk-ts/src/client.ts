@@ -143,8 +143,19 @@ export class QWEDClient {
             this.jwksFetchedAt = Date.now();
             return jwks;
         } catch (error) {
-            this.jwksError = error;
-            throw error;
+            // As request() does: a QWEDError whatever failed (a network
+            // error, a timeout, a body that is not JSON), as Python's
+            // KeysUnavailableError is.
+            const wrapped = error instanceof QWEDError
+                ? error
+                : error instanceof Error && error.name === 'AbortError'
+                    ? new QWEDError('Attestation keys unavailable: request timeout', 'QWED-SYS-TIMEOUT', 504)
+                    : new QWEDError(
+                        `Attestation keys unavailable: ${error instanceof Error ? error.message : 'unknown error'}`,
+                        'QWED-ATTEST-001',
+                    );
+            this.jwksError = wrapped;
+            throw wrapped;
         } finally {
             clearTimeout(timeoutId);
         }

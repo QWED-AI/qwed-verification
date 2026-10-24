@@ -12,6 +12,7 @@ import {
     AttestationError,
     KeyMismatchError,
     QWEDClient,
+    QWEDError,
     UnknownKeyError,
     parseVerificationResponse,
     statementHash,
@@ -360,6 +361,45 @@ describe('the response and the client', () => {
 
         expect(verified).toHaveLength(3);
         expect(fetches).toBe(1);
+    });
+
+    it.each([
+        ['a network failure', async () => { throw new TypeError('fetch failed'); }, 'QWED-ATTEST-001', /fetch failed/],
+        ['a body that is not JSON', async () => new Response('not json', { status: 200 }), 'QWED-ATTEST-001', /unavailable/],
+        ['an HTTP error', async () => new Response('', { status: 503 }), 'QWED-ATTEST-001', /unavailable/],
+    ])('reports %s fetching the keys as a QWEDError, and again for 30 s', async (_case, respond, code, message) => {
+        // As request() does, and as Python's KeysUnavailableError (#512 review).
+        const { privateKey } = await keyPair();
+        const token = await sign(privateKey, await claims());
+        let fetches = 0;
+        vi.stubGlobal('fetch', async () => {
+            fetches += 1;
+            return respond();
+        });
+        const client = new QWEDClient({ apiKey: 'k', baseUrl: 'http://qwed.test' });
+        const answer = { attestation: token, proof_ref: PROOF };
+
+        for (let call = 0; call < 2; call++) {
+            const failed = client.verifyAttestation(answer);
+            await expect(failed).rejects.toBeInstanceOf(QWEDError);
+            await expect(failed).rejects.toMatchObject({ code });
+            await expect(failed).rejects.toThrow(message);
+        }
+        expect(fetches).toBe(1);
+    });
+
+    it('reports a key fetch that times out as QWED-SYS-TIMEOUT', async () => {
+        const { privateKey } = await keyPair();
+        const token = await sign(privateKey, await claims());
+        vi.stubGlobal('fetch', (_url: string, init: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
+            init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        }));
+        const client = new QWEDClient({ apiKey: 'k', baseUrl: 'http://qwed.test', timeout: 10 });
+
+        const failed = client.verifyAttestation({ attestation: token, proof_ref: PROOF });
+
+        await expect(failed).rejects.toBeInstanceOf(QWEDError);
+        await expect(failed).rejects.toMatchObject({ code: 'QWED-SYS-TIMEOUT', statusCode: 504 });
     });
 
     it('gives a failed fetch to every caller for 30 s, then fetches again', async () => {
