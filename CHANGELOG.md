@@ -6,6 +6,42 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Security
 
+- **The SDKs read attestations, and the Python and TypeScript SDKs verify
+  them (#319).** Every VERIFIED answer carries its attestation, but no SDK
+  read it, so no client could tell a genuine verdict from a forged one.
+  - Python (`VerificationResult.attestation`, `.proof_ref`), TypeScript
+    (`VerificationResponse.attestation`), Go (`VerificationResponse.Attestation`)
+    and Rust (`VerificationResponse::attestation`) have a typed field; Go
+    and Rust no longer put the token among the endpoint's own fields.
+  - Python (`qwed_sdk.verify_attestation`, `QWEDClient.verify_attestation`)
+    and TypeScript (`verifyAttestation`, `client.verifyAttestation`) verify
+    it: the ES256 signature with a key in the server's JWKS, which the
+    token's `kid` must name (Python tries each ES256 key and reads nothing
+    from the token before one verifies it), the issuer, expiry and any
+    `nbf`, a VERIFIED status, and that it
+    is this answer's token (`proof_hash` is the answer's `proof_ref`), and
+    optionally the statement's hash. Any algorithm but ES256 is refused
+    before a key is used. A token covers what it signs, not other fields of
+    the response such as `admission`.
+  - The clients fetch `/.well-known/jwks.json` and reuse it for five
+    minutes. When no key in it verifies the token (the key rotated, or a
+    server restarted with a new ephemeral key under the same `kid`), they
+    try keys another caller fetched meanwhile, else fetch it once more, at
+    most once every 30 seconds, failed fetches included. Concurrent callers
+    share one fetch. When a fetch fails, every caller gets that failure for
+    30 seconds without another request (`KeysUnavailableError` in Python;
+    in TypeScript a `QWEDError`, `QWED-ATTEST-001`, or `QWED-SYS-TIMEOUT`
+    for a timeout);
+    keys past their five minutes are not used instead, since a key the
+    server has withdrawn would still verify.
+  - The TypeScript verifier has no dependency (WebCrypto, Node 18+ and
+    browsers); CI verifies a token with the built package on Node 18. Go
+    and Rust verifiers follow.
+  - **Breaking for the `qwed` crate's types:** `VerificationResponse` has a
+    new public field, `attestation`, so code that builds one with a struct
+    literal must add `attestation: None`. Code that only reads responses is
+    unaffected.
+
 - **Attestations are delivered, with a JWKS to verify them (#319).** Every
   VERIFIED result was signed and checked inside the server, then the token
   was dropped, so a consumer could not tell a genuine verdict from a forged

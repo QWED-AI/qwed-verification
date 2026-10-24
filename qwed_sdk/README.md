@@ -174,7 +174,40 @@ class VerificationResult:
     result: dict          # Full response data
     error: str | None     # Error message if any
     latency_ms: float     # Request latency
+    attestation: str | None  # The server's signed token, on a VERIFIED answer
+    proof_ref: str | None    # The proof the token binds
 ```
+
+### Verifying the attestation
+
+Every `VERIFIED` answer carries `attestation`, an ES256 JWT the server
+signed after checking the verdict. Verifying it shows that server issued a
+VERIFIED verdict for this answer's `proof_ref` (and, when you pass `query`,
+for that statement). It covers only what the token signs, not other fields
+of the response such as `admission` or `agent_message`:
+
+```python
+from qwed_sdk import AttestationError
+
+result = client.verify_math("2+2=4")
+if result.attestation:
+    try:
+        # Fetches /.well-known/jwks.json (cached for five minutes), then
+        # checks the signature, issuer, expiry (and any nbf), a VERIFIED
+        # status, and that the token is this answer's (its proof_hash is
+        # result.proof_ref). If no cached key verifies it, the keys are
+        # fetched once more, at most once every 30 s, to pick up a rotated
+        # key or a restarted server's new one. If the keys cannot be
+        # fetched it raises KeysUnavailableError (an AttestationError).
+        claims = client.verify_attestation(result, query="2+2=4")
+    except AttestationError as exc:
+        print("attestation does not verify for this answer:", exc)
+```
+
+To verify offline, or against keys you pinned, use
+`qwed_sdk.verify_attestation(token, jwks, proof_ref=..., query=...)` with the
+JWKS you hold. A token says the server reached the verdict; whether to act
+on it is still the answer's admission.
 
 ### BatchResult
 

@@ -47,6 +47,16 @@ fn an_ambiguous_expression_is_blocked() {
 }
 
 #[test]
+fn a_verified_answer_carries_its_attestation_in_the_typed_field() {
+    // #319: the token is an envelope field, not an endpoint one; a BLOCKED
+    // answer has none.
+    let verified = response("math_verified");
+    assert!(verified.attestation.as_deref().is_some_and(|t| !t.is_empty()));
+    assert!(!verified.extra.contains_key("attestation"));
+    assert!(response("math_ambiguous").attestation.is_none());
+}
+
+#[test]
 fn safe_code_is_admitted_and_unsafe_code_is_not() {
     let safe = response("code_safe");
     assert_eq!(safe.status, VerificationStatus::Verified);

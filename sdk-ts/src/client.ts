@@ -16,7 +16,26 @@ import {
     AgentRegistration,
     AgentVerificationRequest,
     AgentVerificationResponse,
+    AttestationClaims,
 } from './types';
+import {
+    DEFAULT_ISSUER,
+    JWKS_PATH,
+    Jwks,
+    KeyMismatchError,
+    requireAnswer,
+    verifyAttestation,
+} from './attestation';
+
+// How long a fetched JWKS is reused, as the server's Cache-Control says.
+const JWKS_MAX_AGE_MS = 300_000;
+// The least time since the last attempt to fetch the JWKS before another:
+// after a token whose key it lacks (an unknown kid, or a signature that does
+// not verify with the kid's key; a key rotation or a restart with a new
+// ephemeral key is picked up within this, but a stream of made-up or forged
+// tokens cannot turn each one into a request), and after a failed fetch,
+// whose failure every caller gets meanwhile instead of a request each (#512).
+const JWKS_MIN_REFRESH_MS = 30_000;
 
 // ============================================================================
 // Errors
@@ -57,6 +76,11 @@ export class QWEDClient {
     private apiKey: string;
     private timeout: number;
     private headers: Record<string, string>;
+    private jwks?: Jwks;
+    private jwksFetchedAt = 0;
+    private jwksAttemptedAt = 0;
+    private jwksError?: unknown;
+    private jwksFetch?: Promise<Jwks>;
 
     constructor(options: QWEDClientOptions) {
         this.apiKey = options.apiKey;
@@ -67,6 +91,121 @@ export class QWEDClient {
             'X-API-Key': this.apiKey,
             ...options.headers,
         };
+    }
+
+    // --------------------------------------------------------------------------
+    // Attestations (#319)
+    // --------------------------------------------------------------------------
+
+    /**
+     * The server's attestation keys (`GET /.well-known/jwks.json`, public),
+     * reused for five minutes as the server's Cache-Control says. If they
+     * cannot be fetched, that failure is thrown again for 30 seconds,
+     * without a request, unless `refresh`.
+     */
+    async getJwks(refresh = false): Promise<Jwks> {
+        const stale = Date.now() - this.jwksFetchedAt > JWKS_MAX_AGE_MS;
+        if (this.jwks && !refresh && !stale) {
+            return this.jwks;
+        }
+        // Callers that need keys while a fetch is in flight share it, a
+        // refresh included: it began after the keys they found wanting.
+        if (this.jwksFetch) {
+            return this.jwksFetch;
+        }
+        // After a failed fetch its failure, for JWKS_MIN_REFRESH_MS. Keys
+        // past their age are not used instead: a key the server has since
+        // withdrawn would still verify.
+        if (!refresh && this.jwksError !== undefined && Date.now() - this.jwksAttemptedAt < JWKS_MIN_REFRESH_MS) {
+            throw this.jwksError;
+        }
+        const fetching = this.fetchJwks();
+        const done = () => {
+            if (this.jwksFetch === fetching) this.jwksFetch = undefined;
+        };
+        this.jwksFetch = fetching;
+        fetching.then(done, done);
+        return fetching;
+    }
+
+    private async fetchJwks(): Promise<Jwks> {
+        this.jwksAttemptedAt = Date.now();
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+        try {
+            const response = await fetch(`${this.baseUrl}${JWKS_PATH}`, { signal: controller.signal });
+            if (!response.ok) {
+                throw new QWEDError('Attestation keys unavailable', 'QWED-ATTEST-001', response.status);
+            }
+            const jwks = await response.json() as Jwks;
+            this.jwks = jwks;
+            this.jwksError = undefined;
+            this.jwksFetchedAt = Date.now();
+            return jwks;
+        } catch (error) {
+            // As request() does: a QWEDError whatever failed (a network
+            // error, a timeout, a body that is not JSON), as Python's
+            // KeysUnavailableError is.
+            const wrapped = error instanceof QWEDError
+                ? error
+                : error instanceof Error && error.name === 'AbortError'
+                    ? new QWEDError('Attestation keys unavailable: request timeout', 'QWED-SYS-TIMEOUT', 504)
+                    : new QWEDError(
+                        `Attestation keys unavailable: ${error instanceof Error ? error.message : 'unknown error'}`,
+                        'QWED-ATTEST-001',
+                    );
+            this.jwksError = wrapped;
+            throw wrapped;
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    }
+
+    /**
+     * Verify an answer's attestation against this server's keys and return
+     * its claims; throws AttestationError if it does not verify or is not
+     * this answer's. `query`, when given, must be the statement the verdict
+     * covers. To verify against keys you pinned, call `verifyAttestation`
+     * with your JWKS.
+     */
+    async verifyAttestation(
+        result: Pick<VerificationResponse, 'attestation' | 'proof_ref'>,
+        query?: string,
+        options: { issuer?: string; leewaySeconds?: number } = {},
+    ): Promise<AttestationClaims> {
+        // A missing token or proof_ref is an AttestationError, not a network
+        // error from the key fetch.
+        requireAnswer(result?.attestation, result?.proof_ref);
+        const verify = async (jwks: Jwks) => verifyAttestation(result.attestation as string, jwks, {
+            proofRef: result.proof_ref as string,
+            query,
+            issuer: options.issuer ?? DEFAULT_ISSUER,
+            leewaySeconds: options.leewaySeconds,
+        });
+        const jwks = await this.getJwks();
+        try {
+            return await verify(jwks);
+        } catch (error) {
+            if (!(error instanceof KeyMismatchError)) throw error;
+            // The key may have rotated, or the server restarted with a new
+            // key under the same kid, since the JWKS was cached: try the
+            // keys once more (see jwksAfterMismatch).
+            const newer = await this.jwksAfterMismatch(jwks);
+            if (!newer) throw error;
+            return verify(newer);
+        }
+    }
+
+    /**
+     * Keys to try once more after none in `used` verified a token: those
+     * another caller fetched, or is fetching, meanwhile; else a fresh fetch
+     * if the last attempt was at least JWKS_MIN_REFRESH_MS ago; else none.
+     */
+    private async jwksAfterMismatch(used: Jwks): Promise<Jwks | undefined> {
+        if (this.jwksFetch) return this.jwksFetch;
+        if (this.jwks && this.jwks !== used) return this.jwks;
+        if (Date.now() - this.jwksAttemptedAt < JWKS_MIN_REFRESH_MS) return undefined;
+        return this.getJwks(true);
     }
 
     // --------------------------------------------------------------------------
@@ -449,6 +588,10 @@ export function parseVerificationResponse(body: unknown): VerificationResponse {
         response.admission = KNOWN_ADMISSIONS.has(body.admission)
             ? (body.admission as Admission)
             : Admission.Unknown;
+    }
+    // A token is a non-empty string or nothing (#319).
+    if (typeof body.attestation !== 'string' || body.attestation.length === 0) {
+        delete response.attestation;
     }
     response.verified = isAdmitted(response);
     Object.defineProperty(response, 'toJSON', {

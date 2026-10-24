@@ -37,7 +37,12 @@ class VerificationResult:
     error: Optional[str] = None
     provider_used: Optional[str] = None
     latency_ms: float = 0.0
-    
+    # Set only on a VERIFIED answer that passed the server's trust step: its
+    # signed attestation, an ES256 JWT (#319). Check it with
+    # QWEDClient.verify_attestation or qwed_sdk.attestation.verify_attestation.
+    attestation: Optional[str] = None
+    proof_ref: Optional[str] = None
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "VerificationResult":
         return cls(
@@ -46,8 +51,20 @@ class VerificationResult:
             result=data,
             error=data.get("error"),
             provider_used=data.get("provider_used"),
-            latency_ms=data.get("latency_ms", 0.0)
+            latency_ms=data.get("latency_ms", 0.0),
+            **token_fields(data),
         )
+
+
+def token_fields(data: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    """A response's ``attestation`` and ``proof_ref``, each a non-empty
+    string or None, for every VerificationResult built from a server
+    response (#319)."""
+    fields: Dict[str, Optional[str]] = {}
+    for name in ("attestation", "proof_ref"):
+        value = data.get(name)
+        fields[name] = value if isinstance(value, str) and value else None
+    return fields
 
 
 @dataclass

@@ -41,6 +41,7 @@ Every verification returns the server's DiagnosticResult envelope:
 | `rawStatus` | The server's status text exactly as sent, such as `SAT` where `status` is `UNKNOWN`; never used for admission |
 | `admission` | `ADMIT` or `BLOCKED` where the endpoint decides (`UNKNOWN` for a value this SDK does not know); absent where it does not, as on `/verify/logic`, `/verify/fact` and batch logic and fact items |
 | `proof_ref` | Set only when `status` is `VERIFIED` |
+| `attestation` | The server's signed token on a `VERIFIED` answer (see [Attestations](#attestations)) |
 | `agent_message`, `developer_fields`, `is_authoritative`, `constraint_id` | Explanation and detail |
 | any other key | The endpoint's own fields, such as `is_valid`, `issues` or `error`. Numbers come from `JSON.parse`, so an integer above 2^53 or a long decimal is rounded |
 
@@ -128,18 +129,31 @@ for (const item of batch.items) {
 
 ## Attestations
 
-Request cryptographic proof of verification:
+Every `VERIFIED` answer carries `attestation`: an ES256 JWT the server signed
+after checking the verdict (no request option is needed). Verifying it shows
+that server issued a VERIFIED verdict for this answer's `proof_ref` (and,
+when you pass the query, for that statement). It covers only what the token
+signs, not other fields of the response such as `admission` or
+`agent_message`:
 
 ```typescript
-const result = await client.verify('2+2=4', {
-  includeAttestation: true,
-});
-
-if (typeof result.attestation === 'string') {
-  const parsed = parseAttestation(result.attestation);
-  console.log(parsed?.payload.qwed.result.status); // 'VERIFIED'
+const result = await client.verifyMath('2 + 2 = 4');
+if (result.attestation) {
+  // Fetches the server's keys from /.well-known/jwks.json (cached for five
+  // minutes) and checks the signature, issuer, expiry (and any nbf), a
+  // VERIFIED status, and that the token is this answer's (its proof_hash is
+  // result.proof_ref). If the key the token names is missing or does not
+  // verify it, the keys are fetched once more, at most every 30 s.
+  const claims = await client.verifyAttestation(result, '2 + 2 = 4');
+  console.log(claims.exp); // when the token expires
 }
 ```
+
+To verify offline, or against keys you pinned, call
+`verifyAttestation(token, jwks, { proofRef, query })` with the JWKS you
+hold. A failure throws `AttestationError`. A token says the server reached
+the verdict; whether to act on it is still `isAdmitted(result)`.
+`parseAttestation` only decodes a token, without checking it.
 
 ## Agent Verification
 

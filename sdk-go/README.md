@@ -54,6 +54,7 @@ Every verification returns the server's DiagnosticResult envelope:
 | `RawStatus` | The server's status text exactly as sent, such as `SAT` where `Status` is `StatusUnknown`; never used for admission |
 | `Admission` | `AdmissionAdmit` or `AdmissionBlocked` where the endpoint decides (`AdmissionUnknown` for a value this SDK does not know); empty where it does not, as on `/verify/logic`, `/verify/fact` and batch logic and fact items |
 | `ProofRef` | Set only when `Status` is `StatusVerified` |
+| `Attestation` | On a `StatusVerified` answer, the server's signed token: an ES256 JWT whose header `kid` names a key at `GET /.well-known/jwks.json`, and whose `qwed.proof_hash` claim is the answer's `ProofRef`. This SDK keeps it but does not verify it yet; the Python and TypeScript SDKs do. |
 | `AgentMessage`, `DeveloperFields`, `IsAuthoritative`, `ConstraintID` | Explanation and detail |
 | `Extra` | The endpoint's own fields, such as `is_valid`, `issues` or `error`. Numbers here and in `DeveloperFields` are `json.Number`, so they keep their exact text |
 
