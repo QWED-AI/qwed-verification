@@ -144,7 +144,10 @@ type AttestationOptions struct {
 	// Leeway is the clock skew allowed on expiry and nbf.
 	Leeway time.Duration
 	// Admission, when not empty, is the admission the token must sign: the
-	// answer's Admission (#321). See CheckAdmission.
+	// answer's Admission (#321). Empty is not checked: for an answer that
+	// carries no admission, call CheckAdmission(claims, "") after verifying,
+	// which requires that the token signs none. Client.VerifyAttestation
+	// does this check for you.
 	Admission string
 	// Now is the current time (tests); time.Now when nil.
 	Now func() time.Time

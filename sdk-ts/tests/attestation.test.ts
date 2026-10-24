@@ -524,6 +524,20 @@ describe('the attested admission (#321)', () => {
             .rejects.toBeInstanceOf(AttestationError);
     });
 
+    it('checks an admission given as undefined too', async () => {
+        // #514 review: `{ admission: answer.admission }` for an answer that
+        // carries none must not skip the check.
+        const { privateKey, jwks } = await keyPair();
+        const signedBlocked = await signed(privateKey, 'BLOCKED');
+        const unsigned = await signed(privateKey);
+        const none: { admission?: string } = {};
+
+        await expect(verifyAttestation(unsigned, jwks, { proofRef: PROOF, admission: none.admission }))
+            .resolves.toBeTruthy();
+        await expect(verifyAttestation(signedBlocked, jwks, { proofRef: PROOF, admission: none.admission }))
+            .rejects.toThrow(/another admission/);
+    });
+
     it('checkAdmission reads only the qwed claims', async () => {
         const base = (await claims()) as unknown as AttestationClaims;
         const signedAdmit = { ...base, qwed: { ...base.qwed, admission: 'ADMIT' } };

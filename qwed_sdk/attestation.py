@@ -132,6 +132,11 @@ def check_admission(claims: Mapping[str, Any], admission: str | None) -> None:
         raise AttestationError("attestation is for another admission (admission differs)")
 
 
+# verify_attestation's ``admission`` when the caller gives none: not checked.
+# None is a value, the admission of an answer that carries none (#514 review).
+_UNCHECKED: Any = object()
+
+
 def statement_hash(statement: str) -> str:
     """The ``query_hash`` a token carries for ``statement``."""
     return "sha256:" + hashlib.sha256(statement.encode()).hexdigest()
@@ -145,7 +150,7 @@ def verify_attestation(
     query: str | None = None,
     issuer: str = DEFAULT_ISSUER,
     leeway: int = 0,
-    admission: str | None = None,
+    admission: str | None = _UNCHECKED,
 ) -> dict[str, Any]:
     """Verify ``token`` as the attestation of the answer whose ``proof_ref``
     is given, and return its claims; raise AttestationError otherwise.
@@ -153,7 +158,8 @@ def verify_attestation(
     ``query``, when given, must be the statement the verdict covers.
     ``leeway`` is the clock skew allowed on expiry, in seconds.
     ``admission``, when given, must be the admission the token signs (the
-    answer's ``admission``, #321); see ``check_admission``.
+    answer's ``admission``, #321): ``None`` too, for an answer that carries
+    none, whose token must then sign none. See ``check_admission``.
     """
     require_answer(token, proof_ref)
     # Nothing from the token is read before its signature verifies: each
@@ -183,6 +189,6 @@ def verify_attestation(
         raise AttestationError("attestation is for another answer (proof_ref differs)")
     if query is not None and qwed.get("query_hash") != statement_hash(query):
         raise AttestationError("attestation is for another statement (query differs)")
-    if admission is not None:
+    if admission is not _UNCHECKED:
         check_admission(claims, admission)
     return claims

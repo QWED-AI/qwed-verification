@@ -772,4 +772,12 @@ func TestVerifyAttestationChecksAnAdmissionGivenToIt(t *testing.T) {
 	_, err := VerifyAttestation(token, key.jwks, testProof, AttestationOptions{Admission: "ADMIT"})
 	mustReject(t, err, ErrAttestation, "another admission")
 	mustReject(t, CheckAdmission(nil, ""), ErrAttestation, "another admission")
+
+	// Empty is not checked by the options; for an answer that carries no
+	// admission, CheckAdmission requires that the token signs none.
+	claims, err := VerifyAttestation(token, key.jwks, testProof, AttestationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustReject(t, CheckAdmission(claims, ""), ErrAttestation, "another admission")
 }

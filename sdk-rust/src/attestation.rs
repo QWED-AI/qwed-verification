@@ -164,7 +164,10 @@ pub struct AttestationOptions {
     /// The current time (tests); the system clock when `None`.
     pub now: Option<SystemTime>,
     /// When set, the admission the token must sign: the answer's `admission`
-    /// (#321). See [`check_admission`].
+    /// (#321). `None` is not checked: for an answer that carries no
+    /// admission, call [`check_admission`] with `None` after verifying, which
+    /// requires that the token signs none. [`QWEDClient::verify_attestation`]
+    /// does this check for you.
     pub admission: Option<String>,
 }
 

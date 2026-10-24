@@ -1039,23 +1039,33 @@ def _validate_attestation_claims(
             },
         )
 
-    if admission is not None and qwed_claims.get("admission") != admission:
-        logger.warning(
-            "trust_gate.blocked constraint_id=%s reason=claims_admission_mismatch policy=%s",
-            result.constraint_id or "unknown",
-            policy,
-        )
-        return DiagnosticResult.blocked(
-            agent_message="Verification blocked — attestation does not sign this admission",
-            developer_fields={
-                "constraint_id": "trust_gate.claims_admission_mismatch",
-                "token_admission": qwed_claims.get("admission"),
-                "expected_admission": admission,
-                "policy": policy,
-            },
-        )
+    return _admission_mismatch(result, qwed_claims, admission, policy)
 
-    return None
+
+def _admission_mismatch(
+    result: DiagnosticResult,
+    qwed_claims: dict[str, Any],
+    admission: str | None,
+    policy: str,
+) -> DiagnosticResult | None:
+    """A blocked result if ``admission`` is given and the token does not sign
+    it (``qwed.admission``, #321); None otherwise."""
+    if admission is None or qwed_claims.get("admission") == admission:
+        return None
+    logger.warning(
+        "trust_gate.blocked constraint_id=%s reason=claims_admission_mismatch policy=%s",
+        result.constraint_id or "unknown",
+        policy,
+    )
+    return DiagnosticResult.blocked(
+        agent_message="Verification blocked — attestation does not sign this admission",
+        developer_fields={
+            "constraint_id": "trust_gate.claims_admission_mismatch",
+            "token_admission": qwed_claims.get("admission"),
+            "expected_admission": admission,
+            "policy": policy,
+        },
+    )
 
 
 def _snapshot_developer_fields(fields: Dict[str, Any]) -> Dict[str, Any]:

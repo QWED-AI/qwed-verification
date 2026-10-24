@@ -16,6 +16,7 @@ and query, signs ADMIT.
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from qwed_new.api import main as api_main
@@ -34,6 +35,7 @@ from qwed_new.core.attestation import (
     VerificationResult,
     create_verification_attestation,
     get_attestation_service,
+    is_admission_claim,
 )
 from qwed_new.core.control_plane import natural_language_admission
 from qwed_new.core.diagnostics import (
@@ -60,10 +62,14 @@ def fresh_service(monkeypatch):
     return monkeypatch
 
 
+def _mock_session():
+    return MagicMock()
+
+
 @pytest.fixture
 def client(isolated_audit_chain, fresh_service):
     api_main.app.dependency_overrides[api_main.get_current_tenant] = lambda: TENANT
-    api_main.app.dependency_overrides[api_main.get_session] = lambda: MagicMock()
+    api_main.app.dependency_overrides[api_main.get_session] = _mock_session
     try:
         with patch("qwed_new.api.main.check_rate_limit"):
             yield TestClient(api_main.app)
@@ -106,8 +112,10 @@ def test_a_route_that_decides_none_signs_none(fresh_service):
     assert "admission" not in _claims(_token())["qwed"]
 
 
-@pytest.mark.parametrize("admission", ["DENY", "admit", "", 1])
+@pytest.mark.parametrize("admission", ["DENY", "admit", "", 1, [], ["ADMIT"], {}])
 def test_any_other_admission_is_refused(fresh_service, admission):
+    # An unhashable value is refused like any other, not with TypeError
+    # (#514 review).
     service = AttestationService()
     result = VerificationResult(status="VERIFIED", verified=True, engine="math")
 
@@ -118,6 +126,11 @@ def test_any_other_admission_is_refused(fresh_service, admission):
     )
     assert issued.status is AttestationStatus.BLOCKED
     assert issued.error_code == "INVALID_ADMISSION"
+    assert not is_admission_claim(admission)
+
+
+def test_the_admission_claims_are_admit_and_blocked():
+    assert is_admission_claim("ADMIT") and is_admission_claim("BLOCKED")
 
 
 # ---------------------------------------------------------------- the trust step
@@ -168,16 +181,17 @@ def test_attest_and_enforce_without_a_rule_signs_no_admission(fresh_service):
     ("/verify/sql", {"query": "DROP TABLE users", "schema_ddl": "CREATE TABLE users (id INT)", "dialect": "sqlite"}),
 ])
 def test_a_routes_token_signs_the_admission_it_returns(client, route, body):
+    # Each case reaches VERIFIED, the unsafe ones with admission BLOCKED: a
+    # failure to sign or check the token would be BLOCKED, and fails here
+    # (#514 review).
     response = client.post(route, json=body).json()
 
-    if response["status"] != "VERIFIED":
-        pytest.skip(f"{route} did not reach VERIFIED here: {response.get('agent_message')}")
+    assert response["status"] == "VERIFIED", response
     assert response["admission"] in {"ADMIT", "BLOCKED"}
     assert _claims(response["attestation"])["qwed"]["admission"] == response["admission"]
 
 
 def test_both_admissions_are_signed_on_a_route(client):
-    # The parametrised test above may skip a route; maths reaches both here.
     admit = client.post("/verify/math", json={"expression": "2+2=4"}).json()
     blocked = client.post("/verify/math", json={"expression": "2+2=5"}).json()
 
@@ -216,6 +230,34 @@ def test_a_token_that_signs_admit_admits_the_document(fresh_service):
     assert fields["attested_admission"] == "ADMIT"
 
 
+def test_an_admitted_document_names_the_engine_that_signed_it(fresh_service):
+    # #514 review: the caller chose the verifier, so a genuine token could
+    # carry an ADMIT document naming a verifier that never checked it.
+    payload = DiagnosticVerificationContextRequest(
+        query=QUERY, verifier="Lean", verifier_version="9.9.9",
+        diagnostic={"status": "VERIFIED", "agent_message": "m", "proof_ref": PROOF},
+        attestation_token=_token("ADMIT"),  # signed by the "stats" engine
+    )
+
+    document = create_verification_context_from_diagnostic(payload, tenant=TENANT, session=None)
+    context = document["context"]
+
+    assert context["decision"]["admission"] == "ADMIT"
+    assert context["proof"]["verifier"] == "stats"
+    assert context["proof"]["verifier_version"] != "9.9.9"  # the server's own
+    assert context["interpretation"]["theory"] == "stats verification"
+    caller = context["evidence"]["evidence"]["developer_fields"]["caller_supplied"]
+    assert (caller["verifier"], caller["verifier_version"]) == ("Lean", "9.9.9")
+
+
+def test_a_denied_document_keeps_the_callers_verifier(fresh_service):
+    # Not admitted, it vouches for nothing, so it records what was asked.
+    document = _document({"status": "VERIFIED", "agent_message": "m", "proof_ref": PROOF}, attestation_token=_token())
+
+    assert document["context"]["decision"]["admission"] == "DENY"
+    assert document["context"]["proof"]["verifier"] == "TestVerifier"
+
+
 @pytest.mark.parametrize("admission", ["BLOCKED", None])
 def test_a_token_that_does_not_sign_admit_leaves_the_document_denied(fresh_service, admission):
     # The caller's is_valid is still ignored (#509).
@@ -247,10 +289,11 @@ def test_a_signed_admit_does_not_admit_a_diagnostic_that_is_not_verified(fresh_s
     assert document["context"]["decision"]["admission"] == "DENY"
 
 
-def test_an_unverifiable_token_admits_nothing(fresh_service, monkeypatch):
-    # Should reading the signed admission fail (the second of three reads:
-    # the route's trust step, the admission, the bridge's trust step), the
-    # verdict stands but the document is not admitted.
+def test_a_failure_to_read_the_admission_fails_loudly(fresh_service, monkeypatch):
+    # Should reading the signed admission fail (the second read, after the
+    # route's trust step), the request fails with a 500 rather than going on
+    # as DENY: an enforcement failure is not suppressed (QWED_RULES.md
+    # section 6, #514 review).
     token = _token("ADMIT")
     service = get_attestation_service()
     calls = []
@@ -262,11 +305,13 @@ def test_an_unverifiable_token_admits_nothing(fresh_service, monkeypatch):
         return AttestationService.verify_attestation(service, token, **kwargs)
 
     monkeypatch.setattr(service, "verify_attestation", flaky)
-    document = _document({"status": "VERIFIED", "agent_message": "m", "proof_ref": PROOF}, attestation_token=token)
+    diagnostic = {"status": "VERIFIED", "agent_message": "m", "proof_ref": PROOF}
 
-    assert len(calls) == 3
-    assert document["verdict"] == "VERIFIED"
-    assert document["context"]["decision"]["admission"] == "DENY"
+    with pytest.raises(HTTPException) as failed:
+        _document(diagnostic, attestation_token=token)
+
+    assert failed.value.status_code == 500
+    assert len(calls) == 2
 
 
 def test_a_live_answers_token_admits_its_document(client):

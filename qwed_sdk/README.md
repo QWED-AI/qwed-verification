@@ -184,7 +184,8 @@ Every `VERIFIED` answer carries `attestation`, an ES256 JWT the server
 signed after checking the verdict. Verifying it shows that server issued a
 VERIFIED verdict for this answer's `proof_ref` (and, when you pass `query`,
 for that statement). On a route that decides an admission (maths, code,
-SQL, natural language), the token signs that too, and `verify_attestation`
+SQL and natural language, the agent route, and their batch items), the
+token signs that too, and `verify_attestation`
 checks it is the answer's `admission`. It covers only what the token signs,
 not other fields of the response such as `agent_message`:
 

@@ -220,7 +220,8 @@ class QWEDClient:
         message and developer fields are kept under
         ``developer_fields.caller_supplied`` and decide nothing. The admission
         is DENY unless ``attestation_token`` signs ADMIT for this verdict
-        (#321), as a token from a maths, code, SQL or natural-language answer
+        (#321), as a token from a maths, code, SQL or natural-language answer,
+        or an agent or batch item's,
         that the server admitted does.
         """
         return self._request(
@@ -702,7 +703,8 @@ class QWEDAsyncClient:
         message and developer fields are kept under
         ``developer_fields.caller_supplied`` and decide nothing. The admission
         is DENY unless ``attestation_token`` signs ADMIT for this verdict
-        (#321), as a token from a maths, code, SQL or natural-language answer
+        (#321), as a token from a maths, code, SQL or natural-language answer,
+        or an agent or batch item's,
         that the server admitted does.
         """
         return await self._request(

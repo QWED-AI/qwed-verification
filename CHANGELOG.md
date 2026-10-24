@@ -24,7 +24,13 @@ All notable changes to the QWED Protocol will be documented in this file.
     whose token, checked against its status, `proof_ref` and query, signs
     `ADMIT` (`constraint_id` `verification_context.attested_admit`). The
     caller's `is_valid` still decides nothing; without a signed `ADMIT` the
-    admission stays `DENY`.
+    admission stays `DENY`. An admitted document names the engine that
+    signed (`qwed.result.engine`) and this server's version as its
+    verifier; the caller's `verifier` and `verifier_version` are kept under
+    `caller_supplied`, so no document is admitted under a verifier that
+    never checked it. A failure to read the signed admission is a 500, not
+    a quiet `DENY`. A value that is not `ADMIT` or `BLOCKED`, a list
+    included, is refused, not raised as a `TypeError`.
   - The four SDKs return the signed admission, and their clients'
     `verify_attestation` refuse an answer whose `admission` is not the one
     the token signs ("attestation is for another admission"): an answer
@@ -32,7 +38,10 @@ All notable changes to the QWED Protocol will be documented in this file.
     signs none. The verifiers also take an expected admission (`admission=`
     in Python, `admission` in TypeScript, `AttestationOptions.Admission` in
     Go, `.admission(...)` in Rust), and each SDK has a `check_admission`
-    helper (`checkAdmission`, `CheckAdmission`). Python's
+    helper (`checkAdmission`, `CheckAdmission`). In Python and TypeScript an
+    admission given as none (`None`, `undefined`) is checked too: the token
+    must sign none. In Go and Rust an empty one is not checked; their docs
+    point to the helper for that. Python's
     `VerificationResult` gains `admission`.
   - No released server issues tokens yet (#511 is unreleased), so no token
     in use lacks the claim.

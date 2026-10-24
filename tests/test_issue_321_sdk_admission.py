@@ -82,9 +82,10 @@ def test_an_answer_whose_admission_is_signed_verifies(server, admission):
 def test_an_answer_whose_admission_is_not_signed_is_refused(server, signed, carried):
     service, jwks = server
     answer = _answer(_token(service, signed), carried)
+    client = _client(jwks)
 
     with pytest.raises(AttestationError, match="another admission"):
-        _client(jwks).verify_attestation(answer)
+        client.verify_attestation(answer)
 
 
 def test_a_typed_result_carries_its_admission(server):
@@ -111,8 +112,10 @@ def test_the_async_client_checks_the_admission_too(server):
             client._jwks_fetched_at = time.monotonic()
             await client.verify_attestation(edited)
 
+    verifying = run()
+
     with pytest.raises(AttestationError, match="another admission"):
-        asyncio.run(run())
+        asyncio.run(verifying)
 
 
 def test_verify_attestation_checks_an_admission_given_to_it(server):
@@ -123,6 +126,18 @@ def test_verify_attestation_checks_an_admission_given_to_it(server):
     assert verify_attestation(token, jwks, proof_ref=PROOF)["qwed"]["admission"] == "BLOCKED"
     with pytest.raises(AttestationError, match="another admission"):
         verify_attestation(token, jwks, proof_ref=PROOF, admission="ADMIT")
+
+
+def test_an_admission_given_as_none_is_checked_too(server):
+    # #514 review: passing an answer's admission as given, None for one that
+    # carries none, must not skip the check.
+    service, jwks = server
+    signed = _token(service, "BLOCKED")
+    unsigned = _token(service)
+
+    assert verify_attestation(unsigned, jwks, proof_ref=PROOF, admission=None)["qwed"].get("admission") is None
+    with pytest.raises(AttestationError, match="another admission"):
+        verify_attestation(signed, jwks, proof_ref=PROOF, admission=None)
 
 
 def test_check_admission_reads_only_the_qwed_claims():

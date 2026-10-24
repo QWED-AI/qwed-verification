@@ -359,6 +359,13 @@ def _is_proof_hash(value: Any) -> bool:
     non-string included, so it is refused rather than raising TypeError."""
     return isinstance(value, str) and _PROOF_HASH.fullmatch(value) is not None
 
+
+def is_admission_claim(value: Any) -> bool:
+    """True for "ADMIT" or "BLOCKED"; False for anything else, an unhashable
+    value such as a list included, so it is refused rather than raising
+    TypeError (#514 review)."""
+    return isinstance(value, str) and value in ADMISSION_CLAIMS
+
 # (#275) Single source of truth for the generic attestation rejection message.
 # Every caller-sensitive failure returns this exactly, so attackers cannot
 # enumerate trusted issuers, probe expirations, or read implementation state.
@@ -469,6 +476,31 @@ class AttestationService:
         """Create SHA-256 hash of content."""
         return f"sha256:{hashlib.sha256(content.encode()).hexdigest()}"
 
+    def _binding_claims(
+        self,
+        proof_data: str | None,
+        proof_hash: str | None,
+        admission: str | None,
+    ) -> dict[str, Any]:
+        """The claims that bind a token to its answer: ``proof_hash``, and
+        ``admission`` where the route decides one (#321). Checked here, at
+        the signing boundary, not only by the wrapper; a value that is not
+        allowed raises ValueError."""
+        if proof_data is not None and proof_hash is not None:
+            raise ValueError("give proof_data or proof_hash, not both")
+        claims: dict[str, Any] = {}
+        if admission is not None:
+            if not is_admission_claim(admission):
+                raise ValueError("admission must be ADMIT or BLOCKED")
+            claims["admission"] = admission
+        if proof_hash is not None:
+            if not _is_proof_hash(proof_hash):
+                raise ValueError("proof_hash must be sha256:<64 hex>")
+            claims["proof_hash"] = proof_hash
+        elif proof_data:
+            claims["proof_hash"] = self._hash_content(proof_data)
+        return claims
+
     def create_attestation(
         self,
         verification_result: VerificationResult,
@@ -533,21 +565,8 @@ class AttestationService:
                 "confidence": verification_result.confidence,
             },
             "query_hash": self._hash_content(original_query),
+            **self._binding_claims(proof_data, proof_hash, admission),
         }
-
-        # Checked here, at the signing boundary, not only by the wrapper.
-        if proof_data is not None and proof_hash is not None:
-            raise ValueError("give proof_data or proof_hash, not both")
-        if admission is not None:
-            if admission not in ADMISSION_CLAIMS:
-                raise ValueError("admission must be ADMIT or BLOCKED")
-            qwed_claims["admission"] = admission
-        if proof_hash is not None:
-            if not _is_proof_hash(proof_hash):
-                raise ValueError("proof_hash must be sha256:<64 hex>")
-            qwed_claims["proof_hash"] = proof_hash
-        elif proof_data:
-            qwed_claims["proof_hash"] = self._hash_content(proof_data)
 
         if chain_id:
             qwed_claims["chain_id"] = chain_id
@@ -813,7 +832,7 @@ def create_verification_attestation(
             error="proof_hash must be sha256:<64 hex>",
         )
 
-    if admission is not None and admission not in ADMISSION_CLAIMS:
+    if admission is not None and not is_admission_claim(admission):
         logger.warning(
             "attestation.blocked query_hash=%s reason=INVALID_ADMISSION",
             hashlib.sha256(query.encode()).hexdigest()[:16],

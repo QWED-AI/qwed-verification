@@ -56,7 +56,8 @@ Every `Verified` answer carries `attestation`, an ES256 JWT the server
 signed after checking the verdict. Verifying it shows that server issued a
 VERIFIED verdict for this answer's `proof_ref` (and, when you pass the
 query, for that statement). On a route that decides an admission (maths,
-code, SQL, natural language), the token signs that too, and
+code, SQL and natural language, the agent route, and their batch items), the
+token signs that too, and
 `verify_attestation` checks it is the answer's `admission`. It covers only
 what the token signs, not other fields of the response such as
 `agent_message`:
@@ -82,7 +83,8 @@ without another request (a token the cached keys do not verify gets it too),
 and keys past their five minutes are not used instead. To verify offline, or
 against keys you pinned, call `qwed::verify_attestation(token, &jwks,
 proof_ref, &options)` with the JWKS you hold (`options.admission(...)` checks
-the admission too). A token says the server reached
+the admission too; for an answer without one, `qwed::check_admission(&claims,
+None)` requires that the token signs none). A token says the server reached
 the verdict; whether to act on it is still `is_admitted()`. The checks use
 the RustCrypto `p256` crate.
 

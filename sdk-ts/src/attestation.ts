@@ -82,7 +82,9 @@ export interface VerifyAttestationOptions {
     query?: string;
     /**
      * When given, the admission the token must sign: the answer's
-     * `admission` (#321). See `checkAdmission`.
+     * `admission` (#321). Given as `undefined` (an answer that carries none,
+     * passed as `{ admission: answer.admission }`), the token must sign none.
+     * See `checkAdmission`.
      */
     admission?: string;
     issuer?: string;
@@ -259,7 +261,8 @@ export async function verifyAttestation(
     if (options.query !== undefined && qwed.query_hash !== await statementHash(options.query)) {
         throw new AttestationError('attestation is for another statement (query differs)');
     }
-    if (options.admission !== undefined) {
+    // Given at all, even as undefined, it is checked (#514 review).
+    if ('admission' in options) {
         checkAdmission(claims as unknown as AttestationClaims, options.admission);
     }
     return claims as unknown as AttestationClaims;
