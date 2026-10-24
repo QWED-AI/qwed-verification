@@ -6,6 +6,23 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Security
 
+- **A configured attestation signing key (#319, #188).** Every VERIFIED
+  result is signed, but with a key generated per process, so after a restart
+  or on another replica no token could be verified. Set
+  `QWED_SIGNING_KEY` (the PEM) or
+  `QWED_SIGNING_KEY_FILE` (a path) to an unencrypted EC P-256
+  private key, and every process and replica signs and verifies with it.
+  - The key ID is the key's RFC 7638 thumbprint, the same everywhere.
+  - A configured key that cannot be read or used (not P-256, encrypted,
+    both settings set, a missing or non-regular file) is never replaced by
+    a generated one: the server refuses to start, as it does without
+    `QWED_AUDIT_SECRET_KEY`. Used as a library, without the server's
+    startup, signing is BLOCKED instead. Errors carry no key material.
+  - Unset, the key is generated per process as before, with a warning.
+    `get_issuer_info()` reports the policy (`configured` or `ephemeral`) and
+    `key_loaded_at`; `key_generated_at` is null for a configured key.
+  - The first part of #319: delivering tokens and a JWKS to consumers
+    follows.
 - **`/verification-context/from-diagnostic` records a caller's diagnostic
   without vouching for it (#321).** The route built a hash-bound document,
   logged to the audit chain, from a diagnostic the caller wrote in full, and
