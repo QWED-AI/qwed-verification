@@ -15,7 +15,7 @@ Thank you for your interest in contributing! Before you start, please read this 
 | [Architecture](https://docs.qwedai.tech/architecture) | System design and engine architecture |
 | [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) | Community standards |
 | [SECURITY.md](./SECURITY.md) | How to report vulnerabilities |
-
+| [CODE-GUIDELINES.md](./CODE-GUIDELINES.md) | Follow Code Guidelines |
 ---
 
 ## 🧠 Understanding QWED's Philosophy
@@ -58,6 +58,8 @@ be caught by the CI boundary gate (see `scripts/check_boundary.py`).
 | "The model said it's correct" | Verify with deterministic computation |
 
 ---
+
+
 
 ## 🔧 Development Setup
 
