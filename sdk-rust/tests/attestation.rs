@@ -15,6 +15,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const PROOF: &str = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 const QUERY: &str = "2+2=4";
+/// A statement the tokens here do not attest.
+const OTHER_QUERY: &str = "2+2=5";
 const KID: &str = "did:qwed:node:local#test-key";
 
 /// A signing key derived from `label`, and the JWKS that holds it under `kid`.
@@ -163,7 +165,7 @@ fn refusals() {
             "another statement",
             genuine.clone(),
             PROOF,
-            opts.clone().query("2+2=5"),
+            opts.clone().query(OTHER_QUERY),
             "another statement",
             false,
         ),

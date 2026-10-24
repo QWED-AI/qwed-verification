@@ -186,6 +186,10 @@ Err(Error::Auth) => eprintln!("Invalid API key"),
 | `VerificationResponse` | The DiagnosticResult envelope, with `is_admitted()` |
 | `BatchResponse`, `BatchResult` | A batch job and its items; each item (`BatchResult`) has `is_admitted()` |
 | `Error` | Error enum with Http, Auth, RateLimit, Api and Serialization variants |
+| `AttestationOptions` | How to verify an attestation: `AttestationOptions::new()`, then `.query(...)`, `.issuer(...)`, `.leeway(...)` |
+| `AttestationClaims` | A verified token's claims: `iss`, `sub`, `iat`, `exp`, `nbf`, `jti` and `qwed` (`QwedClaims`, with the attested `AttestedResult`) |
+| `AttestationError` | Why an attestation was not accepted: `Rejected`, `KeyMismatch` (fetching the keys again may help) or `KeysUnavailable` |
+| `Jwks`, `Jwk` | A server's public keys, read from `/.well-known/jwks.json` or from JSON you hold |
 
 ## Async Runtime
 
