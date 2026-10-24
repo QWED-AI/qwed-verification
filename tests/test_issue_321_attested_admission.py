@@ -23,6 +23,7 @@ from qwed_new.api import main as api_main
 from qwed_new.api.verification_context_routes import (
     ATTESTED_ADMIT,
     DiagnosticVerificationContextRequest,
+    _admitting_engine,
     create_verification_context_from_diagnostic,
 )
 from qwed_new.core import attestation
@@ -130,7 +131,8 @@ def test_any_other_admission_is_refused(fresh_service, admission):
 
 
 def test_the_admission_claims_are_admit_and_blocked():
-    assert is_admission_claim("ADMIT") and is_admission_claim("BLOCKED")
+    assert is_admission_claim("ADMIT")
+    assert is_admission_claim("BLOCKED")
 
 
 # ---------------------------------------------------------------- the trust step
@@ -248,6 +250,19 @@ def test_an_admitted_document_names_the_engine_that_signed_it(fresh_service):
     assert context["interpretation"]["theory"] == "stats verification"
     caller = context["evidence"]["evidence"]["developer_fields"]["caller_supplied"]
     assert (caller["verifier"], caller["verifier_version"]) == ("Lean", "9.9.9")
+
+
+@pytest.mark.parametrize("token", [None, ""])
+def test_no_token_names_no_admitting_engine(fresh_service, token):
+    # The route asks only once the trust step has accepted a token; without
+    # one there is nothing to read, and nothing is admitted.
+    assert _admitting_engine(token) is None
+
+
+def test_only_a_token_that_signs_admit_names_its_engine(fresh_service):
+    assert _admitting_engine(_token("ADMIT")) == "stats"
+    assert _admitting_engine(_token("BLOCKED")) is None
+    assert _admitting_engine(_token()) is None
 
 
 def test_a_denied_document_keeps_the_callers_verifier(fresh_service):

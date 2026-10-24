@@ -121,7 +121,8 @@ def _admitting_engine(token: str | None) -> str | None:
         return None
     try:
         is_valid, claims, _error = get_attestation_service().verify_attestation(token)
-    except Exception:  # noqa: BLE001 - reported as a 500 below, not suppressed
+    # Any failure here is reported as a 500, not suppressed.
+    except Exception:  # noqa: BLE001
         raise HTTPException(status_code=500, detail="attestation verification failed") from None
     qwed = claims.get("qwed") if is_valid and isinstance(claims, dict) else None
     if not isinstance(qwed, dict) or qwed.get("admission") != AdmissionDecision.ADMIT.value:
