@@ -42,6 +42,10 @@ class VerificationResult:
     # QWEDClient.verify_attestation or qwed_sdk.attestation.verify_attestation.
     attestation: Optional[str] = None
     proof_ref: Optional[str] = None
+    # The server's admission decision, ADMIT or BLOCKED, where the route
+    # makes one; the attestation signs it too (#321). Act on it, not on
+    # status alone.
+    admission: str | None = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "VerificationResult":
@@ -57,11 +61,11 @@ class VerificationResult:
 
 
 def token_fields(data: Dict[str, Any]) -> Dict[str, Optional[str]]:
-    """A response's ``attestation`` and ``proof_ref``, each a non-empty
-    string or None, for every VerificationResult built from a server
-    response (#319)."""
+    """A response's ``attestation``, ``proof_ref`` and ``admission``, each
+    a non-empty string or None, for every VerificationResult built from a
+    server response (#319, #321): what the attestation binds."""
     fields: Dict[str, Optional[str]] = {}
-    for name in ("attestation", "proof_ref"):
+    for name in ("attestation", "proof_ref", "admission"):
         value = data.get(name)
         fields[name] = value if isinstance(value, str) and value else None
     return fields

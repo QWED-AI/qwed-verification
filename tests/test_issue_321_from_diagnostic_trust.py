@@ -10,7 +10,9 @@ the document's message, its evidence fields and, with a token, an ADMIT.
 The document now records the diagnostic without vouching for it: the
 status and ``proof_ref`` stay the result's own (only they are checked), the
 caller's message and fields are kept under ``caller_supplied``, and the
-admission is always DENY.
+admission is DENY. (Since the attestation signs the server's admission, a
+token that signs ADMIT admits the document: see
+test_issue_321_attested_admission.py. The tokens here sign none.)
 """
 
 import json

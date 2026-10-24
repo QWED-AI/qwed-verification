@@ -349,11 +349,22 @@ class IssuerKeyPair:
 # A DiagnosticResult proof_ref, the only proof_hash form that is signed (#320).
 _PROOF_HASH = re.compile(r"sha256:[0-9a-f]{64}")
 
+# The admission decisions a token can sign as qwed.admission (#321), the
+# values of diagnostics.AdmissionDecision.
+ADMISSION_CLAIMS = frozenset({"ADMIT", "BLOCKED"})
+
 
 def _is_proof_hash(value: Any) -> bool:
     """True for a well-formed proof hash; False for anything else, a
     non-string included, so it is refused rather than raising TypeError."""
     return isinstance(value, str) and _PROOF_HASH.fullmatch(value) is not None
+
+
+def is_admission_claim(value: Any) -> bool:
+    """True for "ADMIT" or "BLOCKED"; False for anything else, an unhashable
+    value such as a list included, so it is refused rather than raising
+    TypeError (#514 review)."""
+    return isinstance(value, str) and value in ADMISSION_CLAIMS
 
 # (#275) Single source of truth for the generic attestation rejection message.
 # Every caller-sensitive failure returns this exactly, so attackers cannot
@@ -465,6 +476,31 @@ class AttestationService:
         """Create SHA-256 hash of content."""
         return f"sha256:{hashlib.sha256(content.encode()).hexdigest()}"
 
+    def _binding_claims(
+        self,
+        proof_data: str | None,
+        proof_hash: str | None,
+        admission: str | None,
+    ) -> dict[str, Any]:
+        """The claims that bind a token to its answer: ``proof_hash``, and
+        ``admission`` where the route decides one (#321). Checked here, at
+        the signing boundary, not only by the wrapper; a value that is not
+        allowed raises ValueError."""
+        if proof_data is not None and proof_hash is not None:
+            raise ValueError("give proof_data or proof_hash, not both")
+        claims: dict[str, Any] = {}
+        if admission is not None:
+            if not is_admission_claim(admission):
+                raise ValueError("admission must be ADMIT or BLOCKED")
+            claims["admission"] = admission
+        if proof_hash is not None:
+            if not _is_proof_hash(proof_hash):
+                raise ValueError("proof_hash must be sha256:<64 hex>")
+            claims["proof_hash"] = proof_hash
+        elif proof_data:
+            claims["proof_hash"] = self._hash_content(proof_data)
+        return claims
+
     def create_attestation(
         self,
         verification_result: VerificationResult,
@@ -476,6 +512,7 @@ class AttestationService:
         jti: Optional[str] = None,
         proof_hash: Optional[str] = None,
         store: bool = True,
+        admission: str | None = None,
     ) -> Attestation:
         """
         Create a signed attestation for a verification result.
@@ -498,6 +535,11 @@ class AttestationService:
                                  registry (get_attestation). False for a
                                  token checked once in this process and not
                                  returned, so it does not accumulate.
+            admission:           The server's admission decision for the
+                                 result, "ADMIT" or "BLOCKED", signed as
+                                 qwed.admission (#321). None for a route
+                                 that decides none; any other value is
+                                 refused.
 
         Returns:
             Attestation object with signed JWT.
@@ -523,17 +565,8 @@ class AttestationService:
                 "confidence": verification_result.confidence,
             },
             "query_hash": self._hash_content(original_query),
+            **self._binding_claims(proof_data, proof_hash, admission),
         }
-
-        # Checked here, at the signing boundary, not only by the wrapper.
-        if proof_data is not None and proof_hash is not None:
-            raise ValueError("give proof_data or proof_hash, not both")
-        if proof_hash is not None:
-            if not _is_proof_hash(proof_hash):
-                raise ValueError("proof_hash must be sha256:<64 hex>")
-            qwed_claims["proof_hash"] = proof_hash
-        elif proof_data:
-            qwed_claims["proof_hash"] = self._hash_content(proof_data)
 
         if chain_id:
             qwed_claims["chain_id"] = chain_id
@@ -741,6 +774,7 @@ def create_verification_attestation(
     confidence: float = 1.0,
     proof_data: Optional[str] = None,
     proof_hash: Optional[str] = None,
+    admission: str | None = None,
 ) -> AttestationResult:
     """Create a signed attestation for a verification result.
 
@@ -767,6 +801,9 @@ def create_verification_attestation(
         proof_hash:  Optional ``sha256:<hex>`` proof hash to bind as is, in
                      place of hashing ``proof_data``: a DiagnosticResult's
                      ``proof_ref`` (#320). A malformed value is BLOCKED.
+        admission:   The route's admission decision, "ADMIT" or "BLOCKED",
+                     signed as ``qwed.admission`` (#321); None where the route
+                     decides none. Any other value is BLOCKED.
 
     Returns:
         AttestationResult with status "ISSUED", "BLOCKED", or "UNVERIFIABLE".
@@ -795,6 +832,18 @@ def create_verification_attestation(
             error="proof_hash must be sha256:<64 hex>",
         )
 
+    if admission is not None and not is_admission_claim(admission):
+        logger.warning(
+            "attestation.blocked query_hash=%s reason=INVALID_ADMISSION",
+            hashlib.sha256(query.encode()).hexdigest()[:16],
+        )
+        return AttestationResult(
+            status=AttestationStatus.BLOCKED,
+            token=None,
+            error_code="INVALID_ADMISSION",
+            error="admission must be ADMIT or BLOCKED",
+        )
+
     if verified and not (proof_data or proof_hash):
         logger.warning(
             "attestation.blocked query_hash=%s reason=VERIFIED_WITHOUT_PROOF",
@@ -819,7 +868,7 @@ def create_verification_attestation(
         # and not returned (#319), so keeping it would only grow memory with
         # every VERIFIED response (#320).
         attestation = service.create_attestation(
-            result, query, proof_data, proof_hash=proof_hash, store=False
+            result, query, proof_data, proof_hash=proof_hash, store=False, admission=admission
         )
         return AttestationResult(
             status=AttestationStatus.ISSUED,

@@ -6,8 +6,14 @@ from dataclasses import replace
 from typing import Any, Dict, Optional
 import json
 
+from qwed_new.core.attestation import get_attestation_service
 from qwed_new.core.database import get_session
-from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus, enforce_trust_decision
+from qwed_new.core.diagnostics import (
+    AdmissionDecision,
+    DiagnosticResult,
+    DiagnosticStatus,
+    enforce_trust_decision,
+)
 from qwed_new.core.audit_logger import SecurityError, get_audit_logger
 from qwed_new.core.rate_limiter import check_rate_limit
 from qwed_new.core.security import redact_pii
@@ -72,7 +78,8 @@ def _diagnostic_result_from_payload(diagnostic: Any) -> DiagnosticResult:
     a VERIFIED result needs an attestation that binds them and the query.
     The caller's message and developer fields are recorded as given, under
     ``caller_supplied``, and decide nothing; in particular there is no
-    ``is_valid``, so the document's admission is DENY.
+    ``is_valid``, so the document's admission is DENY unless the attestation
+    signs ADMIT (see ``_attested_admission``).
     """
     if not isinstance(diagnostic, dict):
         return _malformed_diagnostic_result()
@@ -95,6 +102,33 @@ def _diagnostic_result_from_payload(diagnostic: Any) -> DiagnosticResult:
         )
     except (ValueError, TypeError, AttributeError):
         return _malformed_diagnostic_result()
+
+
+ATTESTED_ADMIT = "verification_context.attested_admit"
+
+
+def _admitting_engine(token: str | None) -> str | None:
+    """The engine that signed ADMIT for this verdict (``qwed.admission`` and
+    ``qwed.result.engine``, #321), or None if the token signs no ADMIT.
+
+    Read only after ``enforce_trust_decision`` has checked the token against
+    the result's status and ``proof_ref`` and the query, so the admission is
+    the server's decision for this verdict, not the caller's. A failure to
+    read it again is an enforcement failure: it fails loudly, with a 500, not
+    quietly as DENY (QWED_RULES.md section 6).
+    """
+    if not token:
+        return None
+    try:
+        is_valid, claims, _error = get_attestation_service().verify_attestation(token)
+    except Exception:  # noqa: BLE001 - reported as a 500 below, not suppressed
+        raise HTTPException(status_code=500, detail="attestation verification failed") from None
+    qwed = claims.get("qwed") if is_valid and isinstance(claims, dict) else None
+    if not isinstance(qwed, dict) or qwed.get("admission") != AdmissionDecision.ADMIT.value:
+        return None
+    signed_result = qwed.get("result")
+    engine = signed_result.get("engine") if isinstance(signed_result, dict) else None
+    return engine if isinstance(engine, str) and engine else None
 
 
 def _redact_strings(value: Any) -> Any:
@@ -150,7 +184,7 @@ def _safe_commit_context_log(
     "/from-diagnostic",
     responses={
         422: {"description": "Verification Context rejected"},
-        500: {"description": "Audit persistence failed"},
+        500: {"description": "Audit persistence or attestation verification failed"},
     },
 )
 def create_verification_context_from_diagnostic(
@@ -165,10 +199,15 @@ def create_verification_context_from_diagnostic(
     an attestation token binding the status, ``proof_ref`` and ``query``
     (BLOCKED otherwise). The caller's message and developer fields are kept
     under ``developer_fields.caller_supplied``, a blocked one's included, and
-    the admission is always DENY: nothing the caller wrote is taken as a
-    server verdict (#321).
+    decide nothing: nothing the caller wrote is taken as a server verdict
+    (#321). The admission is DENY unless that token also signs ADMIT, the
+    server's own admission of this verdict (``qwed.admission``). An admitted
+    document names the engine that signed it, and this server's version, as
+    its verifier; the caller's ``verifier`` and ``verifier_version`` are
+    kept under ``caller_supplied``.
     """
     result = _diagnostic_result_from_payload(payload.diagnostic)
+    verifier, verifier_version = payload.verifier, payload.verifier_version
     if result.status is DiagnosticStatus.VERIFIED:
         # The bridge enforces this too, but its BLOCKED replacement carries
         # the gate's fields only. Enforce here first so a blocked diagnostic
@@ -187,12 +226,33 @@ def create_verification_context_from_diagnostic(
                     "caller_supplied": result.developer_fields["caller_supplied"],
                 },
             )
+        elif (engine := _admitting_engine(payload.attestation_token)) is not None:
+            # The server signed ADMIT for this verdict, proof_ref and query,
+            # which it does only for a valid result: the document is admitted
+            # on the server's word, not the caller's, and so names the engine
+            # that verified it, not a verifier the caller chose.
+            verifier, verifier_version = engine, None
+            caller_supplied = result.developer_fields["caller_supplied"]
+            result = replace(
+                result,
+                developer_fields={
+                    **result.developer_fields,
+                    "constraint_id": ATTESTED_ADMIT,
+                    "is_valid": True,
+                    "attested_admission": AdmissionDecision.ADMIT.value,
+                    "caller_supplied": {
+                        **caller_supplied,
+                        "verifier": payload.verifier,
+                        "verifier_version": payload.verifier_version,
+                    },
+                },
+            )
     try:
         document = verification_context_from_diagnostic_result(
             result,
             formal_statement=payload.query,
-            verifier=payload.verifier,
-            verifier_version=payload.verifier_version,
+            verifier=verifier,
+            verifier_version=verifier_version,
             attestation_token=payload.attestation_token,
         )
         document.validate()

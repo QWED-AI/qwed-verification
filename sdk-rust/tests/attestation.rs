@@ -7,7 +7,8 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use p256::ecdsa::{signature::Signer, Signature, SigningKey};
 use qwed::{
-    statement_hash, verify_attestation, AttestationError, AttestationOptions, Jwks, DEFAULT_ISSUER,
+    check_admission, statement_hash, verify_attestation, AttestationError, AttestationOptions,
+    Jwks, DEFAULT_ISSUER,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -553,4 +554,37 @@ fn jwks_keys_that_cannot_verify() {
         matches!(error, AttestationError::KeyMismatch(_)),
         "{error:?}"
     );
+}
+
+#[test]
+fn the_attested_admission_is_returned_and_checked_when_given() {
+    // #321: a route that decides an admission signs it as qwed.admission.
+    let (signing, jwks) = key("genuine", KID);
+    let mut signed = claims();
+    signed["qwed"]["admission"] = json!("BLOCKED");
+    let token = sign(&signing, &header(), &signed, false);
+
+    for options in [
+        AttestationOptions::new(),
+        AttestationOptions::new().admission("BLOCKED"),
+    ] {
+        let verified = verify_attestation(&token, &jwks, PROOF, &options).unwrap();
+        assert_eq!(verified.qwed.admission.as_deref(), Some("BLOCKED"));
+    }
+    let error = verify_attestation(
+        &token,
+        &jwks,
+        PROOF,
+        &AttestationOptions::new().admission("ADMIT"),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("another admission"), "{error}");
+
+    let verified = verify_attestation(&token, &jwks, PROOF, &AttestationOptions::new()).unwrap();
+    assert!(check_admission(&verified, Some("BLOCKED")).is_ok());
+    assert!(check_admission(&verified, None).is_err());
+    let unsigned = sign(&signing, &header(), &claims(), false);
+    let verified = verify_attestation(&unsigned, &jwks, PROOF, &AttestationOptions::new()).unwrap();
+    assert!(check_admission(&verified, None).is_ok());
+    assert!(check_admission(&verified, Some("ADMIT")).is_err());
 }

@@ -49,7 +49,9 @@ supplies; it does not vouch for it. The document's verdict is the
 diagnostic's status (a `VERIFIED` one needs an attestation token that binds
 the status, `proof_ref` and query, or the document is `BLOCKED`). The
 caller's message and developer fields are kept under
-`developer_fields.caller_supplied`, and the admission is always `DENY`.
+`developer_fields.caller_supplied` and decide nothing. The admission is
+`DENY` unless that token also signs `ADMIT` (`qwed.admission`), the server's
+own admission of the verdict: then the document is `ADMIT`.
 
 ## Conformance expectations for other language SDKs
 

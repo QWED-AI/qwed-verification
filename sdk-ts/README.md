@@ -132,8 +132,11 @@ for (const item of batch.items) {
 Every `VERIFIED` answer carries `attestation`: an ES256 JWT the server signed
 after checking the verdict (no request option is needed). Verifying it shows
 that server issued a VERIFIED verdict for this answer's `proof_ref` (and,
-when you pass the query, for that statement). It covers only what the token
-signs, not other fields of the response such as `admission` or
+when you pass the query, for that statement). On a route that decides an
+admission (maths, code, SQL and natural language, the agent route, and
+their batch items), the token signs that too,
+and `client.verifyAttestation` checks it is the answer's `admission`. It
+covers only what the token signs, not other fields of the response such as
 `agent_message`:
 
 ```typescript
@@ -150,7 +153,7 @@ if (result.attestation) {
 ```
 
 To verify offline, or against keys you pinned, call
-`verifyAttestation(token, jwks, { proofRef, query })` with the JWKS you
+`verifyAttestation(token, jwks, { proofRef, query, admission })` with the JWKS you
 hold. A failure throws `AttestationError`. A token says the server reached
 the verdict; whether to act on it is still `isAdmitted(result)`.
 `parseAttestation` only decodes a token, without checking it.
