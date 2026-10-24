@@ -37,7 +37,7 @@ INTERNAL_PROCESSING_ERROR = "Internal processing error"
 
 from qwed_new.core.control_plane import ControlPlane, natural_language_admission
 from qwed_new.core.route_diagnostics import logic_diagnostic, natural_language_diagnostic
-from qwed_new.core.trust import attest_and_enforce
+from qwed_new.core.trust import AdmissionRule, attest_and_enforce
 from qwed_new.core.tenant_context import get_current_tenant, TenantContext
 from qwed_new.core.database import create_db_and_tables, get_session
 from qwed_new.core.audit_logger import get_audit_logger
@@ -377,14 +377,22 @@ def on_startup():
 # Initialize Kernel (Control Plane)
 control_plane = ControlPlane()
 
-def _enforce_trust(dr: DiagnosticResult, query: str, *, engine: str) -> DiagnosticResult:
+def _enforce_trust(
+    dr: DiagnosticResult,
+    query: str,
+    *,
+    engine: str,
+    admission: AdmissionRule | None = None,
+) -> DiagnosticResult:
     """Sign a VERIFIED result and enforce its attestation as mandatory (#320).
 
     Callers must use the returned DiagnosticResult for audit logging and
     response construction: a VERIFIED result whose attestation cannot be
     issued or does not check out comes back BLOCKED (see core/trust.py).
+    A route that decides an admission passes its rule, so the token signs the
+    admission the route returns (#321).
     """
-    return attest_and_enforce(dr, engine=engine, query=query)
+    return attest_and_enforce(dr, engine=engine, query=query, admission=admission)
 
 
 _merge_response = merge_diagnostic_result  # shared merge helper (#271)
@@ -635,7 +643,9 @@ async def verify_natural_language(
 
     if dr is None:
         dr = _natural_language_diagnostic(result)
-    dr = _enforce_trust(dr, query=request.query, engine="natural_language")
+    dr = _enforce_trust(
+        dr, query=request.query, engine="natural_language", admission=natural_language_admission
+    )
     # The verdict covers the LLM's translated expression, not the user's
     # question, so it is never admitted for the question while the
     # translation itself is unverified. The verdict stays as produced
@@ -1000,7 +1010,7 @@ async def verify_code(
         # AdmissionDecision rather than letting authority-only consumers treat
         # proof_ref as "safe to execute".
         dr = result
-        dr = _enforce_trust(dr, query=code, engine="code")
+        dr = _enforce_trust(dr, query=code, engine="code", admission=admission_decision)
         admission = admission_decision(dr)
 
         log = VerificationLog(
@@ -1025,7 +1035,7 @@ async def verify_code(
             INTERNAL_VERIFICATION_ERROR,
             {"constraint_id": "api.code.execution_error", "is_safe": False},
         )
-        dr = _enforce_trust(dr, query=code, engine="code")
+        dr = _enforce_trust(dr, query=code, engine="code", admission=admission_decision)
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=(code or "")[:200],
@@ -1166,7 +1176,7 @@ async def verify_math(
         if float_advisory is not None:
             dr.developer_fields.setdefault("advisory_checks", []).append(float_advisory)
 
-        dr = _enforce_trust(dr, query=expression, engine="math")
+        dr = _enforce_trust(dr, query=expression, engine="math", admission=admission_decision)
         # A proven-false identity is VERIFIED too, so the verdict alone is
         # not "safe to use": expose admission separately (QWED #15).
         admission = admission_decision(dr)
@@ -1193,7 +1203,7 @@ async def verify_math(
             INTERNAL_VERIFICATION_ERROR,
             {"constraint_id": "api.math.execution_error"},
         )
-        dr = _enforce_trust(dr, query=expression, engine="math")
+        dr = _enforce_trust(dr, query=expression, engine="math", admission=admission_decision)
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=expression,
@@ -1239,7 +1249,7 @@ async def verify_sql(
         # SQL must never be admitted, so we expose an explicit AdmissionDecision rather
         # than letting authority-only consumers treat proof_ref as "safe to execute".
         dr = result
-        dr = _enforce_trust(dr, query=query, engine="sql")
+        dr = _enforce_trust(dr, query=query, engine="sql", admission=admission_decision)
         admission = admission_decision(dr)
 
         log = VerificationLog(
@@ -1264,7 +1274,7 @@ async def verify_sql(
             INTERNAL_VERIFICATION_ERROR,
             {"constraint_id": "api.sql.execution_error", "is_valid": False},
         )
-        dr = _enforce_trust(dr, query=query, engine="sql")
+        dr = _enforce_trust(dr, query=query, engine="sql", admission=admission_decision)
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=query,
@@ -1887,7 +1897,12 @@ async def agent_verify(
     # The same row /verify/natural_language writes, plus the agent id.
     # AgentActivity is neither chained nor signed, so it is not the audit
     # record (#477).
-    dr = _enforce_trust(_natural_language_diagnostic(result), query=request.query, engine="natural_language")
+    dr = _enforce_trust(
+        _natural_language_diagnostic(result),
+        query=request.query,
+        engine="natural_language",
+        admission=natural_language_admission,
+    )
     admission = natural_language_admission(dr)
     await asyncio.to_thread(_safe_commit_log, VerificationLog(
         organization_id=agent.organization_id,

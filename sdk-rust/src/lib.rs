@@ -29,7 +29,7 @@
 pub mod attestation;
 
 pub use attestation::{
-    statement_hash, verify_attestation, AttestationClaims, AttestationError, AttestationOptions,
+    check_admission, statement_hash, verify_attestation, AttestationClaims, AttestationError, AttestationOptions,
     AttestedResult, Jwk, Jwks, QwedClaims, DEFAULT_ISSUER, JWKS_PATH,
 };
 

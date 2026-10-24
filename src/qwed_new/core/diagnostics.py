@@ -960,6 +960,7 @@ def _validate_attestation_claims(
     token_claims: Dict[str, Any],
     query: Optional[str],
     policy: str,
+    admission: str | None = None,
 ) -> Optional[DiagnosticResult]:
     """Validate token claims against result. Returns a blocked result or None."""
     raw_qwed = (token_claims or {}).get("qwed")
@@ -1038,6 +1039,22 @@ def _validate_attestation_claims(
             },
         )
 
+    if admission is not None and qwed_claims.get("admission") != admission:
+        logger.warning(
+            "trust_gate.blocked constraint_id=%s reason=claims_admission_mismatch policy=%s",
+            result.constraint_id or "unknown",
+            policy,
+        )
+        return DiagnosticResult.blocked(
+            agent_message="Verification blocked — attestation does not sign this admission",
+            developer_fields={
+                "constraint_id": "trust_gate.claims_admission_mismatch",
+                "token_admission": qwed_claims.get("admission"),
+                "expected_admission": admission,
+                "policy": policy,
+            },
+        )
+
     return None
 
 
@@ -1085,6 +1102,7 @@ def enforce_trust_decision(
     require_attestation: bool = True,
     trusted_issuers: Optional[List[str]] = None,
     query: Optional[str] = None,
+    admission: str | None = None,
 ) -> DiagnosticResult:
     """Enforce trust-boundary gate: VERIFIED without required attestation → BLOCKED.
 
@@ -1103,6 +1121,9 @@ def enforce_trust_decision(
         query: Original query string for query_hash binding validation.
             If provided, the attestation token's qwed.query_hash claim must
             match sha256(query). Without it, query binding is not checked.
+        admission: The admission decision the token must sign, "ADMIT" or
+            "BLOCKED" (#321). If provided, the token's qwed.admission claim
+            must equal it. Without it, the admission is not checked.
 
     Returns:
         The original DiagnosticResult if all policy checks pass, or a BLOCKED
@@ -1175,7 +1196,7 @@ def enforce_trust_decision(
         return verification
     _is_valid, token_claims, _error = verification
 
-    validation = _validate_attestation_claims(result, token_claims, query, policy)
+    validation = _validate_attestation_claims(result, token_claims, query, policy, admission)
     if validation is not None:
         return validation
 

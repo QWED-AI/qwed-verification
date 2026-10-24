@@ -349,6 +349,10 @@ class IssuerKeyPair:
 # A DiagnosticResult proof_ref, the only proof_hash form that is signed (#320).
 _PROOF_HASH = re.compile(r"sha256:[0-9a-f]{64}")
 
+# The admission decisions a token can sign as qwed.admission (#321), the
+# values of diagnostics.AdmissionDecision.
+ADMISSION_CLAIMS = frozenset({"ADMIT", "BLOCKED"})
+
 
 def _is_proof_hash(value: Any) -> bool:
     """True for a well-formed proof hash; False for anything else, a
@@ -476,6 +480,7 @@ class AttestationService:
         jti: Optional[str] = None,
         proof_hash: Optional[str] = None,
         store: bool = True,
+        admission: str | None = None,
     ) -> Attestation:
         """
         Create a signed attestation for a verification result.
@@ -498,6 +503,11 @@ class AttestationService:
                                  registry (get_attestation). False for a
                                  token checked once in this process and not
                                  returned, so it does not accumulate.
+            admission:           The server's admission decision for the
+                                 result, "ADMIT" or "BLOCKED", signed as
+                                 qwed.admission (#321). None for a route
+                                 that decides none; any other value is
+                                 refused.
 
         Returns:
             Attestation object with signed JWT.
@@ -528,6 +538,10 @@ class AttestationService:
         # Checked here, at the signing boundary, not only by the wrapper.
         if proof_data is not None and proof_hash is not None:
             raise ValueError("give proof_data or proof_hash, not both")
+        if admission is not None:
+            if admission not in ADMISSION_CLAIMS:
+                raise ValueError("admission must be ADMIT or BLOCKED")
+            qwed_claims["admission"] = admission
         if proof_hash is not None:
             if not _is_proof_hash(proof_hash):
                 raise ValueError("proof_hash must be sha256:<64 hex>")
@@ -741,6 +755,7 @@ def create_verification_attestation(
     confidence: float = 1.0,
     proof_data: Optional[str] = None,
     proof_hash: Optional[str] = None,
+    admission: str | None = None,
 ) -> AttestationResult:
     """Create a signed attestation for a verification result.
 
@@ -767,6 +782,9 @@ def create_verification_attestation(
         proof_hash:  Optional ``sha256:<hex>`` proof hash to bind as is, in
                      place of hashing ``proof_data``: a DiagnosticResult's
                      ``proof_ref`` (#320). A malformed value is BLOCKED.
+        admission:   The route's admission decision, "ADMIT" or "BLOCKED",
+                     signed as ``qwed.admission`` (#321); None where the route
+                     decides none. Any other value is BLOCKED.
 
     Returns:
         AttestationResult with status "ISSUED", "BLOCKED", or "UNVERIFIABLE".
@@ -795,6 +813,18 @@ def create_verification_attestation(
             error="proof_hash must be sha256:<64 hex>",
         )
 
+    if admission is not None and admission not in ADMISSION_CLAIMS:
+        logger.warning(
+            "attestation.blocked query_hash=%s reason=INVALID_ADMISSION",
+            hashlib.sha256(query.encode()).hexdigest()[:16],
+        )
+        return AttestationResult(
+            status=AttestationStatus.BLOCKED,
+            token=None,
+            error_code="INVALID_ADMISSION",
+            error="admission must be ADMIT or BLOCKED",
+        )
+
     if verified and not (proof_data or proof_hash):
         logger.warning(
             "attestation.blocked query_hash=%s reason=VERIFIED_WITHOUT_PROOF",
@@ -819,7 +849,7 @@ def create_verification_attestation(
         # and not returned (#319), so keeping it would only grow memory with
         # every VERIFIED response (#320).
         attestation = service.create_attestation(
-            result, query, proof_data, proof_hash=proof_hash, store=False
+            result, query, proof_data, proof_hash=proof_hash, store=False, admission=admission
         )
         return AttestationResult(
             status=AttestationStatus.ISSUED,

@@ -283,7 +283,10 @@ class BatchVerificationService:
                 organization_id=organization_id
             )
             dr = attest_and_enforce(
-                natural_language_diagnostic(result), engine="natural_language", query=item.query
+                natural_language_diagnostic(result),
+                engine="natural_language",
+                query=item.query,
+                admission=natural_language_admission,
             )
             # As /verify/natural_language: the verdict covers the translated
             # expression, so admission is decided by its own rule.
@@ -311,7 +314,7 @@ class BatchVerificationService:
                     item.query,
                     language=item.params.get("language", "python")
                 )
-                dr = attest_and_enforce(result, engine="code", query=item.query)
+                dr = attest_and_enforce(result, engine="code", query=item.query, admission=admission_decision)
                 serialized = dr.to_dict()
                 # Gate on admission like /verify/code: VERIFIED-as-unsafe code
                 # must never be admitted by authority-only consumers (#254).
@@ -349,7 +352,7 @@ class BatchVerificationService:
                     schema_ddl,
                     dialect=item.params.get("dialect", "sqlite")
                 )
-                dr = attest_and_enforce(result, engine="sql", query=item.query)
+                dr = attest_and_enforce(result, engine="sql", query=item.query, admission=admission_decision)
                 serialized = dr.to_dict()
                 # As /verify/sql: a proven-malicious query is VERIFIED but
                 # must not be admitted (#307).
@@ -408,7 +411,7 @@ class BatchVerificationService:
         # As /verify/math: a VERIFIED identity is signed and its attestation
         # enforced, and is BLOCKED if signing fails (#271, #320). Admission is
         # decided apart from the verdict, as there (#307).
-        dr = attest_and_enforce(dr, engine="math", query=item.query)
+        dr = attest_and_enforce(dr, engine="math", query=item.query, admission=admission_decision)
         return merge_diagnostic_result(dr) | {"admission": admission_decision(dr).value}
 
     def get_job(self, job_id: str) -> Optional[BatchJob]:

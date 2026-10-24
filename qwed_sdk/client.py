@@ -17,6 +17,7 @@ from qwed_sdk.attestation import (
     JWKS_PATH,
     KeyMismatchError,
     KeysUnavailableError,
+    check_admission,
     require_answer,
     verify_attestation,
 )
@@ -36,18 +37,18 @@ _JWKS_MIN_REFRESH_SECONDS = 30.0
 
 def _attestation_of(
     result: VerificationResult | dict[str, Any],
-) -> tuple[str | None, str | None]:
-    """The token and proof_ref of an answer, typed or as the response dict,
-    checked before any key is fetched so a missing one is an
-    AttestationError, not a network error."""
+) -> tuple[str | None, str | None, str | None]:
+    """The token, proof_ref and admission of an answer, typed or as the
+    response dict. The token and proof_ref are checked before any key is
+    fetched, so a missing one is an AttestationError, not a network error."""
     if isinstance(result, VerificationResult):
-        token, proof_ref = result.attestation, result.proof_ref
+        token, proof_ref, admission = result.attestation, result.proof_ref, result.admission
     elif isinstance(result, dict):
-        token, proof_ref = result.get("attestation"), result.get("proof_ref")
+        token, proof_ref, admission = result.get("attestation"), result.get("proof_ref"), result.get("admission")
     else:
         raise TypeError("expected a VerificationResult or a response dict")
     require_answer(token, proof_ref)
-    return token, proof_ref
+    return token, proof_ref, admission
 
 
 class QWEDClient:
@@ -150,19 +151,21 @@ class QWEDClient:
     ) -> Dict[str, Any]:
         """Verify an answer's attestation against this server's keys and
         return its claims; raise qwed_sdk.attestation.AttestationError if it
-        does not verify or is not this answer's (#319).
+        does not verify or is not this answer's (#319): its proof_ref, and
+        the admission it carries, which the token must sign (none if it
+        carries none, #321).
 
         ``query``, when given, must be the statement the verdict covers. To
         verify against keys you pinned, use
         qwed_sdk.attestation.verify_attestation with your JWKS.
         """
-        token, proof_ref = _attestation_of(result)
+        token, proof_ref, admission = _attestation_of(result)
         verify = functools.partial(
             verify_attestation, token, proof_ref=proof_ref, query=query, issuer=issuer, leeway=leeway,
         )
         jwks = self.get_jwks()
         try:
-            return verify(jwks)
+            claims = verify(jwks)
         except KeyMismatchError:
             # The key may have rotated, or the server restarted with a new
             # key under the same kid, since the JWKS was cached: try the
@@ -170,7 +173,11 @@ class QWEDClient:
             newer = self._jwks_after_mismatch(jwks)
             if newer is None:
                 raise
-            return verify(newer)
+            claims = verify(newer)
+        # The token signs the server's admission where the route decides one
+        # (#321): the answer's admission must be that one.
+        check_admission(claims, admission)
+        return claims
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -211,7 +218,10 @@ class QWEDClient:
 
         The server records the diagnostic without vouching for it: the
         message and developer fields are kept under
-        ``developer_fields.caller_supplied`` and the admission is always DENY.
+        ``developer_fields.caller_supplied`` and decide nothing. The admission
+        is DENY unless ``attestation_token`` signs ADMIT for this verdict
+        (#321), as a token from a maths, code, SQL or natural-language answer
+        that the server admitted does.
         """
         return self._request(
             "POST",
@@ -626,18 +636,20 @@ class QWEDAsyncClient:
         leeway: int = 0,
     ) -> Dict[str, Any]:
         """Verify an answer's attestation; see QWEDClient.verify_attestation."""
-        token, proof_ref = _attestation_of(result)
+        token, proof_ref, admission = _attestation_of(result)
         verify = functools.partial(
             verify_attestation, token, proof_ref=proof_ref, query=query, issuer=issuer, leeway=leeway,
         )
         jwks = await self.get_jwks()
         try:
-            return verify(jwks)
+            claims = verify(jwks)
         except KeyMismatchError:
             newer = await self._jwks_after_mismatch(jwks)
             if newer is None:
                 raise
-            return verify(newer)
+            claims = verify(newer)
+        check_admission(claims, admission)
+        return claims
 
     async def __aenter__(self):
         self._client = httpx.AsyncClient(timeout=self.timeout)
@@ -688,7 +700,10 @@ class QWEDAsyncClient:
 
         The server records the diagnostic without vouching for it: the
         message and developer fields are kept under
-        ``developer_fields.caller_supplied`` and the admission is always DENY.
+        ``developer_fields.caller_supplied`` and decide nothing. The admission
+        is DENY unless ``attestation_token`` signs ADMIT for this verdict
+        (#321), as a token from a maths, code, SQL or natural-language answer
+        that the server admitted does.
         """
         return await self._request(
             "POST",

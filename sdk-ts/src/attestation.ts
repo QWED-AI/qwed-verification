@@ -5,8 +5,9 @@
  * the server signed after checking the verdict. Verifying it shows that
  * server issued a VERIFIED verdict for this answer's `proof_ref` (and, when
  * you pass it, for this statement). It covers only what the token signs:
- * the status, `proof_ref` and statement hash, not other fields of the
- * response such as `admission` or `agent_message`. What is checked:
+ * the status, `proof_ref`, statement hash and, on a route that decides one,
+ * the admission; not other fields of the response such as `agent_message`.
+ * What is checked:
  *
  * - the signature, with the key the token header's `kid` names in the
  *   server's JWKS (`GET /.well-known/jwks.json`);
@@ -79,6 +80,11 @@ export interface VerifyAttestationOptions {
     proofRef: string;
     /** When given, the statement the verdict covers must hash to the token's `query_hash`. */
     query?: string;
+    /**
+     * When given, the admission the token must sign: the answer's
+     * `admission` (#321). See `checkAdmission`.
+     */
+    admission?: string;
     issuer?: string;
     /** Clock skew allowed on expiry, in seconds. */
     leewaySeconds?: number;
@@ -253,5 +259,19 @@ export async function verifyAttestation(
     if (options.query !== undefined && qwed.query_hash !== await statementHash(options.query)) {
         throw new AttestationError('attestation is for another statement (query differs)');
     }
+    if (options.admission !== undefined) {
+        checkAdmission(claims as unknown as AttestationClaims, options.admission);
+    }
     return claims as unknown as AttestationClaims;
+}
+
+/**
+ * Throw AttestationError unless the verified `claims` sign `admission`: the
+ * answer's `admission` (#321), or undefined for an answer that carries none,
+ * whose token must then sign none.
+ */
+export function checkAdmission(claims: AttestationClaims, admission: string | undefined): void {
+    if (claims?.qwed?.admission !== admission) {
+        throw new AttestationError('attestation is for another admission (admission differs)');
+    }
 }

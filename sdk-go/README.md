@@ -67,8 +67,10 @@ The `Verified` field and `IsVerified()` are deprecated. Decoding always sets `Ve
 Every `StatusVerified` answer carries `Attestation`, an ES256 JWT the server
 signed after checking the verdict. Verifying it shows that server issued a
 VERIFIED verdict for this answer's `ProofRef` (and, when you pass `Query`,
-for that statement). It covers only what the token signs, not other fields
-of the response such as `Admission` or `AgentMessage`:
+for that statement). On a route that decides an admission (maths, code,
+SQL, natural language), the token signs that too, and `VerifyAttestation`
+checks it is the answer's `Admission`. It covers only what the token signs,
+not other fields of the response such as `AgentMessage`:
 
 ```go
 result, err := client.VerifyMath(ctx, "2+2=4")
@@ -95,7 +97,8 @@ not verify gets it too), and keys past their five minutes are not used
 instead. A caller waiting for another's fetch stops when its own context
 ends. `GetJWKS` returns a copy of the keys. To verify offline, or against
 keys you pinned, call
-`qwed.VerifyAttestation(token, &jwks, proofRef, opts)` with the JWKS you
+`qwed.VerifyAttestation(token, &jwks, proofRef, opts)` (set `opts.Admission` to check the
+admission) with the JWKS you
 hold. A token says the server reached the verdict; whether to act on it is
 still `IsAdmitted()`.
 

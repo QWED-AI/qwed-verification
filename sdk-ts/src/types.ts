@@ -235,6 +235,8 @@ export interface AttestationClaims {
         result: AttestationResult;
         query_hash?: string;
         proof_hash?: string;
+        /** The server's admission, ADMIT or BLOCKED, on a route that decides one (#321). */
+        admission?: string;
         chain_id?: string;
         chain_index?: number;
     };

@@ -38,6 +38,7 @@ export {
     KeyMismatchError,
     UnknownKeyError,
     verifyAttestation,
+    checkAdmission,
     statementHash,
     DEFAULT_ISSUER,
     JWKS_PATH,

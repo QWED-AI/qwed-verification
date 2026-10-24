@@ -336,8 +336,10 @@ func clockClient(server *httptest.Server) (*Client, *fakeClock) {
 	return client, clock
 }
 
+// answer is a VERIFIED answer carrying token, and no admission, as the
+// tokens here sign none unless a test says otherwise.
 func answer(token string) *VerificationResponse {
-	return &VerificationResponse{Status: StatusVerified, Admission: AdmissionAdmit, ProofRef: testProof, Attestation: token}
+	return &VerificationResponse{Status: StatusVerified, ProofRef: testProof, Attestation: token}
 }
 
 func TestTheClientVerifiesAndReusesTheJWKS(t *testing.T) {
@@ -705,4 +707,69 @@ func TestTheClientChecksTheAnswerBeforeFetchingKeys(t *testing.T) {
 	if got := keys.fetches.Load(); got != 0 {
 		t.Fatalf("fetches = %d, want 0", got)
 	}
+}
+
+// ============================================================================
+// The attested admission (#321)
+// ============================================================================
+
+// withAdmission are testClaims whose qwed claims sign admission ("" for none).
+func withAdmission(admission string) map[string]interface{} {
+	claims := testClaims(nil)
+	if admission != "" {
+		claims["qwed"].(map[string]interface{})["admission"] = admission
+	}
+	return claims
+}
+
+func TestTheClientChecksTheAttestedAdmission(t *testing.T) {
+	key := newTestKey(t)
+	keys := &keyServer{respond: func(int32) (int, interface{}) { return 200, key.jwks }}
+	server := httptest.NewServer(keys.handler(t))
+	defer server.Close()
+	client, _ := clockClient(server)
+
+	for _, tc := range []struct {
+		name, signed string
+		carried      Admission
+		ok           bool
+	}{
+		{"ADMIT signed and carried", "ADMIT", AdmissionAdmit, true},
+		{"BLOCKED signed and carried", "BLOCKED", AdmissionBlocked, true},
+		{"none signed, none carried", "", "", true},
+		{"an answer edited to say ADMIT", "BLOCKED", AdmissionAdmit, false},
+		{"a token that signs no admission", "", AdmissionAdmit, false},
+		{"an answer that dropped its admission", "ADMIT", "", false},
+		{"an admission this SDK does not know", "ADMIT", AdmissionUnknown, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := answer(sign(t, key.private, defaultHeader(), withAdmission(tc.signed), false))
+			resp.Admission = tc.carried
+
+			claims, err := client.VerifyAttestation(context.Background(), resp, AttestationOptions{})
+
+			if tc.ok {
+				if err != nil || claims.QWED.Admission != tc.signed {
+					t.Fatalf("%v %+v", err, claims)
+				}
+				return
+			}
+			mustReject(t, err, ErrAttestation, "another admission")
+		})
+	}
+}
+
+func TestVerifyAttestationChecksAnAdmissionGivenToIt(t *testing.T) {
+	key := newTestKey(t)
+	token := sign(t, key.private, defaultHeader(), withAdmission("BLOCKED"), false)
+
+	for _, admission := range []string{"BLOCKED", ""} {
+		claims, err := VerifyAttestation(token, key.jwks, testProof, AttestationOptions{Admission: admission})
+		if err != nil || claims.QWED.Admission != "BLOCKED" {
+			t.Fatalf("%q: %v %+v", admission, err, claims)
+		}
+	}
+	_, err := VerifyAttestation(token, key.jwks, testProof, AttestationOptions{Admission: "ADMIT"})
+	mustReject(t, err, ErrAttestation, "another admission")
+	mustReject(t, CheckAdmission(nil, ""), ErrAttestation, "another admission")
 }

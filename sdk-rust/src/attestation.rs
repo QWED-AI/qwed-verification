@@ -4,8 +4,9 @@
 //! the server signed after checking the verdict. Verifying it shows that
 //! server issued a VERIFIED verdict for this answer's `proof_ref` (and, when
 //! you pass it, for this statement). It covers only what the token signs: the
-//! status, `proof_ref` and statement hash, not other fields of the response
-//! such as `admission` or `agent_message`. What is checked:
+//! status, `proof_ref`, statement hash and, on a route that decides one, the
+//! admission; not other fields of the response such as `agent_message`. What
+//! is checked:
 //!
 //! - the signature, with the key the token header's `kid` names in the
 //!   server's JWKS (`GET /.well-known/jwks.json`);
@@ -15,15 +16,19 @@
 //! - that its `proof_hash` is the answer's `proof_ref`, so it is this
 //!   answer's token;
 //! - optionally, that its `query_hash` is the SHA-256 of the statement the
-//!   verdict covers.
+//!   verdict covers;
+//! - on a route that decides an admission, the token signs it too
+//!   (`qwed.admission`, #321): the client checks it is the answer's
+//!   `admission`, so the server's ADMIT or BLOCKED is verified as well.
 //!
-//! A token says the server reached the verdict; whether to act on it is still
-//! the answer's admission ([`VerificationResponse::is_admitted`]). Fetching
+//! A token says the server reached the verdict and, where it signs one, the
+//! admission; act on the admission ([`VerificationResponse::is_admitted`]).
+//! Fetching
 //! the JWKS from the server you asked trusts that server's TLS; to verify
 //! offline or against a pinned key, call [`verify_attestation`] with the JWKS
 //! you hold.
 
-use crate::{QWEDClient, VerificationResponse};
+use crate::{Admission, QWEDClient, VerificationResponse};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -124,6 +129,10 @@ pub struct QwedClaims {
     #[serde(default)]
     pub query_hash: Option<String>,
     pub proof_hash: String,
+    /// The server's admission, `ADMIT` or `BLOCKED`, on a route that decides
+    /// one (#321); `None` otherwise.
+    #[serde(default)]
+    pub admission: Option<String>,
 }
 
 /// A verified token's claims. Times are Unix seconds.
@@ -154,6 +163,9 @@ pub struct AttestationOptions {
     pub leeway: Duration,
     /// The current time (tests); the system clock when `None`.
     pub now: Option<SystemTime>,
+    /// When set, the admission the token must sign: the answer's `admission`
+    /// (#321). See [`check_admission`].
+    pub admission: Option<String>,
 }
 
 impl AttestationOptions {
@@ -185,6 +197,27 @@ impl AttestationOptions {
         self.now = Some(now);
         self
     }
+
+    /// Check the token signs `admission`, the answer's (#321).
+    pub fn admission(mut self, admission: impl Into<String>) -> Self {
+        self.admission = Some(admission.into());
+        self
+    }
+}
+
+/// An error unless the verified `claims` sign `admission`: the answer's
+/// `admission` (#321), or `None` for an answer that carries none, whose token
+/// must then sign none.
+pub fn check_admission(
+    claims: &AttestationClaims,
+    admission: Option<&str>,
+) -> Result<(), AttestationError> {
+    if claims.qwed.admission.as_deref() != admission {
+        return Err(rejected(
+            "attestation is for another admission (admission differs)",
+        ));
+    }
+    Ok(())
 }
 
 /// The `query_hash` a token carries for `statement`.
@@ -339,6 +372,9 @@ pub fn verify_attestation(
             ));
         }
     }
+    if let Some(admission) = &options.admission {
+        check_admission(&claims, Some(admission))?;
+    }
     Ok(claims)
 }
 
@@ -490,8 +526,9 @@ impl QWEDClient {
 
     /// Verify `response`'s attestation against this server's keys and return
     /// its claims. An error says the token does not verify or is not this
-    /// answer's, or ([`AttestationError::KeysUnavailable`]) the keys could not
-    /// be fetched. To verify against keys you pinned, call
+    /// answer's (its `proof_ref`, and the `admission` it carries, which the
+    /// token must sign, none if it carries none, #321), or
+    /// ([`AttestationError::KeysUnavailable`]) the keys could not be fetched. To verify against keys you pinned, call
     /// [`verify_attestation`] with your JWKS.
     pub async fn verify_attestation(
         &self,
@@ -503,7 +540,7 @@ impl QWEDClient {
         // A missing token or proof_ref is refused before any key is fetched.
         require_answer(token, proof_ref)?;
         let jwks = self.cached_jwks(false).await?;
-        match verify_attestation(token, &jwks, proof_ref, options) {
+        let claims = match verify_attestation(token, &jwks, proof_ref, options) {
             Err(AttestationError::KeyMismatch(reason)) => {
                 // The key may have rotated, or the server restarted with a new
                 // key under the same kid, since the JWKS was cached: try the
@@ -514,7 +551,19 @@ impl QWEDClient {
                 }
             }
             verified => verified,
-        }
+        }?;
+        // The token signs the server's admission where the route decides one
+        // (#321): the answer's admission must be that one.
+        let carried = response
+            .admission
+            .as_ref()
+            .map(|admission| match admission {
+                Admission::Admit => "ADMIT",
+                Admission::Blocked => "BLOCKED",
+                Admission::Unknown => "UNKNOWN",
+            });
+        check_admission(&claims, carried)?;
+        Ok(claims)
     }
 }
 

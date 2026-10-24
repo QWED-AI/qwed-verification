@@ -9,16 +9,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+    Admission,
     AttestationError,
     KeyMismatchError,
     QWEDClient,
     QWEDError,
     UnknownKeyError,
+    checkAdmission,
     parseVerificationResponse,
     statementHash,
     verifyAttestation,
 } from '../src';
-import type { Jwks } from '../src';
+import type { AttestationClaims, Jwks } from '../src';
 
 const PROOF = 'sha256:' + 'e'.repeat(64);
 const QUERY = '2+2=4';
@@ -466,5 +468,69 @@ describe('the response and the client', () => {
         await client.verifyAttestation({ attestation: token, proof_ref: PROOF });
 
         expect(fetches).toBe(1);
+    });
+});
+
+describe('the attested admission (#321)', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    /** A token whose qwed claims sign `admission` (none when undefined). */
+    async function signed(privateKey: PrivateKey, admission?: string) {
+        const base = await claims();
+        const qwed = admission === undefined ? base.qwed : { ...base.qwed, admission };
+        return sign(privateKey, { ...base, qwed });
+    }
+
+    function serving(jwks: Jwks): QWEDClient {
+        vi.stubGlobal('fetch', async () => new Response(JSON.stringify(jwks), { status: 200 }));
+        return new QWEDClient({ apiKey: 'k', baseUrl: 'http://qwed.test' });
+    }
+
+    it.each([Admission.Admit, Admission.Blocked, undefined])(
+        'verifies an answer whose admission (%s) the token signs',
+        async admission => {
+            const { privateKey, jwks } = await keyPair();
+            const token = await signed(privateKey, admission);
+
+            const verified = await serving(jwks).verifyAttestation({ attestation: token, proof_ref: PROOF, admission });
+
+            expect(verified.qwed.admission).toBe(admission);
+        },
+    );
+
+    it.each([
+        ['an answer edited to say ADMIT', Admission.Blocked, Admission.Admit],
+        ['a token that signs no admission', undefined, Admission.Admit],
+        ['an answer that dropped its admission', Admission.Admit, undefined],
+        ['an admission this SDK does not know', Admission.Admit, Admission.Unknown],
+    ])('refuses %s', async (_case, signedAdmission, carried) => {
+        const { privateKey, jwks } = await keyPair();
+        const token = await signed(privateKey, signedAdmission);
+
+        await expect(serving(jwks).verifyAttestation({ attestation: token, proof_ref: PROOF, admission: carried }))
+            .rejects.toThrow(/another admission/);
+    });
+
+    it('checks an admission given to verifyAttestation', async () => {
+        const { privateKey, jwks } = await keyPair();
+        const token = await signed(privateKey, 'BLOCKED');
+
+        await expect(verifyAttestation(token, jwks, { proofRef: PROOF, admission: 'BLOCKED' })).resolves.toBeTruthy();
+        await expect(verifyAttestation(token, jwks, { proofRef: PROOF })).resolves.toBeTruthy();
+        await expect(verifyAttestation(token, jwks, { proofRef: PROOF, admission: 'ADMIT' }))
+            .rejects.toBeInstanceOf(AttestationError);
+    });
+
+    it('checkAdmission reads only the qwed claims', async () => {
+        const base = (await claims()) as unknown as AttestationClaims;
+        const signedAdmit = { ...base, qwed: { ...base.qwed, admission: 'ADMIT' } };
+        const outsideQwed = { ...base, admission: 'ADMIT' } as AttestationClaims;
+
+        expect(() => checkAdmission(signedAdmit, 'ADMIT')).not.toThrow();
+        expect(() => checkAdmission(base, undefined)).not.toThrow();
+        expect(() => checkAdmission(outsideQwed, 'ADMIT')).toThrow(AttestationError);
     });
 });
