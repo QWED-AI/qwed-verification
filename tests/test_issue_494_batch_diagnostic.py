@@ -85,12 +85,24 @@ def _route_and_batch(client, kind, output):
     return route, batch["items"][0]
 
 
+def _same_answer(item_result, route):
+    """The batch item's result is the route's response. Each signing issues
+    its own token (#319: a fresh ID and issue time), so the two tokens
+    differ; both carry one or neither does, and the rest is equal."""
+    assert ("attestation" in item_result) == ("attestation" in route)
+
+    def strip(answer):
+        return {k: v for k, v in answer.items() if k != "attestation"}
+
+    return strip(item_result) == strip(route)
+
+
 @pytest.mark.parametrize("case", sorted(LOGIC_OUTPUTS))
 def test_a_batch_logic_item_returns_what_verify_logic_returns(client, case):
     route, item = _route_and_batch(client, "logic", LOGIC_OUTPUTS[case])
 
     assert item["status"] == "completed"
-    assert item["result"] == route
+    assert _same_answer(item["result"], route)
     assert item["result"]["status"] in ("VERIFIED", "UNVERIFIABLE", "BLOCKED")
 
 
@@ -99,14 +111,14 @@ def test_a_batch_natural_language_item_returns_what_its_route_returns(client, ca
     route, item = _route_and_batch(client, "natural_language", NL_OUTPUTS[case])
 
     assert item["status"] == "completed"
-    assert item["result"] == route
+    assert _same_answer(item["result"], route)
     assert item["result"]["admission"] in ("ADMIT", "BLOCKED")
 
 
 def test_a_proven_translation_stays_verified_and_is_not_admitted(client):
     route, item = _route_and_batch(client, "natural_language", NL_OUTPUTS["proven_translation"])
 
-    assert item["result"] == route
+    assert _same_answer(item["result"], route)
     assert item["result"]["status"] == "VERIFIED"
     assert item["result"]["proof_ref"]
     assert item["result"]["admission"] == "BLOCKED"

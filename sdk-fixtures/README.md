@@ -21,3 +21,8 @@ fails if the server's answers to the deterministic requests drift from them.
 
 The natural-language, logic and fact answers depend on the configured LLM
 provider, so the Python test checks only their envelope rules.
+
+Every `VERIFIED` answer carries `attestation`, its signed token (an ES256
+JWT, #319). The ones here were issued by a key generated for the capture, so
+they show the shape and claims but do not verify against any server's
+`/.well-known/jwks.json`.

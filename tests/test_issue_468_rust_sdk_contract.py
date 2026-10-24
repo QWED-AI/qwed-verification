@@ -55,6 +55,9 @@ RUST_FIELD_TYPES = {
     "is_authoritative": (bool, NONE),
     "constraint_id": (str, NONE),
     "developer_fields": (dict, NONE),
+    # The signed token a VERIFIED answer carries (#319); the SDKs keep it
+    # with the endpoint's own fields until they read it themselves.
+    "attestation": (str, NONE),
 }
 # BatchResult and BatchResponse fields, the same way (Go reads error,
 # created_at and completed_at as strings).

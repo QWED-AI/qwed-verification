@@ -10,10 +10,15 @@ server with no attestation ever issued or checked.
 the VERIFIED result, then enforce the attestation as mandatory. A result
 that is not VERIFIED (UNVERIFIABLE or BLOCKED) is already fail closed and
 passes through unchanged. If signing fails, the result is BLOCKED.
+
+A VERIFIED result that passes carries its token (``attestation``), so the
+response delivers it and a consumer can check it against the server's JWKS
+(#319).
 """
 
 import logging
 import math
+from dataclasses import replace
 
 from qwed_new.core.attestation import AttestationStatus, create_verification_attestation
 from qwed_new.core.diagnostics import (
@@ -92,9 +97,15 @@ def attest_and_enforce(dr: DiagnosticResult, *, engine: str, query: str) -> Diag
                 "verdict_proof_ref": dr.proof_ref,
             },
         )
-    return enforce_trust_decision(
+    enforced = enforce_trust_decision(
         dr,
         require_attestation=True,
         attestation_token=attestation.token,
         query=statement,
     )
+    if enforced.status is not DiagnosticStatus.VERIFIED:
+        return enforced
+    # Delivered with the result, so a consumer can check the verdict against
+    # the server's JWKS (#319). Only a token that has just passed the checks
+    # above is attached.
+    return replace(enforced, attestation=attestation.token)

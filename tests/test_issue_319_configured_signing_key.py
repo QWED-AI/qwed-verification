@@ -383,11 +383,12 @@ def test_the_server_starts_and_loads_a_usable_key(fresh_service):
 
 # ---------------------------------------------------------------- revocation
 
-def test_revocation_is_per_service_until_it_is_shared():
+def test_revocation_is_per_service():
     """Pins a known limit (#510 review): revocation is held in memory, so a
     service sharing the key still accepts a token another revoked. Nothing
-    revokes today and no token leaves the server; this must change before
-    tokens are delivered (#319), and this test with it."""
+    in the server revokes. Delivered tokens are short-lived instead, and
+    rotating the key ends them all (#319, test_issue_319_deliver_attestations);
+    a shared revocation store would change this test."""
     pem = _pem()
     a = AttestationService(key_continuity_policy="configured", private_key_pem=pem)
     b = AttestationService(key_continuity_policy="configured", private_key_pem=pem)

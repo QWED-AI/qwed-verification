@@ -63,13 +63,45 @@ SIGNING_KEY_FILE_ENV = "QWED_SIGNING_KEY_FILE"
 # A P-256 private key in PEM is about 250 bytes; a file far larger is not one.
 _MAX_KEY_FILE_BYTES = 16 * 1024
 
+# How long a token the server issues stays valid, in seconds (#319). Tokens
+# are delivered to consumers, and revocation is held per process, so a
+# token's lifetime is what bounds its use; rotating the key ends them all.
+TTL_ENV = "QWED_ATTESTATION_TTL_SECONDS"
+DEFAULT_TTL_SECONDS = 24 * 60 * 60
+_MIN_TTL_SECONDS = 60
+_MAX_TTL_SECONDS = 30 * 24 * 60 * 60
 
-class SigningKeyError(RuntimeError):
+
+class AttestationConfigError(RuntimeError):
+    """The server's attestation settings cannot be used."""
+
+
+class SigningKeyError(AttestationConfigError):
     """The configured signing key is missing, unreadable or unusable.
 
     Its message never includes key material: it can reach a log line and a
     BLOCKED result's developer fields.
     """
+
+
+def configured_ttl_seconds() -> int:
+    """The token lifetime from ``QWED_ATTESTATION_TTL_SECONDS``: 24 hours
+    when unset, otherwise a whole number of seconds from 60 to 30 days.
+
+    Anything else raises AttestationConfigError rather than falling back, so
+    a typo cannot quietly issue tokens for longer than intended.
+    """
+    raw = os.environ.get(TTL_ENV, "").strip()
+    if not raw:
+        return DEFAULT_TTL_SECONDS
+    if not raw.isdigit():
+        raise AttestationConfigError(f"{TTL_ENV} must be a whole number of seconds")
+    ttl = int(raw)
+    if not _MIN_TTL_SECONDS <= ttl <= _MAX_TTL_SECONDS:
+        raise AttestationConfigError(
+            f"{TTL_ENV} must be from {_MIN_TTL_SECONDS} to {_MAX_TTL_SECONDS} seconds"
+        )
+    return ttl
 
 
 def _is_p256_private_key(key: Any) -> bool:
@@ -343,8 +375,12 @@ class AttestationService:
         key_suffix: Optional[str] = None,
         key_continuity_policy: str = "ephemeral",
         private_key_pem: Optional[bytes] = None,
+        validity_seconds: Optional[int] = None,
     ):
-        """``private_key_pem`` is the configured key (policy "configured"),
+        """``validity_seconds``, when given, is a token's lifetime in place of
+        ``validity_days``; the server's service sets it (#319).
+
+        ``private_key_pem`` is the configured key (policy "configured"),
         loaded, checked and put in use here, so an unusable key fails at once
         rather than at the first signing, and ``key_loaded_at`` is when it
         was loaded. Its key ID is the key's RFC 7638 thumbprint, the same on
@@ -352,6 +388,7 @@ class AttestationService:
         key."""
         self.issuer_did = issuer_did
         self.validity_days = validity_days
+        self.validity_seconds = validity_seconds
 
         if key_continuity_policy not in ALLOWED_KEY_CONTINUITY_POLICIES:
             raise ValueError(
@@ -408,7 +445,10 @@ class AttestationService:
         A configured key that cannot be read or used raises SigningKeyError:
         it is never replaced by a generated key, because that would issue
         tokens no other replica, and no restart, could verify (#188, #319).
+        Its tokens last ``QWED_ATTESTATION_TTL_SECONDS`` (24 hours by
+        default); an unusable value raises AttestationConfigError.
         """
+        ttl = configured_ttl_seconds()
         pem = configured_signing_key_pem()
         if pem is None:
             logger.warning(
@@ -418,8 +458,8 @@ class AttestationService:
                 SIGNING_KEY_ENV,
                 SIGNING_KEY_FILE_ENV,
             )
-            return cls()
-        return cls(key_continuity_policy="configured", private_key_pem=pem)
+            return cls(validity_seconds=ttl)
+        return cls(key_continuity_policy="configured", private_key_pem=pem, validity_seconds=ttl)
 
     def _hash_content(self, content: str) -> str:
         """Create SHA-256 hash of content."""
@@ -466,7 +506,11 @@ class AttestationService:
             RuntimeError: if crypto is unavailable or signing fails.
         """
         now = issued_at if issued_at is not None else int(time.time())
-        expiry = now + (self.validity_days * 24 * 60 * 60)
+        lifetime = (
+            self.validity_seconds if self.validity_seconds is not None
+            else self.validity_days * 24 * 60 * 60
+        )
+        expiry = now + lifetime
         attestation_id = jti if jti is not None else f"att_{uuid.uuid4().hex[:12]}"
 
         # Build QWED-specific claims
@@ -630,10 +674,10 @@ class AttestationService:
 
         The revoked IDs are held in memory. With a configured key, which
         other replicas and later processes share, they still accept the
-        token: revocation is not yet shared or durable. Nothing in the
-        server revokes today and no token leaves it; a shared, durable
-        store, or short-lived tokens, must come before tokens are delivered
-        (#319).
+        token: revocation is not shared or durable. Nothing in the server
+        revokes. Tokens the server delivers are short-lived instead
+        (``QWED_ATTESTATION_TTL_SECONDS``, 24 hours by default), and
+        rotating the key ends every token issued before (#319).
         """
         self._revoked_attestations.add(attestation_id)
         return True
