@@ -22,6 +22,16 @@
 //! (`ADMIT` or `BLOCKED`) where the endpoint makes one, and a `proof_ref`
 //! when the status is `VERIFIED`. [`VerificationResponse::is_admitted`] is
 //! the only check to gate on.
+//!
+//! A VERIFIED answer also carries `attestation`, the server's signed token;
+//! [`QWEDClient::verify_attestation`] verifies it (see [`attestation`]).
+
+pub mod attestation;
+
+pub use attestation::{
+    statement_hash, verify_attestation, AttestationClaims, AttestationError, AttestationOptions,
+    AttestedResult, Jwk, Jwks, QwedClaims, DEFAULT_ISSUER, JWKS_PATH,
+};
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -269,6 +279,8 @@ pub struct QWEDClient {
     api_key: String,
     base_url: String,
     client: Client,
+    /// The server's attestation keys (#319), fetched one caller at a time.
+    jwks: attestation::KeyCache,
 }
 
 impl QWEDClient {
@@ -290,6 +302,7 @@ impl QWEDClient {
                 .timeout(timeout)
                 .build()
                 .expect("Failed to create HTTP client"),
+            jwks: Default::default(),
         }
     }
 

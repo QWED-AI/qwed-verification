@@ -6,6 +6,49 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Security
 
+- **The Go and Rust SDKs verify attestations too (#319).** They read the
+  token but could not check it, so a Go or Rust client could not tell a
+  genuine verdict from a forged one.
+  - Go (`qwed.VerifyAttestation`, `Client.VerifyAttestation`, `GetJWKS`)
+    and Rust (`qwed::verify_attestation`, `QWEDClient::verify_attestation`,
+    `get_jwks`) check what the Python and TypeScript SDKs check: the ES256
+    signature with the key the token's `kid` names, the issuer, expiry and
+    any `nbf` (expired from the second `exp` names), a VERIFIED status, that
+    the token is this answer's (`proof_hash` is the answer's `proof_ref`),
+    and optionally the statement's hash. Any algorithm but ES256 is refused
+    before a key is used. A leeway counts in full, a fraction of a second
+    included. A token covers what it signs, not other fields of the response
+    such as `admission`.
+  - The clients keep the same key rules: the JWKS is reused for five
+    minutes; when no cached key verifies a token they try keys another
+    caller fetched meanwhile, else fetch once more, at most once every 30
+    seconds; concurrent callers share one fetch; a failed fetch's error
+    (`ErrKeysUnavailable` in Go, `AttestationError::KeysUnavailable` in
+    Rust) goes to every caller for 30 seconds without another request,
+    including a caller whose token the cached keys do not verify.
+  - The 30 seconds count from when a fetch ends, so one that is slow to fail
+    is still shared for all of them. A caller whose own context ends (Go) or
+    whose future is dropped (Rust) changes nothing the others see, and stops
+    waiting for another caller's fetch. Fresh keys are returned without
+    waiting for a fetch in flight. Go's `GetJWKS` returns a copy, so
+    changing it does not change the keys the client trusts; a JWKS with no
+    key list is out of date, so a refetch may help.
+  - The Python and TypeScript clients follow the same two rules: their 30
+    seconds count from when a fetch ends, and a token the cached keys do not
+    verify, within 30 seconds of a failed refresh, gets that failure
+    (`KeysUnavailableError`, or the TypeScript `QWEDError`) rather than a
+    key mismatch.
+  - Go needs no new dependency (`crypto/ecdsa`, with `crypto/ecdh` to refuse
+    a key that is not on the curve). Rust adds the RustCrypto `p256` (ECDSA
+    P-256), `sha2` and `base64` crates, and tokio's `sync` feature. The new
+    Rust types are `#[non_exhaustive]`, so a field added later does not
+    break code that uses them; `AttestationOptions` is built with
+    `AttestationOptions::new().query(...)`. Go's `Verifier` interface is
+    unchanged, so mocks that implement it still compile.
+  - Both verify tokens issued by the server itself, including signatures
+    whose `s` is in the upper half of the curve order, which the server's
+    library can produce.
+
 - **The SDKs read attestations, and the Python and TypeScript SDKs verify
   them (#319).** Every VERIFIED answer carries its attestation, but no SDK
   read it, so no client could tell a genuine verdict from a forged one.
@@ -35,8 +78,8 @@ All notable changes to the QWED Protocol will be documented in this file.
     keys past their five minutes are not used instead, since a key the
     server has withdrawn would still verify.
   - The TypeScript verifier has no dependency (WebCrypto, Node 18+ and
-    browsers); CI verifies a token with the built package on Node 18. Go
-    and Rust verifiers follow.
+    browsers); CI verifies a token with the built package on Node 18. The
+    Go and Rust SDKs verify it too (the entry above).
   - **Breaking for the `qwed` crate's types:** `VerificationResponse` has a
     new public field, `attestation`, so code that builds one with a struct
     literal must add `attestation: None`. Code that only reads responses is

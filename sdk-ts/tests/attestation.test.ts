@@ -326,8 +326,31 @@ describe('the response and the client', () => {
         const answer = { attestation: token, proof_ref: PROOF };
 
         await expect(client.verifyAttestation(answer)).rejects.toThrow(/keys unavailable/);
-        await expect(client.verifyAttestation(answer)).rejects.toBeInstanceOf(KeyMismatchError);
+        // Within the next 30 s, the refresh's failure, not a missing key
+        // (#513 review), and no request.
+        await expect(client.verifyAttestation(answer)).rejects.toThrow(/keys unavailable/);
         expect(fetches).toBe(2);
+    });
+
+    it('shares a slow failure for the full 30 s', async () => {
+        // #513 review: the 30 s counted from the start of a fetch, so one that
+        // took 30 s to fail was already past them. Now they count from its end.
+        const { privateKey } = await keyPair();
+        const token = await sign(privateKey, await claims());
+        let now = Date.now();
+        let fetches = 0;
+        vi.stubGlobal('fetch', async () => {
+            fetches += 1;
+            now += 40_000; // the fetch takes 40 s to fail
+            return new Response('', { status: 503 });
+        });
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
+        const client = new QWEDClient({ apiKey: 'k', baseUrl: 'http://qwed.test' });
+        const answer = { attestation: token, proof_ref: PROOF };
+
+        await expect(client.verifyAttestation(answer)).rejects.toThrow(/keys unavailable/);
+        await expect(client.verifyAttestation(answer)).rejects.toThrow(/keys unavailable/);
+        expect(fetches).toBe(1);
     });
 
     it.each([
