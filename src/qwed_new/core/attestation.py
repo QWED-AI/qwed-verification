@@ -677,7 +677,8 @@ def get_attestation_service() -> AttestationService:
 
     The key is the configured one when set (#319). If it cannot be used,
     this raises SigningKeyError and keeps no service, so every call fails
-    the same way: both callers turn that into a BLOCKED result.
+    the same way. The server calls this at startup and refuses to start;
+    elsewhere both callers turn the error into a BLOCKED result.
     """
     global _default_service
     if _default_service is None:

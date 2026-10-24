@@ -14,9 +14,10 @@ All notable changes to the QWED Protocol will be documented in this file.
   private key, and every process and replica signs and verifies with it.
   - The key ID is the key's RFC 7638 thumbprint, the same everywhere.
   - A configured key that cannot be read or used (not P-256, encrypted,
-    both settings set, a missing file) is never replaced by a generated
-    one: every VERIFIED result is BLOCKED until it is fixed. Errors carry no
-    key material.
+    both settings set, a missing or non-regular file) is never replaced by
+    a generated one: the server refuses to start, as it does without
+    `QWED_AUDIT_SECRET_KEY`. Used as a library, without the server's
+    startup, signing is BLOCKED instead. Errors carry no key material.
   - Unset, the key is generated per process as before, with a warning.
     `get_issuer_info()` reports the policy (`configured` or `ephemeral`) and
     `key_loaded_at`; `key_generated_at` is null for a configured key.

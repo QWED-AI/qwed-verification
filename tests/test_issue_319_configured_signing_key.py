@@ -270,6 +270,41 @@ def test_a_key_file_must_be_a_regular_file(fresh_service, tmp_path):
         attestation.configured_signing_key_pem()
 
 
+def test_a_read_error_after_the_open_is_refused_and_closes_the_file(fresh_service, tmp_path, monkeypatch):
+    # The file opens, then reading it fails (an I/O error, a vanished
+    # mount): refused as unreadable, with the descriptor closed, on every
+    # platform.
+    path = tmp_path / "attestation-key.pem"
+    path.write_bytes(_pem())
+    fresh_service.setenv(SIGNING_KEY_FILE_ENV, str(path))
+    opened, closed = [], []
+    real_open, real_close = os.open, os.close
+
+    def tracking_open(*args, **kwargs):
+        fd = real_open(*args, **kwargs)
+        opened.append(fd)
+        return fd
+
+    def failing_fstat(fd):
+        raise OSError("I/O error")
+
+    def tracking_close(fd):
+        closed.append(fd)
+        real_close(fd)
+
+    monkeypatch.setattr(attestation.os, "open", tracking_open)
+    monkeypatch.setattr(attestation.os, "fstat", failing_fstat)
+    monkeypatch.setattr(attestation.os, "close", tracking_close)
+    try:
+        with pytest.raises(SigningKeyError, match="could not be read"):
+            attestation.configured_signing_key_pem()
+    finally:
+        monkeypatch.undo()
+
+    assert len(opened) == 1
+    assert closed == opened
+
+
 @pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="counts descriptors through /proc")
 def test_a_refused_key_file_leaves_no_descriptor_open(fresh_service, tmp_path):
     # POSIX opens a directory, and os.fdopen would raise on it without
