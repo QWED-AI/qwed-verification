@@ -765,8 +765,26 @@ def test_a_document_that_cannot_be_encoded_is_rejected_not_a_500(fresh_service, 
     assert rejected.value.detail == "verification context rejected"
 
 
-def test_an_integer_the_encoding_cannot_hold_is_rejected_too(fresh_service):
+@pytest.mark.parametrize("n", [2**53 + 1, -(2**53) - 1, 2**60, 2**1024])
+def test_an_integer_past_2_53_is_rejected_by_the_schema(fresh_service, n):
+    # #517 review: the schema bounds integers to +/-2**53 (EncodableNumber),
+    # and refuses these before anything is encoded or signed, a power of two
+    # such as 2**60 that a double holds exactly included. Every integer it
+    # lets through is exactly a double, so the canonical encoding's own
+    # integer check is not reached from this route.
+    diagnostic = {"status": "UNVERIFIABLE", "agent_message": "m", "developer_fields": {"n": n}}
+
     with pytest.raises(HTTPException) as rejected:
-        _document({"status": "UNVERIFIABLE", "agent_message": "m", "developer_fields": {"n": 2**60}})
+        _document(diagnostic)
 
     assert rejected.value.status_code == 422
+    assert rejected.value.detail == "verification context rejected"
+
+
+@pytest.mark.parametrize("n", [2**53, -(2**53)])
+def test_an_integer_at_2_53_is_encoded_and_signed(fresh_service, n):
+    document = _document({"status": "UNVERIFIABLE", "agent_message": "m", "developer_fields": {"n": n}})
+    caller = document["context"]["evidence"]["evidence"]["developer_fields"]["caller_supplied"]
+
+    assert caller["developer_fields"]["n"] == n
+    assert _context_claims(document["attestation"])["qwed"]["document_hash"] == compute_document_hash(document)
