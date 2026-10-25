@@ -17,7 +17,9 @@ All notable changes to the QWED Protocol will be documented in this file.
     `validate_document` checks each against its version's schema.
   - `/verification-context/from-diagnostic` returns every document as v1.1,
     signed with the attestation key; a failure to sign is a 500, not an
-    unsigned document. The token lasts as long as a verdict's
+    unsigned document, and a document the canonical encoding refuses (a
+    lone surrogate in a string, in one that is not `VERIFIED`) is a 422,
+    as a `VERIFIED` one already was. The token lasts as long as a verdict's
     (`QWED_ATTESTATION_TTL_SECONDS`). As for a verdict's token, a server
     without `QWED_SIGNING_KEY` or `QWED_SIGNING_KEY_FILE` signs with a key
     generated per process, so its documents stop verifying after a restart

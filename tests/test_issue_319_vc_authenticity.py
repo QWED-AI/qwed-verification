@@ -750,3 +750,23 @@ def test_a_document_too_deep_to_encode_is_a_mismatch_not_an_error(jwks):
     assert mismatch == "document is not a Verification Context"
     with pytest.raises(AttestationError, match="not a Verification Context"):
         verify_document_attestation(document, jwks)
+
+
+@pytest.mark.parametrize("message", ["\ud800", "a\udfffb"])
+def test_a_document_that_cannot_be_encoded_is_rejected_not_a_500(fresh_service, message):
+    # #517 review: the schema takes a lone surrogate in a string, but the
+    # canonical encoding refuses it, so a document that is not VERIFIED
+    # (whose proof_ref nothing computes) failed only at signing. It is the
+    # caller's document that is wrong: 422, as for a VERIFIED one.
+    with pytest.raises(HTTPException) as rejected:
+        _document({"status": "UNVERIFIABLE", "agent_message": message})
+
+    assert rejected.value.status_code == 422
+    assert rejected.value.detail == "verification context rejected"
+
+
+def test_an_integer_the_encoding_cannot_hold_is_rejected_too(fresh_service):
+    with pytest.raises(HTTPException) as rejected:
+        _document({"status": "UNVERIFIABLE", "agent_message": "m", "developer_fields": {"n": 2**60}})
+
+    assert rejected.value.status_code == 422

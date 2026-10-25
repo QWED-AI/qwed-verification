@@ -275,6 +275,15 @@ def create_verification_context_from_diagnostic(
         ) from None
     try:
         document_dict = attest_document(unsigned)
+    except VerificationContextValidationError:
+        # The schema takes what the canonical encoding refuses (a lone
+        # surrogate in a string), and a document that is not VERIFIED is
+        # first encoded here, to be signed. The caller's document is what
+        # is wrong, as for a VERIFIED one (#517 review).
+        raise HTTPException(
+            status_code=422,
+            detail="verification context rejected",
+        ) from None
     except (RuntimeError, ValueError):
         # The document was valid, so a failure here is the server's own:
         # its key or settings (AttestationConfigError is a RuntimeError).
