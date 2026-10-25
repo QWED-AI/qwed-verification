@@ -791,6 +791,13 @@ class AttestationService:
                 logger.debug("Attestation of another type rejected (verified)")
                 return False, None, _GENERIC_REJECTION_MSG
 
+            # No token this service signs names a critical extension, and
+            # PyJWT before 2.12 does not refuse one it does not understand
+            # (RFC 7515 section 4.1.11; #517 review).
+            if "crit" in decoded["header"]:
+                logger.debug("Attestation with a critical header extension rejected (verified)")
+                return False, None, _GENERIC_REJECTION_MSG
+
             # Now verified: apply issuer authorization. External issuers have no
             # key resolution implemented (#275) — silent generic, never enumerate.
             if claims.get("iss") != self.issuer_did:

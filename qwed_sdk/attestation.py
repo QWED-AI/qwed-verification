@@ -29,8 +29,9 @@ trusts that server's TLS; to verify offline or against a pinned key, pass
 the JWKS you hold.
 
 A Verification Context document the server issued (spec v1.1) carries its
-own ``attestation``, a token of type ``qwed-context+jwt`` that signs the
-whole document; ``verify_document_attestation`` checks it (#319).
+own ``attestation``, a token of type ``qwed-context+jwt`` that signs every
+other field of the document; ``verify_document_attestation`` checks it
+(#319).
 """
 
 import hashlib
@@ -167,6 +168,11 @@ def _verified_claims(
         raise AttestationError("token header's kid does not name the key that signed it")
     if header.get("typ") != token_type:
         raise AttestationError(f"token is not a QWED attestation of type {token_type}")
+    # A QWED server names no critical extension; one it does not understand
+    # must not be ignored (RFC 7515 section 4.1.11). PyJWT before 2.12 does
+    # not refuse them itself, and the floor is 2.8 (#517 review).
+    if "crit" in header:
+        raise AttestationError("token names a critical header extension this client does not support")
     return decoded["payload"]
 
 
@@ -228,8 +234,9 @@ def verify_document_attestation(
     (#319).
 
     The token must verify with a key in ``jwks``, be a document's
-    (``qwed-context+jwt``), and sign this document: the hash of all of it
-    but the token, and its verdict, admission and ``proof_ref``. It shows
+    (``qwed-context+jwt``, ``qwed.version`` "1.1"), and sign this document:
+    the hash of all of it but the token (as ``sub`` and
+    ``qwed.document_hash``), and its verdict, admission and ``proof_ref``. It shows
     the server issued this document unchanged; it adds nothing to the
     verdict or the admission, and does not check the schema or that
     ``proof_ref`` resolves (the server's validate and resolve do).
@@ -242,7 +249,7 @@ def verify_document_attestation(
     if token is None:
         raise AttestationError("no attestation")
     claims = _verified_claims(token, jwks, issuer=issuer, leeway=leeway, token_type=CONTEXT_TOKEN_TYPE)
-    mismatch = document_attestation_mismatch(document, claims.get("qwed"))
+    mismatch = document_attestation_mismatch(document, claims)
     if mismatch is not None:
         raise AttestationError(mismatch)
     return claims

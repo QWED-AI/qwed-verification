@@ -672,14 +672,19 @@ def compute_document_hash(document: Mapping[str, Any]) -> str:
 
 def document_attestation_mismatch(
     document: Mapping[str, Any],
-    qwed_claims: Any,
+    claims: Any,
 ) -> Optional[str]:
-    """Why the verified ``qwed`` claims of a document's attestation do not
-    sign this document, or None if they do (#319): the document hash, and
-    the verdict, admission and ``proof_ref`` they name, must all be this
-    document's. Read only after the token's signature has verified."""
+    """Why the verified claims of a document's attestation do not sign this
+    document, or None if they do (#319). As spec v1.1 section 2 has them:
+    ``qwed.version`` is "1.1"; ``sub`` and ``qwed.document_hash`` are both
+    this document's hash; and the verdict, admission and ``proof_ref`` they
+    name are this document's. Read only after the token's signature has
+    verified."""
+    qwed_claims = claims.get("qwed") if isinstance(claims, Mapping) else None
     if not isinstance(qwed_claims, Mapping):
         return "attestation signs no document"
+    if qwed_claims.get("version") != ATTESTED_SPEC_VERSION:
+        return "attestation is not a v1.1 document's (version differs)"
     try:
         context = document["context"]
         signed = {
@@ -695,6 +700,8 @@ def document_attestation_mismatch(
     for claim, value in signed.items():
         if claim not in qwed_claims or qwed_claims[claim] != value:
             return f"attestation is for another document ({claim} differs)"
+    if claims.get("sub") != signed["document_hash"]:
+        return "attestation is for another document (sub differs)"
     return None
 
 

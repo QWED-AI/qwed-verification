@@ -21,6 +21,7 @@ from pathlib import Path
 
 import httpx
 import jsonschema
+import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -344,14 +345,100 @@ def test_the_v1_1_schema_is_published_with_the_spec():
 
 def test_the_claims_must_name_this_document(fresh_service):
     document = _admitted()
-    claims = _context_claims(document["attestation"])["qwed"]
+    claims = _context_claims(document["attestation"])
+    qwed = claims["qwed"]
 
     assert document_attestation_mismatch(document, claims) is None
     assert document_attestation_mismatch(document, None) == "attestation signs no document"
+    assert document_attestation_mismatch(document, {**claims, "qwed": None}) == "attestation signs no document"
     assert document_attestation_mismatch({"spec_version": "1.1"}, claims) == "document is not a Verification Context"
     for claim in ("document_hash", "verdict", "admission", "proof_ref"):
-        missing = {key: value for key, value in claims.items() if key != claim}
-        assert claim in document_attestation_mismatch(document, missing)
+        missing = {key: value for key, value in qwed.items() if key != claim}
+        assert claim in document_attestation_mismatch(document, {**claims, "qwed": missing})
+
+
+@pytest.mark.parametrize("version", [None, "1.0", "1.2", 1.1])
+def test_the_claims_must_be_a_v1_1_documents(fresh_service, version):
+    # #517 review: spec v1.1 section 2 fixes qwed.version.
+    document = _admitted()
+    claims = _context_claims(document["attestation"])
+    claims["qwed"]["version"] = version
+
+    assert "version differs" in document_attestation_mismatch(document, claims)
+
+
+@pytest.mark.parametrize("sub", [None, HASH, "sha256:" + "0" * 64])
+def test_the_subject_must_be_the_document_hash(fresh_service, sub):
+    # #517 review: sub names the document hash too, not only the qwed claim.
+    document = _admitted()
+    claims = {**_context_claims(document["attestation"]), "sub": sub}
+
+    assert document_attestation_mismatch(document, claims) == "attestation is for another document (sub differs)"
+
+
+def _crit_token(service, payload, typ):
+    """A token ``service``'s key signs with a critical header extension."""
+    return jwt.encode(
+        payload, service._ensure_key_pair().private_key_pem, algorithm="ES256",
+        headers={"typ": typ, "kid": service._ensure_key_pair().key_id, "crit": ["qwed-ext"], "qwed-ext": True},
+    )
+
+
+def _context_payload(service):
+    return {
+        "iss": service.issuer_did, "sub": HASH, "iat": int(time.time()), "exp": int(time.time()) + 600, "jti": "att_x",
+        "qwed": {"version": "1.1", "document_hash": HASH, "verdict": "VERIFIED", "admission": "ADMIT", "proof_ref": PROOF},
+    }
+
+
+def test_the_server_refuses_a_token_with_a_critical_extension():
+    # #517 review: PyJWT 2.8 accepts a crit header it does not understand.
+    service = _service()
+    token = _crit_token(service, _context_payload(service), CONTEXT_TOKEN_TYPE)
+
+    assert service.verify_attestation(token, token_type=CONTEXT_TOKEN_TYPE)[0] is False
+
+
+def test_the_server_refuses_crit_even_where_pyjwt_ignores_it(monkeypatch):
+    # The check itself, as on PyJWT 2.8, whatever PyJWT is installed here.
+    service = _service()
+    token = service.create_context_attestation(document_hash=HASH, verdict="VERIFIED", admission="ADMIT", proof_ref=PROOF)
+    decode = jwt.PyJWT.decode_complete
+
+    def ignoring_crit(self, *args, **kwargs):
+        decoded = decode(self, *args, **kwargs)
+        return {**decoded, "header": {**decoded["header"], "crit": ["qwed-ext"]}}
+
+    monkeypatch.setattr(jwt.PyJWT, "decode_complete", ignoring_crit)
+
+    assert service.verify_attestation(token, token_type=CONTEXT_TOKEN_TYPE)[0] is False
+
+
+def test_the_sdk_refuses_a_document_token_with_a_critical_extension(jwks):
+    service = get_attestation_service()
+    document = _admitted()
+    document["attestation"] = _crit_token(service, {
+        **_context_payload(service), "sub": compute_document_hash(document),
+        "qwed": {**_context_payload(service)["qwed"], "document_hash": compute_document_hash(document),
+                 "proof_ref": document["context"]["evidence"]["proof_ref"]},
+    }, CONTEXT_TOKEN_TYPE)
+
+    with pytest.raises(AttestationError):
+        verify_document_attestation(document, jwks)
+
+
+def test_the_sdk_refuses_crit_even_where_pyjwt_ignores_it(jwks, monkeypatch):
+    document = _admitted()
+    decode = jwt.PyJWT.decode_complete
+
+    def ignoring_crit(self, *args, **kwargs):
+        decoded = decode(self, *args, **kwargs)
+        return {**decoded, "header": {**decoded["header"], "crit": ["qwed-ext"]}}
+
+    monkeypatch.setattr(jwt.PyJWT, "decode_complete", ignoring_crit)
+
+    with pytest.raises(AttestationError, match="critical header extension"):
+        verify_document_attestation(document, jwks)
 
 
 # ---------------------------------------------------------------- the SDK verifies
@@ -651,7 +738,7 @@ def test_a_document_too_deep_to_encode_is_a_mismatch_not_an_error(jwks):
     # #517 review: a RecursionError from the canonical encoding must not
     # escape the claim check; there is no hash, so the document is refused.
     document = _admitted()
-    claims = verify_document_attestation(document, jwks)["qwed"]
+    claims = verify_document_attestation(document, jwks)
     deep = current = {}
     for _ in range(5000):
         current["next"] = {}

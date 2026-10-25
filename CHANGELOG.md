@@ -35,13 +35,16 @@ All notable changes to the QWED Protocol will be documented in this file.
     document's token) is `attestation_invalid`, without asking the server.
     Keys that cannot be fetched raise `KeysUnavailableError`. A document
     nested too deeply to encode is refused as a mismatch, not a
-    `RecursionError`.
+    `RecursionError`. A token whose `qwed.version` is not `"1.1"`, or whose
+    `sub` is not the document hash, is refused.
     `require_attestation=False` keeps the old schema-only and
     `proof_ref`-only checks.
   - The server and the SDK read a token with `jwt.PyJWT().decode_complete`.
     `jwt.decode_complete` is exported only from PyJWT 2.10 and the floor is
     2.8, so on 2.8 and 2.9 the SDK's `verify_attestation` raised
-    `AttributeError` for every token.
+    `AttributeError` for every token. Both also refuse a token whose header
+    names a critical extension (`crit`), which PyJWT before 2.12 accepts
+    without understanding it.
   - The signature authenticates the document relative to the server's key;
     it adds nothing to the verdict or the admission. The API's validate and
     resolve routes and the `qwed context` CLI commands do not check it. The

@@ -58,7 +58,10 @@ A consumer verifies a v1.1 document by checking, in order:
 
 1. The signature, with an ES256 P-256 key from the issuer's JWKS
    (`GET /.well-known/jwks.json` on a QWED server), and that the verified
-   header's `kid` names that key and its `typ` is `qwed-context+jwt`.
+   header's `kid` names that key and its `typ` is `qwed-context+jwt`. A
+   header that names a critical extension (`crit`) is refused: the issuer
+   uses none, and one a verifier does not understand must not be ignored
+   (RFC 7515 §4.1.11).
 2. The issuer, and that the token has not expired (nor is used before any
    `nbf`). The token lasts as long as a verdict's attestation
    (`QWED_ATTESTATION_TTL_SECONDS`, 24 hours by default): an expired document
@@ -67,8 +70,9 @@ A consumer verifies a v1.1 document by checking, in order:
    (`QWED_SIGNING_KEY` or `QWED_SIGNING_KEY_FILE`), or a document it issued
    no longer verifies after a restart, or on another replica (v1.0 §6,
    multi-replica caveat).
-3. That `qwed.document_hash` is the hash of this document (§3), and that
-   `qwed.verdict`, `qwed.admission` and `qwed.proof_ref` are this document's.
+3. That `qwed.version` is `"1.1"`, that `sub` and `qwed.document_hash` are
+   both the hash of this document (§3), and that `qwed.verdict`,
+   `qwed.admission` and `qwed.proof_ref` are this document's.
 
 Only then is the document the issuer's. A consumer that gates on
 `admission == "ADMIT"` (v1.0 §5) SHOULD require a verified attestation, as
