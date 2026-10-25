@@ -38,7 +38,9 @@ class PIIDetector:
         """
         if AnalyzerEngine is None:
             raise ImportError(
-                "Presidio not found. Install with: pip install presidio-analyzer presidio-anonymizer spacy && python -m spacy download en_core_web_lg"
+                # The extra, not the packages by name: it also excludes the
+                # preshed release that breaks spaCy (explosion/spaCy#14058).
+                "Presidio not found. Install with: pip install 'qwed[pii]' && python -m spacy download en_core_web_lg"
             )
             
         self.analyzer = AnalyzerEngine()

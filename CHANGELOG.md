@@ -325,6 +325,16 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Fixed
 
+- **The `pii` extra excludes preshed 3.0.14.** preshed 3.0.14 (released
+  2026-10-24) makes every spaCy model fail to load with `OverflowError:
+  Python int too large to convert to C ssize_t` (explosion/spaCy#14058), so
+  a fresh `pip install qwed[pii]` could not mask PII, and the PII tests
+  failed. The extra now requires `preshed!=3.0.14`, which resolves to
+  3.0.13 with spaCy 3.8; a fixed 3.0.15 is not excluded. `PIIDetector`'s
+  install hint names the extra (`pip install 'qwed[pii]'`), as the CLI and
+  the other hints do, instead of the packages by name, which would miss
+  the exclusion.
+
 - **`/verify/batch` and `/agents/{agent_id}/verify` write audit rows (#477).**
   The single `/verify/*` routes append a chained, signed `VerificationLog` row
   and return 500 if the append fails. The batch route ran up to 100 items and
