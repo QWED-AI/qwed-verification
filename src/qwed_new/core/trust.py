@@ -13,18 +13,26 @@ passes through unchanged. If signing fails, the result is BLOCKED.
 
 A VERIFIED result that passes carries its token (``attestation``), so the
 response delivers it and a consumer can check it against the server's JWKS
-(#319).
+(#319). On a route that decides an admission, the token signs that decision
+too (``qwed.admission``, #321), so a consumer can check the server's ADMIT or
+BLOCKED as well as its verdict.
 """
 
 import logging
 import math
+from collections.abc import Callable
 
 from qwed_new.core.attestation import AttestationStatus, create_verification_attestation
 from qwed_new.core.diagnostics import (
+    AdmissionDecision,
     DiagnosticResult,
     DiagnosticStatus,
     enforce_trust_decision,
 )
+
+# How a route decides its admission from the verdict: admission_decision, or
+# natural_language_admission for a verdict reached through a translation.
+AdmissionRule = Callable[[DiagnosticResult], AdmissionDecision]
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +61,13 @@ def _confidence(dr: DiagnosticResult) -> float:
     return 1.0
 
 
-def attest_and_enforce(dr: DiagnosticResult, *, engine: str, query: str) -> DiagnosticResult:
+def attest_and_enforce(
+    dr: DiagnosticResult,
+    *,
+    engine: str,
+    query: str,
+    admission: AdmissionRule | None = None,
+) -> DiagnosticResult:
     """Sign a VERIFIED result and enforce its attestation as mandatory.
 
     The attestation binds the result's status and ``proof_ref`` and what the
@@ -61,10 +75,17 @@ def attest_and_enforce(dr: DiagnosticResult, *, engine: str, query: str) -> Diag
     ``enforce_trust_decision`` then checks the token's signature and that its
     claims match, and blocks the result otherwise. ``engine`` names the engine
     that produced the verdict, recorded in the token.
+
+    ``admission`` is the rule the route decides its admission with. When
+    given, the token also signs ``admission(dr)`` (``qwed.admission``,
+    #321): the route returns the same rule applied to the returned result,
+    which is ``dr`` itself whenever a token is attached, so the two agree.
     """
     statement = _attested_statement(dr, query)
     if dr.status is not DiagnosticStatus.VERIFIED:
         return enforce_trust_decision(dr, require_attestation=True, query=statement)
+
+    decision = admission(dr).value if admission is not None else None
 
     attestation = create_verification_attestation(
         status=dr.status.value,
@@ -76,6 +97,7 @@ def attest_and_enforce(dr: DiagnosticResult, *, engine: str, query: str) -> Diag
         confidence=_confidence(dr),
         # The proof_ref is already the hash of the evidence: bind it as is.
         proof_hash=dr.proof_ref,
+        admission=decision,
     )
     if attestation.status is not AttestationStatus.ISSUED:
         logger.warning(
@@ -101,6 +123,7 @@ def attest_and_enforce(dr: DiagnosticResult, *, engine: str, query: str) -> Diag
         require_attestation=True,
         attestation_token=attestation.token,
         query=statement,
+        admission=decision,
     )
     if enforced.status is not DiagnosticStatus.VERIFIED:
         return enforced

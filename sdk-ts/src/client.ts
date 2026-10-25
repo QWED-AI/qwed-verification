@@ -23,6 +23,7 @@ import {
     JWKS_PATH,
     Jwks,
     KeyMismatchError,
+    checkAdmission,
     requireAnswer,
     verifyAttestation,
 } from './attestation';
@@ -165,12 +166,14 @@ export class QWEDClient {
     /**
      * Verify an answer's attestation against this server's keys and return
      * its claims; throws AttestationError if it does not verify or is not
-     * this answer's. `query`, when given, must be the statement the verdict
+     * this answer's: its `proof_ref`, and the `admission` it carries, which
+     * the token must sign (none if it carries none, #321). `query`, when
+     * given, must be the statement the verdict
      * covers. To verify against keys you pinned, call `verifyAttestation`
      * with your JWKS.
      */
     async verifyAttestation(
-        result: Pick<VerificationResponse, 'attestation' | 'proof_ref'>,
+        result: Pick<VerificationResponse, 'attestation' | 'proof_ref' | 'admission'>,
         query?: string,
         options: { issuer?: string; leewaySeconds?: number } = {},
     ): Promise<AttestationClaims> {
@@ -184,8 +187,9 @@ export class QWEDClient {
             leewaySeconds: options.leewaySeconds,
         });
         const jwks = await this.getJwks();
+        let claims: AttestationClaims;
         try {
-            return await verify(jwks);
+            claims = await verify(jwks);
         } catch (error) {
             if (!(error instanceof KeyMismatchError)) throw error;
             // The key may have rotated, or the server restarted with a new
@@ -193,8 +197,12 @@ export class QWEDClient {
             // keys once more (see jwksAfterMismatch).
             const newer = await this.jwksAfterMismatch(jwks);
             if (!newer) throw error;
-            return verify(newer);
+            claims = await verify(newer);
         }
+        // The token signs the server's admission where the route decides one
+        // (#321): the answer's admission must be that one.
+        checkAdmission(claims, result.admission);
+        return claims;
     }
 
     /**

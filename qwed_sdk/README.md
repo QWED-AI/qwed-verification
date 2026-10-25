@@ -183,8 +183,11 @@ class VerificationResult:
 Every `VERIFIED` answer carries `attestation`, an ES256 JWT the server
 signed after checking the verdict. Verifying it shows that server issued a
 VERIFIED verdict for this answer's `proof_ref` (and, when you pass `query`,
-for that statement). It covers only what the token signs, not other fields
-of the response such as `admission` or `agent_message`:
+for that statement). On a route that decides an admission (maths, code,
+SQL and natural language, the agent route, and their batch items), the
+token signs that too, and `verify_attestation`
+checks it is the answer's `admission`. It covers only what the token signs,
+not other fields of the response such as `agent_message`:
 
 ```python
 from qwed_sdk import AttestationError
@@ -205,7 +208,7 @@ if result.attestation:
 ```
 
 To verify offline, or against keys you pinned, use
-`qwed_sdk.verify_attestation(token, jwks, proof_ref=..., query=...)` with the
+`qwed_sdk.verify_attestation(token, jwks, proof_ref=..., query=..., admission=...)` with the
 JWKS you hold. A token says the server reached the verdict; whether to act
 on it is still the answer's admission.
 

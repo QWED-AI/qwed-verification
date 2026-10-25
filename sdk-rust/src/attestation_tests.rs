@@ -23,20 +23,34 @@ fn key(label: &str, kid: &str) -> (SigningKey, Jwks) {
 }
 
 fn answer(signing: &SigningKey) -> VerificationResponse {
+    answer_with(signing, None, None)
+}
+
+/// A VERIFIED answer whose token signs `signed` as its admission, carrying
+/// `carried` as its own (each none when `None`).
+fn answer_with(
+    signing: &SigningKey,
+    signed: Option<&str>,
+    carried: Option<&str>,
+) -> VerificationResponse {
     let now = (unix_nanos(SystemTime::now()) / NANOS) as i64;
     let header = json!({"alg": "ES256", "typ": TOKEN_TYPE, "kid": KID});
-    let claims = json!({
+    let mut claims = json!({
         "iss": DEFAULT_ISSUER, "sub": "s", "iat": now, "exp": now + 3600, "jti": "att_test",
         "qwed": {"result": {"status": "VERIFIED"}, "proof_hash": PROOF},
     });
+    if let Some(admission) = signed {
+        claims["qwed"]["admission"] = json!(admission);
+    }
     let encode = |value: &Value| URL_SAFE_NO_PAD.encode(serde_json::to_vec(value).unwrap());
     let input = format!("{}.{}", encode(&header), encode(&claims));
     let signature: Signature = signing.sign(input.as_bytes());
     let token = format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature.to_bytes()));
-    serde_json::from_value(json!({
-        "status": "VERIFIED", "admission": "ADMIT", "proof_ref": PROOF, "attestation": token,
-    }))
-    .unwrap()
+    let mut response = json!({"status": "VERIFIED", "proof_ref": PROOF, "attestation": token});
+    if let Some(admission) = carried {
+        response["admission"] = json!(admission);
+    }
+    serde_json::from_value(response).unwrap()
 }
 
 /// A key server on a local port: `respond` gives the n-th request's status
@@ -390,6 +404,37 @@ async fn the_client_checks_the_answer_before_fetching_keys() {
         );
     }
     assert_eq!(count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn the_client_checks_the_attested_admission() {
+    // #321: the answer's admission must be the one the token signs.
+    let (signing, jwks) = key("genuine", KID);
+    let served = body(&jwks);
+    let (url, _) = key_server(Duration::ZERO, move |_| (200, served.clone())).await;
+    let client = client(&url);
+    let options = AttestationOptions::new();
+
+    for (signed, carried, ok) in [
+        (Some("ADMIT"), Some("ADMIT"), true),
+        (Some("BLOCKED"), Some("BLOCKED"), true),
+        (None, None, true),
+        (Some("BLOCKED"), Some("ADMIT"), false), // an answer edited to say ADMIT
+        (None, Some("ADMIT"), false),            // a token that signs no admission
+        (Some("ADMIT"), None, false),            // an answer that dropped its admission
+        (Some("ADMIT"), Some("SOMETHING_NEW"), false), // parsed as Admission::Unknown
+    ] {
+        let verified = client
+            .verify_attestation(&answer_with(&signing, signed, carried), &options)
+            .await;
+        match verified {
+            Ok(claims) if ok => assert_eq!(claims.qwed.admission.as_deref(), signed),
+            Err(AttestationError::Rejected(reason)) if !ok => {
+                assert!(reason.contains("another admission"), "{reason}")
+            }
+            other => panic!("{signed:?} {carried:?}: {other:?}"),
+        }
+    }
 }
 
 #[test]

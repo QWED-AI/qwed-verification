@@ -6,6 +6,49 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Security
 
+- **The attestation signs the server's admission, and a signed ADMIT admits
+  a Verification Context (#321).** A token bound the verdict's status,
+  `proof_ref` and statement, but not the admission, which rests on more than
+  those (`is_valid`, and for natural language that the translation was
+  verified). So a consumer could check a verdict but not the server's ADMIT
+  or BLOCKED, and `/verification-context/from-diagnostic`, which must not
+  take the caller's `is_valid`, could only say `DENY`.
+  - A route that decides an admission (`/verify/math`, `/verify/code`,
+    `/verify/sql`, `/verify/natural_language`, the agent verify route, and
+    their batch items) signs it as `qwed.admission`, `ADMIT` or `BLOCKED`,
+    with the same rule it returns the admission by; the trust step checks
+    the fresh token carries it. Routes that decide none (logic, fact, stats,
+    image, RAG, process, consensus) sign none. Any other value is refused at
+    signing, and so is `ADMIT` for a result that is not `VERIFIED`, valid
+    and bound to its proof. A token that signs a different admission is
+    blocked with the verdict it blocks kept beside the reason.
+  - `/verification-context/from-diagnostic` admits a `VERIFIED` diagnostic
+    whose token, checked against its status, `proof_ref` and query, signs
+    `ADMIT` (`constraint_id` `verification_context.attested_admit`). The
+    caller's `is_valid` still decides nothing; without a signed `ADMIT` the
+    admission stays `DENY`. An admitted document names the engine that
+    signed (`qwed.result.engine`) and this server's version as its
+    verifier; the caller's `verifier` and `verifier_version` are kept under
+    `caller_supplied`, so no document is admitted under a verifier that
+    never checked it. A failure to read the signed admission, an error or a
+    token that no longer verifies, is a 500, not a quiet `DENY`. A value
+    that is not `ADMIT` or `BLOCKED`, a list included, is refused, not
+    raised as a `TypeError`.
+  - The four SDKs return the signed admission, and their clients'
+    `verify_attestation` refuse an answer whose `admission` is not the one
+    the token signs ("attestation is for another admission"): an answer
+    edited to say `ADMIT`, one that dropped its admission, or one whose token
+    signs none. The verifiers also take an expected admission (`admission=`
+    in Python, `admission` in TypeScript, `AttestationOptions.Admission` in
+    Go, `.admission(...)` in Rust), and each SDK has a `check_admission`
+    helper (`checkAdmission`, `CheckAdmission`). In Python and TypeScript an
+    admission given as none (`None`, `undefined`) is checked too: the token
+    must sign none. In Go and Rust an empty one is not checked; their docs
+    point to the helper for that. Python's
+    `VerificationResult` gains `admission`.
+  - No released server issues tokens yet (#511 is unreleased), so no token
+    in use lacks the claim.
+
 - **The Go and Rust SDKs verify attestations too (#319).** They read the
   token but could not check it, so a Go or Rust client could not tell a
   genuine verdict from a forged one.
@@ -18,7 +61,7 @@ All notable changes to the QWED Protocol will be documented in this file.
     and optionally the statement's hash. Any algorithm but ES256 is refused
     before a key is used. A leeway counts in full, a fraction of a second
     included. A token covers what it signs, not other fields of the response
-    such as `admission`.
+    such as `agent_message`; it signs the admission too (the #321 entry).
   - The clients keep the same key rules: the JWKS is reused for five
     minutes; when no cached key verifies a token they try keys another
     caller fetched meanwhile, else fetch once more, at most once every 30
@@ -65,7 +108,8 @@ All notable changes to the QWED Protocol will be documented in this file.
     is this answer's token (`proof_hash` is the answer's `proof_ref`), and
     optionally the statement's hash. Any algorithm but ES256 is refused
     before a key is used. A token covers what it signs, not other fields of
-    the response such as `admission`.
+    the response such as `agent_message`; it signs the admission too (the
+    #321 entry).
   - The clients fetch `/.well-known/jwks.json` and reuse it for five
     minutes. When no key in it verifies the token (the key rotated, or a
     server restarted with a new ephemeral key under the same `kid`), they

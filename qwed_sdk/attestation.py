@@ -4,8 +4,9 @@ A VERIFIED answer from a QWED server carries ``attestation``: an ES256 JWT
 the server signed after checking the verdict. Verifying it shows that server
 issued a VERIFIED verdict for this answer's ``proof_ref`` (and, when you pass
 it, for this statement). It covers only what the token signs: the status,
-``proof_ref`` and statement hash, not other fields of the response such as
-``admission`` or ``agent_message``. What is checked:
+``proof_ref``, statement hash and, on a route that decides one, the
+admission; not other fields of the response such as ``agent_message``. What
+is checked:
 
 - the signature, with an ES256 key in the server's JWKS
   (``GET /.well-known/jwks.json``), and that the verified header's ``kid``
@@ -17,10 +18,13 @@ it, for this statement). It covers only what the token signs: the status,
   answer's token;
 - optionally, that its ``query_hash`` is the SHA-256 of the statement the
   verdict covers: the query you sent (for natural language, the translated
-  expression the server reports).
+  expression the server reports);
+- on a route that decides an admission, the token signs it too
+  (``qwed.admission``, #321): the client checks it is the answer's
+  ``admission``, so the server's ADMIT or BLOCKED is verified as well.
 
-A token says the server reached the verdict; whether to act on it is still
-the answer's ``admission``. Fetching the JWKS from the server you asked
+A token says the server reached the verdict and, where it signs one, the
+admission; act on the admission. Fetching the JWKS from the server you asked
 trusts that server's TLS; to verify offline or against a pinned key, pass
 the JWKS you hold.
 """
@@ -118,6 +122,21 @@ def _decode(token: str, key: Any, *, issuer: str, leeway: int) -> dict[str, Any]
         raise AttestationError("attestation is not a JWT") from exc
 
 
+def check_admission(claims: Mapping[str, Any], admission: str | None) -> None:
+    """Raise AttestationError unless the verified ``claims`` sign
+    ``admission``: the answer's ``admission`` (#321), or None for an answer
+    that carries none, whose token must then sign none."""
+    qwed = claims.get("qwed")
+    signed = qwed.get("admission") if isinstance(qwed, Mapping) else None
+    if signed != admission:
+        raise AttestationError("attestation is for another admission (admission differs)")
+
+
+# verify_attestation's ``admission`` when the caller gives none: not checked.
+# None is a value, the admission of an answer that carries none (#514 review).
+_UNCHECKED: Any = object()
+
+
 def statement_hash(statement: str) -> str:
     """The ``query_hash`` a token carries for ``statement``."""
     return "sha256:" + hashlib.sha256(statement.encode()).hexdigest()
@@ -131,12 +150,16 @@ def verify_attestation(
     query: str | None = None,
     issuer: str = DEFAULT_ISSUER,
     leeway: int = 0,
+    admission: str | None = _UNCHECKED,
 ) -> dict[str, Any]:
     """Verify ``token`` as the attestation of the answer whose ``proof_ref``
     is given, and return its claims; raise AttestationError otherwise.
 
     ``query``, when given, must be the statement the verdict covers.
     ``leeway`` is the clock skew allowed on expiry, in seconds.
+    ``admission``, when given, must be the admission the token signs (the
+    answer's ``admission``, #321): ``None`` too, for an answer that carries
+    none, whose token must then sign none. See ``check_admission``.
     """
     require_answer(token, proof_ref)
     # Nothing from the token is read before its signature verifies: each
@@ -166,4 +189,6 @@ def verify_attestation(
         raise AttestationError("attestation is for another answer (proof_ref differs)")
     if query is not None and qwed.get("query_hash") != statement_hash(query):
         raise AttestationError("attestation is for another statement (query differs)")
+    if admission is not _UNCHECKED:
+        check_admission(claims, admission)
     return claims

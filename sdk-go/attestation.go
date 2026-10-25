@@ -6,8 +6,8 @@ package qwed
 // server signed after checking the verdict. Verifying it shows that server
 // issued a VERIFIED verdict for this answer's ProofRef (and, when you pass
 // it, for this statement). It covers only what the token signs: the status,
-// ProofRef and statement hash, not other fields of the response such as
-// Admission or AgentMessage. What is checked:
+// ProofRef, statement hash and, on a route that decides one, the admission;
+// not other fields of the response such as AgentMessage. What is checked:
 //
 //   - the signature, with the key the token header's kid names in the
 //     server's JWKS (GET /.well-known/jwks.json);
@@ -17,10 +17,13 @@ package qwed
 //   - that its proof_hash is the answer's ProofRef, so it is this answer's
 //     token;
 //   - optionally, that its query_hash is the SHA-256 of the statement the
-//     verdict covers.
+//     verdict covers;
+//   - on a route that decides an admission, the token signs it too
+//     (qwed.admission, #321): the client checks it is the answer's
+//     Admission, so the server's ADMIT or BLOCKED is verified as well.
 //
-// A token says the server reached the verdict; whether to act on it is still
-// the answer's admission (IsAdmitted). Fetching the JWKS from the server you
+// A token says the server reached the verdict and, where it signs one, the
+// admission; act on the admission (IsAdmitted). Fetching the JWKS from the server you
 // asked trusts that server's TLS; to verify offline or against a pinned key,
 // call VerifyAttestation with the JWKS you hold.
 
@@ -113,6 +116,9 @@ type QWEDClaims struct {
 	Result    AttestedResult `json:"result"`
 	QueryHash string         `json:"query_hash,omitempty"`
 	ProofHash string         `json:"proof_hash"`
+	// Admission is the server's admission, ADMIT or BLOCKED, on a route that
+	// decides one (#321); empty otherwise.
+	Admission string `json:"admission,omitempty"`
 }
 
 // AttestationClaims are a verified token's claims. Times are Unix seconds.
@@ -137,6 +143,12 @@ type AttestationOptions struct {
 	Issuer string
 	// Leeway is the clock skew allowed on expiry and nbf.
 	Leeway time.Duration
+	// Admission, when not empty, is the admission the token must sign: the
+	// answer's Admission (#321). Empty is not checked: for an answer that
+	// carries no admission, call CheckAdmission(claims, "") after verifying,
+	// which requires that the token signs none. Client.VerifyAttestation
+	// does this check for you.
+	Admission string
 	// Now is the current time (tests); time.Now when nil.
 	Now func() time.Time
 }
@@ -145,6 +157,16 @@ type AttestationOptions struct {
 func StatementHash(statement string) string {
 	sum := sha256.Sum256([]byte(statement))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// CheckAdmission returns an error, wrapping ErrAttestation, unless the
+// verified claims sign admission: the answer's Admission (#321), or empty for
+// an answer that carries none, whose token must then sign none.
+func CheckAdmission(claims *AttestationClaims, admission string) error {
+	if claims == nil || claims.QWED.Admission != admission {
+		return rejected("attestation is for another admission (admission differs)")
+	}
+	return nil
 }
 
 // requireAnswer returns an error unless there is a token and a proof_ref to
@@ -297,6 +319,11 @@ func VerifyAttestation(token string, jwks *JWKS, proofRef string, opts Attestati
 	}
 	if opts.Query != "" && claims.QWED.QueryHash != StatementHash(opts.Query) {
 		return nil, rejected("attestation is for another statement (query differs)")
+	}
+	if opts.Admission != "" {
+		if err := CheckAdmission(&claims, opts.Admission); err != nil {
+			return nil, err
+		}
 	}
 	return &claims, nil
 }
@@ -455,8 +482,9 @@ func (c *Client) jwksAfterMismatch(ctx context.Context, used *JWKS) (*JWKS, erro
 
 // VerifyAttestation verifies resp's attestation against this server's keys
 // and returns its claims. Every error wraps ErrAttestation: the token does
-// not verify or is not this answer's, or (ErrKeysUnavailable) the keys could
-// not be fetched. To verify against keys you pinned, call the package's
+// not verify or is not this answer's (its ProofRef, and the Admission it
+// carries, which the token must sign, none if it carries none, #321), or
+// (ErrKeysUnavailable) the keys could not be fetched. To verify against keys you pinned, call the package's
 // VerifyAttestation with your JWKS.
 func (c *Client) VerifyAttestation(ctx context.Context, resp *VerificationResponse, opts AttestationOptions) (*AttestationClaims, error) {
 	if resp == nil {
@@ -474,17 +502,26 @@ func (c *Client) VerifyAttestation(ctx context.Context, resp *VerificationRespon
 		return nil, err
 	}
 	claims, err := VerifyAttestation(resp.Attestation, jwks, resp.ProofRef, opts)
-	if !errors.Is(err, ErrKeyMismatch) {
-		return claims, err
+	if errors.Is(err, ErrKeyMismatch) {
+		// The key may have rotated, or the server restarted with a new key
+		// under the same kid, since the JWKS was cached: try the keys once
+		// more.
+		newer, fetchErr := c.jwksAfterMismatch(ctx, jwks)
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
+		if newer == nil {
+			return nil, err
+		}
+		claims, err = VerifyAttestation(resp.Attestation, newer, resp.ProofRef, opts)
 	}
-	// The key may have rotated, or the server restarted with a new key under
-	// the same kid, since the JWKS was cached: try the keys once more.
-	newer, fetchErr := c.jwksAfterMismatch(ctx, jwks)
-	if fetchErr != nil {
-		return nil, fetchErr
-	}
-	if newer == nil {
+	if err != nil {
 		return nil, err
 	}
-	return VerifyAttestation(resp.Attestation, newer, resp.ProofRef, opts)
+	// The token signs the server's admission where the route decides one
+	// (#321): the answer's admission must be that one.
+	if err := CheckAdmission(claims, string(resp.Admission)); err != nil {
+		return nil, err
+	}
+	return claims, nil
 }
