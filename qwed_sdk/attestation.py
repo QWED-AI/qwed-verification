@@ -27,6 +27,10 @@ A token says the server reached the verdict and, where it signs one, the
 admission; act on the admission. Fetching the JWKS from the server you asked
 trusts that server's TLS; to verify offline or against a pinned key, pass
 the JWKS you hold.
+
+A Verification Context document the server issued (spec v1.1) carries its
+own ``attestation``, a token of type ``qwed-context+jwt`` that signs the
+whole document; ``verify_document_attestation`` checks it (#319).
 """
 
 import hashlib
@@ -38,6 +42,7 @@ import jwt
 # The issuer a QWED server signs as.
 DEFAULT_ISSUER = "did:qwed:node:local"
 TOKEN_TYPE = "qwed-attestation+jwt"
+CONTEXT_TOKEN_TYPE = "qwed-context+jwt"
 JWKS_PATH = "/.well-known/jwks.json"
 
 
@@ -137,6 +142,32 @@ def check_admission(claims: Mapping[str, Any], admission: str | None) -> None:
 _UNCHECKED: Any = object()
 
 
+def _verified_claims(
+    token: str, jwks: Mapping[str, Any], *, issuer: str, leeway: int, token_type: str,
+) -> dict[str, Any]:
+    """The claims of ``token``, verified with a key in ``jwks`` and of type
+    ``token_type``; raise AttestationError otherwise."""
+    # Nothing from the token is read before its signature verifies: each
+    # ES256 key the JWKS holds (one, or two during a rotation) is tried, and
+    # the verified header must then name the key that verified it.
+    for kid, key in _es256_keys(jwks):
+        decoded = _decode(token, key, issuer=issuer, leeway=leeway)
+        if decoded is not None:
+            break
+    else:
+        raise KeyMismatchError("attestation signature does not verify with any JWKS key")
+
+    # From here on the header and claims are verified.
+    header = decoded["header"]
+    if not isinstance(header.get("kid"), str) or not header["kid"]:
+        raise AttestationError("token header names no key (kid)")
+    if header["kid"] != kid:
+        raise AttestationError("token header's kid does not name the key that signed it")
+    if header.get("typ") != token_type:
+        raise AttestationError(f"token is not a QWED attestation of type {token_type}")
+    return decoded["payload"]
+
+
 def statement_hash(statement: str) -> str:
     """The ``query_hash`` a token carries for ``statement``."""
     return "sha256:" + hashlib.sha256(statement.encode()).hexdigest()
@@ -162,25 +193,7 @@ def verify_attestation(
     none, whose token must then sign none. See ``check_admission``.
     """
     require_answer(token, proof_ref)
-    # Nothing from the token is read before its signature verifies: each
-    # ES256 key the JWKS holds (one, or two during a rotation) is tried, and
-    # the verified header must then name the key that verified it.
-    for kid, key in _es256_keys(jwks):
-        decoded = _decode(token, key, issuer=issuer, leeway=leeway)
-        if decoded is not None:
-            break
-    else:
-        raise KeyMismatchError("attestation signature does not verify with any JWKS key")
-
-    # From here on the header and claims are verified.
-    header = decoded["header"]
-    if not isinstance(header.get("kid"), str) or not header["kid"]:
-        raise AttestationError("token header names no key (kid)")
-    if header["kid"] != kid:
-        raise AttestationError("token header's kid does not name the key that signed it")
-    if header.get("typ") != TOKEN_TYPE:
-        raise AttestationError("token is not a QWED attestation")
-    claims = decoded["payload"]
+    claims = _verified_claims(token, jwks, issuer=issuer, leeway=leeway, token_type=TOKEN_TYPE)
     qwed = claims.get("qwed")
     result = qwed.get("result") if isinstance(qwed, Mapping) else None
     if not isinstance(result, Mapping) or result.get("status") != "VERIFIED":
@@ -191,4 +204,43 @@ def verify_attestation(
         raise AttestationError("attestation is for another statement (query differs)")
     if admission is not _UNCHECKED:
         check_admission(claims, admission)
+    return claims
+
+
+def document_attestation(document: Any) -> str | None:
+    """The ``attestation`` a Verification Context document carries, or None
+    if it carries none (a v1.0 document, or not a document)."""
+    token = document.get("attestation") if isinstance(document, Mapping) else None
+    return token if isinstance(token, str) and token else None
+
+
+def verify_document_attestation(
+    document: Mapping[str, Any],
+    jwks: Mapping[str, Any],
+    *,
+    issuer: str = DEFAULT_ISSUER,
+    leeway: int = 0,
+) -> dict[str, Any]:
+    """Verify the ``attestation`` of a Verification Context ``document``
+    (spec v1.1) and return its claims; raise AttestationError otherwise
+    (#319).
+
+    The token must verify with a key in ``jwks``, be a document's
+    (``qwed-context+jwt``), and sign this document: the hash of all of it
+    but the token, and its verdict, admission and ``proof_ref``. It shows
+    the server issued this document unchanged; it adds nothing to the
+    verdict or the admission, and does not check the schema or that
+    ``proof_ref`` resolves (the server's validate and resolve do).
+    """
+    # Imported here: qwed_new is the same distribution, but loading it is
+    # needed only for a document.
+    from qwed_new.core.verification_context import document_attestation_mismatch
+
+    token = document_attestation(document)
+    if token is None:
+        raise AttestationError("no attestation")
+    claims = _verified_claims(token, jwks, issuer=issuer, leeway=leeway, token_type=CONTEXT_TOKEN_TYPE)
+    mismatch = document_attestation_mismatch(document, claims.get("qwed"))
+    if mismatch is not None:
+        raise AttestationError(mismatch)
     return claims

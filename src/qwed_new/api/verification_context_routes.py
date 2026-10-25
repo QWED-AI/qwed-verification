@@ -23,6 +23,7 @@ from qwed_new.core.verification_context import (
     resolve_document_proof_ref,
     validate_document,
 )
+from qwed_new.core.verification_context_attestation import attest_document
 from qwed_new.core.verification_context_bridge import (
     verification_context_from_diagnostic_result,
 )
@@ -189,7 +190,7 @@ def _safe_commit_context_log(
     "/from-diagnostic",
     responses={
         422: {"description": "Verification Context rejected"},
-        500: {"description": "Audit persistence or attestation verification failed"},
+        500: {"description": "Audit persistence, or attestation verification or signing, failed"},
     },
 )
 def create_verification_context_from_diagnostic(
@@ -210,6 +211,11 @@ def create_verification_context_from_diagnostic(
     document names the engine that signed it, and this server's version, as
     its verifier; the caller's ``verifier`` and ``verifier_version`` are
     kept under ``caller_supplied``.
+
+    Every document returned is v1.1, signed by this server (#319): its
+    ``attestation`` authenticates the whole document as this server's, so
+    a consumer can tell it from one built elsewhere with a ``proof_ref``
+    that resolves. A failure to sign is a 500, not an unsigned document.
     """
     result = _diagnostic_result_from_payload(payload.diagnostic)
     verifier, verifier_version = payload.verifier, payload.verifier_version
@@ -261,12 +267,18 @@ def create_verification_context_from_diagnostic(
             attestation_token=payload.attestation_token,
         )
         document.validate()
-        document_dict = document.to_dict()
+        unsigned = document.to_dict()
     except VerificationContextValidationError:
         raise HTTPException(
             status_code=422,
             detail="verification context rejected",
         ) from None
+    try:
+        document_dict = attest_document(unsigned)
+    except (RuntimeError, ValueError):
+        # The document was valid, so a failure here is the server's own:
+        # its key or settings (AttestationConfigError is a RuntimeError).
+        raise HTTPException(status_code=500, detail="attestation signing failed") from None
     _safe_commit_context_log(
         session,
         tenant,
