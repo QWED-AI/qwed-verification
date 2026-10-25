@@ -38,7 +38,8 @@ All notable changes to the QWED Protocol will be documented in this file.
     Keys that cannot be fetched raise `KeysUnavailableError`. A document
     nested too deeply to encode is refused as a mismatch, not a
     `RecursionError`. A token whose `qwed.version` is not `"1.1"`, or whose
-    `sub` is not the document hash, is refused.
+    `sub` is not the document hash, is refused, and so is a document whose
+    own `spec_version` is not `"1.1"`.
     `require_attestation=False` keeps the old schema-only and
     `proof_ref`-only checks.
   - The server and the SDK read a token with `jwt.PyJWT().decode_complete`.

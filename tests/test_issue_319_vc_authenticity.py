@@ -367,6 +367,19 @@ def test_the_claims_must_be_a_v1_1_documents(fresh_service, version):
     assert "version differs" in document_attestation_mismatch(document, claims)
 
 
+@pytest.mark.parametrize("spec_version", ["1.0", None, 1.1])
+def test_the_document_itself_must_be_v1_1(fresh_service, jwks, spec_version):
+    # #517 review: a v1.0 document may not carry an attestation. The hash
+    # binds spec_version, so a relabelled document differs there too; the
+    # check names the reason first.
+    document = {**_admitted(), "spec_version": spec_version}
+    claims = _context_claims(document["attestation"])
+
+    assert document_attestation_mismatch(document, claims) == "document is not a v1.1 document (spec_version differs)"
+    with pytest.raises(AttestationError, match="spec_version differs"):
+        verify_document_attestation(document, jwks)
+
+
 @pytest.mark.parametrize("sub", [None, HASH, "sha256:" + "0" * 64])
 def test_the_subject_must_be_the_document_hash(fresh_service, sub):
     # #517 review: sub names the document hash too, not only the qwed claim.

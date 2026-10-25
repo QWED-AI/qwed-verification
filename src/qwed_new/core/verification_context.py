@@ -676,15 +676,19 @@ def document_attestation_mismatch(
 ) -> Optional[str]:
     """Why the verified claims of a document's attestation do not sign this
     document, or None if they do (#319). As spec v1.1 section 2 has them:
-    ``qwed.version`` is "1.1"; ``sub`` and ``qwed.document_hash`` are both
-    this document's hash; and the verdict, admission and ``proof_ref`` they
-    name are this document's. Read only after the token's signature has
-    verified."""
+    ``qwed.version`` and the document's ``spec_version`` are both "1.1";
+    ``sub`` and ``qwed.document_hash`` are both this document's hash; and
+    the verdict, admission and ``proof_ref`` they name are this document's.
+    Read only after the token's signature has verified."""
     qwed_claims = claims.get("qwed") if isinstance(claims, Mapping) else None
     if not isinstance(qwed_claims, Mapping):
         return "attestation signs no document"
     if qwed_claims.get("version") != ATTESTED_SPEC_VERSION:
         return "attestation is not a v1.1 document's (version differs)"
+    # The hash binds spec_version too, so a relabelled document already
+    # differs there; this says why, and does not lean on that (#517 review).
+    if not isinstance(document, Mapping) or document.get("spec_version") != ATTESTED_SPEC_VERSION:
+        return "document is not a v1.1 document (spec_version differs)"
     try:
         context = document["context"]
         signed = {
