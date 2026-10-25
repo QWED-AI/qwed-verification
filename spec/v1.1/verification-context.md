@@ -62,7 +62,11 @@ A consumer verifies a v1.1 document by checking, in order:
 2. The issuer, and that the token has not expired (nor is used before any
    `nbf`). The token lasts as long as a verdict's attestation
    (`QWED_ATTESTATION_TTL_SECONDS`, 24 hours by default): an expired document
-   is obtained again, not trusted.
+   is obtained again, not trusted. The issuer's key must outlive the
+   tokens it signs: a QWED server needs a configured signing key
+   (`QWED_SIGNING_KEY` or `QWED_SIGNING_KEY_FILE`), or a document it issued
+   no longer verifies after a restart, or on another replica (v1.0 §6,
+   multi-replica caveat).
 3. That `qwed.document_hash` is the hash of this document (§3), and that
    `qwed.verdict`, `qwed.admission` and `qwed.proof_ref` are this document's.
 

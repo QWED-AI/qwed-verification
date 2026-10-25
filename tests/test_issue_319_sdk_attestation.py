@@ -220,7 +220,7 @@ def test_a_recursion_error_from_pyjwt_is_an_attestation_error(server, monkeypatc
         raise RecursionError("maximum recursion depth exceeded")
 
     token = _token(service)
-    monkeypatch.setattr(jwt, "decode_complete", deep)
+    monkeypatch.setattr(jwt.PyJWT, "decode_complete", deep)
 
     with pytest.raises(AttestationError, match="not a JWT"):
         verify_attestation(token, jwks, proof_ref=PROOF)

@@ -102,7 +102,9 @@ def _decode(token: str, key: Any, *, issuer: str, leeway: int) -> dict[str, Any]
         # the key is used. iat is required but not compared with the clock:
         # expiry is what bounds a token, and a client whose clock is behind
         # the server's would otherwise refuse a token just issued.
-        return jwt.decode_complete(
+        # jwt.decode_complete is exported only from PyJWT 2.10; the PyJWT
+        # class has it from 2.0, and the floor is 2.8 (#517 review).
+        return jwt.PyJWT().decode_complete(
             token,
             key,
             algorithms=["ES256"],

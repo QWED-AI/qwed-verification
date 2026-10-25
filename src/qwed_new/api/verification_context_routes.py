@@ -213,7 +213,7 @@ def create_verification_context_from_diagnostic(
     kept under ``caller_supplied``.
 
     Every document returned is v1.1, signed by this server (#319): its
-    ``attestation`` authenticates the whole document as this server's, so
+    ``attestation`` authenticates every other field as this server's, so
     a consumer can tell it from one built elsewhere with a ``proof_ref``
     that resolves. A failure to sign is a 500, not an unsigned document.
     """

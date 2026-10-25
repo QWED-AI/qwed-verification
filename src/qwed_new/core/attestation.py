@@ -774,8 +774,10 @@ class AttestationService:
             key_pair = self._ensure_key_pair()
             public_key = key_pair.public_key_pem
 
-            # Verify signature and claims
-            decoded = jwt.decode_complete(
+            # Verify signature and claims. PyJWT exports decode_complete at
+            # module level only from 2.10; the PyJWT class has it from 2.0,
+            # and the floor is 2.8 (#517 review).
+            decoded = jwt.PyJWT().decode_complete(
                 jwt_token,
                 public_key,
                 algorithms=["ES256"],

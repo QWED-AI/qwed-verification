@@ -2,9 +2,9 @@
 
 A document's ``proof_ref`` is an unkeyed commitment: anyone can build a
 document whose ``proof_ref`` resolves. ``attest_document`` adds what only
-the server can: its signature over the whole document, as a v1.1 document's
-``attestation``. A consumer verifies it with a key in the server's JWKS
-(``qwed_sdk.attestation.verify_document_attestation``).
+the server can: its signature over every other field of the document, as
+a v1.1 document's ``attestation``. A consumer verifies it with a key in the
+server's JWKS (``qwed_sdk.attestation.verify_document_attestation``).
 """
 
 import copy

@@ -216,7 +216,8 @@ on it is still the answer's admission.
 
 A document's `proof_ref` is a commitment anyone can compute, so it does not
 show who issued the document. The server returns spec v1.1 documents, which
-carry `attestation`: its signature over the whole document. By default
+carry `attestation`: its signature over every other field of the document
+(the token cannot sign itself). By default
 `validate_verification_context` and `resolve_verification_context` verify
 it against the server's keys before asking the server:
 
@@ -235,7 +236,9 @@ client.validate_verification_context(local_v1_0, require_attestation=False)  # t
 `qwed_sdk.verify_document_attestation(document, jwks)`. Keys that cannot be
 fetched raise `KeysUnavailableError` rather than report a document invalid.
 The signature authenticates the document; it adds nothing to its verdict or
-admission.
+admission. A server without a configured signing key (`QWED_SIGNING_KEY` or
+`QWED_SIGNING_KEY_FILE`) signs with a key generated per process, so its
+documents stop verifying after a restart, or on another replica.
 
 ### BatchResult
 

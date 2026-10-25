@@ -26,8 +26,8 @@ trust it.
 
 ## Verification Context v1.1
 
-v1.1 adds `attestation`: the issuing server's ES256 signature over the whole
-document, which a v1.0 `proof_ref` (an unkeyed commitment anyone can
+v1.1 adds `attestation`: the issuing server's ES256 signature over every
+other field of the document, which a v1.0 `proof_ref` (an unkeyed commitment anyone can
 compute) cannot show. A QWED server returns v1.1 documents.
 
 - **Prose specification:** [`v1.1/verification-context.md`](v1.1/verification-context.md)

@@ -20,6 +20,8 @@ _SCHEMA_FILES = {
     ATTESTED_SPEC_VERSION: "verification-context-1.1.schema.json",
 }
 _PROOF_REF_PATTERN = re.compile(r"sha256:[a-f0-9]{64}")
+_SHA256_PREFIX = "sha256:"
+_NOT_A_DOCUMENT = "Verification Context document must be a JSON object"
 
 
 class VerificationContextValidationError(ValueError):
@@ -447,7 +449,7 @@ def compute_context_proof_ref(
         "context": context_dict,
     }
     payload = _canonical_json(bound)
-    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return _SHA256_PREFIX + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -637,13 +639,13 @@ def _expected_document_proof_ref(document: Mapping[str, Any]) -> str:
         "context": context_copy,
     }
     payload = _canonical_json(bound)
-    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return _SHA256_PREFIX + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def compute_document_proof_ref(document: Mapping[str, Any]) -> str:
     if not isinstance(document, Mapping):
         raise VerificationContextValidationError(
-            "Verification Context document must be a JSON object"
+            _NOT_A_DOCUMENT
         )
     try:
         return _expected_document_proof_ref(document)
@@ -661,11 +663,11 @@ def compute_document_hash(document: Mapping[str, Any]) -> str:
     something only under the issuing server's signature."""
     if not isinstance(document, Mapping):
         raise VerificationContextValidationError(
-            "Verification Context document must be a JSON object"
+            _NOT_A_DOCUMENT
         )
     unsigned = {key: value for key, value in document.items() if key != "attestation"}
     payload = _canonical_json(unsigned)
-    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return _SHA256_PREFIX + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def document_attestation_mismatch(
@@ -686,7 +688,9 @@ def document_attestation_mismatch(
             "admission": context["decision"]["admission"],
             "proof_ref": context["evidence"]["proof_ref"],
         }
-    except _RESOLVER_ERRORS:
+    # RecursionError: a document nested too deeply to encode has no hash
+    # to compare, so it is a mismatch, not an error that escapes (#517 review).
+    except (*_RESOLVER_ERRORS, RecursionError):
         return "document is not a Verification Context"
     for claim, value in signed.items():
         if claim not in qwed_claims or qwed_claims[claim] != value:
@@ -744,7 +748,7 @@ def _validate_verified_commitment(document: Mapping[str, Any]) -> None:
 def validate_document(document: Mapping[str, Any]) -> None:
     if not isinstance(document, Mapping):
         raise VerificationContextValidationError(
-            "Verification Context document must be a JSON object"
+            _NOT_A_DOCUMENT
         )
     _reject_non_finite_numbers(document)
     try:

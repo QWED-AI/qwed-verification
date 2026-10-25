@@ -193,8 +193,10 @@ def test_only_a_valid_document_is_attested(fresh_service, document):
 
 
 def test_a_signed_document_is_not_signed_again(fresh_service):
+    signed = _document()
+
     with pytest.raises(VerificationContextValidationError, match="v1.0"):
-        attest_document(_document())
+        attest_document(signed)
 
 
 # ---------------------------------------------------------------- the tokens
@@ -224,9 +226,10 @@ HASH = "sha256:" + "d" * 64
 )
 def test_fields_the_schema_refuses_are_not_signed(fields, refusal):
     signed = {"document_hash": HASH, "verdict": "VERIFIED", "admission": "ADMIT", "proof_ref": PROOF, **fields}
+    service = _service()
 
     with pytest.raises(ValueError, match=refusal):
-        _service().create_context_attestation(**signed)
+        service.create_context_attestation(**signed)
 
 
 def test_a_documents_token_is_not_a_verdicts_nor_the_reverse():
@@ -300,27 +303,32 @@ def test_the_document_hash_needs_a_document():
 
 def test_a_v1_1_document_must_carry_an_attestation(fresh_service):
     document = _document()
+    del document["attestation"]
 
     with pytest.raises(VerificationContextValidationError, match="attestation"):
-        validate_document({key: value for key, value in document.items() if key != "attestation"})
+        validate_document(document)
 
 
 @pytest.mark.parametrize("token", ["", "not-a-jwt", "a.b", "a.b.c.d", "a.b.c d", 7, "a.b." + "c" * 8192])
 def test_a_v1_1_attestation_must_be_a_compact_jwt(fresh_service, token):
+    document = {**_document(), "attestation": token}
+
     with pytest.raises(VerificationContextValidationError):
-        validate_document({**_document(), "attestation": token})
+        validate_document(document)
 
 
 def test_a_v1_0_document_carries_no_attestation(fresh_service):
-    document = _document()
+    document = {**_document(), "spec_version": "1.0"}
 
     with pytest.raises(VerificationContextValidationError):
-        validate_document({**document, "spec_version": "1.0"})
+        validate_document(document)
 
 
 def test_an_unknown_spec_version_is_still_refused(fresh_service):
+    document = {**_unsigned(_document()), "spec_version": "2.0"}
+
     with pytest.raises(VerificationContextValidationError, match="spec_version"):
-        validate_document({**_unsigned(_document()), "spec_version": "2.0"})
+        validate_document(document)
 
 
 def test_the_v1_1_schema_is_published_with_the_spec():
@@ -377,10 +385,10 @@ def test_the_sdk_refuses_a_changed_document(jwks, path, value, differs):
 
 def test_the_sdk_refuses_another_documents_attestation(jwks):
     admitted = _admitted()
-    denied = _document()
+    denied = {**_document(), "attestation": admitted["attestation"]}
 
     with pytest.raises(AttestationError, match="another document"):
-        verify_document_attestation({**denied, "attestation": admitted["attestation"]}, jwks)
+        verify_document_attestation(denied, jwks)
 
 
 def test_the_sdk_refuses_a_forged_admit_with_a_resolving_proof_ref(jwks):
@@ -399,8 +407,9 @@ def test_the_sdk_refuses_a_forged_admit_with_a_resolving_proof_ref(jwks):
 
 def test_the_sdk_refuses_a_verdicts_token_in_a_document(jwks):
     document = {**_admitted(), "attestation": _verdict_token("ADMIT")}
+    expected = re.escape(CONTEXT_TOKEN_TYPE)
 
-    with pytest.raises(AttestationError, match=re.escape(CONTEXT_TOKEN_TYPE)):
+    with pytest.raises(AttestationError, match=expected):
         verify_document_attestation(document, jwks)
 
 
@@ -452,40 +461,46 @@ def _client(jwks, endpoint_calls):
     return client
 
 
-@pytest.mark.parametrize(
-    ("method", "key"), [("validate_verification_context", "valid"), ("resolve_verification_context", "resolved")],
-)
-def test_validate_and_resolve_require_an_attestation_by_default(jwks, method, key):
+CHECKS = [
+    (QWEDClient.validate_verification_context, "/verification-context/validate", "valid"),
+    (QWEDClient.resolve_verification_context, "/verification-context/resolve", "resolved"),
+]
+
+
+@pytest.mark.parametrize(("check", "endpoint", "key"), CHECKS)
+def test_validate_and_resolve_require_an_attestation_by_default(jwks, check, endpoint, key):
     calls = []
     client = _client(jwks, calls)
 
-    unsigned = getattr(client, method)(_unsigned(_document()))
-    forged = getattr(client, method)({**_document(), "verdict": "BLOCKED"})
-    signed = getattr(client, method)(_document())
+    unsigned = check(client, _unsigned(_document()))
+    forged = check(client, {**_document(), "verdict": "BLOCKED"})
+    signed = check(client, _document())
 
     assert unsigned == {key: False, "error": client_module.ATTESTATION_REQUIRED}
     assert forged == {key: False, "error": client_module.ATTESTATION_INVALID}
     assert signed[key] is True
     # Only the signed document reached the server.
-    assert [path for path, _body in calls] == [f"/verification-context/{method.split('_')[0]}"]
+    assert [path for path, _body in calls] == [endpoint]
 
 
-@pytest.mark.parametrize("method", ["validate_verification_context", "resolve_verification_context"])
-def test_require_attestation_false_checks_the_server_alone(method):
+@pytest.mark.parametrize(("check", "endpoint", "key"), CHECKS)
+def test_require_attestation_false_checks_the_server_alone(check, endpoint, key):
     calls = []
     client = _client(None, calls)  # no keys are fetched
 
-    getattr(client, method)({"spec_version": "1.0"}, require_attestation=False)
+    response = check(client, {"spec_version": "1.0"}, require_attestation=False)
 
-    assert calls == [(f"/verification-context/{method.split('_')[0]}", {"document": {"spec_version": "1.0"}})]
+    assert response[key] is True
+    assert calls == [(endpoint, {"document": {"spec_version": "1.0"}})]
 
 
 def test_keys_that_cannot_be_fetched_decide_nothing(fresh_service):
     calls = []
     client = _client(None, calls)
+    document = _document()
 
     with pytest.raises(KeysUnavailableError):
-        client.resolve_verification_context(_document())
+        client.resolve_verification_context(document)
 
     assert calls == []
 
@@ -579,12 +594,15 @@ def test_the_async_client_reports_keys_it_cannot_fetch(fresh_service):
         client = QWEDAsyncClient(api_key="k", base_url="http://qwed.test")
         client._client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(503)))
         try:
-            return await client.resolve_verification_context(_document())
+            return await client.resolve_verification_context(document)
         finally:
             await client._client.aclose()
 
+    document = _document()
+    resolving = run()
+
     with pytest.raises(KeysUnavailableError):
-        asyncio.run(run())
+        asyncio.run(resolving)
 
 
 def test_a_key_mismatch_within_30_seconds_is_invalid_without_a_fetch(jwks):
@@ -627,3 +645,21 @@ def test_the_async_client_does_not_refetch_within_30_seconds(jwks):
 
     assert asyncio.run(run()) == {"valid": False, "error": "attestation_invalid"}
     assert fetched == []
+
+
+def test_a_document_too_deep_to_encode_is_a_mismatch_not_an_error(jwks):
+    # #517 review: a RecursionError from the canonical encoding must not
+    # escape the claim check; there is no hash, so the document is refused.
+    document = _admitted()
+    claims = verify_document_attestation(document, jwks)["qwed"]
+    deep = current = {}
+    for _ in range(5000):
+        current["next"] = {}
+        current = current["next"]
+    document["context"]["evidence"]["evidence"]["deep"] = deep
+
+    mismatch = document_attestation_mismatch(document, claims)
+
+    assert mismatch == "document is not a Verification Context"
+    with pytest.raises(AttestationError, match="not a Verification Context"):
+        verify_document_attestation(document, jwks)
