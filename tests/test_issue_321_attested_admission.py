@@ -130,6 +130,36 @@ def test_any_other_admission_is_refused(fresh_service, admission):
     assert not is_admission_claim(admission)
 
 
+@pytest.mark.parametrize("status, verified, proof", [
+    ("VERIFIED", False, PROOF),    # a result the engine did not find valid
+    ("BLOCKED", True, PROOF),      # not a VERIFIED result
+    ("VERIFIED", True, None),      # no proof bound to the token
+])
+def test_admit_is_signed_only_for_a_verified_proven_result(fresh_service, status, verified, proof):
+    # #514 review: ADMIT is a pass at the boundary, so the signing entry
+    # points refuse it for anything admission_decision would not admit.
+    service = AttestationService()
+    result = VerificationResult(status=status, verified=verified, engine="math")
+
+    with pytest.raises(ValueError, match="ADMIT needs"):
+        service.create_attestation(result, QUERY, proof_hash=proof, admission="ADMIT", store=False)
+    issued = create_verification_attestation(
+        status=status, verified=verified, engine="math", query=QUERY, proof_hash=proof, admission="ADMIT",
+    )
+    assert issued.status is AttestationStatus.BLOCKED
+    assert issued.error_code == "INVALID_ADMISSION"
+
+
+def test_blocked_is_signed_for_a_result_that_is_not_valid(fresh_service):
+    # Code proven unsafe: VERIFIED, not valid, BLOCKED at the boundary.
+    issued = create_verification_attestation(
+        status="VERIFIED", verified=False, engine="code", query=QUERY, proof_hash=PROOF, admission="BLOCKED",
+    )
+
+    assert issued.is_issued
+    assert _claims(issued.token)["qwed"]["admission"] == "BLOCKED"
+
+
 def test_the_admission_claims_are_admit_and_blocked():
     assert is_admission_claim("ADMIT")
     assert is_admission_claim("BLOCKED")
@@ -148,6 +178,10 @@ def test_the_trust_step_checks_the_signed_admission(fresh_service):
     for blocked in (refused, unsigned):
         assert blocked.status is DiagnosticStatus.BLOCKED
         assert blocked.developer_fields["constraint_id"] == "trust_gate.claims_admission_mismatch"
+        # The verdict it blocks is kept beside the reason (#514 review).
+        assert blocked.developer_fields["verdict_status"] == "VERIFIED"
+        assert blocked.developer_fields["verdict_proof_ref"] == PROOF
+        assert blocked.developer_fields["verdict_developer_fields"] == _verified().developer_fields
 
 
 @pytest.mark.parametrize("fields, rule, expected", [
@@ -263,6 +297,29 @@ def test_only_a_token_that_signs_admit_names_its_engine(fresh_service):
     assert _admitting_engine(_token("ADMIT")) == "stats"
     assert _admitting_engine(_token("BLOCKED")) is None
     assert _admitting_engine(_token()) is None
+
+
+def test_a_token_that_no_longer_verifies_on_the_second_read_fails_loudly(fresh_service, monkeypatch):
+    # #514 review: expired or revoked between the trust step and the
+    # admission read, the token is a verification failure, not "no ADMIT".
+    token = _token("ADMIT")
+    service = get_attestation_service()
+    calls = []
+
+    def expiring(token, **kwargs):
+        calls.append(token)
+        if len(calls) == 2:
+            return False, None, "Invalid token"
+        return AttestationService.verify_attestation(service, token, **kwargs)
+
+    monkeypatch.setattr(service, "verify_attestation", expiring)
+    diagnostic = {"status": "VERIFIED", "agent_message": "m", "proof_ref": PROOF}
+
+    with pytest.raises(HTTPException) as failed:
+        _document(diagnostic, attestation_token=token)
+
+    assert failed.value.status_code == 500
+    assert len(calls) == 2
 
 
 def test_a_denied_document_keeps_the_callers_verifier(fresh_service):

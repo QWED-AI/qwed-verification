@@ -1049,7 +1049,8 @@ def _admission_mismatch(
     policy: str,
 ) -> DiagnosticResult | None:
     """A blocked result if ``admission`` is given and the token does not sign
-    it (``qwed.admission``, #321); None otherwise."""
+    it (``qwed.admission``, #321); None otherwise. The verdict it blocks is
+    kept beside the reason, unchanged, as evidence (#514 review)."""
     if admission is None or qwed_claims.get("admission") == admission:
         return None
     logger.warning(
@@ -1064,6 +1065,9 @@ def _admission_mismatch(
             "token_admission": qwed_claims.get("admission"),
             "expected_admission": admission,
             "policy": policy,
+            "verdict_status": result.status.value,
+            "verdict_proof_ref": result.proof_ref,
+            "verdict_developer_fields": result.developer_fields,
         },
     )
 

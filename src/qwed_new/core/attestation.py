@@ -366,6 +366,22 @@ def is_admission_claim(value: Any) -> bool:
     TypeError (#514 review)."""
     return isinstance(value, str) and value in ADMISSION_CLAIMS
 
+
+def _admission_refusal(admission: Any, *, status: Any, verified: Any, proof_bound: bool) -> str | None:
+    """Why ``admission`` cannot be signed, or None if it can (#321).
+
+    It must be ADMIT or BLOCKED. ADMIT, a pass at the boundary, is signed
+    only for a VERIFIED result that is ``verified`` with a proof bound to the
+    token, as admission_decision admits only such a result (#514 review).
+    """
+    if admission is None:
+        return None
+    if not is_admission_claim(admission):
+        return "admission must be ADMIT or BLOCKED"
+    if admission == "ADMIT" and not (status == "VERIFIED" and verified is True and proof_bound):
+        return "ADMIT needs a VERIFIED, verified result with a proof bound to it"
+    return None
+
 # (#275) Single source of truth for the generic attestation rejection message.
 # Every caller-sensitive failure returns this exactly, so attackers cannot
 # enumerate trusted issuers, probe expirations, or read implementation state.
@@ -478,6 +494,7 @@ class AttestationService:
 
     def _binding_claims(
         self,
+        verification_result: VerificationResult,
         proof_data: str | None,
         proof_hash: str | None,
         admission: str | None,
@@ -489,16 +506,22 @@ class AttestationService:
         if proof_data is not None and proof_hash is not None:
             raise ValueError("give proof_data or proof_hash, not both")
         claims: dict[str, Any] = {}
-        if admission is not None:
-            if not is_admission_claim(admission):
-                raise ValueError("admission must be ADMIT or BLOCKED")
-            claims["admission"] = admission
         if proof_hash is not None:
             if not _is_proof_hash(proof_hash):
                 raise ValueError("proof_hash must be sha256:<64 hex>")
             claims["proof_hash"] = proof_hash
         elif proof_data:
             claims["proof_hash"] = self._hash_content(proof_data)
+        refusal = _admission_refusal(
+            admission,
+            status=verification_result.status,
+            verified=verification_result.verified,
+            proof_bound="proof_hash" in claims,
+        )
+        if refusal is not None:
+            raise ValueError(refusal)
+        if admission is not None:
+            claims["admission"] = admission
         return claims
 
     def create_attestation(
@@ -539,7 +562,8 @@ class AttestationService:
                                  result, "ADMIT" or "BLOCKED", signed as
                                  qwed.admission (#321). None for a route
                                  that decides none; any other value is
-                                 refused.
+                                 refused, and so is ADMIT for a result that
+                                 is not VERIFIED, verified and proven.
 
         Returns:
             Attestation object with signed JWT.
@@ -565,7 +589,7 @@ class AttestationService:
                 "confidence": verification_result.confidence,
             },
             "query_hash": self._hash_content(original_query),
-            **self._binding_claims(proof_data, proof_hash, admission),
+            **self._binding_claims(verification_result, proof_data, proof_hash, admission),
         }
 
         if chain_id:
@@ -803,7 +827,8 @@ def create_verification_attestation(
                      ``proof_ref`` (#320). A malformed value is BLOCKED.
         admission:   The route's admission decision, "ADMIT" or "BLOCKED",
                      signed as ``qwed.admission`` (#321); None where the route
-                     decides none. Any other value is BLOCKED.
+                     decides none. Any other value is BLOCKED, and so is ADMIT
+                     for a result that is not VERIFIED, verified and proven.
 
     Returns:
         AttestationResult with status "ISSUED", "BLOCKED", or "UNVERIFIABLE".
@@ -832,7 +857,10 @@ def create_verification_attestation(
             error="proof_hash must be sha256:<64 hex>",
         )
 
-    if admission is not None and not is_admission_claim(admission):
+    refusal = _admission_refusal(
+        admission, status=status, verified=verified, proof_bound=bool(proof_data or proof_hash),
+    )
+    if refusal is not None:
         logger.warning(
             "attestation.blocked query_hash=%s reason=INVALID_ADMISSION",
             hashlib.sha256(query.encode()).hexdigest()[:16],
@@ -841,7 +869,7 @@ def create_verification_attestation(
             status=AttestationStatus.BLOCKED,
             token=None,
             error_code="INVALID_ADMISSION",
-            error="admission must be ADMIT or BLOCKED",
+            error=refusal,
         )
 
     if verified and not (proof_data or proof_hash):

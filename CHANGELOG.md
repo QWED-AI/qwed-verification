@@ -19,7 +19,9 @@ All notable changes to the QWED Protocol will be documented in this file.
     with the same rule it returns the admission by; the trust step checks
     the fresh token carries it. Routes that decide none (logic, fact, stats,
     image, RAG, process, consensus) sign none. Any other value is refused at
-    signing.
+    signing, and so is `ADMIT` for a result that is not `VERIFIED`, valid
+    and bound to its proof. A token that signs a different admission is
+    blocked with the verdict it blocks kept beside the reason.
   - `/verification-context/from-diagnostic` admits a `VERIFIED` diagnostic
     whose token, checked against its status, `proof_ref` and query, signs
     `ADMIT` (`constraint_id` `verification_context.attested_admit`). The
@@ -28,9 +30,10 @@ All notable changes to the QWED Protocol will be documented in this file.
     signed (`qwed.result.engine`) and this server's version as its
     verifier; the caller's `verifier` and `verifier_version` are kept under
     `caller_supplied`, so no document is admitted under a verifier that
-    never checked it. A failure to read the signed admission is a 500, not
-    a quiet `DENY`. A value that is not `ADMIT` or `BLOCKED`, a list
-    included, is refused, not raised as a `TypeError`.
+    never checked it. A failure to read the signed admission, an error or a
+    token that no longer verifies, is a 500, not a quiet `DENY`. A value
+    that is not `ADMIT` or `BLOCKED`, a list included, is refused, not
+    raised as a `TypeError`.
   - The four SDKs return the signed admission, and their clients'
     `verify_attestation` refuse an answer whose `admission` is not the one
     the token signs ("attestation is for another admission"): an answer

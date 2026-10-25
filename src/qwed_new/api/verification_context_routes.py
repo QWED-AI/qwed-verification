@@ -114,8 +114,10 @@ def _admitting_engine(token: str | None) -> str | None:
     Read only after ``enforce_trust_decision`` has checked the token against
     the result's status and ``proof_ref`` and the query, so the admission is
     the server's decision for this verdict, not the caller's. A failure to
-    read it again is an enforcement failure: it fails loudly, with a 500, not
-    quietly as DENY (QWED_RULES.md section 6).
+    read it again, an error or a token that no longer verifies (expired or
+    revoked since), is an enforcement failure: it fails loudly, with a 500,
+    not quietly as DENY (QWED_RULES.md section 6). Only a token that still
+    verifies and signs no ADMIT is DENY.
     """
     if not token:
         return None
@@ -124,7 +126,9 @@ def _admitting_engine(token: str | None) -> str | None:
     # Any failure here is reported as a 500, not suppressed.
     except Exception:  # noqa: BLE001
         raise HTTPException(status_code=500, detail="attestation verification failed") from None
-    qwed = claims.get("qwed") if is_valid and isinstance(claims, dict) else None
+    if not is_valid or not isinstance(claims, dict):
+        raise HTTPException(status_code=500, detail="attestation verification failed")
+    qwed = claims.get("qwed")
     if not isinstance(qwed, dict) or qwed.get("admission") != AdmissionDecision.ADMIT.value:
         return None
     signed_result = qwed.get("result")
