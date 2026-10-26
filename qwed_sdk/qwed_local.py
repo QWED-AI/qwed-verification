@@ -563,6 +563,11 @@ def _safe_eval_z3_expr(expr_str: str, z3_namespace: dict):
     return _evaluate_validated_ast(tree, restricted_ns)
 
 
+# The code-cache policy: results cached under another version (the old AST
+# check's "v1") are never served (GHSA-v8qq-v427-qrqc).
+CODE_CACHE_POLICY_VERSION = "code_verifier-v2"
+
+
 @dataclass
 class VerificationResult:
     """Result from verification."""
@@ -1115,126 +1120,107 @@ Z3 code:"""
     
     def verify_code(self, code: str, language: str = "python") -> VerificationResult:
         """
-        Verify code for security issues and code smells.
-        
-        Uses Python AST analysis for security checks.
-        Checks cache first to save API costs!
+        Verify code for security issues with QWED's CodeVerifier.
+
+        The verdict is CodeVerifier's and the admission its
+        ``admission_decision``: only admitted code is ``verified`` and
+        ``SAFE``. The earlier local AST check flagged only bare calls to
+        four names, so ``os.system``, ``subprocess.run`` or
+        ``from os import system`` came back SAFE (GHSA-v8qq-v427-qrqc). A
+        blocklist is not a verdict, so without CodeVerifier (``qwed_new`` is
+        not installed) the result is UNVERIFIABLE, never SAFE.
         """
         if language != "python":
             return VerificationResult(
                 verified=False,
                 error=f"Only Python supported currently (got: {language})"
             )
-        
-        # Check cache first
+
+        try:
+            from qwed_new.core.code_verifier import CodeVerifier
+            from qwed_new.core.diagnostics import admission_decision
+        except ImportError:
+            return VerificationResult(
+                verified=False,
+                value="UNVERIFIABLE",
+                confidence=0.0,
+                evidence={"method": "unavailable", "language": language},
+                error="CodeVerifier is not available (install the full qwed package); the code was not verified.",
+            )
+
+        # Check cache first. The policy version names the verifier, so a
+        # result cached by the old AST check is never served (GHSA-v8qq).
         cache_key = f"code:{code}"
+        _code_ctx = None
         if self._cache:
             _code_ctx = self._cache_context_class(
                 provider=self.provider or "local",
-                model="ast",
-                policy_version="v1",
+                model="code_verifier",
+                policy_version=CODE_CACHE_POLICY_VERSION,
             )
             cached_result = self._cache.get(cache_key, _code_ctx)
             if cached_result:
                 if HAS_COLOR and os.getenv("QWED_QUIET") != "1":
                     print(f"{QWED.SUCCESS}⚡ Cache HIT{QWED.RESET} {QWED.INFO}(saved API call!){QWED.RESET}")
                 return VerificationResult(**cached_result)
-        
+
         # Show QWED branding
         if HAS_COLOR and os.getenv("QWED_QUIET") != "1":
             print(f"\n{QWED.BRAND}🔬 QWED Verification{QWED.RESET} {QWED.INFO}| Code Security Engine{QWED.RESET}")
-        
-        # Step 1: AST Analysis (no LLM needed!)
-        import ast
-        
-        dangerous_patterns = []
-        warnings = []
-        
+
         try:
-            tree = ast.parse(code)
-            
-            # Check for dangerous patterns
-            for node in ast.walk(tree):
-                # Dangerous functions
-                if isinstance(node, ast.Call):
-                    if isinstance(node.func, ast.Name):
-                        func_name = node.func.id
-                        if func_name in ['eval', 'exec', 'compile', '__import__']:
-                            dangerous_patterns.append(f"Dangerous function: {func_name}")
-                
-                # File operations
-                if isinstance(node, ast.Call):
-                    if isinstance(node.func, ast.Name):
-                        if node.func.id == 'open':
-                            warnings.append("File operation detected: open()")
-                
-                # System calls
-                if isinstance(node, ast.Import) or isinstance(node, ast.ImportFrom):
-                    if isinstance(node, ast.Import):
-                        for alias in node.names:
-                            if alias.name in ['os', 'subprocess', 'sys']:
-                                warnings.append(f"System module imported: {alias.name}")
-            
-            # Determine if code is safe
-            is_safe = len(dangerous_patterns) == 0
-            
-            result = VerificationResult(
-                verified=is_safe,
-                value="SAFE" if is_safe else "UNSAFE",
-                confidence=1.0 if is_safe else 0.0,
-                evidence={
-                    "dangerous_patterns": dangerous_patterns,
-                    "warnings": warnings,
-                    "method": "ast_analysis",
-                    "language": language
-                }
-            )
-            
-            # Save to cache
-            if self._cache:
-                cache_data = {
-                    "verified": result.verified,
-                    "value": result.value,
-                    "confidence": result.confidence,
-                    "evidence": result.evidence
-                }
-                self._cache.set(cache_key, cache_data, _code_ctx)
-            
-            # Show result
-            if HAS_COLOR and os.getenv("QWED_QUIET") != "1":
-                if is_safe:
-                    print(f"{QWED.SUCCESS}✅ SAFE CODE{QWED.RESET} {QWED.INFO}(no dangerous patterns){QWED.RESET}")
-                    if warnings:
-                        print(f"{QWED.WARNING}⚠️  Warnings: {len(warnings)}{QWED.RESET}")
-                        for w in warnings[:3]:  # Show first 3
-                            print(f"  - {w}")
-                    _show_github_nudge()
-                else:
-                    print(f"{QWED.ERROR}❌ UNSAFE CODE{QWED.RESET}")
-                    for p in dangerous_patterns:
-                        print(f"  {QWED.ERROR}⚠️  {p}{QWED.RESET}")
-            
-            return result
-        
-        except SyntaxError as e:
-            if HAS_COLOR and os.getenv("QWED_QUIET") != "1":
-                print(f"{QWED.ERROR}❌ Syntax Error: {str(e)}{QWED.RESET}")
-            
-            return VerificationResult(
-                verified=False,
-                error=f"Python syntax error: {str(e)}",
-                evidence={"syntax_error": str(e)}
-            )
-        
+            diagnostic = CodeVerifier().verify_code(code, language=language)
+            admission = admission_decision(diagnostic).value
         except Exception as e:
             if HAS_COLOR and os.getenv("QWED_QUIET") != "1":
                 print(f"{QWED.ERROR}❌ Analysis failed: {str(e)}{QWED.RESET}")
-            
             return VerificationResult(
                 verified=False,
+                value="UNVERIFIABLE",
                 error=f"Code analysis failed: {str(e)}"
             )
-    
+
+        is_safe = admission == "ADMIT"
+        fields = diagnostic.developer_fields or {}
+        result = VerificationResult(
+            verified=is_safe,
+            value="SAFE" if is_safe else "UNSAFE",
+            confidence=1.0 if is_safe else 0.0,
+            evidence={
+                "status": diagnostic.status.value,
+                "admission": admission,
+                "constraint_id": fields.get("constraint_id"),
+                "critical_count": fields.get("critical_count"),
+                "issues": fields.get("issues", []),
+                "proof_ref": diagnostic.proof_ref,
+                "method": "code_verifier",
+                "language": language,
+            }
+        )
+
+        # Save to cache
+        if self._cache:
+            cache_data = {
+                "verified": result.verified,
+                "value": result.value,
+                "confidence": result.confidence,
+                "evidence": result.evidence
+            }
+            self._cache.set(cache_key, cache_data, _code_ctx)
+
+        # Show result
+        if HAS_COLOR and os.getenv("QWED_QUIET") != "1":
+            if is_safe:
+                print(f"{QWED.SUCCESS}✅ SAFE CODE{QWED.RESET} {QWED.INFO}(CodeVerifier admitted it){QWED.RESET}")
+                _show_github_nudge()
+            else:
+                print(f"{QWED.ERROR}❌ UNSAFE CODE{QWED.RESET} {QWED.INFO}({diagnostic.status.value} · {admission}){QWED.RESET}")
+                for issue in result.evidence["issues"][:3]:
+                    description = issue.get("description", issue) if isinstance(issue, dict) else issue
+                    print(f"  {QWED.ERROR}⚠️  {description}{QWED.RESET}")
+
+        return result
+
     def verify_shell_command(
         self, 
         command: str, 
