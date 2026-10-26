@@ -23,11 +23,12 @@ def test_context_validate_and_resolve(tmp_path):
     path.write_text(json.dumps(document.to_dict()), encoding="utf-8")
 
     runner = CliRunner()
-    validate_result = runner.invoke(cli, ["context", "validate", str(path)])
+    # A document built here is v1.0, unsigned: the schema and proof_ref only.
+    validate_result = runner.invoke(cli, ["context", "validate", "--no-require-attestation", str(path)])
     assert validate_result.exit_code == 0
     assert json.loads(validate_result.output)["valid"] is True
 
-    resolve_result = runner.invoke(cli, ["context", "resolve", str(path)])
+    resolve_result = runner.invoke(cli, ["context", "resolve", "--no-require-attestation", str(path)])
     assert resolve_result.exit_code == 0
     assert json.loads(resolve_result.output)["resolved"] is False
 
@@ -37,7 +38,7 @@ def test_context_validate_invalid_document(tmp_path):
     path.write_text(json.dumps({"spec_version": "1.0"}), encoding="utf-8")
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["context", "validate", str(path)])
+    result = runner.invoke(cli, ["context", "validate", "--no-require-attestation", str(path)])
     assert result.exit_code == 1
     payload = json.loads(result.output)
     assert payload["valid"] is False

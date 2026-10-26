@@ -759,6 +759,11 @@ class AttestationService:
             try:
                 if len(jwt_token) > 8192:
                     return False, None, _GENERIC_REJECTION_MSG
+                # A compact JWT is base64url, so ASCII. PyJWT encodes the
+                # token as UTF-8 first, and an unpaired surrogate there
+                # raised UnicodeEncodeError, not a rejection (#523 review).
+                if not jwt_token.isascii():
+                    return False, None, _GENERIC_REJECTION_MSG
                 _, payload_segment, _ = jwt_token.split('.', 2)
                 if len(payload_segment) > 4096:
                     return False, None, _GENERIC_REJECTION_MSG
@@ -798,6 +803,12 @@ class AttestationService:
                 logger.debug("Attestation with a critical header extension rejected (verified)")
                 return False, None, _GENERIC_REJECTION_MSG
 
+            # The verified header must name the key that verified it, as
+            # spec v1.1 section 4 and the SDKs require (#523 review).
+            if decoded["header"].get("kid") != key_pair.key_id:
+                logger.debug("Attestation naming another key rejected (verified)")
+                return False, None, _GENERIC_REJECTION_MSG
+
             # Now verified: apply issuer authorization. External issuers have no
             # key resolution implemented (#275) — silent generic, never enumerate.
             if claims.get("iss") != self.issuer_did:
@@ -821,6 +832,11 @@ class AttestationService:
             return False, None, _GENERIC_REJECTION_MSG
         except jwt.InvalidTokenError as e:
             logger.debug(f"Attestation verification failed (silent): {type(e).__name__}")
+            return False, None, _GENERIC_REJECTION_MSG
+        except RecursionError:
+            # A header nested too deeply for the JSON parser: the caller's
+            # malformed token, not the server's failure (#523 review).
+            logger.debug("Attestation header too deeply nested (silent)")
             return False, None, _GENERIC_REJECTION_MSG
 
     def revoke_attestation(self, attestation_id: str) -> bool:

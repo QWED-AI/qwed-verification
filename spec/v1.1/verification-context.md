@@ -76,8 +76,9 @@ A consumer verifies a v1.1 document by checking, in order:
 
 Only then is the document the issuer's. A consumer that gates on
 `admission == "ADMIT"` (v1.0 §5) SHOULD require a verified attestation, as
-the QWED Python SDK's `validate_verification_context` and
-`resolve_verification_context` do by default.
+a QWED server's `/verification-context/validate` and `/resolve`, the Python
+SDK's `validate_verification_context` and `resolve_verification_context`,
+and `qwed context validate` and `resolve` do by default.
 
 ## 5. What the attestation does not do
 

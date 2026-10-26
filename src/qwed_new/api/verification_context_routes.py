@@ -23,7 +23,10 @@ from qwed_new.core.verification_context import (
     resolve_document_proof_ref,
     validate_document,
 )
-from qwed_new.core.verification_context_attestation import attest_document
+from qwed_new.core.verification_context_attestation import (
+    attest_document,
+    document_attestation_refusal,
+)
 from qwed_new.core.verification_context_bridge import (
     verification_context_from_diagnostic_result,
 )
@@ -52,7 +55,12 @@ class DiagnosticVerificationContextRequest(BaseModel):
 
 
 class VerificationContextDocumentRequest(BaseModel):
+    """``require_attestation``: the document must carry an attestation this
+    server's key verifies and that signs it (spec v1.1, #319). Pass false
+    to check the schema or ``proof_ref`` alone, as for a v1.0 document."""
+
     document: Dict[str, Any]
+    require_attestation: bool = True
 
 
 def _malformed_diagnostic_result() -> DiagnosticResult:
@@ -106,6 +114,7 @@ def _diagnostic_result_from_payload(diagnostic: Any) -> DiagnosticResult:
 
 
 ATTESTED_ADMIT = "verification_context.attested_admit"
+_ATTESTATION_VERIFICATION_FAILED = "attestation verification failed"
 
 
 def _admitting_engine(token: str | None) -> str | None:
@@ -126,9 +135,9 @@ def _admitting_engine(token: str | None) -> str | None:
         is_valid, claims, _error = get_attestation_service().verify_attestation(token)
     # Any failure here is reported as a 500, not suppressed.
     except Exception:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail="attestation verification failed") from None
+        raise HTTPException(status_code=500, detail=_ATTESTATION_VERIFICATION_FAILED) from None
     if not is_valid or not isinstance(claims, dict):
-        raise HTTPException(status_code=500, detail="attestation verification failed")
+        raise HTTPException(status_code=500, detail=_ATTESTATION_VERIFICATION_FAILED)
     qwed = claims.get("qwed")
     if not isinstance(qwed, dict) or qwed.get("admission") != AdmissionDecision.ADMIT.value:
         return None
@@ -300,20 +309,37 @@ def create_verification_context_from_diagnostic(
     return document_dict
 
 
+def _attestation_refusal(payload: VerificationContextDocumentRequest) -> Optional[str]:
+    """Why the document's attestation is refused, or None if it verifies or
+    is not required (#319). A failure to check it, such as a signing key
+    that cannot be loaded, is a 500, not a refusal or a pass."""
+    if not payload.require_attestation:
+        return None
+    try:
+        return document_attestation_refusal(payload.document)
+    except (RuntimeError, ValueError):
+        raise HTTPException(status_code=500, detail=_ATTESTATION_VERIFICATION_FAILED) from None
+
+
 @router.post(
     "/validate",
-    responses={500: {"description": "Audit persistence failed"}},
+    responses={500: {"description": "Audit persistence or attestation verification failed"}},
 )
 def validate_verification_context(
     payload: VerificationContextDocumentRequest,
     tenant: TenantContext = Depends(_enforce_tenant_access),
     session: Optional[Session] = Depends(get_session),
 ) -> Dict[str, Any]:
-    try:
-        validate_document(payload.document)
-        response = {"valid": True}
-    except VerificationContextValidationError:
-        response = {"valid": False, "error": "validation_failed"}
+    """Validate a document against its version's schema; by default, check
+    its attestation first (see VerificationContextDocumentRequest)."""
+    if (refusal := _attestation_refusal(payload)) is not None:
+        response = {"valid": False, "error": refusal}
+    else:
+        try:
+            validate_document(payload.document)
+            response = {"valid": True}
+        except VerificationContextValidationError:
+            response = {"valid": False, "error": "validation_failed"}
     _safe_commit_context_log(
         session,
         tenant,
@@ -326,14 +352,20 @@ def validate_verification_context(
 
 @router.post(
     "/resolve",
-    responses={500: {"description": "Audit persistence failed"}},
+    responses={500: {"description": "Audit persistence or attestation verification failed"}},
 )
 def resolve_verification_context(
     payload: VerificationContextDocumentRequest,
     tenant: TenantContext = Depends(_enforce_tenant_access),
     session: Optional[Session] = Depends(get_session),
 ) -> Dict[str, Any]:
-    response = {"resolved": resolve_document_proof_ref(payload.document)}
+    """Resolve a document's ``proof_ref``; by default, check its attestation
+    first. A ``proof_ref`` is a commitment anyone can compute; the
+    attestation is what shows this server issued the document."""
+    if (refusal := _attestation_refusal(payload)) is not None:
+        response = {"resolved": False, "error": refusal}
+    else:
+        response = {"resolved": resolve_document_proof_ref(payload.document)}
     _safe_commit_context_log(
         session,
         tenant,

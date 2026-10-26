@@ -47,8 +47,8 @@ QWED Security surfaces should render this envelope:
   - `QWEDClient.validate_verification_context(...)`
   - `QWEDClient.resolve_verification_context(...)`
 - CLI:
-  - `qwed context validate <file>`
-  - `qwed context resolve <file>`
+  - `qwed context validate [--jwks-file <jwks> | --server <url>] <file>`
+  - `qwed context resolve [--jwks-file <jwks> | --server <url>] <file>`
   - `qwed context from-diagnostic --diagnostic-file <file> --query <query> --verifier <verifier>`
 
 `POST /verification-context/from-diagnostic` records a diagnostic the caller
@@ -68,8 +68,14 @@ with none is `{"valid": false, "error": "attestation_required"}` (or
 `"resolved": false`), and one whose attestation does not verify or is not
 this document's is `"attestation_invalid"`. Keys that cannot be fetched raise
 `KeysUnavailableError`. Pass `require_attestation=False` to check the schema
-or `proof_ref` alone. The API routes and the `qwed context` CLI commands check
-the schema and `proof_ref` only, not the attestation.
+or `proof_ref` alone.
+
+`POST /verification-context/validate` and `/resolve` check the attestation
+the same way by default, with the server's own key; send
+`"require_attestation": false` to skip it. `qwed context validate` and
+`qwed context resolve` check it with the keys of `--jwks-file` or `--server`;
+a signed document with neither is `attestation_keys_required`, and
+`--no-require-attestation` skips the check.
 
 ## Conformance expectations for other language SDKs
 

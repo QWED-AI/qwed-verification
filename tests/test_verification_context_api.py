@@ -30,7 +30,7 @@ def test_from_diagnostic_malformed_diagnostic_fails_closed():
     assert document["context"]["evidence"]["proof_ref"] is None
     assert document["context"]["decision"]["admission"] == "DENY"
     assert validate_verification_context(
-        VerificationContextDocumentRequest(document=document),
+        VerificationContextDocumentRequest(document=document, require_attestation=False),
         tenant=_TENANT,
         session=None,
     ) == {"valid": True}
@@ -58,16 +58,17 @@ def test_from_diagnostic_verified_without_attestation_fails_closed():
 
 
 def test_validate_and_resolve_fail_closed_for_invalid_document():
+    # The schema and proof_ref paths; the attestation is #319's tests'.
     document = {"spec_version": "1.0"}
     validation = validate_verification_context(
-        VerificationContextDocumentRequest(document=document),
+        VerificationContextDocumentRequest(document=document, require_attestation=False),
         tenant=_TENANT,
         session=None,
     )
     assert validation["valid"] is False
     assert "error" in validation
     resolution = resolve_verification_context(
-        VerificationContextDocumentRequest(document=document),
+        VerificationContextDocumentRequest(document=document, require_attestation=False),
         tenant=_TENANT,
         session=None,
     )

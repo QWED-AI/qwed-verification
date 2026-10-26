@@ -591,7 +591,7 @@ def test_require_attestation_false_checks_the_server_alone(check, endpoint, key)
     response = check(client, {"spec_version": "1.0"}, require_attestation=False)
 
     assert response[key] is True
-    assert calls == [(endpoint, {"document": {"spec_version": "1.0"}})]
+    assert calls == [(endpoint, {"document": {"spec_version": "1.0"}, "require_attestation": False})]
 
 
 def test_keys_that_cannot_be_fetched_decide_nothing(fresh_service):

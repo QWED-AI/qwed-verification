@@ -45,6 +45,7 @@ DEFAULT_ISSUER = "did:qwed:node:local"
 TOKEN_TYPE = "qwed-attestation+jwt"
 CONTEXT_TOKEN_TYPE = "qwed-context+jwt"
 JWKS_PATH = "/.well-known/jwks.json"
+_NOT_A_JWT = "attestation is not a JWT"
 
 
 class AttestationError(Exception):
@@ -85,7 +86,9 @@ def _es256_keys(jwks: Mapping[str, Any]) -> list[tuple[Any, Any]]:
             continue
         try:
             found.append((jwk.get("kid"), jwt.PyJWK(dict(jwk), algorithm="ES256").key))
-        except jwt.PyJWTError:
+        # PyJWT before 2.15 raises TypeError or AttributeError, not a
+        # PyJWTError, for a coordinate that is not a string (#523 review).
+        except (jwt.PyJWTError, TypeError, AttributeError, ValueError):
             unusable = True
     if not found and unusable:
         raise AttestationError("JWKS key is unusable")
@@ -122,12 +125,12 @@ def _decode(token: str, key: Any, *, issuer: str, leeway: int) -> dict[str, Any]
     except jwt.InvalidAlgorithmError as exc:
         raise AttestationError("attestation is not signed with ES256") from exc
     except jwt.DecodeError as exc:
-        raise AttestationError("attestation is not a JWT") from exc
+        raise AttestationError(_NOT_A_JWT) from exc
     except jwt.PyJWTError as exc:
         raise AttestationError("attestation signature or claims do not verify") from exc
     except RecursionError as exc:
         # A header or payload nested too deeply for the JSON parser.
-        raise AttestationError("attestation is not a JWT") from exc
+        raise AttestationError(_NOT_A_JWT) from exc
 
 
 def check_admission(claims: Mapping[str, Any], admission: str | None) -> None:
@@ -150,6 +153,11 @@ def _verified_claims(
 ) -> dict[str, Any]:
     """The claims of ``token``, verified with a key in ``jwks`` and of type
     ``token_type``; raise AttestationError otherwise."""
+    # A compact JWT is base64url, so ASCII. PyJWT encodes the token as UTF-8
+    # first, and an unpaired surrogate raised UnicodeEncodeError, not an
+    # AttestationError (#523 review).
+    if not token.isascii():
+        raise AttestationError(_NOT_A_JWT)
     # Nothing from the token is read before its signature verifies: each
     # ES256 key the JWKS holds (one, or two during a rotation) is tried, and
     # the verified header must then name the key that verified it.
@@ -239,7 +247,8 @@ def verify_document_attestation(
     ``qwed.document_hash``), and its verdict, admission and ``proof_ref``. It shows
     the server issued this document unchanged; it adds nothing to the
     verdict or the admission, and does not check the schema or that
-    ``proof_ref`` resolves (the server's validate and resolve do).
+    ``proof_ref`` resolves (the server's validate and resolve, and the
+    ``qwed context`` commands, do).
     """
     # Imported here: qwed_new is the same distribution, but loading it is
     # needed only for a document.

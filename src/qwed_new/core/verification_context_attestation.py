@@ -8,16 +8,22 @@ server's JWKS (``qwed_sdk.attestation.verify_document_attestation``).
 """
 
 import copy
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Optional
 
-from .attestation import get_attestation_service
+from .attestation import CONTEXT_TOKEN_TYPE, get_attestation_service
 from .verification_context import (
     ATTESTED_SPEC_VERSION,
     SPEC_VERSION,
     VerificationContextValidationError,
     compute_document_hash,
+    document_attestation_mismatch,
     validate_document,
 )
+
+# Why a document's attestation is refused, as validate and resolve report
+# it (#319): it has none, or it does not verify or is not this document's.
+ATTESTATION_REQUIRED = "attestation_required"
+ATTESTATION_INVALID = "attestation_invalid"
 
 
 def attest_document(document: Mapping[str, Any]) -> Dict[str, Any]:
@@ -47,3 +53,26 @@ def attest_document(document: Mapping[str, Any]) -> Dict[str, Any]:
     )
     validate_document(signed)
     return signed
+
+
+def document_attestation_refusal(document: Any) -> Optional[str]:
+    """None if ``document`` carries an attestation that this server's key
+    verifies and that signs this document; otherwise why not,
+    ATTESTATION_REQUIRED or ATTESTATION_INVALID (#319).
+
+    The checks are those of spec v1.1 section 4, as the SDK makes them
+    (``qwed_sdk.attestation.verify_document_attestation``), against this
+    server's key rather than a JWKS. A document this server signed with a
+    key it no longer holds (a restart without a configured key, or a
+    rotation) is ATTESTATION_INVALID. The service's own failure to load its
+    key raises.
+    """
+    token = document.get("attestation") if isinstance(document, Mapping) else None
+    if not isinstance(token, str) or not token:
+        return ATTESTATION_REQUIRED
+    is_valid, claims, _error = get_attestation_service().verify_attestation(
+        token, token_type=CONTEXT_TOKEN_TYPE,
+    )
+    if not is_valid or document_attestation_mismatch(document, claims) is not None:
+        return ATTESTATION_INVALID
+    return None
