@@ -13,7 +13,7 @@ go get github.com/QWED-AI/qwed-verification/sdk-go/v8
 ```
 
 The module lives in the `sdk-go/` subdirectory and tracks the main QWED version
-line, so it carries the `/v7` major-version suffix and is released under
+line, so it carries the `/v8` major-version suffix and is released under
 `sdk-go/vX.Y.Z` tags — e.g. `go get github.com/QWED-AI/qwed-verification/sdk-go/v8@v8.0.0`.
 
 ## Quick Start
