@@ -79,7 +79,7 @@ Other languages and runtimes:
 | TypeScript | `npm install @qwed-ai/sdk` | Published on each release; pin a version, e.g. `@8.0.0` |
 | Go | `go get github.com/QWED-AI/qwed-verification/sdk-go/v8` | Released under `sdk-go/vX.Y.Z` tags; pin a version, e.g. `@v8.0.0`. From 8.0.0 the module path ends in `/v8` |
 | Rust | `cargo add qwed` | |
-| Docker | `docker pull qwedai/qwed-verification` | The API server on port 8000, from 8.0.0 (earlier tags ran the GitHub Action). It needs `QWED_CORS_ORIGINS`, `API_KEY_SECRET`, `QWED_JWT_SECRET_KEY`, `QWED_API_KEY_LOOKUP_SECRET` and `QWED_AUDIT_SECRET_KEY`. With Postgres, Redis and monitoring: `docker compose -f deploy/docker-compose.yml up -d` after filling in `deploy/.env` from `deploy/.env.example`. See [self-hosting](https://docs.qwedai.tech/advanced/self-hosting) |
+| Docker | `docker pull qwedai/qwed-verification` | The API server on port 8000, from 8.0.0 (earlier tags ran the GitHub Action). It needs `QWED_CORS_ORIGINS`, `API_KEY_SECRET`, `QWED_JWT_SECRET_KEY`, `QWED_API_KEY_LOOKUP_SECRET` and `QWED_AUDIT_SECRET_KEY`; set `QWED_SIGNING_KEY` (an EC P-256 key) too, or attestations stop verifying after a restart or on another replica. With Postgres, Redis and monitoring: `docker compose -f deploy/docker-compose.yml up -d` after filling in `deploy/.env` from `deploy/.env.example`. See [self-hosting](https://docs.qwedai.tech/advanced/self-hosting) |
 
 From source:
 
