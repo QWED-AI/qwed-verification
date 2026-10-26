@@ -179,7 +179,7 @@ jobs:
     name: Tag Go SDK
     runs-on: ubuntu-latest
     # Scoped to this job only (the global default stays contents: read): the Go
-    # module lives in sdk-go/ with path .../sdk-go/v7, so the proxy resolves it
+    # module lives in sdk-go/ with path .../sdk-go/v8, so the proxy resolves it
     # from a tag named sdk-go/vX.Y.Z — which this job has to push (#443).
     permissions:
       contents: write
