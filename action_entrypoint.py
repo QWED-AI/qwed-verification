@@ -11,6 +11,7 @@ import os
 import sys
 import json
 import hashlib
+import secrets
 from pathlib import Path
 
 try:
@@ -31,8 +32,22 @@ def get_env(name: str, default: str = "") -> str:
     return os.environ.get(f"INPUT_{name.upper()}", default)
 
 
+def _is_within(root: str, path: str) -> bool:
+    try:
+        return os.path.commonpath([root, path]) == root
+    except ValueError:
+        # Different drives on Windows, or a mix of absolute and relative paths.
+        return False
+
+
 def set_output(name: str, value: str):
-    """Set GitHub Action output."""
+    """Write a GitHub Action output to the GITHUB_OUTPUT file.
+
+    Each value is written between random heredoc delimiters, so a value that
+    contains a newline (an explanation, a file name) cannot end its own entry
+    and set another output such as ``verified``. Without a usable
+    GITHUB_OUTPUT, as in a local run, nothing is written.
+    """
     output_file = os.environ.get("GITHUB_OUTPUT")
     if output_file:
         # Validate path to prevent path traversal (defense-in-depth)
@@ -40,18 +55,29 @@ def set_output(name: str, value: str):
         cwd = os.path.realpath(os.getcwd())
         # Canonical containment check using commonpath
         allowed_roots = ["/home/runner", "/github", cwd]
-        try:
-            if not any(os.path.commonpath([root, output_path]) == root for root in allowed_roots):
-                print(f"⚠️  Suspicious GITHUB_OUTPUT path: {output_file}")
-                return
-        except ValueError:
-            # commonpath raises ValueError if paths are on different drives (Windows)
-            print(f"⚠️  Invalid GITHUB_OUTPUT path: {output_file}")
+        if not any(_is_within(root, output_path) for root in allowed_roots):
+            print(f"⚠️  Suspicious GITHUB_OUTPUT path: {output_file}")
             return
+        value = str(value)
+        delimiter = f"qwed_{secrets.token_hex(16)}"
+        while delimiter in value:
+            delimiter = f"qwed_{secrets.token_hex(16)}"
         # deepcode ignore PT: Path validated with commonpath containment check
-        with open(output_path, "a") as f:
-            f.write(f"{name}={value}\n")
-    print(f"::set-output name={name}::{value}")  # Legacy fallback
+        with open(output_path, "a", encoding="utf-8", newline="") as f:
+            f.write(f"{name}<<{delimiter}\n{value}\n{delimiter}\n")
+
+
+def _stop_workflow_commands():
+    """Stop the runner from acting on workflow commands in this step's log.
+
+    The Action prints text it does not control: an explanation from the
+    verifier, file names, error messages. A line in it such as
+    ``::set-output name=verified::true`` would otherwise be run as a command.
+    The Action itself issues no workflow commands, so they stay off for the
+    rest of the step. The token is random, so printed text cannot turn them
+    back on.
+    """
+    print(f"::stop-commands::{secrets.token_hex(16)}")
 
 
 CODE_PATTERNS = "**/*.py"
@@ -644,7 +670,8 @@ def _set_vc_outputs(verdict: str, admission: str, evidence: dict, scan_type: str
 # ============== MAIN ==============
 def main():
     action = get_env("ACTION", "verify")
-    
+    _stop_workflow_commands()
+
     print("=" * 50)
     print("  🔬 QWED Protocol v3.0 - GitHub Action")
     print("  https://github.com/QWED-AI/qwed-verification")
