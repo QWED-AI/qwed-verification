@@ -2407,25 +2407,91 @@ _CONTEXT_MALFORMED_DIAGNOSTIC_CONSTRAINT = "verification_context.malformed_diagn
 
 @cli.group()
 def context():
-    """Verification Context v1.0 utilities."""
+    """Verification Context utilities (spec v1.0 and v1.1)."""
     pass
+
+
+def _context_attestation_options(command):
+    """The options validate and resolve take to check a document's
+    attestation (#319)."""
+    command = click.option(
+        "--require-attestation/--no-require-attestation", default=True,
+        help="Require an attestation that verifies and signs this document (default). "
+             "--no-require-attestation checks the schema or proof_ref alone.",
+    )(command)
+    command = click.option(
+        "--server", default=None,
+        help="QWED server URL whose keys (/.well-known/jwks.json) verify the attestation.",
+    )(command)
+    return click.option(
+        "--jwks-file", default=None, type=click.Path(exists=True, dir_okay=False),
+        help="JWKS file whose keys verify the attestation, for offline or pinned keys.",
+    )(command)
+
+
+def _context_attestation_refusal(document: Any, jwks_file: Optional[str], server: Optional[str]) -> Optional[str]:
+    """Why ``document``'s attestation is refused, or None if it verifies
+    with the keys given and signs this document (spec v1.1 section 4)."""
+    import httpx
+
+    from qwed_sdk.attestation import (
+        AttestationError,
+        JWKS_PATH,
+        document_attestation,
+        verify_document_attestation,
+    )
+
+    if jwks_file and server:
+        raise click.UsageError("pass --jwks-file or --server, not both")
+    if document_attestation(document) is None:
+        return "attestation_required"
+    if not jwks_file and not server:
+        # The document is signed, but nothing here can check whose key.
+        return "attestation_keys_required"
+    try:
+        if jwks_file:
+            with open(jwks_file, encoding="utf-8") as handle:
+                jwks = json.load(handle)
+        else:
+            response = httpx.get(f"{server.rstrip('/')}{JWKS_PATH}", timeout=10.0)
+            response.raise_for_status()
+            jwks = response.json()
+    except (OSError, ValueError, httpx.HTTPError):
+        return "attestation_keys_unavailable"
+    try:
+        verify_document_attestation(document, jwks)
+    except AttestationError:
+        return "attestation_invalid"
+    return None
+
+
+def _load_context_document(path: str, failure: Dict[str, Any]) -> Any:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        click.echo(json.dumps({**failure, "error": "invalid_document_file"}, indent=2))
+        raise SystemExit(1) from None
 
 
 @context.command(name="validate")
 @click.argument("path", type=click.Path(exists=True, dir_okay=False))
-def context_validate(path: str):
-    """Validate a Verification Context document."""
+@_context_attestation_options
+def context_validate(path: str, jwks_file: Optional[str], server: Optional[str], require_attestation: bool):
+    """Validate a Verification Context document.
+
+    By default its attestation must verify, with the keys of --jwks-file or
+    --server, and sign this document (#319).
+    """
     from qwed_new.core.verification_context import (
         VerificationContextValidationError,
         validate_document,
     )
 
-    try:
-        with open(path, encoding="utf-8") as handle:
-            document = json.load(handle)
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        click.echo(json.dumps({"valid": False, "error": "invalid_document_file"}, indent=2))
-        raise SystemExit(1) from None
+    document = _load_context_document(path, {"valid": False})
+    if require_attestation and (refusal := _context_attestation_refusal(document, jwks_file, server)):
+        click.echo(json.dumps({"valid": False, "error": refusal}, indent=2))
+        raise SystemExit(1)
     try:
         validate_document(document)
     except VerificationContextValidationError:
@@ -2436,16 +2502,19 @@ def context_validate(path: str):
 
 @context.command(name="resolve")
 @click.argument("path", type=click.Path(exists=True, dir_okay=False))
-def context_resolve(path: str):
-    """Resolve the proof_ref commitment for a Verification Context document."""
+@_context_attestation_options
+def context_resolve(path: str, jwks_file: Optional[str], server: Optional[str], require_attestation: bool):
+    """Resolve the proof_ref commitment for a Verification Context document.
+
+    A proof_ref is a commitment anyone can compute; by default the
+    document's attestation must also verify and sign it, as for validate.
+    """
     from qwed_new.core.verification_context import resolve_document_proof_ref
 
-    try:
-        with open(path, encoding="utf-8") as handle:
-            document = json.load(handle)
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        click.echo(json.dumps({"resolved": False, "error": "invalid_document_file"}, indent=2))
-        raise SystemExit(1) from None
+    document = _load_context_document(path, {"resolved": False})
+    if require_attestation and (refusal := _context_attestation_refusal(document, jwks_file, server)):
+        click.echo(json.dumps({"resolved": False, "error": refusal}, indent=2))
+        raise SystemExit(1)
     click.echo(json.dumps({"resolved": resolve_document_proof_ref(document)}, indent=2))
 
 

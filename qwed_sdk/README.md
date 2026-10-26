@@ -231,6 +231,14 @@ client.validate_verification_context(local_v1_0)     # {"valid": False, "error":
 client.validate_verification_context(local_v1_0, require_attestation=False)  # the schema alone
 ```
 
+The server's routes and the CLI check it too, by default:
+
+```bash
+qwed context resolve --server http://localhost:8000 document.json
+qwed context validate --jwks-file jwks.json document.json
+qwed context validate --no-require-attestation local_v1_0.json
+```
+
 `client.verify_document_attestation(document)` returns the claims or raises
 `AttestationError`; offline, use
 `qwed_sdk.verify_document_attestation(document, jwks)`. Keys that cannot be

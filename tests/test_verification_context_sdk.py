@@ -70,6 +70,6 @@ def test_sdk_verification_context_methods_call_endpoints(monkeypatch):
                 "attestation_token": None,
             },
         ),
-        ("POST", "/verification-context/validate", {"document": {"spec_version": "1.0"}}),
-        ("POST", "/verification-context/resolve", {"document": {"spec_version": "1.0"}}),
+        ("POST", "/verification-context/validate", {"document": {"spec_version": "1.0"}, "require_attestation": False}),
+        ("POST", "/verification-context/resolve", {"document": {"spec_version": "1.0"}, "require_attestation": False}),
     ]

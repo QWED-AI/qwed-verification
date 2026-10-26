@@ -314,7 +314,7 @@ class QWEDClient:
         return self._request(
             "POST",
             "/verification-context/validate",
-            json={"document": document},
+            json={"document": document, "require_attestation": require_attestation},
         )
 
     def resolve_verification_context(
@@ -334,7 +334,7 @@ class QWEDClient:
         return self._request(
             "POST",
             "/verification-context/resolve",
-            json={"document": document},
+            json={"document": document, "require_attestation": require_attestation},
         )
 
     def verify(
@@ -850,7 +850,7 @@ class QWEDAsyncClient:
         return await self._request(
             "POST",
             "/verification-context/validate",
-            json={"document": document},
+            json={"document": document, "require_attestation": require_attestation},
         )
 
     async def resolve_verification_context(
@@ -863,7 +863,7 @@ class QWEDAsyncClient:
         return await self._request(
             "POST",
             "/verification-context/resolve",
-            json={"document": document},
+            json={"document": document, "require_attestation": require_attestation},
         )
 
     async def verify(

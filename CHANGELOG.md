@@ -6,6 +6,30 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Security
 
+- **The API's and the CLI's validate and resolve check a Verification
+  Context document's attestation too (#319).** They answered on the schema
+  and `proof_ref` alone, so a caller not using the Python SDK could take a
+  forged document, an `ADMIT` one whose `proof_ref` was recomputed, as
+  `resolved`.
+  - `/verification-context/validate` and `/resolve` take
+    `require_attestation` (default true) and first verify the document's
+    attestation with the server's own key, as spec v1.1 section 4 has it: a
+    document with none is `attestation_required`, and one whose attestation
+    does not verify or is not this document's is `attestation_invalid`. A
+    key that cannot be loaded is a 500. `require_attestation: false` keeps
+    the old checks. **Behaviour change:** a caller that sends a v1.0
+    document, an older SDK included, now gets `attestation_required` unless
+    it sends `require_attestation: false`.
+  - The Python SDK sends its own `require_attestation` to the server, so
+    `require_attestation=False` there reaches the routes too.
+  - `qwed context validate` and `qwed context resolve` verify the
+    attestation with the keys of `--jwks-file` (offline or pinned) or
+    `--server` (its `/.well-known/jwks.json`), by default. A signed document
+    with neither is `attestation_keys_required`; keys that cannot be read or
+    fetched, `attestation_keys_unavailable`. `--no-require-attestation`
+    keeps the old checks, as for a v1.0 document that
+    `qwed context from-diagnostic` builds locally.
+
 - **A Verification Context document is signed by the server that issued it
   (#319).** A document's `proof_ref` is an unkeyed commitment: anyone could
   build a document, an `ADMIT` one included, whose `proof_ref` resolves, and
@@ -49,9 +73,8 @@ All notable changes to the QWED Protocol will be documented in this file.
     names a critical extension (`crit`), which PyJWT before 2.12 accepts
     without understanding it.
   - The signature authenticates the document relative to the server's key;
-    it adds nothing to the verdict or the admission. The API's validate and
-    resolve routes and the `qwed context` CLI commands do not check it. The
-    TypeScript, Go and Rust SDKs have no Verification Context methods.
+    it adds nothing to the verdict or the admission. The TypeScript, Go and
+    Rust SDKs have no Verification Context methods.
 
 - **The attestation signs the server's admission, and a signed ADMIT admits
   a Verification Context (#321).** A token bound the verdict's status,

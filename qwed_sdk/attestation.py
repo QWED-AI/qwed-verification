@@ -239,7 +239,8 @@ def verify_document_attestation(
     ``qwed.document_hash``), and its verdict, admission and ``proof_ref``. It shows
     the server issued this document unchanged; it adds nothing to the
     verdict or the admission, and does not check the schema or that
-    ``proof_ref`` resolves (the server's validate and resolve do).
+    ``proof_ref`` resolves (the server's validate and resolve, and the
+    ``qwed context`` commands, do).
     """
     # Imported here: qwed_new is the same distribution, but loading it is
     # needed only for a document.
