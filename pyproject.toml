@@ -124,6 +124,7 @@ packages = ["src/qwed_new", "qwed_sdk"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/qwed_new/core/data/verification-context.schema.json" = "qwed_new/core/data/verification-context.schema.json"
+"src/qwed_new/core/data/verification-context-1.1.schema.json" = "qwed_new/core/data/verification-context-1.1.schema.json"
 
 [project.scripts]
 qwed = "qwed_sdk.cli:cli"

@@ -13,7 +13,15 @@ from types import MappingProxyType
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 SPEC_VERSION = "1.0"
+# A document the issuing server signed (#319): v1.0 plus ``attestation``.
+ATTESTED_SPEC_VERSION = "1.1"
+_SCHEMA_FILES = {
+    SPEC_VERSION: "verification-context.schema.json",
+    ATTESTED_SPEC_VERSION: "verification-context-1.1.schema.json",
+}
 _PROOF_REF_PATTERN = re.compile(r"sha256:[a-f0-9]{64}")
+_SHA256_PREFIX = "sha256:"
+_NOT_A_DOCUMENT = "Verification Context document must be a JSON object"
 
 
 class VerificationContextValidationError(ValueError):
@@ -441,7 +449,7 @@ def compute_context_proof_ref(
         "context": context_dict,
     }
     payload = _canonical_json(bound)
-    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return _SHA256_PREFIX + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -575,11 +583,11 @@ class VerificationContextDocument:
         )
 
 
-@lru_cache(maxsize=1)
-def _schema_text() -> str:
+@lru_cache(maxsize=len(_SCHEMA_FILES))
+def _schema_text(spec_version: str = SPEC_VERSION) -> str:
     try:
         resource = resources.files("qwed_new.core.data").joinpath(
-            "verification-context.schema.json"
+            _SCHEMA_FILES[spec_version]
         )
         return resource.read_text(encoding="utf-8")
     except Exception as exc:
@@ -588,9 +596,11 @@ def _schema_text() -> str:
         ) from exc
 
 
-def load_schema() -> Dict[str, Any]:
+def load_schema(spec_version: str = SPEC_VERSION) -> Dict[str, Any]:
+    """The packaged schema for ``spec_version``: "1.0", or "1.1" for a
+    document that carries the issuing server's ``attestation`` (#319)."""
     try:
-        return json.loads(_schema_text())
+        return json.loads(_schema_text(spec_version))
     except json.JSONDecodeError as exc:
         raise VerificationContextValidationError(
             "packaged Verification Context schema is invalid JSON"
@@ -629,13 +639,13 @@ def _expected_document_proof_ref(document: Mapping[str, Any]) -> str:
         "context": context_copy,
     }
     payload = _canonical_json(bound)
-    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return _SHA256_PREFIX + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def compute_document_proof_ref(document: Mapping[str, Any]) -> str:
     if not isinstance(document, Mapping):
         raise VerificationContextValidationError(
-            "Verification Context document must be a JSON object"
+            _NOT_A_DOCUMENT
         )
     try:
         return _expected_document_proof_ref(document)
@@ -643,6 +653,60 @@ def compute_document_proof_ref(document: Mapping[str, Any]) -> str:
         raise VerificationContextValidationError(
             "bound payload is missing required Verification Context fields"
         ) from exc
+
+
+def compute_document_hash(document: Mapping[str, Any]) -> str:
+    """The hash an attestation signs for ``document`` (#319): sha256 of the
+    canonical encoding of the whole document except ``attestation``, so it
+    binds the formal statement, the complete context, the verdict and the
+    spec version. Unlike ``proof_ref``, which anyone can compute, it means
+    something only under the issuing server's signature."""
+    if not isinstance(document, Mapping):
+        raise VerificationContextValidationError(
+            _NOT_A_DOCUMENT
+        )
+    unsigned = {key: value for key, value in document.items() if key != "attestation"}
+    payload = _canonical_json(unsigned)
+    return _SHA256_PREFIX + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def document_attestation_mismatch(
+    document: Mapping[str, Any],
+    claims: Any,
+) -> Optional[str]:
+    """Why the verified claims of a document's attestation do not sign this
+    document, or None if they do (#319). As spec v1.1 section 2 has them:
+    ``qwed.version`` and the document's ``spec_version`` are both "1.1";
+    ``sub`` and ``qwed.document_hash`` are both this document's hash; and
+    the verdict, admission and ``proof_ref`` they name are this document's.
+    Read only after the token's signature has verified."""
+    qwed_claims = claims.get("qwed") if isinstance(claims, Mapping) else None
+    if not isinstance(qwed_claims, Mapping):
+        return "attestation signs no document"
+    if qwed_claims.get("version") != ATTESTED_SPEC_VERSION:
+        return "attestation is not a v1.1 document's (version differs)"
+    # The hash binds spec_version too, so a relabelled document already
+    # differs there; this says why, and does not lean on that (#517 review).
+    if not isinstance(document, Mapping) or document.get("spec_version") != ATTESTED_SPEC_VERSION:
+        return "document is not a v1.1 document (spec_version differs)"
+    try:
+        context = document["context"]
+        signed = {
+            "document_hash": compute_document_hash(document),
+            "verdict": document["verdict"],
+            "admission": context["decision"]["admission"],
+            "proof_ref": context["evidence"]["proof_ref"],
+        }
+    # RecursionError: a document nested too deeply to encode has no hash
+    # to compare, so it is a mismatch, not an error that escapes (#517 review).
+    except (*_RESOLVER_ERRORS, RecursionError):
+        return "document is not a Verification Context"
+    for claim, value in signed.items():
+        if claim not in qwed_claims or qwed_claims[claim] != value:
+            return f"attestation is for another document ({claim} differs)"
+    if claims.get("sub") != signed["document_hash"]:
+        return "attestation is for another document (sub differs)"
+    return None
 
 
 def resolve_document_proof_ref(document: Mapping[str, Any]) -> bool:
@@ -695,7 +759,7 @@ def _validate_verified_commitment(document: Mapping[str, Any]) -> None:
 def validate_document(document: Mapping[str, Any]) -> None:
     if not isinstance(document, Mapping):
         raise VerificationContextValidationError(
-            "Verification Context document must be a JSON object"
+            _NOT_A_DOCUMENT
         )
     _reject_non_finite_numbers(document)
     try:
@@ -705,7 +769,12 @@ def validate_document(document: Mapping[str, Any]) -> None:
             "jsonschema is required for Verification Context validation"
         ) from exc
 
-    validator = Draft202012Validator(load_schema())
+    # A document names its version; one this module does not know is checked
+    # against v1.0, whose schema then refuses it.
+    spec_version = document.get("spec_version")
+    if not isinstance(spec_version, str) or spec_version not in _SCHEMA_FILES:
+        spec_version = SPEC_VERSION
+    validator = Draft202012Validator(load_schema(spec_version))
     errors = sorted(
         validator.iter_errors(document),
         key=lambda error: (

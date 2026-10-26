@@ -12,6 +12,7 @@ the specifications here make it precise and machine-readable.
 | Version | Document | Status |
 |---------|----------|--------|
 | [v1.0](v1.0/verification-context.md) | Verification Context | Draft |
+| [v1.1](v1.1/verification-context.md) | Verification Context, signed by its issuer | Draft |
 
 ## Verification Context v1.0
 
@@ -22,6 +23,16 @@ trust it.
 - **Prose specification:** [`v1.0/verification-context.md`](v1.0/verification-context.md)
 - **Machine-readable schema:** [`v1.0/schemas/verification-context.schema.json`](v1.0/schemas/verification-context.schema.json)
 - **Conformance tests:** [`../tests/test_verification_context_spec.py`](../tests/test_verification_context_spec.py)
+
+## Verification Context v1.1
+
+v1.1 adds `attestation`: the issuing server's ES256 signature over every
+other field of the document, which a v1.0 `proof_ref` (an unkeyed commitment anyone can
+compute) cannot show. A QWED server returns v1.1 documents.
+
+- **Prose specification:** [`v1.1/verification-context.md`](v1.1/verification-context.md)
+- **Machine-readable schema:** [`v1.1/schemas/verification-context.schema.json`](v1.1/schemas/verification-context.schema.json)
+- **Tests:** [`../tests/test_issue_319_vc_authenticity.py`](../tests/test_issue_319_vc_authenticity.py)
 
 ### Core vocabulary
 

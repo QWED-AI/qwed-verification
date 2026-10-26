@@ -15,11 +15,14 @@ import os
 from qwed_sdk.attestation import (
     DEFAULT_ISSUER,
     JWKS_PATH,
+    AttestationError,
     KeyMismatchError,
     KeysUnavailableError,
     check_admission,
+    document_attestation,
     require_answer,
     verify_attestation,
+    verify_document_attestation,
 )
 from qwed_sdk.models import VerificationResult, BatchResult, token_fields
 
@@ -33,6 +36,20 @@ _JWKS_MAX_AGE_SECONDS = 300.0
 # counts from the end, so a fetch that is slow to fail is still shared for
 # all of it (#513).
 _JWKS_MIN_REFRESH_SECONDS = 30.0
+
+
+# The error validate and resolve report, when they require a Verification
+# Context document's attestation (#319), for a document with none and for
+# one whose attestation does not verify or is not this document's.
+ATTESTATION_REQUIRED = "attestation_required"
+ATTESTATION_INVALID = "attestation_invalid"
+
+
+def _require_document_attestation(document: Any) -> None:
+    """Raise AttestationError for a document with no attestation, before
+    any key is fetched."""
+    if document_attestation(document) is None:
+        raise AttestationError("no attestation")
 
 
 def _attestation_of(
@@ -223,6 +240,10 @@ class QWEDClient:
         (#321), as a token from a maths, code, SQL or natural-language answer,
         or an agent or batch item's,
         that the server admitted does.
+
+        The document returned is spec v1.1, signed by the server: its
+        ``attestation`` is what validate_verification_context and
+        resolve_verification_context require by default (#319).
         """
         return self._request(
             "POST",
@@ -236,16 +257,80 @@ class QWEDClient:
             },
         )
 
-    def validate_verification_context(self, document: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate a Verification Context document against the v1.0 schema."""
+    def verify_document_attestation(
+        self,
+        document: Dict[str, Any],
+        *,
+        issuer: str = DEFAULT_ISSUER,
+        leeway: int = 0,
+    ) -> Dict[str, Any]:
+        """Verify a Verification Context document's ``attestation`` against
+        this server's keys and return its claims; raise
+        qwed_sdk.attestation.AttestationError if it has none, or it does not
+        verify or is not this document's (#319). To verify against keys you
+        pinned, use qwed_sdk.attestation.verify_document_attestation.
+        """
+        _require_document_attestation(document)
+        verify = functools.partial(verify_document_attestation, document, issuer=issuer, leeway=leeway)
+        jwks = self.get_jwks()
+        try:
+            return verify(jwks)
+        except KeyMismatchError:
+            # As in verify_attestation: the keys may have changed since.
+            newer = self._jwks_after_mismatch(jwks)
+            if newer is None:
+                raise
+            return verify(newer)
+
+    def _document_refusal(self, document: Dict[str, Any]) -> Optional[str]:
+        """The error to report for a document whose attestation is required,
+        or None if it verifies. Keys that cannot be fetched decide nothing,
+        so KeysUnavailableError is raised, not reported as invalid."""
+        if document_attestation(document) is None:
+            return ATTESTATION_REQUIRED
+        try:
+            self.verify_document_attestation(document)
+        except KeysUnavailableError:
+            raise
+        except AttestationError:
+            return ATTESTATION_INVALID
+        return None
+
+    def validate_verification_context(
+        self, document: Dict[str, Any], require_attestation: bool = True,
+    ) -> Dict[str, Any]:
+        """Validate a Verification Context document against its schema.
+
+        By default the document must be one this server issued (#319): its
+        ``attestation`` is verified here, against the server's keys, first.
+        A document with none is ``{"valid": False, "error":
+        "attestation_required"}``; one whose attestation does not verify or
+        is not this document's, ``"attestation_invalid"``. Pass
+        ``require_attestation=False`` to validate the schema alone, as for a
+        v1.0 document built locally.
+        """
+        if require_attestation and (refusal := self._document_refusal(document)) is not None:
+            return {"valid": False, "error": refusal}
         return self._request(
             "POST",
             "/verification-context/validate",
             json={"document": document},
         )
 
-    def resolve_verification_context(self, document: Dict[str, Any]) -> Dict[str, Any]:
-        """Resolve the proof_ref commitment for a Verification Context document."""
+    def resolve_verification_context(
+        self, document: Dict[str, Any], require_attestation: bool = True,
+    ) -> Dict[str, Any]:
+        """Resolve the proof_ref commitment for a Verification Context document.
+
+        By default the document's ``attestation`` is required and verified
+        first, as for validate_verification_context: a failure is
+        ``{"resolved": False, "error": ...}``. A ``proof_ref`` alone is a
+        commitment anyone can compute; the attestation shows this server
+        issued the document. Pass ``require_attestation=False`` to resolve
+        the commitment alone.
+        """
+        if require_attestation and (refusal := self._document_refusal(document)) is not None:
+            return {"resolved": False, "error": refusal}
         return self._request(
             "POST",
             "/verification-context/resolve",
@@ -706,6 +791,10 @@ class QWEDAsyncClient:
         (#321), as a token from a maths, code, SQL or natural-language answer,
         or an agent or batch item's,
         that the server admitted does.
+
+        The document returned is spec v1.1, signed by the server: its
+        ``attestation`` is what validate_verification_context and
+        resolve_verification_context require by default (#319).
         """
         return await self._request(
             "POST",
@@ -719,16 +808,58 @@ class QWEDAsyncClient:
             },
         )
 
-    async def validate_verification_context(self, document: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate a Verification Context document against the v1.0 schema."""
+    async def verify_document_attestation(
+        self,
+        document: Dict[str, Any],
+        *,
+        issuer: str = DEFAULT_ISSUER,
+        leeway: int = 0,
+    ) -> Dict[str, Any]:
+        """Verify a Verification Context document's attestation; see
+        QWEDClient.verify_document_attestation."""
+        _require_document_attestation(document)
+        verify = functools.partial(verify_document_attestation, document, issuer=issuer, leeway=leeway)
+        jwks = await self.get_jwks()
+        try:
+            return verify(jwks)
+        except KeyMismatchError:
+            newer = await self._jwks_after_mismatch(jwks)
+            if newer is None:
+                raise
+            return verify(newer)
+
+    async def _document_refusal(self, document: Dict[str, Any]) -> Optional[str]:
+        """See QWEDClient._document_refusal."""
+        if document_attestation(document) is None:
+            return ATTESTATION_REQUIRED
+        try:
+            await self.verify_document_attestation(document)
+        except KeysUnavailableError:
+            raise
+        except AttestationError:
+            return ATTESTATION_INVALID
+        return None
+
+    async def validate_verification_context(
+        self, document: Dict[str, Any], require_attestation: bool = True,
+    ) -> Dict[str, Any]:
+        """Validate a Verification Context document; see
+        QWEDClient.validate_verification_context."""
+        if require_attestation and (refusal := await self._document_refusal(document)) is not None:
+            return {"valid": False, "error": refusal}
         return await self._request(
             "POST",
             "/verification-context/validate",
             json={"document": document},
         )
 
-    async def resolve_verification_context(self, document: Dict[str, Any]) -> Dict[str, Any]:
-        """Resolve the proof_ref commitment for a Verification Context document."""
+    async def resolve_verification_context(
+        self, document: Dict[str, Any], require_attestation: bool = True,
+    ) -> Dict[str, Any]:
+        """Resolve a Verification Context document's proof_ref; see
+        QWEDClient.resolve_verification_context."""
+        if require_attestation and (refusal := await self._document_refusal(document)) is not None:
+            return {"resolved": False, "error": refusal}
         return await self._request(
             "POST",
             "/verification-context/resolve",

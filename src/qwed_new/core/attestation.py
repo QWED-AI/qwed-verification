@@ -367,6 +367,32 @@ def is_admission_claim(value: Any) -> bool:
     return isinstance(value, str) and value in ADMISSION_CLAIMS
 
 
+# The header typ of a verdict's token, and of a token that signs a
+# Verification Context document (#319).
+TOKEN_TYPE = "qwed-attestation+jwt"
+CONTEXT_TOKEN_TYPE = "qwed-context+jwt"
+_CONTEXT_VERDICTS = frozenset({"VERIFIED", "UNVERIFIABLE", "BLOCKED"})
+_CONTEXT_ADMISSIONS = frozenset({"ADMIT", "DENY"})
+
+
+def _context_refusal(document_hash: Any, verdict: Any, admission: Any, proof_ref: Any) -> str | None:
+    """Why a document with these fields cannot be signed, or None if it can
+    (#319). The fields are those the Verification Context schema allows: a
+    VERIFIED document has a proof_ref, any other has none and is DENY."""
+    if not _is_proof_hash(document_hash):
+        return "document_hash must be sha256:<64 hex>"
+    if not isinstance(verdict, str) or verdict not in _CONTEXT_VERDICTS:
+        return "verdict must be VERIFIED, UNVERIFIABLE or BLOCKED"
+    if not isinstance(admission, str) or admission not in _CONTEXT_ADMISSIONS:
+        return "admission must be ADMIT or DENY"
+    if verdict == "VERIFIED":
+        if not _is_proof_hash(proof_ref):
+            return "a VERIFIED document needs a proof_ref"
+    elif proof_ref is not None or admission != "DENY":
+        return "a document that is not VERIFIED has no proof_ref and is DENY"
+    return None
+
+
 def _admission_refusal(admission: Any, *, status: Any, verified: Any, proof_bound: bool) -> str | None:
     """Why ``admission`` cannot be signed, or None if it can (#321).
 
@@ -571,13 +597,7 @@ class AttestationService:
         Raises:
             RuntimeError: if crypto is unavailable or signing fails.
         """
-        now = issued_at if issued_at is not None else int(time.time())
-        lifetime = (
-            self.validity_seconds if self.validity_seconds is not None
-            else self.validity_days * 24 * 60 * 60
-        )
-        expiry = now + lifetime
-        attestation_id = jti if jti is not None else f"att_{uuid.uuid4().hex[:12]}"
+        now, expiry, attestation_id = self._lifetime_claims(issued_at, jti)
 
         # Build QWED-specific claims
         qwed_claims = {
@@ -607,31 +627,7 @@ class AttestationService:
             "qwed": qwed_claims,
         }
 
-        # Validate encoded payload fits verify_attestation's 4096-byte limit
-        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode().rstrip("=")
-        if len(payload_b64) > 4096:
-            raise ValueError(
-                f"Attestation payload too large ({len(payload_b64)} bytes) — "
-                f"must fit within 4096-byte verify-side limit"
-            )
-
-        key_pair = self._ensure_key_pair()
-
-        # Build header
-        header = {
-            "alg": "ES256",
-            "typ": "qwed-attestation+jwt",
-            "kid": key_pair.key_id,
-        }
-
-        # Sign the JWT
-        token = jwt.encode(
-            payload,
-            key_pair.private_key_pem,
-            algorithm="ES256",
-            headers=header,
-        )
+        token, header = self._sign(payload, TOKEN_TYPE)
 
         claims = AttestationClaims(
             iss=payload["iss"],
@@ -653,10 +649,92 @@ class AttestationService:
 
         return attestation
 
+    def _lifetime_claims(self, issued_at: Optional[int], jti: Optional[str]) -> Tuple[int, int, str]:
+        """A new token's iat, exp and jti."""
+        now = issued_at if issued_at is not None else int(time.time())
+        lifetime = (
+            self.validity_seconds if self.validity_seconds is not None
+            else self.validity_days * 24 * 60 * 60
+        )
+        attestation_id = jti if jti is not None else f"att_{uuid.uuid4().hex[:12]}"
+        return now, now + lifetime, attestation_id
+
+    def _sign(self, payload: Dict[str, Any], token_type: str) -> Tuple[str, Dict[str, str]]:
+        """``payload`` signed with this service's key as a JWT whose header
+        typ is ``token_type``, and that header."""
+        # Validate encoded payload fits verify_attestation's 4096-byte limit
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).decode().rstrip("=")
+        if len(payload_b64) > 4096:
+            raise ValueError(
+                f"Attestation payload too large ({len(payload_b64)} bytes) — "
+                f"must fit within 4096-byte verify-side limit"
+            )
+
+        key_pair = self._ensure_key_pair()
+
+        # Build header
+        header = {
+            "alg": "ES256",
+            "typ": token_type,
+            "kid": key_pair.key_id,
+        }
+
+        # Sign the JWT
+        token = jwt.encode(
+            payload,
+            key_pair.private_key_pem,
+            algorithm="ES256",
+            headers=header,
+        )
+        return token, header
+
+    def create_context_attestation(
+        self,
+        *,
+        document_hash: str,
+        verdict: str,
+        admission: str,
+        proof_ref: Optional[str],
+        issued_at: Optional[int] = None,
+        jti: Optional[str] = None,
+    ) -> str:
+        """Sign a Verification Context document and return the token (#319).
+
+        ``document_hash`` is the document's
+        ``verification_context.compute_document_hash``, which binds all of
+        it; its verdict, admission and ``proof_ref`` are signed beside it, so
+        a consumer can check them against the document. The header's typ is
+        ``qwed-context+jwt``: the token is not a verdict's attestation, and a
+        verdict's check refuses it. It lasts as long as a verdict's token.
+        Fields the schema would refuse are refused (ValueError).
+        """
+        refusal = _context_refusal(document_hash, verdict, admission, proof_ref)
+        if refusal is not None:
+            raise ValueError(refusal)
+        now, expiry, attestation_id = self._lifetime_claims(issued_at, jti)
+        payload = {
+            "iss": self.issuer_did,
+            "sub": document_hash,
+            "iat": now,
+            "exp": expiry,
+            "jti": attestation_id,
+            "qwed": {
+                "version": "1.1",
+                "document_hash": document_hash,
+                "verdict": verdict,
+                "admission": admission,
+                "proof_ref": proof_ref,
+            },
+        }
+        token, _header = self._sign(payload, CONTEXT_TOKEN_TYPE)
+        return token
+
     def verify_attestation(
         self,
         jwt_token: str,
         trusted_issuers: Optional[List[str]] = None,
+        token_type: str = TOKEN_TYPE,
     ) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
         """
         Verify an attestation JWT.
@@ -664,6 +742,9 @@ class AttestationService:
         Args:
             jwt_token:        The JWT to verify.
             trusted_issuers:  List of trusted issuer DIDs (None = trust self).
+            token_type:       The typ its verified header must have: a
+                              verdict's token by default, or
+                              CONTEXT_TOKEN_TYPE for a document's (#319).
 
         Returns:
             Tuple of (is_valid, claims, error_message).
@@ -693,13 +774,29 @@ class AttestationService:
             key_pair = self._ensure_key_pair()
             public_key = key_pair.public_key_pem
 
-            # Verify signature and claims
-            claims = jwt.decode(
+            # Verify signature and claims. PyJWT exports decode_complete at
+            # module level only from 2.10; the PyJWT class has it from 2.0,
+            # and the floor is 2.8 (#517 review).
+            decoded = jwt.PyJWT().decode_complete(
                 jwt_token,
                 public_key,
                 algorithms=["ES256"],
                 options={"verify_signature": True, "verify_exp": True, "require": ["iss", "sub", "iat", "exp", "jti"]},
             )
+            claims = decoded["payload"]
+
+            # The verified header says which kind of token this is: a
+            # document's token is not a verdict's, nor the reverse (#319).
+            if decoded["header"].get("typ") != token_type:
+                logger.debug("Attestation of another type rejected (verified)")
+                return False, None, _GENERIC_REJECTION_MSG
+
+            # No token this service signs names a critical extension, and
+            # PyJWT before 2.12 does not refuse one it does not understand
+            # (RFC 7515 section 4.1.11; #517 review).
+            if "crit" in decoded["header"]:
+                logger.debug("Attestation with a critical header extension rejected (verified)")
+                return False, None, _GENERIC_REJECTION_MSG
 
             # Now verified: apply issuer authorization. External issuers have no
             # key resolution implemented (#275) — silent generic, never enumerate.

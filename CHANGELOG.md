@@ -6,6 +6,53 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Security
 
+- **A Verification Context document is signed by the server that issued it
+  (#319).** A document's `proof_ref` is an unkeyed commitment: anyone could
+  build a document, an `ADMIT` one included, whose `proof_ref` resolves, and
+  nothing told it from one the server issued.
+  - Spec v1.1 (`spec/v1.1/`) adds `attestation`: an ES256 JWT, header `typ`
+    `qwed-context+jwt`, whose claims sign the hash of the whole document
+    except that field (`compute_document_hash`) with its verdict, admission
+    and `proof_ref`. A v1.1 document must carry it, and a v1.0 one must not;
+    `validate_document` checks each against its version's schema.
+  - `/verification-context/from-diagnostic` returns every document as v1.1,
+    signed with the attestation key; a failure to sign is a 500, not an
+    unsigned document, and a document the canonical encoding refuses (a
+    lone surrogate in a string, in one that is not `VERIFIED`) is a 422,
+    as a `VERIFIED` one already was. The token lasts as long as a verdict's
+    (`QWED_ATTESTATION_TTL_SECONDS`). As for a verdict's token, a server
+    without `QWED_SIGNING_KEY` or `QWED_SIGNING_KEY_FILE` signs with a key
+    generated per process, so its documents stop verifying after a restart
+    or on another replica.
+  - A document's token is not a verdict's, nor the reverse: the server's
+    `verify_attestation` checks the verified header's `typ`, so the trust
+    step refuses a document's token as a verdict's attestation.
+  - The Python SDK verifies a document's attestation
+    (`qwed_sdk.verify_document_attestation`, and the clients'
+    `verify_document_attestation` against the server's JWKS), and
+    `validate_verification_context` and `resolve_verification_context`
+    require it by default (`require_attestation=True`): a document with none
+    is `attestation_required`, and one whose attestation does not verify or
+    is not this document's (edited after signing, or carrying another
+    document's token) is `attestation_invalid`, without asking the server.
+    Keys that cannot be fetched raise `KeysUnavailableError`. A document
+    nested too deeply to encode is refused as a mismatch, not a
+    `RecursionError`. A token whose `qwed.version` is not `"1.1"`, or whose
+    `sub` is not the document hash, is refused, and so is a document whose
+    own `spec_version` is not `"1.1"`.
+    `require_attestation=False` keeps the old schema-only and
+    `proof_ref`-only checks.
+  - The server and the SDK read a token with `jwt.PyJWT().decode_complete`.
+    `jwt.decode_complete` is exported only from PyJWT 2.10 and the floor is
+    2.8, so on 2.8 and 2.9 the SDK's `verify_attestation` raised
+    `AttributeError` for every token. Both also refuse a token whose header
+    names a critical extension (`crit`), which PyJWT before 2.12 accepts
+    without understanding it.
+  - The signature authenticates the document relative to the server's key;
+    it adds nothing to the verdict or the admission. The API's validate and
+    resolve routes and the `qwed context` CLI commands do not check it. The
+    TypeScript, Go and Rust SDKs have no Verification Context methods.
+
 - **The attestation signs the server's admission, and a signed ADMIT admits
   a Verification Context (#321).** A token bound the verdict's status,
   `proof_ref` and statement, but not the admission, which rests on more than

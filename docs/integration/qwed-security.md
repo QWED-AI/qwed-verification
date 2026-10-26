@@ -1,7 +1,8 @@
 # QWED Security Integration Contract v1.0
 
 This contract defines how the QWED Security GitHub App / GitHub Action must consume
-QWED Verification Context v1.0 documents.
+QWED Verification Context documents: v1.0, and v1.1, which a QWED server
+returns signed (see [spec v1.1](../../spec/v1.1/verification-context.md)).
 
 ## Output envelope
 
@@ -17,7 +18,8 @@ QWED Security surfaces should render this envelope:
 }
 ```
 
-`verification_context` MUST be a schema-valid Verification Context v1.0 document.
+`verification_context` MUST be a schema-valid Verification Context document
+(v1.0, or v1.1 with its `attestation`).
 
 ## Fail-closed rules
 
@@ -28,6 +30,11 @@ QWED Security surfaces should render this envelope:
 - Schema validation failure MUST fail closed.
 - Canonical encoding failure MUST fail closed.
 - Never expose `UNVERIFIABLE` or `BLOCKED` as `ADMIT`.
+- A resolvable `proof_ref` does not show who issued a document: anyone can
+  compute one. Trust an `ADMIT` only from a v1.1 document whose
+  `attestation` verifies against the issuing server's JWKS and signs this
+  document; a document without one, or whose attestation fails, MUST be
+  treated as `DENY`.
 
 ## QWED verification surfaces
 
@@ -51,15 +58,29 @@ the status, `proof_ref` and query, or the document is `BLOCKED`). The
 caller's message and developer fields are kept under
 `developer_fields.caller_supplied` and decide nothing. The admission is
 `DENY` unless that token also signs `ADMIT` (`qwed.admission`), the server's
-own admission of the verdict: then the document is `ADMIT`.
+own admission of the verdict: then the document is `ADMIT`. Every document
+it returns is v1.1, signed by the server (`attestation`).
+
+`QWEDClient.validate_verification_context(...)` and
+`QWEDClient.resolve_verification_context(...)` verify that attestation
+against the server's JWKS before asking the server, by default: a document
+with none is `{"valid": false, "error": "attestation_required"}` (or
+`"resolved": false`), and one whose attestation does not verify or is not
+this document's is `"attestation_invalid"`. Keys that cannot be fetched raise
+`KeysUnavailableError`. Pass `require_attestation=False` to check the schema
+or `proof_ref` alone. The API routes and the `qwed context` CLI commands check
+the schema and `proof_ref` only, not the attestation.
 
 ## Conformance expectations for other language SDKs
 
 Other SDKs MUST:
 
-1. Validate Verification Context documents against the v1.0 JSON Schema.
+1. Validate Verification Context documents against the JSON Schema of their
+   `spec_version` (v1.0 or v1.1).
 2. Derive and resolve `proof_ref` using the normative canonical encoding.
 3. Reject unpaired UTF-16 surrogates, non-string object keys, non-finite numbers,
    and integers that do not round-trip through IEEE-754 doubles.
 4. Fail closed on any validation or resolution error.
 5. Never admit execution/shipping unless `admission == "ADMIT"`.
+6. Verify a v1.1 document's `attestation` as spec v1.1 §4 describes before
+   trusting its admission.
