@@ -182,19 +182,24 @@ def action_verify():
             print(f"❌ Unsupported engine: {engine}")
             sys.exit(1)
         
-        print(f"🔍 Verdict: {result.is_verified}")
+        # Admitted only as the server decided (GHSA-jppc-7r58-7pjh): its
+        # admission where the route makes one, otherwise VERIFIED with
+        # is_valid true. The SDK's is_verified follows that rule; a BLOCKED or
+        # UNVERIFIABLE result is never admitted, whatever is_valid it carries.
+        admitted = result.is_verified
+        verdict = result.status if result.status in ("VERIFIED", "UNVERIFIABLE", "BLOCKED") else "UNVERIFIABLE"
+        print(f"🔍 Verdict: {verdict} · {'ADMIT' if admitted else 'DENY'}")
         explanation = result.result.get("explanation", "") if result.result else ""
         print(f"📝 Explanation: {explanation}")
         
-        set_output("verified", str(result.is_verified).lower())
+        set_output("verified", str(admitted).lower())
         set_output("explanation", explanation)
-        set_output("badge_url", generate_badge_url(result.is_verified))
+        set_output("badge_url", generate_badge_url(admitted))
         
-        verdict = "VERIFIED" if result.is_verified else "UNVERIFIABLE"
-        admission = "ADMIT" if result.is_verified else "DENY"
+        admission = "ADMIT" if admitted else "DENY"
         _set_vc_outputs(verdict, admission, {"explanation": explanation}, engine)
         
-        if not result.is_verified and get_env("FAIL_ON_FINDINGS", "true") == "true":
+        if not admitted and get_env("FAIL_ON_FINDINGS", "true") == "true":
             sys.exit(1)
             
     except Exception as e:

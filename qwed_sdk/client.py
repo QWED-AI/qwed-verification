@@ -554,9 +554,12 @@ class QWEDClient:
         # The API returns: { "final_answer": ..., "confidence": ..., "verification_chain": ... }
         # We wrap this in a VerificationResult.
 
+        # The server's status, and meets_requirement, which it sets only for
+        # a VERIFIED result that meets the confidence (#269); a truthy value
+        # that is not exactly True admits nothing (GHSA-jppc-7r58-7pjh).
         return VerificationResult(
-            status="VERIFIED" if data.get("meets_requirement", False) else "UNVERIFIED",
-            is_verified=data.get("meets_requirement", False),
+            status=data.get("status") or ("VERIFIED" if data.get("meets_requirement") is True else "UNVERIFIED"),
+            is_verified=data.get("meets_requirement") is True,
             result=data,
             latency_ms=data.get("latency_ms", 0.0) or (time.time() - start) * 1000,
             # So verify_attestation works on a consensus answer too (#319).
@@ -963,9 +966,12 @@ class QWEDAsyncClient:
             }
         )
 
+        # The server's status, and meets_requirement, which it sets only for
+        # a VERIFIED result that meets the confidence (#269); a truthy value
+        # that is not exactly True admits nothing (GHSA-jppc-7r58-7pjh).
         return VerificationResult(
-            status="VERIFIED" if data.get("meets_requirement", False) else "UNVERIFIED",
-            is_verified=data.get("meets_requirement", False),
+            status=data.get("status") or ("VERIFIED" if data.get("meets_requirement") is True else "UNVERIFIED"),
+            is_verified=data.get("meets_requirement") is True,
             result=data,
             latency_ms=data.get("latency_ms", 0.0) or (time.time() - start) * 1000,
             # So verify_attestation works on a consensus answer too (#319).

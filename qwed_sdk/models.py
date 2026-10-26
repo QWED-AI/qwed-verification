@@ -51,13 +51,29 @@ class VerificationResult:
     def from_dict(cls, data: Dict[str, Any]) -> "VerificationResult":
         return cls(
             status=data.get("status", "UNKNOWN"),
-            is_verified=data.get("is_verified", data.get("is_valid", False)),
+            is_verified=is_admitted(data),
             result=data,
             error=data.get("error"),
             provider_used=data.get("provider_used"),
             latency_ms=data.get("latency_ms", 0.0),
             **token_fields(data),
         )
+
+
+def is_admitted(data: Dict[str, Any]) -> bool:
+    """Whether a response admits its answer (GHSA-jppc-7r58-7pjh).
+
+    A route that decides an admission returns it, and only ``ADMIT``
+    admits. A route that decides none is admitted by the server's own rule
+    (``admission_decision``): a ``VERIFIED`` status with ``is_valid`` true.
+    A bare ``is_valid`` or ``is_verified`` never admits on its own: the
+    server flattens the engine's fields into the response, so a result a
+    gate blocked can still carry the engine's ``is_valid: true``.
+    """
+    admission = data.get("admission")
+    if admission is not None:
+        return admission == "ADMIT"
+    return data.get("status") == "VERIFIED" and data.get("is_valid") is True
 
 
 def token_fields(data: Dict[str, Any]) -> Dict[str, Optional[str]]:
