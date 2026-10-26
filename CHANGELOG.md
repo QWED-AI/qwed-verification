@@ -16,7 +16,10 @@ All notable changes to the QWED Protocol will be documented in this file.
     attestation with the server's own key, as spec v1.1 section 4 has it: a
     document with none is `attestation_required`, and one whose attestation
     does not verify or is not this document's is `attestation_invalid`. A
-    key that cannot be loaded is a 500. `require_attestation: false` keeps
+    key that cannot be loaded is a 500; a token whose header is nested too
+    deeply to parse is `attestation_invalid`, not a 500. The server's
+    `verify_attestation` now also requires the verified header's `kid` to
+    name its key, as the SDKs do, for verdict tokens too. `require_attestation: false` keeps
     the old checks. **Behaviour change:** a caller that sends a v1.0
     document, an older SDK included, now gets `attestation_required` unless
     it sends `require_attestation: false`.
@@ -26,7 +29,9 @@ All notable changes to the QWED Protocol will be documented in this file.
     attestation with the keys of `--jwks-file` (offline or pinned) or
     `--server` (its `/.well-known/jwks.json`), by default. A signed document
     with neither is `attestation_keys_required`; keys that cannot be read or
-    fetched, `attestation_keys_unavailable`. `--no-require-attestation`
+    fetched, a malformed `--server` URL included, `attestation_keys_unavailable`.
+    Passing both is a usage error, with or without the check, and a file
+    nested too deeply to parse is `invalid_document_file`. `--no-require-attestation`
     keeps the old checks, as for a v1.0 document that
     `qwed context from-diagnostic` builds locally.
 

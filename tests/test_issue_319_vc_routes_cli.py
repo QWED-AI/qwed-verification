@@ -352,3 +352,112 @@ def test_over_http_a_document_the_server_issued_is_checked_end_to_end(api, tmp_p
     assert _run("validate", "--server", "http://testserver", _write(tmp_path, "forged.json", forged)) == (
         1, {"valid": False, "error": "attestation_invalid"},
     )
+
+
+# ---------------------------------------------------------------- #523 review
+
+def _signed_with_header(document, header):
+    """``document`` with an attestation the server's own key signs, under
+    ``header`` (typ and alg added), whose claims are otherwise right."""
+    import time as _time
+
+    import jwt
+
+    service = get_attestation_service()
+    digest = compute_document_hash(document)
+    now = int(_time.time())
+    payload = {
+        "iss": service.issuer_did, "sub": digest, "iat": now, "exp": now + 600, "jti": "att_review",
+        "qwed": {
+            "version": "1.1", "document_hash": digest, "verdict": document["verdict"],
+            "admission": document["context"]["decision"]["admission"],
+            "proof_ref": document["context"]["evidence"]["proof_ref"],
+        },
+    }
+    token = jwt.encode(
+        payload, service._ensure_key_pair().private_key_pem, algorithm="ES256",
+        headers={"typ": "qwed-context+jwt", **header},
+    )
+    if "kid" not in header:
+        # PyJWT adds no kid of its own; make sure none is there.
+        assert "kid" not in jwt.get_unverified_header(token)
+    return {**document, "attestation": token}
+
+
+def test_the_server_accepts_a_token_naming_its_key(fresh_service):
+    document = _admitted()
+    kid = get_attestation_service()._ensure_key_pair().key_id
+
+    assert _resolve(_signed_with_header(document, {"kid": kid})) == {"resolved": True}
+
+
+@pytest.mark.parametrize("header", [{}, {"kid": "another-key"}, {"kid": ""}])
+def test_the_server_refuses_a_token_that_does_not_name_its_key(fresh_service, header):
+    # #523 review: spec v1.1 section 4 has the verified header name the key
+    # that verified it, as the SDKs check.
+    document = _signed_with_header(_admitted(), header)
+
+    assert _resolve(document) == {"resolved": False, "error": ATTESTATION_INVALID}
+
+
+def test_a_token_with_a_header_too_deep_to_parse_is_invalid_not_a_500(fresh_service):
+    # #523 review: a RecursionError from the token's header is the caller's
+    # malformed token, not the server's failure. PyJWT 2.15 reports it as a
+    # DecodeError itself; PyJWT 2.8, the floor, lets it through.
+    import base64
+
+    def segment(raw):
+        return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+    header = segment('{"alg":"ES256","x":' + "[" * 1500 + "]" * 1500 + "}")
+    token = f"{header}.{segment('{}')}.{segment('sig')}"
+    assert len(token) <= 8192
+    document = {**_admitted(), "attestation": token}
+
+    assert _resolve(document) == {"resolved": False, "error": ATTESTATION_INVALID}
+    assert _validate(document) == {"valid": False, "error": ATTESTATION_INVALID}
+
+
+def test_a_recursion_error_from_pyjwt_is_invalid_not_a_500(fresh_service, monkeypatch):
+    # The same, whatever PyJWT is installed: the server's own check.
+    import jwt
+
+    document = _admitted()
+
+    def deep(*args, **kwargs):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(jwt.PyJWT, "decode_complete", deep)
+
+    assert _resolve(document) == {"resolved": False, "error": ATTESTATION_INVALID}
+
+
+@pytest.mark.parametrize("command", ["validate", "resolve"])
+def test_both_key_sources_are_refused_even_without_the_check(tmp_path, jwks, command):
+    # #523 review: the usage error must not depend on --require-attestation.
+    document = _write(tmp_path, "doc.json", _unsigned(_document()))
+    keys = _write(tmp_path, "jwks.json", jwks)
+
+    exit_code, output = _run(
+        command, "--no-require-attestation", "--jwks-file", keys, "--server", "http://qwed.test", document,
+    )
+
+    assert exit_code == 2
+    assert "not both" in output
+
+
+@pytest.mark.parametrize(("command", "key"), [("validate", "valid"), ("resolve", "resolved")])
+def test_a_document_too_deep_to_parse_is_an_unreadable_file(tmp_path, command, key):
+    path = tmp_path / "deep.json"
+    path.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
+
+    assert _run(command, "--no-require-attestation", str(path)) == (1, {key: False, "error": "invalid_document_file"})
+
+
+def test_a_malformed_server_url_is_keys_unavailable(tmp_path, fresh_service):
+    # #523 review: httpx.InvalidURL is neither an HTTPError nor a ValueError.
+    document = _write(tmp_path, "doc.json", _admitted())
+
+    assert _run("resolve", "--server", "http://localhost:bad", document) == (
+        1, {"resolved": False, "error": "attestation_keys_unavailable"},
+    )

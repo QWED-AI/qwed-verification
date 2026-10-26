@@ -2441,8 +2441,6 @@ def _context_attestation_refusal(document: Any, jwks_file: Optional[str], server
         verify_document_attestation,
     )
 
-    if jwks_file and server:
-        raise click.UsageError("pass --jwks-file or --server, not both")
     if document_attestation(document) is None:
         return "attestation_required"
     if not jwks_file and not server:
@@ -2456,7 +2454,9 @@ def _context_attestation_refusal(document: Any, jwks_file: Optional[str], server
             response = httpx.get(f"{server.rstrip('/')}{JWKS_PATH}", timeout=10.0)
             response.raise_for_status()
             jwks = response.json()
-    except (OSError, ValueError, httpx.HTTPError):
+    # InvalidURL (a malformed --server) is neither an HTTPError nor a
+    # ValueError (#523 review).
+    except (OSError, ValueError, httpx.HTTPError, httpx.InvalidURL):
         return "attestation_keys_unavailable"
     try:
         verify_document_attestation(document, jwks)
@@ -2465,11 +2465,21 @@ def _context_attestation_refusal(document: Any, jwks_file: Optional[str], server
     return None
 
 
+def _check_key_options(jwks_file: Optional[str], server: Optional[str]) -> None:
+    """Refuse both key sources at once, whether or not the attestation is
+    required, so the usage error does not depend on another flag (#523
+    review)."""
+    if jwks_file and server:
+        raise click.UsageError("pass --jwks-file or --server, not both")
+
+
 def _load_context_document(path: str, failure: Dict[str, Any]) -> Any:
     try:
         with open(path, encoding="utf-8") as handle:
             return json.load(handle)
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+    # RecursionError: a document nested too deeply for the JSON parser is
+    # an unreadable file too, not a traceback (#523 review).
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, RecursionError):
         click.echo(json.dumps({**failure, "error": "invalid_document_file"}, indent=2))
         raise SystemExit(1) from None
 
@@ -2488,6 +2498,7 @@ def context_validate(path: str, jwks_file: Optional[str], server: Optional[str],
         validate_document,
     )
 
+    _check_key_options(jwks_file, server)
     document = _load_context_document(path, {"valid": False})
     if require_attestation and (refusal := _context_attestation_refusal(document, jwks_file, server)):
         click.echo(json.dumps({"valid": False, "error": refusal}, indent=2))
@@ -2511,6 +2522,7 @@ def context_resolve(path: str, jwks_file: Optional[str], server: Optional[str], 
     """
     from qwed_new.core.verification_context import resolve_document_proof_ref
 
+    _check_key_options(jwks_file, server)
     document = _load_context_document(path, {"resolved": False})
     if require_attestation and (refusal := _context_attestation_refusal(document, jwks_file, server)):
         click.echo(json.dumps({"resolved": False, "error": refusal}, indent=2))

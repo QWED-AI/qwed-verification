@@ -114,6 +114,7 @@ def _diagnostic_result_from_payload(diagnostic: Any) -> DiagnosticResult:
 
 
 ATTESTED_ADMIT = "verification_context.attested_admit"
+_ATTESTATION_VERIFICATION_FAILED = "attestation verification failed"
 
 
 def _admitting_engine(token: str | None) -> str | None:
@@ -134,9 +135,9 @@ def _admitting_engine(token: str | None) -> str | None:
         is_valid, claims, _error = get_attestation_service().verify_attestation(token)
     # Any failure here is reported as a 500, not suppressed.
     except Exception:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail="attestation verification failed") from None
+        raise HTTPException(status_code=500, detail=_ATTESTATION_VERIFICATION_FAILED) from None
     if not is_valid or not isinstance(claims, dict):
-        raise HTTPException(status_code=500, detail="attestation verification failed")
+        raise HTTPException(status_code=500, detail=_ATTESTATION_VERIFICATION_FAILED)
     qwed = claims.get("qwed")
     if not isinstance(qwed, dict) or qwed.get("admission") != AdmissionDecision.ADMIT.value:
         return None
@@ -317,7 +318,7 @@ def _attestation_refusal(payload: VerificationContextDocumentRequest) -> Optiona
     try:
         return document_attestation_refusal(payload.document)
     except (RuntimeError, ValueError):
-        raise HTTPException(status_code=500, detail="attestation verification failed") from None
+        raise HTTPException(status_code=500, detail=_ATTESTATION_VERIFICATION_FAILED) from None
 
 
 @router.post(
