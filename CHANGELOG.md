@@ -6,6 +6,16 @@ All notable changes to the QWED Protocol will be documented in this file.
 
 ### Security
 
+- **Dependency updates for open Dependabot alerts.**
+  - `requirements.txt` pins certifi 2026.10.19 (was 2026.2.25), which
+    drops the emSign root CAs whose intermediate CA keys were compromised
+    (GHSA-6q48-6c7w-9gw2, critical). `requirements-server.txt` already
+    pinned it.
+  - The TypeScript SDK's dev dependency vitest is `^5.0.5`, which brings
+    `@vitest/mocker` 5.0.5 (GHSA-xp26-3454-mjgp, GHSA-qxg6-89mg-rqv8). vite
+    went from 6.4.3 to 8.3.5 in #515, which removed `launch-editor`. Both
+    are test tooling only; the published SDK does not depend on them.
+
 - **The API's and the CLI's validate and resolve check a Verification
   Context document's attestation too (#319).** They answered on the schema
   and `proof_ref` alone, so a caller not using the Python SDK could take a
