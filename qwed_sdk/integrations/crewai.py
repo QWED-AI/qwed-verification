@@ -97,9 +97,16 @@ class QWEDVerifiedAgent(Agent if CREWAI_AVAILABLE else object):
         return result
 
     def _verify_safety(self, content: str) -> Dict[str, Any]:
-        """Internal verification logic."""
+        """Internal verification logic: verified only when the server
+        admitted the output (``is_verified``), and an error fails closed
+        (GHSA-83v6-6h23-pvp4). The client's result is a dataclass, so the
+        earlier ``model_dump()`` raised and every output was refused."""
         try:
-            return self.client.verify(content).model_dump()
+            result = self.client.verify(content)
+            return {
+                "verified": getattr(result, "is_verified", False) is True,
+                "status": getattr(result, "status", "UNKNOWN"),
+            }
         except Exception as e:
             return {"verified": False, "status": f"Error during verification: {str(e)}"}
 

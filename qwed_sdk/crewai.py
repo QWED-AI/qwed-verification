@@ -87,7 +87,7 @@ class QWEDVerificationTool(BaseTool if CREWAI_AVAILABLE else object):
         try:
             result = self._client.verify(query)
             
-            if result.verified:
+            if result.is_verified:
                 return f"✅ VERIFIED: The statement '{query[:50]}...' is correct."
             else:
                 msg = ""
@@ -113,7 +113,7 @@ class QWEDMathTool(QWEDVerificationTool):
     def _run(self, expression: str) -> str:
         try:
             result = self._client.verify_math(expression)
-            if result.verified:
+            if result.is_verified:
                 return f"✅ VERIFIED: {expression} is mathematically correct."
             else:
                 return f"❌ INCORRECT: {expression} is not valid."
@@ -133,7 +133,7 @@ class QWEDCodeTool(QWEDVerificationTool):
     def _run(self, code: str) -> str:
         try:
             result = self._client.verify_code(code)
-            if result.verified:
+            if result.is_verified:
                 return "✅ SAFE: No security vulnerabilities detected in the code."
             else:
                 vulns = result.result.get("vulnerabilities", []) if hasattr(result, "result") else []
@@ -157,7 +157,7 @@ class QWEDSQLTool(QWEDVerificationTool):
     def _run(self, query: str) -> str:
         try:
             result = self._client.verify_sql(query, "")
-            if result.verified:
+            if result.is_verified:
                 return "✅ SAFE: SQL query is valid and secure."
             else:
                 return "❌ BLOCKED: SQL query contains security issues (possible injection)."
@@ -262,29 +262,34 @@ class QWEDVerifiedAgent:
     
     def verify_output(self, output: str) -> Dict[str, Any]:
         """Verify an agent output."""
+        # Not verified until a check says so (GHSA-83v6-6h23-pvp4): a
+        # disabled config or an error leaves it unverified.
         result = {
             "output": output[:100] + "..." if len(output) > 100 else output,
-            "verified": True,
+            "verified": False,
+            "status": "SKIPPED",
             "checks": []
         }
-        
+
         try:
             # Verify if enabled
             if self.config.enabled:
                 verification = self._client.verify(output)
-                result["verified"] = verification.verified
+                result["verified"] = verification.is_verified
                 result["status"] = verification.status
                 result["checks"].append({
                     "type": "general",
-                    "verified": verification.verified
+                    "verified": verification.is_verified
                 })
                 
                 if self.config.log_results:
-                    status = "✅" if verification.verified else "❌"
+                    status = "✅" if verification.is_verified else "❌"
                     print(f"[QWED] {status} Agent output verified: {verification.status}")
         except Exception as e:
+            result["verified"] = False
+            result["status"] = "ERROR"
             result["error"] = str(e)
-        
+
         self.verification_results.append(result)
         return result
     
@@ -357,12 +362,12 @@ class QWEDVerifiedCrew:
         result_text = str(result)
         
         # Verify final output
-        verification = {"verified": True, "status": "SKIPPED"}
+        verification = {"verified": False, "status": "SKIPPED"}
         if self.verify_final_output:
             try:
                 v = self._client.verify(result_text)
                 verification = {
-                    "verified": v.verified,
+                    "verified": v.is_verified,
                     "status": v.status,
                 }
             except Exception as e:
@@ -424,7 +429,7 @@ def verified_task(
             # Verify before processing
             if verify_output:
                 result = client.verify(output)
-                if not result.verified:
+                if not result.is_verified:
                     print(f"[QWED] ⚠️ Task output verification failed: {result.status}")
             
             return func(output, *args, **kwargs)

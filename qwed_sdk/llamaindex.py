@@ -151,19 +151,22 @@ class QWEDQueryEngine:
             if self.verify_math and self._contains_math(response):
                 result = self._client.verify(response)
                 return {
-                    "verified": result.verified,
+                    "verified": result.is_verified,
                     "status": result.status,
                     "corrected": result.result.get("corrected") if hasattr(result, "result") else None,
                     "attestation": getattr(result, "attestation", None),
                 }
             
-            # Check if it's a factual claim
-            if self.verify_facts and self._is_factual(query):
-                # For fact verification, we'd need context
-                # For now, pass through
-                return {"verified": True, "status": "PASSED"}
-            
-            return {"verified": True, "status": "PASSED"}
+            # Nothing here verified the response: a factual answer needs
+            # context this integration does not have, and other text has no
+            # QWED engine to check it. Unverified, never PASSED
+            # (GHSA-83v6-6h23-pvp4).
+            reason = (
+                "Fact checking needs the source context, which this integration does not have."
+                if self.verify_facts and self._is_factual(query)
+                else "No QWED engine applies to this response."
+            )
+            return {"verified": False, "status": "UNVERIFIABLE", "reason": reason}
             
         except Exception as e:
             return {"verified": False, "status": "ERROR", "error": str(e)}
@@ -230,11 +233,17 @@ class QWEDVerificationTransform(BaseNodePostprocessor if LLAMAINDEX_AVAILABLE el
         
         for node in nodes:
             text = node.node.get_content()
-            
+
             # Verify content
             is_safe = self._verify_content(text)
-            
-            if is_safe:
+
+            if is_safe is None:
+                # Nothing in the node was checked: not verified, and not
+                # refused either, so it keeps its score.
+                node.node.metadata["qwed_verified"] = False
+                node.node.metadata["qwed_checked"] = False
+                verified_nodes.append(node)
+            elif is_safe:
                 # Add verification metadata
                 node.node.metadata["qwed_verified"] = True
                 verified_nodes.append(node)
@@ -247,21 +256,20 @@ class QWEDVerificationTransform(BaseNodePostprocessor if LLAMAINDEX_AVAILABLE el
         
         return verified_nodes
     
-    def _verify_content(self, text: str) -> bool:
-        """Verify content is safe and accurate."""
+    def _verify_content(self, text: str) -> Optional[bool]:
+        """Whether QWED verified the node's content: True when a check ran
+        and admitted it, False when one refused it or could not run (fail
+        closed, GHSA-83v6-6h23-pvp4), None when there was nothing to check."""
         try:
             # Check for code
             if self.verify_code and "```" in text:
                 code_match = re.search(r'```(?:\w+)?\n(.*?)```', text, re.DOTALL)
                 if code_match:
                     code = code_match.group(1)
-                    result = self._client.verify_code(code)
-                    if not result.verified:
-                        return False
-            
-            return True
+                    return self._client.verify_code(code).is_verified is True
+            return None
         except Exception:
-            return True  # Pass through on error
+            return False  # Fail closed: an error is not a verification
 
 
 # ============================================================================
@@ -315,13 +323,13 @@ class QWEDCallbackHandler(BaseCallbackHandler if LLAMAINDEX_AVAILABLE else objec
                 self.events.append({
                     "event_id": event_id,
                     "event_type": str(event_type),
-                    "verified": result.verified,
+                    "verified": result.is_verified,
                     "status": result.status,
                 })
                 
                 if self.log_all:
-                    status = "✅" if result.verified else "❌"
-                    print(f"[QWED] {status} Event {event_type}: verified={result.verified}")
+                    status = "✅" if result.is_verified else "❌"
+                    print(f"[QWED] {status} Event {event_type}: verified={result.is_verified}")
             except Exception:
                 # Verification logging is best-effort and should not break the callback flow.
                 pass
@@ -370,7 +378,7 @@ class QWEDVerifyTool:
         """Run verification."""
         try:
             result = self._client.verify(query)
-            if result.verified:
+            if result.is_verified:
                 return f"✅ VERIFIED: The statement is correct."
             else:
                 msg = result.result.get("message", "Verification failed") if hasattr(result, "result") else "Failed"

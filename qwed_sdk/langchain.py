@@ -87,7 +87,7 @@ class QWEDTool(BaseTool if LANGCHAIN_AVAILABLE else object):
         try:
             result = self._client.verify(query)
             
-            if result.verified:
+            if result.is_verified:
                 return f"✅ VERIFIED: {result.result.get('message', 'Correct')}"
             else:
                 correction = result.result.get('corrected', '')
@@ -114,7 +114,7 @@ class QWEDMathTool(QWEDTool):
     def _run(self, expression: str) -> str:
         try:
             result = self._client.verify_math(expression)
-            if result.verified:
+            if result.is_verified:
                 return f"✅ VERIFIED: {expression} is correct"
             else:
                 return f"❌ INCORRECT: {result.result.get('message', 'Invalid')}"
@@ -134,7 +134,7 @@ class QWEDLogicTool(QWEDTool):
     def _run(self, query: str) -> str:
         try:
             result = self._client.verify_logic(query)
-            if result.verified:
+            if result.is_verified:
                 model = result.result.get('model', {})
                 return f"✅ SAT: Satisfying assignment: {model}"
             else:
@@ -155,7 +155,7 @@ class QWEDCodeTool(QWEDTool):
     def _run(self, code: str) -> str:
         try:
             result = self._client.verify_code(code)
-            if result.verified:
+            if result.is_verified:
                 return "✅ SAFE: No security issues detected"
             else:
                 vulns = result.result.get('vulnerabilities', [])
@@ -249,7 +249,7 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
                 result = self._client.verify(text)
                 results["verifications"].append({
                     "type": "math",
-                    "verified": result.verified,
+                    "verified": result.is_verified,
                     "status": result.status
                 })
             except Exception:
@@ -264,7 +264,7 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
                     result = self._client.verify_code(code)
                     results["verifications"].append({
                         "type": "code",
-                        "verified": result.verified,
+                        "verified": result.is_verified,
                         "vulnerabilities": len(result.result.get("vulnerabilities", []))
                     })
             except Exception:
@@ -279,7 +279,7 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
                     result = self._client.verify_sql(sql, "")
                     results["verifications"].append({
                         "type": "sql",
-                        "verified": result.verified
+                        "verified": result.is_verified
                     })
             except Exception:
                 # Optional auto-verification should not interrupt LangChain execution.
@@ -386,14 +386,14 @@ class QWEDVerifiedChain:
         
         verification = self._client.verify(output)
         
-        if self.auto_correct and not verification.verified:
+        if self.auto_correct and not verification.is_verified:
             corrected = verification.result.get("corrected")
             if corrected:
                 output = corrected
         
         return VerifiedOutput(
             output=output,
-            verified=verification.verified,
+            verified=verification.is_verified,
             status=verification.status,
             attestation=getattr(verification, 'attestation', None)
         )
@@ -405,7 +405,7 @@ class QWEDVerifiedChain:
         
         return VerifiedOutput(
             output=output,
-            verified=verification.verified,
+            verified=verification.is_verified,
             status=verification.status,
             attestation=getattr(verification, 'attestation', None)
         )

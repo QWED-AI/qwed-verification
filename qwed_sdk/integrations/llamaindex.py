@@ -21,6 +21,15 @@ try:
 except ImportError:
     from ..client import QWEDClient
 
+def _verification(result: Any) -> Dict[str, Any]:
+    """A QWEDClient result as the engine's verification dict: verified only
+    when the server admitted it (``is_verified``)."""
+    return {
+        "verified": getattr(result, "is_verified", False) is True,
+        "status": getattr(result, "status", "UNKNOWN"),
+    }
+
+
 @dataclass
 class VerifiedResponse:
     """Response with verification metadata."""
@@ -77,28 +86,28 @@ class QWEDQueryEngine:
         )
     
     def _verify_response(self, response: str, query: str, source_nodes: List[Any]) -> Dict[str, Any]:
-        """Verify report based on content and context."""
+        """Verify report based on content and context.
+
+        Verified only when a QWED engine verified the response
+        (GHSA-83v6-6h23-pvp4): a response no engine checked is UNVERIFIABLE,
+        never PASSED, and an error fails closed.
+        """
         try:
             # 1. Math Verification
             if self.verify_math and self._contains_math(response):
-                result = self.client.verify_math(response)
-                # verify_math usually returns a full result object, we extract dict
-                if hasattr(result, "dict"): result = result.dict()
-                return result
-            
+                return _verification(self.client.verify_math(response))
+
             # 2. Fact Guard (RAG Verification)
             if self.verify_facts and source_nodes:
                 # Extract context from nodes
                 context_text = "\n".join([n.node.get_content() for n in source_nodes])
-                
+
                 # Check if response is supported by context
                 # "Fact Guard" (TF-IDF + NLI)
-                result = self.client.verify_fact(claim=response, context=context_text)
-                if hasattr(result, "dict"): result = result.dict()
-                return result
-            
-            return {"verified": True, "status": "PASSED (No claims verified)"}
-            
+                return _verification(self.client.verify_fact(claim=response, context=context_text))
+
+            return {"verified": False, "status": "UNVERIFIABLE (no QWED engine checked the response)"}
+
         except Exception as e:
             return {"verified": False, "status": f"ERROR: {str(e)}"}
     
