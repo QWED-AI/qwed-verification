@@ -45,6 +45,7 @@ DEFAULT_ISSUER = "did:qwed:node:local"
 TOKEN_TYPE = "qwed-attestation+jwt"
 CONTEXT_TOKEN_TYPE = "qwed-context+jwt"
 JWKS_PATH = "/.well-known/jwks.json"
+_NOT_A_JWT = "attestation is not a JWT"
 
 
 class AttestationError(Exception):
@@ -122,12 +123,12 @@ def _decode(token: str, key: Any, *, issuer: str, leeway: int) -> dict[str, Any]
     except jwt.InvalidAlgorithmError as exc:
         raise AttestationError("attestation is not signed with ES256") from exc
     except jwt.DecodeError as exc:
-        raise AttestationError("attestation is not a JWT") from exc
+        raise AttestationError(_NOT_A_JWT) from exc
     except jwt.PyJWTError as exc:
         raise AttestationError("attestation signature or claims do not verify") from exc
     except RecursionError as exc:
         # A header or payload nested too deeply for the JSON parser.
-        raise AttestationError("attestation is not a JWT") from exc
+        raise AttestationError(_NOT_A_JWT) from exc
 
 
 def check_admission(claims: Mapping[str, Any], admission: str | None) -> None:
@@ -154,7 +155,7 @@ def _verified_claims(
     # first, and an unpaired surrogate raised UnicodeEncodeError, not an
     # AttestationError (#523 review).
     if not token.isascii():
-        raise AttestationError("attestation is not a JWT")
+        raise AttestationError(_NOT_A_JWT)
     # Nothing from the token is read before its signature verifies: each
     # ES256 key the JWKS holds (one, or two during a rotation) is tried, and
     # the verified header must then name the key that verified it.
