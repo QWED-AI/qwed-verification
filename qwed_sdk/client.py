@@ -475,31 +475,30 @@ class QWEDClient:
         schema_ddl: str = "",
         dialect: str = "sqlite"
     ) -> VerificationResult:
-        """Verify SQL query against schema."""
+        """Verify an SQL query against the schema with the server's SQLVerifier.
+
+        The server decides: its admission is the result's ``is_verified``. The
+        local SQLGuard is a pre-filter, not a verification, so it is not used
+        in the server's place (GHSA-45jv-2j44-4c2q); a server that cannot be
+        reached is UNVERIFIABLE, never VERIFIED.
+        """
         start = time.time()
-        # Try local execution first (Technical Safety - Phase 12)
         try:
-            from qwed_new.guards.sql_guard import SQLGuard
-            # Note: SQLGuard in client ignores schema/dialect for deep checks in this simple integration
-            # but we can pass dialect if needed.
-            guard = SQLGuard() 
-            result_dict = guard.verify_query(query, dialect)
-            
-            result = VerificationResult(
-                status="VERIFIED" if result_dict["verified"] else "UNVERIFIED",
-                is_verified=result_dict["verified"],
-                result=result_dict,
-                latency_ms=(time.time() - start) * 1000
-            )
-            return result
-        except ImportError:
             data = self._request(
                 "POST",
                 "/verify/sql",
                 json={"query": query, "schema_ddl": schema_ddl, "dialect": dialect}
             )
-            data["latency_ms"] = (time.time() - start) * 1000
-            return VerificationResult.from_dict(data)
+        except (httpx.ConnectError, httpx.TimeoutException):
+            return VerificationResult(
+                status="UNVERIFIABLE",
+                is_verified=False,
+                result={"message": "The QWED server could not be reached, so the query was not verified."},
+                error="server unreachable",
+                latency_ms=(time.time() - start) * 1000,
+            )
+        data["latency_ms"] = (time.time() - start) * 1000
+        return VerificationResult.from_dict(data)
 
     def verify_stats(
         self,

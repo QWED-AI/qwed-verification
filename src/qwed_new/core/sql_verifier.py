@@ -55,7 +55,51 @@ MALICIOUS_ISSUE_TYPES = frozenset({
     "injection_tautology",
     "injection_or_true",
     "stacked_queries",
+    "dangerous_function",
 })
+
+# Functions that read or write server files, load code, or reach the OS or
+# another server, in any dialect (GHSA-45jv-2j44-4c2q). A read-only SELECT
+# that calls one is not read-only. Shared with guards.sql_guard.SQLGuard so
+# the two cannot drift.
+DANGEROUS_SQL_FUNCTIONS = frozenset({
+    # SQLite
+    "load_extension", "readfile", "writefile", "edit", "fts3_tokenizer",
+    # PostgreSQL
+    "pg_read_file", "pg_read_binary_file", "pg_ls_dir", "pg_stat_file",
+    "pg_ls_logdir", "pg_ls_waldir", "pg_ls_tmpdir",
+    "lo_import", "lo_export", "lo_from_bytea", "lo_get", "lo_put",
+    "dblink", "dblink_exec", "dblink_connect", "dblink_connect_u", "dblink_send_query",
+    "pg_execute_server_program", "pg_reload_conf", "pg_terminate_backend",
+    "pg_cancel_backend", "set_config",
+    # MySQL / MariaDB
+    "load_file", "sys_exec", "sys_eval",
+    # SQL Server
+    "xp_cmdshell", "xp_dirtree", "xp_fileexist", "xp_regread", "xp_regwrite",
+    "sp_oacreate", "sp_oamethod", "sp_execute_external_script",
+    "openrowset", "opendatasource", "openquery",
+    # Oracle
+    "utl_file", "utl_http", "utl_inaddr", "dbms_java", "dbms_scheduler",
+})
+
+
+def sql_function_names(parsed: exp.Expression) -> Set[str]:
+    """The lower-cased name of every function the parse tree calls, known
+    to sqlglot or not."""
+    names: Set[str] = set()
+    for node in parsed.walk():
+        node = node[0] if isinstance(node, tuple) else node
+        if isinstance(node, exp.Anonymous):
+            names.add(str(node.name).lower())
+        elif isinstance(node, exp.Func):
+            names.add(node.sql_name().lower())
+            names.add(type(node).__name__.lower())
+        elif isinstance(node, exp.Dot):
+            # utl_file.fopen(...), dbms_java.runjava(...): the package name.
+            left = node.this
+            if isinstance(left, (exp.Column, exp.Identifier)):
+                names.add(str(left.name).lower())
+    return names
 
 
 def _available_expression_types(*names: str) -> Set[type]:
@@ -346,6 +390,7 @@ class SQLVerifier:
             issues: List[SQLIssue] = []
 
             issues.extend(self._check_command_type(parsed_query))
+            issues.extend(self._check_dangerous_functions(parsed_query))
             issues.extend(self._check_column_access(parsed_query))
             issues.extend(self._check_injection_patterns(parsed_query, analysed))
 
@@ -548,6 +593,20 @@ class SQLVerifier:
 
         return issues
     
+    def _check_dangerous_functions(self, parsed_query: exp.Expression) -> List[SQLIssue]:
+        """Block a call to a function that reads or writes files, loads code
+        or reaches the OS or another server (GHSA-45jv-2j44-4c2q). Such a
+        call makes a SELECT unsafe, so it is blocked whatever the policy."""
+        return [
+            SQLIssue(
+                severity="CRITICAL",
+                issue_type="dangerous_function",
+                description=f"Function '{name}' blocked: it reaches files, code, the OS or another server.",
+                recommendation="Submit a query that does not call this function.",
+            )
+            for name in sorted(sql_function_names(parsed_query) & DANGEROUS_SQL_FUNCTIONS)
+        ]
+
     # =========================================================================
     # Column Access Control
     # =========================================================================
