@@ -17,7 +17,9 @@ All notable changes to the QWED Protocol will be documented in this file.
     document with none is `attestation_required`, and one whose attestation
     does not verify or is not this document's is `attestation_invalid`. A
     key that cannot be loaded is a 500; a token whose header is nested too
-    deeply to parse is `attestation_invalid`, not a 500. The server's
+    deeply to parse, or that is not ASCII (an unpaired surrogate raised
+    `UnicodeEncodeError` in PyJWT), is `attestation_invalid`, not a 500. The
+    SDK's verifiers refuse a non-ASCII token as "not a JWT" too. The server's
     `verify_attestation` now also requires the verified header's `kid` to
     name its key, as the SDKs do, for verdict tokens too. `require_attestation: false` keeps
     the old checks. **Behaviour change:** a caller that sends a v1.0

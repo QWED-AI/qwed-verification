@@ -150,6 +150,11 @@ def _verified_claims(
 ) -> dict[str, Any]:
     """The claims of ``token``, verified with a key in ``jwks`` and of type
     ``token_type``; raise AttestationError otherwise."""
+    # A compact JWT is base64url, so ASCII. PyJWT encodes the token as UTF-8
+    # first, and an unpaired surrogate raised UnicodeEncodeError, not an
+    # AttestationError (#523 review).
+    if not token.isascii():
+        raise AttestationError("attestation is not a JWT")
     # Nothing from the token is read before its signature verifies: each
     # ES256 key the JWKS holds (one, or two during a rotation) is tried, and
     # the verified header must then name the key that verified it.

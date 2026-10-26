@@ -461,3 +461,30 @@ def test_a_malformed_server_url_is_keys_unavailable(tmp_path, fresh_service):
     assert _run("resolve", "--server", "http://localhost:bad", document) == (
         1, {"resolved": False, "error": "attestation_keys_unavailable"},
     )
+
+
+@pytest.mark.parametrize("token", ["\ud800.e30.x", "a\udfff.e30.x", "é.e30.x"])
+def test_a_token_that_is_not_ascii_is_invalid_not_a_500(fresh_service, token):
+    # #523 review: a compact JWT is base64url, so ASCII. PyJWT encodes the
+    # token as UTF-8 first, and an unpaired surrogate raised
+    # UnicodeEncodeError, a ValueError the route turned into a 500.
+    document = {**_admitted(), "attestation": token}
+
+    assert _resolve(document) == {"resolved": False, "error": ATTESTATION_INVALID}
+
+
+@pytest.mark.parametrize("token", ["\ud800.e30.x", "é.e30.x"])
+def test_the_sdk_and_cli_refuse_a_token_that_is_not_ascii(tmp_path, jwks, token):
+    # The same hole in the SDK verifier: UnicodeEncodeError escaped instead
+    # of an AttestationError, so the clients' and the CLI's checks crashed.
+    from qwed_sdk.attestation import AttestationError, verify_attestation, verify_document_attestation
+
+    document = {**_admitted(), "attestation": token}
+
+    with pytest.raises(AttestationError, match="not a JWT"):
+        verify_document_attestation(document, jwks)
+    with pytest.raises(AttestationError, match="not a JWT"):
+        verify_attestation(token, jwks, proof_ref=PROOF)
+    path = _write(tmp_path, "doc.json", document)
+    keys = _write(tmp_path, "jwks.json", jwks)
+    assert _run("validate", "--jwks-file", keys, path) == (1, {"valid": False, "error": "attestation_invalid"})
