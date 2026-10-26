@@ -86,7 +86,9 @@ def _es256_keys(jwks: Mapping[str, Any]) -> list[tuple[Any, Any]]:
             continue
         try:
             found.append((jwk.get("kid"), jwt.PyJWK(dict(jwk), algorithm="ES256").key))
-        except jwt.PyJWTError:
+        # PyJWT before 2.15 raises TypeError or AttributeError, not a
+        # PyJWTError, for a coordinate that is not a string (#523 review).
+        except (jwt.PyJWTError, TypeError, AttributeError, ValueError):
             unusable = True
     if not found and unusable:
         raise AttestationError("JWKS key is unusable")

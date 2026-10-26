@@ -2455,8 +2455,9 @@ def _context_attestation_refusal(document: Any, jwks_file: Optional[str], server
             response.raise_for_status()
             jwks = response.json()
     # InvalidURL (a malformed --server) is neither an HTTPError nor a
-    # ValueError (#523 review).
-    except (OSError, ValueError, httpx.HTTPError, httpx.InvalidURL):
+    # ValueError, and a JWKS nested too deeply to parse raises
+    # RecursionError (#523 review).
+    except (OSError, ValueError, httpx.HTTPError, httpx.InvalidURL, RecursionError):
         return "attestation_keys_unavailable"
     try:
         verify_document_attestation(document, jwks)

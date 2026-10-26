@@ -31,7 +31,10 @@ All notable changes to the QWED Protocol will be documented in this file.
     attestation with the keys of `--jwks-file` (offline or pinned) or
     `--server` (its `/.well-known/jwks.json`), by default. A signed document
     with neither is `attestation_keys_required`; keys that cannot be read or
-    fetched, a malformed `--server` URL included, `attestation_keys_unavailable`.
+    fetched, a malformed `--server` URL or a JWKS nested too deeply to parse
+    included, `attestation_keys_unavailable`. A JWKS key whose coordinates
+    are not strings is unusable in the SDK on every PyJWT version (2.8 raised
+    `TypeError`), not an error that escapes.
     Passing both is a usage error, with or without the check, and a file
     nested too deeply to parse is `invalid_document_file`. `--no-require-attestation`
     keeps the old checks, as for a v1.0 document that

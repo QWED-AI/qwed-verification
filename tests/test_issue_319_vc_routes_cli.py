@@ -488,3 +488,41 @@ def test_the_sdk_and_cli_refuse_a_token_that_is_not_ascii(tmp_path, jwks, token)
     path = _write(tmp_path, "doc.json", document)
     keys = _write(tmp_path, "jwks.json", jwks)
     assert _run("validate", "--jwks-file", keys, path) == (1, {"valid": False, "error": "attestation_invalid"})
+
+
+def test_a_jwks_file_too_deep_to_parse_is_keys_unavailable(tmp_path, fresh_service):
+    # #523 review: RecursionError from json.load escaped the key loading.
+    document = _write(tmp_path, "doc.json", _admitted())
+    keys = tmp_path / "jwks.json"
+    keys.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
+
+    assert _run("resolve", "--jwks-file", str(keys), document) == (
+        1, {"resolved": False, "error": "attestation_keys_unavailable"},
+    )
+
+
+def test_server_keys_too_deep_to_parse_are_unavailable(tmp_path, fresh_service, monkeypatch):
+    document = _write(tmp_path, "doc.json", _admitted())
+    deep = ("[" * 100_000 + "]" * 100_000).encode()
+    monkeypatch.setattr(
+        httpx, "get", lambda url, **kwargs: httpx.Response(200, content=deep, request=httpx.Request("GET", url)),
+    )
+
+    assert _run("validate", "--server", "http://qwed.test", document) == (
+        1, {"valid": False, "error": "attestation_keys_unavailable"},
+    )
+
+
+@pytest.mark.parametrize("coordinates", [{"x": None, "y": None}, {"x": 7, "y": []}])
+def test_a_jwks_key_with_coordinates_of_the_wrong_type_is_unusable(tmp_path, fresh_service, coordinates):
+    # #523 review: PyJWT before 2.15 raises TypeError for these, which
+    # escaped the SDK's key loading and crashed the CLI.
+    from qwed_sdk.attestation import AttestationError, _es256_keys
+
+    jwks = {"keys": [{"kty": "EC", "crv": "P-256", "kid": "k", **coordinates}]}
+
+    with pytest.raises(AttestationError, match="unusable"):
+        _es256_keys(jwks)
+    document = _write(tmp_path, "doc.json", _admitted())
+    keys = _write(tmp_path, "jwks.json", jwks)
+    assert _run("resolve", "--jwks-file", keys, document) == (1, {"resolved": False, "error": "attestation_invalid"})
