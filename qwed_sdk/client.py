@@ -52,6 +52,19 @@ def _require_document_attestation(document: Any) -> None:
         raise AttestationError("no attestation")
 
 
+def _unreachable_code_result(start: float) -> VerificationResult:
+    """The result of a code check the server could not be reached for:
+    UNVERIFIABLE and not admitted (GHSA-4rj3-8wqj-cqwc), as for verify_fact
+    (#326)."""
+    return VerificationResult(
+        status="UNVERIFIABLE",
+        is_verified=False,
+        result={"message": "The QWED server could not be reached, so the code was not verified."},
+        error="server unreachable",
+        latency_ms=(time.time() - start) * 1000,
+    )
+
+
 def _attestation_of(
     result: VerificationResult | dict[str, Any],
 ) -> tuple[str | None, str | None, str | None]:
@@ -388,30 +401,24 @@ class QWEDClient:
         code: str,
         language: str = "python"
     ) -> VerificationResult:
-        """Verify code for security vulnerabilities."""
+        """Verify code for security vulnerabilities with the server's CodeVerifier.
+
+        The server decides: its admission is the result's ``is_verified``. A
+        local blocklist is not a verification, so none is used in its place
+        (GHSA-4rj3-8wqj-cqwc); a server that cannot be reached is
+        UNVERIFIABLE, never VERIFIED.
+        """
         start = time.time()
-        # Try local execution first (Technical Safety - Phase 12)
         try:
-            from qwed_new.guards.code_guard import CodeGuard
-            guard = CodeGuard()
-            result_dict = guard.verify_safety(code, language=language)
-            
-            result = VerificationResult(
-                status="VERIFIED" if result_dict["verified"] else "UNVERIFIED",
-                is_verified=result_dict["verified"],
-                result=result_dict,
-                latency_ms=(time.time() - start) * 1000
-            )
-            return result
-        except ImportError:
-            # Fallback to API
             data = self._request(
                 "POST",
                 "/verify/code",
                 json={"code": code, "language": language}
             )
-            data["latency_ms"] = (time.time() - start) * 1000
-            return VerificationResult.from_dict(data)
+        except (httpx.ConnectError, httpx.TimeoutException):
+            return _unreachable_code_result(start)
+        data["latency_ms"] = (time.time() - start) * 1000
+        return VerificationResult.from_dict(data)
     
     def verify_fact(
         self,
@@ -911,13 +918,16 @@ class QWEDAsyncClient:
         code: str,
         language: str = "python"
     ) -> VerificationResult:
-        """Verify code for security vulnerabilities."""
+        """Verify code with the server's CodeVerifier; see QWEDClient.verify_code."""
         start = time.time()
-        data = await self._request(
-            "POST",
-            "/verify/code",
-            json={"code": code, "language": language}
-        )
+        try:
+            data = await self._request(
+                "POST",
+                "/verify/code",
+                json={"code": code, "language": language}
+            )
+        except (httpx.ConnectError, httpx.TimeoutException):
+            return _unreachable_code_result(start)
         data["latency_ms"] = (time.time() - start) * 1000
         return VerificationResult.from_dict(data)
     

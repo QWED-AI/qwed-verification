@@ -3,13 +3,25 @@ from typing import Dict, Any, List, Set
 
 class CodeGuard:
     """
-    Statically analyzes Python code for security risks using AST.
-    Blocks Remote Code Execution (RCE) vectors.
+    Statically screens Python code for security risks using AST.
+    Blocks Remote Code Execution (RCE) vectors it recognises.
+
+    A blocklist pre-filter, not a verification (GHSA-4rj3-8wqj-cqwc): a pass
+    means only that no listed pattern was found. Use it to refuse code
+    early, never to admit it; code that must be admitted goes through the
+    server's CodeVerifier (``QWEDClient.verify_code``).
     """
     def __init__(self):
         # Blocklist of dangerous functions and imports
         self.dangerous_functions: Set[str] = {'eval', 'exec', 'compile', 'open', 'system', 'popen', '__import__', 'spawn'}
-        self.dangerous_modules: Set[str] = {'os', 'subprocess', 'sys', 'shutil', 'socket', 'pickle', 'pty'}
+        self.dangerous_modules: Set[str] = {
+            'os', 'subprocess', 'sys', 'shutil', 'socket', 'pickle', 'pty',
+            'importlib', 'builtins', 'ctypes', 'marshal',
+        }
+        # Indirect access that reaches the above without naming it.
+        self.reflective_functions: Set[str] = {
+            'getattr', 'setattr', 'delattr', 'globals', 'locals', 'vars', 'breakpoint',
+        }
 
     def verify_safety(self, code_snippet: str, language: str = "python") -> Dict[str, Any]:
         """
@@ -43,15 +55,25 @@ class CodeGuard:
                 elif isinstance(node.func, ast.Attribute) and node.func.attr in self.dangerous_functions:
                     violations.append(f"Forbidden method call: .{node.func.attr}()")
             
+            # Reflection that reaches blocked names indirectly:
+            # getattr(__builtins__, 'ev' + 'al'), ().__class__.__base__, ...
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                    and node.func.id in self.reflective_functions:
+                violations.append(f"Forbidden reflective call: {node.func.id}()")
+            elif isinstance(node, ast.Name) and node.id == "__builtins__":
+                violations.append("Forbidden name: __builtins__")
+            elif isinstance(node, ast.Attribute) and node.attr.startswith("__") and node.attr.endswith("__"):
+                violations.append(f"Forbidden dunder attribute: .{node.attr}")
+
             # Check for dangerous imports (e.g., import os)
-            elif isinstance(node, ast.Import):
+            if isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name in self.dangerous_modules:
+                    if alias.name.split(".")[0] in self.dangerous_modules:
                         violations.append(f"Forbidden import: {alias.name}")
             
             # Check for dangerous 'from X import Y'
             elif isinstance(node, ast.ImportFrom):
-                if node.module in self.dangerous_modules:
+                if node.module and node.module.split(".")[0] in self.dangerous_modules:
                     violations.append(f"Forbidden import from: {node.module}")
         
         if violations:
@@ -64,8 +86,9 @@ class CodeGuard:
 
         return {
             "verified": True,
+            "advisory": True,
             "scan_method": "AST_STATIC_ANALYSIS",
-            "message": "Code structure verified safe (No dangerous imports/functions)."
+            "message": "No blocked import or call found. A blocklist pre-filter, not a verification of the code.",
         }
 
     def _verify_bash(self, code: str) -> Dict[str, Any]:
@@ -104,6 +127,7 @@ class CodeGuard:
             
         return {
             "verified": True,
+            "advisory": True,
             "scan_method": "REGEX_HEURISTICS",
-            "message": "Shell command verified safe."
+            "message": "No blocked shell pattern found. A blocklist pre-filter, not a verification of the command.",
         }
