@@ -20,7 +20,7 @@
 
 QWED is an open-source (Apache-2.0) verification layer that checks claims in LLM and AI-agent output with deterministic engines, including SymPy, Z3, SQLGlot and Python AST analysis. A claim that QWED cannot check is never reported as verified: it fails closed. It runs in your own environment as a Python library, a CLI, a self-hosted API or a Docker image, with SDKs for TypeScript, Go and Rust.
 
-This repository is the reference implementation of the QWED verification protocol and of [Verification Context v1.0](spec/), the record format for a verification result.
+This repository is the reference implementation of the QWED verification protocol and of [Verification Context v1.0 and v1.1](spec/), the record format for a verification result. A v1.1 document carries the issuing server's signature.
 
 ## How a result reads
 
@@ -76,10 +76,10 @@ Other languages and runtimes:
 
 | | Install | Notes |
 |---|---|---|
-| TypeScript | `npm install @qwed-ai/sdk` | Published on each release; pin a version, e.g. `@7.3.0` |
-| Go | `go get github.com/QWED-AI/qwed-verification/sdk-go/v7` | Released under `sdk-go/vX.Y.Z` tags; pin a version, e.g. `@v7.3.0` |
+| TypeScript | `npm install @qwed-ai/sdk` | Published on each release; pin a version, e.g. `@8.0.0` |
+| Go | `go get github.com/QWED-AI/qwed-verification/sdk-go/v8` | Released under `sdk-go/vX.Y.Z` tags; pin a version, e.g. `@v8.0.0`. From 8.0.0 the module path ends in `/v8` |
 | Rust | `cargo add qwed` | |
-| Docker | `docker pull qwedai/qwed-verification` | The API server on port 8000, from 7.3.1 (earlier tags ran the GitHub Action). It needs `QWED_CORS_ORIGINS`, `API_KEY_SECRET`, `QWED_JWT_SECRET_KEY`, `QWED_API_KEY_LOOKUP_SECRET` and `QWED_AUDIT_SECRET_KEY`. With Postgres, Redis and monitoring: `docker compose -f deploy/docker-compose.yml up -d` after filling in `deploy/.env` from `deploy/.env.example`. See [self-hosting](https://docs.qwedai.tech/advanced/self-hosting) |
+| Docker | `docker pull qwedai/qwed-verification` | The API server on port 8000, from 8.0.0 (earlier tags ran the GitHub Action). It needs `QWED_CORS_ORIGINS`, `API_KEY_SECRET`, `QWED_JWT_SECRET_KEY`, `QWED_API_KEY_LOOKUP_SECRET` and `QWED_AUDIT_SECRET_KEY`; set `QWED_SIGNING_KEY` (an EC P-256 key) too, or attestations stop verifying after a restart or on another replica. With Postgres, Redis and monitoring: `docker compose -f deploy/docker-compose.yml up -d` after filling in `deploy/.env` from `deploy/.env.example`. See [self-hosting](https://docs.qwedai.tech/advanced/self-hosting) |
 
 From source:
 
@@ -192,7 +192,7 @@ The Stats engine executes statistical code in a sandbox and returns `UNVERIFIABL
 ## GitHub Action
 
 ```yaml
-- uses: QWED-AI/qwed-verification@v7.3.0
+- uses: QWED-AI/qwed-verification@v8.0.0
   with:
     action: scan-secrets        # or scan-code, verify-shell
     paths: "**/*.py,**/*.env"
