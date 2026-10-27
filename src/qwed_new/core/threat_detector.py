@@ -12,7 +12,7 @@ Features:
 
 import logging
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from sqlmodel import Session, select
 
@@ -104,7 +104,7 @@ class ThreatDetector:
         
         # Track failure
         if event_type == "BLOCKED":
-            self.failed_attempts[organization_id].append(datetime.utcnow())
+            self.failed_attempts[organization_id].append(datetime.now(timezone.utc))
         
         return {
             "threat_score": min(threat_score, 100),
@@ -112,12 +112,12 @@ class ThreatDetector:
             "should_alert": threat_score >= self.threat_score_threshold,
             "details": details,
             "organization_id": organization_id,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     
     def _get_recent_failures(self, organization_id: int, minutes: int = 10) -> List[datetime]:
         """Get failed attempts in the last N minutes."""
-        cutoff = datetime.utcnow() - timedelta(minutes=minutes)
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
         failures = self.failed_attempts[organization_id]
         # Filter to recent only
         recent = [f for f in failures if f > cutoff]
@@ -134,8 +134,10 @@ class ThreatDetector:
         
         Returns aggregated threat metrics.
         """
-        cutoff = datetime.utcnow() - timedelta(hours=hours)
-        
+        # Aware, as SecurityEvent.timestamp is: the pinned SQLModel refuses a
+        # naive datetime in a query (#506).
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+
         with Session(engine) as session:
             events = session.exec(
                 select(SecurityEvent).where(
@@ -174,7 +176,7 @@ class ThreatDetector:
                     "recent_failures_10min": len(self._get_recent_failures(organization_id))
                 },
                 "security_layer_breakdown": dict(layer_counts),
-                "generated_at": datetime.utcnow().isoformat()
+                "generated_at": datetime.now(timezone.utc).isoformat()
             }
     
     def blacklist_ip(self, ip_address: str):

@@ -2215,10 +2215,10 @@ _ROLE_RANK = ROLE_RANK
 
 # Module-level dependency singletons (avoids calling require_admin_role in
 # argument defaults — Ruff B008 — and builds each dependency once).
-_REQUIRE_ADMIN = Depends(require_admin_role(["owner", "admin"]))
 _REQUIRE_ADMIN_OR_MEMBER = Depends(require_admin_role(["owner", "admin", "member"]))
-# The compliance routes also accept a signed-in owner or admin (#485).
+# Also a signed-in user: compliance (#485), threat summary (#506), key rotation (#505).
 _REQUIRE_ADMIN_OR_SESSION = Depends(require_admin_role(["owner", "admin"], allow_session=True))
+_REQUIRE_MEMBER_OR_SESSION = Depends(require_admin_role(["owner", "admin", "member"], allow_session=True))
 _FOREIGN_ORG_RESPONSE = {403: {"description": _FOREIGN_ORG_DETAIL}}
 
 
@@ -2277,7 +2277,7 @@ async def generate_soc2_report(
 @app.get("/admin/security/threats/{org_id}", tags=["Security"], responses=_FOREIGN_ORG_RESPONSE)
 async def get_threat_summary(
     org_id: int,
-    ctx: AdminContext = _REQUIRE_ADMIN,
+    ctx: AdminContext = _REQUIRE_ADMIN_OR_SESSION,
 ):
     """Get real-time threat summary (own organization only)."""
     if org_id != ctx.organization_id:
@@ -2289,7 +2289,7 @@ async def get_threat_summary(
                      404: {"description": "Key not found"}})
 async def rotate_api_key(
     key_id: int,
-    ctx: AdminContext = _REQUIRE_ADMIN_OR_MEMBER,
+    ctx: AdminContext = _REQUIRE_MEMBER_OR_SESSION,
     session: Session = Depends(get_session)
 ):
     """Rotate an API key and return the new secret once.
