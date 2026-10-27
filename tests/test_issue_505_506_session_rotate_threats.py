@@ -12,6 +12,7 @@ higher-privileged user, and never a revoked key or one in another
 organisation. An API key still wins when both are sent.
 """
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -115,6 +116,20 @@ def test_a_signed_in_member_or_viewer_cannot_read_the_threat_summary(env, who):
 
 def test_a_session_cannot_read_another_organisations_threat_summary(env):
     assert _threats(env, env.globex.id, _bearer(env.users["owner"])).status_code == 403
+
+
+def test_recent_failures_compare_aware_times():
+    """A BLOCKED event is tracked with an aware time, and the 10-minute
+    window compares aware with aware (a naive entry would raise TypeError)."""
+    detector = threat_detector.ThreatDetector()
+    detector.failed_attempts[7].append(datetime.now(timezone.utc) - timedelta(minutes=20))
+
+    analysis = detector.analyze_security_event(7, "BLOCKED", "r", "q")
+
+    recent = detector._get_recent_failures(7)
+    assert len(recent) == 1
+    assert recent[0].tzinfo is not None
+    assert analysis["timestamp"].endswith("+00:00")
 
 
 def test_an_api_key_still_reads_the_threat_summary_and_wins_over_a_session(env):
