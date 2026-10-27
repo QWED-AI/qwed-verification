@@ -42,8 +42,8 @@ def env(tmp_path, monkeypatch):
         session.refresh(o)
         return o
 
-    def user(o, role):
-        u = User(email=f"{role}-{o.id}@test", password_hash="x", organization_id=o.id, role=role)
+    def user(o, role, email=None):
+        u = User(email=email or f"{role}-{o.id}@test", password_hash="x", organization_id=o.id, role=role)
         session.add(u)
         session.commit()
         session.refresh(u)
@@ -65,11 +65,13 @@ def env(tmp_path, monkeypatch):
 
     acme, globex = org("acme"), org("globex")
     users = {role: user(acme, role) for role in ROLES}
+    # A second admin and owner, for rotating a key of the same role.
+    peers = {role: user(acme, role, f"peer-{role}@test") for role in ("admin", "owner")}
     other_owner = user(globex, "owner")
 
     main.app.dependency_overrides[main.get_session] = lambda: session
     yield SimpleNamespace(
-        session=session, acme=acme, globex=globex, users=users, other_owner=other_owner,
+        session=session, acme=acme, globex=globex, users=users, peers=peers, other_owner=other_owner,
         key_for=key_for, event=event, client=TestClient(main.app),
     )
     main.app.dependency_overrides.clear()
@@ -150,11 +152,21 @@ def test_a_signed_in_user_can_rotate_their_own_key(env, who):
     ("owner", "member"),
     ("admin", "member"),
     ("admin", "viewer"),
+    # Another user with the same role: the role comparison runs and allows it.
+    ("owner", "peer owner"),
+    ("admin", "peer admin"),
 ])
 def test_a_signed_in_owner_or_admin_can_rotate_a_lower_or_equal_users_key(env, who, target):
-    _, key = env.key_for(env.users[target])
+    owner = env.peers[target.split()[1]] if target.startswith("peer ") else env.users[target]
+    _, key = env.key_for(owner)
 
-    assert _rotate(env, key.id, _bearer(env.users[who])).status_code == 200
+    response = _rotate(env, key.id, _bearer(env.users[who]))
+
+    assert response.status_code == 200
+    env.session.expire_all()
+    new = env.session.get(ApiKey, response.json()["new_key_id"])
+    # The replacement belongs to the key's owner, not to the caller.
+    assert (new.user_id, new.organization_id) == (owner.id, env.acme.id)
 
 
 @pytest.mark.parametrize(("who", "target"), [

@@ -23,6 +23,15 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - Agent token reissue (`POST /agents/{agent_id}/token/reissue`) still
     takes an API key only.
 
+### Fixed
+
+- **The threat summary no longer fails with the pinned SQLModel (#506).**
+  `ThreatDetector` used naive `datetime.utcnow()` times, and SQLModel 0.0.48
+  (pinned in `requirements-server.txt`) refuses a naive datetime in a query,
+  so `GET /admin/security/threats/{org_id}` raised on every call. Its times
+  are now aware UTC, so `generated_at` and the event analysis `timestamp`
+  end in `+00:00`.
+
 ## [8.0.0] - 2026-10-26
 
 A major release: verdicts can now be checked by whoever receives them, and
