@@ -187,7 +187,7 @@ class TestSignin:
             email="owner@example.com", password_hash="$2b$12$hash",
             is_active=True, id=7, organization_id=3, role="owner",
         )
-        session = FakeSession([user], org=SimpleNamespace(display_name="Acme Corp"))
+        session = FakeSession([user], org=SimpleNamespace(display_name="Acme Corp", is_active=True))
         with patch("qwed_new.auth.routes.verify_password", return_value=True), patch(
             "qwed_new.auth.routes.create_access_token", return_value="tok"
         ):

@@ -20,6 +20,8 @@ from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine
 
 from qwed_new.api import main
+from qwed_new.auth import routes
+from qwed_new.auth.roles import INACTIVE_ORG
 from qwed_new.auth.security import create_access_token, generate_api_key, hash_password
 from qwed_new.core.models import ApiKey, Organization, User
 from qwed_new.core.rate_limiter import rate_limiter
@@ -191,6 +193,22 @@ def test_signin_returns_the_organisations_name(env):
     assert response.json()["user"]["org_id"] == str(env.acme.id)
 
 
+def test_signin_refuses_a_user_of_an_inactive_organisation(env):
+    # /auth/me and every other user-session route refuse it, so sign-in
+    # issues no token for it either.
+    user = env.users["owner"]
+    user.password_hash = hash_password(PASSWORD)
+    env.add(user)
+    env.acme.is_active = False
+    env.add(env.acme)
+
+    response = TestClient(main.app).post("/auth/signin", json={"email": "owner@acme.example.com", "password": PASSWORD})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == INACTIVE_ORG
+    assert "access_token" not in response.text
+
+
 def test_signup_returns_the_new_organisations_name(env):
     response = TestClient(main.app).post("/auth/signup", json={
         "email": "new@initech.example.com", "password": PASSWORD, "organization_name": "Initech Ltd",
@@ -221,3 +239,20 @@ def test_the_name_is_the_display_name_not_the_unique_slug(env):
     env.add(env.acme)
 
     assert env.call("GET", "/auth/me", "owner").json()["org_name"] == "Acme, Renamed"
+
+
+# ---------------------------------------------------------------- stored times
+
+@pytest.mark.parametrize("value, expected", [
+    (None, None),
+    # Naive, as SQLite and SQLModel before 0.0.28 read it back: UTC is set.
+    (datetime(2030, 1, 2, 3, 4, 5, tzinfo=timezone.utc).replace(tzinfo=None),
+     datetime(2030, 1, 2, 3, 4, 5, tzinfo=timezone.utc)),
+    # Already aware: unchanged, not shifted.
+    (datetime(2030, 1, 2, 3, 4, 5, tzinfo=timezone.utc), datetime(2030, 1, 2, 3, 4, 5, tzinfo=timezone.utc)),
+])
+def test_as_utc_sets_utc_on_a_naive_time_only(value, expected):
+    result = routes._as_utc(value)
+
+    assert result == expected
+    assert result is None or result.tzinfo is not None

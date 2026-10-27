@@ -19,7 +19,7 @@ from .security import (
     generate_api_key, mask_api_key, decode_access_token
 )
 from .roles import (
-    ADMIN_ROLES, READ_ROLES, WRITE_ROLES, ensure_user_role,
+    ADMIN_ROLES, INACTIVE_ORG, READ_ROLES, WRITE_ROLES, ensure_user_role,
     outranks_or_equals,
 )
 
@@ -152,7 +152,7 @@ async def signup(
     response_model=TokenResponse,
     responses={
         401: {"description": "Invalid email or password"},
-        403: {"description": "Account is deactivated"},
+        403: {"description": "Account or organisation is deactivated"},
         429: {"description": "Per-IP authentication rate limit exceeded"},
     },
 )
@@ -180,14 +180,20 @@ async def signin(
     
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account is deactivated")
-    
+
+    # Every user-session route refuses an inactive organisation (#478), so a
+    # token for one would be refused everywhere: do not issue it.
+    org = session.get(Organization, user.organization_id)
+    if org is None or not org.is_active:
+        raise HTTPException(status_code=403, detail=INACTIVE_ORG)
+
     # Generate JWT token
     access_token = create_access_token(data={"sub": str(user.id), "org_id": str(user.organization_id)})
 
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "user": _user_body(user, session.get(Organization, user.organization_id)),
+        "user": _user_body(user, org),
     }
 
 def get_current_user_token(authorization: Optional[str] = Header(None)) -> dict:
@@ -251,8 +257,8 @@ async def get_me(
 ):
     """Get current user info, with the organisation's name (#518).
 
-    An inactive user or organisation is refused (403), as at sign-in, not
-    answered from a token that is still valid.
+    An inactive user or organisation is refused (403) rather than answered
+    from a token that is still valid. Sign-in refuses both as well.
     """
     return _user_body(current_user, session.get(Organization, current_user.organization_id))
 

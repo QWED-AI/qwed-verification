@@ -42,8 +42,11 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   it cannot be read), beside `org_id`, so a client can show the name and not
   "Organisation 1".
   - `/auth/me` now applies the same checks as the other user-session routes
-    (#478): an inactive user or organisation, or an unknown role, is 403, as
-    at sign-in. It answered any valid token before.
+    (#478): an inactive user or organisation, or an unknown role, is 403. It
+    answered any valid token before.
+  - Sign-in refuses a user of an inactive organisation (403, "Organization
+    is not active"), as it already refused an inactive user. It issued a
+    token that every user-session route then refused.
 
 ### Fixed
 
