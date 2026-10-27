@@ -34,10 +34,16 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - Who sees which keys is unchanged (#478): owners and admins see every key
     in their organisation, members and viewers only their own. The owners
     are read in one query, not one per key.
+  - `expires_at`, `created_at` and `last_used_at` always carry their UTC
+    offset. SQLite, and SQLModel before 0.0.28, read stored times back
+    without one, so a client would have read them as local time.
 - **Sign-up, sign-in and `/auth/me` return the organisation's name (#518).**
   The user object adds `org_name`, the organisation's display name (null if
   it cannot be read), beside `org_id`, so a client can show the name and not
   "Organisation 1".
+  - `/auth/me` now applies the same checks as the other user-session routes
+    (#478): an inactive user or organisation, or an unknown role, is 403, as
+    at sign-in. It answered any valid token before.
 
 ### Fixed
 

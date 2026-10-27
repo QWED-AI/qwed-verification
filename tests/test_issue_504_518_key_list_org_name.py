@@ -10,6 +10,7 @@ Now each listed key carries ``expires_at``, ``rotation_required`` and
 ``owner`` (id and email, or null), and the user object carries ``org_name``.
 """
 
+import secrets
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -23,7 +24,8 @@ from qwed_new.auth.security import create_access_token, generate_api_key, hash_p
 from qwed_new.core.models import ApiKey, Organization, User
 from qwed_new.core.rate_limiter import rate_limiter
 
-PASSWORD = "correct horse battery staple"
+# Made per run, so no credential sits in the source.
+PASSWORD = secrets.token_urlsafe(16)
 
 
 @pytest.fixture
@@ -84,8 +86,10 @@ def test_a_key_that_expires_and_one_that_does_not(env):
 
     items = _listed(env)
 
-    assert datetime.fromisoformat(items[str(expiring.id)]["expires_at"]).replace(tzinfo=timezone.utc) == when
+    # Always with its UTC offset, also where SQLite reads the time back naive.
+    assert items[str(expiring.id)]["expires_at"] == "2030-01-02T03:04:05Z"
     assert items[str(lasting.id)]["expires_at"] is None
+    assert items[str(lasting.id)]["created_at"].endswith("Z")
 
 
 def test_the_rotation_flag_is_returned_as_stored(env):
@@ -194,6 +198,22 @@ def test_signup_returns_the_new_organisations_name(env):
 
     assert response.status_code == 200
     assert response.json()["user"]["org_name"] == "Initech Ltd"
+
+
+@pytest.mark.parametrize("what", ["user", "organisation"])
+def test_me_refuses_an_inactive_user_or_organisation(env, what):
+    target = env.users["owner"] if what == "user" else env.acme
+    target.is_active = False
+    env.add(target)
+
+    response = env.call("GET", "/auth/me", "owner")
+
+    assert response.status_code == 403
+    assert "org_name" not in response.text
+
+
+def test_me_still_needs_a_token(env):
+    assert TestClient(main.app).get("/auth/me").status_code == 401
 
 
 def test_the_name_is_the_display_name_not_the_unique_slug(env):

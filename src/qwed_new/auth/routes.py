@@ -44,6 +44,15 @@ async def _burn_one_bcrypt(password: str) -> None:
     await asyncio.to_thread(verify_password, password, _dummy_password_hash)
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Stored times are UTC, but SQLite (and SQLModel before 0.0.28) reads
+    them back naive, which would serialise without an offset and read as
+    local time in a client (#504)."""
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=timezone.utc)
+
+
 def _user_body(user: User, org: Organization | None) -> dict:
     """The user object of sign-up, sign-in and /auth/me. ``org_name`` is the
     organisation's display name (#518), or null when it cannot be read."""
@@ -235,12 +244,16 @@ ROLE_REFUSED = {403: {"description": "User or organisation inactive, or role not
 # query and fail with a server error instead of a 404.
 _MAX_KEY_ID = 2**63 - 1
 
-@router.get("/me")
+@router.get("/me", responses=ROLE_REFUSED)
 async def get_me(
-    current_user: User = Depends(get_current_user),
+    current_user: User = _READER,
     session: Session = _SESSION,
 ):
-    """Get current user info, with the organisation's name (#518)."""
+    """Get current user info, with the organisation's name (#518).
+
+    An inactive user or organisation is refused (403), as at sign-in, not
+    answered from a token that is still valid.
+    """
     return _user_body(current_user, session.get(Organization, current_user.organization_id))
 
 @router.post("/api-keys", response_model=APIKeyResponse, responses=ROLE_REFUSED)
@@ -312,10 +325,10 @@ async def list_api_keys(
             "id": str(key.id),
             "name": key.name,
             "key_preview": key.key_preview,
-            "created_at": key.created_at,
-            "last_used_at": key.last_used_at,
+            "created_at": _as_utc(key.created_at),
+            "last_used_at": _as_utc(key.last_used_at),
             "is_revoked": key.revoked_at is not None,
-            "expires_at": key.expires_at,
+            "expires_at": _as_utc(key.expires_at),
             "rotation_required": key.rotation_required,
             "owner": owner_of(key),
         }
