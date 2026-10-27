@@ -29,9 +29,10 @@ class FakeResult:
 class FakeSession:
     """session.exec() pops a queued value and wraps it result-style."""
 
-    def __init__(self, first_values, commit_error=None):
+    def __init__(self, first_values, commit_error=None, org=None):
         self._first_values = list(first_values)
         self._commit_error = commit_error
+        self._org = org
         self.added = []
         self.commits = 0
         self.rollbacks = 0
@@ -44,6 +45,10 @@ class FakeSession:
         return FakeResult(self._first_values.pop(0))
 
     exec = execute
+
+    def get(self, _model, _id):
+        # Sign-in reads the user's organisation for its name (#518).
+        return self._org
 
     def add(self, obj):
         self.added.append(obj)
@@ -114,6 +119,7 @@ class TestSignup:
             })
         assert response.status_code == 200
         assert response.json()["access_token"] == "tok"
+        assert response.json()["user"]["org_name"] == "Acme"
         fake_hash.assert_called_once_with("correct horse battery staple")
 
     def test_signup_duplicate_email_rejected(self, client):
@@ -181,13 +187,14 @@ class TestSignin:
             email="owner@example.com", password_hash="$2b$12$hash",
             is_active=True, id=7, organization_id=3, role="owner",
         )
-        session = FakeSession([user])
+        session = FakeSession([user], org=SimpleNamespace(display_name="Acme Corp", is_active=True))
         with patch("qwed_new.auth.routes.verify_password", return_value=True), patch(
             "qwed_new.auth.routes.create_access_token", return_value="tok"
         ):
             response = self._post(client, session)
         assert response.status_code == 200
         assert response.json()["access_token"] == "tok"
+        assert response.json()["user"]["org_name"] == "Acme Corp"
 
     def test_signin_wrong_password_401(self, client):
         user = SimpleNamespace(

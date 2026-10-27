@@ -67,6 +67,10 @@ class APIKeyResponse(BaseModel):
     key: str  # Only shown once on creation
     created_at: datetime
 
+class APIKeyOwner(BaseModel):
+    id: str
+    email: str
+
 class APIKeyListItem(BaseModel):
     id: str
     name: str
@@ -74,3 +78,6 @@ class APIKeyListItem(BaseModel):
     created_at: datetime
     last_used_at: Optional[datetime]
     is_revoked: bool
+    expires_at: datetime | None  # null: the key does not expire (#504)
+    rotation_required: bool
+    owner: APIKeyOwner | None  # null: no user, or not one of the key's organisation
