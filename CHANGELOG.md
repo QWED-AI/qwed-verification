@@ -22,6 +22,22 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     or one in another organisation is 404. A viewer cannot rotate.
   - Agent token reissue (`POST /agents/{agent_id}/token/reissue`) still
     takes an API key only.
+- **The API key list returns expiry, the rotation flag and the owner
+  (#504).** `ApiKey` stores all three, but `GET /auth/api-keys` returned
+  none, so a client could not show that a key expires, must be rotated, or
+  belongs to someone else.
+  - Each item adds `expires_at` (null when the key does not expire),
+    `rotation_required`, and `owner`: the owning user's `id` and `email`, or
+    null for a key with no user. A key whose user is not in the key's
+    organisation also has a null owner, so no other organisation's user is
+    shown.
+  - Who sees which keys is unchanged (#478): owners and admins see every key
+    in their organisation, members and viewers only their own. The owners
+    are read in one query, not one per key.
+- **Sign-up, sign-in and `/auth/me` return the organisation's name (#518).**
+  The user object adds `org_name`, the organisation's display name (null if
+  it cannot be read), beside `org_id`, so a client can show the name and not
+  "Organisation 1".
 
 ### Fixed
 

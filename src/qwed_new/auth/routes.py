@@ -43,6 +43,18 @@ async def _burn_one_bcrypt(password: str) -> None:
         )
     await asyncio.to_thread(verify_password, password, _dummy_password_hash)
 
+
+def _user_body(user: User, org: Organization | None) -> dict:
+    """The user object of sign-up, sign-in and /auth/me. ``org_name`` is the
+    organisation's display name (#518), or null when it cannot be read."""
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "org_id": str(user.organization_id),
+        "org_name": org.display_name if org is not None else None,
+        "role": user.role,
+    }
+
 @router.post(
     "/signup",
     response_model=TokenResponse,
@@ -119,16 +131,11 @@ async def signup(
     
     # Generate JWT token
     access_token = create_access_token(data={"sub": str(user.id), "org_id": str(org.id)})
-    
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "user": {
-            "id": str(user.id),
-            "email": user.email,
-            "org_id": str(user.organization_id),
-            "role": user.role
-        }
+        "user": _user_body(user, org),
     }
 
 @router.post(
@@ -167,16 +174,11 @@ async def signin(
     
     # Generate JWT token
     access_token = create_access_token(data={"sub": str(user.id), "org_id": str(user.organization_id)})
-    
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "user": {
-            "id": str(user.id),
-            "email": user.email,
-            "org_id": str(user.organization_id),
-            "role": user.role
-        }
+        "user": _user_body(user, session.get(Organization, user.organization_id)),
     }
 
 def get_current_user_token(authorization: Optional[str] = Header(None)) -> dict:
@@ -225,6 +227,7 @@ def require_user_role(allowed: frozenset):
 # Built once, at import (Ruff B008).
 _READER = Depends(require_user_role(READ_ROLES))
 _WRITER = Depends(require_user_role(WRITE_ROLES))
+_SESSION = Depends(get_session)
 _KEY_NOT_FOUND = "API key not found"
 # OpenAPI docs for what a role-checked route can refuse.
 ROLE_REFUSED = {403: {"description": "User or organisation inactive, or role not allowed"}}
@@ -233,14 +236,12 @@ ROLE_REFUSED = {403: {"description": "User or organisation inactive, or role not
 _MAX_KEY_ID = 2**63 - 1
 
 @router.get("/me")
-async def get_me(current_user: User = Depends(get_current_user)):
-    """Get current user info."""
-    return {
-        "id": str(current_user.id),
-        "email": current_user.email,
-        "org_id": str(current_user.organization_id),
-        "role": current_user.role
-    }
+async def get_me(
+    current_user: User = Depends(get_current_user),
+    session: Session = _SESSION,
+):
+    """Get current user info, with the organisation's name (#518)."""
+    return _user_body(current_user, session.get(Organization, current_user.organization_id))
 
 @router.post("/api-keys", response_model=APIKeyResponse, responses=ROLE_REFUSED)
 async def create_api_key_endpoint(
@@ -279,7 +280,10 @@ async def list_api_keys(
     """List active API keys (#478).
 
     Admins and owners see every key in their organisation; members and
-    viewers see only their own.
+    viewers see only their own. Each key carries its expiry, the rotation
+    flag and its owner's id and email (#504). The owner is null for a key
+    with no user, or whose user is not in the key's organisation, so no
+    other organisation's user is ever shown.
     """
     statement = select(ApiKey).where(
         ApiKey.organization_id == current_user.organization_id,
@@ -290,7 +294,19 @@ async def list_api_keys(
     statement = statement.order_by(ApiKey.created_at.desc())
 
     keys = session.exec(statement).all()
-    
+    # The owners in one query, not one per key.
+    owner_ids = {key.user_id for key in keys if key.user_id is not None}
+    owners = {
+        user.id: user
+        for user in session.exec(select(User).where(User.id.in_(owner_ids))).all()
+    } if owner_ids else {}
+
+    def owner_of(key: ApiKey) -> dict | None:
+        user = owners.get(key.user_id)
+        if user is None or user.organization_id != key.organization_id:
+            return None
+        return {"id": str(user.id), "email": user.email}
+
     return [
         {
             "id": str(key.id),
@@ -298,7 +314,10 @@ async def list_api_keys(
             "key_preview": key.key_preview,
             "created_at": key.created_at,
             "last_used_at": key.last_used_at,
-            "is_revoked": key.revoked_at is not None
+            "is_revoked": key.revoked_at is not None,
+            "expires_at": key.expires_at,
+            "rotation_required": key.rotation_required,
+            "owner": owner_of(key),
         }
         for key in keys
     ]
