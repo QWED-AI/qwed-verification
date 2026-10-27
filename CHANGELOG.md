@@ -5,6 +5,24 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ## [Unreleased]
 
+### Added
+
+- **Key rotation and the threat summary accept a signed-in session (#505,
+  #506).** `POST /admin/keys/rotate` and
+  `GET /admin/security/threats/{org_id}` took an `x-api-key` only, so a
+  dashboard that signs in with a session could not offer either.
+  - Both also accept `Authorization: Bearer <jwt>`, with the same session
+    checks as the compliance routes (#485): an active user in an active
+    organisation, with an allowed role. `x-api-key` works as before and is
+    used when both are sent; with neither, the request is 401.
+  - The rules are unchanged. The threat summary is for an owner or admin of
+    their own organisation. A member, admin or owner may rotate their own
+    key; an owner or admin may rotate another user's key in their
+    organisation, never one owned by a higher-privileged user; a revoked key
+    or one in another organisation is 404. A viewer cannot rotate.
+  - Agent token reissue (`POST /agents/{agent_id}/token/reissue`) still
+    takes an API key only.
+
 ## [8.0.0] - 2026-10-26
 
 A major release: verdicts can now be checked by whoever receives them, and
