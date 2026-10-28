@@ -78,8 +78,7 @@ def _owner():
 def _set(engine, row_id, **fields):
     with Session(engine) as session:
         row = session.get(VerificationLog, row_id)
-        for name, value in fields.items():
-            setattr(row, name, value)
+        row.sqlmodel_update(fields)
         session.add(row)
         session.commit()
 

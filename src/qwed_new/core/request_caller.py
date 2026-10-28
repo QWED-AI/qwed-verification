@@ -22,7 +22,9 @@ from contextvars import ContextVar
 from typing import Any
 
 _api_key_id: ContextVar[int | None] = ContextVar("qwed_request_api_key_id", default=None)
-_request_started: ContextVar[float | None] = ContextVar("qwed_request_started", default=None)
+# perf_counter_ns: an integer, high-resolution clock on every platform. On
+# Windows, monotonic() ticks in 15.6 ms steps, too coarse for latency.
+_request_started: ContextVar[int | None] = ContextVar("qwed_request_started", default=None)
 
 
 def set_request_api_key_id(api_key_id: int | None) -> None:
@@ -40,7 +42,7 @@ def request_latency_ms() -> int | None:
     started = _request_started.get()
     if started is None:
         return None
-    return max(0, round((time.perf_counter() - started) * 1000))
+    return max(0, round((time.perf_counter_ns() - started) / 1_000_000))
 
 
 class RequestTimingMiddleware:
@@ -57,7 +59,7 @@ class RequestTimingMiddleware:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
-        token = _request_started.set(time.perf_counter())
+        token = _request_started.set(time.perf_counter_ns())
         try:
             await self.app(scope, receive, send)
         finally:
