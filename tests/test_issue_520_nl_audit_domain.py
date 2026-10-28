@@ -20,6 +20,7 @@ from sqlmodel import Session, select
 
 from qwed_new.api import main as api_main
 from qwed_new.api.batch_audit import BATCH_AUDIT_DOMAIN
+from qwed_new.core import audit_logger as audit_module
 from qwed_new.core.diagnostics import DiagnosticResult
 from qwed_new.core.models import VerificationLog
 from qwed_new.core.tenant_context import TenantContext
@@ -73,6 +74,28 @@ def test_a_batch_natural_language_item_stores_the_same_domain(client, isolated_a
     domains = {json.loads(r.result)["batch_item_type"]: r.domain for r in _rows(isolated_audit_chain)}
     # Natural language no longer shares MATH with a maths item.
     assert domains == {"natural_language": "NATURAL_LANGUAGE", "math": "MATH"}
+
+
+def test_the_new_domain_is_signed_and_chained(client, isolated_audit_chain):
+    # The rows verify with their new domain, and rewriting it breaks the
+    # chain: why rows written before this change keep MATH.
+    client.post("/verify/batch", json={"items": [
+        {"query": "what is 2+2", "type": "natural_language"},
+        {"query": "2+2=4", "type": "math"},
+    ]})
+    logger = audit_module.get_audit_logger()
+    assert logger.verify_audit_trail(ORG_ID)["valid"] is True
+
+    nl_row = next(r for r in _rows(isolated_audit_chain) if r.domain == "NATURAL_LANGUAGE")
+    with Session(isolated_audit_chain) as session:
+        stored = session.get(VerificationLog, nl_row.id)
+        stored.domain = "MATH"
+        session.add(stored)
+        session.commit()
+
+    trail = logger.verify_audit_trail(ORG_ID)
+    assert trail["valid"] is False
+    assert nl_row.id in trail["failed_entries"]
 
 
 def test_verify_math_still_stores_math(client, isolated_audit_chain):
