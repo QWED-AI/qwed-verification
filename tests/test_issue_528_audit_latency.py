@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, text, update
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from qwed_new.api import main as api_main
@@ -76,11 +76,10 @@ def _owner():
 
 
 def _set(engine, row_id, **fields):
-    with Session(engine) as session:
-        row = session.get(VerificationLog, row_id)
-        row.sqlmodel_update(fields)
-        session.add(row)
-        session.commit()
+    # A plain SQL UPDATE, as tampering would be; works on every SQLModel the
+    # package allows (sqlmodel_update needs 0.0.16).
+    with engine.begin() as connection:
+        connection.execute(update(VerificationLog).where(VerificationLog.id == row_id).values(**fields))
 
 
 def _trail_valid(org_id=ORG_ID):
