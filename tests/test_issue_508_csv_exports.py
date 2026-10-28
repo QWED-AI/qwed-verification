@@ -15,6 +15,7 @@ version and the entry hash, with nothing cut, and both take a period.
 """
 
 import csv
+import inspect
 import io
 import json
 from datetime import datetime, timedelta, timezone
@@ -300,6 +301,12 @@ def test_an_export_says_when_it_did_not(env, monkeypatch, export):
 
 def test_both_exports_share_one_cap():
     assert audit_routes._EXPORT_MAX_ROWS == compliance_routes._EXPORT_MAX_ROWS == 1000
+
+
+def test_the_audit_export_runs_off_the_event_loop():
+    # A plain def, which FastAPI runs in a worker thread; the compliance
+    # export hands its work to asyncio.to_thread.
+    assert not inspect.iscoroutinefunction(audit_routes.export_logs)
 
 
 def test_a_browser_on_another_origin_can_read_the_truncation_flag():

@@ -187,13 +187,16 @@ _EXPORT_MAX_ROWS = EXPORT_MAX_ROWS
     "/export",
     responses={**ROLE_REFUSED, 400: {"description": "start is after end"}},
 )
-async def export_logs(
+def export_logs(
     start: datetime | None = _EXPORT_START,
     end: datetime | None = _EXPORT_END,
     current_user: User = _ADMIN,
     session: Session = Depends(get_session)
 ):
     """Export the organisation's audit log as CSV, newest first (#508).
+
+    A plain ``def``, so FastAPI runs the query and the CSV building in its
+    worker threads, not on the event loop.
 
     The columns are those of ``/admin/compliance/export/csv``
     (``AUDIT_CSV_HEADER`` in core/audit_export.py): the stored verdict and
