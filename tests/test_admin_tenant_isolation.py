@@ -68,7 +68,7 @@ def env(tmp_path, monkeypatch):
     _, key_revoked = key(org_a, member_a, is_active=False, revoked_at=datetime.now(timezone.utc))
     log_a, log_b = log(org_a), log(org_b)
 
-    monkeypatch.setattr(main.compliance_exporter, "export_audit_trail_csv", lambda org_id: "col\n1\n")
+    monkeypatch.setattr(main.compliance_exporter, "export_audit_trail_csv", lambda org_id, start=None, end=None: "col\n1\n")
     monkeypatch.setattr(main.compliance_exporter, "generate_soc2_report", lambda org_id: {"org": org_id})
     monkeypatch.setattr(main.threat_detector, "get_threat_summary", lambda org_id: {"org": org_id})
 

@@ -59,6 +59,32 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     403. No other organisation's user is ever returned. Inviting users and
     changing roles are not part of this.
 
+### Changed
+
+- **The CSV exports carry the stored verdict and admission, and take a
+  period (#508).** `GET /admin/compliance/export/csv` was fixed to the last
+  30 days, cut the query to 100 characters and the signature to 16, and had
+  no verdict, admission or result. `GET /audit/export` wrote `is_verified`
+  as "verified" or "blocked" under `Status`, with no admission or caller.
+  - Both now write the same columns: `ID`, `Timestamp`, `User ID`,
+    `API Key ID`, `Verifier Version`, `Domain`, `Query`, `Verdict`,
+    `Admission`, `Is Verified (legacy)`, `Result`, `Entry Hash`,
+    `HMAC Signature` and `Chain Status`. `Verdict` is the stored verdict
+    and `Admission` the stored admission, as `/audit/logs` returns them; a
+    value that was not recorded is an empty cell. Nothing is cut. A client
+    that read the old columns by position or name must update.
+  - A cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return
+    gets a leading apostrophe, so a spreadsheet does not run it as a
+    formula. The query and the result are caller-controlled.
+  - Both take `start` and `end` (a time without a zone is UTC; `start`
+    after `end` is 400), newest first. The compliance export keeps its
+    default of the 30 days before `end`, which defaults to now.
+    `/audit/export` keeps its cap of the newest 1,000 rows and sets
+    `X-Export-Truncated: true` when more matched.
+  - `/admin/compliance/export/csv` moves from `api/main.py` to
+    `api/compliance_routes.py`; its path, its checks and its
+    `organization_id` parameter are unchanged.
+
 ### Fixed
 
 - **The threat summary no longer fails with the pinned SQLModel (#506).**

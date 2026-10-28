@@ -25,6 +25,7 @@ from qwed_new.core.models import (
     User,
     ApiKey
 )
+from qwed_new.core.audit_export import as_utc, audit_csv
 from qwed_new.core.audit_logger import get_audit_logger
 from qwed_new.core.database import engine
 from qwed_new.core.diagnostics import compute_proof_ref
@@ -46,53 +47,26 @@ class ComplianceExporter:
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None
     ) -> str:
+        """Export the audit trail of a period as CSV, newest first (#508).
+
+        Without ``end_date`` the period ends now; without ``start_date`` it
+        starts 30 days before its end. A time without a zone is read as UTC.
+        The columns are ``AUDIT_CSV_HEADER`` (core/audit_export.py), the same
+        as ``GET /audit/export``: the stored verdict and admission, the
+        caller and the entry hash, with nothing cut.
         """
-        Export audit trail as CSV for analysis.
-        
-        Returns:
-            CSV string
-        """
-        if not start_date:
-            start_date = datetime.now(timezone.utc) - timedelta(days=30)
-        if not end_date:
-            end_date = datetime.now(timezone.utc)
-        
+        end_date = as_utc(end_date) or datetime.now(timezone.utc)
+        start_date = as_utc(start_date) or end_date - timedelta(days=30)
+
         with Session(engine) as session:
             query = select(VerificationLog).where(
                 VerificationLog.organization_id == organization_id,
                 VerificationLog.timestamp >= start_date,
                 VerificationLog.timestamp <= end_date
-            ).order_by(VerificationLog.timestamp.desc())
-            
-            logs = session.exec(query).all()
-            
-            # Generate CSV
-            output = io.StringIO()
-            writer = csv.writer(output)
-            
-            # Header
-            writer.writerow([
-                'ID', 'Timestamp', 'User ID', 'Query', 'Domain',
-                'Is Verified', 'HMAC Signature', 'Chain Status'
-            ])
-            
-            # Data rows
-            for log in logs:
-                writer.writerow([
-                    log.id,
-                    log.timestamp.isoformat(),
-                    log.user_id or 'N/A',
-                    log.query[:100]+ '...' if len(log.query) > 100 else log.query,
-                    log.domain,
-                    'Yes' if log.is_verified else 'No',
-                    log.hmac_signature[:16] + '...' if log.hmac_signature else 'N/A',
-                    # Presence of a hash only: the export does not re-check
-                    # integrity. Use /admin/compliance/verify for that.
-                    'Chained' if log.entry_hash else 'Legacy'
-                ])
-            
-            return output.getvalue()
-    
+            ).order_by(VerificationLog.timestamp.desc(), VerificationLog.id.desc())
+
+            return audit_csv(session.exec(query).all())
+
     def export_security_events_csv(
         self,
         organization_id: int,
