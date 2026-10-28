@@ -1,12 +1,13 @@
-"""Authentication and role checks for the /admin/* routes.
+"""Authentication and role checks for the /admin/* routes and /auth/users.
 
 Moved out of api/main.py, which is at the size limit of the deterministic
 security scan. ``require_admin_role`` authenticates with an API key; with
 ``allow_session=True`` it also accepts a signed-in user's JWT, so the
 dashboard can call a route without holding an API key in the browser: the
 compliance routes (#485), the security events list (#486), the threat summary
-(#506) and key rotation (#505). Agent token reissue stays API-key only. Both
-paths apply the same role allowlist and active checks.
+(#506), key rotation (#505) and the organisation's user list (#507). Agent
+token reissue stays API-key only. Both paths apply the same role allowlist and
+active checks.
 """
 
 import asyncio
