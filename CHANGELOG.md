@@ -114,6 +114,26 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ### Fixed
 
+- **The audit log stores and returns real latency (#528).** `/audit/logs`
+  returned `latency_ms` as a fixed 0 for every row, and nothing stored it,
+  so a client could not tell a real 0 from "not measured".
+  - `RequestTimingMiddleware` (`core/request_caller.py`) records when each
+    HTTP request starts. The audit logger stores the whole milliseconds from
+    then to the row's append, measured before it waits for the append lock,
+    as the new nullable `VerificationLog.latency_ms`. Every writer gets it:
+    the `/verify/*` routes, batch items (each from the batch request's
+    start), agent verification and the Verification Context routes.
+  - `/audit/logs` and `/audit/logs/{log_id}` return the stored value, and
+    both CSV exports have a `Latency (ms)` column. It is null (an empty
+    cell) on rows written before this change and on rows written outside a
+    request.
+  - `latency_ms` is covered by the entry hash. Rows hashed before it was
+    covered still verify while it is null; setting it on such a row, or
+    changing or clearing it on a newer row, fails verification. As with
+    #484 and #307, an older release cannot verify a row hashed this way:
+    upgrade every process together.
+  - An existing database gets the column at startup (`add_missing_columns`).
+
 - **Natural-language audit rows are stored with their own domain (#520).**
   `/verify/natural_language`, `/agents/{agent_id}/verify` and the
   natural-language items of `/verify/batch` wrote `domain` "MATH", while

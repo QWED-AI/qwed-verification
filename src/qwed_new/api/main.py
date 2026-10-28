@@ -57,6 +57,7 @@ from qwed_new.api.compliance_routes import router as compliance_router
 from qwed_new.api.security_routes import router as security_router
 from qwed_new.api.org_users_routes import router as org_users_router
 from qwed_new.api.agent_admin_routes import router as agent_admin_router
+from qwed_new.core.request_caller import RequestTimingMiddleware
 from qwed_new.api.attestation_routes import router as attestation_router
 
 TenantDependency = Annotated[TenantContext, Depends(get_current_tenant)]
@@ -280,6 +281,8 @@ app.add_middleware(
     limits=_BODY_LIMITS,
     concurrency_paths={"/verify/stats", "/verify/image"},
 )
+
+app.add_middleware(RequestTimingMiddleware)  # #528: audit latency_ms
 
 app.add_middleware(
     CORSMiddleware,

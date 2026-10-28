@@ -29,7 +29,7 @@ _VERDICTS = frozenset(v.value for v in Verdict)
 AUDIT_CSV_HEADER = (
     "ID", "Timestamp", "User ID", "API Key ID", "Verifier Version", "Domain",
     "Query", "Verdict", "Admission", "Is Verified (legacy)", "Result",
-    "Entry Hash", "HMAC Signature", "Chain Status",
+    "Latency (ms)", "Entry Hash", "HMAC Signature", "Chain Status",
 )
 
 # A cell that starts with one of these is read as a formula by spreadsheet
@@ -145,6 +145,7 @@ def audit_csv(logs: Iterable[VerificationLog]) -> str:
             log.admission,
             "Yes" if log.is_verified else "No",
             log.result,
+            log.latency_ms,
             log.entry_hash,
             log.hmac_signature,
             "Chained" if log.entry_hash else "Legacy",

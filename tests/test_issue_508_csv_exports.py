@@ -103,7 +103,7 @@ EXPORTS = [_compliance, _audit]
 
 @pytest.mark.parametrize("export", EXPORTS)
 def test_a_row_carries_the_stored_verdict_admission_and_caller(env, export):
-    row_log = env.log(admission="BLOCKED", api_key_id=7, verifier_version="8.0.0",
+    row_log = env.log(admission="BLOCKED", api_key_id=7, verifier_version="8.0.0", latency_ms=42,
                       user_id=env.owner.id, entry_hash="e" * 64, hmac_signature="h" * 64)
 
     (row,) = _rows(export(env))
@@ -122,6 +122,7 @@ def test_a_row_carries_the_stored_verdict_admission_and_caller(env, export):
         "Admission": "BLOCKED",
         "Is Verified (legacy)": "No",
         "Result": row_log.result,
+        "Latency (ms)": "42",  # #528
         "Entry Hash": "e" * 64,
         "HMAC Signature": "h" * 64,
         "Chain Status": "Chained",
@@ -134,7 +135,8 @@ def test_a_row_without_them_has_empty_cells_not_a_guess(env, export):
 
     (row,) = _rows(export(env))
 
-    for column in ("User ID", "API Key ID", "Verifier Version", "Verdict", "Admission", "Entry Hash", "HMAC Signature"):
+    for column in ("User ID", "API Key ID", "Verifier Version", "Verdict", "Admission", "Latency (ms)",
+                   "Entry Hash", "HMAC Signature"):
         assert row[column] == "", column
     assert row["Is Verified (legacy)"] == "Yes"
     assert row["Chain Status"] == "Legacy"
