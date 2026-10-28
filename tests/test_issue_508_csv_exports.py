@@ -24,7 +24,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
 
-from qwed_new.api import main
+from qwed_new.api import compliance_routes, main
 from qwed_new.auth import audit_routes
 from qwed_new.auth.security import create_access_token
 from qwed_new.core import compliance_exporter as exporter_module
@@ -78,7 +78,7 @@ def _rows(response):
     reader = csv.reader(io.StringIO(response.text))
     header = next(reader)
     assert tuple(header) == AUDIT_CSV_HEADER
-    return [dict(zip(header, row)) for row in reader]
+    return [dict(zip(header, row, strict=True)) for row in reader]
 
 
 def _compliance(env, query=""):
@@ -151,7 +151,7 @@ def test_nothing_is_cut(env, export):
 
 
 @pytest.mark.parametrize("export", EXPORTS)
-@pytest.mark.parametrize("text", ["=HYPERLINK(\"http://x\")", "+1", "-2+3", "@SUM(A1)", "\tx"])
+@pytest.mark.parametrize("text", ["=HYPERLINK(\"http://x\")", "+1", "-2+3", "@SUM(A1)", "\tx", "\n=1+1", "\r=1+1"])
 def test_text_a_spreadsheet_would_run_gets_a_leading_apostrophe(env, export, text):
     env.log(query=text)
 
@@ -252,26 +252,60 @@ def test_start_after_end_is_400(env, export):
     assert response.status_code == 400
 
 
-# ---------------------------------------------------------------- the audit export's cap
+def test_a_future_start_without_an_end_is_400_on_the_compliance_export(env):
+    # The end defaults to now, so the period is checked after the defaults
+    # and a future start is out of order, not an empty file.
+    env.log()
 
-def test_the_audit_export_says_when_it_cut_rows(env, monkeypatch):
+    response = _compliance(env, f"&start={_iso(NOW + timedelta(days=1))}")
+
+    assert response.status_code == 400
+
+
+def test_a_future_start_without_an_end_is_an_open_period_on_the_audit_export(env):
+    # /audit/export has no default end, so the period is open and simply empty.
+    env.log()
+
+    assert _rows(_audit(env, f"?start={_iso(NOW + timedelta(days=1))}")) == []
+
+
+# ---------------------------------------------------------------- the row cap
+
+@pytest.mark.parametrize("export", EXPORTS)
+def test_an_export_says_when_it_cut_rows(env, monkeypatch, export):
     monkeypatch.setattr(audit_routes, "_EXPORT_MAX_ROWS", 2)
+    monkeypatch.setattr(compliance_routes, "_EXPORT_MAX_ROWS", 2)
     for hours in (3, 2, 1):
         env.log(when=NOW - timedelta(hours=hours), query=f"{hours}h")
 
-    response = _audit(env)
+    response = export(env)
 
     assert response.headers["X-Export-Truncated"] == "true"
+    # The newest rows are kept.
     assert [row["Query"] for row in _rows(response)] == ["1h", "2h"]
 
 
-def test_the_audit_export_says_when_it_did_not(env):
+@pytest.mark.parametrize("export", EXPORTS)
+def test_an_export_says_when_it_did_not(env, monkeypatch, export):
+    monkeypatch.setattr(audit_routes, "_EXPORT_MAX_ROWS", 2)
+    monkeypatch.setattr(compliance_routes, "_EXPORT_MAX_ROWS", 2)
+    env.log(when=NOW - timedelta(hours=1))
     env.log()
 
-    response = _audit(env)
+    response = export(env)
 
     assert response.headers["X-Export-Truncated"] == "false"
-    assert len(_rows(response)) == 1
+    assert len(_rows(response)) == 2
+
+
+def test_both_exports_share_one_cap():
+    assert audit_routes._EXPORT_MAX_ROWS == compliance_routes._EXPORT_MAX_ROWS == 1000
+
+
+def test_a_browser_on_another_origin_can_read_the_truncation_flag():
+    cors = next(m for m in main.app.user_middleware if m.cls.__name__ == "CORSMiddleware")
+
+    assert "X-Export-Truncated" in cors.kwargs["expose_headers"]
 
 
 # ---------------------------------------------------------------- the writer itself

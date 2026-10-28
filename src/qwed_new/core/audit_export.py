@@ -14,6 +14,8 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlmodel import Session, select
+
 from qwed_new.core.models import VerificationLog
 from qwed_new.core.verification_context import Verdict
 
@@ -32,7 +34,16 @@ AUDIT_CSV_HEADER = (
 
 # A cell that starts with one of these is read as a formula by spreadsheet
 # software (CSV injection), and the query and result are caller-controlled.
-_FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+# A leading line feed is included too: some importers drop it and then read
+# the rest as a formula.
+_FORMULA_START = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+# At most this many rows per export. A stored result can be up to 64,000
+# characters (_MAX_LOG_RESULT_CHARS in api/main.py) and is written in full, so
+# an uncapped period could hold the whole trail in memory twice. The routes
+# set X-Export-Truncated when more rows matched.
+EXPORT_MAX_ROWS = 1000
+TRUNCATED_HEADER = "X-Export-Truncated"
 
 
 def stored_verdict(result: str) -> str | None:
@@ -77,6 +88,28 @@ def as_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def newest_logs(
+    session: Session,
+    organization_id: int,
+    start: datetime | None,
+    end: datetime | None,
+    max_rows: int = EXPORT_MAX_ROWS,
+) -> tuple[list[VerificationLog], bool]:
+    """The organisation's rows in the period, newest first by time and then
+    id, at most ``max_rows`` of them, and whether more matched. An open side
+    (None) of the period is not bounded."""
+    statement = select(VerificationLog).where(VerificationLog.organization_id == organization_id)
+    if start is not None:
+        statement = statement.where(VerificationLog.timestamp >= start)
+    if end is not None:
+        statement = statement.where(VerificationLog.timestamp <= end)
+    statement = statement.order_by(
+        VerificationLog.timestamp.desc(), VerificationLog.id.desc()
+    ).limit(max_rows + 1)
+    logs = list(session.exec(statement).all())
+    return logs[:max_rows], len(logs) > max_rows
 
 
 def _cell(value: object) -> str:

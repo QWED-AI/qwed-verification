@@ -73,14 +73,19 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     and `Admission` the stored admission, as `/audit/logs` returns them; a
     value that was not recorded is an empty cell. Nothing is cut. A client
     that read the old columns by position or name must update.
-  - A cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return
-    gets a leading apostrophe, so a spreadsheet does not run it as a
-    formula. The query and the result are caller-controlled.
+  - A cell that starts with `=`, `+`, `-`, `@`, a tab, a carriage return
+    or a line feed gets a leading apostrophe, so a spreadsheet does not run
+    it as a formula. The query and the result are caller-controlled.
   - Both take `start` and `end` (a time without a zone is UTC; `start`
     after `end` is 400), newest first. The compliance export keeps its
-    default of the 30 days before `end`, which defaults to now.
-    `/audit/export` keeps its cap of the newest 1,000 rows and sets
-    `X-Export-Truncated: true` when more matched.
+    default of the 30 days before `end`, which defaults to now, and checks
+    the period after those defaults, so a future `start` with no `end` is
+    400.
+  - Both export at most the newest 1,000 rows (one shared cap), since the
+    query and result are now written in full, and set
+    `X-Export-Truncated: true` when more matched. The compliance export had
+    no cap before. CORS exposes `X-Export-Truncated`, so a browser client
+    on another allowed origin can read it.
   - `/admin/compliance/export/csv` moves from `api/main.py` to
     `api/compliance_routes.py`; its path, its checks and its
     `organization_id` parameter are unchanged.

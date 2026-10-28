@@ -286,6 +286,7 @@ app.add_middleware(
     allow_credentials=CORS_ORIGINS != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Export-Truncated"],  # #508: a cut CSV export
 )
 
 

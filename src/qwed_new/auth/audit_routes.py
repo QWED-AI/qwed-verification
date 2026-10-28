@@ -13,7 +13,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, select
 
 from qwed_new.core.database import get_session
-from qwed_new.core.audit_export import as_utc, audit_csv, stored_verdict
+from qwed_new.core.audit_export import (
+    EXPORT_MAX_ROWS,
+    TRUNCATED_HEADER,
+    as_utc,
+    audit_csv,
+    newest_logs,
+    stored_verdict,
+)
 from qwed_new.core.audit_logger import SecurityError, get_audit_logger
 from qwed_new.core.models import VerificationLog, User
 from .roles import ADMIN_ROLES, READ_ROLES
@@ -169,10 +176,11 @@ async def get_log_detail(
         **_caller(log),
     }
 
-# The export's period (#508), and its row cap.
+# The export's period (#508). The row cap is EXPORT_MAX_ROWS, shared with
+# /admin/compliance/export/csv, and is read at call time so a test can lower it.
 _EXPORT_START = Query(None, description="Only entries at or after this time (UTC if no zone; other offsets are converted)")
 _EXPORT_END = Query(None, description="Only entries at or before this time (UTC if no zone; other offsets are converted)")
-_EXPORT_MAX_ROWS = 1000
+_EXPORT_MAX_ROWS = EXPORT_MAX_ROWS
 
 
 @router.get(
@@ -199,26 +207,14 @@ async def export_logs(
     start, end = as_utc(start), as_utc(end)
     if start is not None and end is not None and start > end:
         raise HTTPException(status_code=400, detail="start must not be after end")
-    statement = select(VerificationLog).where(
-        VerificationLog.organization_id == current_user.organization_id
-    )
-    if start is not None:
-        statement = statement.where(VerificationLog.timestamp >= start)
-    if end is not None:
-        statement = statement.where(VerificationLog.timestamp <= end)
-    statement = statement.order_by(
-        VerificationLog.timestamp.desc(), VerificationLog.id.desc()
-    ).limit(_EXPORT_MAX_ROWS + 1)
-
-    logs = session.exec(statement).all()
-    truncated = len(logs) > _EXPORT_MAX_ROWS
+    logs, truncated = newest_logs(session, current_user.organization_id, start, end, _EXPORT_MAX_ROWS)
 
     return StreamingResponse(
-        iter([audit_csv(logs[:_EXPORT_MAX_ROWS])]),
+        iter([audit_csv(logs)]),
         media_type="text/csv",
         headers={
             "Content-Disposition": "attachment; filename=qwed_audit_logs.csv",
-            "X-Export-Truncated": "true" if truncated else "false",
+            TRUNCATED_HEADER: "true" if truncated else "false",
         },
     )
 

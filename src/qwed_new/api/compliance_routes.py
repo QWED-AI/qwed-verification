@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from qwed_new.api.admin_auth import AdminContext, require_admin_role
+from qwed_new.core.audit_export import EXPORT_MAX_ROWS, TRUNCATED_HEADER
 from qwed_new.core.audit_export import as_utc as _as_utc
 from qwed_new.core.compliance_exporter import ComplianceExporter
 
@@ -26,6 +27,8 @@ _FOREIGN_ORG_DETAIL = "Cannot access another organization's data"
 _REQUIRE_ADMIN_OR_SESSION = Depends(require_admin_role(["owner", "admin"], allow_session=True))
 _START = Query(None, description="Check entries at or after this time (UTC if no zone; other offsets are converted)")
 _END = Query(None, description="Check entries at or before this time (UTC if no zone; other offsets are converted)")
+# The row cap shared with /audit/export, read at call time so a test can lower it.
+_EXPORT_MAX_ROWS = EXPORT_MAX_ROWS
 _EXPORT_START = Query(None, description="Export entries at or after this time; default 30 days before end")
 _EXPORT_END = Query(None, description="Export entries at or before this time; default now")
 
@@ -90,19 +93,26 @@ async def export_audit_csv(
     """Export the audit trail of a period as CSV, newest first (own organisation only).
 
     Without ``end`` the period ends now; without ``start`` it starts 30 days
-    before its end. The columns are those of ``GET /audit/export``
-    (``AUDIT_CSV_HEADER`` in core/audit_export.py): the stored verdict and
-    admission, the caller, the verifier version and the entry hash, with
-    nothing cut (#508).
+    before its end. The period is checked after those defaults, so a
+    ``start`` in the future with no ``end`` is 400, not an empty file. The
+    columns are those of ``GET /audit/export`` (``AUDIT_CSV_HEADER`` in
+    core/audit_export.py): the stored verdict and admission, the caller, the
+    verifier version and the entry hash, with nothing cut (#508). At most
+    the newest 1,000 rows: ``X-Export-Truncated`` is "true" when more matched.
     """
     if organization_id != ctx.organization_id:
         raise HTTPException(status_code=403, detail=_FOREIGN_ORG_DETAIL)
-    start, end = _as_utc(start), _as_utc(end)
+    start, end = compliance_exporter.export_period(start, end)
     _check_period(start, end)
-    # Off the event loop: the export reads every row of the period.
-    csv_data = await asyncio.to_thread(compliance_exporter.export_audit_trail_csv, organization_id, start, end)
+    # Off the event loop: the export reads up to the row cap from the database.
+    csv_data, truncated = await asyncio.to_thread(
+        compliance_exporter.export_audit_trail, organization_id, start, end, _EXPORT_MAX_ROWS
+    )
     return Response(
         content=csv_data,
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=qwed_audit_trail.csv"},
+        headers={
+            "Content-Disposition": "attachment; filename=qwed_audit_trail.csv",
+            TRUNCATED_HEADER: "true" if truncated else "false",
+        },
     )
