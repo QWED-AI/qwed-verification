@@ -56,6 +56,7 @@ from qwed_new.api.secret_scanning_routes import router as secret_scanning_router
 from qwed_new.api.compliance_routes import router as compliance_router
 from qwed_new.api.security_routes import router as security_router
 from qwed_new.api.org_users_routes import router as org_users_router
+from qwed_new.api.agent_admin_routes import router as agent_admin_router
 from qwed_new.api.attestation_routes import router as attestation_router
 
 TenantDependency = Annotated[TenantContext, Depends(get_current_tenant)]
@@ -301,6 +302,7 @@ app.include_router(secret_scanning_router)
 app.include_router(compliance_router)
 app.include_router(security_router)
 app.include_router(org_users_router)
+app.include_router(agent_admin_router)
 app.include_router(attestation_router)
 
 # Verified leak reports -> auto-revoke + owner notify (#368). Assigned here
@@ -1736,7 +1738,7 @@ async def get_tenant_logs(
 # ============================================================
 
 from qwed_new.core.agent_registry import agent_registry
-from qwed_new.core.agent_models import Agent, AgentActivity
+from qwed_new.core.agent_models import Agent
 from qwed_new.core.tool_approval import tool_approval
 import json
 
@@ -2008,46 +2010,6 @@ async def agent_tool_call(
         "result": result
     }
 
-@app.get("/agents/{agent_id}/activity")
-async def get_agent_activity(
-    agent_id: int,
-    limit: int = 20,
-    x_agent_token: str = Header(...),
-    session: Session = Depends(get_session)
-):
-    """
-    Get activity log for an agent.
-    Provides full audit trail.
-    """
-    # Authenticate agent
-    agent = agent_registry.authenticate_agent(session, x_agent_token)
-    if not agent or agent.id != agent_id:
-        raise HTTPException(status_code=401, detail="Invalid agent token")
-    
-    # Get activity
-    statement = select(AgentActivity).where(
-        AgentActivity.agent_id == agent_id
-    ).order_by(AgentActivity.timestamp.desc()).limit(limit)
-    
-    activities = session.execute(statement).scalars().all()
-    
-    return {
-        "agent_id": agent_id,
-        "agent_name": agent.name,
-        "total_activities": len(activities),
-        "current_cost_today": agent.current_cost_today,
-        "max_cost_per_day": agent.max_cost_per_day,
-        "activities": [
-            {
-                "type": act.activity_type,
-                "description": act.description,
-                "status": act.status,
-                "cost": act.cost,
-                "timestamp": act.timestamp.isoformat()
-            }
-            for act in activities
-        ]
-    }
 # Append to main.py - Consensus Verification Endpoint
 
 # ============================================================

@@ -1,13 +1,16 @@
-"""Authentication and role checks for the /admin/* routes and /auth/users.
+"""Authentication and role checks for the /admin/* routes, /auth/users and /agents.
 
 Moved out of api/main.py, which is at the size limit of the deterministic
 security scan. ``require_admin_role`` authenticates with an API key; with
 ``allow_session=True`` it also accepts a signed-in user's JWT, so the
 dashboard can call a route without holding an API key in the browser: the
 compliance routes (#485), the security events list (#486), the threat summary
-(#506), key rotation (#505) and the organisation's user list (#507). Agent
-token reissue stays API-key only. Both paths apply the same role allowlist and
-active checks.
+(#506), key rotation (#505), the organisation's user list (#507), and the
+agent list and an agent's activity (#527). Agent token reissue stays API-key
+only. Both paths apply the same role allowlist and active checks.
+``bearer_scheme`` is public so a route that runs the check itself (the
+agent activity route, which first tries the agent's own token) can declare
+the same OpenAPI security scheme.
 """
 
 import asyncio
@@ -29,12 +32,12 @@ _API_KEY = Depends(get_api_key)
 _API_KEY_HEADER = Security(api_key_header)
 # A security scheme, not a plain header, so OpenAPI lists the bearer token as
 # an alternative to the API key and generated clients can model it.
-_bearer_scheme = HTTPBearer(
+bearer_scheme = HTTPBearer(
     auto_error=False,
     scheme_name="SessionBearer",
     description="A signed-in user's JWT (owner or admin), as an alternative to x-api-key",
 )
-_BEARER = Security(_bearer_scheme)
+_BEARER = Security(bearer_scheme)
 _SESSION = Depends(get_session)
 
 
