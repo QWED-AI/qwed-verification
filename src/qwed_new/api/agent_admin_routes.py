@@ -13,6 +13,7 @@ Kept out of api/main.py, which is at the size limit of the deterministic
 security scan; the activity route moves here from it.
 """
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -39,6 +40,9 @@ _AGENT_TOKEN = Header(None, description="The agent's own token. When sent, it al
 _API_KEY = Security(api_key_header)
 _BEARER = Security(bearer_scheme)
 _LIMIT = Query(20, ge=1, le=200)
+# Largest id an SQL BIGINT holds, as for API key ids in auth/routes.py: a
+# larger id would overflow the lookup and fail with a server error, not 404.
+_MAX_AGENT_ID = 2**63 - 1
 
 
 class AgentSummary(BaseModel):
@@ -86,6 +90,24 @@ def list_agents(
     ]
 
 
+def _org_agent(session: Session, agent_id: int, organization_id: int) -> Agent | None:
+    """The agent with this id in this organisation, or None for any other id."""
+    if not 1 <= agent_id <= _MAX_AGENT_ID:
+        return None
+    agent = session.get(Agent, agent_id)
+    return agent if agent is not None and agent.organization_id == organization_id else None
+
+
+def _activities(session: Session, agent_id: int, limit: int) -> list[AgentActivity]:
+    """The agent's newest activities, newest first by time and then id."""
+    return list(session.exec(
+        select(AgentActivity)
+        .where(AgentActivity.agent_id == agent_id)
+        .order_by(AgentActivity.timestamp.desc(), AgentActivity.id.desc())
+        .limit(limit)
+    ).all())
+
+
 @router.get(
     "/{agent_id}/activity",
     responses={
@@ -108,26 +130,23 @@ async def get_agent_activity(
     token must be the active agent's own, or the request is 401, whatever
     else is sent. Without it, an owner or admin (API key or signed-in
     session) reads the activity of an agent of their organisation; another
-    organisation's agent, or one that does not exist, is 404.
+    organisation's agent, one that does not exist, or an id out of range,
+    is 404. The database work runs in a worker thread, one step at a time on
+    the request's session, so it does not block the event loop.
     """
     if x_agent_token is not None:
-        agent = agent_registry.authenticate_agent(session, x_agent_token)
+        agent = await asyncio.to_thread(agent_registry.authenticate_agent, session, x_agent_token)
         if not agent or agent.id != agent_id:
             raise HTTPException(status_code=401, detail="Invalid agent token")
     else:
         ctx = await _admin_or_session(x_api_key=x_api_key, bearer=bearer, session=session)
-        agent = session.get(Agent, agent_id)
-        if agent is None or agent.organization_id != ctx.organization_id:
+        agent = await asyncio.to_thread(_org_agent, session, agent_id, ctx.organization_id)
+        if agent is None:
             # 404, not 403: do not confirm that an agent id in another
             # organisation exists.
             raise HTTPException(status_code=404, detail="Agent not found")
 
-    activities = session.exec(
-        select(AgentActivity)
-        .where(AgentActivity.agent_id == agent_id)
-        .order_by(AgentActivity.timestamp.desc(), AgentActivity.id.desc())
-        .limit(limit)
-    ).all()
+    activities = await asyncio.to_thread(_activities, session, agent_id, limit)
 
     return {
         "agent_id": agent_id,

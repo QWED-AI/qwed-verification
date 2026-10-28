@@ -75,7 +75,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     token is 401 even beside an owner's session.
   - The activity route's `limit` is now 1 to 200 (default 20; it was
     unbounded), activity comes newest first with an id tie-break, and its
-    timestamps carry their UTC offset.
+    timestamps carry their UTC offset. An agent id too large for the
+    database is 404 on the owner path, not a server error, and the route's
+    database work runs in a worker thread, off the event loop.
   - The activity route moves from `api/main.py` to
     `api/agent_admin_routes.py`.
 

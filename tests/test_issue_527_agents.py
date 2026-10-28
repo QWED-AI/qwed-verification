@@ -237,6 +237,33 @@ def test_openapi_lists_both_credentials_for_both_routes(env):
 
 
 def test_the_activity_route_moved_out_of_main():
-    routes = {(r.path, tuple(sorted(r.methods))) for r in main.app.routes if hasattr(r, "methods")}
-    assert ("/agents/{agent_id}/activity", ("GET",)) in routes
-    assert agent_admin_routes.get_agent_activity.__module__ == "qwed_new.api.agent_admin_routes"
+    # Read from the router, not main.app.routes: newer FastAPI (0.162 on CI)
+    # keeps an included router as one _IncludedRouter entry there.
+    routes = {(r.path, tuple(sorted(r.methods))) for r in agent_admin_routes.router.routes}
+    assert routes == {("/agents", ("GET",)), ("/agents/{agent_id}/activity", ("GET",))}
+    assert not hasattr(main, "get_agent_activity")
+
+
+@pytest.mark.parametrize("agent_id", [2**63, 10**30])
+def test_an_id_out_of_range_is_404_not_a_server_error(env, agent_id):
+    # A larger id would overflow the database lookup (SQLite OverflowError).
+    assert _activity(env, agent_id, _bearer(env.users["owner"])).status_code == 404
+    # The agent path compares ids without a lookup, so it stays 401.
+    assert _activity(env, agent_id, {"x-agent-token": env.bot_token}).status_code == 401
+
+
+def test_the_activity_route_runs_its_database_work_off_the_event_loop(env, monkeypatch):
+    threads = []
+    real = agent_admin_routes.asyncio.to_thread
+
+    async def spy(func, *args, **kwargs):
+        threads.append(func.__name__)
+        return await real(func, *args, **kwargs)
+
+    monkeypatch.setattr(agent_admin_routes.asyncio, "to_thread", spy)
+    _activity(env, env.bot.id, _bearer(env.users["owner"]))
+    _activity(env, env.bot.id, {"x-agent-token": env.bot_token})
+
+    assert threads.count("_org_agent") == 1
+    assert threads.count("authenticate_agent") == 1
+    assert threads.count("_activities") == 2
