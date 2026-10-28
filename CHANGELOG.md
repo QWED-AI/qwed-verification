@@ -58,6 +58,28 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     same checks as the compliance routes, #485); members and viewers are
     403. No other organisation's user is ever returned. Inviting users and
     changing roles are not part of this.
+- **List an organisation's agents, and read an agent's activity as an
+  owner (#527).** No route listed the agents, and
+  `GET /agents/{agent_id}/activity` took only the agent's own token, so an
+  owner could read neither.
+  - New `GET /agents` returns each agent of the caller's organisation,
+    oldest first: `id`, `name`, `type`, `status` (suspended and deactivated
+    agents included) and `created_at` and `last_active` (with their UTC
+    offset). It never returns the agent token or its digest. Owners and
+    admins only, with an API key or a signed-in session; members and
+    viewers are 403.
+  - `GET /agents/{agent_id}/activity` also accepts an owner's or admin's
+    API key or session, for an agent of their organisation; another
+    organisation's agent, or one that does not exist, is 404. When
+    `x-agent-token` is sent, it alone decides access, as before: a wrong
+    token is 401 even beside an owner's session.
+  - The activity route's `limit` is now 1 to 200 (default 20; it was
+    unbounded), activity comes newest first with an id tie-break, and its
+    timestamps carry their UTC offset. An agent id too large for the
+    database is 404 on the owner path, not a server error, and the route's
+    database work runs in a worker thread, off the event loop.
+  - The activity route moves from `api/main.py` to
+    `api/agent_admin_routes.py`.
 
 ### Changed
 
