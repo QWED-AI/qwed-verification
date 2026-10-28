@@ -17,7 +17,8 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
 
 from qwed_new.api import main
-from qwed_new.auth import roles
+from qwed_new.auth import audit_routes, roles
+from qwed_new.auth import routes as auth_routes
 from qwed_new.auth.security import create_access_token, generate_api_key
 from qwed_new.core.models import ApiKey, Organization, User, VerificationLog
 
@@ -254,10 +255,20 @@ def test_the_unused_rbac_module_is_gone():
 
 
 def test_no_route_left_on_bare_get_current_user():
-    # Every api-key and audit route goes through a role check.
-    for route in main.app.routes:
-        path = getattr(route, "path", "")
-        if path.startswith(("/auth/api-keys", "/audit/")):
-            calls = {dep.call.__qualname__ for dep in route.dependant.dependencies}
-            assert "get_current_user" not in calls, path
-            assert any("require_user_role" in name for name in calls), path
+    # Every api-key and audit route, and /auth/me (#518), goes through a role
+    # check. The routes are read from their routers, not main.app.routes:
+    # FastAPI 0.162 (on CI) keeps an included router there as one
+    # _IncludedRouter entry, so the loop found nothing and checked nothing.
+    guarded = [
+        route
+        for route in (*auth_routes.router.routes, *audit_routes.router.routes)
+        if route.path.startswith(("/auth/api-keys", "/auth/me", "/audit/"))
+    ]
+    # POST, GET and DELETE /auth/api-keys, /auth/me, and /audit/logs,
+    # /audit/logs/{log_id}, /audit/export and /audit/seed: an empty list
+    # would pass every assertion below without checking anything.
+    assert len(guarded) == 8
+    for route in guarded:
+        calls = {dep.call.__qualname__ for dep in route.dependant.dependencies}
+        assert "get_current_user" not in calls, route.path
+        assert any("require_user_role" in name for name in calls), route.path
