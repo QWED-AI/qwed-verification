@@ -2,22 +2,27 @@
 Audit log routes for QWED Enterprise Portal.
 """
 import asyncio
-import json
 import os
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, HTTPException
-from typing import Any, Optional
-import csv
-import io
+from typing import Optional
 from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, or_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, select
 
 from qwed_new.core.database import get_session
+from qwed_new.core.audit_export import (
+    EXPORT_MAX_ROWS,
+    TRUNCATED_HEADER,
+    as_utc,
+    audit_csv,
+    newest_logs,
+    stored_verdict,
+)
 from qwed_new.core.audit_logger import SecurityError, get_audit_logger
 from qwed_new.core.models import VerificationLog, User
-from qwed_new.core.verification_context import Verdict
 from .roles import ADMIN_ROLES, READ_ROLES
 from .routes import ROLE_REFUSED, require_user_role
 
@@ -28,7 +33,6 @@ router = APIRouter(prefix="/audit", tags=["audit"])
 _READER = Depends(require_user_role(READ_ROLES))
 _ADMIN = Depends(require_user_role(ADMIN_ROLES))
 
-_VERDICTS = frozenset(v.value for v in Verdict)
 # Largest id an SQL BIGINT holds, as for API key ids in routes.py; a larger
 # id would overflow the query and fail with a server error instead of a 404.
 _MAX_LOG_ID = 2**63 - 1
@@ -53,38 +57,6 @@ def _org_log(session: Session, log_id: int, organization_id: int) -> Verificatio
     log = session.get(VerificationLog, log_id)
     return log if log and log.organization_id == organization_id else None
 
-
-def stored_verdict(result: str) -> str | None:
-    """The verdict the verifier stored in a row's result, or None (#484).
-
-    Reads the three shapes a row can hold: a DiagnosticResult from a
-    /verify/* route (``status``), a Verification Context document
-    (``verdict``), and a /verify/batch item row (its top-level ``verdict``,
-    kept outside the capped details since #494, or ``details.result.status``
-    on rows written before that).
-    Only VERIFIED, UNVERIFIABLE and BLOCKED count; anything else, including
-    a truncated result, is None. Nothing is worked out from ``is_verified``.
-
-    This is the verdict, not an admission. VERIFIED means the check ran to a
-    proof, not that the claim holds or may be admitted: a disproven identity
-    or code proven unsafe is VERIFIED with a DENY admission (see
-    ``AdmissionDecision`` in core/diagnostics.py). Never gate on it alone.
-    """
-    try:
-        value: Any = json.loads(result)
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(value, dict) or value.get("truncated") is True:
-        return None
-    if "spec_version" in value:
-        candidate = value.get("verdict")
-    elif "batch_job_id" in value:
-        details = value.get("details")
-        inner = details.get("result") if isinstance(details, dict) else None
-        candidate = value.get("verdict") or (inner.get("status") if isinstance(inner, dict) else None)
-    else:
-        candidate = value.get("status")
-    return candidate if isinstance(candidate, str) and candidate in _VERDICTS else None
 
 @router.get(
     "/logs",
@@ -204,47 +176,49 @@ async def get_log_detail(
         **_caller(log),
     }
 
-@router.get("/export", responses=ROLE_REFUSED)
-async def export_logs(
+# The export's period (#508). The row cap is EXPORT_MAX_ROWS, shared with
+# /admin/compliance/export/csv, and is read at call time so a test can lower it.
+_EXPORT_START = Query(None, description="Only entries at or after this time (UTC if no zone; other offsets are converted)")
+_EXPORT_END = Query(None, description="Only entries at or before this time (UTC if no zone; other offsets are converted)")
+_EXPORT_MAX_ROWS = EXPORT_MAX_ROWS
+
+
+@router.get(
+    "/export",
+    responses={**ROLE_REFUSED, 400: {"description": "start is after end"}},
+)
+def export_logs(
+    start: datetime | None = _EXPORT_START,
+    end: datetime | None = _EXPORT_END,
     current_user: User = _ADMIN,
     session: Session = Depends(get_session)
 ):
-    """Export audit logs as CSV."""
-    statement = select(VerificationLog).where(
-        VerificationLog.organization_id == current_user.organization_id
-    ).order_by(VerificationLog.timestamp.desc()).limit(1000)
-    
-    logs = session.exec(statement).all()
-    
-    # Create CSV in memory
-    output = io.StringIO()
-    writer = csv.writer(output)
-    
-    # Write header
-    writer.writerow([
-        "Timestamp",
-        "Request Input",
-        "Verification Result",
-        "Engine",
-        "Status"
-    ])
-    
-    # Write data
-    for log in logs:
-        writer.writerow([
-            log.timestamp.isoformat(),
-            log.query,
-            log.result,
-            log.domain,
-            "verified" if log.is_verified else "blocked"
-        ])
-    
-    output.seek(0)
-    
+    """Export the organisation's audit log as CSV, newest first (#508).
+
+    A plain ``def``, so FastAPI runs the query and the CSV building in its
+    worker threads, not on the event loop.
+
+    The columns are those of ``/admin/compliance/export/csv``
+    (``AUDIT_CSV_HEADER`` in core/audit_export.py): the stored verdict and
+    admission as ``/audit/logs`` returns them, the caller, the verifier
+    version and the entry hash, with nothing cut. With ``start`` or ``end``
+    only that period is exported; without either, the newest rows.
+
+    At most the newest 1,000 rows: ``X-Export-Truncated`` is "true" when more
+    matched, so a period can be narrowed instead of losing rows silently.
+    """
+    start, end = as_utc(start), as_utc(end)
+    if start is not None and end is not None and start > end:
+        raise HTTPException(status_code=400, detail="start must not be after end")
+    logs, truncated = newest_logs(session, current_user.organization_id, start, end, _EXPORT_MAX_ROWS)
+
     return StreamingResponse(
-        iter([output.getvalue()]),
+        iter([audit_csv(logs)]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=qwed_audit_logs.csv"}
+        headers={
+            "Content-Disposition": "attachment; filename=qwed_audit_logs.csv",
+            TRUNCATED_HEADER: "true" if truncated else "false",
+        },
     )
 
 SEED_ENABLED_ENV_VAR = "QWED_ENABLE_AUDIT_SEED"

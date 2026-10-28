@@ -286,6 +286,7 @@ app.add_middleware(
     allow_credentials=CORS_ORIGINS != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Export-Truncated"],  # #508: a cut CSV export
 )
 
 
@@ -2196,17 +2197,13 @@ async def verify_with_consensus(
     return _merge_response(dr) | response
 # --- Enterprise Security Endpoints (Week 2) ---
 
-from qwed_new.core.compliance_exporter import ComplianceExporter
+from qwed_new.api.compliance_routes import FOREIGN_ORG_DETAIL as _FOREIGN_ORG_DETAIL, compliance_exporter
 from qwed_new.core.threat_detector import threat_detector
 from qwed_new.core.key_rotation import key_manager
 from qwed_new.auth.roles import ROLE_RANK
 from qwed_new.api.admin_auth import AdminContext, require_admin_role
 
-compliance_exporter = ComplianceExporter()
 
-
-# Shared across the admin handlers so the message lives in one place.
-_FOREIGN_ORG_DETAIL = "Cannot access another organization's data"
 # Role hierarchy for admin operations (higher number = more privilege); one
 # ranking shared with the user-session routes (#478).
 _ROLE_RANK = ROLE_RANK
@@ -2223,17 +2220,6 @@ _REQUIRE_ADMIN_OR_SESSION = Depends(require_admin_role(["owner", "admin"], allow
 _REQUIRE_MEMBER_OR_SESSION = Depends(require_admin_role(["owner", "admin", "member"], allow_session=True))
 _FOREIGN_ORG_RESPONSE = {403: {"description": _FOREIGN_ORG_DETAIL}}
 
-
-@app.get("/admin/compliance/export/csv", tags=["Compliance"], responses=_FOREIGN_ORG_RESPONSE)
-async def export_audit_csv(
-    organization_id: int,
-    ctx: AdminContext = _REQUIRE_ADMIN_OR_SESSION,
-):
-    """Export audit trail as CSV (admin, own organization only)."""
-    if organization_id != ctx.organization_id:
-        raise HTTPException(status_code=403, detail=_FOREIGN_ORG_DETAIL)
-    csv_data = compliance_exporter.export_audit_trail_csv(organization_id)
-    return Response(content=csv_data, media_type="text/csv")
 
 @app.get("/admin/compliance/verify/{log_id}", tags=["Compliance"],
          responses={404: {"description": "Audit log entry not found"}})
