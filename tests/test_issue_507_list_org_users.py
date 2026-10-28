@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine
 
 from qwed_new.api import main
@@ -93,8 +94,10 @@ def test_an_owner_or_admin_session_lists_their_organisations_users(env, who):
 
 
 def test_users_come_oldest_first_then_by_id(env):
-    # Creation times that disagree with the ids, and a tie: sorting by id
-    # alone, or by time without the id tie-break, gives another order.
+    # Creation times that disagree with the ids: sorting by id alone gives
+    # another order. The tied pair (member, viewer) comes back in id order,
+    # but SQLite returns tied rows in rowid order anyway, so a missing id
+    # tie-break is checked on the query instead (next test).
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     offsets = {"owner": 3, "admin": 0, "viewer": 1, "member": 1, "former": 2}
     for name, hours in offsets.items():
@@ -106,6 +109,27 @@ def test_users_come_oldest_first_then_by_id(env):
     body = _users(env, _bearer(env.users["owner"])).json()
 
     assert [u["email"].split("@")[0] for u in body] == ["admin", "member", "viewer", "former", "owner"]
+
+
+def test_the_query_orders_by_time_then_id(env):
+    # The rows cannot show a missing tie-break on SQLite (see above); the
+    # ORDER BY clause can.
+    statements = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        flat = " ".join(statement.replace('"', "").split())
+        if "FROM user " in flat and "ORDER BY" in flat:
+            statements.append(flat)
+
+    engine = env.session.get_bind()
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        assert _users(env, _bearer(env.users["owner"])).status_code == 200
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+
+    assert len(statements) == 1
+    assert statements[0].split("ORDER BY", 1)[1].strip() == "user.created_at, user.id"
 
 
 @pytest.mark.parametrize("who", ["owner", "admin"])
