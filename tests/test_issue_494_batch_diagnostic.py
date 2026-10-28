@@ -147,7 +147,9 @@ def test_a_satisfiable_batch_logic_item_is_verified_not_sat(client):
 
 def _batch_rows(engine):
     with Session(engine) as session:
-        return session.exec(select(VerificationLog).where(VerificationLog.domain.in_(["LOGIC", "MATH"]))).all()
+        return session.exec(
+            select(VerificationLog).where(VerificationLog.domain.in_(["LOGIC", "MATH", "NATURAL_LANGUAGE"]))
+        ).all()
 
 
 def test_batch_rows_now_carry_a_verdict_and_the_natural_language_admission(client, isolated_audit_chain):

@@ -16,8 +16,10 @@ from qwed_new.core.diagnostics import AdmissionDecision
 from qwed_new.core.models import VerificationLog
 
 # The audit domain for each batch item type, as its single route records it.
+# Natural language has its own domain (#520): it was stored as MATH, so the
+# ledger could not tell it from /verify/math.
 BATCH_AUDIT_DOMAIN = {
-    "natural_language": "MATH",
+    "natural_language": "NATURAL_LANGUAGE",
     "logic": "LOGIC",
     "math": "MATH",
     "code": "CODE",
