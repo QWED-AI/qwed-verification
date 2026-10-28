@@ -92,6 +92,15 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ### Fixed
 
+- **Natural-language audit rows are stored with their own domain (#520).**
+  `/verify/natural_language`, `/agents/{agent_id}/verify` and the
+  natural-language items of `/verify/batch` wrote `domain` "MATH", while
+  their response and attestation say `natural_language`, so the audit log
+  and its exports grouped them with `/verify/math`. They now write
+  "NATURAL_LANGUAGE" (`engine_used` on `/audit/logs`, `Domain` in the CSV
+  exports). `/verify/math` and batch maths items still write "MATH". Rows
+  already written keep "MATH": the domain is part of each signed, chained
+  entry, so it is not rewritten.
 - **The threat summary no longer fails with the pinned SQLModel (#506).**
   `ThreatDetector` used naive `datetime.utcnow()` times, and SQLModel 0.0.48
   (pinned in `requirements-server.txt`) refuses a naive datetime in a query,

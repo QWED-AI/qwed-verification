@@ -663,7 +663,7 @@ async def verify_natural_language(
         # The log row is keyed by the user's question, which is only
         # verified when it is admitted.
         is_verified=admission is AdmissionDecision.ADMIT,
-        domain="MATH",
+        domain="NATURAL_LANGUAGE",  # #520: its own domain, not MATH
         admission=admission.value,  # #307: as returned
     )
     _safe_commit_log(log)
@@ -1913,7 +1913,7 @@ async def agent_verify(
         query=request.query,
         result=_cap_log_result({**dr.to_dict(), "agent_id": agent_id}),
         is_verified=admission is AdmissionDecision.ADMIT,
-        domain="MATH",
+        domain="NATURAL_LANGUAGE",  # #520
         admission=admission.value,  # #307
     ))
     # The enforced verdict with its admission, as /verify/natural_language
