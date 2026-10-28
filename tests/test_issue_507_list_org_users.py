@@ -11,6 +11,7 @@ signed-in session. Members and viewers are refused, and no other
 organisation's user is ever returned.
 """
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -75,7 +76,7 @@ def test_an_owner_or_admin_session_lists_their_organisations_users(env, who):
 
     assert response.status_code == 200
     body = response.json()
-    # Oldest first, the inactive user included, nobody from globex.
+    # The inactive user included, nobody from globex.
     assert [u["email"] for u in body] == [
         "owner@acme.example.com", "admin@acme.example.com", "member@acme.example.com",
         "viewer@acme.example.com", "former@acme.example.com",
@@ -89,6 +90,22 @@ def test_an_owner_or_admin_session_lists_their_organisations_users(env, who):
     }
     assert body[-1]["is_active"] is False
     assert all(u["created_at"].endswith("Z") for u in body)
+
+
+def test_users_come_oldest_first_then_by_id(env):
+    # Creation times that disagree with the ids, and a tie: sorting by id
+    # alone, or by time without the id tie-break, gives another order.
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    offsets = {"owner": 3, "admin": 0, "viewer": 1, "member": 1, "former": 2}
+    for name, hours in offsets.items():
+        env.users[name].created_at = start + timedelta(hours=hours)
+        env.add(env.users[name])
+    # member was created before viewer, so has the lower id of the tied pair.
+    assert env.users["member"].id < env.users["viewer"].id
+
+    body = _users(env, _bearer(env.users["owner"])).json()
+
+    assert [u["email"].split("@")[0] for u in body] == ["admin", "member", "viewer", "former", "owner"]
 
 
 @pytest.mark.parametrize("who", ["owner", "admin"])
