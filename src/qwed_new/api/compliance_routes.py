@@ -19,9 +19,11 @@ from qwed_new.core.audit_export import as_utc as _as_utc
 from qwed_new.core.compliance_exporter import ComplianceExporter
 
 router = APIRouter(prefix="/admin/compliance", tags=["Compliance"])
-# Shared with api/main.py, which imports it for the security activity summary.
+# Both shared with api/main.py: the exporter for the security activity
+# summary, and the refusal message for every admin route given another
+# organisation's id.
 compliance_exporter = ComplianceExporter()
-_FOREIGN_ORG_DETAIL = "Cannot access another organization's data"
+FOREIGN_ORG_DETAIL = "Cannot access another organization's data"
 
 # Owners and admins, with an API key or a signed-in session.
 _REQUIRE_ADMIN_OR_SESSION = Depends(require_admin_role(["owner", "admin"], allow_session=True))
@@ -76,12 +78,13 @@ async def verify_audit_trail(
         **result,
     }
 
+
 @router.get(
     "/export/csv",
     responses={
         400: {"description": "start is after end"},
         401: {"description": "No API key or bearer token"},
-        403: {"description": _FOREIGN_ORG_DETAIL + ", or not an owner or admin, or an inactive user, organisation or key"},
+        403: {"description": FOREIGN_ORG_DETAIL + ", or not an owner or admin, or an inactive user, organisation or key"},
     },
 )
 async def export_audit_csv(
@@ -101,7 +104,7 @@ async def export_audit_csv(
     the newest 1,000 rows: ``X-Export-Truncated`` is "true" when more matched.
     """
     if organization_id != ctx.organization_id:
-        raise HTTPException(status_code=403, detail=_FOREIGN_ORG_DETAIL)
+        raise HTTPException(status_code=403, detail=FOREIGN_ORG_DETAIL)
     start, end = compliance_exporter.export_period(start, end)
     _check_period(start, end)
     # Off the event loop: the export reads up to the row cap from the database.

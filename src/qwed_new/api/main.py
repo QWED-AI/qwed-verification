@@ -2197,15 +2197,13 @@ async def verify_with_consensus(
     return _merge_response(dr) | response
 # --- Enterprise Security Endpoints (Week 2) ---
 
-from qwed_new.api.compliance_routes import compliance_exporter
+from qwed_new.api.compliance_routes import FOREIGN_ORG_DETAIL as _FOREIGN_ORG_DETAIL, compliance_exporter
 from qwed_new.core.threat_detector import threat_detector
 from qwed_new.core.key_rotation import key_manager
 from qwed_new.auth.roles import ROLE_RANK
 from qwed_new.api.admin_auth import AdminContext, require_admin_role
 
 
-# Shared across the admin handlers so the message lives in one place.
-_FOREIGN_ORG_DETAIL = "Cannot access another organization's data"
 # Role hierarchy for admin operations (higher number = more privilege); one
 # ranking shared with the user-session routes (#478).
 _ROLE_RANK = ROLE_RANK
