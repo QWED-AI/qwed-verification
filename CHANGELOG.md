@@ -47,6 +47,17 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - Sign-in refuses a user of an inactive organisation (403, "Organization
     is not active"), as it already refused an inactive user. It issued a
     token that every user-session route then refused.
+- **List the users of an organisation (#507).** No route listed them:
+  `/auth/me` returns the signed-in user and the security activity summary
+  only a count, so a client could name a user only by id.
+  - New `GET /auth/users` returns each user of the caller's organisation,
+    oldest first: `id`, `email`, `role`, `is_active` and `created_at` (with
+    its UTC offset). Inactive users are listed with `is_active` false. No
+    password hash or permission data is returned.
+  - Owners and admins only, with an API key or a signed-in session (the
+    same checks as the compliance routes, #485); members and viewers are
+    403. No other organisation's user is ever returned. Inviting users and
+    changing roles are not part of this.
 
 ### Fixed
 
