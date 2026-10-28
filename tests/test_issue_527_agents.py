@@ -10,11 +10,13 @@ the agent's token, and now also an owner's or admin's credential for an agent
 of their organisation.
 """
 
+import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine
 
 from qwed_new.api import agent_admin_routes, main
@@ -252,18 +254,36 @@ def test_an_id_out_of_range_is_404_not_a_server_error(env, agent_id):
     assert _activity(env, agent_id, {"x-agent-token": env.bot_token}).status_code == 401
 
 
-def test_the_activity_route_runs_its_database_work_off_the_event_loop(env, monkeypatch):
-    threads = []
+@pytest.mark.parametrize("path", ["owner", "agent"])
+def test_the_activity_route_sends_no_sql_from_the_event_loop(env, monkeypatch, path):
+    # Every statement of the request runs in a worker thread. On the agent
+    # path, authenticate_agent commits last_active, which expires the row:
+    # reading it on the event loop afterwards would send a SELECT there.
+    env.activity(env.bot, 3)
     real = agent_admin_routes.asyncio.to_thread
+    loop_threads, helpers, statement_threads = set(), [], []
 
     async def spy(func, *args, **kwargs):
-        threads.append(func.__name__)
+        # The spy itself runs on the event loop.
+        loop_threads.add(threading.get_ident())
+        helpers.append(func.__name__)
         return await real(func, *args, **kwargs)
 
-    monkeypatch.setattr(agent_admin_routes.asyncio, "to_thread", spy)
-    _activity(env, env.bot.id, _bearer(env.users["owner"]))
-    _activity(env, env.bot.id, {"x-agent-token": env.bot_token})
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        statement_threads.append(threading.get_ident())
 
-    assert threads.count("_org_agent") == 1
-    assert threads.count("authenticate_agent") == 1
-    assert threads.count("_activities") == 2
+    monkeypatch.setattr(agent_admin_routes.asyncio, "to_thread", spy)
+    engine = env.session.get_bind()
+    event.listen(engine, "before_cursor_execute", capture)
+    headers = _bearer(env.users["owner"]) if path == "owner" else {"x-agent-token": env.bot_token}
+    try:
+        response = _activity(env, env.bot.id, headers)
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+
+    assert response.status_code == 200
+    assert body_len(response) == 1
+    assert ("_org_agent" if path == "owner" else "_token_agent") in helpers
+    assert "_activities" in helpers
+    assert statement_threads
+    assert not loop_threads & set(statement_threads)

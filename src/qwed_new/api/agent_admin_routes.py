@@ -90,6 +90,19 @@ def list_agents(
     ]
 
 
+def _token_agent(session: Session, agent_token: str) -> Agent | None:
+    """The active agent this token belongs to, loaded, or None.
+
+    ``authenticate_agent`` commits ``last_active``, which expires the row, so
+    the row is reloaded here, in the worker thread. Reading it afterwards on
+    the event loop would otherwise send a SELECT from there.
+    """
+    agent = agent_registry.authenticate_agent(session, agent_token)
+    if agent is not None:
+        session.refresh(agent)
+    return agent
+
+
 def _org_agent(session: Session, agent_id: int, organization_id: int) -> Agent | None:
     """The agent with this id in this organisation, or None for any other id."""
     if not 1 <= agent_id <= _MAX_AGENT_ID:
@@ -135,7 +148,7 @@ async def get_agent_activity(
     the request's session, so it does not block the event loop.
     """
     if x_agent_token is not None:
-        agent = await asyncio.to_thread(agent_registry.authenticate_agent, session, x_agent_token)
+        agent = await asyncio.to_thread(_token_agent, session, x_agent_token)
         if not agent or agent.id != agent_id:
             raise HTTPException(status_code=401, detail="Invalid agent token")
     else:
