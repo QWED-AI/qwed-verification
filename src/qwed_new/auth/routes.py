@@ -16,7 +16,8 @@ from .models import (
 )
 from .security import (
     hash_password, verify_password, create_access_token,
-    generate_api_key, mask_api_key, decode_access_token
+    generate_api_key, mask_api_key, decode_access_token,
+    MAX_PASSWORD_BYTES, password_too_long,
 )
 from .roles import (
     ADMIN_ROLES, INACTIVE_ORG, READ_ROLES, WRITE_ROLES, ensure_user_role,
@@ -68,7 +69,7 @@ def _user_body(user: User, org: Organization | None) -> dict:
     "/signup",
     response_model=TokenResponse,
     responses={
-        400: {"description": "Email already registered or organization name taken"},
+        400: {"description": "Email already registered, organization name taken, or password too long"},
         429: {"description": "Per-IP authentication rate limit exceeded"},
         500: {"description": "User creation failed"},
     },
@@ -85,6 +86,14 @@ async def signup(
     # Anonymous route: per-IP throttle before any DB or bcrypt work
     # (bcrypt is ~269 ms of CPU; issues #226/#334).
     check_auth_rate_limit(req)
+
+    # bcrypt cannot hash it (#548); refused before the email lookup, so
+    # the answer does not depend on whether the email is registered.
+    if password_too_long(request.password):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Password must be at most {MAX_PASSWORD_BYTES} bytes",
+        )
 
     # Check if email already exists
     statement = select(User).where(User.email == request.email)

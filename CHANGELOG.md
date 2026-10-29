@@ -171,6 +171,19 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   so `GET /admin/security/threats/{org_id}` raised on every call. Its times
   are now aware UTC, so `generated_at` and the event analysis `timestamp`
   end in `+00:00`.
+- **Signup and signin no longer fail with a 500 for a long password (#548).**
+  bcrypt reads at most 72 bytes of a password, and bcrypt 5 (pinned in
+  `requirements-server.txt`) raises for more, so `/auth/signup` and
+  `/auth/signin` returned 500 for a password over 72 bytes in UTF-8.
+  - `/auth/signup` refuses it with 400 "Password must be at most 72 bytes",
+    before it looks up the email, so the answer is the same whether or not
+    the email is registered. Nothing is written.
+  - `/auth/signin` answers 401 "Invalid email or password", for a registered
+    email and an unknown one alike. `verify_password` returns false for such
+    a password without calling bcrypt.
+  - An account whose password was set over 72 bytes with bcrypt 4, which
+    used only the first 72 bytes, cannot sign in with that password. It
+    could not under bcrypt 5 either.
 
 ## [8.0.0] - 2026-10-26
 
