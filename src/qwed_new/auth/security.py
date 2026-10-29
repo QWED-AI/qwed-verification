@@ -58,6 +58,10 @@ MAX_PASSWORD_BYTES = 72
 
 def password_too_long(password: str) -> bool:
     """True when the password is longer than bcrypt can hash."""
+    # Every character is at least one byte, so a long string is refused
+    # without encoding (and copying) all of it.
+    if len(password) > MAX_PASSWORD_BYTES:
+        return True
     return len(password.encode('utf-8')) > MAX_PASSWORD_BYTES
 
 def hash_password(password: str) -> str:

@@ -6,7 +6,6 @@ caller as a 500. Signup now refuses it with a 400 before any lookup, and
 signin answers 401. These tests use real bcrypt, not a mock.
 """
 
-import secrets
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -37,9 +36,9 @@ def client():
 
 
 def _password(n_bytes: int) -> str:
-    """A per-run password of exactly n_bytes in UTF-8, half of it two-byte."""
+    """A password of exactly n_bytes in UTF-8, half of it two-byte."""
     two_byte = "é" * (n_bytes // 4)
-    return secrets.token_hex(n_bytes)[: n_bytes - 2 * len(two_byte)] + two_byte
+    return "a" * (n_bytes - 2 * len(two_byte)) + two_byte
 
 
 AT_LIMIT = _password(MAX_PASSWORD_BYTES)
@@ -56,6 +55,14 @@ def test_the_passwords_have_the_intended_sizes():
 def test_password_too_long_counts_utf8_bytes():
     assert not password_too_long(AT_LIMIT)
     assert password_too_long(OVER_LIMIT)
+
+
+def test_password_too_long_does_not_encode_a_string_over_the_limit():
+    class _NoEncode(str):
+        def encode(self, *args, **kwargs):
+            raise AssertionError("encoded")
+
+    assert password_too_long(_NoEncode("a" * (MAX_PASSWORD_BYTES + 1)))
 
 
 def test_verify_password_refuses_a_password_over_the_limit():
