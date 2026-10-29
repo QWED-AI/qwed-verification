@@ -39,7 +39,7 @@ from sqlmodel import Session, create_engine, select
 from qwed_new import __version__ as _QWED_VERSION
 from qwed_new.core import database as _database
 from qwed_new.core.models import Organization, VerificationLog
-from qwed_new.core.request_caller import request_api_key_id
+from qwed_new.core.request_caller import request_api_key_id, request_latency_ms
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +167,9 @@ class AuditLogger:
             stored_result = json.dumps(result)
             hashed_result = result
 
+        # Measured before waiting for the append lock, so it is the route's
+        # time, not the queue's (#528).
+        latency_ms = request_latency_ms()
         with self._append_lock:
             return self._append(
                 organization_id=organization_id,
@@ -178,6 +181,7 @@ class AuditLogger:
                 domain=domain,
                 raw_llm_output=raw_llm_output,
                 admission=admission,
+                latency_ms=latency_ms,
             )
 
     def _append(
@@ -192,6 +196,7 @@ class AuditLogger:
         domain: str,
         raw_llm_output: Optional[str],
         admission: Optional[str] = None,
+        latency_ms: Optional[int] = None,
     ) -> str:
         """Append one entry under the chain lock (see log_verification)."""
         timestamp = datetime.now(timezone.utc)
@@ -232,6 +237,9 @@ class AuditLogger:
                 # The admission the route decided (#307); None when it
                 # decided none. Covered, so it cannot be set or cleared later.
                 "admission": admission,
+                # How long the route took (#528); None outside a request.
+                # Covered too.
+                "latency_ms": latency_ms,
             }
 
             entry_hash = self._compute_hash(log_data)
@@ -252,6 +260,7 @@ class AuditLogger:
                 api_key_id=api_key_id,
                 verifier_version=_QWED_VERSION,
                 admission=admission,
+                latency_ms=latency_ms,
             )
             session.add(log_entry)
             session.commit()
@@ -507,6 +516,13 @@ class AuditLogger:
     def _reconstruct_log_data(self, log_entry: VerificationLog) -> Dict[str, Any]:
         """Rebuild the canonical payload for integrity verification."""
         return {
+            **self._reconstruct_pre_latency_log_data(log_entry),
+            "latency_ms": log_entry.latency_ms,
+        }
+
+    def _reconstruct_pre_latency_log_data(self, log_entry: VerificationLog) -> dict[str, Any]:
+        """Rebuild the payload for entries hashed before latency was covered (#528)."""
+        return {
             **self._reconstruct_pre_admission_log_data(log_entry),
             "admission": log_entry.admission,
         }
@@ -611,15 +627,22 @@ class AuditLogger:
         admission, so every older shape (the #484 one and the ones before
         it) is a candidate only while ``admission`` is null; otherwise
         setting an admission on an older row would leave its hash matching.
+
+        And for ``latency_ms`` (#528): no older shape covers it, so every
+        older shape is a candidate only while it is null. Setting a latency
+        on a row written before #528 then fails verification, and so does
+        clearing it on a row written since.
         """
         payloads = [self._reconstruct_log_data(log_entry)]
-        if log_entry.admission is None:
-            payloads.append(self._reconstruct_pre_admission_log_data(log_entry))
-            if log_entry.api_key_id is None and log_entry.verifier_version is None:
-                payloads += [
-                    self._reconstruct_pre_caller_log_data(log_entry),
-                    self._reconstruct_legacy_log_data(log_entry),
-                ]
+        if log_entry.latency_ms is None:
+            payloads.append(self._reconstruct_pre_latency_log_data(log_entry))
+            if log_entry.admission is None:
+                payloads.append(self._reconstruct_pre_admission_log_data(log_entry))
+                if log_entry.api_key_id is None and log_entry.verifier_version is None:
+                    payloads += [
+                        self._reconstruct_pre_caller_log_data(log_entry),
+                        self._reconstruct_legacy_log_data(log_entry),
+                    ]
         candidates = []
         for payload in payloads:
             candidates.append(self._compute_hash(payload))

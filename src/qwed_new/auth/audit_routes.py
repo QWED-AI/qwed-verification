@@ -93,6 +93,11 @@ async def get_logs(
 
     ``api_key_id`` and ``verifier_version`` say who wrote each row and with
     what server version (see ``_caller``).
+
+    ``latency_ms`` is how long the route took, in whole milliseconds, from
+    the start of the request to the row's append (#528). It is null on rows
+    written before it was stored and on rows written outside a request; it
+    was a fixed 0 before.
     """
     statement = select(VerificationLog).where(
         VerificationLog.organization_id == current_user.organization_id
@@ -131,7 +136,7 @@ async def get_logs(
                 "verdict": stored_verdict(log.result),
                 "status": "verified" if log.is_verified else "blocked",
                 "admission": log.admission,
-                "latency_ms": 0, # Placeholder, add latency to model if needed
+                "latency_ms": log.latency_ms,
                 "created_at": log.timestamp.isoformat(),
                 "entry_hash": log.entry_hash,
                 **_caller(log),
@@ -173,6 +178,7 @@ async def get_log_detail(
         "entry_hash": log.entry_hash,
         "previous_hash": log.previous_hash,
         "hmac_signature": log.hmac_signature,
+        "latency_ms": log.latency_ms,
         **_caller(log),
     }
 

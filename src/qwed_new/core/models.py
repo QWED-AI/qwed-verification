@@ -104,6 +104,11 @@ class VerificationLog(SQLModel, table=True):
     # without returning it. Null when the route decides none, and on rows written
     # before the column existed. Not the verdict: a VERIFIED row can be BLOCKED.
     admission: str | None = None
+    # Whole milliseconds from the start of the request that wrote the row to
+    # its append (#528): the time the route took to reach its answer. Null on
+    # rows written outside a request and on rows written before the column
+    # existed. Covered by the entry hash.
+    latency_ms: int | None = None
 
 class SecurityEvent(SQLModel, table=True):
     """
