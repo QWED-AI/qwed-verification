@@ -35,6 +35,7 @@ except ImportError:
     sys.exit(1)
 
 from qwed_new.core.security import redact_pii
+from qwed_sdk.init_owner import resolve_owner, signup_failure
 
 logger = logging.getLogger(__name__)
 
@@ -429,6 +430,8 @@ def _ensure_local_server_running(
     runtime_dir = _resolve_server_runtime_dir()
 
     env = os.environ.copy()
+    # The server never needs the owner's password (#524): signup sends it.
+    env.pop("QWED_OWNER_PASSWORD", None)
     src = _src_path()
     current_pythonpath = env.get("PYTHONPATH", "")
     if src not in current_pythonpath.split(os.pathsep):
@@ -482,15 +485,28 @@ def _ensure_local_server_running(
     return False, True
 
 
-def _bootstrap_api_key(server_url: str, organization_name: str) -> tuple[str, str]:
+def _bootstrap_api_key(
+    server_url: str,
+    organization_name: str,
+    owner: Optional[tuple[str, str]] = None,
+) -> tuple[str, str]:
+    """Sign up the organisation and create its first API key.
+
+    ``owner`` is the owner's email and password (#524), so the owner can sign
+    in later. Without it the owner gets a generated email and password that
+    are never shown or saved: nobody can sign in to that organisation.
+    """
     import httpx
 
     base = server_url.rstrip("/")
-    org_slug = _sanitize_org_slug(organization_name)
-    # An email local part may be at most 64 characters; "-<8 hex>" uses 9.
-    local_slug = org_slug[:_MAX_EMAIL_SLUG].rstrip("-") or "qwed-org"
-    email = f"{local_slug}-{secrets.token_hex(4)}@example.com"
-    password = secrets.token_urlsafe(24)
+    if owner is not None:
+        email, password = owner
+    else:
+        org_slug = _sanitize_org_slug(organization_name)
+        # An email local part may be at most 64 characters; "-<8 hex>" uses 9.
+        local_slug = org_slug[:_MAX_EMAIL_SLUG].rstrip("-") or "qwed-org"
+        email = f"{local_slug}-{secrets.token_hex(4)}@example.com"
+        password = secrets.token_urlsafe(24)
     signup_payload = {
         "email": email,
         "password": password,
@@ -509,7 +525,7 @@ def _bootstrap_api_key(server_url: str, organization_name: str) -> tuple[str, st
                     raise RuntimeError(f"Signup failed: {_safe_json_detail(signup_resp.text)}")
                 organization_name = fallback_org
             else:
-                raise RuntimeError(f"Signup failed: {detail}")
+                raise RuntimeError(signup_failure(detail, owner is not None))
 
         token = signup_resp.json().get("access_token")
         if not token:
@@ -1227,6 +1243,7 @@ def _start_server_and_bootstrap(
     lookup_secret: str,
     organization_name: str,
     secrets_fresh: bool,
+    owner: Optional[tuple[str, str]] = None,
 ) -> tuple[str, str]:
     """Start (or reuse) the local server, guard stale secrets, bootstrap a key.
 
@@ -1286,7 +1303,7 @@ def _start_server_and_bootstrap(
     click.echo("  [ok] Server identity verified")
 
     try:
-        qwed_api_key, actual_org_name = _bootstrap_api_key(normalized_server_url, organization_name)
+        qwed_api_key, actual_org_name = _bootstrap_api_key(normalized_server_url, organization_name, owner)
     except Exception as exc:
         logger.exception("API key bootstrap failed")
         click.echo(f"  [x] API key bootstrap failed: {exc}", err=True)
@@ -1295,6 +1312,13 @@ def _start_server_and_bootstrap(
     click.echo("  [ok] Organization created")
     if actual_org_name != organization_name:
         click.echo(f"  [ok] Organization alias used: {actual_org_name}")
+    if owner is not None:
+        click.echo(f"  [ok] Owner: {owner[0]} (sign in with the password you set)")
+    else:
+        click.echo("  Warning: No owner email was given, so nobody can sign in to this organisation.")
+        click.echo("    Its records cannot be read in qwed-dashboard. An owner who can sign in is")
+        click.echo("    named only when an organisation is created: running init again with")
+        click.echo("    --owner-email creates a new organisation; it does not recover these records.")
     return qwed_api_key, actual_org_name
 
 
@@ -1310,6 +1334,12 @@ def _start_server_and_bootstrap(
 @click.option("--base-url", default=None, help="Base URL for custom/openai-compatible providers.")
 @click.option("--model", default=None, help="Default model for provider.")
 @click.option("--organization-name", default=None, help="Organization name for local API key bootstrap.")
+@click.option(
+    "--owner-email",
+    default=None,
+    help="Email of the organisation's owner, to sign in later (e.g. to qwed-dashboard). "
+    "The password is prompted for, or read from QWED_OWNER_PASSWORD with --non-interactive.",
+)
 @click.option("--server-url", default="http://localhost:8000", show_default=True, help="Local QWED server URL.")
 @click.option("--non-interactive", is_flag=True, help="Run without prompts (CI-friendly).")
 @click.option("--skip-tests", is_flag=True, help="Skip deterministic verification smoke tests.")
@@ -1319,6 +1349,7 @@ def init(
     base_url: Optional[str],
     model: Optional[str],
     organization_name: Optional[str],
+    owner_email: Optional[str],
     server_url: str,
     non_interactive: bool,
     skip_tests: bool,
@@ -1431,6 +1462,7 @@ def init(
 
     try:
         organization_name = _resolve_organization_name(organization_name, non_interactive)
+        owner = resolve_owner(owner_email, non_interactive)
         normalized_server_url = _normalize_local_server_url(server_url)
     except RuntimeError as exc:
         click.echo(redact_pii(str(exc)), err=True)
@@ -1446,6 +1478,7 @@ def init(
         lookup_secret=lookup_secret,
         organization_name=organization_name,
         secrets_fresh=not all(had_secrets_before_init.values()),
+        owner=owner,
     )
 
     click.echo(f"\n  Your API key: {qwed_api_key}")
