@@ -35,6 +35,7 @@ except ImportError:
     sys.exit(1)
 
 from qwed_new.core.security import redact_pii
+from qwed_sdk.init_owner import resolve_owner, signup_failure
 
 logger = logging.getLogger(__name__)
 
@@ -429,6 +430,8 @@ def _ensure_local_server_running(
     runtime_dir = _resolve_server_runtime_dir()
 
     env = os.environ.copy()
+    # The server never needs the owner's password (#524): signup sends it.
+    env.pop("QWED_OWNER_PASSWORD", None)
     src = _src_path()
     current_pythonpath = env.get("PYTHONPATH", "")
     if src not in current_pythonpath.split(os.pathsep):
@@ -522,7 +525,7 @@ def _bootstrap_api_key(
                     raise RuntimeError(f"Signup failed: {_safe_json_detail(signup_resp.text)}")
                 organization_name = fallback_org
             else:
-                raise RuntimeError(f"Signup failed: {detail}")
+                raise RuntimeError(signup_failure(detail, owner is not None))
 
         token = signup_resp.json().get("access_token")
         if not token:
@@ -1121,63 +1124,6 @@ def _resolve_organization_name(organization_name: Optional[str], non_interactive
     return resolved_org
 
 
-# bcrypt, which the server hashes passwords with, reads at most 72 bytes.
-_MAX_OWNER_PASSWORD_BYTES = 72
-
-
-def _owner_email_problem(email: str) -> Optional[str]:
-    """Why ``email`` cannot be the owner's email, or None. The server checks it fully."""
-    local, at, domain = email.partition("@")
-    if not (at and local and "." in domain) or any(c.isspace() for c in email):
-        return f"Not an email address: {email!r}."
-    return None
-
-
-def _owner_password_problem(password: str) -> Optional[str]:
-    """Why ``password`` cannot be the owner's password, or None."""
-    if not password:
-        return "The owner password must not be empty."
-    if len(password.encode("utf-8")) > _MAX_OWNER_PASSWORD_BYTES:
-        return f"The owner password must be at most {_MAX_OWNER_PASSWORD_BYTES} bytes."
-    return None
-
-
-def _resolve_owner(owner_email: Optional[str], non_interactive: bool) -> Optional[tuple[str, str]]:
-    """The owner's email and password for the new organisation (#524), or None.
-
-    The email comes from ``--owner-email`` or QWED_OWNER_EMAIL, else a prompt.
-    The password is prompted for with hidden input and a confirmation; it is
-    never a flag, so it stays out of shell history.
-
-    With ``--non-interactive`` nothing is prompted: the password comes from
-    QWED_OWNER_PASSWORD, and without an email the result is None (an owner
-    nobody can sign in as, as before #524).
-    """
-    email = (owner_email or "").strip() or os.getenv("QWED_OWNER_EMAIL", "").strip()
-    if non_interactive:
-        if not email:
-            return None
-        password = os.getenv("QWED_OWNER_PASSWORD", "")
-        problem = _owner_email_problem(email) or (
-            _owner_password_problem(password) if password
-            else "--owner-email with --non-interactive needs QWED_OWNER_PASSWORD set."
-        )
-        if problem:
-            raise RuntimeError(problem)
-        return email, password
-
-    while not email or _owner_email_problem(email):
-        if email:
-            click.echo(f"  [x] {_owner_email_problem(email)}", err=True)
-        email = click.prompt("Owner email (to sign in later, e.g. to qwed-dashboard)").strip()
-    while True:
-        password = click.prompt("Owner password", hide_input=True, confirmation_prompt=True)
-        problem = _owner_password_problem(password)
-        if problem is None:
-            return email, password
-        click.echo(f"  [x] {problem}", err=True)
-
-
 def _identity_proof(secret: str, domain: str, nonce: str) -> str:
     """Domain-separated HMAC of the handshake nonce under one secret."""
     import hashlib
@@ -1370,8 +1316,9 @@ def _start_server_and_bootstrap(
         click.echo(f"  [ok] Owner: {owner[0]} (sign in with the password you set)")
     else:
         click.echo("  Warning: No owner email was given, so nobody can sign in to this organisation.")
-        click.echo("    Its records cannot be read in qwed-dashboard. To sign in later, run init")
-        click.echo("    with --owner-email (and QWED_OWNER_PASSWORD with --non-interactive).")
+        click.echo("    Its records cannot be read in qwed-dashboard. An owner who can sign in is")
+        click.echo("    named only when an organisation is created: running init again with")
+        click.echo("    --owner-email creates a new organisation; it does not recover these records.")
     return qwed_api_key, actual_org_name
 
 
@@ -1515,7 +1462,7 @@ def init(
 
     try:
         organization_name = _resolve_organization_name(organization_name, non_interactive)
-        owner = _resolve_owner(owner_email, non_interactive)
+        owner = resolve_owner(owner_email, non_interactive)
         normalized_server_url = _normalize_local_server_url(server_url)
     except RuntimeError as exc:
         click.echo(redact_pii(str(exc)), err=True)

@@ -84,18 +84,24 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   with a generated email and password that it never showed or saved, so
   nobody could sign in to the organisation it created, and its records could
   not be read in qwed-dashboard.
-  - New `--owner-email` (or `QWED_OWNER_EMAIL`) names the owner. The
-    password is asked for with hidden input and a confirmation; it is never
-    a flag, so it stays out of shell history, and init neither prints nor
-    saves it. Without the flag, interactive init asks for the email too.
+  - New `--owner-email` (or `QWED_OWNER_EMAIL`, read only when the flag is
+    not given) names the owner. The password is asked for with hidden input
+    and a confirmation; it is never a flag, so it stays out of shell
+    history, and init neither prints nor saves it. Without the flag,
+    interactive init asks for the email too.
   - With `--non-interactive`, the password comes from `QWED_OWNER_PASSWORD`;
-    an owner email without it stops init before the server starts. Without
-    an owner email, init creates the generated owner as before and warns
-    that nobody can sign in to the organisation.
-  - The email is checked for a basic `name@domain.tld` shape (the server
-    checks it fully), and the password must be 1 to 72 bytes, the most
-    bcrypt reads. An email that is already registered fails the signup, as
-    before.
+    an owner email without it stops init before the server starts, and the
+    local server init starts does not inherit it. Without an owner email,
+    init creates the generated owner as before and warns that nobody can
+    sign in to the organisation, and that running init again creates a new
+    organisation rather than recovering it.
+  - The email is checked for a basic `name@domain.tld` shape with one `@`
+    (the server checks it fully), and the password must be 1 to 72 bytes,
+    the most bcrypt reads. An email that is already registered fails the
+    signup, now with how to go on: sign in with it and create a key there,
+    or use another email.
+  - The owner handling is in the new `qwed_sdk/init_owner.py`, which keeps
+    `cli.py` under the security scan's 100,000-character file limit.
 
 ### Changed
 
