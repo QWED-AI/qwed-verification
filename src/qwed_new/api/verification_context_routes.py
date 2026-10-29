@@ -146,22 +146,6 @@ def _admitting_engine(token: str | None) -> str | None:
     return engine if isinstance(engine, str) and engine else None
 
 
-def _redact_strings(value: Any) -> Any:
-    """Redact PII in every string of a JSON-like value, leaving its structure intact.
-
-    Redacting the serialised text instead would also rewrite bare numbers
-    (a ten-digit integer matches the phone pattern) into unquoted tokens and
-    leave invalid JSON, which the audit chain refuses to store.
-    """
-    if isinstance(value, str):
-        return redact_pii(value)
-    if isinstance(value, dict):
-        return {redact_pii(str(k)): _redact_strings(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_redact_strings(v) for v in value]
-    return value
-
-
 def _safe_commit_context_log(
     session: Optional[Session],
     tenant: TenantContext,
@@ -172,7 +156,12 @@ def _safe_commit_context_log(
 ) -> None:
     """``admission`` is the decision the route returned, or None when it
     decides none (#307): from-diagnostic decides "ADMIT" or "DENY", in the
-    Verification Context spec's terms; validate and resolve decide none."""
+    Verification Context spec's terms; validate and resolve decide none.
+
+    ``result`` is stored as returned, as the /verify routes store theirs.
+    From from-diagnostic it is the signed document, and a redacted copy
+    would no longer match its attestation (#532). Only ``query`` is
+    redacted."""
     if session is None:
         return
     # Appended to the organisation's signed audit chain (core.audit_logger),
@@ -183,7 +172,7 @@ def _safe_commit_context_log(
             organization_id=tenant.organization_id,
             user_id=getattr(tenant, "user_id", None),
             query=redact_pii(query),
-            result=json.dumps(_redact_strings(result)),
+            result=json.dumps(result),
             is_verified=is_verified,
             domain="VERIFICATION_CONTEXT",
             admission=admission,

@@ -184,6 +184,22 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - An account whose password was set over 72 bytes with bcrypt 4, which
     used only the first 72 bytes, cannot sign in with that password. It
     could not under bcrypt 5 either.
+- **The audit row of a signed Verification Context document verifies (#532).**
+  `/verification-context/from-diagnostic` signs the document it returns, but
+  its audit row stored a copy with personal data (emails, phone numbers,
+  SSNs, IP addresses) redacted in every string after signing. That copy no
+  longer matched its attestation, so a consumer reading it back from
+  `/audit/logs` (such as qwed-dashboard) could not verify it.
+  - The row now stores the document exactly as returned, as the `/verify`
+    routes store their results. Its signature verifies, and
+    `/verification-context/validate` accepts it.
+  - The row's `query` column is still redacted.
+  - The stored document keeps any personal data the caller put in the query
+    or the diagnostic. The stored result had been redacted since 7.1.0;
+    documents are signed since 8.0.0, which is when the two stopped
+    agreeing.
+  - Rows written before this change keep their redacted copy and still do
+    not verify against their attestation.
 
 ## [8.0.0] - 2026-10-26
 
