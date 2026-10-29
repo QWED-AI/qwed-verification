@@ -75,8 +75,7 @@ class _Client:
 
 @pytest.fixture
 def signups(monkeypatch):
-    _Client.signups = []
-    _Client.signup_reply = (200, {"access_token": "token-123"})
+    monkeypatch.setattr(_Client, "signups", [])
     monkeypatch.setattr("httpx.Client", _Client)
     return _Client.signups
 
@@ -100,9 +99,9 @@ def test_without_an_owner_the_email_and_password_are_generated(signups):
     assert payload["password"] != OWNER_SECRET
 
 
-def test_an_owner_already_registered_is_told_how_to_go_on(signups):
+def test_an_owner_already_registered_is_told_how_to_go_on(signups, monkeypatch):
     # e.g. an earlier init signed this owner up, then failed to create the key.
-    _Client.signup_reply = (400, {"detail": "Email already registered"})
+    monkeypatch.setattr(_Client, "signup_reply", (400, {"detail": "Email already registered"}))
 
     with pytest.raises(RuntimeError) as refused:
         _bootstrap_api_key("http://localhost:8000", "Acme", (EMAIL, OWNER_SECRET))
