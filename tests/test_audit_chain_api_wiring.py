@@ -312,17 +312,18 @@ def test_process_wide_logger_is_reused():
     assert audit_module._default_logger is get_audit_logger()
 
 
-def test_context_log_keeps_json_valid_with_ten_digit_numbers(isolated_audit_chain):
-    """A bare ten-digit number must not be redacted into an unquoted token."""
+def test_context_log_stores_the_result_as_returned_and_redacts_the_query(isolated_audit_chain):
+    """The result is stored unchanged, so a signed document still matches its
+    attestation (#532); only the query is redacted."""
     tenant = TenantContext(organization_id=ORG_ID, organization_name="Org", tier="free")
+    result = {"timestamp": 1730000000, "note": "call 555-123-4567"}
     verification_context_routes._safe_commit_context_log(
-        object(), tenant, "query", {"timestamp": 1730000000, "note": "call 555-123-4567"}, True
+        object(), tenant, "call 555-123-4567", result, True
     )
 
     (row,) = _rows(isolated_audit_chain)
-    stored = json.loads(row.result)
-    assert stored["timestamp"] == 1730000000
-    assert "555-123-4567" not in stored["note"]
+    assert json.loads(row.result) == result
+    assert "555-123-4567" not in row.query
     assert _verify(isolated_audit_chain, row.id)["valid"] is True
 
 
