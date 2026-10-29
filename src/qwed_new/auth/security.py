@@ -52,6 +52,14 @@ _validate_secret_config()
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 60))
 
+# bcrypt reads at most 72 bytes of a password; bcrypt 5 raises ValueError
+# for more, which reached callers as a 500 (#548).
+MAX_PASSWORD_BYTES = 72
+
+def password_too_long(password: str) -> bool:
+    """True when the password is longer than bcrypt can hash."""
+    return len(password.encode('utf-8')) > MAX_PASSWORD_BYTES
+
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt."""
     salt = bcrypt.gensalt()
@@ -59,6 +67,9 @@ def hash_password(password: str) -> str:
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash."""
+    # Signup refuses such a password (#548), so it cannot match.
+    if password_too_long(plain_password):
+        return False
     return bcrypt.checkpw(
         plain_password.encode('utf-8'),
         hashed_password.encode('utf-8')
