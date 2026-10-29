@@ -33,6 +33,8 @@ from qwed_sdk.cli import (
 
 TEST_TOKEN_MARKER = f"fixture-{uuid.uuid4().hex}"
 TEST_LOOKUP_MARKER = f"lookup-{uuid.uuid4().hex}"
+# Interactive init asks for the owner's email, then the password twice (#524).
+OWNER_INPUT = "owner@example.com\nowner-pass\nowner-pass\n"
 
 
 @pytest.fixture
@@ -1870,7 +1872,7 @@ def test_init_interactive_shows_warning_on_invalid_key_format(
     result = runner.invoke(
         init,
         ["--skip-tests"],
-        input="2\nsk-first\ndemo-org\n",
+        input="2\nsk-first\ndemo-org\n" + OWNER_INPUT,
     )
     assert result.exit_code == 0
     assert "Warning: bad format" in result.output
@@ -1909,7 +1911,7 @@ def test_init_interactive_prompts_for_model_when_default_empty(
     result = runner.invoke(
         init,
         ["--provider", "custom", "--skip-tests"],
-        input="custom-key\nhttps://custom.example/v1\nmodel-x\ndemo-org\n",
+        input="custom-key\nhttps://custom.example/v1\nmodel-x\ndemo-org\n" + OWNER_INPUT,
     )
     assert result.exit_code == 0
 
@@ -1950,7 +1952,8 @@ def test_init_interactive_custom_retry_prompts_base_url_again(
     result = runner.invoke(
         init,
         ["--provider", "custom", "--skip-tests"],
-        input="custom-key\nhttps://custom.example/v1\ny\ncustom-key-2\nhttps://custom2.example/v1\nmodel-y\ndemo-org\n",
+        input="custom-key\nhttps://custom.example/v1\ny\ncustom-key-2\nhttps://custom2.example/v1\nmodel-y\ndemo-org\n"
+        + OWNER_INPUT,
     )
     assert result.exit_code == 0
     assert mock_test_connection.call_count == 2
@@ -2080,7 +2083,7 @@ def test_init_non_interactive_autogenerates_org_name_when_missing(
         ],
     )
     assert result.exit_code == 0
-    _mock_bootstrap.assert_called_once_with("http://localhost:8000", "qwed-beef")
+    _mock_bootstrap.assert_called_once_with("http://localhost:8000", "qwed-beef", None)
 
 
 @patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
@@ -2228,7 +2231,7 @@ def test_init_interactive_retries_connection_until_success(
     result = runner.invoke(
         init,
         ["--skip-tests"],
-        input="2\nsk-first\ny\nsk-second\n\ndemo-org\n",
+        input="2\nsk-first\ny\nsk-second\n\ndemo-org\n" + OWNER_INPUT,
     )
 
     assert result.exit_code == 0

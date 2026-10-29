@@ -80,6 +80,22 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     database work runs in a worker thread, off the event loop.
   - The activity route moves from `api/main.py` to
     `api/agent_admin_routes.py`.
+- **`qwed init` can create an owner who can sign in (#524).** It signed up
+  with a generated email and password that it never showed or saved, so
+  nobody could sign in to the organisation it created, and its records could
+  not be read in qwed-dashboard.
+  - New `--owner-email` (or `QWED_OWNER_EMAIL`) names the owner. The
+    password is asked for with hidden input and a confirmation; it is never
+    a flag, so it stays out of shell history, and init neither prints nor
+    saves it. Without the flag, interactive init asks for the email too.
+  - With `--non-interactive`, the password comes from `QWED_OWNER_PASSWORD`;
+    an owner email without it stops init before the server starts. Without
+    an owner email, init creates the generated owner as before and warns
+    that nobody can sign in to the organisation.
+  - The email is checked for a basic `name@domain.tld` shape (the server
+    checks it fully), and the password must be 1 to 72 bytes, the most
+    bcrypt reads. An email that is already registered fails the signup, as
+    before.
 
 ### Changed
 
