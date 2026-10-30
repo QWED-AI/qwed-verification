@@ -43,6 +43,39 @@ _EXECUTABLE_COMMENT = re.compile(r"/\*M?!(?:\d{5,6})?(.*?)\*/", re.DOTALL)
 def expand_executable_comments(query: str) -> str:
     """Replace each MySQL/MariaDB executable comment with the SQL inside it."""
     return _EXECUTABLE_COMMENT.sub(lambda m: f" {m.group(1)} ", query)
+
+
+# Forms where sqlglot and the database can split a query into statements
+# differently (#533): a backslash (escape rules depend on server settings,
+# such as MySQL's NO_BACKSLASH_ESCAPES or PostgreSQL E'' strings), "--" not
+# followed by whitespace (MySQL starts a comment only then) and a "/*" inside
+# a block comment (only some engines nest them). In a query with one of these,
+# every ";" before the end counts as a separator, as it did before #533.
+_AMBIGUOUS_TOKENIZATION = re.compile(r"\\|--(?=\S)|/\*(?:(?!\*/).)*?/\*", re.DOTALL)
+_EMPTY_STATEMENT_TYPES = tuple(
+    t for t in (getattr(exp, "Semicolon", None),) if t is not None
+)
+
+
+def has_stacked_statements(query: str, dialect: str) -> bool:
+    """True when *query* holds more than one statement.
+
+    ``parse_one`` reads only the first statement, so the check is separate.
+    A ";" inside a string literal, a dollar-quoted string or a comment is not
+    a separator: the statements are counted from sqlglot's parse. Where
+    tokenizing is ambiguous (``_AMBIGUOUS_TOKENIZATION``) or the parse fails,
+    any ";" before the end counts (fail closed).
+    """
+    if ";" not in query.strip()[:-1]:
+        return False
+    if _AMBIGUOUS_TOKENIZATION.search(query):
+        return True
+    try:
+        parsed = sqlglot.parse(query, read=dialect)
+    except Exception:  # noqa: BLE001 — fail closed: count the raw ";"
+        return True
+    statements = [e for e in parsed if e is not None and not isinstance(e, _EMPTY_STATEMENT_TYPES)]
+    return len(statements) > 1
 CONSTRAINT_BATCH_BLOCKED = "sql_verifier.batch_blocked"
 
 # Issue types that prove malice. Resource-limit violations (complexity_*) are CRITICAL
@@ -392,7 +425,7 @@ class SQLVerifier:
             issues.extend(self._check_command_type(parsed_query))
             issues.extend(self._check_dangerous_functions(parsed_query))
             issues.extend(self._check_column_access(parsed_query))
-            issues.extend(self._check_injection_patterns(parsed_query, analysed))
+            issues.extend(self._check_injection_patterns(parsed_query, analysed, dialect))
 
             complexity = self._analyze_complexity(parsed_query)
 
@@ -631,7 +664,9 @@ class SQLVerifier:
     # Injection Pattern Detection
     # =========================================================================
     
-    def _check_injection_patterns(self, parsed_query: exp.Expression, raw_query: str) -> List[SQLIssue]:
+    def _check_injection_patterns(
+        self, parsed_query: exp.Expression, raw_query: str, dialect: str = "postgres"
+    ) -> List[SQLIssue]:
         """Detect SQL injection patterns."""
         issues = []
         
@@ -679,8 +714,9 @@ class SQLVerifier:
                 recommendation="Ensure UNION source is trusted."
             ))
         
-        # Stacked queries (multiple statements)
-        if ";" in raw_query.strip()[:-1]:  # Ignore trailing semicolon
+        # Stacked queries (multiple statements); a ";" in a literal or comment
+        # is not one (#533).
+        if has_stacked_statements(raw_query, dialect):
             issues.append(SQLIssue(
                 severity="CRITICAL",
                 issue_type="stacked_queries",

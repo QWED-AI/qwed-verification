@@ -251,6 +251,22 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     an `INSERT ... SELECT` and the UPDATE or DELETE of a writable CTE.
   - Two eval cases (`sql-019`, `sql-020`) prove a valid `IN (SELECT ...)`
     and a scalar subquery.
+- **A `;` inside a string or comment no longer marks a query as stacked
+  (#533).** SQLVerifier flagged `stacked_queries` (malicious, not admitted)
+  for any `;` before the last character of the query, so
+  `WHERE name = 'a;b'`, `/* ; */`, `$$a;b$$` and `...; -- note` were refused.
+  - Statements are now counted from sqlglot's parse (`has_stacked_statements`),
+    so a `;` inside a string literal, a dollar-quoted string or a comment is
+    not a separator. Two real statements are still `stacked_queries`.
+  - Where the database could split the text differently from sqlglot, every
+    `;` before the end still counts, as before: a backslash anywhere (escape
+    rules depend on server settings, such as MySQL's `NO_BACKSLASH_ESCAPES`),
+    `--` not followed by whitespace (MySQL starts a comment only then) and a
+    `/*` inside a block comment. A query that does not parse also counts
+    every `;`.
+  - Eval cases `sql-021` and `sql-022` prove a `;` in a string and in a
+    dollar-quoted string; `sql-023` checks that a backslash-escaped quote
+    followed by `; DROP TABLE` is never accepted.
 
 ## [8.0.0] - 2026-10-26
 
