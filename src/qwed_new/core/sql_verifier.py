@@ -736,25 +736,33 @@ class SQLVerifier:
         
         return metrics
     
+    # Statements whose SELECTs are subqueries: a SELECT nested in one of these
+    # is one level deeper. UPDATE, DELETE, INSERT and MERGE count, so a
+    # subquery of a permitted DML statement is held to max_subquery_depth.
+    _QUERY_LEVEL_TYPES = tuple(
+        {exp.Select} | _available_expression_types("Update", "Delete", "Insert", "Merge")
+    )
+
     def _calculate_subquery_depth(self, expression: exp.Expression) -> int:
         """Calculate maximum subquery nesting depth.
 
-        A SELECT's depth is the number of SELECTs it is nested in, wherever
-        it sits (WHERE, FROM, a scalar position, a CTE). Counting ancestors
-        visits each node once. The recursive walk this replaces called itself
-        on the same Subquery node, because ``find_all`` yields the node it
-        starts from, and raised RecursionError on any parenthesised subquery
-        (#529).
+        A SELECT's depth is the number of SELECT, UPDATE, DELETE, INSERT or
+        MERGE nodes it is nested in, wherever it sits (WHERE, FROM, a scalar
+        position, a CTE). One iterative pass carries the depth down the tree,
+        so each node is visited once and a long UNION chain stays linear. The
+        recursive walk this replaces called itself on the same Subquery node,
+        because ``find_all`` yields the node it starts from, and raised
+        RecursionError on any parenthesised subquery (#529).
         """
         max_depth = 0
-        for select in expression.find_all(exp.Select):
-            depth = 0
-            node = select.parent
-            while node is not None:
-                if isinstance(node, exp.Select):
-                    depth += 1
-                node = node.parent
-            max_depth = max(max_depth, depth)
+        stack = [(expression, 0)]
+        while stack:
+            node, depth = stack.pop()
+            if isinstance(node, exp.Select):
+                max_depth = max(max_depth, depth)
+            if isinstance(node, self._QUERY_LEVEL_TYPES):
+                depth += 1
+            stack.extend((child, depth) for child in node.iter_expressions())
         return max_depth
     
     def _estimate_cost(self, metrics: ComplexityMetrics) -> float:

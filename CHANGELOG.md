@@ -238,9 +238,13 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     and nesting past `max_subquery_depth` (3) is BLOCKED
     `sql_verifier.complexity_limit_exceeded`. Before, the depth limit never
     ran for these queries.
-  - `complexity.subquery_depth` is the number of SELECTs the deepest SELECT
-    is nested in. A `UNION` of two plain SELECTs now reports 0; it reported
-    1 before, which counted the union as a level of nesting.
+  - `complexity.subquery_depth` is the number of SELECT, UPDATE, DELETE,
+    INSERT or MERGE nodes the deepest SELECT is nested in, found in one pass
+    over the tree, so a long `UNION ALL` chain is checked in linear time. A
+    `UNION` of two plain SELECTs now reports 0; it reported 1 before, which
+    counted the union as a level of nesting. With `allow_destructive=True`,
+    a subquery of an UPDATE or DELETE counts as a level, and the SELECT of
+    an `INSERT ... SELECT` counts as one.
   - Two eval cases (`sql-019`, `sql-020`) prove a valid `IN (SELECT ...)`
     and a scalar subquery.
 
