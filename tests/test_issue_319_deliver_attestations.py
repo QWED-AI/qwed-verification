@@ -119,11 +119,13 @@ def test_a_batch_item_carries_its_token(client):
         {"query": "2 + 2 = 4", "type": "math"},
         {"query": "2 + 2 = 5", "type": "math"},
     ]}).json()
-    proven, not_equal = (item["result"] for item in body["items"])
+    proven, disproven = (item["result"] for item in body["items"])
 
     assert _verify(client, proven["attestation"])["qwed"]["proof_hash"] == proven["proof_ref"]
-    assert not_equal["status"] == "UNVERIFIABLE"
-    assert "attestation" not in not_equal
+    # Proven false is VERIFIED too (#530, as /verify/math), so it is signed;
+    # its admission is BLOCKED.
+    assert (disproven["status"], disproven["admission"]) == ("VERIFIED", "BLOCKED")
+    assert _verify(client, disproven["attestation"])["qwed"]["proof_hash"] == disproven["proof_ref"]
 
 
 # ---------------------------------------------------------------- the JWKS

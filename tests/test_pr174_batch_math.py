@@ -19,7 +19,8 @@ def test_batch_math_identity_verification_returns_valid(monkeypatch):
     assert result["type"] == "math"
     assert result["is_valid"] is True
     assert result["status"] == "VERIFIED"
-    assert result["agent_message"] == "Identity verified"
+    # The message /verify/math gives, from the shared verdict (#530).
+    assert result["agent_message"] == "Identity is true"
     assert result["proof_ref"] is not None
     assert result["is_authoritative"] is True
 
@@ -60,6 +61,8 @@ def test_batch_math_verified_attestation_failure_is_blocked(monkeypatch):
 
 
 def test_batch_math_non_identity_verification_returns_invalid():
+    """A claim proven false is a decided verdict, as on /verify/math: VERIFIED
+    with is_valid False and admission BLOCKED, not UNVERIFIABLE (#437, #530)."""
     service = BatchVerificationService()
     item = BatchItem(
         id="math-not-equal",
@@ -71,10 +74,10 @@ def test_batch_math_non_identity_verification_returns_invalid():
 
     assert result["type"] == "math"
     assert result["is_valid"] is False
-    assert result["status"] == "UNVERIFIABLE"
-    assert "Not equal" in result["agent_message"]
-    assert result["proof_ref"] is None
-    assert result["is_authoritative"] is False
+    assert result["status"] == "VERIFIED"
+    assert result["agent_message"] == "Identity is false"
+    assert result["proof_ref"] is not None
+    assert result["admission"] == "BLOCKED"
 
 
 def test_batch_math_simplification_only_is_not_reported_as_valid():
