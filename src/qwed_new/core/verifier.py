@@ -588,6 +588,25 @@ def _denominator_factors(denominator: Any) -> Optional[set]:
     }
 
 
+def has_undefined_part(expression: str) -> bool:
+    """True when a symbol-free part of ``expression`` is undefined, or when
+    that cannot be checked.
+
+    SymPy evaluates such parts away (``log(0)**0`` becomes 1), so a claim
+    about ``log(0)**0`` would otherwise be decided as a claim about 1. Text
+    Python cannot parse (implicit multiplication) is read as undefined when
+    it has a division, power or domain-restricted function, as
+    ``_singular_factors`` reads it.
+    """
+    expression = unicodedata.normalize("NFKC", expression).strip()
+    parsed = _parse_domain_text(expression)
+    if parsed is None:
+        if _text_names(expression) & _DOMAIN_RESTRICTED_FUNCTIONS:
+            return True
+        return any(token in expression for token in ("/", "%", "**", "^"))
+    return _has_undefined_closed_part(*parsed)
+
+
 def identity_domains_match(lhs: str, rhs: str) -> bool:
     """True when both sides of an identity are undefined at the same points.
 

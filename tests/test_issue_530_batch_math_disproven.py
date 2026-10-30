@@ -89,6 +89,7 @@ def test_the_batch_keeps_its_own_fields():
     "0.1 + 0.2 = 0.3",
     "9**9**9**(x**2+8) = 1",
     "sin(x)**2 + cos(x)**2 = 1",
+    "log(0)**0 = 2",
 ])
 def test_the_batch_and_the_route_agree(client, expression):
     route = client.post("/verify/math", json={"expression": expression}).json()
@@ -99,8 +100,36 @@ def test_the_batch_and_the_route_agree(client, expression):
     assert (batch["proof_ref"] is None) == (route["proof_ref"] is None)
 
 
-def test_the_shared_function_decides_without_signing():
+def test_the_shared_function_decides_without_signing(monkeypatch):
+    from qwed_new.core import trust
+
+    def _no_signing(**_kwargs):
+        raise AssertionError("math_identity_result must not sign")
+
+    monkeypatch.setattr(trust, "create_verification_attestation", _no_signing)
+
     dr = math_identity_result("2+2=5")
 
     assert (dr.status.value, dr.developer_fields["is_valid"]) == ("VERIFIED", False)
-    assert "attestation" not in dr.developer_fields
+    assert dr.attestation is None  # the token lives on the result, not in developer_fields
+
+
+# ---------------------------------------------------- undefined parts (review on #557)
+
+@pytest.mark.parametrize("expression", ["log(0)**0 = 2", "tan(pi/2)**0 = 3", "2 = log(0)**0"])
+def test_a_claim_with_an_undefined_part_is_not_disproven(expression):
+    # SymPy evaluates log(0)**0 to 1, so the difference is non-zero, but the
+    # side is undefined: there is no value to disprove.
+    result = _batch(expression)
+
+    assert (result["status"], result["is_valid"], result["admission"]) == ("UNVERIFIABLE", False, "BLOCKED")
+    assert result["constraint_id"] == "math.undefined_part"
+    assert result["proof_ref"] is None
+
+
+@pytest.mark.parametrize("expression", ["x/x = 2", "2x = 3x", "log(x) = 5", "log(2)**0 = 2"])
+def test_a_defined_claim_is_still_disproven(expression):
+    # x/x = 2 is false wherever x/x is defined; log(2)**0 is a defined 1.
+    result = _batch(expression)
+
+    assert (result["status"], result["is_valid"]) == ("VERIFIED", False)

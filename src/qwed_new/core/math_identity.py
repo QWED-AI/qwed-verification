@@ -14,9 +14,14 @@ from qwed_new.core.safe_parser import safe_parse_expr
 from qwed_new.core.verifier import (
     DISPROVEN_STATUS,
     DOMAIN_RESTRICTED_IDENTITY,
+    has_undefined_part,
     identity_domains_match,
     symbolic_difference_status,
 )
+
+# A side has an undefined part SymPy evaluated away (log(0)**0 is 1): the
+# claim is not about a defined value, so it is neither proven nor disproven.
+UNDEFINED_PART_IDENTITY = "math.undefined_part"
 
 
 def math_identity_result(expression: str) -> DiagnosticResult:
@@ -30,6 +35,9 @@ def math_identity_result(expression: str) -> DiagnosticResult:
     - VERIFIED, ``is_valid`` False (``DiagnosticResult.disproven``): SymPy
       decides the difference is non-zero. A proven-false claim is a decided
       verdict, never "inconclusive" (#437).
+    - UNVERIFIABLE with ``UNDEFINED_PART_IDENTITY``: the difference is
+      non-zero, but a side has an undefined part SymPy evaluated away
+      (``log(0)**0 = 2``), so there is no defined value to disprove.
     - UNVERIFIABLE: anything undecided, including a non-zero difference that
       holds a Float, whose rounding residue proves nothing.
 
@@ -62,6 +70,16 @@ def math_identity_result(expression: str) -> DiagnosticResult:
             "Identity is true",
             developer_fields={"is_valid": True, "result": True, **fields},
             evidence=fields,
+        )
+    if identity_status == DISPROVEN_STATUS and (has_undefined_part(left_str) or has_undefined_part(right_str)):
+        return DiagnosticResult.unverifiable(
+            "A side of the identity is undefined",
+            developer_fields={
+                "is_valid": False,
+                "result": None,
+                "constraint_id": UNDEFINED_PART_IDENTITY,
+                **fields,
+            },
         )
     if identity_status == DISPROVEN_STATUS:
         return DiagnosticResult.disproven(
