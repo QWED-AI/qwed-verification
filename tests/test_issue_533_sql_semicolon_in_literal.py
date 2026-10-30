@@ -95,3 +95,27 @@ def test_a_query_that_does_not_parse_counts_every_semicolon():
 @pytest.mark.parametrize("query", ["SELECT 1", "SELECT 1;", "  SELECT 1 ;  "])
 def test_a_single_statement_without_an_inner_semicolon_is_not_stacked(query):
     assert has_stacked_statements(query, "postgres") is False
+
+
+# Line comments (review on #555). sqlglot ends "--" and "#" comments at \r as
+# well as \n, so a ";" after either is a separator, as PostgreSQL reads it;
+# MySQL ends them only at \n, so where they differ this side is the stricter.
+@pytest.mark.parametrize("dialect", ["postgres", "sqlite", "mysql", "tsql", "bigquery"])
+@pytest.mark.parametrize("query", [
+    "SELECT 1 -- note\r; DROP TABLE users",
+    "SELECT 1 -- note\n; DROP TABLE users",
+    "SELECT 1 -- note\r\n; DROP TABLE users",
+])
+def test_a_semicolon_after_a_line_comment_ends_is_a_separator(query, dialect):
+    assert has_stacked_statements(query, dialect) is True
+
+
+@pytest.mark.parametrize("query", ["SELECT 1 # note\r; DROP TABLE users", "SELECT 1 # note\n; DROP TABLE users"])
+def test_a_semicolon_after_a_mysql_hash_comment_ends_is_a_separator(query):
+    assert has_stacked_statements(query, "mysql") is True
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "sqlite", "tsql"])
+def test_a_hash_is_not_a_comment_where_the_dialect_has_none(dialect):
+    # Not a comment there: sqlglot either fails to parse or sees two statements.
+    assert has_stacked_statements("SELECT 1 # ; DROP TABLE users", dialect) is True
