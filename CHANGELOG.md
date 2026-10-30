@@ -228,6 +228,21 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     coverage versions. The README shows how to take a file's digest.
   - In the SDK, `StartupHookGuard` takes `pinned_pth_digests`, and
     `parse_startup_hook_allowlist` parses the variable's value.
+- **SQLVerifier no longer blocks every query with a parenthesised subquery
+  (#529).** `_calculate_subquery_depth` called itself on the same Subquery
+  node until Python raised RecursionError, so `verify_sql` returned BLOCKED
+  `sql_verifier.execution_error` for any `IN (SELECT ...)`, scalar subquery
+  or subquery in `FROM`. That reached `/verify/sql`, SQL items of
+  `/verify/batch` and `QWEDClient.verify_sql`.
+  - Such queries are now checked like any other. A valid one is VERIFIED,
+    and nesting past `max_subquery_depth` (3) is BLOCKED
+    `sql_verifier.complexity_limit_exceeded`. Before, the depth limit never
+    ran for these queries.
+  - `complexity.subquery_depth` is the number of SELECTs the deepest SELECT
+    is nested in. A `UNION` of two plain SELECTs now reports 0; it reported
+    1 before, which counted the union as a level of nesting.
+  - Two eval cases (`sql-019`, `sql-020`) prove a valid `IN (SELECT ...)`
+    and a scalar subquery.
 
 ## [8.0.0] - 2026-10-26
 

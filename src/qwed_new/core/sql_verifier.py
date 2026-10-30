@@ -736,20 +736,25 @@ class SQLVerifier:
         
         return metrics
     
-    def _calculate_subquery_depth(self, expression: exp.Expression, depth: int = 0) -> int:
-        """Calculate maximum subquery nesting depth."""
-        max_depth = depth
-        
-        for subquery in expression.find_all(exp.Subquery):
-            nested_depth = self._calculate_subquery_depth(subquery, depth + 1)
-            max_depth = max(max_depth, nested_depth)
-        
-        # Also check for subqueries in FROM clause
+    def _calculate_subquery_depth(self, expression: exp.Expression) -> int:
+        """Calculate maximum subquery nesting depth.
+
+        A SELECT's depth is the number of SELECTs it is nested in, wherever
+        it sits (WHERE, FROM, a scalar position, a CTE). Counting ancestors
+        visits each node once. The recursive walk this replaces called itself
+        on the same Subquery node, because ``find_all`` yields the node it
+        starts from, and raised RecursionError on any parenthesised subquery
+        (#529).
+        """
+        max_depth = 0
         for select in expression.find_all(exp.Select):
-            if select != expression:
-                nested_depth = self._calculate_subquery_depth(select, depth + 1)
-                max_depth = max(max_depth, nested_depth)
-        
+            depth = 0
+            node = select.parent
+            while node is not None:
+                if isinstance(node, exp.Select):
+                    depth += 1
+                node = node.parent
+            max_depth = max(max_depth, depth)
         return max_depth
     
     def _estimate_cost(self, metrics: ComplexityMetrics) -> float:
