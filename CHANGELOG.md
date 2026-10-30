@@ -200,6 +200,15 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     agreeing.
   - Rows written before this change keep their redacted copy and still do
     not verify against their attestation.
+- **The whole-chain check no longer calls itself a check "in the period"
+  (#521).** `GET /admin/compliance/verify-trail` with no `start` or `end`
+  checks every entry of the organisation, but its `scope` said "audit entries
+  recorded in the period". With neither bound, `scope` now reads "Signature
+  and hash-chain check of every audit entry recorded for the organisation".
+  With a `start`, an `end` or both, it still names the period. Both keep "It
+  does not show that every request was recorded." The activity summary
+  always has a period, so its `audit_trail` keeps the period wording. Only
+  the text changed: the status, counts and `proof_ref` are as before.
 
 ## [8.0.0] - 2026-10-26
 
