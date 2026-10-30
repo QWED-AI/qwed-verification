@@ -209,6 +209,25 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   does not show that every request was recorded." The activity summary
   always has a period, so its `audit_trail` keeps the period wording. Only
   the text changed: the status, counts and `proof_ref` are as before.
+- **A startup hook can be allowed by the digest of its contents (#491).** In
+  a Python 3.11 venv, setuptools' `distutils-precedence.pth` (which uses
+  `__import__(`) and coverage's `a1_coverage.pth` (which uses `exec(`) stopped
+  the server at startup. Allowing them by name did not help, because an
+  allowed name is still scanned for those patterns, so the only way through
+  was `QWED_SKIP_ENV_INTEGRITY_CHECK=true`.
+  - `QWED_ALLOWED_STARTUP_PTH_FILES` now also takes `NAME.pth:sha256:<64 hex>`.
+    Such a file is allowed only while its exact contents hash to that digest,
+    and is then not pattern-scanned, since any change to it changes the
+    digest. A pin overrides an allowed name of the same file.
+  - A pinned file whose contents differ fails the check, counted as
+    `digest_mismatch` in the guard's `counts`. A pin that is not
+    `NAME.pth:sha256:<64 hex>` stops startup with a ValueError instead of
+    being read as a name.
+  - A plain name works as before, and the suspicious patterns are unchanged.
+    No digests are built in: these files change between setuptools and
+    coverage versions. The README shows how to take a file's digest.
+  - In the SDK, `StartupHookGuard` takes `pinned_pth_digests`, and
+    `parse_startup_hook_allowlist` parses the variable's value.
 
 ## [8.0.0] - 2026-10-26
 

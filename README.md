@@ -166,6 +166,14 @@ curl -X POST http://localhost:8000/verify/math \
 
 The full endpoint list is in the [API reference](https://docs.qwedai.tech/api/overview). For running QWED without the server, see [QWEDLocal](https://docs.qwedai.tech/advanced/qwed-local).
 
+At startup the server checks the `.pth` startup hooks in `site-packages` and refuses to start if one is unknown or holds a suspicious pattern. In a Python 3.11 venv, setuptools' `distutils-precedence.pth` and coverage's `a1_coverage.pth` both trip it. Allow such a file by the SHA-256 of its exact contents, in `QWED_ALLOWED_STARTUP_PTH_FILES` (comma-separated):
+
+```bash
+python -c "import hashlib,os,sys; p=sys.argv[1]; print(os.path.basename(p) + ':sha256:' + hashlib.sha256(open(p,'rb').read()).hexdigest())" path/to/site-packages/distutils-precedence.pth
+```
+
+Put the printed `NAME.pth:sha256:<hex>` in the variable. A pinned file is allowed only while its contents match; when the package that wrote it is upgraded, take the digest again. A plain file name there allows an unknown file, but it is still scanned for suspicious patterns. `QWED_SKIP_ENV_INTEGRITY_CHECK=true` turns the whole check off.
+
 ## Engines and guards
 
 QWED has 13 engines and 9 policy guards. What an engine may claim depends on its tier ([details](https://docs.qwedai.tech/engines/overview)).
