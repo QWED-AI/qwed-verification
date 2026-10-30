@@ -50,7 +50,9 @@ _SUSPICIOUS_PATH_PATTERNS = [
     re.compile(r"^https?://"),                    # URL-based path injection
 ]
 
-_DIGEST_PIN = re.compile(r"^(?P<name>[^:]+\.pth):sha256:(?P<digest>[0-9a-fA-F]{64})$")
+# The name is a bare file name: the scan matches pins to a file's base name,
+# so a pin with a directory in it could never apply.
+_DIGEST_PIN = re.compile(r"^(?P<name>[^:/\\]+\.pth):sha256:(?P<digest>[0-9a-fA-F]{64})$")
 
 
 def parse_startup_hook_allowlist(value: str) -> Tuple[Set[str], Dict[str, str]]:
@@ -73,7 +75,8 @@ def parse_startup_hook_allowlist(value: str) -> Tuple[Set[str], Dict[str, str]]:
         match = _DIGEST_PIN.match(entry)
         if match is None:
             raise ValueError(
-                f"Startup hook allowlist entry {entry!r} is not NAME.pth:sha256:<64 hex>"
+                f"Startup hook allowlist entry {entry!r} is not NAME.pth:sha256:<64 hex>, "
+                "with NAME a file name and no directory"
             )
         pins[match["name"]] = match["digest"].lower()
     return names, pins

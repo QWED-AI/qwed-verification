@@ -78,6 +78,8 @@ def test_names_and_pins_are_parsed_apart():
     f"{SETUPTOOLS}:md5:{'a' * 32}",          # another algorithm
     f"{SETUPTOOLS}:{'a' * 64}",              # no algorithm
     f"hook.txt:sha256:{'a' * 64}",           # not a .pth name
+    f"site/{SETUPTOOLS}:sha256:{'a' * 64}",  # a directory: pins match base names
+    f"site\\{SETUPTOOLS}:sha256:{'a' * 64}",
 ])
 def test_a_malformed_pin_raises_instead_of_becoming_a_name(entry):
     with pytest.raises(ValueError, match="NAME.pth:sha256"):
