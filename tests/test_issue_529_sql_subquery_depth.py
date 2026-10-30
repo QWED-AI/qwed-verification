@@ -130,7 +130,8 @@ def test_a_long_union_chain_is_walked_once(monkeypatch):
         exp.Expression, "iter_expressions", lambda self, *a, **k: visits.append(self) or real(self, *a, **k)
     )
     # Count reads of each node's parent: walking every SELECT's ancestors, as
-    # the first fix did, reads about operands**2 / 2 of them.
+    # the first fix did, reads about operands**2 / 2 of them (about 125,000
+    # here). The walk reads at most a couple per node.
     slot = exp.Expression.__dict__["parent"]
     parent_reads = []
 
@@ -142,7 +143,7 @@ def test_a_long_union_chain_is_walked_once(monkeypatch):
 
     assert SQLVerifier()._calculate_subquery_depth(tree) == 0
     assert len(visits) == nodes
-    assert len(parent_reads) <= nodes
+    assert len(parent_reads) <= 2 * nodes
 
 
 def test_tuple_children_from_older_sqlglot_are_unwrapped(monkeypatch):
@@ -159,4 +160,43 @@ def test_tuple_children_from_older_sqlglot_are_unwrapped(monkeypatch):
         lambda self, *a, **k: (c if isinstance(c, tuple) else (c.arg_key, c) for c in real(self, *a, **k)),
     )
 
+    assert SQLVerifier()._calculate_subquery_depth(tree) == 1
+
+
+# ------------------------------------------------- MERGE actions and VALUES CTEs
+
+@pytest.mark.parametrize(("query", "depth"), [
+    # Review on #554: sqlglot parses each WHEN action as an UPDATE or INSERT
+    # under the MERGE; they are part of the MERGE, not nested statements.
+    (
+        (
+            "MERGE INTO users USING orders ON users.id = orders.user_id "
+            "WHEN MATCHED THEN UPDATE SET name = 'x' "
+            "WHEN NOT MATCHED THEN INSERT (id) VALUES (orders.user_id)"
+        ),
+        0,
+    ),
+    (
+        (
+            "MERGE INTO users USING orders ON users.id = orders.user_id "
+            "WHEN MATCHED THEN UPDATE SET name = (SELECT MAX(name) FROM users)"
+        ),
+        1,
+    ),
+])
+def test_merge_when_actions_are_not_a_level(query, depth):
+    verifier = SQLVerifier(allow_destructive=True)
+
+    assert verifier.verify_sql(query, None, "postgres").developer_fields["complexity"]["subquery_depth"] == depth
+
+
+def test_a_cte_with_a_bare_values_body_counts_as_a_level():
+    # sqlglot 20.x keeps a CTE's VALUES body bare; newer versions wrap it in a
+    # SELECT (review on #554). Either way the CTE is one level.
+    from sqlglot import exp, parse_one
+
+    tree = parse_one("WITH c AS (SELECT 1) SELECT * FROM c", read="sqlite")
+    tree.find(exp.CTE).set("this", parse_one("VALUES (1)", read="sqlite"))
+
+    assert isinstance(tree.find(exp.CTE).this, exp.Values)
     assert SQLVerifier()._calculate_subquery_depth(tree) == 1

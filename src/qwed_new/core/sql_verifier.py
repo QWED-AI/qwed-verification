@@ -748,8 +748,9 @@ class SQLVerifier:
 
         A statement's depth is the number of SELECT, UPDATE, DELETE, INSERT
         or MERGE nodes it is nested in, wherever it sits (WHERE, FROM, a
-        scalar position, a CTE); a CTE of a set operation counts as one level
-        too. The query's depth is the deepest statement's.
+        scalar position, a CTE); a CTE counts as one level whatever its body
+        or statement, and a MERGE's WHEN actions count as part of the MERGE.
+        The query's depth is the deepest statement's.
         One iterative pass carries the depth down the tree,
         so each node is visited once and a long UNION chain stays linear. The
         recursive walk this replaces called itself on the same Subquery node,
@@ -760,14 +761,18 @@ class SQLVerifier:
         stack = [(expression, 0)]
         while stack:
             node, depth = stack.pop()
+            # The UPDATE or INSERT of a MERGE ... WHEN action is part of the
+            # MERGE, not a statement nested in it.
+            statement = isinstance(node, self._QUERY_LEVEL_TYPES) and not isinstance(node.parent, exp.When)
             # Every statement counts where it sits, not only a SELECT: an
-            # UPDATE or DELETE in a writable CTE is nested too.
-            if isinstance(node, self._QUERY_LEVEL_TYPES):
+            # UPDATE or DELETE in a writable CTE is nested too. So does every
+            # CTE, whatever its body: sqlglot 20.x keeps a VALUES body bare.
+            if statement or isinstance(node, exp.CTE):
                 max_depth = max(max_depth, depth)
             # A CTE nests in its statement. Under a SELECT or DML node that
             # node already added the level; sqlglot attaches the CTE of a
             # UNION, INTERSECT or EXCEPT to the set operation, which adds none.
-            if isinstance(node, self._QUERY_LEVEL_TYPES) or (
+            if statement or (
                 isinstance(node, exp.With) and not isinstance(node.parent, self._QUERY_LEVEL_TYPES)
             ):
                 depth += 1

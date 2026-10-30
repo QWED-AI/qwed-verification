@@ -243,7 +243,10 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     over the tree, so a long `UNION ALL` chain is checked in linear time. A
     `UNION` of two plain SELECTs now reports 0; it reported 1 before, which
     counted the union as a level of nesting. A CTE counts as one level
-    whether its statement is a SELECT or a UNION. With `allow_destructive=True`,
+    whether its statement is a SELECT or a UNION, and whatever its body
+    (sqlglot 20.x keeps a `VALUES` body bare). The UPDATE or INSERT of a
+    MERGE's `WHEN` action is part of the MERGE, so a plain MERGE reports 0.
+    With `allow_destructive=True`,
     a subquery of an UPDATE or DELETE counts as a level, as do the SELECT of
     an `INSERT ... SELECT` and the UPDATE or DELETE of a writable CTE.
   - Two eval cases (`sql-019`, `sql-020`) prove a valid `IN (SELECT ...)`
