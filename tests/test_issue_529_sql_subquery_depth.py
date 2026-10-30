@@ -88,12 +88,9 @@ def test_a_subquery_of_a_permitted_dml_statement_counts_as_a_level(query, depth)
     # Review on #554: a SELECT under UPDATE or DELETE has no enclosing SELECT,
     # but it is still a subquery, so max_subquery_depth must see it.
     verifier = SQLVerifier(allow_destructive=True, complexity_limits={"max_subquery_depth": 0})
+    verdict = ("BLOCKED", "sql_verifier.complexity_limit_exceeded") if depth else ("VERIFIED", "sql_verifier.sql_valid")
 
-    status, constraint, reported = _verify(query, verifier)
-
-    assert reported == depth
-    expected = ("BLOCKED", "sql_verifier.complexity_limit_exceeded") if depth else ("VERIFIED", "sql_verifier.sql_valid")
-    assert (status, constraint) == expected
+    assert _verify(query, verifier) == (*verdict, depth)
 
 
 def test_a_long_union_chain_is_walked_once(monkeypatch):
@@ -124,3 +121,17 @@ def test_a_long_union_chain_is_walked_once(monkeypatch):
     assert SQLVerifier()._calculate_subquery_depth(tree) == 0
     assert len(visits) == nodes
     assert len(parent_reads) <= nodes
+
+
+def test_tuple_children_from_older_sqlglot_are_unwrapped(monkeypatch):
+    # sqlglot 20.x, which pyproject allows, yields tuples from
+    # iter_expressions (review on #554). The walk takes the expression out.
+    from sqlglot import exp, parse_one
+
+    tree = parse_one("SELECT name FROM users WHERE id IN (SELECT user_id FROM orders)", read="sqlite")
+    real = exp.Expression.iter_expressions
+    monkeypatch.setattr(
+        exp.Expression, "iter_expressions", lambda self, *a, **k: ((c.arg_key, c) for c in real(self, *a, **k))
+    )
+
+    assert SQLVerifier()._calculate_subquery_depth(tree) == 1

@@ -762,7 +762,13 @@ class SQLVerifier:
                 max_depth = max(max_depth, depth)
             if isinstance(node, self._QUERY_LEVEL_TYPES):
                 depth += 1
-            stack.extend((child, depth) for child in node.iter_expressions())
+            for child in node.iter_expressions():
+                # Older sqlglot (20.x, allowed by pyproject) yields tuples
+                # holding the child; take the expression out of the tuple.
+                if isinstance(child, tuple):
+                    child = next((c for c in child if isinstance(c, exp.Expression)), None)
+                if child is not None:
+                    stack.append((child, depth))
         return max_depth
     
     def _estimate_cost(self, metrics: ComplexityMetrics) -> float:
