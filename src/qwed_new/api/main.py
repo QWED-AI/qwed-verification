@@ -329,28 +329,20 @@ STARTUP_ALLOWED_PTH_FILES = {
 }
 
 
-def _get_env_allowlisted_pth_files() -> set[str]:
-    """Parse deployment-provided exact startup hook allowlist entries."""
-    extra = os.environ.get("QWED_ALLOWED_STARTUP_PTH_FILES", "")
-    return {name.strip() for name in extra.split(",") if name.strip()}
-
-
-def _get_startup_hook_allowlist() -> set[str]:
-    """Return additional expected startup hook files for this deployment."""
-    allowlist = set(STARTUP_ALLOWED_PTH_FILES)
-    allowlist.update(_get_env_allowlisted_pth_files())
-    return allowlist
-
-
 def _enforce_environment_integrity() -> None:
     """Fail startup if Python startup hooks cannot be verified as safe."""
     if os.environ.get("QWED_SKIP_ENV_INTEGRITY_CHECK") == "true":
         logger.warning("Bypassing environment integrity check due to QWED_SKIP_ENV_INTEGRITY_CHECK")
         return
 
-    from qwed_sdk.guards.environment_guard import StartupHookGuard
+    from qwed_sdk.guards.environment_guard import (
+        StartupHookGuard,
+        parse_startup_hook_allowlist,
+    )
 
-    guard = StartupHookGuard(allowed_pth_files=_get_startup_hook_allowlist())
+    # Names, and NAME.pth:sha256:<hex> digest pins (#491); a bad pin raises.
+    names, pins = parse_startup_hook_allowlist(os.environ.get("QWED_ALLOWED_STARTUP_PTH_FILES", ""))
+    guard = StartupHookGuard(allowed_pth_files=STARTUP_ALLOWED_PTH_FILES | names, pinned_pth_digests=pins)
     result = guard.verify_environment_integrity()
     if not result.get("verified"):
         logger.critical(f"Startup environment integrity check failed: {result}")

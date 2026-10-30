@@ -14,10 +14,11 @@ This guard scans all site-packages directories for unauthorized .pth files
 and inspects their contents for known malicious patterns.
 """
 
+import hashlib
 import os
 import re
 import site
-from typing import Any, Dict, FrozenSet, List, Optional, Set
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 
 # Patterns that indicate malicious intent inside .pth files
@@ -48,6 +49,42 @@ _SUSPICIOUS_PATH_PATTERNS = [
     re.compile(r"^~"),                            # home directory expansion
     re.compile(r"^https?://"),                    # URL-based path injection
 ]
+
+# The name is a bare file name: the scan matches pins to a file's base name,
+# so a pin with a directory in it could never apply.
+_DIGEST_PIN = re.compile(r"^(?P<name>[^:/\\]+\.pth):sha256:(?P<digest>[0-9a-fA-F]{64})$")
+
+
+def parse_startup_hook_allowlist(value: str) -> Tuple[Set[str], Dict[str, str]]:
+    """Parse a comma-separated allowlist into names and digest pins (#491).
+
+    An entry is a file name (``my_hook.pth``), which is allowed and still
+    scanned for suspicious patterns, or a name with the SHA-256 of its exact
+    contents (``my_hook.pth:sha256:<64 hex>``), which is allowed only while
+    its contents match. Any other entry with a colon raises ValueError, so
+    a mistyped pin fails closed instead of becoming a plain name.
+    """
+    names: Set[str] = set()
+    pins: Dict[str, str] = {}
+    for entry in (part.strip() for part in value.split(",")):
+        if not entry:
+            continue
+        if ":" not in entry:
+            names.add(entry)
+            continue
+        match = _DIGEST_PIN.match(entry)
+        if match is None:
+            raise ValueError(
+                f"Startup hook allowlist entry {entry!r} is not NAME.pth:sha256:<64 hex>, "
+                "with NAME a file name and no directory"
+            )
+        pins[match["name"]] = match["digest"].lower()
+    return names, pins
+
+
+def _sha256_of(filepath: str) -> str:
+    with open(filepath, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
 
 
 class StartupHookGuard:
@@ -82,6 +119,7 @@ class StartupHookGuard:
         self,
         allowed_pth_files: Optional[Set[str]] = None,
         scan_contents: bool = True,
+        pinned_pth_digests: Optional[Dict[str, str]] = None,
     ):
         """
         Args:
@@ -89,11 +127,17 @@ class StartupHookGuard:
             scan_contents: When True, scans file contents for malicious
                 patterns. Note: allowlisted files are always scanned for
                 tampering regardless of this flag (fail-closed design).
+            pinned_pth_digests: .pth filename to the SHA-256 hex digest of
+                its exact contents (#491). A pinned file is allowed only
+                while its digest matches, and is then not pattern-scanned:
+                any change to it changes the digest. A pin overrides an
+                allowlisted name.
         """
         self.allowed = set(self.DEFAULT_ALLOWED)
         if allowed_pth_files:
             self.allowed |= allowed_pth_files
         self.scan_contents = scan_contents
+        self.pinned = {name: digest.lower() for name, digest in (pinned_pth_digests or {}).items()}
 
     def _get_site_dirs(self) -> List[str]:
         """Return all site-packages directories to scan (sorted for determinism)."""
@@ -191,6 +235,30 @@ class StartupHookGuard:
             return True
         return False
 
+    @staticmethod
+    def _pin_fails(
+        filepath: str,
+        expected: str,
+        counts: Dict[str, int],
+        content_findings: List[str],
+    ) -> bool:
+        """Check a pinned .pth file's digest; return True if it fails."""
+        try:
+            actual = _sha256_of(filepath)
+        except OSError as exc:
+            content_findings.append(
+                f"Unable to read {filepath} ({type(exc).__name__}: {exc})"
+            )
+            counts["unreadable"] += 1
+            return True
+        if actual == expected:
+            return False
+        content_findings.append(
+            f"Digest mismatch: {filepath} is sha256:{actual}, pinned sha256:{expected}"
+        )
+        counts["digest_mismatch"] = counts.get("digest_mismatch", 0) + 1
+        return True
+
     def _scan_directory(
         self,
         site_dir: str,
@@ -212,6 +280,10 @@ class StartupHookGuard:
             if not filename.endswith(".pth"):
                 continue
             filepath = os.path.join(site_dir, filename)
+            if filename in self.pinned:
+                if self._pin_fails(filepath, self.pinned[filename], counts, content_findings):
+                    suspicious_hooks.append(filepath)
+                continue
             is_allowlisted = filename in self.allowed
             if self._classify_file(
                 filepath, is_allowlisted, counts, content_findings
@@ -230,6 +302,8 @@ class StartupHookGuard:
             parts.append(f"{counts['unreadable']} unreadable (possible tampering)")
         if counts.get("unauthorized"):
             parts.append(f"{counts['unauthorized']} unauthorized (not on allowlist)")
+        if counts.get("digest_mismatch"):
+            parts.append(f"{counts['digest_mismatch']} not matching its pinned digest")
         if scan_errors:
             parts.append(f"{len(scan_errors)} directory scan failure(s)")
 
@@ -270,6 +344,7 @@ class StartupHookGuard:
             "malicious": 0,
             "unreadable": 0,
             "unauthorized": 0,
+            "digest_mismatch": 0,
         }
 
         for site_dir in self._get_site_dirs():
