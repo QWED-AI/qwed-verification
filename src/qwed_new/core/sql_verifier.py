@@ -746,9 +746,10 @@ class SQLVerifier:
     def _calculate_subquery_depth(self, expression: exp.Expression) -> int:
         """Calculate maximum subquery nesting depth.
 
-        A SELECT's depth is the number of SELECT, UPDATE, DELETE, INSERT or
-        MERGE nodes it is nested in, wherever it sits (WHERE, FROM, a scalar
-        position, a CTE); a CTE of a set operation counts as one level too.
+        A statement's depth is the number of SELECT, UPDATE, DELETE, INSERT
+        or MERGE nodes it is nested in, wherever it sits (WHERE, FROM, a
+        scalar position, a CTE); a CTE of a set operation counts as one level
+        too. The query's depth is the deepest statement's.
         One iterative pass carries the depth down the tree,
         so each node is visited once and a long UNION chain stays linear. The
         recursive walk this replaces called itself on the same Subquery node,
@@ -759,7 +760,9 @@ class SQLVerifier:
         stack = [(expression, 0)]
         while stack:
             node, depth = stack.pop()
-            if isinstance(node, exp.Select):
+            # Every statement counts where it sits, not only a SELECT: an
+            # UPDATE or DELETE in a writable CTE is nested too.
+            if isinstance(node, self._QUERY_LEVEL_TYPES):
                 max_depth = max(max_depth, depth)
             # A CTE nests in its statement. Under a SELECT or DML node that
             # node already added the level; sqlglot attaches the CTE of a

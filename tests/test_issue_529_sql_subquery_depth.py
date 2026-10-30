@@ -83,6 +83,9 @@ def test_the_depth_issue_names_the_depth_and_the_limit():
     ("UPDATE users SET name = 'x' WHERE id IN (SELECT user_id FROM orders)", 1),
     ("DELETE FROM users WHERE id IN (SELECT user_id FROM orders)", 1),
     ("UPDATE users SET name = 'x' WHERE id = 1", 0),
+    # A writable CTE: the UPDATE or DELETE is nested in the SELECT.
+    ("WITH c AS (UPDATE users SET name = 'x' RETURNING id) SELECT id FROM c", 1),
+    ("WITH c AS (DELETE FROM users RETURNING id) SELECT id FROM c", 1),
 ])
 def test_a_subquery_of_a_permitted_dml_statement_counts_as_a_level(query, depth):
     # Review on #554: a SELECT under UPDATE or DELETE has no enclosing SELECT,
