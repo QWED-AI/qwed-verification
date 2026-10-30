@@ -32,8 +32,11 @@ STACKED = [
 AMBIGUOUS = [
     # MySQL with NO_BACKSLASH_ESCAPES, or PostgreSQL, ends the string at \'.
     "SELECT name FROM users WHERE name = 'a\\'; DROP TABLE users; --'",
-    # MySQL starts a comment at "--" only when whitespace follows.
+    # MySQL starts a comment at "--" only when ASCII whitespace follows; a
+    # Unicode space such as U+00A0 is not one (review on #555).
     "SELECT 1 --; DROP TABLE users",
+    "SELECT 1 -- ; DROP TABLE users",
+    "SELECT 1 --　; DROP TABLE users",
     # Only some engines nest block comments.
     "SELECT 1 /* a /* b */ ; DROP TABLE users; */",
 ]

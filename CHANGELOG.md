@@ -261,9 +261,12 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - Where the database could split the text differently from sqlglot, every
     `;` before the end still counts, as before: a backslash anywhere (escape
     rules depend on server settings, such as MySQL's `NO_BACKSLASH_ESCAPES`),
-    `--` not followed by whitespace (MySQL starts a comment only then) and a
-    `/*` inside a block comment. A query that does not parse also counts
-    every `;`.
+    `--` not followed by ASCII whitespace (MySQL starts a comment only then;
+    a Unicode space such as U+00A0 is not one) and a `/*` inside a block
+    comment. A query that does not parse also counts every `;`.
+  - A query with exactly one statement is analysed as that statement. With
+    sqlglot 30, `parse_one` returned a `Block` for `SELECT ...; -- note`,
+    which was blocked as not read-only.
   - Eval cases `sql-021` and `sql-022` prove a `;` in a string and in a
     dollar-quoted string; `sql-023` checks that a backslash-escaped quote
     followed by `; DROP TABLE` is never accepted.

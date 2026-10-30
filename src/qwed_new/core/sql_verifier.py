@@ -48,10 +48,13 @@ def expand_executable_comments(query: str) -> str:
 # Forms where sqlglot and the database can split a query into statements
 # differently (#533): a backslash (escape rules depend on server settings,
 # such as MySQL's NO_BACKSLASH_ESCAPES or PostgreSQL E'' strings), "--" not
-# followed by whitespace (MySQL starts a comment only then) and a "/*" inside
-# a block comment (only some engines nest them). In a query with one of these,
-# every ";" before the end counts as a separator, as it did before #533.
-_AMBIGUOUS_TOKENIZATION = re.compile(r"\\|--(?=\S)|/\*(?:(?!\*/).)*?/\*", re.DOTALL)
+# followed by ASCII whitespace (MySQL starts a comment only then; a Unicode
+# space such as U+00A0 does not count, so the class is spelt out rather than
+# \s) and a "/*" inside a block comment (only some engines nest them). In a
+# query with one of these, every ";" before the end counts as a separator, as
+# it did before #533. The scan does not track quotes, so a literal holding
+# one of these forms also counts every ";" (fail closed).
+_AMBIGUOUS_TOKENIZATION = re.compile(r"\\|--(?![ \t\n\r\f\v])|/\*(?:(?!\*/).)*?/\*", re.DOTALL)
 _EMPTY_STATEMENT_TYPES = tuple(
     t for t in (getattr(exp, "Semicolon", None),) if t is not None
 )
@@ -74,8 +77,25 @@ def has_stacked_statements(query: str, dialect: str) -> bool:
         parsed = sqlglot.parse(query, read=dialect)
     except Exception:  # noqa: BLE001 — fail closed: count the raw ";"
         return True
-    statements = [e for e in parsed if e is not None and not isinstance(e, _EMPTY_STATEMENT_TYPES)]
-    return len(statements) > 1
+    return len(_non_empty(parsed)) > 1
+
+
+def _non_empty(parsed: List[Optional[exp.Expression]]) -> List[exp.Expression]:
+    """The statements of a parse, without the empty ones a trailing ";" or
+    a comment after it leaves (None, or ``exp.Semicolon``)."""
+    return [e for e in parsed if e is not None and not isinstance(e, _EMPTY_STATEMENT_TYPES)]
+
+
+def _single_statement(query: str, dialect: str) -> Optional[exp.Expression]:
+    """The query's statement when it has exactly one, else None.
+
+    For ``SELECT ...; -- note`` sqlglot 30 ``parse_one`` returns a ``Block``
+    of the SELECT and the empty statement after it, which is not a read-only
+    root; sqlglot 28 returns the SELECT (#533). With more than one statement
+    the caller keeps ``parse_one``'s result, and the query is stacked anyway.
+    """
+    statements = _non_empty(sqlglot.parse(query, read=dialect))
+    return statements[0] if len(statements) == 1 else None
 CONSTRAINT_BATCH_BLOCKED = "sql_verifier.batch_blocked"
 
 # Issue types that prove malice. Resource-limit violations (complexity_*) are CRITICAL
@@ -402,7 +422,7 @@ class SQLVerifier:
         executable_comments = bool(_EXECUTABLE_COMMENT.search(query))
         analysed = expand_executable_comments(query) if executable_comments else query
         try:
-            parsed_query = parse_one(analysed, read=dialect)
+            parsed_query = _single_statement(analysed, dialect) or parse_one(analysed, read=dialect)
         except Exception as exc:  # noqa: BLE001 — fail-closed by design
             return DiagnosticResult.blocked(
                 agent_message=(
