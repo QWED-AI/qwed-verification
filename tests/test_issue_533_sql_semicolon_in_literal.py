@@ -39,6 +39,14 @@ AMBIGUOUS = [
     "SELECT 1 --\u3000; DROP TABLE users",
     # Only some engines nest block comments.
     "SELECT 1 /* a /* b */ ; DROP TABLE users; */",
+    # A plain comment inside a MySQL executable comment: expanding it ends
+    # the executable comment at the inner "*/" (Sentry on #555).
+    "SELECT 1 /*!50000 /* x */ ; DROP TABLE users */",
+    "SELECT 1 /*! /* x */ ; DROP TABLE users */",
+    # A bare carriage return: PostgreSQL ends a line comment there, MySQL and
+    # SQLite do not, and sqlglot versions disagree (CI on #555).
+    "SELECT 1 -- note\r; DROP TABLE users",
+    "SELECT 1 # note\r; DROP TABLE users",
 ]
 
 
@@ -97,12 +105,11 @@ def test_a_single_statement_without_an_inner_semicolon_is_not_stacked(query):
     assert has_stacked_statements(query, "postgres") is False
 
 
-# Line comments (review on #555). sqlglot ends "--" and "#" comments at \r as
-# well as \n, so a ";" after either is a separator, as PostgreSQL reads it;
-# MySQL ends them only at \n, so where they differ this side is the stricter.
+# Line comments (review on #555). A ";" after a line comment's \n or \r\n is a
+# separator in every dialect. A bare \r is in AMBIGUOUS above: the guard
+# counts it whatever the installed sqlglot does with it.
 @pytest.mark.parametrize("dialect", ["postgres", "sqlite", "mysql", "tsql", "bigquery"])
 @pytest.mark.parametrize("query", [
-    "SELECT 1 -- note\r; DROP TABLE users",
     "SELECT 1 -- note\n; DROP TABLE users",
     "SELECT 1 -- note\r\n; DROP TABLE users",
 ])
@@ -110,9 +117,8 @@ def test_a_semicolon_after_a_line_comment_ends_is_a_separator(query, dialect):
     assert has_stacked_statements(query, dialect) is True
 
 
-@pytest.mark.parametrize("query", ["SELECT 1 # note\r; DROP TABLE users", "SELECT 1 # note\n; DROP TABLE users"])
-def test_a_semicolon_after_a_mysql_hash_comment_ends_is_a_separator(query):
-    assert has_stacked_statements(query, "mysql") is True
+def test_a_semicolon_after_a_mysql_hash_comment_ends_is_a_separator():
+    assert has_stacked_statements("SELECT 1 # note\n; DROP TABLE users", "mysql") is True
 
 
 @pytest.mark.parametrize("dialect", ["postgres", "sqlite", "tsql"])

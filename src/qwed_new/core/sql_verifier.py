@@ -50,11 +50,14 @@ def expand_executable_comments(query: str) -> str:
 # such as MySQL's NO_BACKSLASH_ESCAPES or PostgreSQL E'' strings), "--" not
 # followed by ASCII whitespace (MySQL starts a comment only then; a Unicode
 # space such as U+00A0 does not count, so the class is spelt out rather than
-# \s) and a "/*" inside a block comment (only some engines nest them). In a
-# query with one of these, every ";" before the end counts as a separator, as
-# it did before #533. The scan does not track quotes, so a literal holding
-# one of these forms also counts every ";" (fail closed).
-_AMBIGUOUS_TOKENIZATION = re.compile(r"\\|--(?![ \t\n\r\f\v])|/\*(?:(?!\*/).)*?/\*", re.DOTALL)
+# \s), a "/*" inside a block comment (only some engines nest them) and a
+# carriage return not followed by a line feed (PostgreSQL ends a line comment
+# there, MySQL and SQLite do not, and sqlglot versions differ: 30.20 ends it,
+# 30.26 does not for mysql and sqlite). In a query with one of these, every
+# ";" before the end counts as a separator, as it did before #533. The scan
+# does not track quotes, so a literal holding one of these forms also counts
+# every ";" (fail closed).
+_AMBIGUOUS_TOKENIZATION = re.compile(r"\\|--(?![ \t\n\r\f\v])|/\*(?:(?!\*/).)*?/\*|\r(?!\n)", re.DOTALL)
 _EMPTY_STATEMENT_TYPES = tuple(
     t for t in (getattr(exp, "Semicolon", None),) if t is not None
 )
@@ -65,16 +68,21 @@ def has_stacked_statements(query: str, dialect: str) -> bool:
 
     ``parse_one`` reads only the first statement, so the check is separate.
     A ";" inside a string literal, a dollar-quoted string or a comment is not
-    a separator: the statements are counted from sqlglot's parse. Where
-    tokenizing is ambiguous (``_AMBIGUOUS_TOKENIZATION``) or the parse fails,
-    any ";" before the end counts (fail closed).
+    a separator: the statements are counted from sqlglot's parse of the query
+    with MySQL executable comments expanded. Where tokenizing is ambiguous
+    (``_AMBIGUOUS_TOKENIZATION``, in the query as given or as expanded) or
+    the parse fails, any ";" before the end counts (fail closed). Checking the
+    query as given matters: expanding ``/*!50000 /* x */ ; DROP ... */`` ends
+    the executable comment at the inner "*/" and leaves the rest inside a
+    plain comment, which hides the ";" from the parse.
     """
-    if ";" not in query.strip()[:-1]:
+    expanded = expand_executable_comments(query)
+    if ";" not in expanded.strip()[:-1]:
         return False
-    if _AMBIGUOUS_TOKENIZATION.search(query):
+    if _AMBIGUOUS_TOKENIZATION.search(query) or _AMBIGUOUS_TOKENIZATION.search(expanded):
         return True
     try:
-        parsed = sqlglot.parse(query, read=dialect)
+        parsed = sqlglot.parse(expanded, read=dialect)
     except Exception:  # noqa: BLE001 — fail closed: count the raw ";"
         return True
     return len(_non_empty(parsed)) > 1
@@ -450,7 +458,9 @@ class SQLVerifier:
             issues.extend(self._check_command_type(parsed_query))
             issues.extend(self._check_dangerous_functions(parsed_query))
             issues.extend(self._check_column_access(parsed_query))
-            issues.extend(self._check_injection_patterns(parsed_query, analysed, dialect))
+            # The query as given: the stacked check expands executable
+            # comments itself, and must also see what expansion hides.
+            issues.extend(self._check_injection_patterns(parsed_query, query, dialect))
 
             complexity = self._analyze_complexity(parsed_query)
 

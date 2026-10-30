@@ -262,8 +262,13 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     `;` before the end still counts, as before: a backslash anywhere (escape
     rules depend on server settings, such as MySQL's `NO_BACKSLASH_ESCAPES`),
     `--` not followed by ASCII whitespace (MySQL starts a comment only then;
-    a Unicode space such as U+00A0 is not one) and a `/*` inside a block
-    comment. A query that does not parse also counts every `;`.
+    a Unicode space such as U+00A0 is not one), a `/*` inside a block
+    comment, and a carriage return not followed by a line feed (PostgreSQL
+    ends a line comment there, MySQL and SQLite do not, and sqlglot versions
+    disagree). These are checked in the query as given as well as with MySQL
+    executable comments expanded, since expanding `/*!50000 /* x */ ; ... */`
+    ends the executable comment at the inner `*/`. A query that does not
+    parse also counts every `;`.
   - A query with exactly one statement is analysed as that statement. With
     sqlglot 30, `parse_one` returned a `Block` for `SELECT ...; -- note`,
     which was blocked as not read-only.
