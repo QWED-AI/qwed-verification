@@ -294,12 +294,15 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     Admission is unchanged: BLOCKED.
   - `sdk-fixtures/batch.json` and the Rust, Go and TypeScript contract tests
     now expect the second item `VERIFIED · BLOCKED`.
-  - A claim with a side whose symbol-free part is undefined, which SymPy
-    evaluates away (`log(0)**0 = 2`: `log(0)**0` becomes 1), is no longer
-    disproven. On both routes it is UNVERIFIABLE with
+  - A claim with a side that has an undefined part, which SymPy evaluates
+    away (`log(0)**0 = 2` and `log(x - x)**0 = 2`: both sides become 1), is
+    no longer disproven. On both routes it is UNVERIFIABLE with
     `math.undefined_part`, since there is no defined value to disprove.
-    `/verify/math` gave it a signed disproof before; `x/x = 2`, which is
-    false wherever `x/x` is defined, is still disproven.
+    `/verify/math` gave it a signed disproof before. A part is undefined when
+    it evaluates to `zoo` or `nan` (a symbol-free part also when it is not
+    finite); implicit multiplication (`2x^2`) is read through SymPy's own
+    grammar first. `x/x = 2`, which is false wherever `x/x` is defined, and
+    `2x^2 = 5` are still disproven.
 
 ## [8.0.0] - 2026-10-26
 

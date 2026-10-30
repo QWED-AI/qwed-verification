@@ -116,7 +116,12 @@ def test_the_shared_function_decides_without_signing(monkeypatch):
 
 # ---------------------------------------------------- undefined parts (review on #557)
 
-@pytest.mark.parametrize("expression", ["log(0)**0 = 2", "tan(pi/2)**0 = 3", "2 = log(0)**0"])
+@pytest.mark.parametrize("expression", [
+    "log(0)**0 = 2",
+    "tan(pi/2)**0 = 3",
+    "2 = log(0)**0",
+    "log(x-x)**0 = 2",  # x - x cancels, leaving log(0) (CodeRabbit on #557)
+])
 def test_a_claim_with_an_undefined_part_is_not_disproven(expression):
     # SymPy evaluates log(0)**0 to 1, so the difference is non-zero, but the
     # side is undefined: there is no value to disprove.
@@ -127,7 +132,18 @@ def test_a_claim_with_an_undefined_part_is_not_disproven(expression):
     assert result["proof_ref"] is None
 
 
-@pytest.mark.parametrize("expression", ["x/x = 2", "2x = 3x", "log(x) = 5", "log(2)**0 = 2"])
+@pytest.mark.parametrize("expression", [
+    "x/x = 2",
+    "2x = 3x",
+    "log(x) = 5",
+    "log(2)**0 = 2",
+    # Implicit multiplication with a power, a division or a function, which
+    # Python cannot parse (Gitar, Greptile and Sentry on #557).
+    "2x^2 = 5",
+    "2x**2 = 3x**2",
+    "3x/2 = x",
+    "2log(x) = 5",
+])
 def test_a_defined_claim_is_still_disproven(expression):
     # x/x = 2 is false wherever x/x is defined; log(2)**0 is a defined 1.
     result = _batch(expression)

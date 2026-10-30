@@ -589,22 +589,53 @@ def _denominator_factors(denominator: Any) -> Optional[set]:
 
 
 def has_undefined_part(expression: str) -> bool:
-    """True when a symbol-free part of ``expression`` is undefined, or when
-    that cannot be checked.
+    """True when a part of ``expression`` is undefined, or when that cannot
+    be checked.
 
-    SymPy evaluates such parts away (``log(0)**0`` becomes 1), so a claim
-    about ``log(0)**0`` would otherwise be decided as a claim about 1. Text
-    Python cannot parse (implicit multiplication) is read as undefined when
-    it has a division, power or domain-restricted function, as
-    ``_singular_factors`` reads it.
+    SymPy evaluates undefined parts away (``log(0)**0`` and ``log(x - x)**0``
+    both become 1), so a claim about them would otherwise be decided as a
+    claim about 1. A part is undefined when it evaluates to ``zoo`` or
+    ``nan``; a symbol-free part also when it is not finite. ``x/x``, which is
+    1 wherever it is defined, is not undefined. Text Python cannot parse
+    (implicit multiplication, ``2x^2``) is read through SymPy's own grammar
+    first, unevaluated, so it gets the same check.
     """
     expression = unicodedata.normalize("NFKC", expression).strip()
-    parsed = _parse_domain_text(expression)
+    parsed = _parse_domain_text(expression) or _parse_domain_text(_explicit_text(expression))
     if parsed is None:
-        if _text_names(expression) & _DOMAIN_RESTRICTED_FUNCTIONS:
+        return True
+    return _has_undefined_closed_part(*parsed) or _has_undefined_symbol_part(*parsed)
+
+
+def _explicit_text(expression: str) -> str:
+    """``expression`` as SymPy reads it, unevaluated, with implicit
+    multiplication made explicit (``2x^2`` is ``2*x**2``); "" if it does not
+    parse."""
+    try:
+        with evaluate(False):
+            return str(safe_parse_expr(expression))
+    except (ValueError, TypeError):
+        return ""
+
+
+def _has_undefined_symbol_part(normalized: str, nodes: List[ast.AST]) -> bool:
+    """True when a part that names a symbol is undefined once SymPy has
+    evaluated it: ``log(x - x)`` is ``log(0)``, ``1/(x - x)`` is ``zoo``.
+    Such parts are skipped by ``_has_undefined_closed_part``."""
+    parts = [n for n in nodes if isinstance(n, (ast.Call, ast.BinOp, ast.UnaryOp))]
+    if len(parts) > _MAX_DOMAIN_SCAN_NODES:
+        return True
+    with_symbol = _nodes_naming_a_symbol(nodes)
+    for node in parts:
+        if id(node) not in with_symbol:
+            continue
+        try:
+            value = safe_parse_expr(ast.get_source_segment(normalized, node))
+        except ValueError:
             return True
-        return any(token in expression for token in ("/", "%", "**", "^"))
-    return _has_undefined_closed_part(*parsed)
+        if value.has(zoo, nan):
+            return True
+    return False
 
 
 def identity_domains_match(lhs: str, rhs: str) -> bool:
