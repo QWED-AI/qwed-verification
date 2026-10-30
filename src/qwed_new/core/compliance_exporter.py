@@ -35,6 +35,22 @@ logger = logging.getLogger(__name__)
 # The audit-trail check lists at most this many errors in a report.
 _MAX_REPORTED_ERRORS = 20
 
+_NOT_EVERY_REQUEST = "It does not show that every request was recorded."
+
+
+def _trail_scope(start_date: Optional[datetime], end_date: Optional[datetime]) -> str:
+    """What the audit-trail check covered: the whole chain when no start or
+    end was given (#521), otherwise the period."""
+    if start_date is None and end_date is None:
+        return (
+            "Signature and hash-chain check of every audit entry recorded for "
+            f"the organisation. {_NOT_EVERY_REQUEST}"
+        )
+    return (
+        "Signature and hash-chain check of the audit entries recorded in "
+        f"the period. {_NOT_EVERY_REQUEST}"
+    )
+
 
 class ComplianceExporter:
     """
@@ -236,10 +252,7 @@ class ComplianceExporter:
         closed: if the check cannot run (for example QWED_AUDIT_SECRET_KEY is unset), the result
         is NOT_VERIFIED.
         """
-        scope = (
-            "Signature and hash-chain check of the audit entries recorded in "
-            "the period. It does not show that every request was recorded."
-        )
+        scope = _trail_scope(start_date, end_date)
         try:
             trail = get_audit_logger().verify_audit_trail(
                 organization_id, start_date=start_date, end_date=end_date
