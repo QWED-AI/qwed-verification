@@ -736,21 +736,65 @@ class SQLVerifier:
         
         return metrics
     
-    def _calculate_subquery_depth(self, expression: exp.Expression, depth: int = 0) -> int:
-        """Calculate maximum subquery nesting depth."""
-        max_depth = depth
-        
-        for subquery in expression.find_all(exp.Subquery):
-            nested_depth = self._calculate_subquery_depth(subquery, depth + 1)
-            max_depth = max(max_depth, nested_depth)
-        
-        # Also check for subqueries in FROM clause
-        for select in expression.find_all(exp.Select):
-            if select != expression:
-                nested_depth = self._calculate_subquery_depth(select, depth + 1)
-                max_depth = max(max_depth, nested_depth)
-        
+    # Statements whose SELECTs are subqueries: a SELECT nested in one of these
+    # is one level deeper. UPDATE, DELETE, INSERT and MERGE count, so a
+    # subquery of a permitted DML statement is held to max_subquery_depth.
+    _QUERY_LEVEL_TYPES = tuple(
+        {exp.Select} | _available_expression_types("Update", "Delete", "Insert", "Merge")
+    )
+
+    def _calculate_subquery_depth(self, expression: exp.Expression) -> int:
+        """Calculate maximum subquery nesting depth.
+
+        A statement's depth is the number of SELECT, UPDATE, DELETE, INSERT
+        or MERGE nodes it is nested in, wherever it sits (WHERE, FROM, a
+        scalar position, a CTE); a CTE counts as one level whatever its body
+        or statement, and a MERGE's WHEN actions count as part of the MERGE.
+        The query's depth is the deepest statement's.
+        One iterative pass carries the depth down the tree,
+        so each node is visited once and a long UNION chain stays linear. The
+        recursive walk this replaces called itself on the same Subquery node,
+        because ``find_all`` yields the node it starts from, and raised
+        RecursionError on any parenthesised subquery (#529).
+        """
+        max_depth = 0
+        stack = [(expression, 0)]
+        while stack:
+            node, depth = stack.pop()
+            statement = self._is_statement(node)
+            # Every statement counts where it sits, not only a SELECT: an
+            # UPDATE or DELETE in a writable CTE is nested too. So does every
+            # CTE, whatever its body: sqlglot 20.x keeps a VALUES body bare.
+            if statement or isinstance(node, exp.CTE):
+                max_depth = max(max_depth, depth)
+            if statement or self._is_set_operation_cte(node):
+                depth += 1
+            stack.extend((child, depth) for child in self._child_expressions(node))
         return max_depth
+
+    def _is_statement(self, node: exp.Expression) -> bool:
+        """A SELECT, UPDATE, DELETE, INSERT or MERGE. The UPDATE or INSERT of a
+        MERGE ... WHEN action is part of the MERGE, not a statement nested in it."""
+        return isinstance(node, self._QUERY_LEVEL_TYPES) and not isinstance(node.parent, exp.When)
+
+    def _is_set_operation_cte(self, node: exp.Expression) -> bool:
+        """A WITH that no statement holds. A CTE nests in its statement: under a
+        SELECT or DML node that node already added the level, but sqlglot
+        attaches the CTE of a UNION, INTERSECT or EXCEPT to the set operation,
+        which adds none."""
+        return isinstance(node, exp.With) and not isinstance(node.parent, self._QUERY_LEVEL_TYPES)
+
+    @staticmethod
+    def _child_expressions(node: exp.Expression) -> List[exp.Expression]:
+        """The node's child expressions. Older sqlglot (20.x, allowed by
+        pyproject) yields tuples holding the child; take the expression out."""
+        children = []
+        for child in node.iter_expressions():
+            if isinstance(child, tuple):
+                child = next((c for c in child if isinstance(c, exp.Expression)), None)
+            if child is not None:
+                children.append(child)
+        return children
     
     def _estimate_cost(self, metrics: ComplexityMetrics) -> float:
         """
