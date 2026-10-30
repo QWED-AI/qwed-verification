@@ -748,7 +748,8 @@ class SQLVerifier:
 
         A SELECT's depth is the number of SELECT, UPDATE, DELETE, INSERT or
         MERGE nodes it is nested in, wherever it sits (WHERE, FROM, a scalar
-        position, a CTE). One iterative pass carries the depth down the tree,
+        position, a CTE); a CTE of a set operation counts as one level too.
+        One iterative pass carries the depth down the tree,
         so each node is visited once and a long UNION chain stays linear. The
         recursive walk this replaces called itself on the same Subquery node,
         because ``find_all`` yields the node it starts from, and raised
@@ -760,7 +761,12 @@ class SQLVerifier:
             node, depth = stack.pop()
             if isinstance(node, exp.Select):
                 max_depth = max(max_depth, depth)
-            if isinstance(node, self._QUERY_LEVEL_TYPES):
+            # A CTE nests in its statement. Under a SELECT or DML node that
+            # node already added the level; sqlglot attaches the CTE of a
+            # UNION, INTERSECT or EXCEPT to the set operation, which adds none.
+            if isinstance(node, self._QUERY_LEVEL_TYPES) or (
+                isinstance(node, exp.With) and not isinstance(node.parent, self._QUERY_LEVEL_TYPES)
+            ):
                 depth += 1
             for child in node.iter_expressions():
                 # Older sqlglot (20.x, allowed by pyproject) yields tuples

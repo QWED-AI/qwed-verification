@@ -93,6 +93,25 @@ def test_a_subquery_of_a_permitted_dml_statement_counts_as_a_level(query, depth)
     assert _verify(query, verifier) == (*verdict, depth)
 
 
+@pytest.mark.parametrize(("query", "depth"), [
+    # sqlglot attaches the CTE to the UNION, not to a SELECT (review on #554).
+    ("WITH c AS (SELECT user_id FROM orders) SELECT user_id FROM c UNION ALL SELECT id FROM users", 1),
+    (
+        (
+            "SELECT name FROM users WHERE id IN "
+            "(WITH c AS (SELECT user_id FROM orders) SELECT user_id FROM c UNION SELECT id FROM users)"
+        ),
+        2,
+    ),
+    ("WITH c AS (SELECT user_id FROM orders) SELECT user_id FROM c", 1),
+])
+def test_a_cte_counts_as_a_level_on_a_union_as_on_a_select(query, depth):
+    assert _verify(query)[2] == depth
+    # With no nesting allowed, a query with a CTE is not admitted.
+    strict = SQLVerifier(complexity_limits={"max_subquery_depth": 0})
+    assert _verify(query, strict)[:2] == ("BLOCKED", "sql_verifier.complexity_limit_exceeded")
+
+
 def test_a_long_union_chain_is_walked_once(monkeypatch):
     # sqlglot nests a UNION ALL chain to the left. Each node is visited once,
     # so the walk is linear in the chain (review on #554), and no level is
@@ -131,7 +150,10 @@ def test_tuple_children_from_older_sqlglot_are_unwrapped(monkeypatch):
     tree = parse_one("SELECT name FROM users WHERE id IN (SELECT user_id FROM orders)", read="sqlite")
     real = exp.Expression.iter_expressions
     monkeypatch.setattr(
-        exp.Expression, "iter_expressions", lambda self, *a, **k: ((c.arg_key, c) for c in real(self, *a, **k))
+        exp.Expression,
+        "iter_expressions",
+        # Wrap bare children; pass through any that already are tuples.
+        lambda self, *a, **k: (c if isinstance(c, tuple) else (c.arg_key, c) for c in real(self, *a, **k)),
     )
 
     assert SQLVerifier()._calculate_subquery_depth(tree) == 1

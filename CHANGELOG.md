@@ -242,7 +242,8 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     INSERT or MERGE nodes the deepest SELECT is nested in, found in one pass
     over the tree, so a long `UNION ALL` chain is checked in linear time. A
     `UNION` of two plain SELECTs now reports 0; it reported 1 before, which
-    counted the union as a level of nesting. With `allow_destructive=True`,
+    counted the union as a level of nesting. A CTE counts as one level
+    whether its statement is a SELECT or a UNION. With `allow_destructive=True`,
     a subquery of an UPDATE or DELETE counts as a level, and the SELECT of
     an `INSERT ... SELECT` counts as one.
   - Two eval cases (`sql-019`, `sql-020`) prove a valid `IN (SELECT ...)`
