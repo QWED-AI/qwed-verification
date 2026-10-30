@@ -35,8 +35,8 @@ AMBIGUOUS = [
     # MySQL starts a comment at "--" only when ASCII whitespace follows; a
     # Unicode space such as U+00A0 is not one (review on #555).
     "SELECT 1 --; DROP TABLE users",
-    "SELECT 1 -- ; DROP TABLE users",
-    "SELECT 1 --　; DROP TABLE users",
+    "SELECT 1 --\u00a0; DROP TABLE users",
+    "SELECT 1 --\u3000; DROP TABLE users",
     # Only some engines nest block comments.
     "SELECT 1 /* a /* b */ ; DROP TABLE users; */",
 ]
