@@ -96,6 +96,11 @@ def _single_statement(query: str, dialect: str) -> Optional[exp.Expression]:
     """
     statements = _non_empty(sqlglot.parse(query, read=dialect))
     return statements[0] if len(statements) == 1 else None
+
+
+def _parse_query(query: str, dialect: str) -> exp.Expression:
+    """The tree verify_sql analyses: the single statement, else parse_one's."""
+    return _single_statement(query, dialect) or parse_one(query, read=dialect)
 CONSTRAINT_BATCH_BLOCKED = "sql_verifier.batch_blocked"
 
 # Issue types that prove malice. Resource-limit violations (complexity_*) are CRITICAL
@@ -422,7 +427,7 @@ class SQLVerifier:
         executable_comments = bool(_EXECUTABLE_COMMENT.search(query))
         analysed = expand_executable_comments(query) if executable_comments else query
         try:
-            parsed_query = _single_statement(analysed, dialect) or parse_one(analysed, read=dialect)
+            parsed_query = _parse_query(analysed, dialect)
         except Exception as exc:  # noqa: BLE001 — fail-closed by design
             return DiagnosticResult.blocked(
                 agent_message=(
