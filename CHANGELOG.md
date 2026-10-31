@@ -330,17 +330,20 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     `2*diff(sqrt(x), x) = 1/sqrt(x)` are VERIFIED, not UNVERIFIABLE.
   - Leibniz notation (`d/dx`, `dy/dx`, `d(x^2)/dx`, `dy/dtheta`,
     `dy/(2*dx)`, `d/d(x)(x^2)`, `d^2y/dx^2`) is refused instead of misread,
-    with the message to write `diff(f, x)`. Three shapes are matched,
+    with the message to write `diff(f, x)`. A name the parser knows
+    (`delta`, `diff`, or a caller's own symbol) is never refused. Otherwise,
     wherever they stand (`/dx`, `/(-2*dfoo)`, `x*dx`):
-    - a name that is `d` joined to a variable: a symbol the parser knows
-      (`dx`, `dt`, `dtheta`, `d2y`) or a name the expression also uses
-      (`dfoo` beside `foo`, `dx_1` beside `x_1`);
-    - a lone `d` over a `d` name, the `d/dx` operator (`d/dx_1`, `d/dfoo`);
+    - a name starting with `d` that SymPy splits into letters, so reads as
+      `d` times the rest: `dx`, `dV/dT` (read as `V/T`), `dtheta`, `d2y`.
+      This includes `data` (read as `a**2*d*t`), since the claim decided
+      would not be the one written; pass such a name in `extra_symbols` to
+      use it as a symbol;
+    - a name with `_`, which SymPy keeps whole, only when the rest is a
+      variable used beside it (`dx_1` beside `x_1`), so `distance_m` is a
+      symbol;
+    - a lone `d` over a `d` name the parser does not know, the `d/dx`
+      operator (`d/dx_1`); `d/delta` and `d/diff(...)` still parse;
     - a lone `d` that a denominator applies to a variable (`d(x)`, `d x`).
-    - A name the parser knows that starts with `d` (`delta`, `diff`, or a
-      caller's own symbol) is not a differential, and neither is one whose
-      rest is not a variable (`data`, `distance`, `distance_m`), so
-      `data*2 = 2*data` is still VERIFIED.
   - Input the parser refuses is BLOCKED with `math.parse_error` and
     "Expression could not be parsed", as SQL and schema parse errors are, not
     with `api.math.execution_error`. The parser's own text is not returned.

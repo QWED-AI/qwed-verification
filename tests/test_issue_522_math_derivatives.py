@@ -136,6 +136,14 @@ def test_the_derivative_order_is_bounded_across_the_expression(text):
     # The d/dx operator over any d-name (CodeRabbit on PR #558).
     "d/dx_1",
     "d/dfoo",
+    # Variables the parser does not know, which it splits into letters
+    # (Gitar on PR #558): dV/dT would be read as V/T.
+    "dV/dT",
+    "dE/dT",
+    "x/(2*dfoo)",
+    # Not a differential, but read as a**2*d*t, so the claim decided would
+    # not be the one written (CodeRabbit on PR #558).
+    "data*2",
 ])
 def test_leibniz_notation_is_refused(text):
     with pytest.raises(DerivativeNotationError):
@@ -146,8 +154,8 @@ def test_leibniz_notation_is_refused(text):
     "d/2", "x*d/(2*d)", "d + x", "delta*x", "x/delta", "x/diff(x**2, x)", "x/d*y", "x/(d)",
     # SymPy keeps a name with "_" whole (CodeRabbit on PR #558).
     "distance_m", "x/distance_m", "dx_1",
-    # A d-name that is not d joined to a variable (Sentry on PR #558).
-    "data", "distance", "data*2", "x/(2*dfoo)",
+    # A name the parser knows after a lone d (Gitar and Greptile on PR #558).
+    "d/delta", "d/diff(x**2, x)",
 ])
 def test_the_symbol_d_still_parses(text):
     safe_parse_expr(text)
@@ -155,6 +163,8 @@ def test_the_symbol_d_still_parses(text):
 
 def test_a_caller_symbol_that_starts_with_d_is_not_a_differential():
     assert safe_parse_expr("x/dt", extra_symbols={"dt": sympy.Symbol("dt")}) == x / sympy.Symbol("dt")
+    data = sympy.Symbol("data")
+    assert safe_parse_expr("data*2", extra_symbols={"data": data}) == 2 * data
 
 
 @pytest.mark.parametrize(("expression", "status", "is_valid", "admission", "message"), [
@@ -163,8 +173,7 @@ def test_a_caller_symbol_that_starts_with_d_is_not_a_differential():
     ("Derivative(x^2, x) = 2x", "VERIFIED", True, "ADMIT", "Identity is true"),
     ("diff(x**2, x) = 3*x", "VERIFIED", False, "BLOCKED", "Identity is false"),
     ("diff(x**2, x) == 3*x", "VERIFIED", False, "BLOCKED", "Identity is false"),
-    # A name that starts with d is not a differential (Sentry on PR #558).
-    ("data*2 = 2*data", "VERIFIED", True, "ADMIT", "Identity is true"),
+    ("d/delta = d/delta", "VERIFIED", True, "ADMIT", "Identity is true"),
 ])
 def test_a_derivative_claim_is_decided(client, expression, status, is_valid, admission, message):
     result = client.post("/verify/math", json={"expression": expression}).json()
@@ -180,6 +189,8 @@ def test_a_derivative_claim_is_decided(client, expression, status, is_valid, adm
     ("d(x^2)/dx = 2x", DERIVATIVE_NOTATION_MESSAGE),
     ("dy/dtheta == dy/dtheta", DERIVATIVE_NOTATION_MESSAGE),
     ("d/dx_1 == d/dx_1", DERIVATIVE_NOTATION_MESSAGE),
+    ("dV/dT = V/T", DERIVATIVE_NOTATION_MESSAGE),
+    ("data*2 = 2*data", DERIVATIVE_NOTATION_MESSAGE),
     ("diff(x**5, x, 4) = 120*x", "Expression could not be parsed"),
     ("x <= 2", "Expression could not be parsed"),
     ("a = b = c", "Expression could not be parsed"),

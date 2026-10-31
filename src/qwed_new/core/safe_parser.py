@@ -99,17 +99,18 @@ _DERIVATIVE_CALLS = frozenset({"diff", "Derivative"})
 
 # Leibniz notation (#522): d/dx(x^2), d(x^2)/dx, dy/(2*dx), d/d(x)(x^2). The
 # parser would read d and dx as symbols (d/dx(x^2) is x**3), so the claim it
-# decides is not the one written. Three shapes give it away, wherever they
-# stand:
-# - a name that is "d" joined to a variable: a symbol the parser knows (dx,
-#   dt, dtheta, d2y) or a name the expression also uses (dfoo beside foo,
-#   dx_1 beside x_1). A name the parser knows (delta, diff, a caller's
-#   symbol) is not one, and neither is data or distance;
-# - a lone "d" over a "d" name, the d/dx operator (d/dx_1, d/dfoo);
+# decides is not the one written. A name the parser knows (delta, diff, a
+# caller's symbol) is never refused. Otherwise, wherever they stand:
+# - a name starting with "d" that SymPy splits into letters, so reads as d
+#   times the rest (dx, dV, dtheta, d2y, data: a**2*d*t). Whatever was meant,
+#   the claim decided would not be the one written;
+# - a name with "_", which SymPy keeps whole, only when the rest is a
+#   variable used beside it (dx_1 beside x_1); distance_m is a symbol;
+# - a lone "d" over a "d" name, the d/dx operator (d/dx_1);
 # - a lone "d" a denominator applies to a variable (d(x), d x).
 _IDENTIFIER = re.compile(r"[A-Za-z_]\w*", re.ASCII)
 _DIVIDED_BY_LONE_D = re.compile(r"/\s*(?:\(\s*)?d\b\s*[(A-Za-z]", re.ASCII)
-_LONE_D_OVER_D_NAME = re.compile(r"(?<![A-Za-z0-9_])d\s*/\s*(?:\(\s*)?d[A-Za-z]", re.ASCII)
+_LONE_D_OVER_D_NAME = re.compile(r"(?<!\w)d\s*/\s*(?:\(\s*)?(d[A-Za-z]\w*)", re.ASCII)
 
 _DENYLIST_PATTERN = re.compile(
     r"(?:"
@@ -915,8 +916,8 @@ class SafeParserError(ValueError):
 
 
 DERIVATIVE_NOTATION_MESSAGE = (
-    "Expression uses d/dx notation, which cannot be read unambiguously; "
-    "write diff(f, x) instead"
+    "Expression uses d/dx notation, or a name read as d times a variable, "
+    "which cannot be read unambiguously; write diff(f, x) for a derivative"
 )
 
 
@@ -926,18 +927,18 @@ class DerivativeNotationError(SafeParserError):
 
 def _leibniz_differential(expression: str, names: Dict[str, Any]) -> Optional[str]:
     """The first differential written in ``expression``, or None."""
-    for pattern in (_DIVIDED_BY_LONE_D, _LONE_D_OVER_D_NAME):
-        operator_form = pattern.search(expression)
-        if operator_form:
+    lone_d = _DIVIDED_BY_LONE_D.search(expression)
+    if lone_d:
+        return lone_d.group()
+    for operator_form in _LONE_D_OVER_D_NAME.finditer(expression):
+        if operator_form.group(1) not in names:
             return operator_form.group()
     tokens = _IDENTIFIER.findall(expression)
     for token in tokens:
         if not token.startswith("d") or len(token) == 1 or token in names:
             continue
-        tail = token[1:]
-        for variable in (tail, tail.strip("0123456789")):
-            if isinstance(names.get(variable), Symbol) or variable in tokens:
-                return token
+        if "_" not in token or token[1:] in tokens or token[1:] in names:
+            return token
     return None
 
 
