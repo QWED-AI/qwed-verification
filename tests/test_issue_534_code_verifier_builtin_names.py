@@ -50,7 +50,7 @@ def _verify(code):
     'parts = "executed,ok".split(",")',
     'cur.execute("SELECT * FROM evaluations WHERE id = %s" % uid)',
     'sql = "SELECT * FROM evaluations WHERE id = %s"\ncur.execute(sql % uid)',
-    'line = "executed,ok"\nparts = line.split(",")',
+    'log.info("%(job)s: executing" % {"job": name})',
     'title = "Re-evaluated"[:5]',
     # Only % substitutes a conversion; + keeps "%s" as text.
     'label = "%sexec" + suffix',
@@ -132,9 +132,26 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ('vars(m)["xexec"[-4:]](payload)', "exec"),
     ('vars(m)["qexecq".replace("q", "")](payload)', "exec"),
     ('vars(m)["qexec".split("q")[1]](payload)', "exec"),
-    # ... or assigned to a name first.
+    # A %-format mapping key may nest parentheses.
+    ('get = vars(object)["%(a(b))s__getattribute__" % keys]', "__getattribute__"),
+    # Steps chained, or a method saved and called later.
+    ('vars(m)["xexecx"[1:][:-1]](payload)', "exec"),
+    ('vars(m)["xexecx".lstrip("x").rstrip("x")](payload)', "exec"),
+    ('vars(m)[("x%sexecx" % "")[1:5]](payload)', "exec"),
+    ('strip = "x__getattribute__".lstrip\nget = vars(object)[strip("x")]', "__getattribute__"),
+    # ... or assigned to a name first, through other names and steps.
     ('name = "xexec"\nvars(m)[name[1:]](payload)', "exec"),
     ('name: str = "xexec"\nvars(m)[name.lstrip("x")](payload)', "exec"),
+    ('a = "xexec"\nb = a\nc = b\nvars(m)[c[1:]](payload)', "exec"),
+    ('s = "xxexec"\nt = s[1:]\nvars(m)[t[1:]](payload)', "exec"),
+    ('s = "x%sexec" % ""\nvars(m)[s[1:]](payload)', "exec"),
+    ('fmt = "%sexec"\nvars(m)[fmt % ""](payload)', "exec"),
+    ('t = "xexec"[0:]\nvars(m)[t[1:]](payload)', "exec"),
+    ('fmt = "%sexecute"[:6]\nvars(m)[fmt % ""](payload)', "exec"),
+    # Conversion flags, and a format the reader cannot parse.
+    ('vars(m)["%-sexec" % ""](payload)', "exec"),
+    ('vars(m)["%(xexec" % d](payload)', "exec"),
+    ('fmt = "%(xexec"\nvars(m)[fmt % d](payload)', "exec"),
     # Where the arguments are not literals, the literal is matched anywhere.
     ('vars(m)["xexec".lstrip(c)](payload)', "exec"),
     ('vars(m)["xexec"[i:]](payload)', "exec"),

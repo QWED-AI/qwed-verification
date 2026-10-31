@@ -63,6 +63,26 @@ def test_growing_literal_reshape_is_not_worked_out():
         assert time.perf_counter() - start < 0.5
 
 
+def test_unclosed_format_keys_stay_fast():
+    # A regex for %-conversions backtracked quadratically on "%(" with no
+    # closing parenthesis, and on a long run of zeros (flag or width) with no
+    # conversion type; the format reader makes one pass.
+    verifier = CodeVerifier()
+    for literal in ("%(" * 100000, "%" + "0" * 200000, "%0" * 100000):
+        start = time.perf_counter()
+        verifier.verify_code('x = "' + literal + '" % values', language="python")
+        assert time.perf_counter() - start < 1.0
+
+
+def test_names_reshaped_many_times_stay_fast():
+    # Each name is worked out once, not once per reshape of it.
+    n = 3000
+    code = "".join(f's = "{i}"\n' for i in range(n)) + "x = s[1:]\n" * n + "y = s % v\n" * n
+    start = time.perf_counter()
+    CodeVerifier().verify_code(code, language="python")
+    assert time.perf_counter() - start < 2.0
+
+
 def test_curl_pipe_shell_still_flagged_across_lines():
     verifier = CodeVerifier()
     code = (

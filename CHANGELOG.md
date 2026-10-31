@@ -363,12 +363,17 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     or by a match pattern (`case object(exec=run)`); and in a string as a
     whole identifier (`vars(module)["exec"]`). A string literal that is
     sliced, `%`-formatted or has characters removed (`strip`, `replace`,
-    `split` and the like), written in place or first assigned to a name, can
-    leave the name (`"xexec"[1:]`, `s = "xexec"; s[1:]`). With literal
-    arguments the result is worked out and matched as whole identifiers;
-    otherwise the literal is matched anywhere. A `translate`, or a `replace`
-    that grows the text, is not worked out, so the work stays bounded. An
-    import of the `builtins` module (`import builtins`) is refused too.
+    `split` and the like) can leave the name (`"xexec"[1:]`). One such step
+    on a literal written in place, with literal arguments, is worked out and
+    matched as whole identifiers; `%` conversions are read as CPython reads
+    them, nested mapping keys included, in one pass. Otherwise the literal is
+    matched anywhere: steps chained (`"xexecx"[1:][:-1]`), a method saved
+    and called later, arguments that are not literals, a `translate` or a
+    `replace` that grows the text, and a literal reached through names
+    (`s = "xexec"; t = s; t[1:]`), where only a `%`-format of a name bound
+    to literals alone is worked out. Each name is worked out once, so the
+    work stays linear in the code. An import of the `builtins` module
+    (`import builtins`) is refused too.
   - Admitted: longer identifiers (`execute`, `evaluate`, `compile_report`),
     the names inside longer words in strings and docstrings, also when
     formatted or split (`"SELECT * FROM evaluations WHERE id = %s" % uid`,
