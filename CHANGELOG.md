@@ -303,6 +303,28 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     finite); implicit multiplication (`2x^2`) is read through SymPy's own
     grammar first. `x/x = 2`, which is false wherever `x/x` is defined, and
     `2x^2 = 5` are still disproven.
+- **`/verify/math` reads `diff()` and refuses `d/dx` (#522).**
+  `diff(x**2, x) == 2*x` came back BLOCKED as "Internal verification error",
+  because the parser did not know `diff`. `d/dx(x^2) = 2x` came back VERIFIED
+  as proven false, because `d` and `dx` were read as symbols.
+  - The expression parser now evaluates `diff` and `Derivative`
+    (`diff(x^2, x)`, `diff(x**3, x, 2)`). The total derivative order in one
+    expression is at most 3, nested calls included, since each order
+    multiplies what `simplify` then has to work through.
+  - `==` reads as `=`, so `diff(x**2, x) == 2*x` is VERIFIED.
+  - The domain check (#429) reads each evaluated derivative as well as the
+    text, since a derivative can be singular where the text it
+    differentiates is not: `diff(sqrt(x), x)*2*sqrt(x) = 1` holds only for
+    x other than 0, so it is UNVERIFIABLE with
+    `math.domain_restricted_identity`, while
+    `diff(sqrt(x), x) = 1/(2*sqrt(x))` is VERIFIED.
+  - Leibniz notation (`d/dx`, `dy/dx`, `d^2y/dx^2`) is refused instead of
+    misread, with the message to write `diff(f, x)`.
+  - Input the parser refuses is BLOCKED with `math.parse_error` and
+    "Expression could not be parsed", as SQL and schema parse errors are, not
+    with `api.math.execution_error`. The parser's own text is not returned.
+    A batch math item the parser refuses still fails with the parser's
+    error, as before.
 
 ## [8.0.0] - 2026-10-26
 

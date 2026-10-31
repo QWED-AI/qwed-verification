@@ -28,7 +28,8 @@ Security boundary (structural, in order):
        static exponent / exact-expansion-call argument bounds, so an
        expression cannot demand unbounded exact-integer expansion at
        evaluation time (SymPy expands Integer powers eagerly — see the
-       measured 9**9**9**9 hang).
+       measured 9**9**9**9 hang). diff/Derivative share one order budget
+       per parse (#522).
 
 The denylist alone can never defend an eval sink — layers 2 and 4 are
 the structural guarantee; layer 3 catches residual non-expression
@@ -65,6 +66,8 @@ __all__ = [
     "check_sympy_expansion_cost",
     "check_closed_expression_cost",
     "SafeParserError",
+    "DerivativeNotationError",
+    "DERIVATIVE_NOTATION_MESSAGE",
 ]
 
 MAX_EXPRESSION_LENGTH = 5_000
@@ -85,6 +88,21 @@ _MAX_EXPANSION_DIGITS = 100_000
 # subtree caught by its own node check (CodeAnt on PR #354: bounding them
 # rejected inexpensive inputs like Rational(10001, 3)).
 _EXACT_EXPANSION_CALLS = frozenset({"factorial", "binomial"})
+# diff/Derivative (#522): each order multiplies the size of the result, and
+# simplify then works on that (measured: order 3 of exp(x*sin(x)*cos(x)*tan(x))
+# simplifies in ~2.5s, order 4 in ~7.7s, order 10 differentiates alone in
+# ~18s). The bound is on the total order across one parse, so nesting
+# diff(diff(...)) cannot get around it.
+_MAX_DERIVATIVE_ORDER = 3
+
+# Leibniz notation (#522): d/dx(x^2), dy/dx, d^2y/dx^2. The parser would read
+# d and dx as symbols (d/dx(x^2) is x**3), so the claim it decides is not the
+# one written. Write diff(x^2, x) instead.
+_LEIBNIZ_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])\d*\s*d\s*(?:(?:\^|\*\*)\s*\d+|\d+)?\s*(?:[A-Za-z]\s*)?"
+    r"/\s*d\s*[A-Za-z](?![A-Za-z_])",
+    re.ASCII,
+)
 
 _DENYLIST_PATTERN = re.compile(
     r"(?:"
@@ -727,9 +745,36 @@ def _validate_sympy_result(result: Any) -> None:
         )
 
 
+def _bounded_derivative():
+    """Return a diff/Derivative for one parse, with its own order budget.
+
+    Both names evaluate the derivative, so ``Derivative(x**2, x)`` reads as
+    ``2*x``. The order is counted on the unevaluated Derivative before any
+    differentiation runs, and the budget is shared by every call in the
+    parse, nested ones included.
+    """
+    budget = [_MAX_DERIVATIVE_ORDER]
+
+    def derivative(expr: Any, *variables: Any) -> Any:
+        unevaluated = sympy.Derivative(expr, *variables, evaluate=False)
+        if not isinstance(unevaluated, sympy.Derivative):
+            return unevaluated  # a zero order leaves the expression as it is
+        order = unevaluated.derivative_count
+        if not order.is_Integer or order > budget[0]:
+            raise SafeParserError(
+                f"Derivative order exceeds the maximum of {_MAX_DERIVATIVE_ORDER} "
+                "in one expression"
+            )
+        budget[0] -= int(order)
+        return unevaluated.doit()
+
+    return derivative
+
+
 def _build_safe_local_dict(
     extra_symbols: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    derivative = _bounded_derivative()
     safe: Dict[str, Any] = {
         "x": Symbol("x"), "y": Symbol("y"), "z": Symbol("z"),
         "a": Symbol("a"), "b": Symbol("b"), "c": Symbol("c"),
@@ -760,6 +805,7 @@ def _build_safe_local_dict(
         "sqrt": sympy.sqrt, "cbrt": sympy.cbrt,
         "abs": sympy.Abs, "Abs": sympy.Abs,
         "factorial": sympy.factorial, "binomial": sympy.binomial,
+        "diff": derivative, "Derivative": derivative,
         "Integer": Integer, "Float": Float, "Rational": Rational,
         # Symbol is required because SymPy standard_transformations may emit
         # Symbol('name') during evaluation. This allows users to create symbols
@@ -797,6 +843,16 @@ class SafeParserError(ValueError):
     pass
 
 
+DERIVATIVE_NOTATION_MESSAGE = (
+    "Expression uses d/dx notation, which cannot be read unambiguously; "
+    "write diff(f, x) instead"
+)
+
+
+class DerivativeNotationError(SafeParserError):
+    """Leibniz notation (d/dx, dy/dx), refused rather than misread (#522)."""
+
+
 def safe_parse_expr(
     expression: str,
     *,
@@ -832,6 +888,9 @@ def safe_parse_expr(
         raise SafeParserError(
             f"Expression contains disallowed construct: {match.group()!r}"
         )
+    leibniz = _LEIBNIZ_PATTERN.search(stripped)
+    if leibniz:
+        raise DerivativeNotationError(f"{DERIVATIVE_NOTATION_MESSAGE}: {leibniz.group()!r}")
     _check_ast_safety(stripped)
     local_dict = _build_safe_local_dict(extra_symbols)
     if transformations is None:

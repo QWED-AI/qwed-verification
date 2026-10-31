@@ -22,6 +22,9 @@ from qwed_new.core.verifier import (
 # A side has an undefined part SymPy evaluated away (log(0)**0 is 1): the
 # claim is not about a defined value, so it is neither proven nor disproven.
 UNDEFINED_PART_IDENTITY = "math.undefined_part"
+# The parser refused the expression (#522): BLOCKED, as SQL and schema
+# parse errors are.
+MATH_PARSE_ERROR = "math.parse_error"
 
 
 def math_identity_result(expression: str) -> DiagnosticResult:
@@ -41,10 +44,11 @@ def math_identity_result(expression: str) -> DiagnosticResult:
     - UNVERIFIABLE: anything undecided, including a non-zero difference that
       holds a Float, whose rounding residue proves nothing.
 
-    The caller signs and enforces the result and decides admission.
-    Parse errors propagate to the caller.
+    ``==`` reads as ``=`` (#522). The caller signs and enforces the result
+    and decides admission. Parse errors propagate to the caller.
     """
-    left_str, right_str = expression.split("=", 1)
+    separator = "==" if expression.count("==") == 1 and expression.count("=") == 2 else "="
+    left_str, right_str = expression.split(separator, 1)
     left = safe_parse_expr(left_str)
     right = safe_parse_expr(right_str)
     difference = simplify(left - right)

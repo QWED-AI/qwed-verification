@@ -431,8 +431,11 @@ _DOMAIN_RESTRICTED_FUNCTIONS = frozenset({
     "tan", "cot", "sec", "csc", "asin", "acos", "atan", "atan2", "tanh",
     "log", "ln", "factorial", "binomial",
 })
+# A derivative can be singular where the text it differentiates is not:
+# diff(sqrt(x), x) is 1/(2*sqrt(x)) (#522).
+_DERIVATIVE_FUNCTIONS = frozenset({"diff", "Derivative"})
 # Every parser name that is not a symbol: functions, constructors, constants.
-_NON_SYMBOL_NAMES = _DOMAIN_RESTRICTED_FUNCTIONS | frozenset({
+_NON_SYMBOL_NAMES = _DOMAIN_RESTRICTED_FUNCTIONS | _DERIVATIVE_FUNCTIONS | frozenset({
     "sin", "cos", "exp", "sinh", "cosh", "sqrt", "cbrt", "abs", "Abs",
     "Integer", "Float", "Rational", "pi", "E", "I", "oo",
 })
@@ -449,7 +452,7 @@ def _singular_factors(expression: str) -> Optional[frozenset]:
         # Unreadable text can only be trusted to have no singular points
         # when it has no division, power or restricted function at all.
         names = _text_names(expression)
-        if names & _DOMAIN_RESTRICTED_FUNCTIONS and names - _NON_SYMBOL_NAMES:
+        if names & (_DOMAIN_RESTRICTED_FUNCTIONS | _DERIVATIVE_FUNCTIONS) and names - _NON_SYMBOL_NAMES:
             return None
         if any(token in expression for token in ("/", "%", "**", "^")):
             return None
@@ -472,6 +475,16 @@ def _singular_factors(expression: str) -> Optional[frozenset]:
         if denominator_factors is None:
             return None
         factors |= denominator_factors
+    for node in nodes:
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _DERIVATIVE_FUNCTIONS:
+            try:
+                derivative = str(safe_parse_expr(ast.get_source_segment(normalized, node)))
+            except ValueError:
+                return None
+            derivative_factors = _singular_factors(derivative)
+            if derivative_factors is None:
+                return None
+            factors |= derivative_factors
     return frozenset(factors)
 
 
