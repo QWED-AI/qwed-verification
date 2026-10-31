@@ -37,6 +37,13 @@ def _verify(code):
     'import re\np = re.compile(r"a+", re.I)',
     'import re\np = re.compile(pattern=r"a+", flags=re.I)',
     'import re, sys\nprint(sys.argv)\np = re.compile(r"a+")',
+    # The names inside longer words in strings, docstrings and formatted text.
+    'cur.execute("SELECT * FROM evaluations WHERE id = ?", (uid,))',
+    'print("executing job")',
+    'def score():\n    """Re-evaluates the score."""\n    return 1',
+    'status = "recompiled"',
+    'print("executing " + job)',
+    'print("evaluations: {}".format(n))',
 ])
 def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     assert _verify(code) == (True, [])
@@ -103,9 +110,12 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("from builtins import exec as run\ndef f():\n    from json import loads as run\nrun(payload)", "exec"),
     # The builtins module reached through a builtin function, with the name split.
     ('vars(print.__self__)["ex" + "ec"](payload)', "__self__"),
-    # A string holding the name inside a longer one, sliced out at runtime.
+    # A literal holding the name inside a longer word, sliced, %-formatted
+    # or stripped into it at runtime.
     ('vars(m)["xexec"[1:]](payload)', "exec"),
     ('get = vars(object)["x__getattribute__"[1:]]\nget(m, n)', "__getattribute__"),
+    ('vars(m)["%sexec" % ""](payload)', "exec"),
+    ('vars(m)["xexec".lstrip("x")](payload)', "exec"),
     # The longest name a string holds is the one reported.
     ('vars(m)["exec_module"](spec)', "exec_module"),
     # getattr / setattr / delattr by their dunder names.

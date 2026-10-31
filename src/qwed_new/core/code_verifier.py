@@ -48,6 +48,9 @@ CONSTRAINT_EMPTY_BATCH = "code_verifier.empty_batch"
 CONSTRAINT_BATCH_BLOCKED = "code_verifier.batch_blocked"
 CONSTRAINT_PARSE_ERROR = "code_verifier.parse_error"
 
+_DYNAMIC_COMPILATION = "Dynamic code compilation"
+_FILE_COMPILATION = "Bytecode compilation of files"
+
 
 class _UnparseablePython(Exception):
     """Python code that does not parse: its AST checks cannot run, so
@@ -79,7 +82,7 @@ class CodeVerifier:
     PYTHON_CRITICAL = {
         "eval": "Remote code execution via eval()",
         "exec": "Remote code execution via exec()",
-        "compile": "Dynamic code compilation",
+        "compile": _DYNAMIC_COMPILATION,
         "__import__": "Dynamic module import",
         "pickle.loads": "Insecure deserialization",
         "pickle.load": "Insecure deserialization",
@@ -115,15 +118,15 @@ class CodeVerifier:
         "evalfile": "Tcl script execution via evalfile()",
         "_evaluate": "String evaluation via ForwardRef._evaluate()",
         "_eval_type": "String evaluation via typing._eval_type()",
-        "compile_command": "Dynamic code compilation",
-        "_compile": "Dynamic code compilation",
-        "_maybe_compile": "Dynamic code compilation",
-        "_try_compile": "Dynamic code compilation",
-        "_compile_source": "Dynamic code compilation",
+        "compile_command": _DYNAMIC_COMPILATION,
+        "_compile": _DYNAMIC_COMPILATION,
+        "_maybe_compile": _DYNAMIC_COMPILATION,
+        "_try_compile": _DYNAMIC_COMPILATION,
+        "_compile_source": _DYNAMIC_COMPILATION,
         "_compile_bytecode": "Code object from bytecode",
-        "compile_file": "Bytecode compilation of files",
-        "compile_dir": "Bytecode compilation of files",
-        "compile_path": "Bytecode compilation of files",
+        "compile_file": _FILE_COMPILATION,
+        "compile_dir": _FILE_COMPILATION,
+        "compile_path": _FILE_COMPILATION,
         "subprocess_exec": "Process execution via an event loop's subprocess_exec()",
         "subprocess_shell": "Shell execution via an event loop's subprocess_shell()",
         "create_subprocess_exec": "Process execution via asyncio",
@@ -142,10 +145,20 @@ class CodeVerifier:
         {"__getattribute__", "__getattr__", "__setattr__", "__delattr__"}
     )
     _ATTRIBUTE_READ_NAMES: ClassVar[frozenset] = _CRITICAL_NAMES | PYTHON_ATTRIBUTE_ACCESSORS
-    # Anywhere in a string, longest first: a string can be sliced or joined
-    # into the name at runtime ("x__getattribute__"[1:]).
+    # Whole identifiers in a string, longest first, so prose such as
+    # "executing job" or "SELECT * FROM evaluations" is not a match.
     _CRITICAL_BUILTIN_NAME: ClassVar = re.compile(
+        r"(?<!\w)(" + "|".join(sorted(_ATTRIBUTE_READ_NAMES, key=len, reverse=True)) + r")(?!\w)"
+    )
+    # Anywhere in a string literal that is sliced, %-formatted or has
+    # characters removed, since the result can be the name although the
+    # literal only holds it inside a longer word ("x__getattribute__"[1:]).
+    _CRITICAL_BUILTIN_IN_WORD: ClassVar = re.compile(
         "(" + "|".join(sorted(_ATTRIBUTE_READ_NAMES, key=len, reverse=True)) + ")"
+    )
+    _CHARACTER_REMOVING_METHODS: ClassVar[frozenset] = frozenset(
+        {"strip", "lstrip", "rstrip", "replace", "removeprefix", "removesuffix",
+         "split", "rsplit", "partition", "rpartition", "translate"}
     )
     # Ways to rebind a name without an assignment the AST shows: a namespace
     # dict (globals()["re"] = ...) or the import system an import reads
@@ -161,7 +174,8 @@ class CodeVerifier:
     _REGEX_COMPILE_KEYWORDS: ClassVar[frozenset] = frozenset({"pattern", "flags"})
     # The node types _critical_builtin_reference reads; others are skipped.
     _REFERENCE_NODE_TYPES: ClassVar[frozenset] = frozenset(
-        {ast.Name, ast.Attribute, ast.MatchClass, ast.Import, ast.ImportFrom, ast.Constant}
+        {ast.Name, ast.Attribute, ast.MatchClass, ast.Import, ast.ImportFrom, ast.Constant,
+         ast.Subscript, ast.BinOp}
     )
 
     # A subprocess call that pipes fetched content (curl/wget) into a shell is
@@ -873,12 +887,13 @@ class CodeVerifier:
           one exception is ``re.compile`` called as ``re.compile(pattern,
           flags)`` on a name every import binds to ``re`` and nothing
           rebinds (_untrusted_compiles);
-        - a string holding one of these names anywhere, since
-          ``vars(module)["exec"]`` reaches it by string and a string can be
-          sliced into it.
+        - a string holding one of these names as a whole identifier, since
+          ``vars(module)["exec"]`` reaches it by string, or anywhere in a
+          literal that is sliced, %-formatted or stripped
+          (``"xexec"[1:]``), since that can leave the name.
         Comments, longer identifiers such as ``execute``, ``evaluate`` and
-        ``compile_report``, and a class or module defining ``__getattr__``
-        are not matches.
+        ``compile_report``, prose in strings, and a class or module defining
+        ``__getattr__`` are not matches.
         """
         found: List[tuple[str, int]] = []
         compile_attributes: List[ast.Attribute] = []
@@ -900,20 +915,38 @@ class CodeVerifier:
         """The critical builtin (or builtins module) ``node`` refers to."""
         if isinstance(node, ast.Name):
             return node.id if node.id in self._CRITICAL_NAMES else None
-        if isinstance(node, ast.Attribute):
-            return node.attr if node.attr in self._ATTRIBUTE_READ_NAMES else None
+        if isinstance(node, ast.Attribute) and node.attr in self._ATTRIBUTE_READ_NAMES:
+            return node.attr
         if isinstance(node, ast.MatchClass):
             return next((attr for attr in node.kwd_attrs if attr in self._ATTRIBUTE_READ_NAMES), None)
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             return self._import_reference(node)
         if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
-            return self._critical_name_in_text(node.value)
-        return None
+            return self._critical_name_in_text(node.value, self._CRITICAL_BUILTIN_NAME)
+        literal = self._reshaped_literal(node)
+        return self._critical_name_in_text(literal, self._CRITICAL_BUILTIN_IN_WORD) if literal is not None else None
 
     @classmethod
-    def _critical_name_in_text(cls, value) -> Optional[str]:
+    def _reshaped_literal(cls, node: ast.AST):
+        """The str/bytes literal ``node`` slices (``"xexec"[1:]``),
+        %-formats (``"%sexec" % ""``) or removes characters from
+        (``"xexec".lstrip("x")``), else None."""
+        if isinstance(node, ast.Subscript):
+            operand = node.value
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+            operand = node.left
+        elif isinstance(node, ast.Attribute) and node.attr in cls._CHARACTER_REMOVING_METHODS:
+            operand = node.value
+        else:
+            return None
+        if isinstance(operand, ast.Constant) and isinstance(operand.value, (str, bytes)):
+            return operand.value
+        return None
+
+    @staticmethod
+    def _critical_name_in_text(value, pattern) -> Optional[str]:
         text = value.decode("latin-1") if isinstance(value, bytes) else value
-        match = cls._CRITICAL_BUILTIN_NAME.search(text)
+        match = pattern.search(text)
         return match.group(1) if match else None
 
     @classmethod

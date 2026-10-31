@@ -358,13 +358,17 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - `eval`, `exec`, `compile`, `__import__`, `getattr` and `setattr` are now
     matched on the AST: as a name, called or not (`f = eval`), whatever an
     import elsewhere binds to it, since imports are not read by scope or
-    order; as an attribute, since the object may be the builtins module
+    order; as an attribute, since the object may be the `builtins` module
     reached another way, whether read as `m.exec`, by `from m import exec`
-    or by a match pattern (`case object(exec=run)`); and anywhere in a
-    string (`vars(module)["exec"]`), since a string can be sliced into the
-    name (`"xexec"[1:]`). An import of the builtins module
+    or by a match pattern (`case object(exec=run)`); and in a string as a
+    whole identifier (`vars(module)["exec"]`). A string literal that is
+    sliced, `%`-formatted or has characters removed (`strip`, `replace`,
+    `split` and the like) is matched anywhere, since the result can be the
+    name (`"xexec"[1:]`). An import of the `builtins` module
     (`import builtins`) is refused too.
   - Admitted: longer identifiers (`execute`, `evaluate`, `compile_report`),
+    the names inside longer words in strings and docstrings
+    (`"SELECT * FROM evaluations"`, `"executing job"`),
     comments, and `re.compile(pattern, flags)` on a name every import binds
     to `re`. The builtin `compile` needs a filename and a mode, so it cannot
     run in that shape; any other `re.compile` call, or `re.compile` not
@@ -390,7 +394,7 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     are refused too.
     `ast.literal_eval` is admitted.
   - `__self__` is a dangerous attribute, as `__dict__` and `__globals__`
-    are: on a builtin function it is the builtins module, so
+    are: on a builtin function it is the `builtins` module, so
     `vars(print.__self__)["ex" + "ec"]` was admitted.
   - `__getattribute__`, `__getattr__`, `__setattr__` and `__delattr__`,
     which reach an attribute by name as `getattr` and `setattr` do, are
