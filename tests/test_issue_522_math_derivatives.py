@@ -123,6 +123,9 @@ def test_the_derivative_order_is_bounded_across_the_expression(text):
     "d(foo**2)/dfoo",
     "1/delta + d(foo**2)/dfoo",
     "x/(2*dfoo)",
+    # Whatever stands before the differential (CodeRabbit on PR #558).
+    "d(foo**2)/(-dfoo)",
+    "x/(y*dfoo)",
 ])
 def test_leibniz_notation_is_refused(text):
     with pytest.raises(DerivativeNotationError):
