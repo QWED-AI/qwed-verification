@@ -158,10 +158,13 @@ class CodeVerifier:
     _CRITICAL_BUILTIN_IN_WORD: ClassVar = re.compile(
         "(" + "|".join(sorted(_ATTRIBUTE_READ_NAMES, key=len, reverse=True)) + ")"
     )
-    _CHARACTER_REMOVING_METHODS: ClassVar[frozenset] = frozenset(
-        {"strip", "lstrip", "rstrip", "replace", "removeprefix", "removesuffix",
-         "split", "rsplit", "partition", "rpartition", "translate"}
-    )
+    _LITERAL_RESHAPERS: ClassVar[dict] = {
+        "strip": str.strip, "lstrip": str.lstrip, "rstrip": str.rstrip,
+        "replace": str.replace, "removeprefix": str.removeprefix, "removesuffix": str.removesuffix,
+        "split": str.split, "rsplit": str.rsplit, "partition": str.partition,
+        "rpartition": str.rpartition, "translate": str.translate,
+    }
+    _CHARACTER_REMOVING_METHODS: ClassVar[frozenset] = frozenset(_LITERAL_RESHAPERS)
     # A %-format conversion ("%s", "%(key)05.2f", "%%"): what it is replaced
     # with is not known, so it may separate a name from the word around it.
     _CONVERSION_SPEC: ClassVar = re.compile(
@@ -1024,7 +1027,7 @@ class CodeVerifier:
         # when the new part is longer: not worked out, to bound the work.
         if method == "translate" or (method == "replace" and len(args) >= 2 and len(args[1]) > len(args[0])):
             return None
-        result = getattr(text, method)(*args, **kwargs)
+        result = self._LITERAL_RESHAPERS[method](text, *args, **kwargs)
         return [result] if isinstance(result, str) else [part for part in result if isinstance(part, str)]
 
     @staticmethod
