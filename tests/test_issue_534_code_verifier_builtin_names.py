@@ -1,0 +1,70 @@
+"""#534: CodeVerifier reads the critical builtins as names, not substrings.
+
+The line scan matched ``exec``, ``eval`` and ``compile`` anywhere in a line,
+so ``cur.execute(...)``, ``model.evaluate(x)`` and ``re.compile(...)`` were
+refused as ``dangerous_function``. The builtins are now matched on the AST:
+as names, as attributes (the object may be the builtins module reached
+another way) and in strings, with ``re.compile`` on an imported ``re`` the
+one attribute admitted.
+"""
+
+import pytest
+
+from qwed_new.core.code_verifier import CodeVerifier
+
+
+def _verify(code):
+    fields = CodeVerifier().verify_code(code, "python").developer_fields
+    return fields["is_valid"], [(issue["type"], issue["pattern"]) for issue in fields["issues"]]
+
+
+@pytest.mark.parametrize("code", [
+    'cur.execute("SELECT ?", params)',
+    'cur.execute("SELECT * FROM t WHERE id = ?", (uid,))',
+    'import re\npat = re.compile(r"[0-9]+")',
+    "score = model.evaluate(x)",
+    "def compile_report():\n    return 1\ncompile_report()",
+    'import re as r\np = r.compile("a+")',
+    'from re import compile\np = compile("a+")',
+    "# we never call eval here\nx = 1",
+    "my_getattr_helper = 1",
+])
+def test_code_that_only_names_a_longer_identifier_is_admitted(code):
+    assert _verify(code) == (True, [])
+
+
+@pytest.mark.parametrize(("code", "pattern"), [
+    ("exec(x)", "exec"),
+    ("eval(x)", "eval"),
+    ('compile(x, "f", "exec")', "compile"),
+    ('__import__("json")', "__import__"),
+    ("getattr(o, name)", "getattr"),
+    ("setattr(o, name, v)", "setattr"),
+    # Not called, but bound to another name.
+    ("f = eval\nf(x)", "eval"),
+    # Through the builtins module, or an import of it.
+    ("import builtins\nbuiltins.exec(x)", "builtins"),
+    ("import builtins as b\nb.exec(x)", "builtins"),
+    ("from builtins import exec as run\nrun(x)", "exec"),
+    ("from builtins import *\neval(x)", "eval"),
+    # The builtins module reached without importing it.
+    ("print.__self__.exec(payload)", "exec"),
+    ('vars(print.__self__)["exec"](payload)', "exec"),
+    ('print.__self__.compile(payload, "", "exec")', "compile"),
+    # re.compile is admitted only on an imported re that is never rebound.
+    ('re = print.__self__\nre.compile(payload, "", "exec")', "compile"),
+    ('import re\nre = print.__self__\nre.compile(payload, "", "exec")', "compile"),
+    ('import re\ndef f(re):\n    return re.compile(p, "", "exec")', "compile"),
+    ('import re\nimport builtins as re\nre.compile(p, "", "exec")', "compile"),
+    # Code that does not parse is scanned for whole identifiers.
+    ("exec(x", "exec"),
+])
+def test_the_critical_builtins_are_still_refused(code, pattern):
+    is_valid, issues = _verify(code)
+
+    assert is_valid is False
+    assert ("dangerous_function", pattern) in issues
+
+
+def test_code_that_does_not_parse_is_not_read_by_substring():
+    assert ("dangerous_function", "exec") not in _verify("cur.execute(x")[1]

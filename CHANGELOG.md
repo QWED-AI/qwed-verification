@@ -349,6 +349,24 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     with `api.math.execution_error`. The parser's own text is not returned.
     A batch math item the parser refuses gets the same BLOCKED result; it
     was a failed item carrying the parser's error text.
+- **The code verifier reads `exec`, `eval` and `compile` as names, not
+  substrings (#534).** The Python line scan matched them anywhere in a line,
+  so `cur.execute("SELECT ?", params)`, `model.evaluate(x)`,
+  `re.compile(r"[0-9]+")` and `compile_report()` came back VERIFIED with
+  `is_valid` false (`dangerous_function`). Parameterised SQL, the safe way to
+  run a query, was refused.
+  - `eval`, `exec`, `compile`, `__import__`, `getattr` and `setattr` are now
+    matched on the AST: as a name, called or not (`f = eval`), or one an
+    import resolves to the builtin (`from builtins import exec as run`); as
+    an attribute (`print.__self__.exec`), since the object may be the
+    builtins module reached another way; and in a string as a whole
+    identifier (`vars(print.__self__)["exec"]`). A reference to the builtins
+    module itself is refused too.
+  - Admitted: longer names (`execute`, `evaluate`, `compile_report`),
+    comments, `from re import compile`, and `re.compile` on an imported `re`
+    that nothing rebinds. `model.eval()` is still refused, as an attribute
+    named `eval`.
+  - Code that does not parse is scanned for the names as whole identifiers.
 
 ## [8.0.0] - 2026-10-26
 

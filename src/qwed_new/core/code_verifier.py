@@ -87,6 +87,21 @@ class CodeVerifier:
         "sys.modules[": "Runtime module acquisition via sys.modules",
     }
 
+    # The PYTHON_CRITICAL entries that are builtins. These are matched as
+    # names on the AST, not as substrings of a line, so cursor.execute,
+    # model.evaluate, re.compile and compile_report() are not read as them
+    # (#534). A bare name, or one an import resolves to the builtins module,
+    # is the builtin; a reference to the builtins module itself is refused
+    # too, since builtins.__dict__ / vars(builtins) reach them by string.
+    PYTHON_CRITICAL_BUILTINS: ClassVar[frozenset] = frozenset(
+        {"eval", "exec", "compile", "__import__", "getattr", "setattr"}
+    )
+    PYTHON_BUILTIN_MODULES: ClassVar[frozenset] = frozenset({"builtins", "__builtin__"})
+    # Fallback for code that does not parse: whole identifiers only.
+    _CRITICAL_BUILTIN_NAME: ClassVar = re.compile(
+        r"(?<!\w)(eval|exec|compile|__import__|getattr|setattr)(?!\w)"
+    )
+
     # A subprocess call that pipes fetched content (curl/wget) into a shell is
     # flagged as remote_code_execution. subprocess.* is already CRITICAL
     # (process_execution, PYTHON_PROCESS_EXECUTION), but this keeps the more
@@ -587,9 +602,10 @@ class CodeVerifier:
         lines = code.split('\n')
         
         for line_num, line in enumerate(lines, 1):
-            # Critical functions
+            # Critical functions; the builtins among them are matched as
+            # names in _check_python_critical_builtins (#534).
             for pattern, desc in self.PYTHON_CRITICAL.items():
-                if pattern in line:
+                if pattern not in self.PYTHON_CRITICAL_BUILTINS and pattern in line:
                     issues.append(SecurityIssue(
                         severity="CRITICAL",
                         issue_type="dangerous_function",
@@ -633,6 +649,8 @@ class CodeVerifier:
                         description=f"Dangerous attribute access: {attr}",
                         line_number=line_num
                     ))
+
+        issues.extend(self._check_python_critical_builtins(code))
 
         # A subprocess call that pipes curl/wget output into a shell, including
         # across lines. Linear scan (no backtracking regex) over the full code.
@@ -718,20 +736,10 @@ class CodeVerifier:
         parts.append(node.id)
         return ".".join(reversed(parts))
 
-    def _check_python_process_ast(self, code: str) -> List[SecurityIssue]:
-        """Flag process-execution and file/network calls, resolving import aliases.
-
-        Catches what the line scan cannot: ``import subprocess as sp;
-        sp.run(...)``, ``from os import system as run_it; run_it(...)``, bare
-        calls to names brought in by ``from os import *``, calls on the raw-OS
-        backend modules ``posix``/``nt``, the builtin ``open``, and file/network
-        sinks reached through an alias (GHSA-4phf).
-        """
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
-            return []
-
+    @staticmethod
+    def _import_aliases(tree: ast.AST) -> tuple[Dict[str, str], List[str]]:
+        """Names bound by imports, mapped to the dotted name they stand for,
+        and the modules star-imported."""
         aliases: Dict[str, str] = {}
         star_modules: List[str] = []
         for node in ast.walk(tree):
@@ -748,7 +756,123 @@ class CodeVerifier:
                         star_modules.append(node.module)
                     else:
                         aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+        return aliases, star_modules
 
+    def _check_python_critical_builtins(self, code: str) -> List[SecurityIssue]:
+        """Flag the critical builtins as names, not substrings (#534).
+
+        On the AST:
+        - a Name that is the builtin, called or not (``f = eval``), or that an
+          import resolves to it; ``from re import compile`` is not. A Name for
+          the builtins module itself is flagged too;
+        - an attribute with the builtin's name, since the object may be the
+          builtins module reached another way (``print.__self__.exec``). The
+          one exception is ``re.compile`` on an imported, never rebound ``re``;
+        - a string holding the name as a whole identifier, since
+          ``vars(print.__self__)["exec"]`` reaches it by string.
+        Comments, and longer names such as ``execute``, ``evaluate`` and
+        ``compile_report``, are not matches. Code that does not parse is
+        scanned for the names as whole identifiers instead.
+        """
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return [
+                self._critical_builtin_issue(match.group(1), line_num)
+                for line_num, line in enumerate(code.split("\n"), 1)
+                for match in self._CRITICAL_BUILTIN_NAME.finditer(line)
+            ]
+
+        aliases, _ = self._import_aliases(tree)
+        safe_re = self._imported_re_names(tree)
+        issues: List[SecurityIssue] = []
+        seen = set()
+        for node in ast.walk(tree):
+            name = self._critical_builtin_reference(node, aliases, safe_re)
+            if name and (name, node.lineno) not in seen:
+                seen.add((name, node.lineno))
+                issues.append(self._critical_builtin_issue(name, node.lineno))
+        return issues
+
+    def _critical_builtin_reference(
+        self, node: ast.AST, aliases: Dict[str, str], safe_re: set
+    ) -> Optional[str]:
+        """The critical builtin (or builtins module) ``node`` refers to."""
+        if isinstance(node, ast.Name):
+            target = aliases.get(node.id, node.id)
+            if target in self.PYTHON_BUILTIN_MODULES:
+                return target
+            module, _, name = target.rpartition(".")
+            if name in self.PYTHON_CRITICAL_BUILTINS and module in {"", *self.PYTHON_BUILTIN_MODULES}:
+                return name
+            return None
+        if isinstance(node, ast.Attribute) and node.attr in self.PYTHON_CRITICAL_BUILTINS:
+            if node.attr == "compile" and isinstance(node.value, ast.Name) and node.value.id in safe_re:
+                return None
+            return node.attr
+        if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
+            text = node.value.decode("latin-1") if isinstance(node.value, bytes) else node.value
+            match = self._CRITICAL_BUILTIN_NAME.search(text)
+            return match.group(1) if match else None
+        return None
+
+    @classmethod
+    def _imported_re_names(cls, tree: ast.AST) -> set:
+        """Names every import binds to the ``re`` module and nothing rebinds."""
+        bindings: Dict[str, set] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    bound = alias.asname or alias.name.split(".")[0]
+                    bindings.setdefault(bound, set()).add(alias.name if alias.asname else bound)
+            elif isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    bindings.setdefault(alias.asname or alias.name, set()).add("from-import")
+        rebound = cls._rebound_names(tree)
+        return {name for name, targets in bindings.items() if targets == {"re"} and name not in rebound}
+
+    @staticmethod
+    def _rebound_names(tree: ast.AST) -> set:
+        """Names bound other than by an import: assignment targets, parameters,
+        def and class names, ``except ... as`` and match-pattern captures."""
+        rebound = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+                rebound.add(node.id)
+            elif isinstance(node, ast.arg):
+                rebound.add(node.arg)
+            elif not isinstance(node, ast.alias):
+                rebound.update(
+                    value for value in (getattr(node, "name", None), getattr(node, "rest", None))
+                    if isinstance(value, str)
+                )
+        return rebound
+
+    def _critical_builtin_issue(self, name: str, line_number: Optional[int]) -> SecurityIssue:
+        return SecurityIssue(
+            severity="CRITICAL",
+            issue_type="dangerous_function",
+            pattern=name,
+            description=self.PYTHON_CRITICAL.get(name, "Access to the builtins module"),
+            line_number=line_number,
+            recommendation="Remove or sandbox this operation",
+        )
+
+    def _check_python_process_ast(self, code: str) -> List[SecurityIssue]:
+        """Flag process-execution and file/network calls, resolving import aliases.
+
+        Catches what the line scan cannot: ``import subprocess as sp;
+        sp.run(...)``, ``from os import system as run_it; run_it(...)``, bare
+        calls to names brought in by ``from os import *``, calls on the raw-OS
+        backend modules ``posix``/``nt``, the builtin ``open``, and file/network
+        sinks reached through an alias (GHSA-4phf).
+        """
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return []
+
+        aliases, star_modules = self._import_aliases(tree)
         issues: List[SecurityIssue] = []
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
