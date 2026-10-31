@@ -61,6 +61,16 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ('import re\nimport sys\nsys._getframe().f_globals["re"] = m\nre.compile(p, "", "single")', "compile"),
     ('import re\nfrom helpers import *\nre.compile(p, "", "single")', "compile"),
     ('import re\nre.compile = f\nre.compile(p, "", "single")', "compile"),
+    ('import re, sys\nsys.modules.get(__name__).re = m\nre.compile(p, "", "single")', "compile"),
+    ('import re, __main__\n__main__.re = m\nre.compile(p, "", "single")', "compile"),
+    # Setting compile on the re module is itself an attribute named compile.
+    ('import re, sys\nsys.modules.get("re").compile = f\nre.compile(p, "", "single")', "compile"),
+    # The builtin read as an attribute by a match pattern or a from-import.
+    ("match m:\n    case object(exec=run):\n        run(payload)", "exec"),
+    ("match m:\n    case object(eval=run):\n        run(payload)", "eval"),
+    ("match m:\n    case object(compile=run):\n        run(payload)", "compile"),
+    ("match m:\n    case object(getattr=run):\n        run(payload)", "getattr"),
+    ("from helpers import exec as run\nrun(payload)", "exec"),
     # A bare name is the builtin whatever an import elsewhere binds to it:
     # imports are not scoped or ordered here.
     ('from re import compile\np = compile("a+")', "compile"),

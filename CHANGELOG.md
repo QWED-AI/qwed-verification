@@ -359,13 +359,15 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     matched on the AST: as a name, called or not (`f = eval`), whatever an
     import elsewhere binds to it, since imports are not read by scope or
     order; as an attribute, since the object may be the builtins module
-    reached another way; and in a string as a whole identifier
-    (`vars(module)["exec"]`). An import from the builtins module
-    (`from builtins import exec as run`, `import builtins`) is refused too.
+    reached another way, whether read as `m.exec`, by `from m import exec`
+    or by a match pattern (`case object(exec=run)`); and in a string as a
+    whole identifier (`vars(module)["exec"]`). An import of the builtins
+    module (`import builtins`) is refused too.
   - Admitted: longer names (`execute`, `evaluate`, `compile_report`),
     comments, and `re.compile` on a name every import binds to `re`. That
     exception is dropped when anything rebinds the name, sets an attribute
-    on it, or can write a namespace without an assignment (`globals()`,
+    on it or an attribute of that name on any object (`module.re = ...`),
+    or can write a namespace without an assignment (`globals()`,
     `vars()`, `locals()`, a frame's `f_globals` or `f_locals`, a star
     import). Still refused: `model.eval()`, an attribute named `eval`, and
     `from re import compile` followed by a bare `compile(...)`.

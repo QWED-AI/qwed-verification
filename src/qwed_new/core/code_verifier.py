@@ -785,12 +785,12 @@ class CodeVerifier:
         - a Name that is the builtin, called or not (``f = eval``), whatever an
           import elsewhere binds to it: imports are not scoped or ordered here,
           so ``exec(x)`` stays refused beside ``from re import compile as exec``;
-        - an import from the builtins module (``from builtins import exec as
-          run``, ``import builtins as b``);
-        - an attribute with the builtin's name, since the object may be the
-          builtins module reached another way. The one exception is
-          ``re.compile`` on a name every import binds to ``re`` and nothing
-          rebinds (_imported_re_names);
+        - an import from the builtins module (``import builtins as b``);
+        - an attribute read with the builtin's name, since the object may be
+          the builtins module reached another way: ``m.exec``, ``from m import
+          exec as run`` and the match pattern ``case object(exec=run)``. The
+          one exception is ``re.compile`` on a name every import binds to
+          ``re`` and nothing rebinds (_imported_re_names);
         - a string holding the name as a whole identifier, since
           ``vars(module)["exec"]`` reaches it by string.
         Comments, and longer names such as ``execute``, ``evaluate`` and
@@ -818,7 +818,8 @@ class CodeVerifier:
             found.extend(
                 ("compile", node.lineno) for node in compile_attributes if node.value.id not in safe_re
             )
-        return [self._critical_builtin_issue(name, line) for name, line in dict.fromkeys(found)]
+        unique = list(dict.fromkeys(found))  # (name, line) pairs, in order, once each
+        return [self._critical_builtin_issue(name, line) for name, line in unique]
 
     def _critical_builtin_reference(self, node: ast.AST) -> Optional[str]:
         """The critical builtin (or builtins module) ``node`` refers to."""
@@ -826,8 +827,10 @@ class CodeVerifier:
             return node.id if node.id in self.PYTHON_CRITICAL_BUILTINS else None
         if isinstance(node, ast.Attribute):
             return node.attr if node.attr in self.PYTHON_CRITICAL_BUILTINS else None
+        if isinstance(node, ast.MatchClass):
+            return next((attr for attr in node.kwd_attrs if attr in self.PYTHON_CRITICAL_BUILTINS), None)
         if isinstance(node, (ast.Import, ast.ImportFrom)):
-            return self._builtins_import(node)
+            return self._import_reference(node)
         if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
             return self._critical_name_in_text(node.value)
         return None
@@ -839,17 +842,18 @@ class CodeVerifier:
         return match.group(1) if match else None
 
     @classmethod
-    def _builtins_import(cls, node: ast.AST) -> Optional[str]:
-        """For an import from the builtins module, the critical name it
-        imports, else the module's name."""
+    def _import_reference(cls, node: ast.AST) -> Optional[str]:
+        """The critical name a from-import reads from any module, else the
+        builtins module when the import is of it."""
         if isinstance(node, ast.Import):
             return next(
                 (alias.name for alias in node.names if alias.name.split(".")[0] in cls.PYTHON_BUILTIN_MODULES),
                 None,
             )
-        if node.level or node.module not in cls.PYTHON_BUILTIN_MODULES:
-            return None
-        return next((alias.name for alias in node.names if alias.name in cls.PYTHON_CRITICAL_BUILTINS), node.module)
+        critical = next((alias.name for alias in node.names if alias.name in cls.PYTHON_CRITICAL_BUILTINS), None)
+        if critical or node.level or node.module not in cls.PYTHON_BUILTIN_MODULES:
+            return critical
+        return node.module
 
     @classmethod
     def _imported_re_names(cls, tree: ast.AST) -> set:
@@ -890,13 +894,16 @@ class CodeVerifier:
     @staticmethod
     def _names_rebound_by(node: ast.AST) -> set:
         """Names ``node`` binds other than by an import: assignment targets,
-        attributes set or deleted on a name (``re.compile = ...``), parameters,
-        def and class names, ``except ... as`` and match-pattern captures."""
+        parameters, def and class names, ``except ... as``, match-pattern
+        captures, and for an attribute set or deleted, both the attribute's
+        name (``module.re = ...`` may be this module) and the object's
+        (``re.compile = ...``)."""
         if isinstance(node, ast.Name):
             return set() if isinstance(node.ctx, ast.Load) else {node.id}
         if isinstance(node, ast.Attribute):
-            stored = not isinstance(node.ctx, ast.Load) and isinstance(node.value, ast.Name)
-            return {node.value.id} if stored else set()
+            if isinstance(node.ctx, ast.Load):
+                return set()
+            return {node.attr, node.value.id} if isinstance(node.value, ast.Name) else {node.attr}
         if isinstance(node, ast.arg):
             return {node.arg}
         if isinstance(node, ast.alias):
@@ -928,44 +935,50 @@ class CodeVerifier:
         aliases, star_modules = self._import_aliases(tree)
         issues: List[SecurityIssue] = []
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            name = self._dotted_name(node.func)
+            name = self._dotted_name(node.func) if isinstance(node, ast.Call) else None
             if not name:
                 continue
-            head, _, rest = name.partition(".")
-            if head in aliases:
-                candidates = [aliases[head] + ("." + rest if rest else "")]
-            elif not rest:
-                candidates = [name] + [f"{module}.{name}" for module in star_modules]
-            else:
-                candidates = [name]
-            lineno = getattr(node, "lineno", None)
-
-            # Process execution, incl. the raw-OS backend modules posix/nt
-            # (matched by module head, so "nt." doesn't collide with words).
-            hit = next((c for c in candidates if self._is_process_execution(c)), None)
-            if hit is None:
-                hit = next(
-                    (c for c in candidates
-                     if "." in c and c.partition(".")[0] in self.PYTHON_RAW_OS_MODULES),
-                    None,
-                )
-            if hit:
-                issues.append(self._process_execution_issue(hit, lineno))
-                continue
-
-            # Builtin open(): a bare call with no module, not shadowed by an
-            # import that re-points the name elsewhere.
-            if name in self.PYTHON_FILE_BUILTINS and name not in aliases:
-                issues.append(self._file_network_issue(name, lineno))
-                continue
-
-            # File system / network sinks.
-            fn_hit = next((c for c in candidates if self._is_file_network(c)), None)
-            if fn_hit:
-                issues.append(self._file_network_issue(fn_hit, lineno))
+            issue = self._process_call_issue(
+                name, self._call_candidates(name, aliases, star_modules), aliases, getattr(node, "lineno", None)
+            )
+            if issue:
+                issues.append(issue)
         return issues
+
+    @staticmethod
+    def _call_candidates(name: str, aliases: Dict[str, str], star_modules: List[str]) -> List[str]:
+        """The dotted names a call to ``name`` may resolve to."""
+        head, _, rest = name.partition(".")
+        if head in aliases:
+            return [aliases[head] + ("." + rest if rest else "")]
+        if not rest:
+            return [name] + [f"{module}.{name}" for module in star_modules]
+        return [name]
+
+    def _process_call_issue(
+        self, name: str, candidates: List[str], aliases: Dict[str, str], lineno: Optional[int]
+    ) -> Optional[SecurityIssue]:
+        """The process-execution or file/network finding for one call, if any."""
+        # Process execution, incl. the raw-OS backend modules posix/nt
+        # (matched by module head, so "nt." doesn't collide with words).
+        hit = next((c for c in candidates if self._is_process_execution(c)), None)
+        if hit is None:
+            hit = next(
+                (c for c in candidates
+                 if "." in c and c.partition(".")[0] in self.PYTHON_RAW_OS_MODULES),
+                None,
+            )
+        if hit:
+            return self._process_execution_issue(hit, lineno)
+
+        # Builtin open(): a bare call with no module, not shadowed by an
+        # import that re-points the name elsewhere.
+        if name in self.PYTHON_FILE_BUILTINS and name not in aliases:
+            return self._file_network_issue(name, lineno)
+
+        # File system / network sinks.
+        fn_hit = next((c for c in candidates if self._is_file_network(c)), None)
+        return self._file_network_issue(fn_hit, lineno) if fn_hit else None
 
     def _check_python_subprocess_ast(self, tree: Optional[ast.AST]) -> List[SecurityIssue]:
         """Detect subprocess curl/wget pipe-to-shell patterns using AST."""
