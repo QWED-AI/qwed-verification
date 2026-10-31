@@ -134,6 +134,8 @@ def test_leibniz_notation_is_refused(text):
 
 @pytest.mark.parametrize("text", [
     "d/2", "x*d/(2*d)", "d + x", "delta*x", "x/delta", "x/diff(x**2, x)", "x/d*y", "x/(d)",
+    # SymPy keeps a name with "_" whole (CodeRabbit on PR #558).
+    "distance_m", "x/distance_m", "dx_1",
 ])
 def test_the_symbol_d_still_parses(text):
     safe_parse_expr(text)

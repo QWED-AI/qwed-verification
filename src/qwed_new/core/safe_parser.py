@@ -103,8 +103,8 @@ _DERIVATIVE_CALLS = frozenset({"diff", "Derivative"})
 # stand (/dx, /(-2*dfoo), x*dx): a name that starts with "d" and that the
 # parser does not know (dx, dtheta, d2y, dfoo), which it would split into
 # letters anyway; and a lone "d" a denominator applies to a variable (d(x),
-# d x). A "d" name the parser knows (delta, diff, a caller's symbol) is not a
-# differential.
+# d x). A "d" name the parser knows (delta, diff, a caller's symbol) or keeps
+# whole (distance_m, which has "_") is not a differential.
 _IDENTIFIER = re.compile(r"[A-Za-z_]\w*", re.ASCII)
 _DIVIDED_BY_LONE_D = re.compile(r"/\s*(?:\(\s*)?d\b\s*[(A-Za-z]", re.ASCII)
 
@@ -916,7 +916,9 @@ def _leibniz_differential(expression: str, names: Dict[str, Any]) -> Optional[st
     if lone_d:
         return lone_d.group()
     for token in _IDENTIFIER.findall(expression):
-        if token.startswith("d") and len(token) > 1 and token not in names:
+        # SymPy keeps a name with "_" whole (distance_m is one symbol), so
+        # only names it would split into letters are differentials.
+        if token.startswith("d") and len(token) > 1 and "_" not in token and token not in names:
             return token
     return None
 

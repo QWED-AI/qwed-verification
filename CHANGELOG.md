@@ -333,7 +333,8 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     wherever they stand (`/dx`, `/(-2*dfoo)`, `x*dx`):
     - a name that starts with `d` and that the parser does not know (`dx`,
       `dtheta`, `d2y`, `dfoo`). The parser would split such a name into
-      letters anyway, so `x/dist` is refused too;
+      letters anyway, so `x/dist` is refused too. A name with `_`
+      (`distance_m`) is one symbol to SymPy, so it is not refused;
     - a lone `d` that a denominator applies to a variable (`d(x)`, `d x`).
     - A name the parser knows that starts with `d` (`delta`, `diff`, or a
       caller's own symbol) is not a differential.
