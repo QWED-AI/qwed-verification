@@ -349,6 +349,71 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     with `api.math.execution_error`. The parser's own text is not returned.
     A batch math item the parser refuses gets the same BLOCKED result; it
     was a failed item carrying the parser's error text.
+- **The code verifier reads `exec`, `eval` and `compile` as names, not
+  substrings (#534).** The Python line scan matched them anywhere in a line,
+  so `cur.execute("SELECT ?", params)`, `model.evaluate(x)`,
+  `re.compile(r"[0-9]+")` and `compile_report()` came back VERIFIED with
+  `is_valid` false (`dangerous_function`). Parameterised SQL, the safe way to
+  run a query, was refused.
+  - `eval`, `exec`, `compile`, `__import__`, `getattr` and `setattr` are now
+    matched on the AST: as a name, called or not (`f = eval`), whatever an
+    import elsewhere binds to it, since imports are not read by scope or
+    order; as an attribute, since the object may be the `builtins` module
+    reached another way, whether read as `m.exec`, by `from m import exec`
+    or by a match pattern (`case object(exec=run)`); and in a string as a
+    whole identifier (`vars(module)["exec"]`). A string literal that is
+    sliced, `%`-formatted or has characters removed (`strip`, `replace`,
+    `split` and the like) can leave the name (`"xexec"[1:]`). One such step
+    on a literal written in place, with literal arguments, is worked out and
+    matched as whole identifiers; `%` conversions are read as CPython reads
+    them, nested mapping keys included, in one pass. Otherwise the literal is
+    matched anywhere: steps chained (`"xexecx"[1:][:-1]`), a method saved
+    and called later, arguments that are not literals, a `translate` or a
+    `replace` that grows the text, and a literal reached through names
+    (`s = "xexec"; t = s; t[1:]`), where only a `%`-format of a name bound
+    to literals alone is worked out. Each name is worked out once, so the
+    work stays linear in the code. An import of the `builtins` module
+    (`import builtins`) is refused too.
+  - Admitted: longer identifiers (`execute`, `evaluate`, `compile_report`),
+    the names inside longer words in strings and docstrings, also when
+    formatted or split (`"SELECT * FROM evaluations WHERE id = %s" % uid`,
+    `"executing job"`, `"executed,ok".split(",")`),
+    comments, and `re.compile(pattern, flags)` on a name every import binds
+    to `re`. The builtin `compile` needs a filename and a mode, so it cannot
+    run in that shape; any other `re.compile` call, or `re.compile` not
+    called, is refused. The exception is also dropped when anything rebinds
+    the name, sets an attribute on it or an attribute of that name on any
+    object (`module.re = ...`), or can rebind it without an assignment: a
+    namespace (`globals()`, `vars()`, `locals()`, a frame's `f_globals` or
+    `f_locals`, a star import) or the import system (`sys.modules`,
+    `sys.meta_path`, `sys.path_hooks`, `sys.path_importer_cache`). Still
+    refused: `model.eval()`, an attribute named `eval`, and
+    `from re import compile` followed by a bare `compile(...)`.
+  - Longer names the substring scan refused that also run or compile code,
+    start a process or look up an attribute by name stay refused, matched
+    the same way: `exec_` (six, future), `exec_module`, `exec_builtin`,
+    `exec_dynamic`, `_exec`, `load_compiled`, `runeval`, `evalfile`,
+    `_evaluate`, `_eval_type`, `compile_command`, `_compile`,
+    `_maybe_compile`, `_try_compile`, `_compile_source`,
+    `_compile_bytecode`, `compile_file`, `compile_dir`, `compile_path`,
+    `subprocess_exec`, `create_subprocess_exec`, `fork_exec`, `_execvpe`,
+    `_execute_child`, `set_executable`, `getattr_static` and
+    `_getattribute`. `loop.subprocess_shell`, and `create_subprocess_shell`
+    imported from `asyncio.subprocess`, which the substring scan admitted,
+    are refused too.
+    `ast.literal_eval` is admitted.
+  - `__self__` is a dangerous attribute, as `__dict__` and `__globals__`
+    are: on a builtin function it is the `builtins` module, so
+    `vars(print.__self__)["ex" + "ec"]` was admitted.
+  - `__getattribute__`, `__getattr__`, `__setattr__` and `__delattr__`,
+    which reach an attribute by name as `getattr` and `setattr` do, are
+    refused when read as an attribute or named in a string, as the builtins
+    are. A class or module that defines `__getattr__` is admitted.
+  - Python that does not parse is BLOCKED with `code_verifier.parse_error`,
+    since the AST checks cannot run on it. It was certified safe unless a
+    line held one of the substring patterns.
+  - The Python AST checks share one parse and one walk of the code instead of
+    parsing and walking it once each.
 
 ## [8.0.0] - 2026-10-26
 

@@ -46,7 +46,72 @@ CONSTRAINT_CODE_SAFE = "code_verifier.code_safe"
 CONSTRAINT_CODE_UNSAFE = "code_verifier.code_unsafe"
 CONSTRAINT_EMPTY_BATCH = "code_verifier.empty_batch"
 CONSTRAINT_BATCH_BLOCKED = "code_verifier.batch_blocked"
+CONSTRAINT_PARSE_ERROR = "code_verifier.parse_error"
 
+_DYNAMIC_COMPILATION = "Dynamic code compilation"
+_FILE_COMPILATION = "Bytecode compilation of files"
+
+
+class _UnparseablePython(Exception):
+    """Python code that does not parse: its AST checks cannot run, so
+    verify_code blocks it instead of certifying it."""
+
+
+_PARENTHESES = re.compile(r"[()]")
+
+
+def _unformatted(text: str) -> Optional[str]:
+    """``text`` with each %-format conversion replaced by a space, since what
+    it becomes is not known and may end a word, or None when the format does
+    not parse. Conversions are read as CPython reads them, mapping keys with
+    nested parentheses included, in one pass over the text."""
+    parts: List[str] = []
+    start = 0
+    while True:
+        percent = text.find("%", start)
+        if percent < 0:
+            parts.append(text[start:])
+            return "".join(parts)
+        parts.append(text[start:percent])
+        end = _conversion_end(text, percent + 1)
+        if end is None:
+            return None
+        parts.append(" ")
+        start = end
+
+
+def _conversion_end(text: str, i: int) -> Optional[int]:
+    """The index after the conversion that starts at ``text[i]``, just past
+    its ``%``: ``(key)``, flags, width, precision, length and the type."""
+    if text.startswith("(", i):
+        i = _mapping_key_end(text, i + 1)
+        if i is None:
+            return None
+    while i < len(text) and text[i] in "-+ #0":
+        i += 1
+    i = _number_end(text, i)
+    if text.startswith(".", i):
+        i = _number_end(text, i + 1)
+    if i < len(text) and text[i] in "hlL":
+        i += 1
+    return i + 1 if i < len(text) else None
+
+
+def _mapping_key_end(text: str, i: int) -> Optional[int]:
+    depth = 1
+    for match in _PARENTHESES.finditer(text, i):
+        depth += 1 if match.group() == "(" else -1
+        if depth == 0:
+            return match.end()
+    return None
+
+
+def _number_end(text: str, i: int) -> int:
+    if text.startswith("*", i):
+        return i + 1
+    while i < len(text) and text[i] in "0123456789":
+        i += 1
+    return i
 
 
 
@@ -74,7 +139,7 @@ class CodeVerifier:
     PYTHON_CRITICAL = {
         "eval": "Remote code execution via eval()",
         "exec": "Remote code execution via exec()",
-        "compile": "Dynamic code compilation",
+        "compile": _DYNAMIC_COMPILATION,
         "__import__": "Dynamic module import",
         "pickle.loads": "Insecure deserialization",
         "pickle.load": "Insecure deserialization",
@@ -86,6 +151,94 @@ class CodeVerifier:
         # interpreter instead of importing it, then calling on it (GHSA-4phf).
         "sys.modules[": "Runtime module acquisition via sys.modules",
     }
+
+    # The PYTHON_CRITICAL entries that are builtins. These are matched as
+    # names on the AST, not as substrings of a line, so cursor.execute,
+    # model.evaluate, re.compile and compile_report() are not read as them
+    # (#534). An import from the builtins module is refused too, since
+    # builtins.__dict__ / vars(builtins) reach them by string.
+    PYTHON_CRITICAL_BUILTINS: ClassVar[frozenset] = frozenset(
+        {"eval", "exec", "compile", "__import__", "getattr", "setattr"}
+    )
+    PYTHON_BUILTIN_MODULES: ClassVar[frozenset] = frozenset({"builtins", "__builtin__"})
+    # Longer names the substring scan refused that also run or compile code,
+    # start a process or look up an attribute by name; they stay refused as
+    # whole identifiers.
+    PYTHON_CODE_EXECUTION_NAMES: ClassVar[dict] = {
+        "exec_": "Remote code execution via exec_() (six, future)",
+        "exec_module": "Module execution via a loader's exec_module()",
+        "exec_builtin": "Module execution via _imp.exec_builtin()",
+        "exec_dynamic": "Module execution via _imp.exec_dynamic()",
+        "_exec": "Module execution via importlib's _exec()",
+        "load_compiled": "Module execution via imp.load_compiled()",
+        "runeval": "Expression evaluation via pdb/bdb runeval()",
+        "evalfile": "Tcl script execution via evalfile()",
+        "_evaluate": "String evaluation via ForwardRef._evaluate()",
+        "_eval_type": "String evaluation via typing._eval_type()",
+        "compile_command": _DYNAMIC_COMPILATION,
+        "_compile": _DYNAMIC_COMPILATION,
+        "_maybe_compile": _DYNAMIC_COMPILATION,
+        "_try_compile": _DYNAMIC_COMPILATION,
+        "_compile_source": _DYNAMIC_COMPILATION,
+        "_compile_bytecode": "Code object from bytecode",
+        "compile_file": _FILE_COMPILATION,
+        "compile_dir": _FILE_COMPILATION,
+        "compile_path": _FILE_COMPILATION,
+        "subprocess_exec": "Process execution via an event loop's subprocess_exec()",
+        "subprocess_shell": "Shell execution via an event loop's subprocess_shell()",
+        "create_subprocess_exec": "Process execution via asyncio",
+        "create_subprocess_shell": "Shell execution via asyncio",
+        "fork_exec": "Process execution via _posixsubprocess.fork_exec()",
+        "_execvpe": "Process execution via os._execvpe()",
+        "_execute_child": "Process execution via Popen._execute_child()",
+        "set_executable": "Sets the program multiprocessing runs",
+        "getattr_static": "Dynamic attribute access",
+        "_getattribute": "Dynamic attribute access via pickle._getattribute()",
+    }
+    _CRITICAL_NAMES: ClassVar[frozenset] = PYTHON_CRITICAL_BUILTINS | frozenset(PYTHON_CODE_EXECUTION_NAMES)
+    # getattr / setattr / delattr by another name. Refused when read as an
+    # attribute or named in a string, not when a class or module defines them.
+    PYTHON_ATTRIBUTE_ACCESSORS: ClassVar[frozenset] = frozenset(
+        {"__getattribute__", "__getattr__", "__setattr__", "__delattr__"}
+    )
+    _ATTRIBUTE_READ_NAMES: ClassVar[frozenset] = _CRITICAL_NAMES | PYTHON_ATTRIBUTE_ACCESSORS
+    # Whole identifiers in a string, longest first, so prose such as
+    # "executing job" or "SELECT * FROM evaluations" is not a match.
+    _CRITICAL_BUILTIN_NAME: ClassVar = re.compile(
+        r"(?<!\w)(" + "|".join(sorted(_ATTRIBUTE_READ_NAMES, key=len, reverse=True)) + r")(?!\w)"
+    )
+    # A string literal that is sliced, %-formatted or has characters removed
+    # can leave the name although it only holds it inside a longer word
+    # ("x__getattribute__"[1:]). One such step on a literal written in place
+    # is worked out and matched as whole identifiers; otherwise the literal
+    # is matched anywhere (_reshaped_references).
+    _CRITICAL_BUILTIN_IN_WORD: ClassVar = re.compile(
+        "(" + "|".join(sorted(_ATTRIBUTE_READ_NAMES, key=len, reverse=True)) + ")"
+    )
+    _LITERAL_RESHAPERS: ClassVar[dict] = {
+        "strip": str.strip, "lstrip": str.lstrip, "rstrip": str.rstrip,
+        "replace": str.replace, "removeprefix": str.removeprefix, "removesuffix": str.removesuffix,
+        "split": str.split, "rsplit": str.rsplit, "partition": str.partition,
+        "rpartition": str.rpartition, "translate": str.translate,
+    }
+    _CHARACTER_REMOVING_METHODS: ClassVar[frozenset] = frozenset(_LITERAL_RESHAPERS)
+    _RESHAPE_NODE_TYPES: ClassVar[frozenset] = frozenset({ast.Subscript, ast.BinOp, ast.Call, ast.Attribute})
+    # Ways to rebind a name without an assignment the AST shows: a namespace
+    # dict (globals()["re"] = ...) or the import system an import reads
+    # (sys.modules, sys.meta_path). Where code uses one, no name is trusted
+    # to still be the re module.
+    _NAMESPACE_ACCESS: ClassVar[frozenset] = frozenset(
+        {"globals", "vars", "locals", "f_globals", "f_locals",
+         "modules", "meta_path", "path_hooks", "path_importer_cache"}
+    )
+    # re.compile(pattern, flags=0) takes at most two arguments. The builtin
+    # compile needs a source, a filename and a mode, so a call in this shape
+    # cannot run it even on a name that turns out to be the builtins module.
+    _REGEX_COMPILE_KEYWORDS: ClassVar[frozenset] = frozenset({"pattern", "flags"})
+    # The node types _critical_builtin_reference reads; others are skipped.
+    _REFERENCE_NODE_TYPES: ClassVar[frozenset] = frozenset(
+        {ast.Name, ast.Attribute, ast.MatchClass, ast.Import, ast.ImportFrom, ast.Constant}
+    )
 
     # A subprocess call that pipes fetched content (curl/wget) into a shell is
     # flagged as remote_code_execution. subprocess.* is already CRITICAL
@@ -184,7 +337,9 @@ class CodeVerifier:
     
     PYTHON_DANGEROUS_ATTRS = {
         "__class__", "__base__", "__subclasses__", "__globals__",
-        "__builtins__", "__import__", "__code__", "__dict__"
+        "__builtins__", "__import__", "__code__", "__dict__",
+        # A builtin function's __self__ is the builtins module (print.__self__).
+        "__self__",
     }
     
     # =========================================================================
@@ -354,6 +509,7 @@ class CodeVerifier:
         - Safe code → VERIFIED with ``is_valid`` True and proof_ref from the
           analysis evidence.
         - Unsupported language → BLOCKED (``code_verifier.unsupported_language``)
+        - Python that does not parse → BLOCKED (``code_verifier.parse_error``)
         - Internal error   → BLOCKED (``code_verifier.execution_error``)
 
         ``agent_message`` is agent-safe: it never leaks detection rules, rule
@@ -429,18 +585,7 @@ class CodeVerifier:
             # Cross-language secret detection
             issues.extend(self._check_secrets(code))
         except Exception as exc:  # noqa: BLE001 — fail-closed by design
-            return DiagnosticResult.blocked(
-                agent_message=(
-                    "Code verification could not be completed due to an internal error."
-                ),
-                developer_fields={
-                    "constraint_id": CONSTRAINT_EXECUTION_ERROR,
-                    "is_safe": False,
-                    "is_valid": False,
-                    "error_type": type(exc).__name__,
-                    "language": language,
-                },
-            )
+            return self._fail_closed(exc, language)
 
         # Calculate counts
         critical_count = sum(1 for i in issues if i.severity == "CRITICAL")
@@ -484,6 +629,36 @@ class CodeVerifier:
             agent_message=agent_message,
             developer_fields=developer_fields,
             evidence=evidence,
+        )
+
+    @staticmethod
+    def _fail_closed(exc: Exception, language: str) -> DiagnosticResult:
+        """BLOCKED for code the checks could not analyse: Python that does not
+        parse (``code_verifier.parse_error``) or an internal error."""
+        if isinstance(exc, _UnparseablePython):
+            return DiagnosticResult.blocked(
+                agent_message=(
+                    "Code verification could not be completed because the code "
+                    "does not parse as Python."
+                ),
+                developer_fields={
+                    "constraint_id": CONSTRAINT_PARSE_ERROR,
+                    "is_safe": False,
+                    "is_valid": False,
+                    "language": language,
+                },
+            )
+        return DiagnosticResult.blocked(
+            agent_message=(
+                "Code verification could not be completed due to an internal error."
+            ),
+            developer_fields={
+                "constraint_id": CONSTRAINT_EXECUTION_ERROR,
+                "is_safe": False,
+                "is_valid": False,
+                "error_type": type(exc).__name__,
+                "language": language,
+            },
         )
 
     def _build_evidence(
@@ -583,13 +758,17 @@ class CodeVerifier:
 
     def _check_python(self, code: str) -> List[SecurityIssue]:
         """Check Python code for security issues."""
+        # The AST checks share one parse and one walk of it; code that does
+        # not parse stops here.
+        nodes = list(ast.walk(self._parse_python(code)))
         issues = []
         lines = code.split('\n')
         
         for line_num, line in enumerate(lines, 1):
-            # Critical functions
+            # Critical functions; the builtins among them are matched as
+            # names in _check_python_critical_builtins (#534).
             for pattern, desc in self.PYTHON_CRITICAL.items():
-                if pattern in line:
+                if pattern not in self.PYTHON_CRITICAL_BUILTINS and pattern in line:
                     issues.append(SecurityIssue(
                         severity="CRITICAL",
                         issue_type="dangerous_function",
@@ -634,6 +813,8 @@ class CodeVerifier:
                         line_number=line_num
                     ))
 
+        issues.extend(self._check_python_critical_builtins(nodes))
+
         # A subprocess call that pipes curl/wget output into a shell, including
         # across lines. Linear scan (no backtracking regex) over the full code.
         for issue in self._check_remote_pipe_to_shell(code):
@@ -645,7 +826,7 @@ class CodeVerifier:
             issues.append(issue)
 
         # Process execution reached through an alias, which the line scan cannot see.
-        for issue in self._check_python_process_ast(code):
+        for issue in self._check_python_process_ast(nodes):
             if any(
                 i.issue_type == issue.issue_type
                 and i.line_number == issue.line_number
@@ -655,7 +836,7 @@ class CodeVerifier:
             issues.append(issue)
 
         # AST-based subprocess checks to catch nested expression forms that regex can miss.
-        for issue in self._check_python_subprocess_ast(code):
+        for issue in self._check_python_subprocess_ast(nodes):
             if any(
                 i.issue_type == issue.issue_type
                 and i.line_number == issue.line_number
@@ -679,6 +860,16 @@ class CodeVerifier:
                     ))
         
         return issues
+
+    @staticmethod
+    def _parse_python(code: str) -> ast.AST:
+        """The module's AST. Code that does not parse raises
+        _UnparseablePython, which verify_code turns into BLOCKED: the AST
+        checks cannot run on it, so it is not certified."""
+        try:
+            return ast.parse(code)
+        except (SyntaxError, ValueError) as exc:  # ValueError: null bytes on Python 3.10
+            raise _UnparseablePython() from exc
 
     def _process_execution_issue(self, pattern: str, line_number: Optional[int]) -> SecurityIssue:
         return SecurityIssue(
@@ -718,7 +909,340 @@ class CodeVerifier:
         parts.append(node.id)
         return ".".join(reversed(parts))
 
-    def _check_python_process_ast(self, code: str) -> List[SecurityIssue]:
+    @staticmethod
+    def _import_aliases(nodes: List[ast.AST]) -> tuple[Dict[str, str], List[str]]:
+        """Names bound by imports, mapped to the dotted name they stand for,
+        and the modules star-imported."""
+        aliases: Dict[str, str] = {}
+        star_modules: List[str] = []
+        for node in nodes:
+            if isinstance(node, ast.Import):
+                aliases.update(CodeVerifier._import_binding(alias) for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                star_modules.extend(node.module for alias in node.names if alias.name == "*")
+                aliases.update(
+                    (alias.asname or alias.name, f"{node.module}.{alias.name}")
+                    for alias in node.names if alias.name != "*"
+                )
+        return aliases, star_modules
+
+    @staticmethod
+    def _import_binding(alias: ast.alias) -> tuple[str, str]:
+        """The name ``import <alias>`` binds, and the module it binds it to."""
+        if alias.asname:
+            return alias.asname, alias.name
+        top = alias.name.split(".")[0]
+        return top, top
+
+    def _check_python_critical_builtins(self, nodes: List[ast.AST]) -> List[SecurityIssue]:
+        """Flag the critical builtins as names, not substrings (#534).
+
+        On the AST:
+        - a Name that is the builtin, called or not (``f = eval``), whatever an
+          import elsewhere binds to it: imports are not scoped or ordered here,
+          so ``exec(x)`` stays refused beside ``from re import compile as exec``;
+        - an import from the builtins module (``import builtins as b``);
+        - an attribute read with the builtin's name, or one of the dunder
+          accessors (``__getattribute__``), since the object may be the
+          builtins module reached another way: ``m.exec``, ``from m import
+          exec as run`` and the match pattern ``case object(exec=run)``. The
+          one exception is ``re.compile`` called as ``re.compile(pattern,
+          flags)`` on a name every import binds to ``re`` and nothing
+          rebinds (_untrusted_compiles);
+        - a string holding one of these names as a whole identifier, since
+          ``vars(module)["exec"]`` reaches it by string, or a name that
+          slicing, %-formatting or stripping a literal can leave, the literal
+          written in place or reached through names (``"xexec"[1:]``,
+          ``s = "xexec"; s[1:]``; _reshaped_references).
+        Comments, longer identifiers such as ``execute``, ``evaluate`` and
+        ``compile_report``, prose in strings, and a class or module defining
+        ``__getattr__`` are not matches.
+        """
+        found: List[tuple[str, int]] = []
+        compile_attributes: List[ast.Attribute] = []
+        reshapes: List[ast.AST] = []
+        for node in nodes:
+            node_type = type(node)
+            if node_type in self._RESHAPE_NODE_TYPES:
+                reshapes.append(node)
+            if node_type not in self._REFERENCE_NODE_TYPES:
+                continue
+            name = self._critical_builtin_reference(node)
+            if name == "compile" and isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+                compile_attributes.append(node)
+            elif name:
+                found.append((name, node.lineno))
+        # Only code with a name.compile pays for the walk that finds re.
+        if compile_attributes:
+            found.extend(("compile", node.lineno) for node in self._untrusted_compiles(nodes, compile_attributes))
+        if reshapes:
+            found.extend(self._reshaped_references(nodes, reshapes))
+        unique = list(dict.fromkeys(found))  # (name, line) pairs, in order, once each
+        return [self._critical_builtin_issue(name, line) for name, line in unique]
+
+    def _critical_builtin_reference(self, node: ast.AST) -> Optional[str]:
+        """The critical builtin (or builtins module) ``node`` refers to."""
+        if isinstance(node, ast.Name):
+            return node.id if node.id in self._CRITICAL_NAMES else None
+        if isinstance(node, ast.Attribute) and node.attr in self._ATTRIBUTE_READ_NAMES:
+            return node.attr
+        if isinstance(node, ast.MatchClass):
+            return next((attr for attr in node.kwd_attrs if attr in self._ATTRIBUTE_READ_NAMES), None)
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return self._import_reference(node)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
+            return self._critical_name_in_text(node.value, self._CRITICAL_BUILTIN_NAME)
+        return None
+
+    def _reshaped_references(self, nodes: List[ast.AST], reshapes: List[ast.AST]) -> List[tuple[str, int]]:
+        """(name, line) for each slice, %-format or character-removing method
+        that can leave a critical name from a string literal.
+
+        One such step on a literal written in place, with literal arguments,
+        is worked out and its result matched as whole identifiers, so
+        ``"executing %s" % job`` and ``"executed,ok".split(",")`` are not
+        matches. Otherwise the literal is matched anywhere: a step that feeds
+        another (``"xexecx"[1:][:-1]``), a method read without being called
+        (``f = "xexec".lstrip``), arguments that are not literals, and a
+        literal reached through names (_BoundLiterals), where only a
+        %-format of a name bound to literals alone is worked out.
+        """
+        consumed, called = self._reshape_links(reshapes)
+        bound = _BoundLiterals(nodes)
+        found: List[tuple[str, int]] = []
+        for node in reshapes:
+            operand = self._reshape_operand(node)
+            if operand is None or id(node) in called:
+                continue
+            final = id(node) not in consumed and not isinstance(node, ast.Attribute)
+            name = self._operand_reference(node, operand, final, bound)
+            if name:
+                found.append((name, node.lineno))
+        return found
+
+    def _operand_reference(
+        self, node: ast.AST, operand: ast.AST, final: bool, bound: "_BoundLiterals"
+    ) -> Optional[str]:
+        if isinstance(operand, ast.Constant) and isinstance(operand.value, (str, bytes)):
+            return self._name_left_by(node, operand.value, final)
+        if isinstance(operand, ast.Name):
+            return bound.left_by(operand.id, final and isinstance(node, ast.BinOp))
+        return None
+
+    @classmethod
+    def _reshape_links(cls, reshapes: List[ast.AST]) -> tuple[set, set]:
+        """The ids of the nodes another reshape works on, and of the
+        functions called."""
+        consumed: set = set()
+        called: set = set()
+        for node in reshapes:
+            operand = cls._reshape_operand(node)
+            if operand is not None:
+                consumed.add(id(operand))
+            if isinstance(node, ast.Call):
+                called.add(id(node.func))
+        return consumed, called
+
+    @classmethod
+    def _reshape_operand(cls, node: ast.AST) -> Optional[ast.AST]:
+        """What ``node`` slices, %-formats or removes characters from, the
+        method read or called."""
+        if isinstance(node, ast.Subscript):
+            return node.value
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+            return node.left
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr in cls._CHARACTER_REMOVING_METHODS:
+            return node.func.value
+        if isinstance(node, ast.Attribute) and node.attr in cls._CHARACTER_REMOVING_METHODS:
+            return node.value
+        return None
+
+    def _name_left_by(self, node: ast.AST, literal, final: bool) -> Optional[str]:
+        """The critical name reshaping ``literal`` as ``node`` does can
+        leave: worked out when ``final`` and the arguments are literals,
+        else the literal matched anywhere."""
+        text = literal.decode("latin-1") if isinstance(literal, bytes) else literal
+        results = None
+        if final:
+            try:
+                results = self._reshape_results(node, text)
+            except (ValueError, TypeError, IndexError, RecursionError):
+                results = None
+        if results is None:
+            return self._critical_name_in_text(text, self._CRITICAL_BUILTIN_IN_WORD)
+        return next(filter(None, (self._critical_name_in_text(r, self._CRITICAL_BUILTIN_NAME) for r in results)), None)
+
+    @classmethod
+    def _name_left_by_format(cls, literal) -> Optional[str]:
+        """The critical name %-formatting ``literal`` can leave."""
+        text = literal.decode("latin-1") if isinstance(literal, bytes) else literal
+        unformatted = _unformatted(text)
+        if unformatted is None:
+            return cls._critical_name_in_text(text, cls._CRITICAL_BUILTIN_IN_WORD)
+        return cls._critical_name_in_text(unformatted, cls._CRITICAL_BUILTIN_NAME)
+
+    def _reshape_results(self, node: ast.AST, text: str) -> Optional[List[str]]:
+        """The strings reshaping ``text`` as ``node`` does gives, or None when
+        that is not known. Raises when the arguments are not literals."""
+        if isinstance(node, ast.Subscript):
+            return [text[self._literal_index(node.slice)]]
+        if isinstance(node, ast.BinOp):
+            unformatted = _unformatted(text)
+            return None if unformatted is None else [unformatted]
+        method = node.func.attr
+        args = [self._literal_text(arg) for arg in node.args]
+        kwargs = {keyword.arg: self._literal_text(keyword.value) for keyword in node.keywords}
+        # translate can map one character to many, and replace grows the text
+        # when the new part is longer: not worked out, to bound the work.
+        if method == "translate" or (method == "replace" and len(args) >= 2 and len(args[1]) > len(args[0])):
+            return None
+        result = self._LITERAL_RESHAPERS[method](text, *args, **kwargs)
+        return [result] if isinstance(result, str) else [part for part in result if isinstance(part, str)]
+
+    @staticmethod
+    def _literal_index(node: ast.AST):
+        """A slice or index written as int literals (``[1:]``, ``[-4:]``)."""
+        if isinstance(node, ast.Slice):
+            bounds = [None if bound is None else ast.literal_eval(bound) for bound in (node.lower, node.upper, node.step)]
+            if any(bound is not None and type(bound) is not int for bound in bounds):
+                raise TypeError("not an int slice")
+            return slice(*bounds)
+        index = ast.literal_eval(node)
+        if type(index) is not int:
+            raise TypeError("not an int index")
+        return index
+
+    @staticmethod
+    def _literal_text(node: ast.AST):
+        value = ast.literal_eval(node)
+        return value.decode("latin-1") if isinstance(value, bytes) else value
+
+    @classmethod
+    def _first_name_in_word(cls, literals: list) -> Optional[str]:
+        return next(filter(None, (cls._critical_name_in_text(literal, cls._CRITICAL_BUILTIN_IN_WORD) for literal in literals)), None)
+
+    @staticmethod
+    def _critical_name_in_text(value, pattern) -> Optional[str]:
+        text = value.decode("latin-1") if isinstance(value, bytes) else value
+        match = pattern.search(text)
+        return match.group(1) if match else None
+
+    @classmethod
+    def _import_reference(cls, node: ast.AST) -> Optional[str]:
+        """The critical name a from-import reads from any module, else the
+        builtins module when the import is of it."""
+        if isinstance(node, ast.Import):
+            return next(
+                (alias.name for alias in node.names if alias.name.split(".")[0] in cls.PYTHON_BUILTIN_MODULES),
+                None,
+            )
+        critical = next((alias.name for alias in node.names if alias.name in cls._ATTRIBUTE_READ_NAMES), None)
+        if critical or node.level or node.module not in cls.PYTHON_BUILTIN_MODULES:
+            return critical
+        return node.module
+
+    @classmethod
+    def _untrusted_compiles(cls, nodes: List[ast.AST], compile_attributes: List[ast.Attribute]) -> List[ast.Attribute]:
+        """The ``name.compile`` reads that are not a regex compile: one is
+        trusted only when called as ``re.compile(pattern, flags)`` on a name
+        _imported_re_names trusts."""
+        safe_re = cls._imported_re_names(nodes)
+        if not safe_re:
+            return compile_attributes
+        regex_calls = {
+            id(node.func) for node in nodes
+            if isinstance(node, ast.Call) and cls._has_regex_compile_arguments(node)
+        }
+        return [node for node in compile_attributes if node.value.id not in safe_re or id(node) not in regex_calls]
+
+    @classmethod
+    def _has_regex_compile_arguments(cls, call: ast.Call) -> bool:
+        """At most two arguments, none unpacked, keywords only pattern and flags."""
+        return (
+            len(call.args) + len(call.keywords) <= 2
+            and not any(isinstance(arg, ast.Starred) for arg in call.args)
+            and all(keyword.arg in cls._REGEX_COMPILE_KEYWORDS for keyword in call.keywords)
+        )
+
+    @classmethod
+    def _imported_re_names(cls, nodes: List[ast.AST]) -> set:
+        """Names every import binds to the ``re`` module and nothing rebinds.
+
+        Empty when the code can rebind a name without an assignment the AST
+        shows: through a namespace dict (``globals()["re"] = ...``,
+        ``globals().update(re=...)``, a frame's ``f_globals``), the import
+        system (``sys.modules.update(re=...)`` before ``import re``) or a star
+        import.
+        """
+        bindings: Dict[str, set] = {}
+        rebound = set()
+        for node in nodes:
+            if cls._writes_namespace(node):
+                return set()
+            for bound, module in cls._import_targets(node):
+                bindings.setdefault(bound, set()).add(module)
+            rebound.update(cls._names_rebound_by(node))
+        return {name for name, modules in bindings.items() if modules == {"re"} and name not in rebound}
+
+    @classmethod
+    def _import_targets(cls, node: ast.AST) -> List[tuple[str, str]]:
+        """(name bound, module bound to) for each name an import binds; a
+        from-import never binds a module the re check trusts."""
+        if isinstance(node, ast.Import):
+            return [cls._import_binding(alias) for alias in node.names]
+        if isinstance(node, ast.ImportFrom):
+            return [(alias.asname or alias.name, "from-import") for alias in node.names]
+        return []
+
+    @classmethod
+    def _writes_namespace(cls, node: ast.AST) -> bool:
+        if isinstance(node, ast.ImportFrom):
+            return any(alias.name == "*" or alias.name in cls._NAMESPACE_ACCESS for alias in node.names)
+        if isinstance(node, ast.Name):
+            return node.id in cls._NAMESPACE_ACCESS
+        return isinstance(node, ast.Attribute) and node.attr in cls._NAMESPACE_ACCESS
+
+    @staticmethod
+    def _names_rebound_by(node: ast.AST) -> set:
+        """Names ``node`` binds other than by an import: assignment targets,
+        parameters, def and class names, ``except ... as``, match-pattern
+        captures, and for an attribute set or deleted, both the attribute's
+        name (``module.re = ...`` may be this module) and the object's
+        (``re.compile = ...``)."""
+        if isinstance(node, ast.Name):
+            return set() if isinstance(node.ctx, ast.Load) else {node.id}
+        if isinstance(node, ast.Attribute):
+            if isinstance(node.ctx, ast.Load):
+                return set()
+            return {node.attr, node.value.id} if isinstance(node.value, ast.Name) else {node.attr}
+        if isinstance(node, ast.arg):
+            return {node.arg}
+        if isinstance(node, ast.alias):
+            return set()
+        return {value for value in (getattr(node, "name", None), getattr(node, "rest", None)) if isinstance(value, str)}
+
+    def _critical_builtin_issue(self, name: str, line_number: Optional[int]) -> SecurityIssue:
+        if name in self.PYTHON_ATTRIBUTE_ACCESSORS:
+            return SecurityIssue(
+                severity="CRITICAL",
+                issue_type="dangerous_attribute",
+                pattern=name,
+                description=f"Dangerous attribute access: {name}",
+                line_number=line_number,
+            )
+        return SecurityIssue(
+            severity="CRITICAL",
+            issue_type="dangerous_function",
+            pattern=name,
+            description=self.PYTHON_CRITICAL.get(
+                name, self.PYTHON_CODE_EXECUTION_NAMES.get(name, "Access to the builtins module")
+            ),
+            line_number=line_number,
+            recommendation="Remove or sandbox this operation",
+        )
+
+    def _check_python_process_ast(self, nodes: List[ast.AST]) -> List[SecurityIssue]:
         """Flag process-execution and file/network calls, resolving import aliases.
 
         Catches what the line scan cannot: ``import subprocess as sp;
@@ -727,78 +1251,58 @@ class CodeVerifier:
         backend modules ``posix``/``nt``, the builtin ``open``, and file/network
         sinks reached through an alias (GHSA-4phf).
         """
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
-            return []
-
-        aliases: Dict[str, str] = {}
-        star_modules: List[str] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.asname:
-                        aliases[alias.asname] = alias.name
-                    else:
-                        top = alias.name.split(".")[0]
-                        aliases[top] = top
-            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-                for alias in node.names:
-                    if alias.name == "*":
-                        star_modules.append(node.module)
-                    else:
-                        aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
-
+        aliases, star_modules = self._import_aliases(nodes)
         issues: List[SecurityIssue] = []
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            name = self._dotted_name(node.func)
+        for node in nodes:
+            name = self._dotted_name(node.func) if isinstance(node, ast.Call) else None
             if not name:
                 continue
-            head, _, rest = name.partition(".")
-            if head in aliases:
-                candidates = [aliases[head] + ("." + rest if rest else "")]
-            elif not rest:
-                candidates = [name] + [f"{module}.{name}" for module in star_modules]
-            else:
-                candidates = [name]
-            lineno = getattr(node, "lineno", None)
-
-            # Process execution, incl. the raw-OS backend modules posix/nt
-            # (matched by module head, so "nt." doesn't collide with words).
-            hit = next((c for c in candidates if self._is_process_execution(c)), None)
-            if hit is None:
-                hit = next(
-                    (c for c in candidates
-                     if "." in c and c.partition(".")[0] in self.PYTHON_RAW_OS_MODULES),
-                    None,
-                )
-            if hit:
-                issues.append(self._process_execution_issue(hit, lineno))
-                continue
-
-            # Builtin open(): a bare call with no module, not shadowed by an
-            # import that re-points the name elsewhere.
-            if name in self.PYTHON_FILE_BUILTINS and name not in aliases:
-                issues.append(self._file_network_issue(name, lineno))
-                continue
-
-            # File system / network sinks.
-            fn_hit = next((c for c in candidates if self._is_file_network(c)), None)
-            if fn_hit:
-                issues.append(self._file_network_issue(fn_hit, lineno))
+            issue = self._process_call_issue(
+                name, self._call_candidates(name, aliases, star_modules), aliases, getattr(node, "lineno", None)
+            )
+            if issue:
+                issues.append(issue)
         return issues
 
-    def _check_python_subprocess_ast(self, code: str) -> List[SecurityIssue]:
-        """Detect subprocess curl/wget pipe-to-shell patterns using AST."""
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
-            return []
+    @staticmethod
+    def _call_candidates(name: str, aliases: Dict[str, str], star_modules: List[str]) -> List[str]:
+        """The dotted names a call to ``name`` may resolve to."""
+        head, _, rest = name.partition(".")
+        if head in aliases:
+            return [aliases[head] + ("." + rest if rest else "")]
+        if not rest:
+            return [name] + [f"{module}.{name}" for module in star_modules]
+        return [name]
 
+    def _process_call_issue(
+        self, name: str, candidates: List[str], aliases: Dict[str, str], lineno: Optional[int]
+    ) -> Optional[SecurityIssue]:
+        """The process-execution or file/network finding for one call, if any."""
+        # Process execution, incl. the raw-OS backend modules posix/nt
+        # (matched by module head, so "nt." doesn't collide with words).
+        hit = next((c for c in candidates if self._is_process_execution(c)), None)
+        if hit is None:
+            hit = next(
+                (c for c in candidates
+                 if "." in c and c.partition(".")[0] in self.PYTHON_RAW_OS_MODULES),
+                None,
+            )
+        if hit:
+            return self._process_execution_issue(hit, lineno)
+
+        # Builtin open(): a bare call with no module, not shadowed by an
+        # import that re-points the name elsewhere.
+        if name in self.PYTHON_FILE_BUILTINS and name not in aliases:
+            return self._file_network_issue(name, lineno)
+
+        # File system / network sinks.
+        fn_hit = next((c for c in candidates if self._is_file_network(c)), None)
+        return self._file_network_issue(fn_hit, lineno) if fn_hit else None
+
+    def _check_python_subprocess_ast(self, nodes: List[ast.AST]) -> List[SecurityIssue]:
+        """Detect subprocess curl/wget pipe-to-shell patterns using AST."""
         issues: List[SecurityIssue] = []
-        for node in ast.walk(tree):
+        for node in nodes:
             if not isinstance(node, ast.Call):
                 continue
 
@@ -1367,4 +1871,78 @@ class CodeVerifier:
         )
 
 
+class _BoundLiterals:
+    """What the string literals bound to each name can leave (#534).
 
+    A name is followed through simple assignments (``s = ...``,
+    ``s: str = ...``, ``s := ...``) and the reshapes and other names in them
+    (``t = s[1:]``, ``u = t``) back to the literals they start from. Each
+    name is worked out once, so the work stays linear in the code however
+    often a name is reshaped. Nothing is worked out until a name is asked
+    about.
+    """
+
+    def __init__(self, nodes: List[ast.AST]):
+        self._nodes = nodes
+        self._in_word: Optional[Dict[str, Optional[str]]] = None
+        self._literals: Dict[str, list] = {}
+        self._users: Dict[str, set] = {}
+        self._plain: Dict[str, bool] = {}
+        self._formatted: Dict[str, Optional[str]] = {}
+
+    def left_by(self, name: str, formatted: bool) -> Optional[str]:
+        """The critical name a reshape of ``name`` can leave. A %-format of
+        a name bound only to literals as written is worked out; anything
+        else is the literals matched anywhere."""
+        if self._in_word is None:
+            for node in self._nodes:
+                for target, value in self._simple_bindings(node):
+                    self._bind(target, value)
+            self._in_word = self._spread(
+                {name: CodeVerifier._first_name_in_word(literals) for name, literals in self._literals.items()}
+            )
+        if not (formatted and self._plain.get(name)):
+            return self._in_word.get(name)
+        if name not in self._formatted:
+            self._formatted[name] = next(
+                filter(None, (CodeVerifier._name_left_by_format(literal) for literal in self._literals[name])), None
+            )
+        return self._formatted[name]
+
+    @staticmethod
+    def _simple_bindings(node: ast.AST) -> List[tuple[str, ast.AST]]:
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)):
+            targets = [node.target]
+        else:
+            return []
+        if node.value is None:
+            return []
+        return [(target.id, node.value) for target in targets if isinstance(target, ast.Name)]
+
+    def _bind(self, name: str, value: ast.AST) -> None:
+        plain = True
+        operand = CodeVerifier._reshape_operand(value)
+        while operand is not None:
+            value, plain = operand, False
+            operand = CodeVerifier._reshape_operand(value)
+        if isinstance(value, ast.Constant) and isinstance(value.value, (str, bytes)):
+            self._literals.setdefault(name, []).append(value.value)
+        else:
+            plain = False
+            if isinstance(value, ast.Name):
+                self._users.setdefault(value.id, set()).add(name)
+        self._plain[name] = self._plain.get(name, True) and plain
+
+    def _spread(self, found: Dict[str, Optional[str]]) -> Dict[str, Optional[str]]:
+        """``found`` carried to every name bound from a name in it."""
+        found = {name: hit for name, hit in found.items() if hit}
+        pending = list(found)
+        while pending:
+            source = pending.pop()
+            for user in self._users.get(source, ()):
+                if user not in found:
+                    found[user] = found[source]
+                    pending.append(user)
+        return found
