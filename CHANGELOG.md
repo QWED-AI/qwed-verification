@@ -314,7 +314,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - A derivative cannot appear in a power, `factorial` or `binomial`
     (`diff(x**2, x)**2` is refused). The cost bounds (#353) read it as
     symbolic, but it evaluates to a value first, so
-    `2**(diff(10000*x, x)**9)` would have expanded `2**(10000**9)`.
+    `2**(diff(10000*x, x)**9)` would have expanded `2**(10000**9)`. A
+    reciprocal or a root (`2x/diff(x**2, x)`, `sqrt(diff(x**2, x))`) is
+    allowed, as it expands nothing.
   - `==` reads as `=`, so `diff(x**2, x) == 2*x` is VERIFIED.
   - The domain check (#429) reads each evaluated derivative as well as the
     text, since a derivative can be singular where the text it
@@ -326,10 +328,12 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     of its singular factor, so `2/(2*sqrt(x)) = 1/sqrt(x)` and
     `2*diff(sqrt(x), x) = 1/sqrt(x)` are VERIFIED, not UNVERIFIABLE.
   - Leibniz notation (`d/dx`, `dy/dx`, `d(x^2)/dx`, `dy/dtheta`,
-    `d^2y/dx^2`) is refused instead of misread, with the message to write
-    `diff(f, x)`. Every form divides by a differential, a `d` joined to a
-    variable, so that is what is matched; a name the parser knows that
-    starts with `d` (`delta`, `diff`, or a caller's own symbol) is not one.
+    `dy/(2*dx)`, `d/d(x)(x^2)`, `d^2y/dx^2`) is refused instead of misread,
+    with the message to write `diff(f, x)`. Two shapes are matched: a name
+    that is `d` joined to a symbol the parser knows (`dx`, `dtheta`, `d2y`),
+    and a lone `d` that a denominator applies to a variable (`d(x)`,
+    `d x`). A name the parser knows that starts with `d` (`delta`, `diff`,
+    or a caller's own symbol) is not a differential.
   - Input the parser refuses is BLOCKED with `math.parse_error` and
     "Expression could not be parsed", as SQL and schema parse errors are, not
     with `api.math.execution_error`. The parser's own text is not returned.

@@ -62,6 +62,10 @@ def client(isolated_audit_chain):
     ("diff(x**2, x, 0)", x**2),
     ("diff(x**2, x) y", 2 * x * y),
     ("sqrt(diff(x**2, x))", sympy.sqrt(2 * x)),
+    # Implicit multiplication: a reciprocal or a root expands nothing (Gitar
+    # on PR #558).
+    ("2x/diff(x**2, x)", 1),
+    ("sqrt(diff(x**2, x)) 2", 2 * sympy.sqrt(2 * x)),
 ])
 def test_diff_and_derivative_are_evaluated(text, expected):
     assert safe_parse_expr(text) == expected
@@ -75,6 +79,10 @@ def test_diff_and_derivative_are_evaluated(text, expected):
     "2^(diff(10000x, x))^9",
     "factorial(diff(10**6*x, x))",
     "diff(x**2, x)**2",
+    # An order SymPy cannot read unevaluated must not skip the gates (Sentry
+    # on PR #558).
+    "2^(diff(10000x, x, 1+0))^9",
+    "diff(x**2, x)^(1/2) y",
 ])
 def test_a_derivative_cannot_feed_an_eager_expansion(text):
     with pytest.raises(SafeParserError, match="A derivative cannot appear in a power"):
@@ -107,6 +115,9 @@ def test_the_derivative_order_is_bounded_across_the_expression(text):
     "d/dtheta(theta**2)",
     "dy/dtheta",
     "x/(dx)",
+    "d/d(x)(x^2)",
+    "dy/(2*dx)",
+    "dy/2dx",
 ])
 def test_leibniz_notation_is_refused(text):
     with pytest.raises(DerivativeNotationError):
@@ -114,7 +125,7 @@ def test_leibniz_notation_is_refused(text):
 
 
 @pytest.mark.parametrize("text", [
-    "d/2", "x*d/(2*d)", "d + x", "delta*x", "x/delta", "x/diff(x**2, x)", "x/d*y",
+    "d/2", "x*d/(2*d)", "d + x", "delta*x", "x/delta", "x/diff(x**2, x)", "x/d*y", "x/(d)",
 ])
 def test_the_symbol_d_still_parses(text):
     safe_parse_expr(text)

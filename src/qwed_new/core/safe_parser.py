@@ -97,12 +97,14 @@ _MAX_DERIVATIVE_ORDER = 3
 
 _DERIVATIVE_CALLS = frozenset({"diff", "Derivative"})
 
-# Leibniz notation (#522): d/dx(x^2), d(x^2)/dx, dy/dtheta, d^2y/dx^2. The
+# Leibniz notation (#522): d/dx(x^2), d(x^2)/dx, dy/(2*dx), d/d(x)(x^2). The
 # parser would read d and dx as symbols (d/dx(x^2) is x**3), so the claim it
-# decides is not the one written. Every form divides by a differential, a
-# "d" joined to a variable, so the denominator is what is matched: a "d"
-# name the parser knows (delta, diff) is not a differential.
-_LEIBNIZ_DENOMINATOR = re.compile(r"/\s*\(?\s*d(\s*)([A-Za-z]\w*)", re.ASCII)
+# decides is not the one written. Two shapes give it away: a name that is "d"
+# joined to a symbol the parser knows (dx, dtheta, d2y, dx2), which it would
+# split into d*x, and a lone "d" a denominator applies to a variable (d(x),
+# d x). A "d" name the parser knows (delta, diff) is not a differential.
+_IDENTIFIER = re.compile(r"[A-Za-z_]\w*", re.ASCII)
+_DIVIDED_BY_LONE_D = re.compile(r"/\s*(?:\(\s*)?d\b\s*[(A-Za-z]", re.ASCII)
 
 _DENYLIST_PATTERN = re.compile(
     r"(?:"
@@ -320,17 +322,30 @@ def _check_derivative_position(node: ast.AST) -> None:
         raise SafeParserError(_DERIVATIVE_POSITION_MESSAGE)
 
 
+# Stands in for diff/Derivative in the unevaluated cost parse. An undefined
+# function takes any arguments, so an order SymPy cannot read there
+# (diff(x, x, 1+0)) cannot make that parse fail and skip the gates.
+_UNEVALUATED_DERIVATIVE = sympy.Function("unevaluated_derivative")
+
+
 def _check_unevaluated_derivative_position(expr: Any, expanding: bool = False) -> None:
-    """:func:`_check_derivative_position` on an unevaluated SymPy tree."""
-    if expanding and isinstance(expr, sympy.Derivative):
+    """:func:`_check_derivative_position` on an unevaluated SymPy tree.
+
+    Unevaluated, a/b is Mul(a, Pow(b, -1)) and sqrt(b) is Pow(b, 1/2): a
+    reciprocal or a root expands nothing, so only other powers count."""
+    if expanding and isinstance(expr, _UNEVALUATED_DERIVATIVE):
         raise SafeParserError(_DERIVATIVE_POSITION_MESSAGE)
-    expanding = expanding or isinstance(expr, (sympy.Pow, sympy.factorial, sympy.binomial))
+    if isinstance(expr, sympy.Pow):
+        exponent = expr.exp
+        expanding = expanding or not (exponent.is_Rational and abs(exponent.p) == 1)
+    else:
+        expanding = expanding or isinstance(expr, (sympy.factorial, sympy.binomial))
     for arg in getattr(expr, "args", ()):
         _check_unevaluated_derivative_position(arg, expanding)
 
 
 def _unevaluated_derivative(*args: Any, **_kwargs: Any) -> Any:
-    return sympy.Derivative(*args, evaluate=False)
+    return _UNEVALUATED_DERIVATIVE(*args)
 
 
 def _fold_exact(node: Any):
@@ -894,11 +909,14 @@ class DerivativeNotationError(SafeParserError):
 
 
 def _leibniz_differential(expression: str, names: Dict[str, Any]) -> Optional[str]:
-    """The first differential ``expression`` divides by, or None."""
-    for match in _LEIBNIZ_DENOMINATOR.finditer(expression):
-        spaced, variable = match.groups()
-        if spaced or "d" + variable not in names:
-            return match.group()
+    """The first differential written in ``expression``, or None."""
+    lone_d = _DIVIDED_BY_LONE_D.search(expression)
+    if lone_d:
+        return lone_d.group()
+    for token in _IDENTIFIER.findall(expression):
+        if token.startswith("d") and token not in names \
+                and isinstance(names.get(token[1:].strip("0123456789")), Symbol):
+            return token
     return None
 
 
