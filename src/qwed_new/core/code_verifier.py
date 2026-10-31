@@ -207,11 +207,12 @@ class CodeVerifier:
     _CRITICAL_BUILTIN_NAME: ClassVar = re.compile(
         r"(?<!\w)(" + "|".join(sorted(_ATTRIBUTE_READ_NAMES, key=len, reverse=True)) + r")(?!\w)"
     )
-    # A string literal that is sliced, %-formatted or has characters removed
-    # can leave the name although it only holds it inside a longer word
-    # ("x__getattribute__"[1:]). One such step on a literal written in place
-    # is worked out and matched as whole identifiers; otherwise the literal
-    # is matched anywhere (_reshaped_references).
+    # A string literal that is sliced, %-formatted, changed in case or has
+    # characters removed can leave the name although it only holds it inside
+    # a longer word ("x__getattribute__"[1:]). Steps are worked out where they
+    # can be and matched as whole identifiers; a step that removes characters
+    # but cannot be worked out matches its literals anywhere
+    # (_reshaped_references).
     _CRITICAL_BUILTIN_IN_WORD: ClassVar = re.compile(
         "(" + "|".join(sorted(_ATTRIBUTE_READ_NAMES, key=len, reverse=True)) + ")"
     )
@@ -220,8 +221,12 @@ class CodeVerifier:
         "replace": str.replace, "removeprefix": str.removeprefix, "removesuffix": str.removesuffix,
         "split": str.split, "rsplit": str.rsplit, "partition": str.partition,
         "rpartition": str.rpartition, "translate": str.translate,
+        "upper": str.upper, "lower": str.lower, "casefold": str.casefold,
+        "swapcase": str.swapcase, "title": str.title, "capitalize": str.capitalize,
     }
-    _CHARACTER_REMOVING_METHODS: ClassVar[frozenset] = frozenset(_LITERAL_RESHAPERS)
+    _CASE_METHODS: ClassVar[frozenset] = frozenset(
+        {"upper", "lower", "casefold", "swapcase", "title", "capitalize"}
+    )
     _RESHAPE_NODE_TYPES: ClassVar[frozenset] = frozenset({ast.Subscript, ast.BinOp, ast.Call, ast.Attribute})
     # Ways to rebind a name without an assignment the AST shows: a namespace
     # dict (globals()["re"] = ...) or the import system an import reads
@@ -995,110 +1000,85 @@ class CodeVerifier:
         return None
 
     def _reshaped_references(self, nodes: List[ast.AST], reshapes: List[ast.AST]) -> List[tuple[str, int]]:
-        """(name, line) for each slice, %-format or character-removing method
-        that can leave a critical name from a string literal.
+        """(name, line) for each step on a string that can leave a critical
+        name: a slice, a %-format, a character-removing or case-changing str
+        method, str() or a concatenation (_string_step).
 
-        One such step on a literal written in place, with literal arguments,
-        is worked out and its result matched as whole identifiers, so
-        ``"executing %s" % job`` and ``"executed,ok".split(",")`` are not
-        matches. Otherwise the literal is matched anywhere: a step that feeds
-        another (``"xexecx"[1:][:-1]``), a method read without being called
-        (``f = "xexec".lstrip``), arguments that are not literals, and a
-        literal reached through names (_BoundLiterals), where only a
-        %-format of a name bound to literals alone is worked out.
+        Steps are worked out deepest first from the literals they start
+        from, so a chain is worked out as a whole (``"xexecx"[1:][:-1]``,
+        ``"xexec".upper().lower()[1:]``), and each result is matched as whole
+        identifiers: ``"executing %s" % job`` and ``"executed,ok".split(",")``
+        are not matches. A step that removes characters but cannot be worked
+        out (arguments that are not literals, a method read without being
+        called, an intermediate value too long to carry) matches the literals
+        it starts from anywhere. Names are followed by _BoundLiterals.
         """
-        consumed, called = self._reshape_links(reshapes)
-        bound = _BoundLiterals(nodes)
+        called = {id(node.func) for node in reshapes if isinstance(node, ast.Call)}
+        steps = _StringSteps(_BoundLiterals(nodes))
         found: List[tuple[str, int]] = []
-        for node in reshapes:
-            operand = self._reshape_operand(node)
-            if operand is None or id(node) in called:
-                continue
-            final = id(node) not in consumed and not isinstance(node, ast.Attribute)
-            name = self._operand_reference(node, operand, final, bound)
+        # ast.walk is breadth first, so in reverse an operand comes before the step on it.
+        for node in reversed(reshapes):
+            name = None if id(node) in called else steps.check(node)
             if name:
                 found.append((name, node.lineno))
+        found.reverse()
         return found
 
-    def _operand_reference(
-        self, node: ast.AST, operand: ast.AST, final: bool, bound: "_BoundLiterals"
-    ) -> Optional[str]:
-        if isinstance(operand, ast.Constant) and isinstance(operand.value, (str, bytes)):
-            return self._name_left_by(node, operand.value, final)
-        if isinstance(operand, ast.Name):
-            return bound.left_by(operand.id, final and isinstance(node, ast.BinOp))
-        return None
-
     @classmethod
-    def _reshape_links(cls, reshapes: List[ast.AST]) -> tuple[set, set]:
-        """The ids of the nodes another reshape works on, and of the
-        functions called."""
-        consumed: set = set()
-        called: set = set()
-        for node in reshapes:
-            operand = cls._reshape_operand(node)
-            if operand is not None:
-                consumed.add(id(operand))
-            if isinstance(node, ast.Call):
-                called.add(id(node.func))
-        return consumed, called
+    def _string_step(cls, node: ast.AST) -> tuple[Optional[str], List[ast.AST]]:
+        """How ``node`` reshapes a string, and the operands it works on:
+        "remove" (a slice, or a character-removing method called or read),
+        "format" (``%``), "keep" (a case change, ``str()`` or ``+``, which
+        remove nothing), or None."""
+        if isinstance(node, ast.Subscript):
+            return "remove", [node.value]
+        if isinstance(node, ast.BinOp):
+            return cls._operator_step(node)
+        if isinstance(node, ast.Call) and cls._is_str_call(node):
+            return "keep", [node.args[0]]
+        method = node.func if isinstance(node, ast.Call) else node
+        if isinstance(method, ast.Attribute) and method.attr in cls._LITERAL_RESHAPERS:
+            return ("keep" if method.attr in cls._CASE_METHODS else "remove"), [method.value]
+        return None, []
+
+    @staticmethod
+    def _operator_step(node: ast.BinOp) -> tuple[Optional[str], List[ast.AST]]:
+        if isinstance(node.op, ast.Mod):
+            return "format", [node.left]
+        if isinstance(node.op, ast.Add):
+            return "keep", [node.left, node.right]
+        return None, []
+
+    @staticmethod
+    def _is_str_call(node: ast.Call) -> bool:
+        return isinstance(node.func, ast.Name) and node.func.id == "str" and len(node.args) == 1 and not node.keywords
 
     @classmethod
     def _reshape_operand(cls, node: ast.AST) -> Optional[ast.AST]:
-        """What ``node`` slices, %-formats or removes characters from, the
-        method read or called."""
-        if isinstance(node, ast.Subscript):
-            return node.value
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
-            return node.left
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
-                and node.func.attr in cls._CHARACTER_REMOVING_METHODS:
-            return node.func.value
-        if isinstance(node, ast.Attribute) and node.attr in cls._CHARACTER_REMOVING_METHODS:
-            return node.value
-        return None
-
-    def _name_left_by(self, node: ast.AST, literal, final: bool) -> Optional[str]:
-        """The critical name reshaping ``literal`` as ``node`` does can
-        leave: worked out when ``final`` and the arguments are literals,
-        else the literal matched anywhere."""
-        text = literal.decode("latin-1") if isinstance(literal, bytes) else literal
-        results = None
-        if final:
-            try:
-                results = self._reshape_results(node, text)
-            except (ValueError, TypeError, IndexError, RecursionError):
-                results = None
-        if results is None:
-            return self._critical_name_in_text(text, self._CRITICAL_BUILTIN_IN_WORD)
-        return next(filter(None, (self._critical_name_in_text(r, self._CRITICAL_BUILTIN_NAME) for r in results)), None)
+        """The one string ``node`` reshapes, if it reshapes one."""
+        kind, operands = cls._string_step(node)
+        return operands[0] if kind and len(operands) == 1 else None
 
     @classmethod
-    def _name_left_by_format(cls, literal) -> Optional[str]:
-        """The critical name %-formatting ``literal`` can leave."""
-        text = literal.decode("latin-1") if isinstance(literal, bytes) else literal
-        unformatted = _unformatted(text)
-        if unformatted is None:
-            return cls._critical_name_in_text(text, cls._CRITICAL_BUILTIN_IN_WORD)
-        return cls._critical_name_in_text(unformatted, cls._CRITICAL_BUILTIN_NAME)
-
-    def _reshape_results(self, node: ast.AST, text: str) -> Optional[List[str]]:
-        """The strings reshaping ``text`` as ``node`` does gives, or None when
-        that is not known. Raises when the arguments are not literals."""
+    def _step_result(cls, node: ast.AST, values: list):
+        """What the step ``node`` leaves of its operands' ``values`` (str, or
+        a list of str from split), or None when that is not known. Raises
+        when the arguments are not literals."""
         if isinstance(node, ast.Subscript):
-            return [text[self._literal_index(node.slice)]]
+            return values[0][cls._literal_index(node.slice)]
         if isinstance(node, ast.BinOp):
-            unformatted = _unformatted(text)
-            return None if unformatted is None else [unformatted]
+            return values[0] + values[1]
+        if isinstance(node, ast.Attribute) or isinstance(node.func, ast.Name):
+            # A method read without being called; or str() of a string.
+            return None if isinstance(node, ast.Attribute) else values[0]
         method = node.func.attr
-        args = [self._literal_text(arg) for arg in node.args]
-        kwargs = {keyword.arg: self._literal_text(keyword.value) for keyword in node.keywords}
+        args = [cls._literal_text(arg) for arg in node.args]
+        kwargs = {keyword.arg: cls._literal_text(keyword.value) for keyword in node.keywords}
         # translate can map one character to many, and replace grows the text
         # when the new part is longer: not worked out, to bound the work.
         if method == "translate" or (method == "replace" and len(args) >= 2 and len(args[1]) > len(args[0])):
             return None
-        result = self._LITERAL_RESHAPERS[method](text, *args, **kwargs)
-        return [result] if isinstance(result, str) else [part for part in result if isinstance(part, str)]
+        return cls._LITERAL_RESHAPERS[method](values[0], *args, **kwargs)
 
     @staticmethod
     def _literal_index(node: ast.AST):
@@ -1119,8 +1099,12 @@ class CodeVerifier:
         return value.decode("latin-1") if isinstance(value, bytes) else value
 
     @classmethod
-    def _first_name_in_word(cls, literals: list) -> Optional[str]:
-        return next(filter(None, (cls._critical_name_in_text(literal, cls._CRITICAL_BUILTIN_IN_WORD) for literal in literals)), None)
+    def _critical_name_in_value(cls, value) -> Optional[str]:
+        """A critical name a worked-out value (str, or list of str) holds as
+        a whole identifier."""
+        parts = value if isinstance(value, list) else [value]
+        return next(filter(None, (cls._critical_name_in_text(part, cls._CRITICAL_BUILTIN_NAME)
+                                  for part in parts if isinstance(part, str))), None)
 
     @staticmethod
     def _critical_name_in_text(value, pattern) -> Optional[str]:
@@ -1875,74 +1859,171 @@ class _BoundLiterals:
     """What the string literals bound to each name can leave (#534).
 
     A name is followed through simple assignments (``s = ...``,
-    ``s: str = ...``, ``s := ...``) and the reshapes and other names in them
-    (``t = s[1:]``, ``u = t``) back to the literals they start from. Each
-    name is worked out once, so the work stays linear in the code however
-    often a name is reshaped. Nothing is worked out until a name is asked
-    about.
+    ``s: str = ...``, ``s := ...``), and the single-string steps and other
+    names in them (``t = s[1:]``, ``u = t``), back to the literals they
+    start from. Each assignment is read once, whatever number of names it
+    binds, and the critical names are spread across names with a work list,
+    so the work stays linear in the code. Nothing is worked out until a name
+    is asked about.
     """
 
     def __init__(self, nodes: List[ast.AST]):
         self._nodes = nodes
-        self._in_word: Optional[Dict[str, Optional[str]]] = None
-        self._literals: Dict[str, list] = {}
-        self._users: Dict[str, set] = {}
-        self._plain: Dict[str, bool] = {}
-        self._formatted: Dict[str, Optional[str]] = {}
+        self._hits: Optional[Dict[str, str]] = None
+        self._only: Dict[str, Optional[str]] = {}
+        self._unformatted: Dict[int, Optional[str]] = {}
 
-    def left_by(self, name: str, formatted: bool) -> Optional[str]:
-        """The critical name a reshape of ``name`` can leave. A %-format of
-        a name bound only to literals as written is worked out; anything
-        else is the literals matched anywhere."""
-        if self._in_word is None:
-            for node in self._nodes:
-                for target, value in self._simple_bindings(node):
-                    self._bind(target, value)
-            self._in_word = self._spread(
-                {name: CodeVerifier._first_name_in_word(literals) for name, literals in self._literals.items()}
-            )
-        if not (formatted and self._plain.get(name)):
-            return self._in_word.get(name)
-        if name not in self._formatted:
-            self._formatted[name] = next(
-                filter(None, (CodeVerifier._name_left_by_format(literal) for literal in self._literals[name])), None
-            )
-        return self._formatted[name]
+    def hit(self, name: str) -> Optional[str]:
+        """A critical name the literals ``name`` starts from hold anywhere."""
+        if self._hits is None:
+            self._build()
+        return self._hits.get(name)
+
+    def literal(self, name: str) -> Optional[str]:
+        """The literal ``name`` holds when its one binding is that literal as
+        written, if it is short enough to work out per use."""
+        if self._hits is None:
+            self._build()
+        text = self._only.get(name)
+        return text if text is not None and len(text) <= _StringSteps.MAX_CARRIED else None
+
+    def unformatted(self, name: str) -> Optional[str]:
+        """``_unformatted`` of the literal ``name`` holds, worked out once
+        per literal."""
+        if self._hits is None:
+            self._build()
+        text = self._only.get(name)
+        if text is None:
+            return None
+        if id(text) not in self._unformatted:
+            self._unformatted[id(text)] = _unformatted(text)
+        return self._unformatted[id(text)]
+
+    def _build(self) -> None:
+        hits: Dict[str, str] = {}
+        users: Dict[str, set] = {}
+        bindings: Dict[str, int] = {}
+        for node in self._nodes:
+            targets, value = self._simple_binding(node)
+            if targets:
+                self._bind(targets, value, hits, users, bindings)
+        self._hits = self._spread(hits, users)
+
+    def _bind(self, targets: List[str], value: ast.AST, hits: Dict[str, str],
+              users: Dict[str, set], bindings: Dict[str, int]) -> None:
+        """Record one assignment: its value is read once for all targets."""
+        source, hit, text = self._source_of(value)
+        for name in targets:
+            bindings[name] = bindings.get(name, 0) + 1
+            self._only[name] = text if bindings[name] == 1 else None
+            if hit:
+                hits.setdefault(name, hit)
+            if isinstance(source, ast.Name):
+                users.setdefault(source.id, set()).add(name)
 
     @staticmethod
-    def _simple_bindings(node: ast.AST) -> List[tuple[str, ast.AST]]:
+    def _spread(hits: Dict[str, str], users: Dict[str, set]) -> Dict[str, str]:
+        """``hits`` carried to every name bound from a name in it."""
+        pending = list(hits)
+        while pending:
+            source_name = pending.pop()
+            for user in users.get(source_name, ()):
+                if user not in hits:
+                    hits[user] = hits[source_name]
+                    pending.append(user)
+        return hits
+
+    @staticmethod
+    def _simple_binding(node: ast.AST) -> tuple[List[str], Optional[ast.AST]]:
         if isinstance(node, ast.Assign):
             targets = node.targets
         elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)):
             targets = [node.target]
         else:
-            return []
+            return [], None
         if node.value is None:
-            return []
-        return [(target.id, node.value) for target in targets if isinstance(target, ast.Name)]
+            return [], None
+        return [target.id for target in targets if isinstance(target, ast.Name)], node.value
 
-    def _bind(self, name: str, value: ast.AST) -> None:
-        plain = True
-        operand = CodeVerifier._reshape_operand(value)
+    @staticmethod
+    def _source_of(value: ast.AST) -> tuple[ast.AST, Optional[str], Optional[str]]:
+        """What a bound value starts from, the critical name it holds
+        anywhere if it is a literal, and the literal text when the value is
+        that literal as written."""
+        source = value
+        operand = CodeVerifier._reshape_operand(source)
         while operand is not None:
-            value, plain = operand, False
-            operand = CodeVerifier._reshape_operand(value)
-        if isinstance(value, ast.Constant) and isinstance(value.value, (str, bytes)):
-            self._literals.setdefault(name, []).append(value.value)
-        else:
-            plain = False
-            if isinstance(value, ast.Name):
-                self._users.setdefault(value.id, set()).add(name)
-        self._plain[name] = self._plain.get(name, True) and plain
+            source = operand
+            operand = CodeVerifier._reshape_operand(source)
+        if not (isinstance(source, ast.Constant) and isinstance(source.value, (str, bytes))):
+            return source, None, None
+        text = source.value.decode("latin-1") if isinstance(source.value, bytes) else source.value
+        hit = CodeVerifier._critical_name_in_text(text, CodeVerifier._CRITICAL_BUILTIN_IN_WORD)
+        return source, hit, text if source is value else None
 
-    def _spread(self, found: Dict[str, Optional[str]]) -> Dict[str, Optional[str]]:
-        """``found`` carried to every name bound from a name in it."""
-        found = {name: hit for name, hit in found.items() if hit}
-        pending = list(found)
-        while pending:
-            source = pending.pop()
-            for user in self._users.get(source, ()):
-                if user not in found:
-                    found[user] = found[source]
-                    pending.append(user)
-        return found
+
+class _StringSteps:
+    """Works out string steps deepest first, carrying each value to the step
+    on it (#534). A value longer than MAX_CARRIED is carried only from a
+    literal as written, so a chain of steps works on at most that much text
+    per step and the work stays linear in the code."""
+
+    MAX_CARRIED = 4096
+
+    def __init__(self, bound: _BoundLiterals):
+        self._bound = bound
+        self._values: Dict[int, object] = {}
+        self._hits: Dict[int, Optional[str]] = {}
+
+    def check(self, node: ast.AST) -> Optional[str]:
+        """Work out ``node`` and return the critical name it can leave."""
+        kind, operands = CodeVerifier._string_step(node)
+        if kind is None:
+            return None
+        hit = next(filter(None, (self._hit(operand) for operand in operands)), None)
+        self._hits[id(node)] = hit
+        if kind == "format":
+            value = self._formatted(operands[0])
+        else:
+            value = self._worked_out(node, [self._value(operand) for operand in operands])
+            self._values[id(node)] = value
+        if value is not None:
+            return CodeVerifier._critical_name_in_value(value)
+        return None if kind == "keep" else hit
+
+    def _worked_out(self, node: ast.AST, values: list):
+        if any(value is None for value in values):
+            return None
+        try:
+            return CodeVerifier._step_result(node, values)
+        except (ValueError, TypeError, IndexError, KeyError, RecursionError):
+            return None
+
+    def _formatted(self, operand: ast.AST) -> Optional[str]:
+        # The %-result with each conversion read as a space: matched here,
+        # but not carried on, since the real text differs.
+        if isinstance(operand, ast.Name):
+            return self._bound.unformatted(operand.id)
+        value = self._value(operand)
+        return _unformatted(value) if isinstance(value, str) else None
+
+    def _value(self, operand: ast.AST):
+        if isinstance(operand, ast.Constant):
+            value = operand.value
+            if isinstance(value, bytes):
+                return value.decode("latin-1")
+            return value if isinstance(value, str) else None
+        if isinstance(operand, ast.Name):
+            return self._bound.literal(operand.id)
+        value = self._values.get(id(operand))
+        if value is None:
+            return None
+        size = len(value) if isinstance(value, str) else sum(len(part) for part in value if isinstance(part, str))
+        return value if size <= self.MAX_CARRIED else None
+
+    def _hit(self, operand: ast.AST) -> Optional[str]:
+        if isinstance(operand, ast.Constant) and isinstance(operand.value, (str, bytes)):
+            return CodeVerifier._critical_name_in_text(operand.value, CodeVerifier._CRITICAL_BUILTIN_IN_WORD)
+        if isinstance(operand, ast.Name):
+            return self._bound.hit(operand.id)
+        return self._hits.get(id(operand))

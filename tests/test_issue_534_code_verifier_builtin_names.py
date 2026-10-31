@@ -51,6 +51,8 @@ def _verify(code):
     'cur.execute("SELECT * FROM evaluations WHERE id = %s" % uid)',
     'sql = "SELECT * FROM evaluations WHERE id = %s"\ncur.execute(sql % uid)',
     'log.info("%(job)s: executing" % {"job": name})',
+    'line = "executed,ok"\nparts = line.split(",")',
+    'print(("executing " + job).upper())',
     'title = "Re-evaluated"[:5]',
     # Only % substitutes a conversion; + keeps "%s" as text.
     'label = "%sexec" + suffix',
@@ -139,6 +141,13 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ('vars(m)["xexecx".lstrip("x").rstrip("x")](payload)', "exec"),
     ('vars(m)[("x%sexecx" % "")[1:5]](payload)', "exec"),
     ('strip = "x__getattribute__".lstrip\nget = vars(object)[strip("x")]', "__getattribute__"),
+    # Case changes, str() and + carry the value to the next step.
+    ('vars(m)["xexec".upper().lower()[1:]](payload)', "exec"),
+    ('vars(m)[str("xexec")[1:]](payload)', "exec"),
+    ('vars(m)[("xexe" + "c")[1:]](payload)', "exec"),
+    ('vars(m)["EXEC".lower()](payload)', "exec"),
+    ('vars(m)["ex" + "ec"](payload)', "exec"),
+    ('vars(m)[("xexec" + suffix)[1:5]](payload)', "exec"),
     # ... or assigned to a name first, through other names and steps.
     ('name = "xexec"\nvars(m)[name[1:]](payload)', "exec"),
     ('name: str = "xexec"\nvars(m)[name.lstrip("x")](payload)', "exec"),
@@ -147,6 +156,8 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ('s = "x%sexec" % ""\nvars(m)[s[1:]](payload)', "exec"),
     ('fmt = "%sexec"\nvars(m)[fmt % ""](payload)', "exec"),
     ('t = "xexec"[0:]\nvars(m)[t[1:]](payload)', "exec"),
+    # A name bound more than once is not worked out from any one binding.
+    ('s = "xexec"\ns = "ok"\nvars(m)[s[1:]](payload)', "exec"),
     ('fmt = "%sexecute"[:6]\nvars(m)[fmt % ""](payload)', "exec"),
     # Conversion flags, and a format the reader cannot parse.
     ('vars(m)["%-sexec" % ""](payload)', "exec"),

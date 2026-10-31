@@ -361,19 +361,22 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     order; as an attribute, since the object may be the `builtins` module
     reached another way, whether read as `m.exec`, by `from m import exec`
     or by a match pattern (`case object(exec=run)`); and in a string as a
-    whole identifier (`vars(module)["exec"]`). A string literal that is
-    sliced, `%`-formatted or has characters removed (`strip`, `replace`,
-    `split` and the like) can leave the name (`"xexec"[1:]`). One such step
-    on a literal written in place, with literal arguments, is worked out and
-    matched as whole identifiers; `%` conversions are read as CPython reads
-    them, nested mapping keys included, in one pass. Otherwise the literal is
-    matched anywhere: steps chained (`"xexecx"[1:][:-1]`), a method saved
-    and called later, arguments that are not literals, a `translate` or a
-    `replace` that grows the text, and a literal reached through names
-    (`s = "xexec"; t = s; t[1:]`), where only a `%`-format of a name bound
-    to literals alone is worked out. Each name is worked out once, so the
-    work stays linear in the code. An import of the `builtins` module
-    (`import builtins`) is refused too.
+    whole identifier (`vars(module)["exec"]`). Steps on strings (a slice, a
+    `%`-format, a character-removing or case-changing `str` method, `str()`
+    and `+`) are worked out deepest first from the literals they start from,
+    chains included (`"xexecx"[1:][:-1]`, `"xexec".upper().lower()[1:]`,
+    `"ex" + "ec"`), and each result is matched as whole identifiers. `%`
+    conversions are read as CPython reads them, nested mapping keys
+    included, in one pass. A step that removes characters but cannot be
+    worked out (arguments that are not literals, a method saved and called
+    later, a `translate` or a `replace` that grows the text, a value longer
+    than 4,096 characters carried from an earlier step) matches the literals
+    it starts from anywhere. Names are followed through simple assignments,
+    other names and steps back to their literals; a name bound once to a
+    literal as written is worked out like that literal. Each assignment is
+    read once, so the work stays linear in the code. Concatenation with a
+    value that is not a literal is not followed. An import of the `builtins`
+    module (`import builtins`) is refused too.
   - Admitted: longer identifiers (`execute`, `evaluate`, `compile_report`),
     the names inside longer words in strings and docstrings, also when
     formatted or split (`"SELECT * FROM evaluations WHERE id = %s" % uid`,

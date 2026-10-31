@@ -83,6 +83,42 @@ def test_names_reshaped_many_times_stay_fast():
     assert time.perf_counter() - start < 2.0
 
 
+def test_one_literal_bound_to_many_names_is_read_once():
+    # A chained assignment binds one literal to every target; it is read
+    # once, not once per name.
+    names = " = ".join(f"a{i}" for i in range(5000))
+    code = names + ' = "' + "q" * 100000 + '"\nx = a0[1:]\n'
+    start = time.perf_counter()
+    CodeVerifier().verify_code(code, language="python")
+    assert time.perf_counter() - start < 1.0
+
+
+def test_long_literal_name_reshaped_many_times_stays_fast():
+    # A literal reached through a name is worked out per use only when it
+    # is short; a long one is matched once.
+    code = 's = "' + "q" * 200000 + '"\n' + "x = s[1:]\n" * 5000
+    start = time.perf_counter()
+    CodeVerifier().verify_code(code, language="python")
+    assert time.perf_counter() - start < 1.0
+
+
+def test_long_value_is_not_carried_up_a_chain():
+    # Worked out once from the literal, then not carried: a chain of steps
+    # on a long value would cost the chain length times the value length.
+    code = 'x = "' + "q" * 200000 + '"' + "[1:]" * 1000 + "\n"
+    start = time.perf_counter()
+    CodeVerifier().verify_code(code, language="python")
+    assert time.perf_counter() - start < 1.0
+
+
+def test_long_concatenation_chain_stays_fast():
+    # Values longer than the carry limit are not carried up a chain of +.
+    code = "x = (" + " + ".join(['"ab"'] * 5000) + ")[1:]\n"
+    start = time.perf_counter()
+    CodeVerifier().verify_code(code, language="python")
+    assert time.perf_counter() - start < 1.0
+
+
 def test_curl_pipe_shell_still_flagged_across_lines():
     verifier = CodeVerifier()
     code = (
