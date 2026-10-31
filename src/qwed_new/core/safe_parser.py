@@ -99,14 +99,17 @@ _DERIVATIVE_CALLS = frozenset({"diff", "Derivative"})
 
 # Leibniz notation (#522): d/dx(x^2), d(x^2)/dx, dy/(2*dx), d/d(x)(x^2). The
 # parser would read d and dx as symbols (d/dx(x^2) is x**3), so the claim it
-# decides is not the one written. Two shapes give it away, wherever they
-# stand (/dx, /(-2*dfoo), x*dx): a name that starts with "d" and that the
-# parser does not know (dx, dtheta, d2y, dfoo), which it would split into
-# letters anyway; and a lone "d" a denominator applies to a variable (d(x),
-# d x). A "d" name the parser knows (delta, diff, a caller's symbol) or keeps
-# whole (distance_m, which has "_") is not a differential.
+# decides is not the one written. Three shapes give it away, wherever they
+# stand:
+# - a name that is "d" joined to a variable: a symbol the parser knows (dx,
+#   dt, dtheta, d2y) or a name the expression also uses (dfoo beside foo,
+#   dx_1 beside x_1). A name the parser knows (delta, diff, a caller's
+#   symbol) is not one, and neither is data or distance;
+# - a lone "d" over a "d" name, the d/dx operator (d/dx_1, d/dfoo);
+# - a lone "d" a denominator applies to a variable (d(x), d x).
 _IDENTIFIER = re.compile(r"[A-Za-z_]\w*", re.ASCII)
 _DIVIDED_BY_LONE_D = re.compile(r"/\s*(?:\(\s*)?d\b\s*[(A-Za-z]", re.ASCII)
+_LONE_D_OVER_D_NAME = re.compile(r"(?<![A-Za-z0-9_])d\s*/\s*(?:\(\s*)?d[A-Za-z]", re.ASCII)
 
 _DENYLIST_PATTERN = re.compile(
     r"(?:"
@@ -923,18 +926,18 @@ class DerivativeNotationError(SafeParserError):
 
 def _leibniz_differential(expression: str, names: Dict[str, Any]) -> Optional[str]:
     """The first differential written in ``expression``, or None."""
-    lone_d = _DIVIDED_BY_LONE_D.search(expression)
-    if lone_d:
-        return lone_d.group()
+    for pattern in (_DIVIDED_BY_LONE_D, _LONE_D_OVER_D_NAME):
+        operator_form = pattern.search(expression)
+        if operator_form:
+            return operator_form.group()
     tokens = _IDENTIFIER.findall(expression)
     for token in tokens:
         if not token.startswith("d") or len(token) == 1 or token in names:
             continue
-        # SymPy keeps a name with "_" whole (distance_m is one symbol), so it
-        # is a differential only when its tail is a variable used beside it
-        # (dx_1 next to x_1, Gitar on PR #558).
-        if "_" not in token or token[1:] in tokens or token[1:] in names:
-            return token
+        tail = token[1:]
+        for variable in (tail, tail.strip("0123456789")):
+            if isinstance(names.get(variable), Symbol) or variable in tokens:
+                return token
     return None
 
 

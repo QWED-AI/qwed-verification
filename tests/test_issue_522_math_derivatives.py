@@ -124,16 +124,18 @@ def test_the_derivative_order_is_bounded_across_the_expression(text):
     "d/d(x)(x^2)",
     "dy/(2*dx)",
     "dy/2dx",
-    # A variable the parser does not know (CodeRabbit on PR #558).
+    # A variable the parser does not know, used in the expression (CodeRabbit
+    # on PR #558), whatever stands before the differential.
     "d(foo**2)/dfoo",
     "1/delta + d(foo**2)/dfoo",
-    "x/(2*dfoo)",
-    # Whatever stands before the differential (CodeRabbit on PR #558).
     "d(foo**2)/(-dfoo)",
-    "x/(y*dfoo)",
+    "x*dt",
     # A subscripted variable (Gitar on PR #558).
     "d(x_1^2)/dx_1",
     "d/dx_1*x_1**2",
+    # The d/dx operator over any d-name (CodeRabbit on PR #558).
+    "d/dx_1",
+    "d/dfoo",
 ])
 def test_leibniz_notation_is_refused(text):
     with pytest.raises(DerivativeNotationError):
@@ -144,6 +146,8 @@ def test_leibniz_notation_is_refused(text):
     "d/2", "x*d/(2*d)", "d + x", "delta*x", "x/delta", "x/diff(x**2, x)", "x/d*y", "x/(d)",
     # SymPy keeps a name with "_" whole (CodeRabbit on PR #558).
     "distance_m", "x/distance_m", "dx_1",
+    # A d-name that is not d joined to a variable (Sentry on PR #558).
+    "data", "distance", "data*2", "x/(2*dfoo)",
 ])
 def test_the_symbol_d_still_parses(text):
     safe_parse_expr(text)
@@ -159,6 +163,8 @@ def test_a_caller_symbol_that_starts_with_d_is_not_a_differential():
     ("Derivative(x^2, x) = 2x", "VERIFIED", True, "ADMIT", "Identity is true"),
     ("diff(x**2, x) = 3*x", "VERIFIED", False, "BLOCKED", "Identity is false"),
     ("diff(x**2, x) == 3*x", "VERIFIED", False, "BLOCKED", "Identity is false"),
+    # A name that starts with d is not a differential (Sentry on PR #558).
+    ("data*2 = 2*data", "VERIFIED", True, "ADMIT", "Identity is true"),
 ])
 def test_a_derivative_claim_is_decided(client, expression, status, is_valid, admission, message):
     result = client.post("/verify/math", json={"expression": expression}).json()
@@ -173,6 +179,7 @@ def test_a_derivative_claim_is_decided(client, expression, status, is_valid, adm
     ("dy/dx = 2x", DERIVATIVE_NOTATION_MESSAGE),
     ("d(x^2)/dx = 2x", DERIVATIVE_NOTATION_MESSAGE),
     ("dy/dtheta == dy/dtheta", DERIVATIVE_NOTATION_MESSAGE),
+    ("d/dx_1 == d/dx_1", DERIVATIVE_NOTATION_MESSAGE),
     ("diff(x**5, x, 4) = 120*x", "Expression could not be parsed"),
     ("x <= 2", "Expression could not be parsed"),
     ("a = b = c", "Expression could not be parsed"),
