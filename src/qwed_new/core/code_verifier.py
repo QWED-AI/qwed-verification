@@ -150,9 +150,11 @@ class CodeVerifier:
     _CRITICAL_BUILTIN_NAME: ClassVar = re.compile(
         r"(?<!\w)(" + "|".join(sorted(_ATTRIBUTE_READ_NAMES, key=len, reverse=True)) + r")(?!\w)"
     )
-    # Anywhere in a string literal that is sliced, %-formatted or has
-    # characters removed, since the result can be the name although the
-    # literal only holds it inside a longer word ("x__getattribute__"[1:]).
+    # A string literal that is sliced, %-formatted or has characters removed
+    # can leave the name although it only holds it inside a longer word
+    # ("x__getattribute__"[1:]). With literal arguments the result is worked
+    # out and matched as whole identifiers (_names_left_by); otherwise the
+    # literal is matched anywhere.
     _CRITICAL_BUILTIN_IN_WORD: ClassVar = re.compile(
         "(" + "|".join(sorted(_ATTRIBUTE_READ_NAMES, key=len, reverse=True)) + ")"
     )
@@ -160,6 +162,12 @@ class CodeVerifier:
         {"strip", "lstrip", "rstrip", "replace", "removeprefix", "removesuffix",
          "split", "rsplit", "partition", "rpartition", "translate"}
     )
+    # A %-format conversion ("%s", "%(key)05.2f", "%%"): what it is replaced
+    # with is not known, so it may separate a name from the word around it.
+    _CONVERSION_SPEC: ClassVar = re.compile(
+        r"%(?:\([^)]*\))?[#0 +\-]*(?:\*|\d+)?(?:\.(?:\*|\d+))?[hlL]?[a-zA-Z%]"
+    )
+    _RESHAPE_NODE_TYPES: ClassVar[frozenset] = frozenset({ast.Subscript, ast.BinOp, ast.Call})
     # Ways to rebind a name without an assignment the AST shows: a namespace
     # dict (globals()["re"] = ...) or the import system an import reads
     # (sys.modules, sys.meta_path). Where code uses one, no name is trusted
@@ -174,8 +182,7 @@ class CodeVerifier:
     _REGEX_COMPILE_KEYWORDS: ClassVar[frozenset] = frozenset({"pattern", "flags"})
     # The node types _critical_builtin_reference reads; others are skipped.
     _REFERENCE_NODE_TYPES: ClassVar[frozenset] = frozenset(
-        {ast.Name, ast.Attribute, ast.MatchClass, ast.Import, ast.ImportFrom, ast.Constant,
-         ast.Subscript, ast.BinOp}
+        {ast.Name, ast.Attribute, ast.MatchClass, ast.Import, ast.ImportFrom, ast.Constant}
     )
 
     # A subprocess call that pipes fetched content (curl/wget) into a shell is
@@ -888,17 +895,23 @@ class CodeVerifier:
           flags)`` on a name every import binds to ``re`` and nothing
           rebinds (_untrusted_compiles);
         - a string holding one of these names as a whole identifier, since
-          ``vars(module)["exec"]`` reaches it by string, or anywhere in a
-          literal that is sliced, %-formatted or stripped
-          (``"xexec"[1:]``), since that can leave the name.
+          ``vars(module)["exec"]`` reaches it by string, or a name left by
+          slicing, %-formatting or stripping a literal, written in place or
+          assigned to a name first (``"xexec"[1:]``, ``s = "xexec";
+          s[1:]``; _reshaped_references).
         Comments, longer identifiers such as ``execute``, ``evaluate`` and
         ``compile_report``, prose in strings, and a class or module defining
         ``__getattr__`` are not matches.
         """
         found: List[tuple[str, int]] = []
         compile_attributes: List[ast.Attribute] = []
+        reshapes: List[ast.AST] = []
         for node in nodes:
-            if type(node) not in self._REFERENCE_NODE_TYPES:
+            node_type = type(node)
+            if node_type in self._RESHAPE_NODE_TYPES:
+                reshapes.append(node)
+                continue
+            if node_type not in self._REFERENCE_NODE_TYPES:
                 continue
             name = self._critical_builtin_reference(node)
             if name == "compile" and isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
@@ -908,6 +921,8 @@ class CodeVerifier:
         # Only code with a name.compile pays for the walk that finds re.
         if compile_attributes:
             found.extend(("compile", node.lineno) for node in self._untrusted_compiles(nodes, compile_attributes))
+        if reshapes:
+            found.extend(self._reshaped_references(nodes, reshapes))
         unique = list(dict.fromkeys(found))  # (name, line) pairs, in order, once each
         return [self._critical_builtin_issue(name, line) for name, line in unique]
 
@@ -923,25 +938,112 @@ class CodeVerifier:
             return self._import_reference(node)
         if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
             return self._critical_name_in_text(node.value, self._CRITICAL_BUILTIN_NAME)
-        literal = self._reshaped_literal(node)
-        return self._critical_name_in_text(literal, self._CRITICAL_BUILTIN_IN_WORD) if literal is not None else None
+        return None
+
+    def _reshaped_references(self, nodes: List[ast.AST], reshapes: List[ast.AST]) -> List[tuple[str, int]]:
+        """(name, line) for each slice, %-format or character-removing call
+        that can leave a critical name from a literal: the literal written in
+        place, or one a simple assignment binds to the name it is read from."""
+        assigned: Optional[Dict[str, list]] = None
+        found: List[tuple[str, int]] = []
+        for node in reshapes:
+            operand = self._reshape_operand(node)
+            if isinstance(operand, ast.Constant) and isinstance(operand.value, (str, bytes)):
+                literals = [operand.value]
+            elif isinstance(operand, ast.Name):
+                if assigned is None:
+                    assigned = self._assigned_literals(nodes)
+                literals = assigned.get(operand.id, [])
+            else:
+                continue
+            name = next(filter(None, (self._name_left_by(node, literal) for literal in literals)), None)
+            if name:
+                found.append((name, node.lineno))
+        return found
 
     @classmethod
-    def _reshaped_literal(cls, node: ast.AST):
-        """The str/bytes literal ``node`` slices (``"xexec"[1:]``),
-        %-formats (``"%sexec" % ""``) or removes characters from
-        (``"xexec".lstrip("x")``), else None."""
+    def _reshape_operand(cls, node: ast.AST) -> Optional[ast.AST]:
+        """What ``node`` slices, %-formats or removes characters from."""
         if isinstance(node, ast.Subscript):
-            operand = node.value
-        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
-            operand = node.left
-        elif isinstance(node, ast.Attribute) and node.attr in cls._CHARACTER_REMOVING_METHODS:
-            operand = node.value
-        else:
-            return None
-        if isinstance(operand, ast.Constant) and isinstance(operand.value, (str, bytes)):
-            return operand.value
+            return node.value
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+            return node.left
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr in cls._CHARACTER_REMOVING_METHODS:
+            return node.func.value
         return None
+
+    @classmethod
+    def _assigned_literals(cls, nodes: List[ast.AST]) -> Dict[str, list]:
+        """The str/bytes literals each name is bound to by ``name = "..."``."""
+        assigned: Dict[str, list] = {}
+        for node in nodes:
+            for target in cls._literal_targets(node):
+                assigned.setdefault(target.id, []).append(node.value.value)
+        return assigned
+
+    @staticmethod
+    def _literal_targets(node: ast.AST) -> List[ast.Name]:
+        """The names an assignment of a str/bytes literal binds."""
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)):
+            targets = [node.target]
+        else:
+            return []
+        if not (isinstance(node.value, ast.Constant) and isinstance(node.value.value, (str, bytes))):
+            return []
+        return [target for target in targets if isinstance(target, ast.Name)]
+
+    def _name_left_by(self, node: ast.AST, literal) -> Optional[str]:
+        """The critical name reshaping ``literal`` as ``node`` does leaves.
+        The result is worked out when the arguments are literals, and matched
+        as whole identifiers, so "executing %s" % job and "executed,ok".split(",")
+        are not matches; otherwise the literal is matched anywhere."""
+        text = literal.decode("latin-1") if isinstance(literal, bytes) else literal
+        try:
+            results = self._reshape_results(node, text)
+        except (ValueError, TypeError, IndexError, RecursionError):
+            results = None
+        if results is None:
+            return self._critical_name_in_text(text, self._CRITICAL_BUILTIN_IN_WORD)
+        return next(filter(None, (self._critical_name_in_text(r, self._CRITICAL_BUILTIN_NAME) for r in results)), None)
+
+    def _reshape_results(self, node: ast.AST, text: str) -> Optional[List[str]]:
+        """The strings reshaping ``text`` as ``node`` does gives, or None when
+        that is not known. Raises when the arguments are not literals."""
+        if isinstance(node, ast.Subscript):
+            return [text[self._literal_index(node.slice)]]
+        if isinstance(node, ast.BinOp):
+            # A conversion becomes unknown text, which may end a word.
+            return [self._CONVERSION_SPEC.sub(" ", text)]
+        method = node.func.attr
+        args = [self._literal_text(arg) for arg in node.args]
+        kwargs = {keyword.arg: self._literal_text(keyword.value) for keyword in node.keywords}
+        # translate can map one character to many, and replace grows the text
+        # when the new part is longer: not worked out, to bound the work.
+        if method == "translate" or (method == "replace" and len(args) >= 2 and len(args[1]) > len(args[0])):
+            return None
+        result = getattr(text, method)(*args, **kwargs)
+        return [result] if isinstance(result, str) else [part for part in result if isinstance(part, str)]
+
+    @staticmethod
+    def _literal_index(node: ast.AST):
+        """A slice or index written as int literals (``[1:]``, ``[-4:]``)."""
+        if isinstance(node, ast.Slice):
+            bounds = [None if bound is None else ast.literal_eval(bound) for bound in (node.lower, node.upper, node.step)]
+            if any(bound is not None and type(bound) is not int for bound in bounds):
+                raise TypeError("not an int slice")
+            return slice(*bounds)
+        index = ast.literal_eval(node)
+        if type(index) is not int:
+            raise TypeError("not an int index")
+        return index
+
+    @staticmethod
+    def _literal_text(node: ast.AST):
+        value = ast.literal_eval(node)
+        return value.decode("latin-1") if isinstance(value, bytes) else value
 
     @staticmethod
     def _critical_name_in_text(value, pattern) -> Optional[str]:

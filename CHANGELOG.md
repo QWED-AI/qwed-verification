@@ -363,12 +363,16 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     or by a match pattern (`case object(exec=run)`); and in a string as a
     whole identifier (`vars(module)["exec"]`). A string literal that is
     sliced, `%`-formatted or has characters removed (`strip`, `replace`,
-    `split` and the like) is matched anywhere, since the result can be the
-    name (`"xexec"[1:]`). An import of the `builtins` module
-    (`import builtins`) is refused too.
+    `split` and the like), written in place or first assigned to a name, can
+    leave the name (`"xexec"[1:]`, `s = "xexec"; s[1:]`). With literal
+    arguments the result is worked out and matched as whole identifiers;
+    otherwise the literal is matched anywhere. A `translate`, or a `replace`
+    that grows the text, is not worked out, so the work stays bounded. An
+    import of the `builtins` module (`import builtins`) is refused too.
   - Admitted: longer identifiers (`execute`, `evaluate`, `compile_report`),
-    the names inside longer words in strings and docstrings
-    (`"SELECT * FROM evaluations"`, `"executing job"`),
+    the names inside longer words in strings and docstrings, also when
+    formatted or split (`"SELECT * FROM evaluations WHERE id = %s" % uid`,
+    `"executing job"`, `"executed,ok".split(",")`),
     comments, and `re.compile(pattern, flags)` on a name every import binds
     to `re`. The builtin `compile` needs a filename and a mode, so it cannot
     run in that shape; any other `re.compile` call, or `re.compile` not

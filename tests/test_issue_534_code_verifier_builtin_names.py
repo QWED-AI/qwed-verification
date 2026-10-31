@@ -44,6 +44,16 @@ def _verify(code):
     'status = "recompiled"',
     'print("executing " + job)',
     'print("evaluations: {}".format(n))',
+    # ... and reshaped, where the result leaves no name.
+    'log.info("executing %s" % job)',
+    'msg = "evaluations: %d" % n',
+    'parts = "executed,ok".split(",")',
+    'cur.execute("SELECT * FROM evaluations WHERE id = %s" % uid)',
+    'sql = "SELECT * FROM evaluations WHERE id = %s"\ncur.execute(sql % uid)',
+    'line = "executed,ok"\nparts = line.split(",")',
+    'title = "Re-evaluated"[:5]',
+    # Only % substitutes a conversion; + keeps "%s" as text.
+    'label = "%sexec" + suffix',
 ])
 def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     assert _verify(code) == (True, [])
@@ -115,7 +125,20 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ('vars(m)["xexec"[1:]](payload)', "exec"),
     ('get = vars(object)["x__getattribute__"[1:]]\nget(m, n)', "__getattribute__"),
     ('vars(m)["%sexec" % ""](payload)', "exec"),
+    ('vars(m)["%(a)sexec" % d](payload)', "exec"),
+    # A conversion may become a separator, not only nothing.
+    ('vars(m)["a%sexec" % sep](payload)', "exec"),
     ('vars(m)["xexec".lstrip("x")](payload)', "exec"),
+    ('vars(m)["xexec"[-4:]](payload)', "exec"),
+    ('vars(m)["qexecq".replace("q", "")](payload)', "exec"),
+    ('vars(m)["qexec".split("q")[1]](payload)', "exec"),
+    # ... or assigned to a name first.
+    ('name = "xexec"\nvars(m)[name[1:]](payload)', "exec"),
+    ('name: str = "xexec"\nvars(m)[name.lstrip("x")](payload)', "exec"),
+    # Where the arguments are not literals, the literal is matched anywhere.
+    ('vars(m)["xexec".lstrip(c)](payload)', "exec"),
+    ('vars(m)["xexec"[i:]](payload)', "exec"),
+    ('vars(m)["xexec".translate(table)](payload)', "exec"),
     # The longest name a string holds is the one reported.
     ('vars(m)["exec_module"](spec)', "exec_module"),
     # getattr / setattr / delattr by their dunder names.

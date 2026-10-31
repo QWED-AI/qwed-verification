@@ -48,6 +48,21 @@ def test_unparseable_worst_case_fragment_is_blocked_fast():
     assert result.developer_fields["constraint_id"] == "code_verifier.parse_error"
 
 
+def test_growing_literal_reshape_is_not_worked_out():
+    # The #534 string check works out what a literal reshape leaves, but not
+    # a translate or a replace that grows the text: worked out, these build
+    # a string of about n * n characters.
+    verifier = CodeVerifier()
+    n = 10000
+    for code in (
+        'x = "' + "q" * n + '".translate({113: "' + "a" * n + '"})',
+        'x = "' + "q" * n + '".replace("q", "' + "a" * n + '")',
+    ):
+        start = time.perf_counter()
+        verifier.verify_code(code, language="python")
+        assert time.perf_counter() - start < 0.5
+
+
 def test_curl_pipe_shell_still_flagged_across_lines():
     verifier = CodeVerifier()
     code = (
