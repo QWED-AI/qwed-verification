@@ -36,8 +36,9 @@ def test_verify_math_exception_handling():
     """
     Test that verify_math catches internal errors and returns a sanitized message.
     """
-    # Force an exception during parsing/processing
-    with patch('qwed_new.core.safe_parser.parse_expr', side_effect=ValueError("CRITICAL SENSITIVE STACK TRACE")):
+    # Force an exception during processing. A parse failure is the caller's
+    # input error since #522 (math.parse_error), so fail simplify instead.
+    with patch('sympy.simplify', side_effect=ValueError("CRITICAL SENSITIVE STACK TRACE")):
         # Providing valid minimal input to pass Pydantic validation
         response = client.post(
             "/verify/math",

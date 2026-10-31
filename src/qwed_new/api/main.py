@@ -21,7 +21,8 @@ from qwed_new.core.diagnostics import (
     admission_decision,
     merge_diagnostic_result,
 )
-from qwed_new.core.math_identity import math_identity_result
+from qwed_new.core.math_identity import math_identity_result, math_parse_error_result
+from qwed_new.core.safe_parser import SafeParserError
 from qwed_new.api.verification_context_routes import router as verification_context_router
 
 # Configure logging
@@ -1154,10 +1155,15 @@ async def verify_math(
         raise
     except Exception as e:
         logger.error(f"Math verification error: {redact_pii(str(e))}", exc_info=False)
-        dr = DiagnosticResult.blocked(
-            INTERNAL_VERIFICATION_ERROR,
-            {"constraint_id": "api.math.execution_error"},
-        )
+        if isinstance(e, SafeParserError):
+            # Input the parser refused is the caller's to fix, not an
+            # internal error (#522); SQL and schema use the same shape.
+            dr = math_parse_error_result(e)
+        else:
+            dr = DiagnosticResult.blocked(
+                INTERNAL_VERIFICATION_ERROR,
+                {"constraint_id": "api.math.execution_error"},
+            )
         dr = _enforce_trust(dr, query=expression, engine="math", admission=admission_decision)
         log = VerificationLog(
             organization_id=tenant.organization_id,

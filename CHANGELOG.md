@@ -303,6 +303,52 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     finite); implicit multiplication (`2x^2`) is read through SymPy's own
     grammar first. `x/x = 2`, which is false wherever `x/x` is defined, and
     `2x^2 = 5` are still disproven.
+- **`/verify/math` reads `diff()` and refuses `d/dx` (#522).**
+  `diff(x**2, x) == 2*x` came back BLOCKED as "Internal verification error",
+  because the parser did not know `diff`. `d/dx(x^2) = 2x` came back VERIFIED
+  as proven false, because `d` and `dx` were read as symbols.
+  - The expression parser now evaluates `diff` and `Derivative`
+    (`diff(x^2, x)`, `diff(x**3, x, 2)`). The total derivative order in one
+    expression is at most 3, nested calls included, since each order
+    multiplies what `simplify` then has to work through.
+  - A derivative cannot appear in a power, `factorial` or `binomial`
+    (`diff(x**2, x)**2` is refused). The cost bounds (#353) read it as
+    symbolic, but it evaluates to a value first, so
+    `2**(diff(10000*x, x)**9)` would have expanded `2**(10000**9)`. A
+    reciprocal or a root (`2x/diff(x**2, x)`, `sqrt(diff(x**2, x))`) is
+    allowed, as it expands nothing. `^` is read as SymPy reads it, so in
+    `diff(x^3, x) - 3*x^2` the derivative is not taken to be inside a power.
+  - `==` reads as `=`, so `diff(x**2, x) == 2*x` is VERIFIED.
+  - The domain check (#429) reads each evaluated derivative as well as the
+    text, since a derivative can be singular where the text it
+    differentiates is not: `diff(sqrt(x), x)*2*sqrt(x) = 1` holds only for
+    x other than 0, so it is UNVERIFIABLE with
+    `math.domain_restricted_identity`, while
+    `diff(sqrt(x), x) = 1/(2*sqrt(x))` is VERIFIED.
+  - A non-zero numeric multiplier in a denominator no longer counts as part
+    of its singular factor, so `2/(2*sqrt(x)) = 1/sqrt(x)` and
+    `2*diff(sqrt(x), x) = 1/sqrt(x)` are VERIFIED, not UNVERIFIABLE.
+  - Leibniz notation (`d/dx`, `dy/dx`, `d(x^2)/dx`, `dy/dtheta`,
+    `dy/(2*dx)`, `d/d(x)(x^2)`, `d^2y/dx^2`) is refused instead of misread,
+    with the message to write `diff(f, x)`. A name the parser knows
+    (`delta`, `diff`, or a caller's own symbol) is never refused. Otherwise,
+    wherever they stand (`/dx`, `/(-2*dfoo)`, `x*dx`):
+    - a name starting with `d` that SymPy splits into letters, so reads as
+      `d` times the rest: `dx`, `dV/dT` (read as `V/T`), `dtheta`, `d2y`.
+      This includes `data` (read as `a**2*d*t`), since the claim decided
+      would not be the one written; pass such a name in `extra_symbols` to
+      use it as a symbol;
+    - a name with `_`, which SymPy keeps whole, only when the rest is a
+      variable used beside it (`dx_1` beside `x_1`), so `distance_m` is a
+      symbol;
+    - a lone `d` over a `d` name the parser does not know, the `d/dx`
+      operator (`d/dx_1`); `d/delta` and `d/diff(...)` still parse;
+    - a lone `d` that a denominator applies to a variable (`d(x)`, `d x`).
+  - Input the parser refuses is BLOCKED with `math.parse_error` and
+    "Expression could not be parsed", as SQL and schema parse errors are, not
+    with `api.math.execution_error`. The parser's own text is not returned.
+    A batch math item the parser refuses gets the same BLOCKED result; it
+    was a failed item carrying the parser's error text.
 
 ## [8.0.0] - 2026-10-26
 

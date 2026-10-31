@@ -28,7 +28,8 @@ Security boundary (structural, in order):
        static exponent / exact-expansion-call argument bounds, so an
        expression cannot demand unbounded exact-integer expansion at
        evaluation time (SymPy expands Integer powers eagerly — see the
-       measured 9**9**9**9 hang).
+       measured 9**9**9**9 hang). diff/Derivative share one order budget
+       per parse (#522).
 
 The denylist alone can never defend an eval sink — layers 2 and 4 are
 the structural guarantee; layer 3 catches residual non-expression
@@ -65,6 +66,8 @@ __all__ = [
     "check_sympy_expansion_cost",
     "check_closed_expression_cost",
     "SafeParserError",
+    "DerivativeNotationError",
+    "DERIVATIVE_NOTATION_MESSAGE",
 ]
 
 MAX_EXPRESSION_LENGTH = 5_000
@@ -85,6 +88,29 @@ _MAX_EXPANSION_DIGITS = 100_000
 # subtree caught by its own node check (CodeAnt on PR #354: bounding them
 # rejected inexpensive inputs like Rational(10001, 3)).
 _EXACT_EXPANSION_CALLS = frozenset({"factorial", "binomial"})
+# diff/Derivative (#522): each order multiplies the size of the result, and
+# simplify then works on that (measured: order 3 of exp(x*sin(x)*cos(x)*tan(x))
+# simplifies in ~2.5s, order 4 in ~7.7s, order 10 differentiates alone in
+# ~18s). The bound is on the total order across one parse, so nesting
+# diff(diff(...)) cannot get around it.
+_MAX_DERIVATIVE_ORDER = 3
+
+_DERIVATIVE_CALLS = frozenset({"diff", "Derivative"})
+
+# Leibniz notation (#522): d/dx(x^2), d(x^2)/dx, dy/(2*dx), d/d(x)(x^2). The
+# parser would read d and dx as symbols (d/dx(x^2) is x**3), so the claim it
+# decides is not the one written. A name the parser knows (delta, diff, a
+# caller's symbol) is never refused. Otherwise, wherever they stand:
+# - a name starting with "d" that SymPy splits into letters, so reads as d
+#   times the rest (dx, dV, dtheta, d2y, data: a**2*d*t). Whatever was meant,
+#   the claim decided would not be the one written;
+# - a name with "_", which SymPy keeps whole, only when the rest is a
+#   variable used beside it (dx_1 beside x_1); distance_m is a symbol;
+# - a lone "d" over a "d" name, the d/dx operator (d/dx_1);
+# - a lone "d" a denominator applies to a variable (d(x), d x).
+_IDENTIFIER = re.compile(r"[A-Za-z_]\w*", re.ASCII)
+_DIVIDED_BY_LONE_D = re.compile(r"/\s*(?:\(\s*)?d\b\s*[(A-Za-z]", re.ASCII)
+_LONE_D_OVER_D_NAME = re.compile(r"(?<!\w)d\s*/\s*(?:\(\s*)?(d[A-Za-z]\w*)", re.ASCII)
 
 _DENYLIST_PATTERN = re.compile(
     r"(?:"
@@ -280,6 +306,65 @@ def _check_exact_expansion_call_cost(node: ast.AST) -> None:
             )
 
 
+_DERIVATIVE_POSITION_MESSAGE = (
+    "A derivative cannot appear in a power, factorial or binomial: its value "
+    "is only known once it is evaluated, so its expansion cannot be bounded"
+)
+
+
+def _is_derivative_call(node: ast.AST) -> bool:
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _DERIVATIVE_CALLS
+
+
+def _check_derivative_position(node: ast.AST) -> None:
+    """The gates read a derivative as symbolic, but it evaluates first and
+    can return a number: 2**(diff(10000*x, x)**9) is 2**(10000**9) (#522).
+    Keep derivatives out of everything that expands eagerly."""
+    expands = (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)) or (
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id in _EXACT_EXPANSION_CALLS
+    )
+    if expands and any(_is_derivative_call(child) for child in ast.walk(node)):
+        raise SafeParserError(_DERIVATIVE_POSITION_MESSAGE)
+
+
+def _check_derivative_positions(expression: str) -> None:
+    """:func:`_check_derivative_position` over the expression with ^ read
+    as SymPy reads it. Python gives ^ the lowest precedence, so in
+    diff(x^3, x) - 3*x^2 the derivative would sit inside the XOR (Sentry
+    on PR #558); as ** it binds only x and 2."""
+    if not any(name in expression for name in _DERIVATIVE_CALLS):
+        return
+    for node in ast.walk(ast.parse(expression.replace("^", "**"), mode="eval")):
+        _check_derivative_position(node)
+
+
+# Stands in for diff/Derivative in the unevaluated cost parse. An undefined
+# function takes any arguments, so an order SymPy cannot read there
+# (diff(x, x, 1+0)) cannot make that parse fail and skip the gates.
+_UNEVALUATED_DERIVATIVE = sympy.Function("unevaluated_derivative")
+
+
+def _check_unevaluated_derivative_position(expr: Any, expanding: bool = False) -> None:
+    """:func:`_check_derivative_position` on an unevaluated SymPy tree.
+
+    Unevaluated, a/b is Mul(a, Pow(b, -1)) and sqrt(b) is Pow(b, 1/2): a
+    reciprocal or a root expands nothing, so only other powers count."""
+    if expanding and isinstance(expr, _UNEVALUATED_DERIVATIVE):
+        raise SafeParserError(_DERIVATIVE_POSITION_MESSAGE)
+    if isinstance(expr, sympy.Pow):
+        exponent = expr.exp
+        expanding = expanding or not (exponent.is_Rational and abs(exponent.p) == 1)
+    else:
+        expanding = expanding or isinstance(expr, (sympy.factorial, sympy.binomial))
+    for arg in getattr(expr, "args", ()):
+        _check_unevaluated_derivative_position(arg, expanding)
+
+
+def _unevaluated_derivative(*args: Any, **_kwargs: Any) -> Any:
+    return _UNEVALUATED_DERIVATIVE(*args)
+
+
 def _fold_exact(node: Any):
     """Fold an exact-number SymPy subtree to an int or Fraction WITHOUT letting
     SymPy evaluate it, raising the moment a power would exceed the expansion
@@ -459,8 +544,11 @@ def _check_unevaluated_sympy_cost(expression: str) -> None:
         # parse_expr(evaluate=False) raise, so use sympy's default namespace —
         # this call only inspects structure for cost, it does not feed the result
         # to the engine (safe_parse_expr re-parses with the hardened namespace).
+        # diff/Derivative stay unevaluated here (#522): evaluating them is
+        # what the order budget in the main parse bounds.
         expr = parse_expr(
             expression,
+            local_dict={"diff": _unevaluated_derivative, "Derivative": _unevaluated_derivative},
             transformations=transformations,
             evaluate=False,
         )
@@ -471,6 +559,7 @@ def _check_unevaluated_sympy_cost(expression: str) -> None:
         return
 
     check_sympy_expansion_cost(expr)
+    _check_unevaluated_derivative_position(expr)
 
 
 def _run_cost_gates(tree: ast.AST) -> None:
@@ -508,6 +597,7 @@ def _check_ast_safety(expression: str) -> None:
         _check_unevaluated_sympy_cost(expression)
         return
     _run_cost_gates(tree)
+    _check_derivative_positions(expression)
 
 
 _ASTRONOMICAL = float("inf")
@@ -727,9 +817,36 @@ def _validate_sympy_result(result: Any) -> None:
         )
 
 
+def _bounded_derivative():
+    """Return a diff/Derivative for one parse, with its own order budget.
+
+    Both names evaluate the derivative, so ``Derivative(x**2, x)`` reads as
+    ``2*x``. The order is counted on the unevaluated Derivative before any
+    differentiation runs, and the budget is shared by every call in the
+    parse, nested ones included.
+    """
+    budget = [_MAX_DERIVATIVE_ORDER]
+
+    def derivative(expr: Any, *variables: Any) -> Any:
+        unevaluated = sympy.Derivative(expr, *variables, evaluate=False)
+        if not isinstance(unevaluated, sympy.Derivative):
+            return unevaluated  # a zero order leaves the expression as it is
+        order = unevaluated.derivative_count
+        if not order.is_Integer or order > budget[0]:
+            raise SafeParserError(
+                f"Derivative order exceeds the maximum of {_MAX_DERIVATIVE_ORDER} "
+                "in one expression"
+            )
+        budget[0] -= int(order)
+        return unevaluated.doit()
+
+    return derivative
+
+
 def _build_safe_local_dict(
     extra_symbols: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    derivative = _bounded_derivative()
     safe: Dict[str, Any] = {
         "x": Symbol("x"), "y": Symbol("y"), "z": Symbol("z"),
         "a": Symbol("a"), "b": Symbol("b"), "c": Symbol("c"),
@@ -760,6 +877,7 @@ def _build_safe_local_dict(
         "sqrt": sympy.sqrt, "cbrt": sympy.cbrt,
         "abs": sympy.Abs, "Abs": sympy.Abs,
         "factorial": sympy.factorial, "binomial": sympy.binomial,
+        "diff": derivative, "Derivative": derivative,
         "Integer": Integer, "Float": Float, "Rational": Rational,
         # Symbol is required because SymPy standard_transformations may emit
         # Symbol('name') during evaluation. This allows users to create symbols
@@ -797,6 +915,33 @@ class SafeParserError(ValueError):
     pass
 
 
+DERIVATIVE_NOTATION_MESSAGE = (
+    "Expression uses d/dx notation, or a name read as d times a variable, "
+    "which cannot be read unambiguously; write diff(f, x) for a derivative"
+)
+
+
+class DerivativeNotationError(SafeParserError):
+    """Leibniz notation (d/dx, dy/dx), refused rather than misread (#522)."""
+
+
+def _leibniz_differential(expression: str, names: Dict[str, Any]) -> Optional[str]:
+    """The first differential written in ``expression``, or None."""
+    lone_d = _DIVIDED_BY_LONE_D.search(expression)
+    if lone_d:
+        return lone_d.group()
+    for operator_form in _LONE_D_OVER_D_NAME.finditer(expression):
+        if operator_form.group(1) not in names:
+            return operator_form.group()
+    tokens = _IDENTIFIER.findall(expression)
+    for token in tokens:
+        if not token.startswith("d") or len(token) == 1 or token in names:
+            continue
+        if "_" not in token or token[1:] in tokens or token[1:] in names:
+            return token
+    return None
+
+
 def safe_parse_expr(
     expression: str,
     *,
@@ -832,8 +977,11 @@ def safe_parse_expr(
         raise SafeParserError(
             f"Expression contains disallowed construct: {match.group()!r}"
         )
-    _check_ast_safety(stripped)
     local_dict = _build_safe_local_dict(extra_symbols)
+    leibniz = _leibniz_differential(stripped, local_dict)
+    if leibniz:
+        raise DerivativeNotationError(f"{DERIVATIVE_NOTATION_MESSAGE}: {leibniz!r}")
+    _check_ast_safety(stripped)
     if transformations is None:
         transformations = standard_transformations + (
             convert_xor,
