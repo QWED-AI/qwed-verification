@@ -46,7 +46,12 @@ CONSTRAINT_CODE_SAFE = "code_verifier.code_safe"
 CONSTRAINT_CODE_UNSAFE = "code_verifier.code_unsafe"
 CONSTRAINT_EMPTY_BATCH = "code_verifier.empty_batch"
 CONSTRAINT_BATCH_BLOCKED = "code_verifier.batch_blocked"
+CONSTRAINT_PARSE_ERROR = "code_verifier.parse_error"
 
+
+class _UnparseablePython(Exception):
+    """Python code that does not parse: its AST checks cannot run, so
+    verify_code blocks it instead of certifying it."""
 
 
 
@@ -105,15 +110,25 @@ class CodeVerifier:
         "getattr_static": "Dynamic attribute access",
     }
     _CRITICAL_NAMES: ClassVar[frozenset] = PYTHON_CRITICAL_BUILTINS | frozenset(PYTHON_CODE_EXECUTION_NAMES)
-    # Whole identifiers, in strings and in code that does not parse.
+    # getattr / setattr / delattr by another name. Refused when read as an
+    # attribute or named in a string, not when a class or module defines them.
+    PYTHON_ATTRIBUTE_ACCESSORS: ClassVar[frozenset] = frozenset(
+        {"__getattribute__", "__getattr__", "__setattr__", "__delattr__"}
+    )
+    _ATTRIBUTE_READ_NAMES: ClassVar[frozenset] = _CRITICAL_NAMES | PYTHON_ATTRIBUTE_ACCESSORS
+    # Whole identifiers in a string.
     _CRITICAL_BUILTIN_NAME: ClassVar = re.compile(
-        r"(?<!\w)(" + "|".join(sorted(_CRITICAL_NAMES)) + r")(?!\w)"
+        r"(?<!\w)(" + "|".join(sorted(_ATTRIBUTE_READ_NAMES)) + r")(?!\w)"
     )
     # Ways to write a namespace without an assignment the AST shows
     # (globals()["re"] = ...). Where code uses one, no name is trusted to
     # still be the re module.
     _NAMESPACE_ACCESS: ClassVar[frozenset] = frozenset(
         {"globals", "vars", "locals", "f_globals", "f_locals"}
+    )
+    # The node types _critical_builtin_reference reads; others are skipped.
+    _REFERENCE_NODE_TYPES: ClassVar[frozenset] = frozenset(
+        {ast.Name, ast.Attribute, ast.MatchClass, ast.Import, ast.ImportFrom, ast.Constant}
     )
 
     # A subprocess call that pipes fetched content (curl/wget) into a shell is
@@ -216,8 +231,6 @@ class CodeVerifier:
         "__builtins__", "__import__", "__code__", "__dict__",
         # A builtin function's __self__ is the builtins module (print.__self__).
         "__self__",
-        # getattr / setattr / delattr by another name.
-        "__getattribute__", "__getattr__", "__setattr__", "__delattr__",
     }
     
     # =========================================================================
@@ -387,6 +400,7 @@ class CodeVerifier:
         - Safe code → VERIFIED with ``is_valid`` True and proof_ref from the
           analysis evidence.
         - Unsupported language → BLOCKED (``code_verifier.unsupported_language``)
+        - Python that does not parse → BLOCKED (``code_verifier.parse_error``)
         - Internal error   → BLOCKED (``code_verifier.execution_error``)
 
         ``agent_message`` is agent-safe: it never leaks detection rules, rule
@@ -462,18 +476,7 @@ class CodeVerifier:
             # Cross-language secret detection
             issues.extend(self._check_secrets(code))
         except Exception as exc:  # noqa: BLE001 — fail-closed by design
-            return DiagnosticResult.blocked(
-                agent_message=(
-                    "Code verification could not be completed due to an internal error."
-                ),
-                developer_fields={
-                    "constraint_id": CONSTRAINT_EXECUTION_ERROR,
-                    "is_safe": False,
-                    "is_valid": False,
-                    "error_type": type(exc).__name__,
-                    "language": language,
-                },
-            )
+            return self._fail_closed(exc, language)
 
         # Calculate counts
         critical_count = sum(1 for i in issues if i.severity == "CRITICAL")
@@ -517,6 +520,36 @@ class CodeVerifier:
             agent_message=agent_message,
             developer_fields=developer_fields,
             evidence=evidence,
+        )
+
+    @staticmethod
+    def _fail_closed(exc: Exception, language: str) -> DiagnosticResult:
+        """BLOCKED for code the checks could not analyse: Python that does not
+        parse (``code_verifier.parse_error``) or an internal error."""
+        if isinstance(exc, _UnparseablePython):
+            return DiagnosticResult.blocked(
+                agent_message=(
+                    "Code verification could not be completed because the code "
+                    "does not parse as Python."
+                ),
+                developer_fields={
+                    "constraint_id": CONSTRAINT_PARSE_ERROR,
+                    "is_safe": False,
+                    "is_valid": False,
+                    "language": language,
+                },
+            )
+        return DiagnosticResult.blocked(
+            agent_message=(
+                "Code verification could not be completed due to an internal error."
+            ),
+            developer_fields={
+                "constraint_id": CONSTRAINT_EXECUTION_ERROR,
+                "is_safe": False,
+                "is_valid": False,
+                "error_type": type(exc).__name__,
+                "language": language,
+            },
         )
 
     def _build_evidence(
@@ -616,6 +649,9 @@ class CodeVerifier:
 
     def _check_python(self, code: str) -> List[SecurityIssue]:
         """Check Python code for security issues."""
+        # The AST checks share one parse and one walk of it; code that does
+        # not parse stops here.
+        nodes = list(ast.walk(self._parse_python(code)))
         issues = []
         lines = code.split('\n')
         
@@ -668,9 +704,7 @@ class CodeVerifier:
                         line_number=line_num
                     ))
 
-        # The AST checks share one parse.
-        tree = self._parse_python(code)
-        issues.extend(self._check_python_critical_builtins(code, tree))
+        issues.extend(self._check_python_critical_builtins(nodes))
 
         # A subprocess call that pipes curl/wget output into a shell, including
         # across lines. Linear scan (no backtracking regex) over the full code.
@@ -683,7 +717,7 @@ class CodeVerifier:
             issues.append(issue)
 
         # Process execution reached through an alias, which the line scan cannot see.
-        for issue in self._check_python_process_ast(tree):
+        for issue in self._check_python_process_ast(nodes):
             if any(
                 i.issue_type == issue.issue_type
                 and i.line_number == issue.line_number
@@ -693,7 +727,7 @@ class CodeVerifier:
             issues.append(issue)
 
         # AST-based subprocess checks to catch nested expression forms that regex can miss.
-        for issue in self._check_python_subprocess_ast(tree):
+        for issue in self._check_python_subprocess_ast(nodes):
             if any(
                 i.issue_type == issue.issue_type
                 and i.line_number == issue.line_number
@@ -719,12 +753,14 @@ class CodeVerifier:
         return issues
 
     @staticmethod
-    def _parse_python(code: str) -> Optional[ast.AST]:
-        """The module's AST, or None for code that does not parse."""
+    def _parse_python(code: str) -> ast.AST:
+        """The module's AST. Code that does not parse raises
+        _UnparseablePython, which verify_code turns into BLOCKED: the AST
+        checks cannot run on it, so it is not certified."""
         try:
             return ast.parse(code)
-        except SyntaxError:
-            return None
+        except (SyntaxError, ValueError) as exc:  # ValueError: null bytes on Python 3.10
+            raise _UnparseablePython() from exc
 
     def _process_execution_issue(self, pattern: str, line_number: Optional[int]) -> SecurityIssue:
         return SecurityIssue(
@@ -765,12 +801,12 @@ class CodeVerifier:
         return ".".join(reversed(parts))
 
     @staticmethod
-    def _import_aliases(tree: ast.AST) -> tuple[Dict[str, str], List[str]]:
+    def _import_aliases(nodes: List[ast.AST]) -> tuple[Dict[str, str], List[str]]:
         """Names bound by imports, mapped to the dotted name they stand for,
         and the modules star-imported."""
         aliases: Dict[str, str] = {}
         star_modules: List[str] = []
-        for node in ast.walk(tree):
+        for node in nodes:
             if isinstance(node, ast.Import):
                 aliases.update(CodeVerifier._import_binding(alias) for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
@@ -789,7 +825,7 @@ class CodeVerifier:
         top = alias.name.split(".")[0]
         return top, top
 
-    def _check_python_critical_builtins(self, code: str, tree: Optional[ast.AST]) -> List[SecurityIssue]:
+    def _check_python_critical_builtins(self, nodes: List[ast.AST]) -> List[SecurityIssue]:
         """Flag the critical builtins as names, not substrings (#534).
 
         On the AST:
@@ -797,27 +833,23 @@ class CodeVerifier:
           import elsewhere binds to it: imports are not scoped or ordered here,
           so ``exec(x)`` stays refused beside ``from re import compile as exec``;
         - an import from the builtins module (``import builtins as b``);
-        - an attribute read with the builtin's name, since the object may be
-          the builtins module reached another way: ``m.exec``, ``from m import
+        - an attribute read with the builtin's name, or one of the dunder
+          accessors (``__getattribute__``), since the object may be the
+          builtins module reached another way: ``m.exec``, ``from m import
           exec as run`` and the match pattern ``case object(exec=run)``. The
           one exception is ``re.compile`` on a name every import binds to
           ``re`` and nothing rebinds (_imported_re_names);
-        - a string holding the name as a whole identifier, since
+        - a string holding one of these names as a whole identifier, since
           ``vars(module)["exec"]`` reaches it by string.
-        Comments, and longer names such as ``execute``, ``evaluate`` and
-        ``compile_report``, are not matches. Code that does not parse is
-        scanned for the names as whole identifiers instead.
+        Comments, longer names such as ``execute``, ``evaluate`` and
+        ``compile_report``, and a class or module defining ``__getattr__``
+        are not matches.
         """
-        if tree is None:
-            return [
-                self._critical_builtin_issue(match.group(1), line_num)
-                for line_num, line in enumerate(code.split("\n"), 1)
-                for match in self._CRITICAL_BUILTIN_NAME.finditer(line)
-            ]
-
         found: List[tuple[str, int]] = []
         compile_attributes: List[ast.Attribute] = []
-        for node in ast.walk(tree):
+        for node in nodes:
+            if type(node) not in self._REFERENCE_NODE_TYPES:
+                continue
             name = self._critical_builtin_reference(node)
             if name == "compile" and isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
                 compile_attributes.append(node)
@@ -825,7 +857,7 @@ class CodeVerifier:
                 found.append((name, node.lineno))
         # Only code with a name.compile pays for the walk that finds re.
         if compile_attributes:
-            safe_re = self._imported_re_names(tree)
+            safe_re = self._imported_re_names(nodes)
             found.extend(
                 ("compile", node.lineno) for node in compile_attributes if node.value.id not in safe_re
             )
@@ -837,9 +869,9 @@ class CodeVerifier:
         if isinstance(node, ast.Name):
             return node.id if node.id in self._CRITICAL_NAMES else None
         if isinstance(node, ast.Attribute):
-            return node.attr if node.attr in self._CRITICAL_NAMES else None
+            return node.attr if node.attr in self._ATTRIBUTE_READ_NAMES else None
         if isinstance(node, ast.MatchClass):
-            return next((attr for attr in node.kwd_attrs if attr in self._CRITICAL_NAMES), None)
+            return next((attr for attr in node.kwd_attrs if attr in self._ATTRIBUTE_READ_NAMES), None)
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             return self._import_reference(node)
         if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
@@ -861,13 +893,13 @@ class CodeVerifier:
                 (alias.name for alias in node.names if alias.name.split(".")[0] in cls.PYTHON_BUILTIN_MODULES),
                 None,
             )
-        critical = next((alias.name for alias in node.names if alias.name in cls._CRITICAL_NAMES), None)
+        critical = next((alias.name for alias in node.names if alias.name in cls._ATTRIBUTE_READ_NAMES), None)
         if critical or node.level or node.module not in cls.PYTHON_BUILTIN_MODULES:
             return critical
         return node.module
 
     @classmethod
-    def _imported_re_names(cls, tree: ast.AST) -> set:
+    def _imported_re_names(cls, nodes: List[ast.AST]) -> set:
         """Names every import binds to the ``re`` module and nothing rebinds.
 
         Empty when the code can rebind a name without an assignment the AST
@@ -876,7 +908,7 @@ class CodeVerifier:
         """
         bindings: Dict[str, set] = {}
         rebound = set()
-        for node in ast.walk(tree):
+        for node in nodes:
             if cls._writes_namespace(node):
                 return set()
             for bound, module in cls._import_targets(node):
@@ -922,6 +954,14 @@ class CodeVerifier:
         return {value for value in (getattr(node, "name", None), getattr(node, "rest", None)) if isinstance(value, str)}
 
     def _critical_builtin_issue(self, name: str, line_number: Optional[int]) -> SecurityIssue:
+        if name in self.PYTHON_ATTRIBUTE_ACCESSORS:
+            return SecurityIssue(
+                severity="CRITICAL",
+                issue_type="dangerous_attribute",
+                pattern=name,
+                description=f"Dangerous attribute access: {name}",
+                line_number=line_number,
+            )
         return SecurityIssue(
             severity="CRITICAL",
             issue_type="dangerous_function",
@@ -933,7 +973,7 @@ class CodeVerifier:
             recommendation="Remove or sandbox this operation",
         )
 
-    def _check_python_process_ast(self, tree: Optional[ast.AST]) -> List[SecurityIssue]:
+    def _check_python_process_ast(self, nodes: List[ast.AST]) -> List[SecurityIssue]:
         """Flag process-execution and file/network calls, resolving import aliases.
 
         Catches what the line scan cannot: ``import subprocess as sp;
@@ -942,12 +982,9 @@ class CodeVerifier:
         backend modules ``posix``/``nt``, the builtin ``open``, and file/network
         sinks reached through an alias (GHSA-4phf).
         """
-        if tree is None:
-            return []
-
-        aliases, star_modules = self._import_aliases(tree)
+        aliases, star_modules = self._import_aliases(nodes)
         issues: List[SecurityIssue] = []
-        for node in ast.walk(tree):
+        for node in nodes:
             name = self._dotted_name(node.func) if isinstance(node, ast.Call) else None
             if not name:
                 continue
@@ -993,13 +1030,10 @@ class CodeVerifier:
         fn_hit = next((c for c in candidates if self._is_file_network(c)), None)
         return self._file_network_issue(fn_hit, lineno) if fn_hit else None
 
-    def _check_python_subprocess_ast(self, tree: Optional[ast.AST]) -> List[SecurityIssue]:
+    def _check_python_subprocess_ast(self, nodes: List[ast.AST]) -> List[SecurityIssue]:
         """Detect subprocess curl/wget pipe-to-shell patterns using AST."""
-        if tree is None:
-            return []
-
         issues: List[SecurityIssue] = []
-        for node in ast.walk(tree):
+        for node in nodes:
             if not isinstance(node, ast.Call):
                 continue
 

@@ -5,7 +5,8 @@ so ``cur.execute(...)``, ``model.evaluate(x)`` and ``re.compile(...)`` were
 refused as ``dangerous_function``. The builtins are now matched on the AST:
 as names, as attributes (the object may be the builtins module reached
 another way) and in strings, with ``re.compile`` on an imported ``re`` the
-one attribute admitted.
+one attribute admitted. Python that does not parse is BLOCKED, since the
+AST checks cannot run on it.
 """
 
 import pytest
@@ -28,6 +29,10 @@ def _verify(code):
     "# we never call eval here\nx = 1",
     "my_getattr_helper = 1",
     "from ast import literal_eval\nvalue = literal_eval(s)",
+    # Defining the dunder accessors is not reading them.
+    "class Proxy:\n    def __getattr__(self, name):\n        return 1",
+    "def __getattr__(name):\n    return 1",
+    "# Proxy overrides __setattr__ here\nx = 1",
 ])
 def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     assert _verify(code) == (True, [])
@@ -87,14 +92,14 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("m.__getattr__(n)(payload)", "__getattr__"),
     ("m.__setattr__(n, v)", "__setattr__"),
     ("m.__delattr__(n)", "__delattr__"),
+    ('vars(object)["__getattribute__"](m, n)', "__getattribute__"),
+    ("match m:\n    case object(__getattribute__=get):\n        get(n)", "__getattribute__"),
     # Longer names that also run or compile code, or look it up by name.
     ("import six\nsix.exec_(src)", "exec_"),
     ("from six import exec_\nexec_(src)", "exec_"),
     ("spec.loader.exec_module(mod)", "exec_module"),
     ("import codeop\nc = codeop.compile_command(src)", "compile_command"),
     ("import inspect\nf = inspect.getattr_static(m, n)", "getattr_static"),
-    # Code that does not parse is scanned for whole identifiers.
-    ("exec(x", "exec"),
 ])
 def test_the_critical_builtins_are_still_refused(code, pattern):
     is_valid, issues = _verify(code)
@@ -104,5 +109,11 @@ def test_the_critical_builtins_are_still_refused(code, pattern):
                        if issue_type in {"dangerous_function", "dangerous_attribute"}}
 
 
-def test_code_that_does_not_parse_is_not_read_by_substring():
-    assert ("dangerous_function", "exec") not in _verify("cur.execute(x")[1]
+@pytest.mark.parametrize("code", ["exec(x", "cur.execute(x", "x = (", "def f(:\n    pass", "x = 1\x00"])
+def test_python_that_does_not_parse_is_blocked(code):
+    # The AST checks cannot run on it, so it is not certified either way.
+    result = CodeVerifier().verify_code(code, "python")
+
+    assert result.status.value == "BLOCKED"
+    assert result.developer_fields["constraint_id"] == "code_verifier.parse_error"
+    assert result.developer_fields["is_valid"] is False

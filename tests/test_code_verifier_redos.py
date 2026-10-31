@@ -28,13 +28,24 @@ def test_detector_scales_near_linearly():
 def test_non_matching_subprocess_input_stays_fast():
     verifier = CodeVerifier()
     # Integration coverage: the public path handles the worst-case fragment
-    # quickly (the old chained-regex froze here).
-    code = "subprocess.run(curl a|" * 4000
+    # quickly (the old chained-regex froze here). Each fragment is a string
+    # literal, so the code parses and every check runs on it (#534).
+    code = '"subprocess.run(curl a|"\n' * 4000
     start = time.perf_counter()
     result = verifier.verify_code(code, language="python")
     assert time.perf_counter() - start < 2.0
     # subprocess. is still CRITICAL via process execution.
     assert result.developer_fields["critical_count"] >= 1
+
+
+def test_unparseable_worst_case_fragment_is_blocked_fast():
+    verifier = CodeVerifier()
+    code = "subprocess.run(curl a|" * 4000
+    start = time.perf_counter()
+    result = verifier.verify_code(code, language="python")
+    assert time.perf_counter() - start < 2.0
+    assert result.status.value == "BLOCKED"
+    assert result.developer_fields["constraint_id"] == "code_verifier.parse_error"
 
 
 def test_curl_pipe_shell_still_flagged_across_lines():

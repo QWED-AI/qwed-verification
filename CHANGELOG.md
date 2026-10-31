@@ -377,12 +377,16 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     `ast.literal_eval` is admitted.
   - `__self__` is a dangerous attribute, as `__dict__` and `__globals__`
     are: on a builtin function it is the builtins module, so
-    `vars(print.__self__)["ex" + "ec"]` was admitted. So are
-    `__getattribute__`, `__getattr__`, `__setattr__` and `__delattr__`,
-    which reach an attribute by name as `getattr` and `setattr` do.
-  - Code that does not parse is scanned for the names as whole identifiers.
-  - The Python AST checks share one parse of the code instead of parsing it
-    once each.
+    `vars(print.__self__)["ex" + "ec"]` was admitted.
+  - `__getattribute__`, `__getattr__`, `__setattr__` and `__delattr__`,
+    which reach an attribute by name as `getattr` and `setattr` do, are
+    refused when read as an attribute or named in a string, as the builtins
+    are. A class or module that defines `__getattr__` is admitted.
+  - Python that does not parse is BLOCKED with `code_verifier.parse_error`,
+    since the AST checks cannot run on it. It was certified safe unless a
+    line held one of the substring patterns.
+  - The Python AST checks share one parse and one walk of the code instead of
+    parsing and walking it once each.
 
 ## [8.0.0] - 2026-10-26
 
