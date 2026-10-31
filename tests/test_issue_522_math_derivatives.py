@@ -67,6 +67,9 @@ def client(isolated_audit_chain):
     # on PR #558).
     ("2x/diff(x**2, x)", 1),
     ("sqrt(diff(x**2, x)) 2", 2 * sympy.sqrt(2 * x)),
+    # ^ binds as SymPy reads it, not with Python's XOR precedence (Sentry on
+    # PR #558): the derivative is not inside a power here.
+    ("diff(x^3, x) - 3*x^2", 0),
 ])
 def test_diff_and_derivative_are_evaluated(text, expected):
     assert safe_parse_expr(text) == expected
@@ -84,6 +87,8 @@ def test_diff_and_derivative_are_evaluated(text, expected):
     # on PR #558).
     "2^(diff(10000x, x, 1+0))^9",
     "diff(x**2, x)^(1/2) y",
+    # ^ on the Python path.
+    "2^(diff(10000*x, x))^9",
 ])
 def test_a_derivative_cannot_feed_an_eager_expansion(text):
     with pytest.raises(SafeParserError, match="A derivative cannot appear in a power"):
@@ -126,6 +131,9 @@ def test_the_derivative_order_is_bounded_across_the_expression(text):
     # Whatever stands before the differential (CodeRabbit on PR #558).
     "d(foo**2)/(-dfoo)",
     "x/(y*dfoo)",
+    # A subscripted variable (Gitar on PR #558).
+    "d(x_1^2)/dx_1",
+    "d/dx_1*x_1**2",
 ])
 def test_leibniz_notation_is_refused(text):
     with pytest.raises(DerivativeNotationError):

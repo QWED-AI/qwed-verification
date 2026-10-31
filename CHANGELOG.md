@@ -316,7 +316,8 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     symbolic, but it evaluates to a value first, so
     `2**(diff(10000*x, x)**9)` would have expanded `2**(10000**9)`. A
     reciprocal or a root (`2x/diff(x**2, x)`, `sqrt(diff(x**2, x))`) is
-    allowed, as it expands nothing.
+    allowed, as it expands nothing. `^` is read as SymPy reads it, so in
+    `diff(x^3, x) - 3*x^2` the derivative is not taken to be inside a power.
   - `==` reads as `=`, so `diff(x**2, x) == 2*x` is VERIFIED.
   - The domain check (#429) reads each evaluated derivative as well as the
     text, since a derivative can be singular where the text it
@@ -334,7 +335,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     - a name that starts with `d` and that the parser does not know (`dx`,
       `dtheta`, `d2y`, `dfoo`). The parser would split such a name into
       letters anyway, so `x/dist` is refused too. A name with `_`
-      (`distance_m`) is one symbol to SymPy, so it is not refused;
+      (`distance_m`) is one symbol to SymPy, so it is refused only when the
+      part after the `d` is a variable used beside it (`dx_1` next to
+      `x_1`);
     - a lone `d` that a denominator applies to a variable (`d(x)`, `d x`).
     - A name the parser knows that starts with `d` (`delta`, `diff`, or a
       caller's own symbol) is not a differential.

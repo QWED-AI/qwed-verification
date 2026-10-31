@@ -316,12 +316,23 @@ def _check_derivative_position(node: ast.AST) -> None:
     """The gates read a derivative as symbolic, but it evaluates first and
     can return a number: 2**(diff(10000*x, x)**9) is 2**(10000**9) (#522).
     Keep derivatives out of everything that expands eagerly."""
-    expands = (isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Pow, ast.BitXor))) or (
+    expands = (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)) or (
         isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
         and node.func.id in _EXACT_EXPANSION_CALLS
     )
     if expands and any(_is_derivative_call(child) for child in ast.walk(node)):
         raise SafeParserError(_DERIVATIVE_POSITION_MESSAGE)
+
+
+def _check_derivative_positions(expression: str) -> None:
+    """:func:`_check_derivative_position` over the expression with ^ read
+    as SymPy reads it. Python gives ^ the lowest precedence, so in
+    diff(x^3, x) - 3*x^2 the derivative would sit inside the XOR (Sentry
+    on PR #558); as ** it binds only x and 2."""
+    if not any(name in expression for name in _DERIVATIVE_CALLS):
+        return
+    for node in ast.walk(ast.parse(expression.replace("^", "**"), mode="eval")):
+        _check_derivative_position(node)
 
 
 # Stands in for diff/Derivative in the unevaluated cost parse. An undefined
@@ -559,7 +570,6 @@ def _run_cost_gates(tree: ast.AST) -> None:
         _check_pow_cost(node)
         _check_caret_chain_cost(node)
         _check_exact_expansion_call_cost(node)
-        _check_derivative_position(node)
 
 
 def _check_ast_safety(expression: str) -> None:
@@ -583,6 +593,7 @@ def _check_ast_safety(expression: str) -> None:
         _check_unevaluated_sympy_cost(expression)
         return
     _run_cost_gates(tree)
+    _check_derivative_positions(expression)
 
 
 _ASTRONOMICAL = float("inf")
@@ -915,10 +926,14 @@ def _leibniz_differential(expression: str, names: Dict[str, Any]) -> Optional[st
     lone_d = _DIVIDED_BY_LONE_D.search(expression)
     if lone_d:
         return lone_d.group()
-    for token in _IDENTIFIER.findall(expression):
-        # SymPy keeps a name with "_" whole (distance_m is one symbol), so
-        # only names it would split into letters are differentials.
-        if token.startswith("d") and len(token) > 1 and "_" not in token and token not in names:
+    tokens = _IDENTIFIER.findall(expression)
+    for token in tokens:
+        if not token.startswith("d") or len(token) == 1 or token in names:
+            continue
+        # SymPy keeps a name with "_" whole (distance_m is one symbol), so it
+        # is a differential only when its tail is a variable used beside it
+        # (dx_1 next to x_1, Gitar on PR #558).
+        if "_" not in token or token[1:] in tokens or token[1:] in names:
             return token
     return None
 
