@@ -95,14 +95,14 @@ _EXACT_EXPANSION_CALLS = frozenset({"factorial", "binomial"})
 # diff(diff(...)) cannot get around it.
 _MAX_DERIVATIVE_ORDER = 3
 
-# Leibniz notation (#522): d/dx(x^2), dy/dx, d^2y/dx^2. The parser would read
-# d and dx as symbols (d/dx(x^2) is x**3), so the claim it decides is not the
-# one written. Write diff(x^2, x) instead.
-_LEIBNIZ_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9_])\d*\s*d\s*(?:(?:\^|\*\*)\s*\d+|\d+)?\s*(?:[A-Za-z]\s*)?"
-    r"/\s*d\s*[A-Za-z](?![A-Za-z_])",
-    re.ASCII,
-)
+_DERIVATIVE_CALLS = frozenset({"diff", "Derivative"})
+
+# Leibniz notation (#522): d/dx(x^2), d(x^2)/dx, dy/dtheta, d^2y/dx^2. The
+# parser would read d and dx as symbols (d/dx(x^2) is x**3), so the claim it
+# decides is not the one written. Every form divides by a differential, a
+# "d" joined to a variable, so the denominator is what is matched: a "d"
+# name the parser knows (delta, diff) is not a differential.
+_LEIBNIZ_DENOMINATOR = re.compile(r"/\s*\(?\s*d(\s*)([A-Za-z]\w*)", re.ASCII)
 
 _DENYLIST_PATTERN = re.compile(
     r"(?:"
@@ -298,6 +298,41 @@ def _check_exact_expansion_call_cost(node: ast.AST) -> None:
             )
 
 
+_DERIVATIVE_POSITION_MESSAGE = (
+    "A derivative cannot appear in a power, factorial or binomial: its value "
+    "is only known once it is evaluated, so its expansion cannot be bounded"
+)
+
+
+def _is_derivative_call(node: ast.AST) -> bool:
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _DERIVATIVE_CALLS
+
+
+def _check_derivative_position(node: ast.AST) -> None:
+    """The gates read a derivative as symbolic, but it evaluates first and
+    can return a number: 2**(diff(10000*x, x)**9) is 2**(10000**9) (#522).
+    Keep derivatives out of everything that expands eagerly."""
+    expands = (isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Pow, ast.BitXor))) or (
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id in _EXACT_EXPANSION_CALLS
+    )
+    if expands and any(_is_derivative_call(child) for child in ast.walk(node)):
+        raise SafeParserError(_DERIVATIVE_POSITION_MESSAGE)
+
+
+def _check_unevaluated_derivative_position(expr: Any, expanding: bool = False) -> None:
+    """:func:`_check_derivative_position` on an unevaluated SymPy tree."""
+    if expanding and isinstance(expr, sympy.Derivative):
+        raise SafeParserError(_DERIVATIVE_POSITION_MESSAGE)
+    expanding = expanding or isinstance(expr, (sympy.Pow, sympy.factorial, sympy.binomial))
+    for arg in getattr(expr, "args", ()):
+        _check_unevaluated_derivative_position(arg, expanding)
+
+
+def _unevaluated_derivative(*args: Any, **_kwargs: Any) -> Any:
+    return sympy.Derivative(*args, evaluate=False)
+
+
 def _fold_exact(node: Any):
     """Fold an exact-number SymPy subtree to an int or Fraction WITHOUT letting
     SymPy evaluate it, raising the moment a power would exceed the expansion
@@ -477,8 +512,11 @@ def _check_unevaluated_sympy_cost(expression: str) -> None:
         # parse_expr(evaluate=False) raise, so use sympy's default namespace —
         # this call only inspects structure for cost, it does not feed the result
         # to the engine (safe_parse_expr re-parses with the hardened namespace).
+        # diff/Derivative stay unevaluated here (#522): evaluating them is
+        # what the order budget in the main parse bounds.
         expr = parse_expr(
             expression,
+            local_dict={"diff": _unevaluated_derivative, "Derivative": _unevaluated_derivative},
             transformations=transformations,
             evaluate=False,
         )
@@ -489,6 +527,7 @@ def _check_unevaluated_sympy_cost(expression: str) -> None:
         return
 
     check_sympy_expansion_cost(expr)
+    _check_unevaluated_derivative_position(expr)
 
 
 def _run_cost_gates(tree: ast.AST) -> None:
@@ -503,6 +542,7 @@ def _run_cost_gates(tree: ast.AST) -> None:
         _check_pow_cost(node)
         _check_caret_chain_cost(node)
         _check_exact_expansion_call_cost(node)
+        _check_derivative_position(node)
 
 
 def _check_ast_safety(expression: str) -> None:
@@ -853,6 +893,15 @@ class DerivativeNotationError(SafeParserError):
     """Leibniz notation (d/dx, dy/dx), refused rather than misread (#522)."""
 
 
+def _leibniz_differential(expression: str, names: Dict[str, Any]) -> Optional[str]:
+    """The first differential ``expression`` divides by, or None."""
+    for match in _LEIBNIZ_DENOMINATOR.finditer(expression):
+        spaced, variable = match.groups()
+        if spaced or "d" + variable not in names:
+            return match.group()
+    return None
+
+
 def safe_parse_expr(
     expression: str,
     *,
@@ -888,11 +937,11 @@ def safe_parse_expr(
         raise SafeParserError(
             f"Expression contains disallowed construct: {match.group()!r}"
         )
-    leibniz = _LEIBNIZ_PATTERN.search(stripped)
-    if leibniz:
-        raise DerivativeNotationError(f"{DERIVATIVE_NOTATION_MESSAGE}: {leibniz.group()!r}")
-    _check_ast_safety(stripped)
     local_dict = _build_safe_local_dict(extra_symbols)
+    leibniz = _leibniz_differential(stripped, local_dict)
+    if leibniz:
+        raise DerivativeNotationError(f"{DERIVATIVE_NOTATION_MESSAGE}: {leibniz!r}")
+    _check_ast_safety(stripped)
     if transformations is None:
         transformations = standard_transformations + (
             convert_xor,

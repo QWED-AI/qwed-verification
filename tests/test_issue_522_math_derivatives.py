@@ -25,6 +25,7 @@ from qwed_new.core.safe_parser import (
     SafeParserError,
     safe_parse_expr,
 )
+from qwed_new.core.verifier import identity_domains_match
 
 x, y = sympy.symbols("x y")
 
@@ -58,9 +59,26 @@ def client(isolated_audit_chain):
     ("2diff(x**2, x)", 4 * x),
     ("diff(x**4, x, 3)", 24 * x),
     ("diff(diff(x**4, x), x, 2)", 24 * x),
+    ("diff(x**2, x, 0)", x**2),
+    ("diff(x**2, x) y", 2 * x * y),
+    ("sqrt(diff(x**2, x))", sympy.sqrt(2 * x)),
 ])
 def test_diff_and_derivative_are_evaluated(text, expected):
     assert safe_parse_expr(text) == expected
+
+
+@pytest.mark.parametrize("text", [
+    # The gates read diff() as symbolic, but it evaluates first:
+    # 2**(diff(10000*x, x)**9) would be 2**(10000**9) (Greptile on PR #558).
+    "2**(diff(10000*x, x)**9)",
+    "diff(9**9999*x, x)**9999",
+    "2^(diff(10000x, x))^9",
+    "factorial(diff(10**6*x, x))",
+    "diff(x**2, x)**2",
+])
+def test_a_derivative_cannot_feed_an_eager_expansion(text):
+    with pytest.raises(SafeParserError, match="A derivative cannot appear in a power"):
+        safe_parse_expr(text)
 
 
 @pytest.mark.parametrize("text", [
@@ -83,15 +101,27 @@ def test_the_derivative_order_is_bounded_across_the_expression(text):
     "2d/dx(x^2)",
     "d / d x",
     "x + d/dt(t**2)",
+    # Gitar, CodeAnt, Greptile and CodeRabbit on PR #558.
+    "d(x^2)/dx",
+    "d(sin(x))/dx",
+    "d/dtheta(theta**2)",
+    "dy/dtheta",
+    "x/(dx)",
 ])
 def test_leibniz_notation_is_refused(text):
     with pytest.raises(DerivativeNotationError):
         safe_parse_expr(text)
 
 
-@pytest.mark.parametrize("text", ["d/2", "x*d/(2*d)", "d + x", "delta*x"])
+@pytest.mark.parametrize("text", [
+    "d/2", "x*d/(2*d)", "d + x", "delta*x", "x/delta", "x/diff(x**2, x)", "x/d*y",
+])
 def test_the_symbol_d_still_parses(text):
     safe_parse_expr(text)
+
+
+def test_a_caller_symbol_that_starts_with_d_is_not_a_differential():
+    assert safe_parse_expr("x/dt", extra_symbols={"dt": sympy.Symbol("dt")}) == x / sympy.Symbol("dt")
 
 
 @pytest.mark.parametrize(("expression", "status", "is_valid", "admission", "message"), [
@@ -112,6 +142,8 @@ def test_a_derivative_claim_is_decided(client, expression, status, is_valid, adm
     ("d/dx(x^2) = 2x", DERIVATIVE_NOTATION_MESSAGE),
     ("d/dx(x^2)", DERIVATIVE_NOTATION_MESSAGE),
     ("dy/dx = 2x", DERIVATIVE_NOTATION_MESSAGE),
+    ("d(x^2)/dx = 2x", DERIVATIVE_NOTATION_MESSAGE),
+    ("dy/dtheta == dy/dtheta", DERIVATIVE_NOTATION_MESSAGE),
     ("diff(x**5, x, 4) = 120*x", "Expression could not be parsed"),
     ("x <= 2", "Expression could not be parsed"),
     ("a = b = c", "Expression could not be parsed"),
@@ -134,6 +166,8 @@ def test_input_the_parser_refuses_is_a_parse_error(client, expression, message):
     "diff(1/x, x)*x**2 = -1",
     # The text is singular where the derivative is not: x**2/x is x.
     "diff(x**2/x, x) = 1",
+    # log is defined for x > 0 only, its derivative 1/x for x other than 0.
+    "diff(x*log(x), x) = log(x) + 1",
 ])
 def test_a_derivative_identity_that_holds_only_off_a_point_is_unverifiable(expression):
     dr = math_identity_result(expression)
@@ -146,11 +180,20 @@ def test_a_derivative_identity_that_holds_only_off_a_point_is_unverifiable(expre
     "diff(sqrt(x), x) = 1/(2*sqrt(x))",
     "diff(1/x, x) = -1/x**2",
     "diff(diff(x**4, x), x) = 12*x**2",
+    # A numeric multiplier excludes no point: 2*sqrt(x) and sqrt(x) are zero
+    # at the same x (Greptile on PR #558).
+    "2*diff(sqrt(x), x) = 1/sqrt(x)",
+    "2/(2*sqrt(x)) = 1/sqrt(x)",
 ])
 def test_a_derivative_identity_on_the_same_domain_is_verified(expression):
     dr = math_identity_result(expression)
 
     assert (dr.status.value, dr.developer_fields["is_valid"]) == ("VERIFIED", True)
+
+
+def test_a_derivative_the_domain_check_cannot_evaluate_has_no_known_domain():
+    # The AST reads "diff(x, x, 4)", but evaluating it exceeds the order budget.
+    assert identity_domains_match("diff(x, x, 4)", "0") is False
 
 
 def test_a_parse_error_does_not_echo_what_sympy_raised(client):

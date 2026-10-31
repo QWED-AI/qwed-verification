@@ -311,6 +311,10 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     (`diff(x^2, x)`, `diff(x**3, x, 2)`). The total derivative order in one
     expression is at most 3, nested calls included, since each order
     multiplies what `simplify` then has to work through.
+  - A derivative cannot appear in a power, `factorial` or `binomial`
+    (`diff(x**2, x)**2` is refused). The cost bounds (#353) read it as
+    symbolic, but it evaluates to a value first, so
+    `2**(diff(10000*x, x)**9)` would have expanded `2**(10000**9)`.
   - `==` reads as `=`, so `diff(x**2, x) == 2*x` is VERIFIED.
   - The domain check (#429) reads each evaluated derivative as well as the
     text, since a derivative can be singular where the text it
@@ -318,8 +322,14 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     x other than 0, so it is UNVERIFIABLE with
     `math.domain_restricted_identity`, while
     `diff(sqrt(x), x) = 1/(2*sqrt(x))` is VERIFIED.
-  - Leibniz notation (`d/dx`, `dy/dx`, `d^2y/dx^2`) is refused instead of
-    misread, with the message to write `diff(f, x)`.
+  - A non-zero numeric multiplier in a denominator no longer counts as part
+    of its singular factor, so `2/(2*sqrt(x)) = 1/sqrt(x)` and
+    `2*diff(sqrt(x), x) = 1/sqrt(x)` are VERIFIED, not UNVERIFIABLE.
+  - Leibniz notation (`d/dx`, `dy/dx`, `d(x^2)/dx`, `dy/dtheta`,
+    `d^2y/dx^2`) is refused instead of misread, with the message to write
+    `diff(f, x)`. Every form divides by a differential, a `d` joined to a
+    variable, so that is what is matched; a name the parser knows that
+    starts with `d` (`delta`, `diff`, or a caller's own symbol) is not one.
   - Input the parser refuses is BLOCKED with `math.parse_error` and
     "Expression could not be parsed", as SQL and schema parse errors are, not
     with `api.math.execution_error`. The parser's own text is not returned.

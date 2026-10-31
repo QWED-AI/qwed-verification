@@ -449,14 +449,7 @@ def _singular_factors(expression: str) -> Optional[frozenset]:
     expression = unicodedata.normalize("NFKC", expression).strip()
     parsed = _parse_domain_text(expression)
     if parsed is None:
-        # Unreadable text can only be trusted to have no singular points
-        # when it has no division, power or restricted function at all.
-        names = _text_names(expression)
-        if names & (_DOMAIN_RESTRICTED_FUNCTIONS | _DERIVATIVE_FUNCTIONS) and names - _NON_SYMBOL_NAMES:
-            return None
-        if any(token in expression for token in ("/", "%", "**", "^")):
-            return None
-        return frozenset()
+        return _unparsed_singular_factors(expression)
     normalized, nodes = parsed
     names = _ast_names(nodes)
     # A closed constant (factorial(5), log(1), tan(pi/4)) has no domain to
@@ -475,17 +468,38 @@ def _singular_factors(expression: str) -> Optional[frozenset]:
         if denominator_factors is None:
             return None
         factors |= denominator_factors
+    derivative_factors = _derivative_singular_factors(normalized, nodes)
+    if derivative_factors is None:
+        return None
+    return frozenset(factors | derivative_factors)
+
+
+def _unparsed_singular_factors(expression: str) -> Optional[frozenset]:
+    """Unreadable text can only be trusted to have no singular points when
+    it has no division, power, restricted function or derivative at all."""
+    names = _text_names(expression)
+    if names & (_DOMAIN_RESTRICTED_FUNCTIONS | _DERIVATIVE_FUNCTIONS) and names - _NON_SYMBOL_NAMES:
+        return None
+    if any(token in expression for token in ("/", "%", "**", "^")):
+        return None
+    return frozenset()
+
+
+def _derivative_singular_factors(normalized: str, nodes: List[ast.AST]) -> Optional[set]:
+    """The singular factors of every evaluated derivative in the text (#522)."""
+    factors = set()
     for node in nodes:
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _DERIVATIVE_FUNCTIONS:
-            try:
-                derivative = str(safe_parse_expr(ast.get_source_segment(normalized, node)))
-            except ValueError:
-                return None
-            derivative_factors = _singular_factors(derivative)
-            if derivative_factors is None:
-                return None
-            factors |= derivative_factors
-    return frozenset(factors)
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _DERIVATIVE_FUNCTIONS):
+            continue
+        try:
+            derivative = str(safe_parse_expr(ast.get_source_segment(normalized, node)))
+        except ValueError:
+            return None
+        derivative_factors = _singular_factors(derivative)
+        if derivative_factors is None:
+            return None
+        factors |= derivative_factors
+    return factors
 
 
 def _ast_names(nodes: List[ast.AST]) -> set:
@@ -590,7 +604,9 @@ def _denominator_factors(denominator: Any) -> Optional[set]:
         return set()
     symbols = sorted(denominator.free_symbols, key=str)
     if not denominator.is_polynomial(*symbols):
-        return {denominator}
+        # A non-zero numeric multiplier excludes no point: 2*sqrt(x) and
+        # sqrt(x) are zero at the same x (Greptile on PR #558).
+        return {denominator.as_coeff_Mul()[1]}
     degree = _polynomial_degree_bound(denominator, set(symbols))
     if degree is None or degree > _MAX_POLYNOMIAL_DEGREE:
         return None
