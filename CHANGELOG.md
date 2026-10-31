@@ -329,16 +329,20 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     `2*diff(sqrt(x), x) = 1/sqrt(x)` are VERIFIED, not UNVERIFIABLE.
   - Leibniz notation (`d/dx`, `dy/dx`, `d(x^2)/dx`, `dy/dtheta`,
     `dy/(2*dx)`, `d/d(x)(x^2)`, `d^2y/dx^2`) is refused instead of misread,
-    with the message to write `diff(f, x)`. Two shapes are matched: a name
-    that is `d` joined to a symbol the parser knows (`dx`, `dtheta`, `d2y`),
-    and a lone `d` that a denominator applies to a variable (`d(x)`,
-    `d x`). A name the parser knows that starts with `d` (`delta`, `diff`,
-    or a caller's own symbol) is not a differential.
+    with the message to write `diff(f, x)`. Three shapes are matched:
+    - a name that is `d` joined to a symbol the parser knows (`dx`,
+      `dtheta`, `d2y`);
+    - a denominator that starts with a `d` name the parser does not know
+      (`d(foo**2)/dfoo`, `x/(2*dfoo)`; the parser would split such a name
+      into letters anyway);
+    - a lone `d` that a denominator applies to a variable (`d(x)`, `d x`).
+    - A name the parser knows that starts with `d` (`delta`, `diff`, or a
+      caller's own symbol) is not a differential.
   - Input the parser refuses is BLOCKED with `math.parse_error` and
     "Expression could not be parsed", as SQL and schema parse errors are, not
     with `api.math.execution_error`. The parser's own text is not returned.
-    A batch math item the parser refuses still fails with the parser's
-    error, as before.
+    A batch math item the parser refuses gets the same BLOCKED result; it
+    was a failed item carrying the parser's error text.
 
 ## [8.0.0] - 2026-10-26
 

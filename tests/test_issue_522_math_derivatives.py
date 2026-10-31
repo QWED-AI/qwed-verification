@@ -17,6 +17,7 @@ import sympy
 from fastapi.testclient import TestClient
 
 from qwed_new.api.main import app, get_current_tenant, get_session
+from qwed_new.core import verifier
 from qwed_new.core.batch import BatchItem, BatchVerificationService, VerificationType
 from qwed_new.core.math_identity import math_identity_result
 from qwed_new.core.safe_parser import (
@@ -118,6 +119,10 @@ def test_the_derivative_order_is_bounded_across_the_expression(text):
     "d/d(x)(x^2)",
     "dy/(2*dx)",
     "dy/2dx",
+    # A variable the parser does not know (CodeRabbit on PR #558).
+    "d(foo**2)/dfoo",
+    "1/delta + d(foo**2)/dfoo",
+    "x/(2*dfoo)",
 ])
 def test_leibniz_notation_is_refused(text):
     with pytest.raises(DerivativeNotationError):
@@ -207,6 +212,21 @@ def test_a_derivative_the_domain_check_cannot_evaluate_has_no_known_domain():
     assert identity_domains_match("diff(x, x, 4)", "0") is False
 
 
+def test_a_derivative_the_domain_check_cannot_reread_has_no_known_domain(monkeypatch):
+    # SymPy's output for diff(x**2, x) is "2*x"; if re-reading it hits a
+    # parser limit, the domain is unknown, not an error (Sentry on PR #558).
+    original = verifier._singular_factors
+
+    def refuse_the_derivative(expression):
+        if expression == "2*x":
+            raise SafeParserError("limit")
+        return original(expression)
+
+    monkeypatch.setattr(verifier, "_singular_factors", refuse_the_derivative)
+
+    assert identity_domains_match("diff(x**2, x)", "2*x + 0") is False
+
+
 def test_a_parse_error_does_not_echo_what_sympy_raised(client):
     with patch("qwed_new.core.safe_parser.parse_expr", side_effect=ValueError("SENSITIVE SYMPY TEXT")):
         result = client.post("/verify/math", json={"expression": "1+1"}).json()
@@ -231,3 +251,20 @@ def test_a_batch_item_reads_diff_as_the_route_does(client):
 
     assert (batch["status"], batch["is_valid"], batch["admission"]) == ("VERIFIED", True, "ADMIT")
     assert (batch["status"], batch["is_valid"]) == (route["status"], route["is_valid"])
+
+
+@pytest.mark.parametrize(("expression", "message"), [
+    ("d/dx(x^2) = 2x", DERIVATIVE_NOTATION_MESSAGE),
+    ("d/dx(x^2)", DERIVATIVE_NOTATION_MESSAGE),
+    ("x <= 2", "Expression could not be parsed"),
+])
+def test_a_batch_item_the_parser_refuses_is_a_parse_error_as_on_the_route(client, expression, message):
+    # It was a failed item carrying the parser's text (CodeRabbit on PR #558).
+    item = BatchItem(id="522", query=expression, verification_type=VerificationType.MATH)
+    batch = BatchVerificationService()._verify_batch_math(item)
+    route = client.post("/verify/math", json={"expression": expression}).json()
+
+    assert (batch["status"], batch["is_valid"], batch["admission"]) == ("BLOCKED", False, "BLOCKED")
+    assert (batch["constraint_id"], batch["agent_message"]) == ("math.parse_error", message)
+    assert (route["constraint_id"], route["agent_message"]) == ("math.parse_error", message)
+    assert "error" not in batch

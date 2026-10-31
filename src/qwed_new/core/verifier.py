@@ -493,9 +493,11 @@ def _derivative_singular_factors(normalized: str, nodes: List[ast.AST]) -> Optio
             continue
         try:
             derivative = str(safe_parse_expr(ast.get_source_segment(normalized, node)))
+            # Re-reading SymPy's output can meet a parser limit the input
+            # did not: the domain is then unknown (Sentry on PR #558).
+            derivative_factors = _singular_factors(derivative)
         except ValueError:
             return None
-        derivative_factors = _singular_factors(derivative)
         if derivative_factors is None:
             return None
         factors |= derivative_factors

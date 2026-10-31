@@ -366,27 +366,33 @@ class BatchVerificationService:
 
     def _verify_batch_math(self, item: BatchItem) -> Dict[str, Any]:
         """Verify a MATH batch item through the DiagnosticResult + attestation trust boundary (#271)."""
-        from qwed_new.core.math_identity import math_identity_result
-        from qwed_new.core.safe_parser import safe_parse_expr
+        from qwed_new.core.math_identity import math_identity_result, math_parse_error_result
+        from qwed_new.core.safe_parser import SafeParserError, safe_parse_expr
         from sympy import simplify
 
         expression = item.query.strip()
-        if "=" not in expression:
-            parsed = safe_parse_expr(expression)
-            simplified = simplify(parsed)
-            dr = DiagnosticResult.unverifiable(
-                "Expression simplified, but no equality or proof claim was provided",
-                developer_fields={"simplified": str(simplified), "type": "math", "is_valid": False, "query": expression},
-            )
-        else:
-            # The verdict /verify/math gives (#530): a claim proven false is
-            # VERIFIED with is_valid False (#437), an undecided one UNVERIFIABLE.
-            dr = math_identity_result(expression)
-            dr.developer_fields.update({
-                "query": expression,
-                "type": "math",
-                "diff": dr.developer_fields["simplified_difference"],
-            })
+        try:
+            if "=" not in expression:
+                parsed = safe_parse_expr(expression)
+                simplified = simplify(parsed)
+                dr = DiagnosticResult.unverifiable(
+                    "Expression simplified, but no equality or proof claim was provided",
+                    developer_fields={"simplified": str(simplified), "type": "math", "is_valid": False, "query": expression},
+                )
+            else:
+                # The verdict /verify/math gives (#530): a claim proven false is
+                # VERIFIED with is_valid False (#437), an undecided one UNVERIFIABLE.
+                dr = math_identity_result(expression)
+                dr.developer_fields.update({
+                    "query": expression,
+                    "type": "math",
+                    "diff": dr.developer_fields["simplified_difference"],
+                })
+        except SafeParserError as exc:
+            # As /verify/math (#522): refused input is BLOCKED with
+            # math.parse_error, not a failed item carrying the parser's text.
+            dr = math_parse_error_result(exc)
+            dr.developer_fields.update({"query": expression, "type": "math"})
 
         # As /verify/math: a VERIFIED identity is signed and its attestation
         # enforced, and is BLOCKED if signing fails (#271, #320). Admission is

@@ -99,12 +99,15 @@ _DERIVATIVE_CALLS = frozenset({"diff", "Derivative"})
 
 # Leibniz notation (#522): d/dx(x^2), d(x^2)/dx, dy/(2*dx), d/d(x)(x^2). The
 # parser would read d and dx as symbols (d/dx(x^2) is x**3), so the claim it
-# decides is not the one written. Two shapes give it away: a name that is "d"
-# joined to a symbol the parser knows (dx, dtheta, d2y, dx2), which it would
-# split into d*x, and a lone "d" a denominator applies to a variable (d(x),
-# d x). A "d" name the parser knows (delta, diff) is not a differential.
+# decides is not the one written. Three shapes give it away: a name that is
+# "d" joined to a symbol the parser knows (dx, dtheta, d2y, dx2), which it
+# would split into d*x; a denominator that starts with a "d" name the parser
+# does not know (/dfoo, /(2*dfoo)); and a lone "d" a denominator applies to
+# a variable (d(x), d x). A "d" name the parser knows (delta, diff) is not a
+# differential.
 _IDENTIFIER = re.compile(r"[A-Za-z_]\w*", re.ASCII)
 _DIVIDED_BY_LONE_D = re.compile(r"/\s*(?:\(\s*)?d\b\s*[(A-Za-z]", re.ASCII)
+_DENOMINATOR_D_NAME = re.compile(r"/[\s(]*(?:\d+(?:\.\d+)?[\s*]*)?(d[A-Za-z]\w*)", re.ASCII)
 
 _DENYLIST_PATTERN = re.compile(
     r"(?:"
@@ -913,6 +916,9 @@ def _leibniz_differential(expression: str, names: Dict[str, Any]) -> Optional[st
     lone_d = _DIVIDED_BY_LONE_D.search(expression)
     if lone_d:
         return lone_d.group()
+    for denominator in _DENOMINATOR_D_NAME.findall(expression):
+        if denominator not in names:
+            return denominator
     for token in _IDENTIFIER.findall(expression):
         if token.startswith("d") and token not in names \
                 and isinstance(names.get(token[1:].strip("0123456789")), Symbol):

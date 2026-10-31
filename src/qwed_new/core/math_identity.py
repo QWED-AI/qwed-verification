@@ -10,7 +10,12 @@ could not decide UNVERIFIABLE.
 from sympy import simplify
 
 from qwed_new.core.diagnostics import DiagnosticResult
-from qwed_new.core.safe_parser import safe_parse_expr
+from qwed_new.core.safe_parser import (
+    DERIVATIVE_NOTATION_MESSAGE,
+    DerivativeNotationError,
+    SafeParserError,
+    safe_parse_expr,
+)
 from qwed_new.core.verifier import (
     DISPROVEN_STATUS,
     DOMAIN_RESTRICTED_IDENTITY,
@@ -25,6 +30,17 @@ UNDEFINED_PART_IDENTITY = "math.undefined_part"
 # The parser refused the expression (#522): BLOCKED, as SQL and schema
 # parse errors are.
 MATH_PARSE_ERROR = "math.parse_error"
+
+
+def math_parse_error_result(error: SafeParserError) -> DiagnosticResult:
+    """BLOCKED with ``MATH_PARSE_ERROR`` for input the parser refused, shared
+    by /verify/math and batch math items. The parser's own text, which can
+    carry SymPy's, is not returned."""
+    message = (
+        DERIVATIVE_NOTATION_MESSAGE if isinstance(error, DerivativeNotationError)
+        else "Expression could not be parsed"
+    )
+    return DiagnosticResult.blocked(message, {"constraint_id": MATH_PARSE_ERROR, "is_valid": False})
 
 
 def math_identity_result(expression: str) -> DiagnosticResult:

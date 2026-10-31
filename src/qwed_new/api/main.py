@@ -21,12 +21,8 @@ from qwed_new.core.diagnostics import (
     admission_decision,
     merge_diagnostic_result,
 )
-from qwed_new.core.math_identity import MATH_PARSE_ERROR, math_identity_result
-from qwed_new.core.safe_parser import (
-    DERIVATIVE_NOTATION_MESSAGE,
-    DerivativeNotationError,
-    SafeParserError,
-)
+from qwed_new.core.math_identity import math_identity_result, math_parse_error_result
+from qwed_new.core.safe_parser import SafeParserError
 from qwed_new.api.verification_context_routes import router as verification_context_router
 
 # Configure logging
@@ -1162,11 +1158,7 @@ async def verify_math(
         if isinstance(e, SafeParserError):
             # Input the parser refused is the caller's to fix, not an
             # internal error (#522); SQL and schema use the same shape.
-            dr = DiagnosticResult.blocked(
-                DERIVATIVE_NOTATION_MESSAGE if isinstance(e, DerivativeNotationError)
-                else "Expression could not be parsed",
-                {"constraint_id": MATH_PARSE_ERROR, "is_valid": False},
-            )
+            dr = math_parse_error_result(e)
         else:
             dr = DiagnosticResult.blocked(
                 INTERNAL_VERIFICATION_ERROR,
