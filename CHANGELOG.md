@@ -371,9 +371,15 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     `vars()`, `locals()`, a frame's `f_globals` or `f_locals`, a star
     import). Still refused: `model.eval()`, an attribute named `eval`, and
     `from re import compile` followed by a bare `compile(...)`.
+  - Longer names the substring scan refused that also run, compile or look
+    up code stay refused, matched the same way: `exec_` (six, future),
+    `exec_module`, `compile_command` and `getattr_static`.
+    `ast.literal_eval` is admitted.
   - `__self__` is a dangerous attribute, as `__dict__` and `__globals__`
     are: on a builtin function it is the builtins module, so
-    `vars(print.__self__)["ex" + "ec"]` was admitted.
+    `vars(print.__self__)["ex" + "ec"]` was admitted. So are
+    `__getattribute__`, `__getattr__`, `__setattr__` and `__delattr__`,
+    which reach an attribute by name as `getattr` and `setattr` do.
   - Code that does not parse is scanned for the names as whole identifiers.
   - The Python AST checks share one parse of the code instead of parsing it
     once each.

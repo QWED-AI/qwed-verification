@@ -96,9 +96,18 @@ class CodeVerifier:
         {"eval", "exec", "compile", "__import__", "getattr", "setattr"}
     )
     PYTHON_BUILTIN_MODULES: ClassVar[frozenset] = frozenset({"builtins", "__builtin__"})
+    # Longer names the substring scan refused that also run, compile or look
+    # up code by name; they stay refused as whole identifiers.
+    PYTHON_CODE_EXECUTION_NAMES: ClassVar[dict] = {
+        "exec_": "Remote code execution via exec_() (six, future)",
+        "exec_module": "Module execution via a loader's exec_module()",
+        "compile_command": "Dynamic code compilation",
+        "getattr_static": "Dynamic attribute access",
+    }
+    _CRITICAL_NAMES: ClassVar[frozenset] = PYTHON_CRITICAL_BUILTINS | frozenset(PYTHON_CODE_EXECUTION_NAMES)
     # Whole identifiers, in strings and in code that does not parse.
     _CRITICAL_BUILTIN_NAME: ClassVar = re.compile(
-        r"(?<!\w)(eval|exec|compile|__import__|getattr|setattr)(?!\w)"
+        r"(?<!\w)(" + "|".join(sorted(_CRITICAL_NAMES)) + r")(?!\w)"
     )
     # Ways to write a namespace without an assignment the AST shows
     # (globals()["re"] = ...). Where code uses one, no name is trusted to
@@ -207,6 +216,8 @@ class CodeVerifier:
         "__builtins__", "__import__", "__code__", "__dict__",
         # A builtin function's __self__ is the builtins module (print.__self__).
         "__self__",
+        # getattr / setattr / delattr by another name.
+        "__getattribute__", "__getattr__", "__setattr__", "__delattr__",
     }
     
     # =========================================================================
@@ -824,11 +835,11 @@ class CodeVerifier:
     def _critical_builtin_reference(self, node: ast.AST) -> Optional[str]:
         """The critical builtin (or builtins module) ``node`` refers to."""
         if isinstance(node, ast.Name):
-            return node.id if node.id in self.PYTHON_CRITICAL_BUILTINS else None
+            return node.id if node.id in self._CRITICAL_NAMES else None
         if isinstance(node, ast.Attribute):
-            return node.attr if node.attr in self.PYTHON_CRITICAL_BUILTINS else None
+            return node.attr if node.attr in self._CRITICAL_NAMES else None
         if isinstance(node, ast.MatchClass):
-            return next((attr for attr in node.kwd_attrs if attr in self.PYTHON_CRITICAL_BUILTINS), None)
+            return next((attr for attr in node.kwd_attrs if attr in self._CRITICAL_NAMES), None)
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             return self._import_reference(node)
         if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
@@ -850,7 +861,7 @@ class CodeVerifier:
                 (alias.name for alias in node.names if alias.name.split(".")[0] in cls.PYTHON_BUILTIN_MODULES),
                 None,
             )
-        critical = next((alias.name for alias in node.names if alias.name in cls.PYTHON_CRITICAL_BUILTINS), None)
+        critical = next((alias.name for alias in node.names if alias.name in cls._CRITICAL_NAMES), None)
         if critical or node.level or node.module not in cls.PYTHON_BUILTIN_MODULES:
             return critical
         return node.module
@@ -915,7 +926,9 @@ class CodeVerifier:
             severity="CRITICAL",
             issue_type="dangerous_function",
             pattern=name,
-            description=self.PYTHON_CRITICAL.get(name, "Access to the builtins module"),
+            description=self.PYTHON_CRITICAL.get(
+                name, self.PYTHON_CODE_EXECUTION_NAMES.get(name, "Access to the builtins module")
+            ),
             line_number=line_number,
             recommendation="Remove or sandbox this operation",
         )

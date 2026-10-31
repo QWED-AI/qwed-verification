@@ -27,6 +27,7 @@ def _verify(code):
     'import re as r\np = r.compile("a+")',
     "# we never call eval here\nx = 1",
     "my_getattr_helper = 1",
+    "from ast import literal_eval\nvalue = literal_eval(s)",
 ])
 def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     assert _verify(code) == (True, [])
@@ -80,6 +81,18 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("from builtins import exec as run\ndef f():\n    from json import loads as run\nrun(payload)", "exec"),
     # The builtins module reached through a builtin function, with the name split.
     ('vars(print.__self__)["ex" + "ec"](payload)', "__self__"),
+    # getattr / setattr / delattr by their dunder names.
+    ("m.__getattribute__(n)(payload)", "__getattribute__"),
+    ("object.__getattribute__(m, n)(payload)", "__getattribute__"),
+    ("m.__getattr__(n)(payload)", "__getattr__"),
+    ("m.__setattr__(n, v)", "__setattr__"),
+    ("m.__delattr__(n)", "__delattr__"),
+    # Longer names that also run or compile code, or look it up by name.
+    ("import six\nsix.exec_(src)", "exec_"),
+    ("from six import exec_\nexec_(src)", "exec_"),
+    ("spec.loader.exec_module(mod)", "exec_module"),
+    ("import codeop\nc = codeop.compile_command(src)", "compile_command"),
+    ("import inspect\nf = inspect.getattr_static(m, n)", "getattr_static"),
     # Code that does not parse is scanned for whole identifiers.
     ("exec(x", "exec"),
 ])
