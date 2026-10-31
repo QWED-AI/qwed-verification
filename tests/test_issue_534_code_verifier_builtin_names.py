@@ -25,7 +25,6 @@ def _verify(code):
     "score = model.evaluate(x)",
     "def compile_report():\n    return 1\ncompile_report()",
     'import re as r\np = r.compile("a+")',
-    'from re import compile\np = compile("a+")',
     "# we never call eval here\nx = 1",
     "my_getattr_helper = 1",
 ])
@@ -56,6 +55,21 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ('import re\nre = print.__self__\nre.compile(payload, "", "exec")', "compile"),
     ('import re\ndef f(re):\n    return re.compile(p, "", "exec")', "compile"),
     ('import re\nimport builtins as re\nre.compile(p, "", "exec")', "compile"),
+    # ... or rebound through a namespace dict, or by setting re.compile.
+    ('import re\nglobals()["re"] = m\nre.compile(p, "<s>", "single")', "compile"),
+    ('import re\nglobals().update(re=m)\nre.compile(p, "<s>", "single")', "compile"),
+    ('import re\nimport sys\nsys._getframe().f_globals["re"] = m\nre.compile(p, "", "single")', "compile"),
+    ('import re\nfrom helpers import *\nre.compile(p, "", "single")', "compile"),
+    ('import re\nre.compile = f\nre.compile(p, "", "single")', "compile"),
+    # A bare name is the builtin whatever an import elsewhere binds to it:
+    # imports are not scoped or ordered here.
+    ('from re import compile\np = compile("a+")', "compile"),
+    ("exec(input())\nfrom re import compile as exec", "exec"),
+    ("def f():\n    from re import compile as eval\neval(payload)", "eval"),
+    ("def f():\n    import math as exec\nexec(payload)", "exec"),
+    ("from builtins import exec as run\ndef f():\n    from json import loads as run\nrun(payload)", "exec"),
+    # The builtins module reached through a builtin function, with the name split.
+    ('vars(print.__self__)["ex" + "ec"](payload)', "__self__"),
     # Code that does not parse is scanned for whole identifiers.
     ("exec(x", "exec"),
 ])
@@ -63,7 +77,8 @@ def test_the_critical_builtins_are_still_refused(code, pattern):
     is_valid, issues = _verify(code)
 
     assert is_valid is False
-    assert ("dangerous_function", pattern) in issues
+    assert pattern in {issue_pattern for issue_type, issue_pattern in issues
+                       if issue_type in {"dangerous_function", "dangerous_attribute"}}
 
 
 def test_code_that_does_not_parse_is_not_read_by_substring():

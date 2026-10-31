@@ -356,17 +356,25 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   `is_valid` false (`dangerous_function`). Parameterised SQL, the safe way to
   run a query, was refused.
   - `eval`, `exec`, `compile`, `__import__`, `getattr` and `setattr` are now
-    matched on the AST: as a name, called or not (`f = eval`), or one an
-    import resolves to the builtin (`from builtins import exec as run`); as
-    an attribute (`print.__self__.exec`), since the object may be the
-    builtins module reached another way; and in a string as a whole
-    identifier (`vars(print.__self__)["exec"]`). A reference to the builtins
-    module itself is refused too.
+    matched on the AST: as a name, called or not (`f = eval`), whatever an
+    import elsewhere binds to it, since imports are not read by scope or
+    order; as an attribute, since the object may be the builtins module
+    reached another way; and in a string as a whole identifier
+    (`vars(module)["exec"]`). An import from the builtins module
+    (`from builtins import exec as run`, `import builtins`) is refused too.
   - Admitted: longer names (`execute`, `evaluate`, `compile_report`),
-    comments, `from re import compile`, and `re.compile` on an imported `re`
-    that nothing rebinds. `model.eval()` is still refused, as an attribute
-    named `eval`.
+    comments, and `re.compile` on a name every import binds to `re`. That
+    exception is dropped when anything rebinds the name, sets an attribute
+    on it, or can write a namespace without an assignment (`globals()`,
+    `vars()`, `locals()`, a frame's `f_globals` or `f_locals`, a star
+    import). Still refused: `model.eval()`, an attribute named `eval`, and
+    `from re import compile` followed by a bare `compile(...)`.
+  - `__self__` is a dangerous attribute, as `__dict__` and `__globals__`
+    are: on a builtin function it is the builtins module, so
+    `vars(print.__self__)["ex" + "ec"]` was admitted.
   - Code that does not parse is scanned for the names as whole identifiers.
+  - The Python AST checks share one parse of the code instead of parsing it
+    once each.
 
 ## [8.0.0] - 2026-10-26
 
