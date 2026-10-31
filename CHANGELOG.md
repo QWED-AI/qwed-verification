@@ -360,20 +360,34 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     import elsewhere binds to it, since imports are not read by scope or
     order; as an attribute, since the object may be the builtins module
     reached another way, whether read as `m.exec`, by `from m import exec`
-    or by a match pattern (`case object(exec=run)`); and in a string as a
-    whole identifier (`vars(module)["exec"]`). An import of the builtins
-    module (`import builtins`) is refused too.
-  - Admitted: longer names (`execute`, `evaluate`, `compile_report`),
-    comments, and `re.compile` on a name every import binds to `re`. That
-    exception is dropped when anything rebinds the name, sets an attribute
-    on it or an attribute of that name on any object (`module.re = ...`),
-    or can write a namespace without an assignment (`globals()`,
-    `vars()`, `locals()`, a frame's `f_globals` or `f_locals`, a star
-    import). Still refused: `model.eval()`, an attribute named `eval`, and
+    or by a match pattern (`case object(exec=run)`); and anywhere in a
+    string (`vars(module)["exec"]`), since a string can be sliced into the
+    name (`"xexec"[1:]`). An import of the builtins module
+    (`import builtins`) is refused too.
+  - Admitted: longer identifiers (`execute`, `evaluate`, `compile_report`),
+    comments, and `re.compile(pattern, flags)` on a name every import binds
+    to `re`. The builtin `compile` needs a filename and a mode, so it cannot
+    run in that shape; any other `re.compile` call, or `re.compile` not
+    called, is refused. The exception is also dropped when anything rebinds
+    the name, sets an attribute on it or an attribute of that name on any
+    object (`module.re = ...`), or can rebind it without an assignment: a
+    namespace (`globals()`, `vars()`, `locals()`, a frame's `f_globals` or
+    `f_locals`, a star import) or the import system (`sys.modules`,
+    `sys.meta_path`, `sys.path_hooks`, `sys.path_importer_cache`). Still
+    refused: `model.eval()`, an attribute named `eval`, and
     `from re import compile` followed by a bare `compile(...)`.
-  - Longer names the substring scan refused that also run, compile or look
-    up code stay refused, matched the same way: `exec_` (six, future),
-    `exec_module`, `compile_command` and `getattr_static`.
+  - Longer names the substring scan refused that also run or compile code,
+    start a process or look up an attribute by name stay refused, matched
+    the same way: `exec_` (six, future), `exec_module`, `exec_builtin`,
+    `exec_dynamic`, `_exec`, `load_compiled`, `runeval`, `evalfile`,
+    `_evaluate`, `_eval_type`, `compile_command`, `_compile`,
+    `_maybe_compile`, `_try_compile`, `_compile_source`,
+    `_compile_bytecode`, `compile_file`, `compile_dir`, `compile_path`,
+    `subprocess_exec`, `create_subprocess_exec`, `fork_exec`, `_execvpe`,
+    `_execute_child`, `set_executable`, `getattr_static` and
+    `_getattribute`. `loop.subprocess_shell`, and `create_subprocess_shell`
+    imported from `asyncio.subprocess`, which the substring scan admitted,
+    are refused too.
     `ast.literal_eval` is admitted.
   - `__self__` is a dangerous attribute, as `__dict__` and `__globals__`
     are: on a builtin function it is the builtins module, so

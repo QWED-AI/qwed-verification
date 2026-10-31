@@ -4,9 +4,9 @@ The line scan matched ``exec``, ``eval`` and ``compile`` anywhere in a line,
 so ``cur.execute(...)``, ``model.evaluate(x)`` and ``re.compile(...)`` were
 refused as ``dangerous_function``. The builtins are now matched on the AST:
 as names, as attributes (the object may be the builtins module reached
-another way) and in strings, with ``re.compile`` on an imported ``re`` the
-one attribute admitted. Python that does not parse is BLOCKED, since the
-AST checks cannot run on it.
+another way) and in strings, with ``re.compile(pattern, flags)`` on an
+imported ``re`` the one attribute admitted. Python that does not parse is
+BLOCKED, since the AST checks cannot run on it.
 """
 
 import pytest
@@ -33,6 +33,10 @@ def _verify(code):
     "class Proxy:\n    def __getattr__(self, name):\n        return 1",
     "def __getattr__(name):\n    return 1",
     "# Proxy overrides __setattr__ here\nx = 1",
+    # re.compile with its flags, by position or keyword, beside sys.
+    'import re\np = re.compile(r"a+", re.I)',
+    'import re\np = re.compile(pattern=r"a+", flags=re.I)',
+    'import re, sys\nprint(sys.argv)\np = re.compile(r"a+")',
 ])
 def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     assert _verify(code) == (True, [])
@@ -57,20 +61,33 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ('vars(print.__self__)["exec"](payload)', "exec"),
     ('print.__self__.compile(payload, "", "exec")', "compile"),
     # re.compile is admitted only on an imported re that is never rebound.
-    ('re = print.__self__\nre.compile(payload, "", "exec")', "compile"),
-    ('import re\nre = print.__self__\nre.compile(payload, "", "exec")', "compile"),
-    ('import re\ndef f(re):\n    return re.compile(p, "", "exec")', "compile"),
-    ('import re\nimport builtins as re\nre.compile(p, "", "exec")', "compile"),
+    ('re = print.__self__\nre.compile(payload)', "compile"),
+    ('import re\nre = m\nre.compile(p)', "compile"),
+    ('import re\ndef f(re):\n    return re.compile(p)', "compile"),
+    ('import re\nimport builtins as re\nre.compile(p)', "compile"),
     # ... or rebound through a namespace dict, or by setting re.compile.
-    ('import re\nglobals()["re"] = m\nre.compile(p, "<s>", "single")', "compile"),
-    ('import re\nglobals().update(re=m)\nre.compile(p, "<s>", "single")', "compile"),
-    ('import re\nimport sys\nsys._getframe().f_globals["re"] = m\nre.compile(p, "", "single")', "compile"),
-    ('import re\nfrom helpers import *\nre.compile(p, "", "single")', "compile"),
-    ('import re\nre.compile = f\nre.compile(p, "", "single")', "compile"),
-    ('import re, sys\nsys.modules.get(__name__).re = m\nre.compile(p, "", "single")', "compile"),
-    ('import re, __main__\n__main__.re = m\nre.compile(p, "", "single")', "compile"),
+    ('import re\nglobals()["re"] = m\nre.compile(p)', "compile"),
+    ('import re\nglobals().update(re=m)\nre.compile(p)', "compile"),
+    ('import re\nimport sys\nsys._getframe().f_globals["re"] = m\nre.compile(p)', "compile"),
+    ('import re\nfrom helpers import *\nre.compile(p)', "compile"),
+    ('import re\nre.compile = f\nre.compile(p)', "compile"),
+    ('import re, sys\nsys.modules.get(__name__).re = m\nre.compile(p)', "compile"),
+    ('import re, __main__\n__main__.re = m\nre.compile(p)', "compile"),
+    # ... or supplied by the import system before import re reads it.
+    ('import sys\nsys.modules.update({"re": m})\nimport re\nre.compile(p)', "compile"),
+    ('from sys import modules as cache\ncache.update(re=m)\nimport re\nre.compile(p)', "compile"),
+    ('import sys\nsys.meta_path.insert(0, finder)\nimport re\nre.compile(p)', "compile"),
+    ('import sys\nsys.path_hooks.insert(0, hook)\nimport re\nre.compile(p)', "compile"),
+    ('import sys\nsys.path_importer_cache.clear()\nimport re\nre.compile(p)', "compile"),
     # Setting compile on the re module is itself an attribute named compile.
-    ('import re, sys\nsys.modules.get("re").compile = f\nre.compile(p, "", "single")', "compile"),
+    ('import re, sys\nsys.modules.get("re").compile = f\nre.compile(p)', "compile"),
+    # ... and only when called as re.compile(pattern, flags): the builtin
+    # compile cannot run in that shape, whatever re turns out to be.
+    ('import re\nre.compile(p, "<s>", "single")', "compile"),
+    ('import re\nre.compile(p, filename="<s>")', "compile"),
+    ('import re\nre.compile(*args)', "compile"),
+    ('import re\nre.compile(**kwargs)', "compile"),
+    ('import re\nc = re.compile\nc(p, "<s>", "single")', "compile"),
     # The builtin read as an attribute by a match pattern or a from-import.
     ("match m:\n    case object(exec=run):\n        run(payload)", "exec"),
     ("match m:\n    case object(eval=run):\n        run(payload)", "eval"),
@@ -86,6 +103,11 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("from builtins import exec as run\ndef f():\n    from json import loads as run\nrun(payload)", "exec"),
     # The builtins module reached through a builtin function, with the name split.
     ('vars(print.__self__)["ex" + "ec"](payload)', "__self__"),
+    # A string holding the name inside a longer one, sliced out at runtime.
+    ('vars(m)["xexec"[1:]](payload)', "exec"),
+    ('get = vars(object)["x__getattribute__"[1:]]\nget(m, n)', "__getattribute__"),
+    # The longest name a string holds is the one reported.
+    ('vars(m)["exec_module"](spec)', "exec_module"),
     # getattr / setattr / delattr by their dunder names.
     ("m.__getattribute__(n)(payload)", "__getattribute__"),
     ("object.__getattribute__(m, n)(payload)", "__getattribute__"),
@@ -100,6 +122,31 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("spec.loader.exec_module(mod)", "exec_module"),
     ("import codeop\nc = codeop.compile_command(src)", "compile_command"),
     ("import inspect\nf = inspect.getattr_static(m, n)", "getattr_static"),
+    ("loop.subprocess_exec(proto, prog)", "subprocess_exec"),
+    ("loop.subprocess_shell(proto, cmd)", "subprocess_shell"),
+    ("from asyncio.subprocess import create_subprocess_exec as spawn\nspawn(prog)", "create_subprocess_exec"),
+    ("from asyncio.subprocess import create_subprocess_shell as spawn\nspawn(cmd)", "create_subprocess_shell"),
+    ("from _posixsubprocess import fork_exec as spawn\nspawn(args)", "fork_exec"),
+    ("import os\nos._execvpe(prog, args)", "_execvpe"),
+    ("p._execute_child(args)", "_execute_child"),
+    ("import multiprocessing\nmultiprocessing.set_executable(prog)", "set_executable"),
+    ("import pdb\npdb.runeval(src)", "runeval"),
+    ("tcl.evalfile(path)", "evalfile"),
+    ("ref._evaluate(g, l)", "_evaluate"),
+    ("import typing\ntyping._eval_type(ref, g, l)", "_eval_type"),
+    ("from importlib._bootstrap import _exec\n_exec(spec, mod)", "_exec"),
+    ("import _imp\n_imp.exec_dynamic(mod)", "exec_dynamic"),
+    ("import _imp\n_imp.exec_builtin(mod)", "exec_builtin"),
+    ("imp.load_compiled(name, path)", "load_compiled"),
+    ("import codeop\ncodeop._compile(src, f, mode)", "_compile"),
+    ("import codeop\ncodeop._maybe_compile(c, src, f, mode)", "_maybe_compile"),
+    ("import dis\ndis._try_compile(src, name)", "_try_compile"),
+    ("import zipimport\nzipimport._compile_source(path, src)", "_compile_source"),
+    ("from importlib._bootstrap_external import _compile_bytecode\n_compile_bytecode(data)", "_compile_bytecode"),
+    ("import compileall\ncompileall.compile_file(path)", "compile_file"),
+    ("import compileall\ncompileall.compile_dir(path)", "compile_dir"),
+    ("import compileall\ncompileall.compile_path()", "compile_path"),
+    ("import pickle\npickle._getattribute(m, n)", "_getattribute"),
 ])
 def test_the_critical_builtins_are_still_refused(code, pattern):
     is_valid, issues = _verify(code)

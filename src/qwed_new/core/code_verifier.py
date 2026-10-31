@@ -101,13 +101,39 @@ class CodeVerifier:
         {"eval", "exec", "compile", "__import__", "getattr", "setattr"}
     )
     PYTHON_BUILTIN_MODULES: ClassVar[frozenset] = frozenset({"builtins", "__builtin__"})
-    # Longer names the substring scan refused that also run, compile or look
-    # up code by name; they stay refused as whole identifiers.
+    # Longer names the substring scan refused that also run or compile code,
+    # start a process or look up an attribute by name; they stay refused as
+    # whole identifiers.
     PYTHON_CODE_EXECUTION_NAMES: ClassVar[dict] = {
         "exec_": "Remote code execution via exec_() (six, future)",
         "exec_module": "Module execution via a loader's exec_module()",
+        "exec_builtin": "Module execution via _imp.exec_builtin()",
+        "exec_dynamic": "Module execution via _imp.exec_dynamic()",
+        "_exec": "Module execution via importlib's _exec()",
+        "load_compiled": "Module execution via imp.load_compiled()",
+        "runeval": "Expression evaluation via pdb/bdb runeval()",
+        "evalfile": "Tcl script execution via evalfile()",
+        "_evaluate": "String evaluation via ForwardRef._evaluate()",
+        "_eval_type": "String evaluation via typing._eval_type()",
         "compile_command": "Dynamic code compilation",
+        "_compile": "Dynamic code compilation",
+        "_maybe_compile": "Dynamic code compilation",
+        "_try_compile": "Dynamic code compilation",
+        "_compile_source": "Dynamic code compilation",
+        "_compile_bytecode": "Code object from bytecode",
+        "compile_file": "Bytecode compilation of files",
+        "compile_dir": "Bytecode compilation of files",
+        "compile_path": "Bytecode compilation of files",
+        "subprocess_exec": "Process execution via an event loop's subprocess_exec()",
+        "subprocess_shell": "Shell execution via an event loop's subprocess_shell()",
+        "create_subprocess_exec": "Process execution via asyncio",
+        "create_subprocess_shell": "Shell execution via asyncio",
+        "fork_exec": "Process execution via _posixsubprocess.fork_exec()",
+        "_execvpe": "Process execution via os._execvpe()",
+        "_execute_child": "Process execution via Popen._execute_child()",
+        "set_executable": "Sets the program multiprocessing runs",
         "getattr_static": "Dynamic attribute access",
+        "_getattribute": "Dynamic attribute access via pickle._getattribute()",
     }
     _CRITICAL_NAMES: ClassVar[frozenset] = PYTHON_CRITICAL_BUILTINS | frozenset(PYTHON_CODE_EXECUTION_NAMES)
     # getattr / setattr / delattr by another name. Refused when read as an
@@ -116,16 +142,23 @@ class CodeVerifier:
         {"__getattribute__", "__getattr__", "__setattr__", "__delattr__"}
     )
     _ATTRIBUTE_READ_NAMES: ClassVar[frozenset] = _CRITICAL_NAMES | PYTHON_ATTRIBUTE_ACCESSORS
-    # Whole identifiers in a string.
+    # Anywhere in a string, longest first: a string can be sliced or joined
+    # into the name at runtime ("x__getattribute__"[1:]).
     _CRITICAL_BUILTIN_NAME: ClassVar = re.compile(
-        r"(?<!\w)(" + "|".join(sorted(_ATTRIBUTE_READ_NAMES)) + r")(?!\w)"
+        "(" + "|".join(sorted(_ATTRIBUTE_READ_NAMES, key=len, reverse=True)) + ")"
     )
-    # Ways to write a namespace without an assignment the AST shows
-    # (globals()["re"] = ...). Where code uses one, no name is trusted to
-    # still be the re module.
+    # Ways to rebind a name without an assignment the AST shows: a namespace
+    # dict (globals()["re"] = ...) or the import system an import reads
+    # (sys.modules, sys.meta_path). Where code uses one, no name is trusted
+    # to still be the re module.
     _NAMESPACE_ACCESS: ClassVar[frozenset] = frozenset(
-        {"globals", "vars", "locals", "f_globals", "f_locals"}
+        {"globals", "vars", "locals", "f_globals", "f_locals",
+         "modules", "meta_path", "path_hooks", "path_importer_cache"}
     )
+    # re.compile(pattern, flags=0) takes at most two arguments. The builtin
+    # compile needs a source, a filename and a mode, so a call in this shape
+    # cannot run it even on a name that turns out to be the builtins module.
+    _REGEX_COMPILE_KEYWORDS: ClassVar[frozenset] = frozenset({"pattern", "flags"})
     # The node types _critical_builtin_reference reads; others are skipped.
     _REFERENCE_NODE_TYPES: ClassVar[frozenset] = frozenset(
         {ast.Name, ast.Attribute, ast.MatchClass, ast.Import, ast.ImportFrom, ast.Constant}
@@ -837,11 +870,13 @@ class CodeVerifier:
           accessors (``__getattribute__``), since the object may be the
           builtins module reached another way: ``m.exec``, ``from m import
           exec as run`` and the match pattern ``case object(exec=run)``. The
-          one exception is ``re.compile`` on a name every import binds to
-          ``re`` and nothing rebinds (_imported_re_names);
-        - a string holding one of these names as a whole identifier, since
-          ``vars(module)["exec"]`` reaches it by string.
-        Comments, longer names such as ``execute``, ``evaluate`` and
+          one exception is ``re.compile`` called as ``re.compile(pattern,
+          flags)`` on a name every import binds to ``re`` and nothing
+          rebinds (_untrusted_compiles);
+        - a string holding one of these names anywhere, since
+          ``vars(module)["exec"]`` reaches it by string and a string can be
+          sliced into it.
+        Comments, longer identifiers such as ``execute``, ``evaluate`` and
         ``compile_report``, and a class or module defining ``__getattr__``
         are not matches.
         """
@@ -857,10 +892,7 @@ class CodeVerifier:
                 found.append((name, node.lineno))
         # Only code with a name.compile pays for the walk that finds re.
         if compile_attributes:
-            safe_re = self._imported_re_names(nodes)
-            found.extend(
-                ("compile", node.lineno) for node in compile_attributes if node.value.id not in safe_re
-            )
+            found.extend(("compile", node.lineno) for node in self._untrusted_compiles(nodes, compile_attributes))
         unique = list(dict.fromkeys(found))  # (name, line) pairs, in order, once each
         return [self._critical_builtin_issue(name, line) for name, line in unique]
 
@@ -899,12 +931,37 @@ class CodeVerifier:
         return node.module
 
     @classmethod
+    def _untrusted_compiles(cls, nodes: List[ast.AST], compile_attributes: List[ast.Attribute]) -> List[ast.Attribute]:
+        """The ``name.compile`` reads that are not a regex compile: one is
+        trusted only when called as ``re.compile(pattern, flags)`` on a name
+        _imported_re_names trusts."""
+        safe_re = cls._imported_re_names(nodes)
+        if not safe_re:
+            return compile_attributes
+        regex_calls = {
+            id(node.func) for node in nodes
+            if isinstance(node, ast.Call) and cls._has_regex_compile_arguments(node)
+        }
+        return [node for node in compile_attributes if node.value.id not in safe_re or id(node) not in regex_calls]
+
+    @classmethod
+    def _has_regex_compile_arguments(cls, call: ast.Call) -> bool:
+        """At most two arguments, none unpacked, keywords only pattern and flags."""
+        return (
+            len(call.args) + len(call.keywords) <= 2
+            and not any(isinstance(arg, ast.Starred) for arg in call.args)
+            and all(keyword.arg in cls._REGEX_COMPILE_KEYWORDS for keyword in call.keywords)
+        )
+
+    @classmethod
     def _imported_re_names(cls, nodes: List[ast.AST]) -> set:
         """Names every import binds to the ``re`` module and nothing rebinds.
 
         Empty when the code can rebind a name without an assignment the AST
         shows: through a namespace dict (``globals()["re"] = ...``,
-        ``globals().update(re=...)``, a frame's ``f_globals``) or a star import.
+        ``globals().update(re=...)``, a frame's ``f_globals``), the import
+        system (``sys.modules.update(re=...)`` before ``import re``) or a star
+        import.
         """
         bindings: Dict[str, set] = {}
         rebound = set()
@@ -929,7 +986,7 @@ class CodeVerifier:
     @classmethod
     def _writes_namespace(cls, node: ast.AST) -> bool:
         if isinstance(node, ast.ImportFrom):
-            return any(alias.name == "*" for alias in node.names)
+            return any(alias.name == "*" or alias.name in cls._NAMESPACE_ACCESS for alias in node.names)
         if isinstance(node, ast.Name):
             return node.id in cls._NAMESPACE_ACCESS
         return isinstance(node, ast.Attribute) and node.attr in cls._NAMESPACE_ACCESS
