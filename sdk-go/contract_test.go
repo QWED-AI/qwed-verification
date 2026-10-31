@@ -151,7 +151,8 @@ func TestContractBatch(t *testing.T) {
 		t.Fatalf("items: got %d, want 2", len(batch.Items))
 	}
 
-	want := []VerificationStatus{StatusVerified, StatusUnverifiable}
+	// Both are decided: the second is proven false, as on /verify/math (#530).
+	want := []VerificationStatus{StatusVerified, StatusVerified}
 	// Batch math items carry the admission /verify/math decides: the proven
 	// identity is admitted, the disproven one is not.
 	wantAdmission := []Admission{AdmissionAdmit, AdmissionBlocked}

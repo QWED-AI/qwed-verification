@@ -111,7 +111,8 @@ fn a_batch_job_and_its_items_parse() {
         .iter()
         .map(|item| item.result.as_ref().unwrap().status.clone())
         .collect();
-    assert_eq!(statuses, [VerificationStatus::Verified, VerificationStatus::Unverifiable]);
+    // Both are decided: the second is proven false, as on /verify/math (#530).
+    assert_eq!(statuses, [VerificationStatus::Verified, VerificationStatus::Verified]);
     assert_eq!(batch.items[0].item_type.as_deref(), Some("math"));
 
     // Batch math items carry the admission /verify/math decides: the proven

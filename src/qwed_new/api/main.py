@@ -21,12 +21,7 @@ from qwed_new.core.diagnostics import (
     admission_decision,
     merge_diagnostic_result,
 )
-from qwed_new.core.verifier import (
-    DISPROVEN_STATUS,
-    DOMAIN_RESTRICTED_IDENTITY,
-    identity_domains_match,
-    symbolic_difference_status,
-)
+from qwed_new.core.math_identity import math_identity_result
 from qwed_new.api.verification_context_routes import router as verification_context_router
 
 # Configure logging
@@ -1069,49 +1064,9 @@ async def verify_math(
         context_data = request.get("context", {})
 
         if "=" in expression:
-            left_str, right_str = expression.split("=", 1)
-            left = safe_parse_expr(left_str)
-            right = safe_parse_expr(right_str)
-            difference = simplify(left - right)
-            identity_status = symbolic_difference_status(difference)
-
-            fields = {
-                "left_side": str(left),
-                "right_side": str(right),
-                "simplified_difference": str(difference),
-            }
-            if identity_status == "VERIFIED" and not identity_domains_match(left_str, right_str):
-                # simplify cancelled a removable singularity (x/x = 1 is
-                # false at x = 0): the identity holds only on a restricted
-                # domain, so it is not proven unconditionally (#429).
-                dr = DiagnosticResult.unverifiable(
-                    "Identity holds only where both sides are defined",
-                    developer_fields={
-                        "is_valid": False,
-                        "result": None,
-                        "constraint_id": DOMAIN_RESTRICTED_IDENTITY,
-                        **fields,
-                    },
-                )
-            elif identity_status == "VERIFIED":
-                dr = DiagnosticResult.verified(
-                    "Identity is true",
-                    developer_fields={"is_valid": True, "result": True, **fields},
-                    evidence=fields,
-                )
-            elif identity_status == DISPROVEN_STATUS:
-                # Proven false is a decided verdict: VERIFIED with is_valid
-                # False, admission DENY — never "inconclusive" (#437).
-                dr = DiagnosticResult.disproven(
-                    "Identity is false",
-                    developer_fields={"result": False, **fields},
-                    evidence={**fields, "verdict": "disproven"},
-                )
-            else:
-                dr = DiagnosticResult.unverifiable(
-                    "Identity could not be proven or disproven",
-                    developer_fields={"is_valid": False, "result": None, **fields},
-                )
+            # Shared with batch math items (#530): proven false is VERIFIED
+            # with is_valid False (#437), an undecided difference UNVERIFIABLE.
+            dr = math_identity_result(expression)
         else:
             import re
             expression_normalized = re.sub(r'(\d)(\()', r'\1*\2', expression)

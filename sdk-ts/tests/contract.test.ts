@@ -100,9 +100,10 @@ describe('captured server responses', () => {
 
         expect(batch.items.map(item => item.status)).toEqual(['completed', 'completed']);
         expect(batch.items.map(item => item.type)).toEqual(['math', 'math']);
+        // Both are decided: the second is proven false, as on /verify/math (#530).
         expect(batch.items.map(item => item.result?.status)).toEqual([
             VerificationStatus.Verified,
-            VerificationStatus.Unverifiable,
+            VerificationStatus.Verified,
         ]);
         expect(batch.items[0].result?.proof_ref).toMatch(/^sha256:/);
 

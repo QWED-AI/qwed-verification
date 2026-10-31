@@ -52,7 +52,7 @@ def _sql_verdict(monkeypatch, *, is_valid):
 
 @pytest.mark.parametrize("query, status, admission", [
     ("x + x = 2*x", "VERIFIED", "ADMIT"),
-    ("x + x = x", "UNVERIFIABLE", "BLOCKED"),
+    ("x + x = x", "VERIFIED", "BLOCKED"),  # proven false, as on /verify/math (#530)
     ("x + x", "UNVERIFIABLE", "BLOCKED"),  # no claim, only a simplification
 ])
 def test_a_math_item_returns_its_admission(query, status, admission):

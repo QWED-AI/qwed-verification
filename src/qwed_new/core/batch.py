@@ -366,8 +366,8 @@ class BatchVerificationService:
 
     def _verify_batch_math(self, item: BatchItem) -> Dict[str, Any]:
         """Verify a MATH batch item through the DiagnosticResult + attestation trust boundary (#271)."""
+        from qwed_new.core.math_identity import math_identity_result
         from qwed_new.core.safe_parser import safe_parse_expr
-        from qwed_new.core.verifier import DOMAIN_RESTRICTED_IDENTITY, identity_domains_match
         from sympy import simplify
 
         expression = item.query.strip()
@@ -379,34 +379,14 @@ class BatchVerificationService:
                 developer_fields={"simplified": str(simplified), "type": "math", "is_valid": False, "query": expression},
             )
         else:
-            left, right = expression.split("=", 1)
-            left_expr = safe_parse_expr(left)
-            right_expr = safe_parse_expr(right)
-            diff = simplify(left_expr - right_expr)
-            if diff != 0:
-                dr = DiagnosticResult.unverifiable(
-                    f"Not equal: {left_expr} != {right_expr}",
-                    developer_fields={"query": expression, "type": "math", "is_valid": False, "diff": str(diff)},
-                )
-            elif not identity_domains_match(left, right):
-                # As /verify/math: simplify cancelled a removable singularity
-                # (x/x = 1 is false at x = 0), so the identity holds only on a
-                # restricted domain and is not proven (#429).
-                dr = DiagnosticResult.unverifiable(
-                    "Identity holds only where both sides are defined",
-                    developer_fields={
-                        "query": expression, "type": "math", "is_valid": False, "diff": str(diff),
-                        "constraint_id": DOMAIN_RESTRICTED_IDENTITY,
-                    },
-                )
-            else:
-                evidence = {"left": left.strip(), "right": right.strip(), "diff": str(diff)}
-                dr = DiagnosticResult.verified(
-                    "Identity verified",
-                    developer_fields={"query": expression, "type": "math", "is_valid": True, "diff": str(diff)},
-                    evidence=evidence,
-                    proof_data=str(evidence),
-                )
+            # The verdict /verify/math gives (#530): a claim proven false is
+            # VERIFIED with is_valid False (#437), an undecided one UNVERIFIABLE.
+            dr = math_identity_result(expression)
+            dr.developer_fields.update({
+                "query": expression,
+                "type": "math",
+                "diff": dr.developer_fields["simplified_difference"],
+            })
 
         # As /verify/math: a VERIFIED identity is signed and its attestation
         # enforced, and is BLOCKED if signing fails (#271, #320). Admission is

@@ -275,6 +275,34 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - Eval cases `sql-021` and `sql-022` prove a `;` in a string and in a
     dollar-quoted string; `sql-023` checks that a backslash-escaped quote
     followed by `; DROP TABLE` is never accepted.
+- **A batch math item proven false is VERIFIED, as on `/verify/math`
+  (#530).** `/verify/batch` math items decided on `simplify(left - right) != 0`
+  and reported a claim proven false (`2+2=5`) as UNVERIFIABLE with no
+  `proof_ref`. `/verify/math` reports it VERIFIED with `is_valid` false,
+  a `proof_ref` and admission BLOCKED (#437).
+  - Both now build the verdict on `left = right` with the same function,
+    `core/math_identity.py`'s `math_identity_result`, so they cannot drift:
+    VERIFIED when the difference is 0, VERIFIED with `is_valid` false when
+    SymPy decides it is non-zero, UNVERIFIABLE when it cannot decide (or the
+    difference only holds Float residue), and UNVERIFIABLE with
+    `math.domain_restricted_identity` for an identity that holds only where
+    both sides are defined.
+  - A batch math item now carries the route's messages ("Identity is true",
+    "Identity is false", ...) and fields (`left_side`, `right_side`,
+    `simplified_difference`, `result`), and keeps its own `query`, `type`
+    and `diff`. A proven-false item is signed, so it carries `attestation`.
+    Admission is unchanged: BLOCKED.
+  - `sdk-fixtures/batch.json` and the Rust, Go and TypeScript contract tests
+    now expect the second item `VERIFIED · BLOCKED`.
+  - A claim with a side that has an undefined part, which SymPy evaluates
+    away (`log(0)**0 = 2` and `log(x - x)**0 = 2`: both sides become 1), is
+    no longer disproven. On both routes it is UNVERIFIABLE with
+    `math.undefined_part`, since there is no defined value to disprove.
+    `/verify/math` gave it a signed disproof before. A part is undefined when
+    it evaluates to `zoo` or `nan` (a symbol-free part also when it is not
+    finite); implicit multiplication (`2x^2`) is read through SymPy's own
+    grammar first. `x/x = 2`, which is false wherever `x/x` is defined, and
+    `2x^2 = 5` are still disproven.
 
 ## [8.0.0] - 2026-10-26
 
