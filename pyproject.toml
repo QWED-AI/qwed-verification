@@ -43,7 +43,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "sympy>=1.12",
     "click>=8.1.0",  # CLI framework
-    "z3-solver==5.1.0.0",
+    "z3-solver==5.3.2.0",
     "networkx>=3.0",
     "sqlmodel>=0.0.14",
     "bcrypt>=4.0.1",
@@ -116,7 +116,7 @@ pii = [
 ]
 
 [build-system]
-requires = ["hatchling==1.32.4"]
+requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
