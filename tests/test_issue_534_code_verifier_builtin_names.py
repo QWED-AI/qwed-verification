@@ -67,6 +67,12 @@ def _verify(code):
     'def score(x):\n    """Re-evaluates the score."""\n    return x[1:]',
     'import sys\nclass Job:\n    def __repr__(self):\n        return "executing job"\nprint(sys.argv[1:])',
     'class Runner:\n    def __init__(self, path):\n        """Set up the evaluator."""\n        self.path = path\nprint(Runner("a").path[1:])',
+    # Names in identifiers, where nothing reads them back as strings.
+    'def run():\n    cur.execute("SELECT 1")\nif __name__ == "__main__":\n    run()\nprint(sys.argv[1:])',
+    "import logging\nlog = logging.getLogger(__name__)\ncur.execute(q)\nprint(args.path[1:])",
+    "class Runner:\n    def execute(self):\n        return 1\nprint(Runner().items[1:])",
+    # A step that overflows is not worked out, and does not fail the check.
+    'parts = "a,b".split(",", 100000000000000000000000000000)',
 ])
 def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     assert _verify(code) == (True, [])
@@ -236,6 +242,22 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ('globals()["s"] = "xexec"\nvars(m)[s[1:]](payload)', "exec"),
     ('d = globals()\nd["s"] = "xexec"\nvars(m)[s[1:]](payload)', "exec"),
     ('s = "xexecx"\nglobals()["s"] = s + "x"\nvars(m)[s[1:-2]](payload)', "exec"),
+    # ... read back from the source as text: an exception's message quoting
+    # a value or a name, a function's or class's name, a keyword, an Enum
+    # member, the source itself, or the names in a namespace ...
+    ('try:\n    int("xexec")\nexcept ValueError as e:\n    vars(m)[str(e)[-5:-1]](payload)', "exec"),
+    ('try:\n    {}["xexec"]\nexcept KeyError as e:\n    vars(m)[str(e)[2:-1]](payload)', "exec"),
+    ("try:\n    object().xexec\nexcept AttributeError as e:\n    vars(m)[str(e)[-5:-1]](payload)", "exec"),
+    ("try:\n    xexec\nexcept NameError as e:\n    vars(m)[e.name[1:]](payload)", "exec"),
+    ("def xexec():\n    pass\nvars(m)[xexec.__name__[1:]](payload)", "exec"),
+    ("class xexec:\n    pass\nvars(m)[xexec.__qualname__[1:]](payload)", "exec"),
+    ("vars(m)[list(dict(xexec=1))[0][1:]](payload)", "exec"),
+    ("from enum import Enum\nclass E(Enum):\n    xexec = 1\nvars(m)[E.xexec.name[1:]](payload)", "exec"),
+    ("import inspect\ndef f():\n    pass  # xexec\nvars(m)[inspect.getsource(f)[-6:-2]](payload)", "exec"),
+    ("from inspect import getsource as read\ndef f():\n    cur.execute(q)\nvars(m)[read(f)[23:27]](payload)", "exec"),
+    ("import traceback\ntry:\n    1/0  # xexec\nexcept Exception:\n    t = traceback.format_exc()\nvars(m)[t[-9:-5]](payload)", "exec"),
+    ('xexec = 1\nvars(m)[[k for k in globals() if k.endswith("xec")][0][1:]](payload)', "exec"),
+    ("class C:\n    xexec = 1\nvars(m)[dir(C)[-1][1:]](payload)", "exec"),
     # ... or returned by a dunder method a class (or its subclass) calls.
     ('class C:\n    def __getitem__(self, k):\n        return "xexec"\nvars(m)[C()[0][1:]](payload)', "exec"),
     ('class B:\n    def __str__(self):\n        return "xexec"\nclass C(B):\n    pass\nvars(m)[str(C())[1:]](payload)', "exec"),

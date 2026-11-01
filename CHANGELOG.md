@@ -369,8 +369,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     each result is matched as whole identifiers, the tuple `partition`
     gives included. A `%`-format is worked out when the format and its
     arguments are literals (`"%c%c%c%c" % (101, 120, 101, 99)`,
-    `"%.4s" % "execute"`), unless its widths would pad past 16,384
-    characters. Otherwise its conversions are read as CPython reads them,
+    `"%.4s" % "execute"`), unless its widths, precisions or a mapping key
+    used by many conversions could make it longer than 16,384 characters
+    (`"%.999999999d" % 1`). Otherwise its conversions are read as CPython reads them,
     nested mapping keys included, in one pass, each both as a separator and
     as nothing (`"ex%sec" % sep`).
   - A step that removes characters but cannot be worked out (arguments
@@ -394,9 +395,17 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     store into (the object a method is called on, another argument, an
     argument through a parameter, a name bound to the same object); and
     every name, for a store through a namespace (`globals()["s"] = ...`).
-    Names and attributes share one key per identifier, and scopes are not
-    told apart. The graph is built only when a literal holds a name inside
-    a word, and walked once, so the work stays linear in the code. A name
+    Where the source holds a name inside a word anywhere, identifiers and
+    comments included, what can read the source or its names back as text
+    is taken to hold it too: an exception caught with `except ... as` (its
+    message can quote a value or a name: `int("xexec")`, `o.xexec`),
+    introspection (`__name__`, `__code__`, `inspect`, `traceback`, `dir`,
+    `globals`), a call given a keyword of that name (`dict(xexec=1)`), and a
+    class with a base that has a member of that name (an Enum member's
+    `.name`). Names and attributes share one key per identifier, and scopes
+    are not told apart. The graph is built only when the source holds a
+    name inside a word, and walked once, so the work stays linear in the
+    code. The string steps live in `string_steps.py`. A name
     bound once, to a literal as written, is worked out like that literal,
     unless the code uses a namespace other than to read an item of it
     (`vars(m)[k]`) or star-imports. Concatenation with a value that is not

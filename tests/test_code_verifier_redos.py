@@ -74,82 +74,87 @@ def test_unclosed_format_keys_stay_fast():
         assert time.perf_counter() - start < 1.0
 
 
-def test_names_reshaped_many_times_stay_fast():
-    # Each name is worked out once, not once per reshape of it.
-    n = 3000
-    code = "".join(f's = "{i}"\n' for i in range(n)) + "x = s[1:]\n" * n + "y = s % v\n" * n
+def _verify_time(code):
     start = time.perf_counter()
     CodeVerifier().verify_code(code, language="python")
-    assert time.perf_counter() - start < 2.0
+    return time.perf_counter() - start
+
+
+def _assert_linear(build, n):
+    # Doubling the input must not blow up: work that is quadratic in it would
+    # be about 4x. A ratio, not a time limit, so the runner's speed (or
+    # coverage tracing) does not decide the result; the best of three runs,
+    # so a busy runner (pytest -n) does not either.
+    _verify_time(build(n // 4))  # warm up
+    small_code, large_code = build(n), build(2 * n)
+    small = min(_verify_time(small_code) for _ in range(3))
+    large = min(_verify_time(large_code) for _ in range(3))
+    assert large < small * 3 + 0.2, f"scaled {large / max(small, 1e-6):.1f}x on 2x input"
+
+
+def test_names_reshaped_many_times_stay_fast():
+    # Each name is worked out once, not once per reshape of it.
+    _assert_linear(
+        lambda n: "".join(f's = "{i}"\n' for i in range(n)) + "x = s[1:]\n" * n + "y = s % v\n" * n, 1500
+    )
 
 
 def test_one_literal_bound_to_many_names_is_read_once():
     # A chained assignment binds one literal to every target; it is read
     # once, not once per name.
-    names = " = ".join(f"a{i}" for i in range(5000))
-    code = names + ' = "' + "q" * 100000 + '"\nx = a0[1:]\n'
-    start = time.perf_counter()
-    CodeVerifier().verify_code(code, language="python")
-    assert time.perf_counter() - start < 1.0
+    _assert_linear(
+        lambda n: " = ".join(f"a{i}" for i in range(n)) + ' = "' + "." * (20 * n) + '"\nx = a0[1:]\n', 2500
+    )
 
 
 def test_long_literal_name_reshaped_many_times_stays_fast():
     # A literal reached through a name is worked out per use only when it
     # is short; a long one is matched once.
-    code = 's = "' + "q" * 200000 + '"\n' + "x = s[1:]\n" * 5000
-    start = time.perf_counter()
-    CodeVerifier().verify_code(code, language="python")
-    assert time.perf_counter() - start < 1.0
+    _assert_linear(lambda n: 's = "' + "." * (40 * n) + '"\n' + "x = s[1:]\n" * n, 2500)
 
 
 def test_long_value_is_not_carried_up_a_chain():
     # Worked out once from the literal, then not carried: a chain of steps
     # on a long value would cost the chain length times the value length.
-    code = 'x = "' + "q" * 200000 + '"' + "[1:]" * 1000 + "\n"
-    start = time.perf_counter()
-    CodeVerifier().verify_code(code, language="python")
-    assert time.perf_counter() - start < 1.0
+    _assert_linear(lambda n: 'x = "' + "." * (200 * n) + '"' + "[1:]" * n + "\n", 500)
 
 
 def test_long_concatenation_chain_stays_fast():
     # Values longer than the carry limit are not carried up a chain of +.
-    code = "x = (" + " + ".join(['"ab"'] * 5000) + ")[1:]\n"
-    start = time.perf_counter()
-    CodeVerifier().verify_code(code, language="python")
-    assert time.perf_counter() - start < 1.0
+    _assert_linear(lambda n: "x = (" + " + ".join(['"ab"'] * n) + ")[1:]\n", 2500)
 
 
 def test_named_format_is_read_once():
-    # A long format reached through a name is read once, however often it
-    # is formatted, not once per format.
-    code = 's = "' + "." * 200000 + '"\n' + "x = s % ()\n" * 10000
-    start = time.perf_counter()
-    CodeVerifier().verify_code(code, language="python")
-    assert time.perf_counter() - start < 1.5
+    # A format reached through a name is read once per literal, however
+    # often it is formatted, not once per format.
+    _assert_linear(lambda n: 's = "' + "." * (20 * n) + '"\n' + "x = s % ()\n" * n, 5000)
+
+
+def test_repeated_format_key_is_not_worked_out():
+    # A mapping key can be used by every conversion: worked out, each of
+    # these 200 formats builds 3 MB. Not worked out, they take milliseconds.
+    code = 't = "' + "%(a)s" * 819 + '"\nv = "' + "x" * 4096 + '"\n' + 'x = t % {"a": v}\n' * 200
+    assert _verify_time(code) < 1.0
 
 
 def test_padded_format_is_not_worked_out():
-    # Worked out, a width this size builds a string of a gigabyte.
-    code = 'x = "%999999999s" % ""\n'
-    start = time.perf_counter()
-    CodeVerifier().verify_code(code, language="python")
-    assert time.perf_counter() - start < 0.5
+    # Worked out, a width or a precision this size builds a gigabyte.
+    for code in ('x = "%999999999s" % ""\n', 'x = "%.999999999d" % 1\n'):
+        assert _verify_time(code) < 0.5
 
 
 def test_reaching_literals_stay_linear():
     # Where a literal holds a name, the literals that reach each step are
     # found in one walk of the code, however many steps, calls, arguments,
     # functions and call sites it has.
-    for code in (
-        'print("executing")\n' + "x = y[i] + f(a, b).c[1:]\n" * 5000,
-        'print("executing")\nf(' + ", ".join(f"a{i}" for i in range(20000)) + ")[1:]\n",
-        'print("executing")\n'
-        + "".join(f"def f{i}(a, b=c):\n    return a[1:]\n" for i in range(2000))
-        + "".join(f"f{i}(x, y)\n" for i in range(2000)),
+    for build in (
+        lambda n: 'print("executing")\n' + "x = y[i] + f(a, b).c[1:]\n" * n,
+        lambda n: 'print("executing")\nf(' + ", ".join(f"a{i}" for i in range(4 * n)) + ")[1:]\n",
+        lambda n: 'print("executing")\n'
+        + "".join(f"def f{i}(a, b=c):\n    return a[1:]\n" for i in range(n // 2))
+        + "".join(f"f{i}(x, y)\n" for i in range(n // 2)),
     ):
-        start = time.perf_counter()
-        CodeVerifier().verify_code(code, language="python")
-        assert time.perf_counter() - start < 2.0
+        _assert_linear(build, 2500)
 
 
 def test_curl_pipe_shell_still_flagged_across_lines():
