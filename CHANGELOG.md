@@ -378,7 +378,10 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     builtin `format()` and f-strings are read the same way
     (`"{:.4}".format("execute")`, `f"ex{''}ec"`). An index that is not a
     literal may be a slice object (`"xexec"[slice(1, None)]`), so it is
-    read as a slice.
+    read as a slice. A regex function (`sub`, `findall`, `search`, `match`
+    and their variants) on `re` or `regex`, however it is named, is a step
+    that removes characters (`re.sub("q", "", "qexec")`). `%` with a number
+    on either side and a format that is not known is arithmetic (`i % 2`).
   - A step that removes characters but cannot be worked out (arguments
     that are not literals, a method saved and called later, a `translate`
     or a `replace` that grows the text, a precision in a format whose
@@ -407,7 +410,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     introspection (`__name__`, `__code__`, `inspect`, `traceback`, `dir`,
     `globals`; and common words such as `fields`, `signature` and
     `exception` only when imported from, or read on, `dataclasses`,
-    `inspect` or `sys`), a call given a keyword of that name (`dict(xexec=1)`), and a
+    `inspect` or `sys`, the module followed through the graph however it
+    is named or looked up: `d = dataclasses`, `sys.modules[...]`,
+    `importlib.import_module(...)`), a call given a keyword of that name (`dict(xexec=1)`), and a
     class with a base that has a member of that name (an Enum member's
     `.name`). Names and attributes share one key per identifier, and scopes
     are not told apart. The graph is built only when the source holds a

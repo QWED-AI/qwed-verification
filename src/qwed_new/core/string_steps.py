@@ -22,6 +22,8 @@ from typing import ClassVar
 RESHAPE_NODE_TYPES = frozenset({ast.Subscript, ast.BinOp, ast.Call, ast.Attribute, ast.JoinedStr})
 # str.format and format_map, and the builtin format(), insert into a template.
 BRACE_FORMATS = frozenset({"format", "format_map"})
+# Regex functions that can remove characters (split is read as str.split).
+REGEX_STEPS = frozenset({"sub", "subn", "findall", "finditer", "search", "match", "fullmatch"})
 
 LITERAL_RESHAPERS = {
     "strip": str.strip, "lstrip": str.lstrip, "rstrip": str.rstrip,
@@ -138,6 +140,15 @@ def _operator_step(node: ast.BinOp) -> tuple[str | None, list[ast.AST]]:
 
 def _is_str_call(node: ast.Call) -> bool:
     return isinstance(node.func, ast.Name) and node.func.id == "str" and len(node.args) == 1 and not node.keywords
+
+
+def _is_number(node: ast.AST) -> bool:
+    """A number written as a literal, or a tuple of them."""
+    if isinstance(node, ast.Tuple):
+        return bool(node.elts) and all(map(_is_number, node.elts))
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        node = node.operand
+    return isinstance(node, ast.Constant) and type(node.value) in (int, float, complex)
 
 
 def _is_literal_index(node: ast.AST) -> bool:
@@ -360,6 +371,7 @@ class ReachingLiterals:
         self._names = names
         self._only: dict[str, str] | None = None
         self._hits: dict[object, str] | None = None
+        self._regex_reach: set = set()
 
     def hit(self, node: ast.AST) -> str | None:
         """A critical name a literal that can reach ``node`` holds anywhere."""
@@ -391,15 +403,40 @@ class ReachingLiterals:
                     seeds[id(node)] = hit
         if not (seeds or source):
             return {}
-        modules = frozenset(
-            alias.asname or alias.name.split(".")[0]
-            for node in self._nodes if type(node) is ast.Import
-            for alias in node.names if alias.name.split(".")[0] in LiteralGraph.INTROSPECTION_MODULES
-        )
-        graph = LiteralGraph(self._names.in_word, source, modules)
+        graph = LiteralGraph(self._names.in_word, source, self._imported_modules())
         for node in self._nodes:
             graph.add_node(node)
-        return graph.spread(seeds)
+        hits = graph.spread(seeds)
+        self._regex_reach = graph.regex_reach
+        return hits
+
+    def _imported_modules(self) -> dict[str, frozenset]:
+        """The names the introspection and regex modules are imported as."""
+        found: dict[str, set] = {"introspection": set(), "regex": set()}
+        for node in self._nodes:
+            if type(node) is not ast.Import:
+                continue
+            for alias in node.names:
+                module = alias.name.split(".")[0]
+                bound = alias.asname or module
+                if module in LiteralGraph.INTROSPECTION_MODULES:
+                    found["introspection"].add(bound)
+                if module in LiteralGraph.REGEX_MODULES:
+                    found["regex"].add(bound)
+        return {kind: frozenset(names) for kind, names in found.items()}
+
+    def regex_call(self, node: ast.AST) -> bool:
+        """``re.sub(...)``, ``pattern.findall(...)``, ``sub(...)`` from re:
+        a regex function, reached from the re module however it is named."""
+        if not isinstance(node, ast.Call):
+            return False
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            if func.attr not in REGEX_STEPS:
+                return False
+            func = func.value
+        self.hit(func)
+        return id(func) in self._regex_reach
 
     # The node types that can bind a name (CriticalNames.bound_by), and
     # those that can reach a namespace.
@@ -537,14 +574,23 @@ class LiteralGraph:
     MODULE_INTROSPECTION: ClassVar[frozenset] = frozenset(
         {"fields", "asdict", "astuple", "signature", "exception", "stack", "trace"}
     )
+    REGEX_MODULES: ClassVar[frozenset] = frozenset({"re", "regex"})
+    # What gives a module by name: sys.modules[...], importlib.import_module().
+    MODULE_LOOKUPS: ClassVar[frozenset] = frozenset({"modules", "import_module"})
 
-    def __init__(self, in_word: re.Pattern, source: str | None, modules: frozenset = frozenset()):
+    def __init__(self, in_word: re.Pattern, source: str | None, imported: dict[str, frozenset] | None = None):
         self._edges: dict[object, list[object]] = {}
         self._read: set = set()
         self._in_word = in_word
         self._source = source
-        # Names imported as the INTROSPECTION_MODULES (import sys as s).
-        self._modules = modules
+        # The keys a module can be reached from: the names it is imported
+        # as, what a from-import of it binds, and the module lookups. A
+        # module is then followed through the graph (d = dataclasses).
+        imported = imported or {}
+        self._module_keys = set(imported.get("introspection", ())) | self.MODULE_LOOKUPS
+        self._regex_keys = set(imported.get("regex", ())) | self.MODULE_LOOKUPS
+        self._module_attributes: list[ast.Attribute] = []
+        self.regex_reach: set = set()
         self._seeds: dict[object, str] = {}
         if source:
             self._seeds[self.RAISED] = source
@@ -557,6 +603,13 @@ class LiteralGraph:
         """Each vertex a seed reaches, with the seed's name."""
         for name in self._read:
             self.add(self.WILDCARD, name)
+        # dataclasses.fields, inspect.signature, sys.exception, on whatever
+        # an introspection module can reach.
+        module_reach = self._walk(self._module_keys)
+        for node in self._module_attributes:
+            if self._source and id(node.value) in module_reach:
+                self._seeds[id(node)] = self._source
+        self.regex_reach = self._walk(self._regex_keys)
         hits = {**self._seeds, **seeds}
         pending = list(hits)
         while pending:
@@ -566,6 +619,16 @@ class LiteralGraph:
                     hits[target] = hits[vertex]
                     pending.append(target)
         return hits
+
+    def _walk(self, start) -> set:
+        reached = set(start)
+        pending = list(reached)
+        while pending:
+            for target in self._edges.get(pending.pop(), ()):
+                if target not in reached:
+                    reached.add(target)
+                    pending.append(target)
+        return reached
 
     def add_node(self, node: ast.AST) -> None:
         node_type = type(node)
@@ -673,28 +736,34 @@ class LiteralGraph:
         if type(node.ctx) is ast.Load:
             self._edges.setdefault(node.attr, []).append(id(node))
             self._read.add(node.attr)
-            if self._source and (node.attr in self.INTROSPECTION or self._module_reads_names(node)):
+            if self._source and node.attr in self.INTROSPECTION:
                 self._seeds[id(node)] = self._source
-
-    def _module_reads_names(self, node: ast.Attribute) -> bool:
-        """dataclasses.fields, inspect.signature, sys.exception."""
-        return (
-            node.attr in self.MODULE_INTROSPECTION
-            and isinstance(node.value, ast.Name)
-            and node.value.id in self._modules
-        )
+            elif node.attr in self.MODULE_INTROSPECTION:
+                self._module_attributes.append(node)
 
     def _import_from(self, node: ast.ImportFrom) -> None:
         # from inspect import stack: what an introspection module gives. From
-        # sys, only what reads names back (sys.argv does not).
-        if not (self._source and node.module):
+        # sys, only what reads names back (sys.argv does not); from sys
+        # import * binds exception on Python 3.11+.
+        if not node.module:
             return
         module = node.module.split(".")[0]
         for alias in node.names:
-            if (module in self.INTROSPECTION_MODULES and module != "sys") or alias.name in (
-                self.INTROSPECTION | self.MODULE_INTROSPECTION
-            ):
-                self._seeds[alias.asname or alias.name] = self._source
+            bound = alias.asname or alias.name
+            if module in self.REGEX_MODULES:
+                self._regex_keys.add(bound)
+            if module in self.INTROSPECTION_MODULES:
+                self._module_keys.add(bound)
+            if self._source:
+                self._seed_import(module, alias.name, bound)
+
+    def _seed_import(self, module: str, name: str, bound: str) -> None:
+        if module == "sys" and name == "*":
+            self._seeds["exception"] = self._source
+        elif (module in self.INTROSPECTION_MODULES and module != "sys") or name in (
+            self.INTROSPECTION | self.MODULE_INTROSPECTION
+        ):
+            self._seeds[bound] = self._source
 
     def _assign(self, node: ast.Assign) -> None:
         for target in node.targets:
@@ -860,7 +929,10 @@ class StringSteps:
         """Work out ``node`` and return the critical name it can leave."""
         kind, operands = string_step(node)
         if kind is None:
-            return None
+            if not self._reach.regex_call(node):
+                return None
+            # A regex can remove anything it matches; it is not worked out.
+            return self._unknown_hit(node, [*node.args, *(keyword.value for keyword in node.keywords)])
         if kind == "format":
             return self._check_format(node, *operands)
         if kind == "braces":
@@ -906,7 +978,9 @@ class StringSteps:
         hit = self._unknown_hit(node, (left, right))
         reading = self._format_reading(left)
         if reading is None:
-            return hit
+            # i % 2: a number either side is arithmetic, or a format that
+            # inserts digits and cuts none of an unknown format's own text.
+            return None if _is_number(left) or _is_number(right) else hit
         # A precision cuts what is inserted, not the format's own text.
         name, cuts = reading
         return name or (self._hit(right) if cuts else None)

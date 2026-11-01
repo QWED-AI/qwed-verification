@@ -83,6 +83,13 @@ def _verify(code):
     'print("evaluated %.2f" % score)',
     'print("evaluated {:.2f}".format(score))',
     'print(f"executing {job}")',
+    # A number either side of % is arithmetic; a regex or a search API on
+    # text that holds no name is not a match.
+    'lines = "executing\\njob".split("\\n")\nfor i, line in enumerate(lines):\n    if i % 2:\n        print(line)',
+    'n = len("executing")\nprint(n % 3)',
+    'from sys import exit\nexit("execution failed")',
+    'import re\nprint(re.sub(r"\\s+", " ", text))\nprint("executing")',
+    'res = es.search(index="evaluations")',
     # A step that overflows is not worked out, and does not fail the check.
     'parts = "a,b".split(",", 100000000000000000000000000000)',
 ])
@@ -282,8 +289,20 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ('xexec = 1\nvars(m)[[k for k in globals() if k.endswith("xec")][0][1:]](payload)', "exec"),
     ("class C:\n    xexec = 1\nvars(m)[dir(C)[-1][1:]](payload)", "exec"),
     ("from dataclasses import dataclass, fields\n@dataclass\nclass C:\n    xexec: int\nvars(m)[fields(C)[0].name[1:]](payload)", "exec"),
+    ("from dataclasses import *\n@dataclass\nclass C:\n    xexec: int\nvars(m)[fields(C)[0].name[1:]](payload)", "exec"),
     ("import dataclasses\n@dataclasses.dataclass\nclass C:\n    xexec: int\nvars(m)[dataclasses.fields(C)[0].name[1:]](payload)", "exec"),
     ('import sys\ntry:\n    int("xexec")\nexcept ValueError:\n    vars(m)[str(sys.exception())[-5:-1]](payload)', "exec"),
+    # ... the introspection module reached by another name or a lookup ...
+    ("import dataclasses\nd = dataclasses\n@d.dataclass\nclass C:\n    xexec: int\nvars(m)[d.fields(C)[0].name[1:]](payload)", "exec"),
+    ("import dataclasses as d\nalias = d\n@d.dataclass\nclass C:\n    xexec: int\nvars(m)[alias.fields(C)[0].name[1:]](payload)", "exec"),
+    ('import importlib, dataclasses\n@dataclasses.dataclass\nclass C:\n    xexec: int\nvars(m)[importlib.import_module("dataclasses").fields(C)[0].name[1:]](payload)', "exec"),
+    ('import sys\ns = sys\ntry:\n    int("xexec")\nexcept ValueError:\n    vars(m)[str(s.exception())[-5:-1]](payload)', "exec"),
+    ('from sys import *\ntry:\n    int("xexec")\nexcept ValueError:\n    vars(m)[str(exception())[-5:-1]](payload)', "exec"),
+    # ... or reshaped by a regex, however re is named ...
+    ('import re\nvars(m)[re.sub("q", "", "qexec")](payload)', "exec"),
+    ('from re import sub as s\nvars(m)[s("q", "", "qexec")](payload)', "exec"),
+    ('import re\nvars(m)[re.findall("e.*", "qexec")[0]](payload)', "exec"),
+    ('import re as r\nvars(m)[r.search("e.*", "qexec").group()](payload)', "exec"),
     ("from linecache import getline as gl\nimport sys\nline = gl(sys.argv[0], 4)\nvars(m)[line[4:8]](payload)\n# xexec", "exec"),
     # ... or returned by a dunder method a class (or its subclass) calls.
     ('class C:\n    def __getitem__(self, k):\n        return "xexec"\nvars(m)[C()[0][1:]](payload)', "exec"),
