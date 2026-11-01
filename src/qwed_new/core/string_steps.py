@@ -12,10 +12,17 @@ admitted on a guess.
 """
 
 import ast
+import dataclasses
+import dis
 import functools
-import importlib
+import inspect
+import linecache
+import pydoc
 import re
 import string
+import sys
+import tokenize
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import ClassVar
@@ -52,14 +59,20 @@ _PARENTHESES = re.compile(r"[()]")
 MAX_CARRIED = 4096
 
 
+# The modules in LiteralGraph.INTROSPECTION_MODULES, imported here by name so
+# their exports are read without importing a module the code names.
+_INTROSPECTION_MODULE_OBJECTS = {
+    module.__name__: module
+    for module in (inspect, traceback, linecache, dis, pydoc, tokenize, dataclasses, sys)
+}
+
+
 @functools.cache
 def module_exports(module: str) -> frozenset[str]:
-    """The names ``from <module> import *`` binds. Only ever called for the
-    standard library modules in LiteralGraph.INTROSPECTION_MODULES, never a
-    name read from the code."""
-    try:
-        imported = importlib.import_module(module)
-    except ImportError:
+    """The names ``from <module> import *`` binds, for the introspection
+    modules above; nothing for any other module."""
+    imported = _INTROSPECTION_MODULE_OBJECTS.get(module)
+    if imported is None:
         return frozenset()
     names = getattr(imported, "__all__", None)
     if names is None:

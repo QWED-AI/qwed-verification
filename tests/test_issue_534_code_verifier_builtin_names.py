@@ -11,6 +11,7 @@ BLOCKED, since the AST checks cannot run on it.
 
 import pytest
 
+from qwed_new.core import string_steps
 from qwed_new.core.code_verifier import CodeVerifier
 
 
@@ -398,3 +399,12 @@ def test_python_that_does_not_parse_is_blocked(code):
     assert result.status.value == "BLOCKED"
     assert result.developer_fields["constraint_id"] == "code_verifier.parse_error"
     assert result.developer_fields["is_valid"] is False
+
+
+def test_star_exports_are_read_for_every_introspection_module():
+    # The exports come from modules imported by name, never from a module
+    # the code names, so the table must cover the whole list.
+    graph = string_steps.LiteralGraph
+    assert set(string_steps._INTROSPECTION_MODULE_OBJECTS) == graph.INTROSPECTION_MODULES
+    assert "get_annotations" in string_steps.module_exports("inspect")
+    assert string_steps.module_exports("os") == frozenset()
