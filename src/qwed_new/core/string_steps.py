@@ -252,11 +252,21 @@ def step_result(node: ast.AST, values: list):
     _, arguments = _method_call_parts(node)
     args = [_literal_text(arg) for arg in arguments]
     kwargs = {keyword.arg: _literal_text(keyword.value) for keyword in node.keywords}
-    # translate can map one character to many, and replace grows the text
-    # when the new part is longer: not worked out, to bound the work.
-    if method == "translate" or (method == "replace" and len(args) >= 2 and len(args[1]) > len(args[0])):
+    # translate can map one character to many: not worked out, to bound the
+    # work. replace grows the text when the new part is longer: worked out
+    # only when what it can grow to is bounded.
+    if method == "translate" or (method == "replace" and _replace_grows_past_bound(values[0], args)):
         return None
     return LITERAL_RESHAPERS[method](values[0], *args, **kwargs)
+
+
+def _replace_grows_past_bound(text, args: list) -> bool:
+    if len(args) < 2 or not all(isinstance(arg, str) for arg in args[:2]) or len(args[1]) <= len(args[0]):
+        return False
+    old, new = args[0], args[1]
+    # "" matches between every character.
+    count = text.count(old) if old else len(text) + 1
+    return len(text) + count * (len(new) - len(old)) > 4 * MAX_CARRIED
 
 
 def _literal_index(node: ast.AST):

@@ -390,9 +390,10 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     (`("xex%sec" % sep)[1:]`).
   - A step that removes characters but cannot be worked out (arguments
     that are not literals, a method saved and called later, a `translate`
-    or a `replace` that grows the text, a precision in a format whose
-    arguments are not known, a value longer than 4,096 characters carried
-    from an earlier step, a value from anywhere else) matches anywhere the
+    or a `replace` that could grow the text past 16,384 characters, a
+    precision in a format whose arguments are not known, a value longer
+    than 4,096 characters carried from an earlier step, a value from
+    anywhere else) matches anywhere the
     value an earlier step worked out, or the literals that can reach it. A
     literal index, a case change, `str()`, `+`, and `strip`, `split`, `partition`
     and their variants cutting on whitespace or on a literal with no word

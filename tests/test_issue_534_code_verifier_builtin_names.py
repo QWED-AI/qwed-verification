@@ -91,6 +91,8 @@ def _verify(code):
     'import re\nprint(re.sub(r"\\s+", " ", text))\nprint("executing")',
     'res = es.search(index="evaluations")',
     'from re import escape as quote\nprint(quote("executing"))',
+    # A replace that grows the text a little is worked out.
+    'msg = "executing job"\nprint(msg.replace("job", "task"))',
     # A step that overflows is not worked out, and does not fail the check.
     'parts = "a,b".split(",", 100000000000000000000000000000)',
 ])
