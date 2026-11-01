@@ -27,6 +27,9 @@ BRACE_FORMATS = frozenset({"format", "format_map"})
 REGEX_STEPS = frozenset({
     "sub", "subn", "subf", "subfn", "findall", "finditer", "splititer", "search", "match", "fullmatch",
 })
+# What a from-import of a regex module can bind that removes characters:
+# split too, which on a module is read as str.split, but under an alias is not.
+REGEX_IMPORTS = REGEX_STEPS | {"split"}
 
 LITERAL_RESHAPERS = {
     "strip": str.strip, "lstrip": str.lstrip, "rstrip": str.rstrip,
@@ -759,17 +762,18 @@ class LiteralGraph:
             if module in self.INTROSPECTION_MODULES:
                 self._module_keys.add(bound)
             if alias.name in self.MODULE_LOOKUPS:
-                # from importlib import import_module as im
+                # A module lookup under another name, such as import_module
+                # imported as im.
                 self._module_keys.add(bound)
                 self._regex_keys.add(bound)
             if self._source:
                 self._seed_import(module, alias.name, bound)
 
     @staticmethod
-    def _regex_names(name: str, bound: str):
+    def _regex_names(name: str, bound: str) -> frozenset[str]:
         if name == "*":
-            return REGEX_STEPS
-        return (bound,) if name in REGEX_STEPS else ()
+            return REGEX_IMPORTS
+        return frozenset({bound}) if name in REGEX_IMPORTS else frozenset()
 
     def _seed_import(self, module: str, name: str, bound: str) -> None:
         if module == "sys" and name == "*":

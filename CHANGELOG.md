@@ -381,8 +381,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     read as a slice. A regex function (`sub`, `findall`, `search`, `match`
     and their variants, and the `regex` package's `subf`, `subfn` and
     `splititer`) on `re` or `regex`, however it is named, is a step that
-    removes characters (`re.sub("q", "", "qexec")`); helpers that remove
-    nothing (`re.escape`) are not. `%` with a number on the left is
+    removes characters (`re.sub("q", "", "qexec")`), as is `split`
+    imported under another name; helpers that remove nothing (`re.escape`)
+    are not. `%` with a number on the left is
     arithmetic (`10 % n`); a number on the right is not, since `%c` and `%x`
     insert letters. A format's own text, its fields read as separators and
     as nothing, is matched anywhere by a later step

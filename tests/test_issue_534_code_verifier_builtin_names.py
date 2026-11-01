@@ -309,6 +309,7 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     # ... or reshaped by a regex, however re is named ...
     ('import re\nvars(m)[re.sub("q", "", "qexec")](payload)', "exec"),
     ('from re import sub as s\nvars(m)[s("q", "", "qexec")](payload)', "exec"),
+    ('from re import split as cut\nvars(m)[cut("q", "qexec")[1]](payload)', "exec"),
     ('import re\nvars(m)[re.findall("e.*", "qexec")[0]](payload)', "exec"),
     ('import re as r\nvars(m)[r.search("e.*", "qexec").group()](payload)', "exec"),
     ('import regex\nvars(m)[regex.subf("q(.*)", "{1}", "qexec")](payload)', "exec"),
