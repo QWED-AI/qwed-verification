@@ -13,12 +13,15 @@ admitted on a guess.
 
 import ast
 import re
+import string
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import ClassVar
 
 # The node types a string step can be.
-RESHAPE_NODE_TYPES = frozenset({ast.Subscript, ast.BinOp, ast.Call, ast.Attribute})
+RESHAPE_NODE_TYPES = frozenset({ast.Subscript, ast.BinOp, ast.Call, ast.Attribute, ast.JoinedStr})
+# str.format and format_map, and the builtin format(), insert into a template.
+BRACE_FORMATS = frozenset({"format", "format_map"})
 
 LITERAL_RESHAPERS = {
     "strip": str.strip, "lstrip": str.lstrip, "rstrip": str.rstrip,
@@ -95,21 +98,32 @@ def reshaped_references(nodes: list[ast.AST], reshapes: list[ast.AST], code: str
 def string_step(node: ast.AST) -> tuple[str | None, list[ast.AST]]:
     """How ``node`` reshapes a string, and the operands it works on:
     "remove" (a slice, a str method that can remove characters inside a
-    word, or one read without being called), "format" (``%``), "keep" (an
-    index, a case change, ``str()``, ``+``, or a method that cuts only
-    between words: keeps_words), or None."""
+    word, or one read without being called), "format" (``%``), "braces"
+    (``str.format``, ``format()``, an f-string: the values it inserts),
+    "keep" (a literal index, a case change, ``str()``, ``+``, or a method
+    that cuts only between words: keeps_words), or None."""
     if isinstance(node, ast.Subscript):
-        # An index leaves one character, or one item whole.
-        return ("remove" if isinstance(node.slice, ast.Slice) else "keep"), [node.value]
+        # A literal index leaves one character, or one item whole; anything
+        # else may be a slice object ("xexec"[slice(1, None)]).
+        return ("keep" if _is_literal_index(node.slice) else "remove"), [node.value]
     if isinstance(node, ast.BinOp):
         return _operator_step(node)
-    if isinstance(node, ast.Call) and _is_str_call(node):
+    if isinstance(node, ast.JoinedStr):
+        return "braces", [value.value for value in node.values if isinstance(value, ast.FormattedValue)]
+    if isinstance(node, ast.Call):
+        return _call_step(node)
+    if isinstance(node, ast.Attribute) and node.attr in LITERAL_RESHAPERS:
+        return "remove", [node.value]
+    return None, []
+
+
+def _call_step(node: ast.Call) -> tuple[str | None, list[ast.AST]]:
+    if _is_str_call(node):
         return "keep", [node.args[0]]
-    method = node.func if isinstance(node, ast.Call) else node
-    if not (isinstance(method, ast.Attribute) and method.attr in LITERAL_RESHAPERS):
+    if _brace_call(node):
+        return "braces", [*node.args, *(keyword.value for keyword in node.keywords)]
+    if not (isinstance(node.func, ast.Attribute) and node.func.attr in LITERAL_RESHAPERS):
         return None, []
-    if isinstance(node, ast.Attribute):
-        return "remove", [method.value]
     receiver, _ = _method_call_parts(node)
     return ("keep" if keeps_words(node) else "remove"), [receiver]
 
@@ -124,6 +138,56 @@ def _operator_step(node: ast.BinOp) -> tuple[str | None, list[ast.AST]]:
 
 def _is_str_call(node: ast.Call) -> bool:
     return isinstance(node.func, ast.Name) and node.func.id == "str" and len(node.args) == 1 and not node.keywords
+
+
+def _is_literal_index(node: ast.AST) -> bool:
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        node = node.operand
+    return isinstance(node, ast.Constant)
+
+
+def _brace_call(node: ast.Call) -> bool:
+    """``template.format(...)``, ``template.format_map(...)``, or the
+    builtin ``format(value, spec)``."""
+    if isinstance(node.func, ast.Name):
+        return node.func.id == "format"
+    return isinstance(node.func, ast.Attribute) and node.func.attr in BRACE_FORMATS
+
+
+def brace_template(node: ast.AST) -> tuple[list[ast.AST], ast.AST | None]:
+    """For an f-string: its parts (Constant or FormattedValue). For a brace
+    call: no parts, and the template it formats (None for the builtin)."""
+    if isinstance(node, ast.JoinedStr):
+        return node.values, None
+    if isinstance(node.func, ast.Name):
+        return [], None
+    receiver, _ = _method_call_parts(node)
+    return [], receiver
+
+
+def read_brace_template(text: str) -> tuple[list[str], bool] | None:
+    """``text`` read as a str.format template: the text between its fields,
+    and whether a field has a precision (or a nested spec), which cuts what
+    it inserts. None when the template does not parse."""
+    pieces: list[str] = []
+    piece: list[str] = []
+    cuts = False
+    try:
+        for literal, field, spec, _ in string.Formatter().parse(text):
+            piece.append(literal)
+            if field is not None:
+                pieces.append("".join(piece))
+                piece = []
+                cuts = cuts or _spec_cuts(spec)
+    except ValueError:
+        return None
+    pieces.append("".join(piece))
+    return pieces, cuts
+
+
+def _spec_cuts(spec: str | None) -> bool:
+    # A "." may be a fill character (":.<9"); read as a precision anyway.
+    return bool(spec) and ("." in spec or "{" in spec)
 
 
 def _method_call_parts(call: ast.Call) -> tuple[ast.AST, list[ast.AST]]:
@@ -327,7 +391,12 @@ class ReachingLiterals:
                     seeds[id(node)] = hit
         if not (seeds or source):
             return {}
-        graph = LiteralGraph(self._names.in_word, source)
+        modules = frozenset(
+            alias.asname or alias.name.split(".")[0]
+            for node in self._nodes if type(node) is ast.Import
+            for alias in node.names if alias.name.split(".")[0] in LiteralGraph.INTROSPECTION_MODULES
+        )
+        graph = LiteralGraph(self._names.in_word, source, modules)
         for node in self._nodes:
             graph.add_node(node)
         return graph.spread(seeds)
@@ -444,26 +513,38 @@ class LiteralGraph:
     NAMESPACE_CALLS: ClassVar[frozenset] = frozenset({"globals", "vars", "locals"})
     NAMESPACE_ATTRIBUTES: ClassVar[frozenset] = frozenset({"__dict__", "f_globals", "f_locals"})
     CONSTRUCTORS = ("__init__", "__new__", "__post_init__")
-    # Names that read source text, or the names in it, back as strings.
+    # Names that read source text, or the names in it, back as strings,
+    # whatever they are read on.
     INTROSPECTION: ClassVar[frozenset] = frozenset({
         "inspect", "traceback", "linecache", "dis", "pydoc", "tokenize",
         "getsource", "getsourcelines", "getsourcefile", "getfile", "getcomments", "findsource",
-        "getframeinfo", "currentframe", "getmembers", "signature", "code_context",
+        "getframeinfo", "currentframe", "getmembers",
         "format_exc", "format_exception", "format_tb", "format_stack", "print_exc",
-        "extract_tb", "extract_stack", "exc_info", "exception", "__traceback__", "tb_frame",
+        "extract_tb", "extract_stack", "exc_info", "__traceback__", "tb_frame",
         "__file__", "__code__", "f_code", "gi_code", "cr_code", "ag_code", "_getframe",
         "_current_frames", "f_back", "f_locals", "f_globals", "__loader__", "__spec__",
         "get_source", "get_data", "get_code", "__name__", "__qualname__", "__module__",
         "__annotations__", "__dict__", "__slots__", "__members__", "_member_names_", "_fields",
         "_asdict", "__match_args__", "__signature__", "__defaults__", "__kwdefaults__",
-        "__wrapped__", "dir", "globals", "locals", "vars", "fields", "asdict", "astuple",
+        "__wrapped__", "dir", "globals", "locals", "vars",
     })
+    # Modules whose functions read names back. Their other names are common
+    # words (fields, signature, exception), so they count only as imported
+    # from these modules or read as attributes of them.
+    INTROSPECTION_MODULES: ClassVar[frozenset] = frozenset(
+        {"inspect", "traceback", "linecache", "dis", "pydoc", "tokenize", "dataclasses", "sys"}
+    )
+    MODULE_INTROSPECTION: ClassVar[frozenset] = frozenset(
+        {"fields", "asdict", "astuple", "signature", "exception", "stack", "trace"}
+    )
 
-    def __init__(self, in_word: re.Pattern, source: str | None):
+    def __init__(self, in_word: re.Pattern, source: str | None, modules: frozenset = frozenset()):
         self._edges: dict[object, list[object]] = {}
         self._read: set = set()
         self._in_word = in_word
         self._source = source
+        # Names imported as the INTROSPECTION_MODULES (import sys as s).
+        self._modules = modules
         self._seeds: dict[object, str] = {}
         if source:
             self._seeds[self.RAISED] = source
@@ -592,13 +673,27 @@ class LiteralGraph:
         if type(node.ctx) is ast.Load:
             self._edges.setdefault(node.attr, []).append(id(node))
             self._read.add(node.attr)
-            if node.attr in self.INTROSPECTION and self._source:
+            if self._source and (node.attr in self.INTROSPECTION or self._module_reads_names(node)):
                 self._seeds[id(node)] = self._source
 
+    def _module_reads_names(self, node: ast.Attribute) -> bool:
+        """dataclasses.fields, inspect.signature, sys.exception."""
+        return (
+            node.attr in self.MODULE_INTROSPECTION
+            and isinstance(node.value, ast.Name)
+            and node.value.id in self._modules
+        )
+
     def _import_from(self, node: ast.ImportFrom) -> None:
-        # from inspect import stack: what an introspection module gives.
-        if self._source and node.module and node.module.split(".")[0] in self.INTROSPECTION:
-            for alias in node.names:
+        # from inspect import stack: what an introspection module gives. From
+        # sys, only what reads names back (sys.argv does not).
+        if not (self._source and node.module):
+            return
+        module = node.module.split(".")[0]
+        for alias in node.names:
+            if (module in self.INTROSPECTION_MODULES and module != "sys") or alias.name in (
+                self.INTROSPECTION | self.MODULE_INTROSPECTION
+            ):
                 self._seeds[alias.asname or alias.name] = self._source
 
     def _assign(self, node: ast.Assign) -> None:
@@ -768,6 +863,8 @@ class StringSteps:
             return None
         if kind == "format":
             return self._check_format(node, *operands)
+        if kind == "braces":
+            return self._check_braces(node, operands)
         if isinstance(node, ast.Attribute):
             return self._check_saved_method(node)
         value = self._worked_out(node, [self._value(operand) for operand in operands])
@@ -807,8 +904,55 @@ class StringSteps:
             self._values[id(node)] = value
             return self._names.in_value(value)
         hit = self._unknown_hit(node, (left, right))
-        name, cuts = self._format_reading(left)
-        return name or (hit if cuts else None)
+        reading = self._format_reading(left)
+        if reading is None:
+            return hit
+        # A precision cuts what is inserted, not the format's own text.
+        name, cuts = reading
+        return name or (self._hit(right) if cuts else None)
+
+    def _check_braces(self, node: ast.AST, inserted: list[ast.AST]) -> str | None:
+        """``str.format``, ``format()`` or an f-string, read as a %-format
+        whose arguments are not known: the text between its fields both as
+        separated and as joined, and a precision as cutting what it inserts.
+        A template that is not known or readable is a removal."""
+        hit = self._unknown_hit(node, inserted)
+        reading = self._brace_reading(node)
+        if reading is None:
+            return hit
+        pieces, cuts = reading
+        name = self._names.in_value(" ".join(pieces)) or self._names.in_value("".join(pieces))
+        return name or (self._operand_hit(inserted) if cuts else None)
+
+    def _brace_reading(self, node: ast.AST) -> tuple[list[str], bool] | None:
+        parts, template = brace_template(node)
+        if isinstance(node, ast.JoinedStr):
+            return self._f_string_reading(parts)
+        if template is None:
+            # format(value, spec): a spec that is not a literal may cut.
+            spec = node.args[1] if len(node.args) > 1 else None
+            text = "" if spec is None else self._value(spec)
+            return (["", ""], _spec_cuts(text)) if isinstance(text, str) else (["", ""], True)
+        text = self._value(template)
+        return read_brace_template(text) if isinstance(text, str) else None
+
+    @staticmethod
+    def _f_string_reading(parts: list[ast.AST]) -> tuple[list[str], bool]:
+        pieces: list[str] = []
+        piece: list[str] = []
+        cuts = False
+        for part in parts:
+            if isinstance(part, ast.Constant):
+                piece.append(str(part.value))
+                continue
+            pieces.append("".join(piece))
+            piece = []
+            spec = part.format_spec
+            if spec is not None:
+                texts = [value.value for value in spec.values if isinstance(value, ast.Constant)]
+                cuts = cuts or len(texts) < len(spec.values) or _spec_cuts("".join(map(str, texts)))
+        pieces.append("".join(piece))
+        return pieces, cuts
 
     def _formatted(self, left: ast.AST, right: ast.AST) -> str | None:
         text = self._value(left)
@@ -855,17 +999,18 @@ class StringSteps:
         value = self._value(node)
         return value if isinstance(value, str) else None
 
-    def _format_reading(self, left: ast.AST) -> tuple[str | None, bool]:
+    def _format_reading(self, left: ast.AST) -> tuple[str | None, bool] | None:
         """For a format whose arguments are not known: the critical name it
         leaves as a whole identifier when each conversion becomes a
-        separator or nothing, and whether it is a removal. A literal reached
+        separator or nothing, and whether a conversion cuts what it inserts;
+        None when the format is not known or readable. A literal reached
         through names is read once, however often it is formatted."""
         if not isinstance(left, ast.Name):
             value = self._value(left)
-            return self._read_unknown_format(value) if isinstance(value, str) else (None, True)
+            return self._read_unknown_format(value) if isinstance(value, str) else None
         text = self._reach.only(left.id)
         if text is None:
-            return None, True
+            return None
         if id(text) not in self._formats:
             self._formats[id(text)] = self._read_unknown_format(text)
         return self._formats[id(text)]
@@ -877,10 +1022,10 @@ class StringSteps:
             self._readings[id(text)] = read_format(text)
         return self._readings[id(text)]
 
-    def _read_unknown_format(self, text: str) -> tuple[str | None, bool]:
+    def _read_unknown_format(self, text: str) -> tuple[str | None, bool] | None:
         reading = read_format(text)
         if reading is None:
-            return None, True
+            return None
         pieces, cuts, _ = reading
         name = self._names.in_value(" ".join(pieces)) or self._names.in_value("".join(pieces))
         return name, cuts

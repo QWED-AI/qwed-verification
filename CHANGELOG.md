@@ -371,16 +371,21 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     arguments are literals (`"%c%c%c%c" % (101, 120, 101, 99)`,
     `"%.4s" % "execute"`), unless its widths, precisions or a mapping key
     used by many conversions could make it longer than 16,384 characters
-    (`"%.999999999d" % 1`). Otherwise its conversions are read as CPython reads them,
-    nested mapping keys included, in one pass, each both as a separator and
-    as nothing (`"ex%sec" % sep`).
+    (`"%.999999999d" % 1`). Otherwise its conversions are read as CPython
+    reads them, nested mapping keys included, in one pass, each both as a
+    separator and as nothing (`"ex%sec" % sep`), and a precision cuts what
+    it inserts, not the format's own text. `str.format`, `format_map`, the
+    builtin `format()` and f-strings are read the same way
+    (`"{:.4}".format("execute")`, `f"ex{''}ec"`). An index that is not a
+    literal may be a slice object (`"xexec"[slice(1, None)]`), so it is
+    read as a slice.
   - A step that removes characters but cannot be worked out (arguments
     that are not literals, a method saved and called later, a `translate`
     or a `replace` that grows the text, a precision in a format whose
     arguments are not known, a value longer than 4,096 characters carried
     from an earlier step, a value from anywhere else) matches anywhere the
-    value an earlier step worked out, or the literals that can reach it. An
-    index, a case change, `str()`, `+`, and `strip`, `split`, `partition`
+    value an earlier step worked out, or the literals that can reach it. A
+    literal index, a case change, `str()`, `+`, and `strip`, `split`, `partition`
     and their variants cutting on whitespace or on a literal with no word
     characters, cannot leave a whole name the value did not already hold,
     so they never refuse on their own.
@@ -400,7 +405,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     is taken to hold it too: an exception caught with `except ... as` (its
     message can quote a value or a name: `int("xexec")`, `o.xexec`),
     introspection (`__name__`, `__code__`, `inspect`, `traceback`, `dir`,
-    `globals`), a call given a keyword of that name (`dict(xexec=1)`), and a
+    `globals`; and common words such as `fields`, `signature` and
+    `exception` only when imported from, or read on, `dataclasses`,
+    `inspect` or `sys`), a call given a keyword of that name (`dict(xexec=1)`), and a
     class with a base that has a member of that name (an Enum member's
     `.name`). Names and attributes share one key per identifier, and scopes
     are not told apart. The graph is built only when the source holds a

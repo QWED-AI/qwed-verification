@@ -71,6 +71,18 @@ def _verify(code):
     'def run():\n    cur.execute("SELECT 1")\nif __name__ == "__main__":\n    run()\nprint(sys.argv[1:])',
     "import logging\nlog = logging.getLogger(__name__)\ncur.execute(q)\nprint(args.path[1:])",
     "class Runner:\n    def execute(self):\n        return 1\nprint(Runner().items[1:])",
+    # Common words are introspection only when an introspection module
+    # gives them.
+    'cur.execute("SELECT a, b FROM t")\nfields = [d[0] for d in cur.description]\nprint(fields[1:])',
+    'cur.execute("x")\nexception = get()\nprint(exception[1:])',
+    'cur.execute("x")\nsignature = get()\nprint(signature[1:])',
+    'cur.execute("x")\nprint(form.fields[1:])',
+    'from sys import argv\ncur.execute("x")\nprint(argv[1:])',
+    # A precision cuts what a format inserts, not the format's own text.
+    'print(f"evaluated {score:.2f}")',
+    'print("evaluated %.2f" % score)',
+    'print("evaluated {:.2f}".format(score))',
+    'print(f"executing {job}")',
     # A step that overflows is not worked out, and does not fail the check.
     'parts = "a,b".split(",", 100000000000000000000000000000)',
 ])
@@ -205,6 +217,17 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ('w = ("execute",)[0]\nvars(m)["%.4s" % w](payload)', "exec"),
     ('vars(m)["%c%c%c%c" % (101, 120, 101, 99)](payload)', "exec"),
     ('vars(m)["%(a)s%(b)s" % {"a": "ex", "b": "ec"}](payload)', "exec"),
+    # str.format, format() and f-strings are read the same way.
+    ('vars(m)["{:.4}".format("execute")](payload)', "exec"),
+    ('vars(m)["ex{}ec".format("")](payload)', "exec"),
+    ('vars(m)["{a:.4}".format_map({"a": "execute"})](payload)', "exec"),
+    ('vars(m)[format("execute", ".4")](payload)', "exec"),
+    ("vars(m)[f\"{'execute':.4}\"](payload)", "exec"),
+    ("vars(m)[f\"ex{''}ec\"](payload)", "exec"),
+    ('w = ("execute",)[0]\nvars(m)[f"{w:.4}"](payload)', "exec"),
+    # An index that is not a literal may be a slice object.
+    ('vars(m)["xexec"[slice(1, None)]](payload)', "exec"),
+    ('s = slice(1, None)\nvars(m)["xexec"[s]](payload)', "exec"),
     # A literal that reaches the step any other way is matched anywhere:
     # bound by unpacking, +=, a loop, a default, an argument, a match or an
     # exception, returned, or as a docstring ...
@@ -258,6 +281,10 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("import traceback\ntry:\n    1/0  # xexec\nexcept Exception:\n    t = traceback.format_exc()\nvars(m)[t[-9:-5]](payload)", "exec"),
     ('xexec = 1\nvars(m)[[k for k in globals() if k.endswith("xec")][0][1:]](payload)', "exec"),
     ("class C:\n    xexec = 1\nvars(m)[dir(C)[-1][1:]](payload)", "exec"),
+    ("from dataclasses import dataclass, fields\n@dataclass\nclass C:\n    xexec: int\nvars(m)[fields(C)[0].name[1:]](payload)", "exec"),
+    ("import dataclasses\n@dataclasses.dataclass\nclass C:\n    xexec: int\nvars(m)[dataclasses.fields(C)[0].name[1:]](payload)", "exec"),
+    ('import sys\ntry:\n    int("xexec")\nexcept ValueError:\n    vars(m)[str(sys.exception())[-5:-1]](payload)', "exec"),
+    ("from linecache import getline as gl\nimport sys\nline = gl(sys.argv[0], 4)\nvars(m)[line[4:8]](payload)\n# xexec", "exec"),
     # ... or returned by a dunder method a class (or its subclass) calls.
     ('class C:\n    def __getitem__(self, k):\n        return "xexec"\nvars(m)[C()[0][1:]](payload)', "exec"),
     ('class B:\n    def __str__(self):\n        return "xexec"\nclass C(B):\n    pass\nvars(m)[str(C())[1:]](payload)', "exec"),
