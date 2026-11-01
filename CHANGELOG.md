@@ -404,7 +404,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     expressions that hold it; names and attributes bound by assignment of
     any shape, augmented assignment, a loop, `with`, a match capture or a
     parameter default; parameters of the functions a call names or is given
-    (`map(f, ...)`, `partial(f, ...)`), and what they return or yield;
+    (`map(f, ...)`, `partial(f, ...)`), or, for a call whose function is
+    not named (`ops["cut"](s)`, `make()(s)`), of every lambda and every
+    function read as a value; and what they return or yield;
     `__doc__` for a docstring; `except ... as` for what is raised; a class
     and its subclasses for what its dunder methods return; what a call can
     store into (the object a method is called on, another argument, an
@@ -419,9 +421,10 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     `exception` only when imported from, or read on, `dataclasses`,
     `inspect` or `sys`, the module followed through the graph however it
     is named or looked up: `d = dataclasses`, `sys.modules[...]`,
-    `importlib.import_module(...)`), a call given a keyword of that name (`dict(xexec=1)`), and a
-    class with a base that has a member of that name (an Enum member's
-    `.name`). Names and attributes share one key per identifier, and scopes
+    `importlib.import_module(...)`; an import seeds its names where they
+    are read as names, and a star import only its introspection names), a
+    call given a keyword of that name (`dict(xexec=1)`), and a class with a
+    base that has a member of that name (an Enum member's `.name`). Names and attributes share one key per identifier, and scopes
     are not told apart. The graph is built only when the source holds a
     name inside a word, and walked once, so the work stays linear in the
     code. The string steps live in `string_steps.py`. A name

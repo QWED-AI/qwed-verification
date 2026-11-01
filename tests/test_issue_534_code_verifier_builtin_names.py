@@ -91,6 +91,13 @@ def _verify(code):
     'import re\nprint(re.sub(r"\\s+", " ", text))\nprint("executing")',
     'res = es.search(index="evaluations")',
     'from re import escape as quote\nprint(quote("executing"))',
+    # A star import of an introspection module seeds its introspection
+    # names only, and only where they are read as names.
+    "from dataclasses import *\ndef compile_report():\n    return 1\nprint(value[1:])",
+    "from dataclasses import *\ncur.execute(q)\nprint(form.fields[1:])",
+    "from dataclasses import fields\nprint(fields(C))\ncur.execute(q)\nprint(form.fields[1:])",
+    # A call through a table reaches functions read as values, not every one.
+    'handlers = {"a": print}\nhandlers["a"]("executing")\ndef parse(line):\n    return line[1:]\nparse(x)',
     # A replace that grows the text a little is worked out.
     'msg = "executing job"\nprint(msg.replace("job", "task"))',
     # A step that overflows is not worked out, and does not fail the check.
@@ -257,6 +264,12 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ('def f(s):\n    return vars(m)[s[1:]](payload)\nf("xexec")', "exec"),
     ('list(map(lambda s: vars(m)[s[1:]](payload), ["xexec"]))', "exec"),
     ('f = lambda s: vars(m)[s[1:]](payload)\nf("xexec")', "exec"),
+    # ... or a call whose function is not named: through a table or a factory.
+    ('ops = {"cut": lambda s: vars(m)[s[1:]](payload)}\nops["cut"]("xexec")', "exec"),
+    ('def make():\n    return lambda s: vars(m)[s[1:]](payload)\nmake()("xexec")', "exec"),
+    ('def cut(s):\n    return vars(m)[s[1:]](payload)\nops = [cut]\nops[0]("xexec")', "exec"),
+    ('def add(l):\n    l.append("xexec")\nitems = []\n[add][0](items)\nvars(m)[items[0][1:]](payload)', "exec"),
+    ("from inspect import *\ndef f():\n    pass  # xexec\nvars(m)[getsource(f)[-6:-2]](payload)", "exec"),
     ('match "xexec":\n    case s:\n        vars(m)[s[1:]](payload)', "exec"),
     ('try:\n    raise ValueError("xexec")\nexcept ValueError as e:\n    vars(m)[str(e)[1:]](payload)', "exec"),
     ('def f():\n    return "xexec"\nvars(m)[f()[1:]](payload)', "exec"),

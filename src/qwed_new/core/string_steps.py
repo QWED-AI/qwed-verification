@@ -593,6 +593,14 @@ class LiteralGraph:
     REGEX_MODULES: ClassVar[frozenset] = frozenset({"re", "regex"})
     # What gives a module by name: sys.modules[...], importlib.import_module().
     MODULE_LOOKUPS: ClassVar[frozenset] = frozenset({"modules", "import_module"})
+    # What a star import of an introspection module can bind that reads
+    # names back; not every name, which would seed unrelated ones.
+    STAR_EXPORTS: ClassVar[frozenset] = INTROSPECTION | MODULE_INTROSPECTION | MODULE_LOOKUPS
+    # A call whose function is not named (ops["cut"](s), make()(s)) reaches
+    # every function that can be called that way: a lambda, or a def whose
+    # name is read as a value.
+    ANY_CALL = ("()", "*")
+    ANY_OUT = ("out", "*")
 
     def __init__(self, in_word: re.Pattern, source: str | None, imported: dict[str, frozenset] | None = None):
         self._edges: dict[object, list[object]] = {}
@@ -606,6 +614,9 @@ class LiteralGraph:
         self._module_keys = set(imported.get("introspection", ())) | self.MODULE_LOOKUPS
         self._regex_keys = set(imported.get("regex", ())) | self.MODULE_LOOKUPS
         self._module_attributes: list[ast.Attribute] = []
+        self._value_names: set = set()
+        self._called: set = set()
+        self._imported_names: set = set()
         self.regex_reach: set = set()
         self._seeds: dict[object, str] = {}
         if source:
@@ -617,15 +628,7 @@ class LiteralGraph:
 
     def spread(self, seeds: dict[object, str]) -> dict[object, str]:
         """Each vertex a seed reaches, with the seed's name."""
-        for name in self._read:
-            self.add(self.WILDCARD, name)
-        # dataclasses.fields, inspect.signature, sys.exception, on whatever
-        # an introspection module can reach.
-        module_reach = self._walk(self._module_keys)
-        for node in self._module_attributes:
-            if self._source and id(node.value) in module_reach:
-                self._seeds[id(node)] = self._source
-        self.regex_reach = self._walk(self._regex_keys)
+        self._finish()
         hits = {**self._seeds, **seeds}
         pending = list(hits)
         while pending:
@@ -635,6 +638,23 @@ class LiteralGraph:
                     hits[target] = hits[vertex]
                     pending.append(target)
         return hits
+
+    def _finish(self) -> None:
+        """The edges and seeds that need the whole code read first."""
+        for name in self._read:
+            self.add(self.WILDCARD, name)
+        for vertex, name in self._value_names:
+            if vertex not in self._called:
+                self._reaches_any_call(name)
+            if self._source and name in self._imported_names:
+                self._seeds[vertex] = self._source
+        # dataclasses.fields, inspect.signature, sys.exception, on whatever
+        # an introspection module can reach.
+        module_reach = self._walk(self._module_keys)
+        for node in self._module_attributes:
+            if self._source and id(node.value) in module_reach:
+                self._seeds[id(node)] = self._source
+        self.regex_reach = self._walk(self._regex_keys)
 
     def _walk(self, start) -> set:
         reached = set(start)
@@ -741,10 +761,15 @@ class LiteralGraph:
             if stored_in is not None:
                 self.add(key, stored_in)
 
+    def _reaches_any_call(self, function) -> None:
+        self.add(self.ANY_CALL, ("()", function))
+        self.add(("out", function), self.ANY_OUT)
+
     def _name(self, node: ast.Name) -> None:
         if type(node.ctx) is ast.Load:
             self._edges.setdefault(node.id, []).append(id(node))
             self._read.add(node.id)
+            self._value_names.add((id(node), node.id))
             if node.id in self.INTROSPECTION and self._source:
                 self._seeds[id(node)] = self._source
 
@@ -766,18 +791,22 @@ class LiteralGraph:
         module = node.module.split(".")[0]
         for alias in node.names:
             bound = alias.asname or alias.name
-            if module in self.REGEX_MODULES:
-                # Only the functions that remove characters: re.escape does not.
-                self._regex_keys.update(self._regex_names(alias.name, bound))
-            if module in self.INTROSPECTION_MODULES:
-                self._module_keys.add(bound)
-            if alias.name in self.MODULE_LOOKUPS:
-                # A module lookup under another name, such as import_module
-                # imported as im.
-                self._module_keys.add(bound)
-                self._regex_keys.add(bound)
+            self._import_keys(module, alias.name, bound)
             if self._source:
                 self._seed_import(module, alias.name, bound)
+
+    def _import_keys(self, module: str, name: str, bound: str) -> None:
+        """The keys a from-import gives the module and regex walks."""
+        if module in self.REGEX_MODULES:
+            # Only the functions that remove characters: re.escape does not.
+            self._regex_keys.update(self._regex_names(name, bound))
+        if module in self.INTROSPECTION_MODULES:
+            self._module_keys.update(self.STAR_EXPORTS if name == "*" else (bound,))
+        if name in self.MODULE_LOOKUPS:
+            # A module lookup under another name, such as import_module
+            # imported as im.
+            self._module_keys.add(bound)
+            self._regex_keys.add(bound)
 
     @staticmethod
     def _regex_names(name: str, bound: str) -> frozenset[str]:
@@ -786,12 +815,19 @@ class LiteralGraph:
         return frozenset({bound}) if name in REGEX_IMPORTS else frozenset()
 
     def _seed_import(self, module: str, name: str, bound: str) -> None:
-        if module == "sys" and name == "*":
-            self._seeds["exception"] = self._source
+        # The names an import binds are seeded where they are read as names,
+        # not as attributes (form.fields is not dataclasses.fields).
+        if name == "*":
+            # sys exports exception (Python 3.11+); the others their
+            # introspection names.
+            if module == "sys":
+                self._imported_names.add("exception")
+            elif module in self.INTROSPECTION_MODULES:
+                self._imported_names.update(self.STAR_EXPORTS)
         elif (module in self.INTROSPECTION_MODULES and module != "sys") or name in (
             self.INTROSPECTION | self.MODULE_INTROSPECTION
         ):
-            self._seeds[bound] = self._source
+            self._imported_names.add(bound)
 
     def _assign(self, node: ast.Assign) -> None:
         for target in node.targets:
@@ -824,9 +860,12 @@ class LiteralGraph:
 
     def _call(self, node: ast.Call) -> None:
         hub = ("args", id(node))
+        self._called.add(id(node.func))
         callee = self._callee(node.func)
         if callee is not None:
             self.add(hub, ("()", callee))
+        else:
+            self.add(hub, self.ANY_CALL)
         if isinstance(node.func, ast.Attribute):
             # A method may store its arguments in the object it is called on.
             self.add(hub, self._head(node.func.value))
@@ -835,8 +874,7 @@ class LiteralGraph:
             self.add(id(argument), hub)
             stored_in = self._stored_in(argument)
             self.add(hub, stored_in)
-            if callee is not None:
-                self.add(("out", callee), stored_in)
+            self.add(self.ANY_OUT if callee is None else ("out", callee), stored_in)
             passed = self._callee(argument)
             if passed is not None:
                 self.add(hub, ("()", passed))
@@ -864,6 +902,7 @@ class LiteralGraph:
 
     def _lambda(self, node: ast.Lambda) -> None:
         self._parameters(id(node), node.args)
+        self._reaches_any_call(id(node))
 
     def _class(self, node: ast.ClassDef) -> None:
         entry = ("()", node.name)
