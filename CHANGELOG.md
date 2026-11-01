@@ -361,26 +361,55 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     order; as an attribute, since the object may be the `builtins` module
     reached another way, whether read as `m.exec`, by `from m import exec`
     or by a match pattern (`case object(exec=run)`); and in a string as a
-    whole identifier (`vars(module)["exec"]`). Steps on strings (a slice, a
-    `%`-format, a character-removing or case-changing `str` method, `str()`
-    and `+`) are worked out deepest first from the literals they start from,
-    chains included (`"xexecx"[1:][:-1]`, `"xexec".upper().lower()[1:]`,
-    `"ex" + "ec"`), and each result is matched as whole identifiers. `%`
-    conversions are read as CPython reads them, nested mapping keys
-    included, in one pass. A step that removes characters but cannot be
-    worked out (arguments that are not literals, a method saved and called
-    later, a `translate` or a `replace` that grows the text, a value longer
-    than 4,096 characters carried from an earlier step) matches the literals
-    it starts from anywhere. Names are followed through simple assignments,
-    other names and steps back to their literals; a name bound once to a
-    literal as written is worked out like that literal. Each assignment is
-    read once, so the work stays linear in the code. Concatenation with a
-    value that is not a literal is not followed. An import of the `builtins`
-    module (`import builtins`) is refused too.
+    whole identifier (`vars(module)["exec"]`). Steps on strings (a slice or
+    an index, a `%`-format, a `str` method that removes characters or
+    changes case, also called as `str.lower(s)`, `str()` and `+`) are worked
+    out deepest first from the literals they start from, chains included
+    (`"xexecx"[1:][:-1]`, `"xexec".upper().lower()[1:]`, `"ex" + "ec"`), and
+    each result is matched as whole identifiers, the tuple `partition`
+    gives included. A `%`-format is worked out when the format and its
+    arguments are literals (`"%c%c%c%c" % (101, 120, 101, 99)`,
+    `"%.4s" % "execute"`), unless its widths would pad past 16,384
+    characters. Otherwise its conversions are read as CPython reads them,
+    nested mapping keys included, in one pass, each both as a separator and
+    as nothing (`"ex%sec" % sep`).
+  - A step that removes characters but cannot be worked out (arguments
+    that are not literals, a method saved and called later, a `translate`
+    or a `replace` that grows the text, a precision in a format whose
+    arguments are not known, a value longer than 4,096 characters carried
+    from an earlier step, a value from anywhere else) matches anywhere the
+    value an earlier step worked out, or the literals that can reach it. An
+    index, a case change, `str()`, `+`, and `strip`, `split`, `partition`
+    and their variants cutting on whitespace or on a literal with no word
+    characters, cannot leave a whole name the value did not already hold,
+    so they never refuse on their own.
+  - The literals that can reach a value are found by following each one,
+    over-approximately, to every value it can become or be stored in: the
+    expressions that hold it; names and attributes bound by assignment of
+    any shape, augmented assignment, a loop, `with`, a match capture or a
+    parameter default; parameters of the functions a call names or is given
+    (`map(f, ...)`, `partial(f, ...)`), and what they return or yield;
+    `__doc__` for a docstring; `except ... as` for what is raised; a class
+    and its subclasses for what its dunder methods return; what a call can
+    store into (the object a method is called on, another argument, an
+    argument through a parameter, a name bound to the same object); and
+    every name, for a store through a namespace (`globals()["s"] = ...`).
+    Names and attributes share one key per identifier, and scopes are not
+    told apart. The graph is built only when a literal holds a name inside
+    a word, and walked once, so the work stays linear in the code. A name
+    bound once, to a literal as written, is worked out like that literal,
+    unless the code uses a namespace other than to read an item of it
+    (`vars(m)[k]`) or star-imports. Concatenation with a value that is not
+    a literal, and names built by `chr` or `join`, are not followed. An
+    import of the `builtins` module (`import builtins`) is refused too.
   - Admitted: longer identifiers (`execute`, `evaluate`, `compile_report`),
     the names inside longer words in strings and docstrings, also when
     formatted or split (`"SELECT * FROM evaluations WHERE id = %s" % uid`,
-    `"executing job"`, `"executed,ok".split(",")`),
+    `"executing job"`, `"executed,ok".split(",")`), or when they reach only
+    an index or a cut between words (`row[0].strip()` after a query on
+    `evaluations`). Prose that can reach a slice or another cut that is not
+    worked out stays refused, as before (`raise ValueError("evaluation
+    failed")` beside `str(e)[:80]`). Also admitted:
     comments, and `re.compile(pattern, flags)` on a name every import binds
     to `re`. The builtin `compile` needs a filename and a mode, so it cannot
     run in that shape; any other `re.compile` call, or `re.compile` not

@@ -119,6 +119,39 @@ def test_long_concatenation_chain_stays_fast():
     assert time.perf_counter() - start < 1.0
 
 
+def test_named_format_is_read_once():
+    # A long format reached through a name is read once, however often it
+    # is formatted, not once per format.
+    code = 's = "' + "." * 200000 + '"\n' + "x = s % ()\n" * 10000
+    start = time.perf_counter()
+    CodeVerifier().verify_code(code, language="python")
+    assert time.perf_counter() - start < 1.5
+
+
+def test_padded_format_is_not_worked_out():
+    # Worked out, a width this size builds a string of a gigabyte.
+    code = 'x = "%999999999s" % ""\n'
+    start = time.perf_counter()
+    CodeVerifier().verify_code(code, language="python")
+    assert time.perf_counter() - start < 0.5
+
+
+def test_reaching_literals_stay_linear():
+    # Where a literal holds a name, the literals that reach each step are
+    # found in one walk of the code, however many steps, calls, arguments,
+    # functions and call sites it has.
+    for code in (
+        'print("executing")\n' + "x = y[i] + f(a, b).c[1:]\n" * 5000,
+        'print("executing")\nf(' + ", ".join(f"a{i}" for i in range(20000)) + ")[1:]\n",
+        'print("executing")\n'
+        + "".join(f"def f{i}(a, b=c):\n    return a[1:]\n" for i in range(2000))
+        + "".join(f"f{i}(x, y)\n" for i in range(2000)),
+    ):
+        start = time.perf_counter()
+        CodeVerifier().verify_code(code, language="python")
+        assert time.perf_counter() - start < 2.0
+
+
 def test_curl_pipe_shell_still_flagged_across_lines():
     verifier = CodeVerifier()
     code = (

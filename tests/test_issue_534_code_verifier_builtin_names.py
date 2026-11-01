@@ -54,8 +54,19 @@ def _verify(code):
     'line = "executed,ok"\nparts = line.split(",")',
     'print(("executing " + job).upper())',
     'title = "Re-evaluated"[:5]',
+    'print("%-10s|" % "executing")',
     # Only % substitutes a conversion; + keeps "%s" as text.
     'label = "%sexec" + suffix',
+    # Prose that reaches an index, or a cut between words, leaves no name.
+    'rows = cur.execute("SELECT name FROM evaluations").fetchall()\nfor r in rows:\n    print(r[0])',
+    'row = cur.execute("SELECT name FROM evaluations").fetchone()\nprint(row[0].strip())',
+    'log.info("executing", line.split(",")[0].strip())',
+    "names = sorted(xs, key=str.lower)",
+    # ... and prose that cannot reach a cut is not matched.
+    'import sys\nlog.info("executing %s", job)\nfor a in sys.argv[1:]:\n    print(a)',
+    'def score(x):\n    """Re-evaluates the score."""\n    return x[1:]',
+    'import sys\nclass Job:\n    def __repr__(self):\n        return "executing job"\nprint(sys.argv[1:])',
+    'class Runner:\n    def __init__(self, path):\n        """Set up the evaluator."""\n        self.path = path\nprint(Runner("a").path[1:])',
 ])
 def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     assert _verify(code) == (True, [])
@@ -167,6 +178,68 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ('vars(m)["xexec".lstrip(c)](payload)', "exec"),
     ('vars(m)["xexec"[i:]](payload)', "exec"),
     ('vars(m)["xexec".translate(table)](payload)', "exec"),
+    # ... and so is a value an earlier step worked out, or one a saved case
+    # method or str.method gives.
+    ('vars(m)[("xex" + "ec")[i:]](payload)', "exec"),
+    ('vars(m)["XEXEC".lower()[i:]](payload)', "exec"),
+    # Cutting on word characters can leave a whole name; on others, not.
+    ('w = ("qexec",)[0]\nvars(m)[w.split("q")[1]](payload)', "exec"),
+    ('w = ("xexec",)[0]\nvars(m)[w.lstrip("x")](payload)', "exec"),
+    ('low = "EXEC".lower\nvars(m)[low()](payload)', "exec"),
+    ('vars(m)[str.lower("EXEC")](payload)', "exec"),
+    # partition and rpartition give a tuple.
+    ('a, b, c = "qexec".partition("q")\nvars(m)[c](payload)', "exec"),
+    ('a, b, c = "execq".rpartition("q")\nvars(m)[a](payload)', "exec"),
+    ('for part in "qexec".partition("q"):\n    vars(m)[part](payload)', "exec"),
+    # A %-format with literal arguments is worked out; without, a conversion
+    # may also become nothing, and a precision cuts what it inserts.
+    ('vars(m)["ex%sec" % ""](payload)', "exec"),
+    ('vars(m)["ex%sec" % sep](payload)', "exec"),
+    ('vars(m)["%.4s" % "execute"](payload)', "exec"),
+    ('w = ("execute",)[0]\nvars(m)["%.4s" % w](payload)', "exec"),
+    ('vars(m)["%c%c%c%c" % (101, 120, 101, 99)](payload)', "exec"),
+    ('vars(m)["%(a)s%(b)s" % {"a": "ex", "b": "ec"}](payload)', "exec"),
+    # A literal that reaches the step any other way is matched anywhere:
+    # bound by unpacking, +=, a loop, a default, an argument, a match or an
+    # exception, returned, or as a docstring ...
+    ('a, b = "xexec", 1\nvars(m)[a[1:]](payload)', "exec"),
+    ('s = "xexecx"\ns += "x"\nvars(m)[s[1:-2]](payload)', "exec"),
+    ('s = "q"\ns += "xexec"\nvars(m)[s[2:]](payload)', "exec"),
+    ('for s in ["xexec"]:\n    vars(m)[s[1:]](payload)', "exec"),
+    ('[vars(m)[s[1:]](payload) for s in ["xexec"]]', "exec"),
+    ('def f(s="xexec"):\n    return vars(m)[s[1:]](payload)', "exec"),
+    ('def f(s):\n    return vars(m)[s[1:]](payload)\nf("xexec")', "exec"),
+    ('list(map(lambda s: vars(m)[s[1:]](payload), ["xexec"]))', "exec"),
+    ('f = lambda s: vars(m)[s[1:]](payload)\nf("xexec")', "exec"),
+    ('match "xexec":\n    case s:\n        vars(m)[s[1:]](payload)', "exec"),
+    ('try:\n    raise ValueError("xexec")\nexcept ValueError as e:\n    vars(m)[str(e)[1:]](payload)', "exec"),
+    ('def f():\n    return "xexec"\nvars(m)[f()[1:]](payload)', "exec"),
+    ('def f():\n    """xexec"""\nvars(m)[f.__doc__[1:]](payload)', "exec"),
+    ('import inspect\ndef f():\n    """xexec"""\nvars(m)[inspect.getdoc(f)[1:]](payload)', "exec"),
+    ('"""xexec"""\nvars(m)[__doc__[1:]](payload)', "exec"),
+    # ... held in an expression ...
+    ('vars(m)[["xexec"][0][1:]](payload)', "exec"),
+    ('vars(m)[{"k": "xexec"}["k"][1:]](payload)', "exec"),
+    ('vars(m)[("xexec" if c else "")[1:]](payload)', "exec"),
+    ('def ident(x):\n    return x\nvars(m)[ident("xexec")[1:]](payload)', "exec"),
+    ('vars(m)[b"xexec".decode()[1:]](payload)', "exec"),
+    ('vars(m)["abc".replace("b", "xexec")[2:6]](payload)', "exec"),
+    # ... stored in an attribute, a container or a namespace ...
+    ('o.s = "xexec"\nvars(m)[o.s[1:]](payload)', "exec"),
+    ('@dataclass\nclass C:\n    s: str\nvars(m)[C("xexec").s[1:]](payload)', "exec"),
+    ('class C:\n    def __init__(self, s):\n        global g\n        g = s\nC("xexec")\nvars(m)[g[1:]](payload)', "exec"),
+    ('items = []\nitems.append("xexec")\nvars(m)[items[0][1:]](payload)', "exec"),
+    ('a = []\nb = a\nb.append("xexec")\nvars(m)[a[0][1:]](payload)', "exec"),
+    ('def add(l):\n    l.append("xexec")\nitems = []\nadd(items)\nvars(m)[items[0][1:]](payload)', "exec"),
+    ('def add(l):\n    l.append("xexec")\nput = add\nitems = []\nput(items)\nvars(m)[items[0][1:]](payload)', "exec"),
+    ('import heapq\nh = []\nheapq.heappush(h, "xexec")\nvars(m)[h[0][1:]](payload)', "exec"),
+    ('globals()["s"] = "xexec"\nvars(m)[s[1:]](payload)', "exec"),
+    ('d = globals()\nd["s"] = "xexec"\nvars(m)[s[1:]](payload)', "exec"),
+    ('s = "xexecx"\nglobals()["s"] = s + "x"\nvars(m)[s[1:-2]](payload)', "exec"),
+    # ... or returned by a dunder method a class (or its subclass) calls.
+    ('class C:\n    def __getitem__(self, k):\n        return "xexec"\nvars(m)[C()[0][1:]](payload)', "exec"),
+    ('class B:\n    def __str__(self):\n        return "xexec"\nclass C(B):\n    pass\nvars(m)[str(C())[1:]](payload)', "exec"),
+    ('class C:\n    def __enter__(self):\n        return "xexec"\nwith C() as s:\n    vars(m)[s[1:]](payload)', "exec"),
     # The longest name a string holds is the one reported.
     ('vars(m)["exec_module"](spec)', "exec_module"),
     # getattr / setattr / delattr by their dunder names.

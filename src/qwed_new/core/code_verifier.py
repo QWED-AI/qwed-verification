@@ -60,41 +60,52 @@ class _UnparseablePython(Exception):
 _PARENTHESES = re.compile(r"[()]")
 
 
-def _unformatted(text: str) -> Optional[str]:
-    """``text`` with each %-format conversion replaced by a space, since what
-    it becomes is not known and may end a word, or None when the format does
-    not parse. Conversions are read as CPython reads them, mapping keys with
-    nested parentheses included, in one pass over the text."""
-    parts: List[str] = []
+def _read_format(text: str) -> Optional[tuple[List[str], bool, float]]:
+    """``text`` read as a %-format: the text between its conversions (``%%``
+    is text), whether a conversion gives a precision, which cuts what it
+    inserts, and the widths the conversions pad to (``*`` unbounded). None
+    when the format does not parse. Conversions are read as CPython reads
+    them, mapping keys with nested parentheses included, in one pass."""
+    pieces: List[str] = []
+    piece: List[str] = []
+    cuts = False
+    padding = 0.0
     start = 0
-    while True:
-        percent = text.find("%", start)
-        if percent < 0:
-            parts.append(text[start:])
-            return "".join(parts)
-        parts.append(text[start:percent])
-        end = _conversion_end(text, percent + 1)
-        if end is None:
+    while (percent := text.find("%", start)) >= 0:
+        piece.append(text[start:percent])
+        conversion = _conversion(text, percent + 1)
+        if conversion is None:
             return None
-        parts.append(" ")
-        start = end
+        start, width, precision = conversion
+        if text[start - 1] == "%":
+            piece.append("%")
+            continue
+        pieces.append("".join(piece))
+        piece = []
+        cuts = cuts or precision is not None
+        padding += width
+    piece.append(text[start:])
+    pieces.append("".join(piece))
+    return pieces, cuts, padding
 
 
-def _conversion_end(text: str, i: int) -> Optional[int]:
-    """The index after the conversion that starts at ``text[i]``, just past
-    its ``%``: ``(key)``, flags, width, precision, length and the type."""
+def _conversion(text: str, i: int) -> Optional[tuple[int, float, Optional[float]]]:
+    """(end, width, precision) of the conversion that starts at ``text[i]``,
+    just past its ``%``: ``(key)``, flags, width, precision, length and the
+    type. The precision is None when there is none."""
     if text.startswith("(", i):
         i = _mapping_key_end(text, i + 1)
         if i is None:
             return None
     while i < len(text) and text[i] in "-+ #0":
         i += 1
-    i = _number_end(text, i)
+    i, width = _number(text, i)
+    precision = None
     if text.startswith(".", i):
-        i = _number_end(text, i + 1)
+        i, precision = _number(text, i + 1)
     if i < len(text) and text[i] in "hlL":
         i += 1
-    return i + 1 if i < len(text) else None
+    return (i + 1, width, precision) if i < len(text) else None
 
 
 def _mapping_key_end(text: str, i: int) -> Optional[int]:
@@ -106,12 +117,17 @@ def _mapping_key_end(text: str, i: int) -> Optional[int]:
     return None
 
 
-def _number_end(text: str, i: int) -> int:
+def _number(text: str, i: int) -> tuple[int, float]:
+    """(end, value) of the width or precision at ``text[i]``: 0 when there
+    is none, unbounded for ``*`` or more than nine digits."""
     if text.startswith("*", i):
-        return i + 1
-    while i < len(text) and text[i] in "0123456789":
-        i += 1
-    return i
+        return i + 1, float("inf")
+    end = i
+    while end < len(text) and text[end] in "0123456789":
+        end += 1
+    if end - i > 9:
+        return end, float("inf")
+    return end, int(text[i:end]) if end > i else 0
 
 
 
@@ -211,11 +227,12 @@ class CodeVerifier:
     # characters removed can leave the name although it only holds it inside
     # a longer word ("x__getattribute__"[1:]). Steps are worked out where they
     # can be and matched as whole identifiers; a step that removes characters
-    # but cannot be worked out matches its literals anywhere
+    # but cannot be worked out matches the literals that can reach it anywhere
     # (_reshaped_references).
     _CRITICAL_BUILTIN_IN_WORD: ClassVar = re.compile(
         "(" + "|".join(sorted(_ATTRIBUTE_READ_NAMES, key=len, reverse=True)) + ")"
     )
+    _WORD_CHARACTER: ClassVar = re.compile(r"\w")
     _LITERAL_RESHAPERS: ClassVar[dict] = {
         "strip": str.strip, "lstrip": str.lstrip, "rstrip": str.rstrip,
         "replace": str.replace, "removeprefix": str.removeprefix, "removesuffix": str.removesuffix,
@@ -226,6 +243,12 @@ class CodeVerifier:
     }
     _CASE_METHODS: ClassVar[frozenset] = frozenset(
         {"upper", "lower", "casefold", "swapcase", "title", "capitalize"}
+    )
+    # Methods that remove characters only where they cut: at the ends, or at
+    # a separator.
+    _EDGE_CUTTERS: ClassVar[frozenset] = frozenset(
+        {"strip", "lstrip", "rstrip", "split", "rsplit", "partition", "rpartition",
+         "removeprefix", "removesuffix"}
     )
     _RESHAPE_NODE_TYPES: ClassVar[frozenset] = frozenset({ast.Subscript, ast.BinOp, ast.Call, ast.Attribute})
     # Ways to rebind a name without an assignment the AST shows: a namespace
@@ -957,8 +980,9 @@ class CodeVerifier:
         - a string holding one of these names as a whole identifier, since
           ``vars(module)["exec"]`` reaches it by string, or a name that
           slicing, %-formatting or stripping a literal can leave, the literal
-          written in place or reached through names (``"xexec"[1:]``,
-          ``s = "xexec"; s[1:]``; _reshaped_references).
+          written in place or reaching the step another way (``"xexec"[1:]``,
+          ``s = "xexec"; s[1:]``, ``ident("xexec")[1:]``;
+          _reshaped_references).
         Comments, longer identifiers such as ``execute``, ``evaluate`` and
         ``compile_report``, prose in strings, and a class or module defining
         ``__getattr__`` are not matches.
@@ -1001,8 +1025,8 @@ class CodeVerifier:
 
     def _reshaped_references(self, nodes: List[ast.AST], reshapes: List[ast.AST]) -> List[tuple[str, int]]:
         """(name, line) for each step on a string that can leave a critical
-        name: a slice, a %-format, a character-removing or case-changing str
-        method, str() or a concatenation (_string_step).
+        name: a slice or index, a %-format, a str method that removes
+        characters or changes case, str() or a concatenation (_string_step).
 
         Steps are worked out deepest first from the literals they start
         from, so a chain is worked out as a whole (``"xexecx"[1:][:-1]``,
@@ -1010,11 +1034,12 @@ class CodeVerifier:
         identifiers: ``"executing %s" % job`` and ``"executed,ok".split(",")``
         are not matches. A step that removes characters but cannot be worked
         out (arguments that are not literals, a method read without being
-        called, an intermediate value too long to carry) matches the literals
-        it starts from anywhere. Names are followed by _BoundLiterals.
+        called, a value too long to carry or one of unknown origin) matches
+        anywhere the literals that can reach it (_ReachingLiterals), or the
+        value an earlier step worked out.
         """
         called = {id(node.func) for node in reshapes if isinstance(node, ast.Call)}
-        steps = _StringSteps(_BoundLiterals(nodes))
+        steps = _StringSteps(_ReachingLiterals(nodes))
         found: List[tuple[str, int]] = []
         # ast.walk is breadth first, so in reverse an operand comes before the step on it.
         for node in reversed(reshapes):
@@ -1027,24 +1052,29 @@ class CodeVerifier:
     @classmethod
     def _string_step(cls, node: ast.AST) -> tuple[Optional[str], List[ast.AST]]:
         """How ``node`` reshapes a string, and the operands it works on:
-        "remove" (a slice, or a character-removing method called or read),
-        "format" (``%``), "keep" (a case change, ``str()`` or ``+``, which
-        remove nothing), or None."""
+        "remove" (a slice, a str method that can remove characters inside a
+        word, or one read without being called), "format" (``%``), "keep"
+        (an index, a case change, ``str()``, ``+``, or a method that cuts
+        only between words: _keeps_words), or None."""
         if isinstance(node, ast.Subscript):
-            return "remove", [node.value]
+            # An index leaves one character, or one item whole.
+            return ("remove" if isinstance(node.slice, ast.Slice) else "keep"), [node.value]
         if isinstance(node, ast.BinOp):
             return cls._operator_step(node)
         if isinstance(node, ast.Call) and cls._is_str_call(node):
             return "keep", [node.args[0]]
         method = node.func if isinstance(node, ast.Call) else node
-        if isinstance(method, ast.Attribute) and method.attr in cls._LITERAL_RESHAPERS:
-            return ("keep" if method.attr in cls._CASE_METHODS else "remove"), [method.value]
-        return None, []
+        if not (isinstance(method, ast.Attribute) and method.attr in cls._LITERAL_RESHAPERS):
+            return None, []
+        if isinstance(node, ast.Attribute):
+            return "remove", [method.value]
+        receiver, _ = cls._method_call_parts(node)
+        return ("keep" if cls._keeps_words(node) else "remove"), [receiver]
 
     @staticmethod
     def _operator_step(node: ast.BinOp) -> tuple[Optional[str], List[ast.AST]]:
         if isinstance(node.op, ast.Mod):
-            return "format", [node.left]
+            return "format", [node.left, node.right]
         if isinstance(node.op, ast.Add):
             return "keep", [node.left, node.right]
         return None, []
@@ -1053,17 +1083,41 @@ class CodeVerifier:
     def _is_str_call(node: ast.Call) -> bool:
         return isinstance(node.func, ast.Name) and node.func.id == "str" and len(node.args) == 1 and not node.keywords
 
+    @staticmethod
+    def _method_call_parts(call: ast.Call) -> tuple[ast.AST, List[ast.AST]]:
+        """The string a str method call works on and the arguments it
+        passes: ``s.strip(c)``, or ``str.strip(s, c)`` through the class."""
+        receiver = call.func.value
+        if isinstance(receiver, ast.Name) and receiver.id == "str" and call.args:
+            return call.args[0], call.args[1:]
+        return receiver, call.args
+
     @classmethod
-    def _reshape_operand(cls, node: ast.AST) -> Optional[ast.AST]:
-        """The one string ``node`` reshapes, if it reshapes one."""
-        kind, operands = cls._string_step(node)
-        return operands[0] if kind and len(operands) == 1 else None
+    def _keeps_words(cls, call: ast.Call) -> bool:
+        """Whether a str method call leaves each word whole: a case change,
+        or strip, split, partition and their variants cutting on whitespace
+        or on a literal with no word characters. What those remove borders a
+        word, so a name in what they leave was already a whole one."""
+        method = call.func.attr
+        if method in cls._CASE_METHODS:
+            return True
+        _, args = cls._method_call_parts(call)
+        if method not in cls._EDGE_CUTTERS or any(isinstance(arg, ast.Starred) for arg in args):
+            return False
+        if any(keyword.arg is None for keyword in call.keywords):
+            return False
+        cut = args[0] if args else next((keyword.value for keyword in call.keywords if keyword.arg == "sep"), None)
+        if cut is None or (isinstance(cut, ast.Constant) and cut.value is None):
+            return True
+        if not (isinstance(cut, ast.Constant) and isinstance(cut.value, (str, bytes))):
+            return False
+        return cls._WORD_CHARACTER.search(cls._literal_text(cut)) is None
 
     @classmethod
     def _step_result(cls, node: ast.AST, values: list):
         """What the step ``node`` leaves of its operands' ``values`` (str, or
-        a list of str from split), or None when that is not known. Raises
-        when the arguments are not literals."""
+        a list or tuple of str from split or partition), or None when that
+        is not known. Raises when the arguments are not literals."""
         if isinstance(node, ast.Subscript):
             return values[0][cls._literal_index(node.slice)]
         if isinstance(node, ast.BinOp):
@@ -1072,7 +1126,8 @@ class CodeVerifier:
             # A method read without being called; or str() of a string.
             return None if isinstance(node, ast.Attribute) else values[0]
         method = node.func.attr
-        args = [cls._literal_text(arg) for arg in node.args]
+        _, arguments = cls._method_call_parts(node)
+        args = [cls._literal_text(arg) for arg in arguments]
         kwargs = {keyword.arg: cls._literal_text(keyword.value) for keyword in node.keywords}
         # translate can map one character to many, and replace grows the text
         # when the new part is longer: not worked out, to bound the work.
@@ -1099,11 +1154,12 @@ class CodeVerifier:
         return value.decode("latin-1") if isinstance(value, bytes) else value
 
     @classmethod
-    def _critical_name_in_value(cls, value) -> Optional[str]:
-        """A critical name a worked-out value (str, or list of str) holds as
-        a whole identifier."""
-        parts = value if isinstance(value, list) else [value]
-        return next(filter(None, (cls._critical_name_in_text(part, cls._CRITICAL_BUILTIN_NAME)
+    def _critical_name_in_value(cls, value, pattern=None) -> Optional[str]:
+        """A critical name a worked-out value (str, or list or tuple of str)
+        holds as a whole identifier, or as ``pattern`` matches it."""
+        pattern = pattern or cls._CRITICAL_BUILTIN_NAME
+        parts = value if isinstance(value, (list, tuple)) else [value]
+        return next(filter(None, (cls._critical_name_in_text(part, pattern)
                                   for part in parts if isinstance(part, str))), None)
 
     @staticmethod
@@ -1855,111 +1911,411 @@ class CodeVerifier:
         )
 
 
-class _BoundLiterals:
-    """What the string literals bound to each name can leave (#534).
+class _ReachingLiterals:
+    """Which critical names the string literals that can reach each value
+    hold anywhere, and the literal a name holds when one binding is all it
+    has (#534).
 
-    A name is followed through simple assignments (``s = ...``,
-    ``s: str = ...``, ``s := ...``), and the single-string steps and other
-    names in them (``t = s[1:]``, ``u = t``), back to the literals they
-    start from. Each assignment is read once, whatever number of names it
-    binds, and the critical names are spread across names with a work list,
-    so the work stays linear in the code. Nothing is worked out until a name
-    is asked about.
+    A literal is followed to every value it can become or be stored in
+    (_LiteralGraph), over-approximately: names and attributes share one key
+    per identifier and scopes are not told apart. The graph has one vertex
+    per expression and key and is walked once, so the work stays linear in
+    the code, and it is built only when a literal holds a critical name.
     """
 
     def __init__(self, nodes: List[ast.AST]):
         self._nodes = nodes
-        self._hits: Optional[Dict[str, str]] = None
-        self._only: Dict[str, Optional[str]] = {}
-        self._unformatted: Dict[int, Optional[str]] = {}
+        self._only: Optional[Dict[str, str]] = None
+        self._hits: Optional[Dict[object, str]] = None
 
-    def hit(self, name: str) -> Optional[str]:
-        """A critical name the literals ``name`` starts from hold anywhere."""
+    def hit(self, node: ast.AST) -> Optional[str]:
+        """A critical name a literal that can reach ``node`` holds anywhere."""
         if self._hits is None:
-            self._build()
-        return self._hits.get(name)
+            self._hits = self._reach()
+        return self._hits.get(id(node))
+
+    def only(self, name: str) -> Optional[str]:
+        """The literal ``name`` holds when its one binding is that literal
+        as written."""
+        if self._only is None:
+            self._only = self._bound_once()
+        return self._only.get(name)
 
     def literal(self, name: str) -> Optional[str]:
-        """The literal ``name`` holds when its one binding is that literal as
-        written, if it is short enough to work out per use."""
-        if self._hits is None:
-            self._build()
-        text = self._only.get(name)
+        """``only(name)``, when it is short enough to work out per use."""
+        text = self.only(name)
         return text if text is not None and len(text) <= _StringSteps.MAX_CARRIED else None
 
-    def unformatted(self, name: str) -> Optional[str]:
-        """``_unformatted`` of the literal ``name`` holds, worked out once
-        per literal."""
-        if self._hits is None:
-            self._build()
-        text = self._only.get(name)
-        if text is None:
-            return None
-        if id(text) not in self._unformatted:
-            self._unformatted[id(text)] = _unformatted(text)
-        return self._unformatted[id(text)]
+    def _reach(self) -> Dict[object, str]:
+        seeds = {}
+        for node in self._nodes:
+            if type(node) is ast.Constant and isinstance(node.value, (str, bytes)):
+                hit = CodeVerifier._critical_name_in_text(node.value, CodeVerifier._CRITICAL_BUILTIN_IN_WORD)
+                if hit:
+                    seeds[id(node)] = hit
+        if not seeds:
+            return {}
+        graph = _LiteralGraph()
+        for node in self._nodes:
+            graph.add_node(node)
+        return graph.spread(seeds)
 
-    def _build(self) -> None:
-        hits: Dict[str, str] = {}
-        users: Dict[str, set] = {}
+    # The node types that can bind a name (CodeVerifier._names_rebound_by,
+    # imports), and those that can reach a namespace.
+    _BINDERS: ClassVar[frozenset] = frozenset({
+        ast.Name, ast.Attribute, ast.arg, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+        ast.ExceptHandler, ast.MatchAs, ast.MatchStar, ast.MatchMapping, ast.Import, ast.ImportFrom,
+    })
+    _NAMESPACE_USES: ClassVar[frozenset] = frozenset({ast.Name, ast.Attribute, ast.Call, ast.ImportFrom})
+
+    def _bound_once(self) -> Dict[str, str]:
+        """Names bound once, to a literal as written. No name is, where the
+        code can bind one without a binding the AST shows: through a
+        namespace used other than by reading an item (``vars(m)[k]``), or a
+        star import."""
+        literals: Dict[str, str] = {}
+        for node in self._nodes:
+            if type(node) in (ast.Assign, ast.AnnAssign, ast.NamedExpr):
+                literals.update(self._literal_bindings(node))
+        bindings = self._binding_counts() if literals else None
+        if bindings is None:
+            return {}
+        return {name: text for name, text in literals.items() if bindings.get(name) == 1}
+
+    def _binding_counts(self) -> Optional[Dict[str, int]]:
+        """How many times each name is bound, or None when that is not all
+        the AST shows."""
+        read_items, called = self._read_items_and_calls()
         bindings: Dict[str, int] = {}
         for node in self._nodes:
-            targets, value = self._simple_binding(node)
-            if targets:
-                self._bind(targets, value, hits, users, bindings)
-        self._hits = self._spread(hits, users)
-
-    def _bind(self, targets: List[str], value: ast.AST, hits: Dict[str, str],
-              users: Dict[str, set], bindings: Dict[str, int]) -> None:
-        """Record one assignment: its value is read once for all targets."""
-        source, hit, text = self._source_of(value)
-        for name in targets:
-            bindings[name] = bindings.get(name, 0) + 1
-            self._only[name] = text if bindings[name] == 1 else None
-            if hit:
-                hits.setdefault(name, hit)
-            if isinstance(source, ast.Name):
-                users.setdefault(source.id, set()).add(name)
+            node_type = type(node)
+            if node_type in self._NAMESPACE_USES and self._binds_unseen(node, read_items, called):
+                return None
+            if node_type in self._BINDERS:
+                for name in self._names_bound_by(node):
+                    bindings[name] = bindings.get(name, 0) + 1
+        return bindings
 
     @staticmethod
-    def _spread(hits: Dict[str, str], users: Dict[str, set]) -> Dict[str, str]:
-        """``hits`` carried to every name bound from a name in it."""
-        pending = list(hits)
-        while pending:
-            source_name = pending.pop()
-            for user in users.get(source_name, ()):
-                if user not in hits:
-                    hits[user] = hits[source_name]
-                    pending.append(user)
-        return hits
+    def _names_bound_by(node: ast.AST):
+        if type(node) is ast.Name:
+            return () if type(node.ctx) is ast.Load else (node.id,)
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return [name for name, _ in CodeVerifier._import_targets(node)]
+        return CodeVerifier._names_rebound_by(node)
+
+    def _read_items_and_calls(self) -> tuple[set, set]:
+        read_items, called = set(), set()
+        for node in self._nodes:
+            node_type = type(node)
+            if node_type is ast.Subscript and type(node.ctx) is ast.Load:
+                read_items.add(id(node.value))
+            elif node_type is ast.Call:
+                called.add(id(node.func))
+        return read_items, called
 
     @staticmethod
-    def _simple_binding(node: ast.AST) -> tuple[List[str], Optional[ast.AST]]:
+    def _binds_unseen(node: ast.AST, read_items: set, called: set) -> bool:
+        if isinstance(node, ast.ImportFrom):
+            return any(alias.name == "*" for alias in node.names)
+        if isinstance(node, ast.Name):
+            return node.id in _LiteralGraph.NAMESPACE_CALLS and id(node) not in called
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            return node.func.id in _LiteralGraph.NAMESPACE_CALLS and id(node) not in read_items
+        if isinstance(node, ast.Attribute):
+            return node.attr in _LiteralGraph.NAMESPACE_ATTRIBUTES and id(node) not in read_items
+        return False
+
+    @staticmethod
+    def _literal_bindings(node: ast.AST) -> List[tuple[str, str]]:
         if isinstance(node, ast.Assign):
             targets = node.targets
         elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)):
             targets = [node.target]
         else:
-            return [], None
-        if node.value is None:
-            return [], None
-        return [target.id for target in targets if isinstance(target, ast.Name)], node.value
+            return []
+        if not (isinstance(node.value, ast.Constant) and isinstance(node.value.value, (str, bytes))):
+            return []
+        text = CodeVerifier._literal_text(node.value)
+        return [(target.id, text) for target in targets if isinstance(target, ast.Name)]
+
+
+class _LiteralGraph:
+    """Where a string literal's value can go (#534). Edges lead from each
+    expression to the one holding it where its value can be part of the
+    result (not a comparison, a test or an index), and from a value to each
+    key it is bound or may be stored to:
+
+    - assignment of any shape, augmented assignment, ``for``, ``with``, a
+      comprehension, a match capture and ``:=`` bind to their targets' keys;
+      a store into an item or attribute binds to the key holding the object;
+    - a call passes its arguments to the parameters of the functions of that
+      name (``("()", f)``) and to those it is given (``map(f, ...)``), and
+      may store them in the object a method is called on, in another
+      argument, or back in an argument through a parameter (``("out", f)``);
+      calling a class reaches its constructors, and what is made from a
+      value holds what the value holds (``C("xexec").s``);
+    - ``return`` and ``yield`` reach the function's key, a docstring
+      ``__doc__``, ``raise`` each ``except ... as`` name; a class's dunder
+      methods (``__repr__``, ``__getitem__``, ``__enter__``) are called
+      without being named, so what they return reaches the class and its
+      subclasses, and from there each value made from them;
+    - a name bound to another (``b = a``) is the same object: a store into
+      one reaches the other;
+    - a store into a namespace (``globals()["s"] = ...``) reaches every key
+      (WILDCARD).
+    """
+
+    WILDCARD = "*"
+    RAISED = ("raise",)
+    NAMESPACE_CALLS: ClassVar[frozenset] = frozenset({"globals", "vars", "locals"})
+    NAMESPACE_ATTRIBUTES: ClassVar[frozenset] = frozenset({"__dict__", "f_globals", "f_locals"})
+    CONSTRUCTORS = ("__init__", "__new__", "__post_init__")
+
+    def __init__(self):
+        self._edges: Dict[object, List[object]] = {}
+        self._read: set = set()
+
+    def add(self, source, target) -> None:
+        if target is not None:
+            self._edges.setdefault(source, []).append(target)
+
+    def spread(self, seeds: Dict[object, str]) -> Dict[object, str]:
+        """Each vertex a seed reaches, with the seed's name."""
+        for name in self._read:
+            self.add(self.WILDCARD, name)
+        hits = dict(seeds)
+        pending = list(seeds)
+        while pending:
+            vertex = pending.pop()
+            for target in self._edges.get(vertex, ()):
+                if target not in hits:
+                    hits[target] = hits[vertex]
+                    pending.append(target)
+        return hits
+
+    def add_node(self, node: ast.AST) -> None:
+        node_type = type(node)
+        children = self._VALUE_CHILDREN.get(node_type)
+        if children is None and isinstance(node, ast.expr):
+            # An expression type not listed (a newer Python's): all its children.
+            children = ast.iter_child_nodes
+        if children is not None:
+            target = id(node)
+            for child in children(node):
+                if child is not None:
+                    self._edges.setdefault(id(child), []).append(target)
+        builder = self._BUILDERS.get(node_type)
+        if builder is not None:
+            builder(self, node)
+
+    # For each expression type, the children whose value can be part of its
+    # own: not a comparison's operands, a test, an index or a slice.
+    _VALUE_CHILDREN: ClassVar[dict] = {
+        ast.Name: lambda node: (), ast.Constant: lambda node: (),
+        ast.Compare: lambda node: (), ast.UnaryOp: lambda node: (),
+        ast.Attribute: lambda node: (node.value,), ast.Subscript: lambda node: (node.value,),
+        ast.Starred: lambda node: (node.value,), ast.NamedExpr: lambda node: (node.value,),
+        ast.Await: lambda node: (node.value,), ast.Yield: lambda node: (node.value,),
+        ast.YieldFrom: lambda node: (node.value,), ast.Lambda: lambda node: (node.body,),
+        ast.BinOp: lambda node: (node.left, node.right), ast.BoolOp: lambda node: node.values,
+        ast.IfExp: lambda node: (node.body, node.orelse),
+        ast.Tuple: lambda node: node.elts, ast.List: lambda node: node.elts, ast.Set: lambda node: node.elts,
+        ast.Dict: lambda node: (*node.keys, *node.values),
+        ast.ListComp: lambda node: (node.elt,), ast.SetComp: lambda node: (node.elt,),
+        ast.GeneratorExp: lambda node: (node.elt,), ast.DictComp: lambda node: (node.key, node.value),
+        ast.JoinedStr: lambda node: node.values,
+        ast.FormattedValue: lambda node: (node.value, node.format_spec),
+        ast.Call: lambda node: (node.func, *node.args, *(keyword.value for keyword in node.keywords)),
+        ast.Slice: lambda node: (),
+    }
+
+    @classmethod
+    def _head(cls, node: ast.AST):
+        """The key holding the object an expression refers to: a name, the
+        last attribute read, or WILDCARD for a namespace."""
+        # An item, an unpacking or a call result is part of what it is taken from.
+        while isinstance(node, (ast.Subscript, ast.Starred, ast.Call)):
+            node = node.func if isinstance(node, ast.Call) else node.value
+        if isinstance(node, ast.Name):
+            return cls.WILDCARD if node.id in cls.NAMESPACE_CALLS else node.id
+        if isinstance(node, ast.Attribute):
+            return cls.WILDCARD if node.attr in cls.NAMESPACE_ATTRIBUTES else node.attr
+        return None
+
+    @classmethod
+    def _stored_in(cls, value: ast.AST):
+        """The key a store into the object ``value`` refers to changes."""
+        head = cls._head(value)
+        if isinstance(value, (ast.Name, ast.Attribute, ast.Subscript)) or head == cls.WILDCARD:
+            return head
+        return None
 
     @staticmethod
-    def _source_of(value: ast.AST) -> tuple[ast.AST, Optional[str], Optional[str]]:
-        """What a bound value starts from, the critical name it holds
-        anywhere if it is a literal, and the literal text when the value is
-        that literal as written."""
-        source = value
-        operand = CodeVerifier._reshape_operand(source)
-        while operand is not None:
-            source = operand
-            operand = CodeVerifier._reshape_operand(source)
-        if not (isinstance(source, ast.Constant) and isinstance(source.value, (str, bytes))):
-            return source, None, None
-        text = source.value.decode("latin-1") if isinstance(source.value, bytes) else source.value
-        hit = CodeVerifier._critical_name_in_text(text, CodeVerifier._CRITICAL_BUILTIN_IN_WORD)
-        return source, hit, text if source is value else None
+    def _callee(node: ast.AST):
+        """The function ``node`` names, if it names one: a name, an
+        attribute, or a lambda."""
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            return node.attr
+        return id(node) if isinstance(node, ast.Lambda) else None
+
+    def _target_keys(self, target: ast.AST) -> List[object]:
+        if isinstance(target, (ast.Tuple, ast.List)):
+            return [key for element in target.elts for key in self._target_keys(element)]
+        if isinstance(target, ast.Starred):
+            return self._target_keys(target.value)
+        head = self._head(target.value if isinstance(target, ast.Subscript) else target)
+        return [] if head is None else [head]
+
+    def _bind(self, value: ast.AST, target: ast.AST, alias: bool = True) -> None:
+        """``value`` bound to ``target``; with ``alias``, a store into the
+        target changes what the value refers to too."""
+        callee = self._callee(value)
+        stored_in = self._stored_in(value) if alias else None
+        for key in self._target_keys(target):
+            self.add(id(value), key)
+            if callee is not None:
+                self.add(("()", key), ("()", callee))
+                self.add(("out", callee), ("out", key))
+            if stored_in is not None:
+                self.add(key, stored_in)
+
+    def _name(self, node: ast.Name) -> None:
+        if type(node.ctx) is ast.Load:
+            self._edges.setdefault(node.id, []).append(id(node))
+            self._read.add(node.id)
+
+    def _attribute(self, node: ast.Attribute) -> None:
+        if type(node.ctx) is ast.Load:
+            self._edges.setdefault(node.attr, []).append(id(node))
+            self._read.add(node.attr)
+
+    def _assign(self, node: ast.Assign) -> None:
+        for target in node.targets:
+            self._bind(node.value, target)
+
+    def _ann_assign(self, node: ast.AnnAssign) -> None:
+        if node.value is not None:
+            self._bind(node.value, node.target)
+
+    def _aug_assign(self, node: ast.AugAssign) -> None:
+        self._bind(node.value, node.target, alias=False)
+
+    def _named_expr(self, node: ast.NamedExpr) -> None:
+        self._bind(node.value, node.target)
+
+    def _loop(self, node: ast.AST) -> None:
+        self._bind(node.iter, node.target)
+
+    def _with(self, node: ast.AST) -> None:
+        for item in node.items:
+            if item.optional_vars is not None:
+                self._bind(item.context_expr, item.optional_vars)
+
+    def _match(self, node: ast.Match) -> None:
+        for case in node.cases:
+            for pattern in ast.walk(case.pattern):
+                for name in (getattr(pattern, "name", None), getattr(pattern, "rest", None)):
+                    if isinstance(name, str):
+                        self.add(id(node.subject), name)
+
+    def _call(self, node: ast.Call) -> None:
+        hub = ("args", id(node))
+        callee = self._callee(node.func)
+        if callee is not None:
+            self.add(hub, ("()", callee))
+        if isinstance(node.func, ast.Attribute):
+            # A method may store its arguments in the object it is called on.
+            self.add(hub, self._head(node.func.value))
+        arguments = [arg.value if isinstance(arg, ast.Starred) else arg for arg in node.args]
+        for argument in arguments + [keyword.value for keyword in node.keywords]:
+            self.add(id(argument), hub)
+            stored_in = self._stored_in(argument)
+            self.add(hub, stored_in)
+            if callee is not None:
+                self.add(("out", callee), stored_in)
+            passed = self._callee(argument)
+            if passed is not None:
+                self.add(hub, ("()", passed))
+
+    def _parameters(self, function, arguments: ast.arguments) -> None:
+        entry, out = ("()", function), ("out", function)
+        for default in (*arguments.defaults, *arguments.kw_defaults):
+            if default is not None:
+                self.add(id(default), entry)
+        for parameter in (*arguments.posonlyargs, *arguments.args, arguments.vararg,
+                          *arguments.kwonlyargs, arguments.kwarg):
+            if parameter is not None:
+                self.add(entry, parameter.arg)
+                self.add(parameter.arg, out)
+
+    def _function(self, node: ast.AST) -> None:
+        self._parameters(node.name, node.args)
+        for value in self._returned(node.body):
+            self.add(id(value), node.name)
+        # A dunder's docstring is not what calling the class gives (_class).
+        self._docstring(node.body, None if self._is_dunder(node.name) else node.name)
+
+    def _lambda(self, node: ast.Lambda) -> None:
+        self._parameters(id(node), node.args)
+
+    def _class(self, node: ast.ClassDef) -> None:
+        entry = ("()", node.name)
+        for constructor in self.CONSTRUCTORS:
+            self.add(entry, ("()", constructor))
+        for base in node.bases:
+            self.add(self._head(base), node.name)
+        for statement in node.body:
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and self._is_dunder(statement.name):
+                self.add(statement.name, node.name)
+        self._docstring(node.body, node.name)
+
+    @staticmethod
+    def _is_dunder(name: str) -> bool:
+        return name.startswith("__") and name.endswith("__")
+
+    def _module(self, node: ast.Module) -> None:
+        self._docstring(node.body, None)
+
+    def _raise(self, node: ast.Raise) -> None:
+        for value in (node.exc, node.cause):
+            if value is not None:
+                self.add(id(value), self.RAISED)
+
+    def _except(self, node: ast.ExceptHandler) -> None:
+        if node.name:
+            self.add(self.RAISED, node.name)
+
+    @staticmethod
+    def _returned(body: List[ast.stmt]):
+        """The values a function's own return and yield statements give."""
+        pending: List[ast.AST] = list(body)
+        while pending:
+            node = pending.pop()
+            if isinstance(node, (ast.Return, ast.Yield, ast.YieldFrom)) and node.value is not None:
+                yield node.value
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                pending.extend(ast.iter_child_nodes(node))
+
+    def _docstring(self, body: List[ast.stmt], name: Optional[str]) -> None:
+        """A docstring is what ``__doc__`` reads, and what inspect.getdoc(f)
+        reads through f."""
+        first = body[0] if body else None
+        if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+            self.add(id(first.value), "__doc__")
+            if name is not None:
+                self.add(id(first.value), name)
+
+    _BUILDERS: ClassVar[dict] = {
+        ast.Name: _name, ast.Attribute: _attribute, ast.Call: _call,
+        ast.Assign: _assign, ast.AnnAssign: _ann_assign, ast.AugAssign: _aug_assign,
+        ast.NamedExpr: _named_expr, ast.For: _loop, ast.AsyncFor: _loop, ast.comprehension: _loop,
+        ast.With: _with, ast.AsyncWith: _with, ast.Match: _match,
+        ast.FunctionDef: _function, ast.AsyncFunctionDef: _function, ast.Lambda: _lambda,
+        ast.ClassDef: _class, ast.Module: _module, ast.Raise: _raise, ast.ExceptHandler: _except,
+    }
 
 
 class _StringSteps:
@@ -1970,26 +2326,124 @@ class _StringSteps:
 
     MAX_CARRIED = 4096
 
-    def __init__(self, bound: _BoundLiterals):
-        self._bound = bound
+    def __init__(self, reach: _ReachingLiterals):
+        self._reach = reach
         self._values: Dict[int, object] = {}
         self._hits: Dict[int, Optional[str]] = {}
+        self._formats: Dict[int, tuple[Optional[str], bool]] = {}
 
     def check(self, node: ast.AST) -> Optional[str]:
         """Work out ``node`` and return the critical name it can leave."""
         kind, operands = CodeVerifier._string_step(node)
         if kind is None:
             return None
-        hit = next(filter(None, (self._hit(operand) for operand in operands)), None)
-        self._hits[id(node)] = hit
         if kind == "format":
-            value = self._formatted(operands[0])
-        else:
-            value = self._worked_out(node, [self._value(operand) for operand in operands])
-            self._values[id(node)] = value
+            return self._check_format(node, *operands)
+        if isinstance(node, ast.Attribute):
+            return self._check_saved_method(node)
+        value = self._worked_out(node, [self._value(operand) for operand in operands])
         if value is not None:
+            self._values[id(node)] = value
             return CodeVerifier._critical_name_in_value(value)
-        return None if kind == "keep" else hit
+        hit = self._unknown_hit(node, operands)
+        return hit if kind == "remove" else None
+
+    def _unknown_hit(self, node: ast.AST, operands) -> Optional[str]:
+        """The hit of a step not worked out: its operands' (an earlier
+        step's value included), or a literal that reaches it another way,
+        such as an argument (``"abc".replace("b", "xexec")``)."""
+        hit = self._operand_hit(operands) or self._reach.hit(node)
+        self._hits[id(node)] = hit
+        return hit
+
+    def _check_saved_method(self, node: ast.Attribute) -> Optional[str]:
+        """A str method read without being called (``f = "xexec".lstrip``)
+        may be called later with any arguments: its string is matched
+        anywhere, after the change a case method makes."""
+        value = self._value(node.value)
+        if isinstance(value, str) and node.attr in CodeVerifier._CASE_METHODS:
+            changed = CodeVerifier._LITERAL_RESHAPERS[node.attr](value)
+            hit = CodeVerifier._critical_name_in_text(changed, CodeVerifier._CRITICAL_BUILTIN_IN_WORD)
+        else:
+            hit = self._hit(node.value)
+        self._hits[id(node)] = hit
+        return hit
+
+    def _check_format(self, node: ast.BinOp, left: ast.AST, right: ast.AST) -> Optional[str]:
+        """A %-format, worked out when the format and its arguments are
+        literals. Otherwise each conversion is read both as a separator and
+        as nothing, and a format that cuts what it inserts (a precision), or
+        is not known or readable, is a removal."""
+        value = self._formatted(left, right)
+        if value is not None:
+            self._values[id(node)] = value
+            return CodeVerifier._critical_name_in_value(value)
+        hit = self._unknown_hit(node, (left, right))
+        name, cuts = self._format_reading(left)
+        return name or (hit if cuts else None)
+
+    def _formatted(self, left: ast.AST, right: ast.AST) -> Optional[str]:
+        text = self._value(left)
+        args = self._format_arguments(right)
+        if not isinstance(text, str) or args is None:
+            return None
+        reading = _read_format(text)
+        if isinstance(args, dict):
+            inserted = args.values()
+        else:
+            inserted = args if isinstance(args, tuple) else (args,)
+        # Bounded, as the widths pad: "%999999999s" % "" is a gigabyte.
+        if reading is None or len(text) + reading[2] + sum(len(str(arg)) for arg in inserted) > 4 * self.MAX_CARRIED:
+            return None
+        try:
+            return text % args
+        except (ValueError, TypeError, KeyError, OverflowError):
+            return None
+
+    def _format_arguments(self, node: ast.AST):
+        """The arguments of a %-format when they are literals (str, or an
+        int ``%c`` or ``%d`` can take): alone, in a tuple, or the values of
+        a dict with str keys."""
+        if isinstance(node, ast.Tuple):
+            args = tuple(self._format_argument(element) for element in node.elts)
+            return None if any(arg is None for arg in args) else args
+        if isinstance(node, ast.Dict):
+            if not all(isinstance(key, ast.Constant) and isinstance(key.value, str) for key in node.keys):
+                return None
+            values = [self._format_argument(value) for value in node.values]
+            return None if any(value is None for value in values) else dict(zip((key.value for key in node.keys), values))
+        return self._format_argument(node)
+
+    def _format_argument(self, node: ast.AST):
+        if isinstance(node, ast.Constant) and type(node.value) is int and abs(node.value) <= 0x10FFFF:
+            return node.value
+        value = self._value(node)
+        return value if isinstance(value, str) else None
+
+    def _format_reading(self, left: ast.AST) -> tuple[Optional[str], bool]:
+        """For a format whose arguments are not known: the critical name it
+        leaves as a whole identifier when each conversion becomes a
+        separator or nothing, and whether it is a removal. A literal reached
+        through names is read once, however often it is formatted."""
+        if not isinstance(left, ast.Name):
+            value = self._value(left)
+            return self._read_unknown_format(value) if isinstance(value, str) else (None, True)
+        text = self._reach.only(left.id)
+        if text is None:
+            return None, True
+        if id(text) not in self._formats:
+            self._formats[id(text)] = self._read_unknown_format(text)
+        return self._formats[id(text)]
+
+    @staticmethod
+    def _read_unknown_format(text: str) -> tuple[Optional[str], bool]:
+        reading = _read_format(text)
+        if reading is None:
+            return None, True
+        pieces, cuts, _ = reading
+        name = (CodeVerifier._critical_name_in_value(" ".join(pieces))
+                or CodeVerifier._critical_name_in_value("".join(pieces)))
+        return name, cuts
 
     def _worked_out(self, node: ast.AST, values: list):
         if any(value is None for value in values):
@@ -1999,14 +2453,6 @@ class _StringSteps:
         except (ValueError, TypeError, IndexError, KeyError, RecursionError):
             return None
 
-    def _formatted(self, operand: ast.AST) -> Optional[str]:
-        # The %-result with each conversion read as a space: matched here,
-        # but not carried on, since the real text differs.
-        if isinstance(operand, ast.Name):
-            return self._bound.unformatted(operand.id)
-        value = self._value(operand)
-        return _unformatted(value) if isinstance(value, str) else None
-
     def _value(self, operand: ast.AST):
         if isinstance(operand, ast.Constant):
             value = operand.value
@@ -2014,7 +2460,7 @@ class _StringSteps:
                 return value.decode("latin-1")
             return value if isinstance(value, str) else None
         if isinstance(operand, ast.Name):
-            return self._bound.literal(operand.id)
+            return self._reach.literal(operand.id)
         value = self._values.get(id(operand))
         if value is None:
             return None
@@ -2022,8 +2468,18 @@ class _StringSteps:
         return value if size <= self.MAX_CARRIED else None
 
     def _hit(self, operand: ast.AST) -> Optional[str]:
+        """A critical name, anywhere, in what can reach ``operand``: the
+        value a step worked out, or the literals that can reach it."""
+        key = id(operand)
+        if key in self._hits:
+            return self._hits[key]
+        if key in self._values:
+            hit = CodeVerifier._critical_name_in_value(self._values[key], CodeVerifier._CRITICAL_BUILTIN_IN_WORD)
+            self._hits[key] = hit
+            return hit
         if isinstance(operand, ast.Constant) and isinstance(operand.value, (str, bytes)):
             return CodeVerifier._critical_name_in_text(operand.value, CodeVerifier._CRITICAL_BUILTIN_IN_WORD)
-        if isinstance(operand, ast.Name):
-            return self._bound.hit(operand.id)
-        return self._hits.get(id(operand))
+        return self._reach.hit(operand)
+
+    def _operand_hit(self, operands) -> Optional[str]:
+        return next(filter(None, map(self._hit, operands)), None)
