@@ -379,9 +379,14 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     (`"{:.4}".format("execute")`, `f"ex{''}ec"`). An index that is not a
     literal may be a slice object (`"xexec"[slice(1, None)]`), so it is
     read as a slice. A regex function (`sub`, `findall`, `search`, `match`
-    and their variants) on `re` or `regex`, however it is named, is a step
-    that removes characters (`re.sub("q", "", "qexec")`). `%` with a number
-    on either side and a format that is not known is arithmetic (`i % 2`).
+    and their variants, and the `regex` package's `subf`, `subfn` and
+    `splititer`) on `re` or `regex`, however it is named, is a step that
+    removes characters (`re.sub("q", "", "qexec")`); helpers that remove
+    nothing (`re.escape`) are not. `%` with a number on the left is
+    arithmetic (`10 % n`); a number on the right is not, since `%c` and `%x`
+    insert letters. A format's own text, its fields read as separators and
+    as nothing, is matched anywhere by a later step
+    (`("xex%sec" % sep)[1:]`).
   - A step that removes characters but cannot be worked out (arguments
     that are not literals, a method saved and called later, a `translate`
     or a `replace` that grows the text, a precision in a format whose

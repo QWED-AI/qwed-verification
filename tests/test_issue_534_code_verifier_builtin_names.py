@@ -83,13 +83,14 @@ def _verify(code):
     'print("evaluated %.2f" % score)',
     'print("evaluated {:.2f}".format(score))',
     'print(f"executing {job}")',
-    # A number either side of % is arithmetic; a regex or a search API on
-    # text that holds no name is not a match.
-    'lines = "executing\\njob".split("\\n")\nfor i, line in enumerate(lines):\n    if i % 2:\n        print(line)',
-    'n = len("executing")\nprint(n % 3)',
+    # A number on the left of % is arithmetic; a regex or a search API on
+    # text that holds no name is not a match, nor is a regex helper that
+    # removes nothing.
+    'n = len("executing")\nprint(100 % n)',
     'from sys import exit\nexit("execution failed")',
     'import re\nprint(re.sub(r"\\s+", " ", text))\nprint("executing")',
     'res = es.search(index="evaluations")',
+    'from re import escape as quote\nprint(quote("executing"))',
     # A step that overflows is not worked out, and does not fail the check.
     'parts = "a,b".split(",", 100000000000000000000000000000)',
 ])
@@ -232,6 +233,13 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("vars(m)[f\"{'execute':.4}\"](payload)", "exec"),
     ("vars(m)[f\"ex{''}ec\"](payload)", "exec"),
     ('w = ("execute",)[0]\nvars(m)[f"{w:.4}"](payload)', "exec"),
+    # A format's own text, its fields joined, can leave a name for a later
+    # step; and %c or %x insert letters, whatever number they are given.
+    ('vars(m)[("xex%sec" % sep)[1:]](payload)', "exec"),
+    ('vars(m)["xex{}ec".format(sep)[1:]](payload)', "exec"),
+    ('vars(m)[f"xex{sep}ec"[1:]](payload)', "exec"),
+    ('s = "%cexec"\ns = s\nvars(m)[(s % 32).strip()](payload)', "exec"),
+    ('vars(m)[(("%cexec" if c else "q") % 32).strip()](payload)', "exec"),
     # An index that is not a literal may be a slice object.
     ('vars(m)["xexec"[slice(1, None)]](payload)', "exec"),
     ('s = slice(1, None)\nvars(m)["xexec"[s]](payload)', "exec"),
@@ -303,6 +311,10 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ('from re import sub as s\nvars(m)[s("q", "", "qexec")](payload)', "exec"),
     ('import re\nvars(m)[re.findall("e.*", "qexec")[0]](payload)', "exec"),
     ('import re as r\nvars(m)[r.search("e.*", "qexec").group()](payload)', "exec"),
+    ('import regex\nvars(m)[regex.subf("q(.*)", "{1}", "qexec")](payload)', "exec"),
+    ('import regex\nvars(m)[list(regex.splititer("q", "qexec"))[1]](payload)', "exec"),
+    ('from importlib import import_module as im\nvars(m)[im("re").sub("q", "", "qexec")](payload)', "exec"),
+    ('from importlib import import_module as im\nimport dataclasses\n@dataclasses.dataclass\nclass C:\n    xexec: int\nvars(m)[im("dataclasses").fields(C)[0].name[1:]](payload)', "exec"),
     ("from linecache import getline as gl\nimport sys\nline = gl(sys.argv[0], 4)\nvars(m)[line[4:8]](payload)\n# xexec", "exec"),
     # ... or returned by a dunder method a class (or its subclass) calls.
     ('class C:\n    def __getitem__(self, k):\n        return "xexec"\nvars(m)[C()[0][1:]](payload)', "exec"),

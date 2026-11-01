@@ -22,8 +22,11 @@ from typing import ClassVar
 RESHAPE_NODE_TYPES = frozenset({ast.Subscript, ast.BinOp, ast.Call, ast.Attribute, ast.JoinedStr})
 # str.format and format_map, and the builtin format(), insert into a template.
 BRACE_FORMATS = frozenset({"format", "format_map"})
-# Regex functions that can remove characters (split is read as str.split).
-REGEX_STEPS = frozenset({"sub", "subn", "findall", "finditer", "search", "match", "fullmatch"})
+# Regex functions that can remove characters (split is read as str.split);
+# subf, subfn and splititer are the regex package's own.
+REGEX_STEPS = frozenset({
+    "sub", "subn", "subf", "subfn", "findall", "finditer", "splititer", "search", "match", "fullmatch",
+})
 
 LITERAL_RESHAPERS = {
     "strip": str.strip, "lstrip": str.lstrip, "rstrip": str.rstrip,
@@ -751,11 +754,22 @@ class LiteralGraph:
         for alias in node.names:
             bound = alias.asname or alias.name
             if module in self.REGEX_MODULES:
-                self._regex_keys.add(bound)
+                # Only the functions that remove characters: re.escape does not.
+                self._regex_keys.update(self._regex_names(alias.name, bound))
             if module in self.INTROSPECTION_MODULES:
                 self._module_keys.add(bound)
+            if alias.name in self.MODULE_LOOKUPS:
+                # from importlib import import_module as im
+                self._module_keys.add(bound)
+                self._regex_keys.add(bound)
             if self._source:
                 self._seed_import(module, alias.name, bound)
+
+    @staticmethod
+    def _regex_names(name: str, bound: str):
+        if name == "*":
+            return REGEX_STEPS
+        return (bound,) if name in REGEX_STEPS else ()
 
     def _seed_import(self, module: str, name: str, bound: str) -> None:
         if module == "sys" and name == "*":
@@ -922,7 +936,7 @@ class StringSteps:
         self._names = names
         self._values: dict[int, object] = {}
         self._hits: dict[int, str | None] = {}
-        self._formats: dict[int, tuple[str | None, bool]] = {}
+        self._formats: dict[int, tuple[str | None, bool, str | None] | None] = {}
         self._readings: dict[int, object] = {}
 
     def check(self, node: ast.AST) -> str | None:
@@ -978,12 +992,25 @@ class StringSteps:
         hit = self._unknown_hit(node, (left, right))
         reading = self._format_reading(left)
         if reading is None:
-            # i % 2: a number either side is arithmetic, or a format that
-            # inserts digits and cuts none of an unknown format's own text.
-            return None if _is_number(left) or _is_number(right) else hit
+            # 10 % n is arithmetic. A number on the right is not: %c and %x
+            # insert letters ("%cexec" % 32).
+            return None if _is_number(left) else hit
         # A precision cuts what is inserted, not the format's own text.
-        name, cuts = reading
+        name, cuts, joined = reading
+        self._join_hit(node, joined)
         return name or (self._hit(right) if cuts else None)
+
+    def _join_hit(self, node: ast.AST, joined: str | None) -> None:
+        """A format's own text, its fields read as separators and as
+        nothing, can leave a name for a later step: ("xex%sec" % "")[1:]."""
+        if self._hits.get(id(node)) is None:
+            self._hits[id(node)] = joined
+
+    def _joined_names(self, pieces: list[str]) -> tuple[str | None, str | None]:
+        """The critical name a format's text leaves with its fields read as
+        separators or as nothing: as a whole identifier, and anywhere."""
+        joined = (" ".join(pieces), "".join(pieces))
+        return self._names.in_value(joined), self._names.in_value(joined, self._names.in_word)
 
     def _check_braces(self, node: ast.AST, inserted: list[ast.AST]) -> str | None:
         """``str.format``, ``format()`` or an f-string, read as a %-format
@@ -995,7 +1022,8 @@ class StringSteps:
         if reading is None:
             return hit
         pieces, cuts = reading
-        name = self._names.in_value(" ".join(pieces)) or self._names.in_value("".join(pieces))
+        name, joined = self._joined_names(pieces)
+        self._join_hit(node, joined)
         return name or (self._operand_hit(inserted) if cuts else None)
 
     def _brace_reading(self, node: ast.AST) -> tuple[list[str], bool] | None:
@@ -1073,12 +1101,14 @@ class StringSteps:
         value = self._value(node)
         return value if isinstance(value, str) else None
 
-    def _format_reading(self, left: ast.AST) -> tuple[str | None, bool] | None:
+    def _format_reading(self, left: ast.AST) -> tuple[str | None, bool, str | None] | None:
         """For a format whose arguments are not known: the critical name it
         leaves as a whole identifier when each conversion becomes a
-        separator or nothing, and whether a conversion cuts what it inserts;
-        None when the format is not known or readable. A literal reached
-        through names is read once, however often it is formatted."""
+        separator or nothing, whether a conversion cuts what it inserts, and
+        the name it leaves anywhere (for a later step); None when the format
+        is not known or readable. A
+        literal reached through names is read once, however often it is
+        formatted."""
         if not isinstance(left, ast.Name):
             value = self._value(left)
             return self._read_unknown_format(value) if isinstance(value, str) else None
@@ -1096,13 +1126,13 @@ class StringSteps:
             self._readings[id(text)] = read_format(text)
         return self._readings[id(text)]
 
-    def _read_unknown_format(self, text: str) -> tuple[str | None, bool] | None:
+    def _read_unknown_format(self, text: str) -> tuple[str | None, bool, str | None] | None:
         reading = read_format(text)
         if reading is None:
             return None
         pieces, cuts, _ = reading
-        name = self._names.in_value(" ".join(pieces)) or self._names.in_value("".join(pieces))
-        return name, cuts
+        name, joined = self._joined_names(pieces)
+        return name, cuts, joined
 
     @staticmethod
     def _worked_out(node: ast.AST, values: list):
