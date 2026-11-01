@@ -381,8 +381,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     read as a slice. A regex function (`sub`, `findall`, `search`, `match`
     and their variants, and the `regex` package's `subf`, `subfn` and
     `splititer`) on `re` or `regex`, however it is named, is a step that
-    removes characters (`re.sub("q", "", "qexec")`), as is `split`
-    imported under another name; helpers that remove nothing (`re.escape`)
+    removes characters (`re.sub("q", "", "qexec")`), as is `split` on a
+    regex module or imported from one, whose pattern is not the text it
+    cuts on; helpers that remove nothing (`re.escape`)
     are not. `%` with a number on the left is
     arithmetic (`10 % n`); a number on the right is not, since `%c` and `%x`
     insert letters. A format's own text, its fields read as separators and
@@ -406,7 +407,8 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     parameter default; parameters of the functions a call names or is given
     (`map(f, ...)`, `partial(f, ...)`), or, for a call whose function is
     not named (`ops["cut"](s)`, `make()(s)`), of every lambda and every
-    function read as a value; and what they return or yield;
+    function or method read as a value (`{"a": obj.cut}`); and what they
+    return or yield;
     `__doc__` for a docstring; `except ... as` for what is raised; a class
     and its subclasses for what its dunder methods return; what a call can
     store into (the object a method is called on, another argument, an
@@ -422,7 +424,8 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     `inspect` or `sys`, the module followed through the graph however it
     is named or looked up: `d = dataclasses`, `sys.modules[...]`,
     `importlib.import_module(...)`; an import seeds its names where they
-    are read as names, and a star import only its introspection names), a
+    are read as names, and a star import what the module exports plus
+    its introspection names, `inspect.get_annotations` included), a
     call given a keyword of that name (`dict(xexec=1)`), and a class with a
     base that has a member of that name (an Enum member's `.name`). Names and attributes share one key per identifier, and scopes
     are not told apart. The graph is built only when the source holds a

@@ -12,6 +12,8 @@ admitted on a guess.
 """
 
 import ast
+import functools
+import importlib
 import re
 import string
 from collections.abc import Callable
@@ -48,6 +50,21 @@ EDGE_CUTTERS = frozenset(
 _WORD_CHARACTER = re.compile(r"\w")
 _PARENTHESES = re.compile(r"[()]")
 MAX_CARRIED = 4096
+
+
+@functools.cache
+def module_exports(module: str) -> frozenset[str]:
+    """The names ``from <module> import *`` binds. Only ever called for the
+    standard library modules in LiteralGraph.INTROSPECTION_MODULES, never a
+    name read from the code."""
+    try:
+        imported = importlib.import_module(module)
+    except ImportError:
+        return frozenset()
+    names = getattr(imported, "__all__", None)
+    if names is None:
+        names = [name for name in dir(imported) if not name.startswith("_")]
+    return frozenset(names)
 
 
 @dataclass(frozen=True)
@@ -448,7 +465,8 @@ class ReachingLiterals:
             return False
         func = node.func
         if isinstance(func, ast.Attribute):
-            if func.attr not in REGEX_STEPS:
+            # split too: on a regex its pattern is not the text it cuts on.
+            if func.attr not in REGEX_IMPORTS:
                 return False
             func = func.value
         self.hit(func)
@@ -593,8 +611,9 @@ class LiteralGraph:
     REGEX_MODULES: ClassVar[frozenset] = frozenset({"re", "regex"})
     # What gives a module by name: sys.modules[...], importlib.import_module().
     MODULE_LOOKUPS: ClassVar[frozenset] = frozenset({"modules", "import_module"})
-    # What a star import of an introspection module can bind that reads
-    # names back; not every name, which would seed unrelated ones.
+    # Names that read names back, seeded for a star import of an
+    # introspection module beside what the module exports (_star_exports);
+    # not every name, which would seed unrelated ones.
     STAR_EXPORTS: ClassVar[frozenset] = INTROSPECTION | MODULE_INTROSPECTION | MODULE_LOOKUPS
     # A call whose function is not named (ops["cut"](s), make()(s)) reaches
     # every function that can be called that way: a lambda, or a def whose
@@ -615,6 +634,7 @@ class LiteralGraph:
         self._regex_keys = set(imported.get("regex", ())) | self.MODULE_LOOKUPS
         self._module_attributes: list[ast.Attribute] = []
         self._value_names: set = set()
+        self._value_attributes: set = set()
         self._called: set = set()
         self._imported_names: set = set()
         self.regex_reach: set = set()
@@ -643,11 +663,7 @@ class LiteralGraph:
         """The edges and seeds that need the whole code read first."""
         for name in self._read:
             self.add(self.WILDCARD, name)
-        for vertex, name in self._value_names:
-            if vertex not in self._called:
-                self._reaches_any_call(name)
-            if self._source and name in self._imported_names:
-                self._seeds[vertex] = self._source
+        self._link_values()
         # dataclasses.fields, inspect.signature, sys.exception, on whatever
         # an introspection module can reach.
         module_reach = self._walk(self._module_keys)
@@ -655,6 +671,18 @@ class LiteralGraph:
             if self._source and id(node.value) in module_reach:
                 self._seeds[id(node)] = self._source
         self.regex_reach = self._walk(self._regex_keys)
+
+    def _link_values(self) -> None:
+        """Functions and methods read as values can be called unnamed
+        (ops = {"a": obj.cut}); imported names are seeded where read."""
+        for vertex, name in self._value_names:
+            if vertex not in self._called:
+                self._reaches_any_call(name)
+            if self._source and name in self._imported_names:
+                self._seeds[vertex] = self._source
+        for vertex, name in self._value_attributes:
+            if vertex not in self._called:
+                self._reaches_any_call(name)
 
     def _walk(self, start) -> set:
         reached = set(start)
@@ -777,6 +805,7 @@ class LiteralGraph:
         if type(node.ctx) is ast.Load:
             self._edges.setdefault(node.attr, []).append(id(node))
             self._read.add(node.attr)
+            self._value_attributes.add((id(node), node.attr))
             if self._source and node.attr in self.INTROSPECTION:
                 self._seeds[id(node)] = self._source
             elif node.attr in self.MODULE_INTROSPECTION:
@@ -801,12 +830,19 @@ class LiteralGraph:
             # Only the functions that remove characters: re.escape does not.
             self._regex_keys.update(self._regex_names(name, bound))
         if module in self.INTROSPECTION_MODULES:
-            self._module_keys.update(self.STAR_EXPORTS if name == "*" else (bound,))
+            self._module_keys.update(self._star_exports(module) if name == "*" else (bound,))
         if name in self.MODULE_LOOKUPS:
             # A module lookup under another name, such as import_module
             # imported as im.
             self._module_keys.add(bound)
             self._regex_keys.add(bound)
+
+    @classmethod
+    def _star_exports(cls, module: str) -> frozenset[str]:
+        """What a star import of an introspection module binds: what the
+        module exports (inspect.get_annotations too), and the names that
+        read names back."""
+        return cls.STAR_EXPORTS | module_exports(module)
 
     @staticmethod
     def _regex_names(name: str, bound: str) -> frozenset[str]:
@@ -823,7 +859,7 @@ class LiteralGraph:
             if module == "sys":
                 self._imported_names.add("exception")
             elif module in self.INTROSPECTION_MODULES:
-                self._imported_names.update(self.STAR_EXPORTS)
+                self._imported_names.update(self._star_exports(module))
         elif (module in self.INTROSPECTION_MODULES and module != "sys") or name in (
             self.INTROSPECTION | self.MODULE_INTROSPECTION
         ):
@@ -994,12 +1030,12 @@ class StringSteps:
 
     def check(self, node: ast.AST) -> str | None:
         """Work out ``node`` and return the critical name it can leave."""
-        kind, operands = string_step(node)
-        if kind is None:
-            if not self._reach.regex_call(node):
-                return None
+        if self._reach.regex_call(node):
             # A regex can remove anything it matches; it is not worked out.
             return self._unknown_hit(node, [*node.args, *(keyword.value for keyword in node.keywords)])
+        kind, operands = string_step(node)
+        if kind is None:
+            return None
         if kind == "format":
             return self._check_format(node, *operands)
         if kind == "braces":
