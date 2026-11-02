@@ -384,7 +384,14 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     removes characters (`re.sub("q", "", "qexec")`), as is `split` on a
     regex module or imported from one, whose pattern is not the text it
     cuts on; helpers that remove nothing (`re.escape`)
-    are not. `%` with a number on the left is
+    are not. Called on the module itself (`re.search(pattern, text)`, or
+    `search` from-imported), on a name bound once by its import, with a
+    `sub` replacement written as a string, a regex function leaves pieces of
+    its string and replacement, never of its pattern, so
+    `re.search("evaluation", text)` is admitted. Anything the pattern gives
+    back (a group name, `.re.pattern`) is still matched by a later step,
+    and a compiled pattern's method or a `sub` given a function is read as
+    before. `%` with a number on the left is
     arithmetic (`10 % n`); a number on the right is not, since `%c` and `%x`
     insert letters. A format's own text, its fields read as separators and
     as nothing, is matched anywhere by a later step
@@ -471,8 +478,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - Calls that evaluate string annotations as code are refused:
     `get_type_hints`, `evaluate_forward_ref`, and the `eval_str` keyword
     (`inspect.get_annotations(f, eval_str=True)`, `inspect.signature`),
-    matched as a keyword, in a string and as any name bound, since
-    `**locals()` passes bound names as keywords.
+    matched as a keyword, in a string and as any name bound, imports
+    included (`from math import pi as eval_str`), since `**locals()`
+    passes bound names as keywords.
   - On Python 3.14, `ForwardRef.evaluate()` runs its string as code
     (`List["..."].__args__[0].evaluate()`), and on the AST it cannot be told
     apart from `model.evaluate(x)`. `evaluate` is therefore read like

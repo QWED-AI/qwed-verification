@@ -964,14 +964,21 @@ class CodeVerifier:
         if isinstance(node, ast.MatchClass):
             return next((attr for attr in node.kwd_attrs if attr in self._ATTRIBUTE_READ_NAMES), None)
         if isinstance(node, (ast.Import, ast.ImportFrom)):
-            return self._import_reference(node)
+            # from math import pi as eval_str binds the keyword's name too.
+            return self._import_reference(node) or self._evaluating_name_bound_by(node)
         if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
             return self._critical_name_in_text(node.value, self._CRITICAL_BUILTIN_NAME)
         if isinstance(node, ast.keyword):
             return node.arg if node.arg in self.PYTHON_EVALUATING_KEYWORDS else None
         if isinstance(node, self._BINDING_NODE_TYPES):
-            return next((name for name in self._names_rebound_by(node) if name in self.PYTHON_EVALUATING_KEYWORDS), None)
+            return self._evaluating_name_bound_by(node)
         return None
+
+    @classmethod
+    def _evaluating_name_bound_by(cls, node: ast.AST) -> Optional[str]:
+        """A keyword name that makes a call evaluate strings, bound by
+        ``node``: **locals() passes it as that keyword."""
+        return next((name for name in cls._names_bound_by(node) if name in cls.PYTHON_EVALUATING_KEYWORDS), None)
 
     @staticmethod
     def _critical_name_in_text(value, pattern) -> Optional[str]:
