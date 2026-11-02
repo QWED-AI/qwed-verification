@@ -481,8 +481,6 @@ class TaintAnalyzer:
             return node.id
         elif isinstance(node, ast.Constant):
             return repr(node.value)
-        elif isinstance(node, ast.Str):  # Python 3.7
-            return repr(node.s)
         elif isinstance(node, ast.BinOp):
             return f"({self._node_to_str(node.left)} op {self._node_to_str(node.right)})"
         elif isinstance(node, ast.Call):
