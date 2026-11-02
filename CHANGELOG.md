@@ -408,7 +408,8 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     as nothing, is matched anywhere by a later step
     (`("xex%sec" % sep)[1:]`).
   - A step that removes characters but cannot be worked out (arguments
-    that are not literals, a method saved and called later, a `translate`
+    that are not literals, a method read without being called, which may be
+    saved and called later (not one set or deleted: `obj.title = t`), a `translate`
     or a `replace` that could grow the text past 16,384 characters, a
     precision in a format whose arguments are not known, a value longer
     than 4,096 characters carried from an earlier step, a value from
@@ -434,11 +435,12 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     every name, for a store through a namespace (`globals()["s"] = ...`);
     and what an import binds after other code has run, or inside a
     function, or what a module looked up by name gives (`import_module`,
-    `pkgutil.resolve_name`, `pydoc.locate`), from every literal and every
-    other seed, since that code may have put a module of its own under the
-    name (`sys.modules.update(m=ns)`, then `from m import s`). The module's
-    opening run of imports, a `try` of them included, binds the modules
-    installed and is read as before.
+    `pkgutil.resolve_name`, `pydoc.locate`, under any alias:
+    `im = importlib.import_module`), from every literal and every other
+    seed, since that code may have put a module of its own under the name
+    (`sys.modules.update(m=ns)`, then `from m import s`). The module's
+    opening run of imports, a `try` made only of imports included, binds
+    the modules installed and is read as before.
     Where the source holds a name inside a word anywhere, identifiers and
     comments included, what can read the source or its names back as text
     is taken to hold it too: an exception caught with `except ... as` (its

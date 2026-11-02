@@ -157,7 +157,8 @@ def string_step(node: ast.AST) -> tuple[str | None, list[ast.AST]]:
         return "braces", [value.value for value in node.values if isinstance(value, ast.FormattedValue)]
     if isinstance(node, ast.Call):
         return _call_step(node)
-    if isinstance(node, ast.Attribute) and node.attr in LITERAL_RESHAPERS:
+    if isinstance(node, ast.Attribute) and node.attr in LITERAL_RESHAPERS and type(node.ctx) is ast.Load:
+        # Read, it may be the method saved to call later; set or deleted, not.
         return "remove", [node.value]
     return None, []
 
@@ -501,8 +502,14 @@ class ReachingLiterals:
             return True
         if type(statement) is not ast.Try or not all(cls._caught_by_name(h.type) for h in statement.handlers):
             return False
+        # Its imports count only once every part does: a finally runs after
+        # the handlers, whatever they did.
         bodies = (statement.body, statement.orelse, statement.finalbody, *(h.body for h in statement.handlers))
-        return all(cls._opening(inner, opening) for body in bodies for inner in body)
+        inner_opening: set = set()
+        if not all(cls._opening(inner, inner_opening) for body in bodies for inner in body):
+            return False
+        opening.update(inner_opening)
+        return True
 
     @classmethod
     def _caught_by_name(cls, node: ast.AST | None) -> bool:
@@ -694,8 +701,11 @@ class LiteralGraph:
     # name is read as a value.
     ANY_CALL = ("()", "*")
     ANY_OUT = ("out", "*")
-    # What a late import, or a module looked up by name, binds can hold any
-    # value the code made (_late_imports): every seed reaches it.
+    # What a late import binds, or a module looked up by name gives, can hold
+    # any value the code made (_late_imports): every seed reaches it. The
+    # lookup names are linked themselves, so an alias (im = importlib.
+    # import_module, [pkgutil.resolve_name][0]) and each call through one
+    # are reached too.
     LATE = ("late",)
     MODULE_BY_NAME: ClassVar[frozenset] = frozenset({"import_module", "locate", "resolve_name"})
 
@@ -705,7 +715,6 @@ class LiteralGraph:
         self._late_imports = late_imports
         self._late_keys: set = set()
         self._module_lookups: set = set(self.MODULE_BY_NAME)
-        self._named_calls: list[tuple[int, str]] = []
         self._read: set = set()
         self._in_word = in_word
         self._source = source
@@ -759,7 +768,7 @@ class LiteralGraph:
             if self._source and id(node.value) in module_reach:
                 self._seeds[id(node)] = self._source
         self.regex_reach = self._walk(self._regex_keys)
-        self._late_keys.update(call for call, name in self._named_calls if name in self._module_lookups)
+        self._late_keys.update(self._module_lookups)
 
     def _link_values(self) -> None:
         """Functions and methods read as values can be called unnamed
@@ -1029,8 +1038,6 @@ class LiteralGraph:
             passed = self._callee(argument)
             if passed is not None:
                 self.add(hub, ("()", passed))
-        if isinstance(callee, str):
-            self._named_calls.append((id(node), callee))
         # dict(xexec=1) gives the keyword's name as a key.
         for keyword in node.keywords:
             self._seed(id(node), keyword.arg)

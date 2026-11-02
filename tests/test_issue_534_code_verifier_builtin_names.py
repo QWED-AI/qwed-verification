@@ -124,6 +124,10 @@ def _verify(code):
     "from dataclasses import fields\nprint(fields(C))\ncur.execute(q)\nprint(form.fields[1:])",
     # A call through a table reaches functions read as values, not every one.
     'handlers = {"a": print}\nhandlers["a"]("executing")\ndef parse(line):\n    return line[1:]\nparse(x)',
+    # An attribute set or deleted under a str method's name is not a saved
+    # method, whatever its object holds.
+    'obj = make("evaluation")\nobj.title = "T"',
+    'obj = make("evaluation")\ndel obj.strip',
     # A replace that grows the text a little is worked out.
     'msg = "executing job"\nprint(msg.replace("job", "task"))',
     # A step that overflows is not worked out, and does not fail the check.
@@ -477,6 +481,9 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("import sys, types, pkgutil\nsys.modules.update(m=types.SimpleNamespace(s=\"xexec\"))\nvars(x)[pkgutil.resolve_name(\"m:s\")[1:]](payload)", "exec"),
     ("import sys, types\nfrom pkgutil import resolve_name as rn\nsys.modules.update(m=types.SimpleNamespace(s=\"xexec\"))\nvars(x)[rn(\"m:s\")[1:]](payload)", "exec"),
     ("import sys, types\ntry:\n    import absent\nexcept (sys.modules.update(m=types.SimpleNamespace(s=\"xexec\")) or ImportError):\n    from m import s\nvars(x)[s[1:]](payload)", "exec"),
+    ("import sys, types\ntry:\n    import absent\nexcept ImportError:\n    sys.modules.update(m=types.SimpleNamespace(s=\"xexec\"))\nfinally:\n    from m import s\nvars(x)[s[1:]](payload)", "exec"),
+    ("import importlib as il\nimport sys, types\nsys.modules.update(m=types.SimpleNamespace(s=\"xexec\"))\nim = il.import_module\nvars(x)[im(\"m\").s[1:]](payload)", "exec"),
+    ("import sys, types, pkgutil\nsys.modules.update(m=types.SimpleNamespace(s=\"xexec\"))\nops = [pkgutil.resolve_name]\nvars(x)[ops[0](\"m:s\")[1:]](payload)", "exec"),
     # A regex call's pattern is matched like its other arguments. It can
     # reach what the call gives (a group name, .re.pattern, a replacement
     # function that stores the match), and re cannot be shown to be the
