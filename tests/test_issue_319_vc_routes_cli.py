@@ -446,12 +446,39 @@ def test_both_key_sources_are_refused_even_without_the_check(tmp_path, jwks, com
     assert "not both" in output
 
 
+# From Python 3.14 the JSON parser is bounded by the C stack, not by the
+# recursion limit, so whether a file nested 100,000 deep parses depends on
+# the platform: a Windows main thread overflows, a Linux one (8 MiB by
+# default) does not. The "too deep to parse" tests raise the RecursionError
+# themselves, as test_a_recursion_error_from_pyjwt_is_invalid_not_a_500
+# does, so the contract is checked everywhere; the "on any platform" tests
+# check what the real file gives.
+_DEEP = "[" * 100_000 + "]" * 100_000
+
+
+def _too_deep(*args, **kwargs):
+    raise RecursionError("maximum recursion depth exceeded while decoding a JSON array")
+
+
 @pytest.mark.parametrize(("command", "key"), [("validate", "valid"), ("resolve", "resolved")])
-def test_a_document_too_deep_to_parse_is_an_unreadable_file(tmp_path, command, key):
+def test_a_document_too_deep_to_parse_is_an_unreadable_file(tmp_path, monkeypatch, command, key):
     path = tmp_path / "deep.json"
-    path.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
+    path.write_text(_DEEP, encoding="utf-8")
+    monkeypatch.setattr(json, "load", _too_deep)
 
     assert _run(command, "--no-require-attestation", str(path)) == (1, {key: False, "error": "invalid_document_file"})
+
+
+@pytest.mark.parametrize(("command", "unreadable", "parsed"), [
+    ("validate", (1, {"valid": False, "error": "invalid_document_file"}), (1, {"valid": False, "error": "validation_failed"})),
+    ("resolve", (1, {"resolved": False, "error": "invalid_document_file"}), (0, {"resolved": False})),
+])
+def test_a_document_nested_100000_deep_is_refused_on_any_platform(tmp_path, command, unreadable, parsed):
+    # Where it parses, it is a list, not a Verification Context.
+    path = tmp_path / "deep.json"
+    path.write_text(_DEEP, encoding="utf-8")
+
+    assert _run(command, "--no-require-attestation", str(path)) in (unreadable, parsed)
 
 
 def test_a_malformed_server_url_is_keys_unavailable(tmp_path, fresh_service):
@@ -490,11 +517,19 @@ def test_the_sdk_and_cli_refuse_a_token_that_is_not_ascii(tmp_path, jwks, token)
     assert _run("validate", "--jwks-file", keys, path) == (1, {"valid": False, "error": "attestation_invalid"})
 
 
-def test_a_jwks_file_too_deep_to_parse_is_keys_unavailable(tmp_path, fresh_service):
+def test_a_jwks_file_too_deep_to_parse_is_keys_unavailable(tmp_path, fresh_service, monkeypatch):
     # #523 review: RecursionError from json.load escaped the key loading.
     document = _write(tmp_path, "doc.json", _admitted())
     keys = tmp_path / "jwks.json"
-    keys.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
+    keys.write_text(_DEEP, encoding="utf-8")
+    load = json.load
+
+    def load_keys_too_deep(handle, *args, **kwargs):
+        if handle.name == str(keys):
+            _too_deep()
+        return load(handle, *args, **kwargs)
+
+    monkeypatch.setattr(json, "load", load_keys_too_deep)
 
     assert _run("resolve", "--jwks-file", str(keys), document) == (
         1, {"resolved": False, "error": "attestation_keys_unavailable"},
@@ -503,13 +538,32 @@ def test_a_jwks_file_too_deep_to_parse_is_keys_unavailable(tmp_path, fresh_servi
 
 def test_server_keys_too_deep_to_parse_are_unavailable(tmp_path, fresh_service, monkeypatch):
     document = _write(tmp_path, "doc.json", _admitted())
-    deep = ("[" * 100_000 + "]" * 100_000).encode()
     monkeypatch.setattr(
-        httpx, "get", lambda url, **kwargs: httpx.Response(200, content=deep, request=httpx.Request("GET", url)),
+        httpx, "get",
+        lambda url, **kwargs: httpx.Response(200, content=_DEEP.encode(), request=httpx.Request("GET", url)),
     )
+    monkeypatch.setattr(httpx.Response, "json", _too_deep)
 
     assert _run("validate", "--server", "http://qwed.test", document) == (
         1, {"valid": False, "error": "attestation_keys_unavailable"},
+    )
+
+
+@pytest.mark.parametrize("source", ["file", "server"])
+def test_keys_nested_100000_deep_are_refused_on_any_platform(tmp_path, fresh_service, monkeypatch, source):
+    # Where they parse, the keys are a list, not a JWKS, so nothing verifies.
+    document = _write(tmp_path, "doc.json", _admitted())
+    keys = tmp_path / "jwks.json"
+    keys.write_text(_DEEP, encoding="utf-8")
+    monkeypatch.setattr(
+        httpx, "get",
+        lambda url, **kwargs: httpx.Response(200, content=_DEEP.encode(), request=httpx.Request("GET", url)),
+    )
+    option = ["--jwks-file", str(keys)] if source == "file" else ["--server", "http://qwed.test"]
+
+    assert _run("resolve", *option, document) in (
+        (1, {"resolved": False, "error": "attestation_keys_unavailable"}),
+        (1, {"resolved": False, "error": "attestation_invalid"}),
     )
 
 

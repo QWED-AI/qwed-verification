@@ -278,7 +278,7 @@ class RestrictedExecutor:
     # Allowed AST node types
     ALLOWED_NODES = {
         ast.Module, ast.Expr, ast.Call, ast.Name, ast.Load, ast.Store,
-        ast.Constant, ast.Num, ast.Str, ast.List, ast.Dict, ast.Tuple,
+        ast.Constant, ast.List, ast.Dict, ast.Tuple,
         ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp,
         ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow, ast.FloorDiv,
         ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
