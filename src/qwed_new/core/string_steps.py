@@ -468,17 +468,50 @@ class ReachingLiterals:
                     seeds[id(node)] = hit
         if not (seeds or source):
             return {}
-        graph = LiteralGraph(self._names.in_word, source, self._imported_modules())
+        graph = LiteralGraph(self._names.in_word, source, self._imported_modules(), self._late_imports())
         for node in self._nodes:
             graph.add_node(node)
-        if any(type(node) is ast.ImportFrom and any(alias.name == "*" for alias in node.names) for node in self._nodes):
-            # A star import can bind any name to a value stored anywhere
-            # (sys.modules.update(m=ns), then from m import *).
-            for vertex in seeds:
-                graph.add(vertex, LiteralGraph.WILDCARD)
         hits = graph.spread(seeds)
         self._regex_reach = graph.regex_reach
         return hits
+
+    def _late_imports(self) -> frozenset:
+        """The imports that may run after other code, which may have put a
+        module of its own under the name (``sys.modules.update(m=ns)``, then
+        ``from m import s``): all but the module's opening run of imports,
+        which bind the modules installed."""
+        opening: set = set()
+        if self._nodes and type(self._nodes[0]) is ast.Module:
+            for statement in self._nodes[0].body:
+                if not self._opening(statement, opening):
+                    break
+        return frozenset(
+            id(node) for node in self._nodes if type(node) in (ast.Import, ast.ImportFrom) and id(node) not in opening
+        )
+
+    @classmethod
+    def _opening(cls, statement: ast.stmt, opening: set) -> bool:
+        """Whether ``statement`` runs nothing but imports: an import, a
+        docstring or ``pass``, or a ``try`` of those that catches by name.
+        Its imports are added to ``opening``."""
+        if type(statement) in (ast.Import, ast.ImportFrom):
+            opening.add(id(statement))
+            return True
+        if type(statement) is ast.Pass or (type(statement) is ast.Expr and type(statement.value) is ast.Constant):
+            return True
+        if type(statement) is not ast.Try or not all(cls._caught_by_name(h.type) for h in statement.handlers):
+            return False
+        bodies = (statement.body, statement.orelse, statement.finalbody, *(h.body for h in statement.handlers))
+        return all(cls._opening(inner, opening) for body in bodies for inner in body)
+
+    @classmethod
+    def _caught_by_name(cls, node: ast.AST | None) -> bool:
+        """``except ImportError``, ``except (a.Error, b)``: no code runs."""
+        if node is None or isinstance(node, ast.Name):
+            return True
+        if isinstance(node, ast.Attribute):
+            return cls._caught_by_name(node.value)
+        return isinstance(node, ast.Tuple) and all(map(cls._caught_by_name, node.elts))
 
     def _imported_modules(self) -> dict[str, frozenset]:
         """The names the introspection and regex modules are imported as."""
@@ -661,9 +694,18 @@ class LiteralGraph:
     # name is read as a value.
     ANY_CALL = ("()", "*")
     ANY_OUT = ("out", "*")
+    # What a late import, or a module looked up by name, binds can hold any
+    # value the code made (_late_imports): every seed reaches it.
+    LATE = ("late",)
+    MODULE_BY_NAME: ClassVar[frozenset] = frozenset({"import_module", "locate", "resolve_name"})
 
-    def __init__(self, in_word: re.Pattern, source: str | None, imported: dict[str, frozenset] | None = None):
+    def __init__(self, in_word: re.Pattern, source: str | None, imported: dict[str, frozenset] | None = None,
+                 late_imports: frozenset = frozenset()):
         self._edges: dict[object, list[object]] = {}
+        self._late_imports = late_imports
+        self._late_keys: set = set()
+        self._module_lookups: set = set(self.MODULE_BY_NAME)
+        self._named_calls: list[tuple[int, str]] = []
         self._read: set = set()
         self._in_word = in_word
         self._source = source
@@ -691,6 +733,11 @@ class LiteralGraph:
         """Each vertex a seed reaches, with the seed's name."""
         self._finish()
         hits = {**self._seeds, **seeds}
+        if self._late_keys:
+            for vertex in hits:
+                self.add(vertex, self.LATE)
+            for key in self._late_keys:
+                self.add(self.LATE, key)
         pending = list(hits)
         while pending:
             vertex = pending.pop()
@@ -712,6 +759,7 @@ class LiteralGraph:
             if self._source and id(node.value) in module_reach:
                 self._seeds[id(node)] = self._source
         self.regex_reach = self._walk(self._regex_keys)
+        self._late_keys.update(call for call, name in self._named_calls if name in self._module_lookups)
 
     def _link_values(self) -> None:
         """Functions and methods read as values can be called unnamed
@@ -852,10 +900,21 @@ class LiteralGraph:
             elif node.attr in self.MODULE_INTROSPECTION:
                 self._module_attributes.append(node)
 
+    def _import(self, node: ast.Import) -> None:
+        if id(node) in self._late_imports:
+            self._late_keys.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+
     def _import_from(self, node: ast.ImportFrom) -> None:
         # from inspect import stack: what an introspection module gives. From
         # sys, only what reads names back (sys.argv does not); from sys
         # import * binds exception on Python 3.11+.
+        late = id(node) in self._late_imports
+        for alias in node.names:
+            bound = alias.asname or alias.name
+            if late:
+                self._late_keys.add(self.WILDCARD if alias.name == "*" else bound)
+            if alias.name in self.MODULE_BY_NAME:
+                self._module_lookups.add(bound)
         if not node.module:
             return
         module = node.module.split(".")[0]
@@ -970,6 +1029,8 @@ class LiteralGraph:
             passed = self._callee(argument)
             if passed is not None:
                 self.add(hub, ("()", passed))
+        if isinstance(callee, str):
+            self._named_calls.append((id(node), callee))
         # dict(xexec=1) gives the keyword's name as a key.
         for keyword in node.keywords:
             self._seed(id(node), keyword.arg)
@@ -1057,7 +1118,7 @@ class LiteralGraph:
                 self.add(id(first.value), name)
 
     _BUILDERS: ClassVar[dict] = {
-        ast.Name: _name, ast.Attribute: _attribute, ast.Call: _call, ast.ImportFrom: _import_from,
+        ast.Name: _name, ast.Attribute: _attribute, ast.Call: _call, ast.Import: _import, ast.ImportFrom: _import_from,
         ast.Assign: _assign, ast.AnnAssign: _ann_assign, ast.AugAssign: _aug_assign,
         ast.NamedExpr: _named_expr, ast.For: _loop, ast.AsyncFor: _loop, ast.comprehension: _loop,
         ast.With: _with, ast.AsyncWith: _with, ast.Match: _match,

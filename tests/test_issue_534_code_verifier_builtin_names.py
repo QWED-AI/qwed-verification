@@ -38,6 +38,10 @@ def _verify(code):
     'import re\nfor layer in model.modules():\n    pass\np = re.compile(r"[0-9]+")',
     'import re\nmodules = ["a", "b"]\np = re.compile(r"[0-9]+")',
     "def compile_report():\n    return 1\ncompile_report()",
+    # The module's opening run of imports binds the modules installed.
+    'import pandas as pd\nq = "SELECT * FROM evaluations"\ncur.execute(q)\nrows = pd.read_csv(path)\nprint(rows[1:])',
+    'try:\n    import orjson as json\nexcept ImportError:\n    import json\nlabel = "evaluation"\nprint(json.loads(s)[1:])',
+    'from os.path import *\nlabel = "evaluation"\nprint(name[1:])',
     "run(execute=True)",
     "def build(compiled=True):\n    return compiled",
     'import re as r\np = r.compile("a+")',
@@ -462,8 +466,17 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("import evaluate\nfrom typing import ForwardRef\nvars(ForwardRef)[evaluate.__name__](ForwardRef(\"x\"))", "evaluate"),
     ("import evaluate as ev\nk = ev.__name__", "evaluate"),
     ("from evaluate import load\nk = load.__module__", "evaluate"),
-    # A star import can bind any name to a value stored anywhere.
+    # An import after other code ran, or a module looked up by name, may give
+    # a module the code made itself, holding any value it made.
     ("import sys, types\nsys.modules.update(m=types.SimpleNamespace(s=\"xexec\"))\ns = \"abc\"\nfrom m import *\nvars(x)[s[1:]](payload)", "exec"),
+    ("import sys, types\nsys.modules.update(m=types.SimpleNamespace(s=\"xexec\"))\nfrom m import s\nvars(x)[s[1:]](payload)", "exec"),
+    ("import sys, types\ndef xexec():\n    pass\nsys.modules.update(m=types.SimpleNamespace(s=xexec.__name__))\nfrom m import *\nvars(x)[s[1:]](payload)", "exec"),
+    ("import sys, types\nsys.modules.update(m=types.SimpleNamespace(s=\"xexec\"))\nimport m\nvars(x)[m.s[1:]](payload)", "exec"),
+    ("import sys, types\nsys.modules.update(m=types.SimpleNamespace(s=\"xexec\"))\ndef f():\n    from m import s\n    return vars(x)[s[1:]](payload)", "exec"),
+    ("import sys\nsys.modules.update(m=type(\"M\", (), {\"s\": \"xexec\"}))\nfrom m import s\nvars(x)[s[1:]](payload)", "exec"),
+    ("import sys, types, pkgutil\nsys.modules.update(m=types.SimpleNamespace(s=\"xexec\"))\nvars(x)[pkgutil.resolve_name(\"m:s\")[1:]](payload)", "exec"),
+    ("import sys, types\nfrom pkgutil import resolve_name as rn\nsys.modules.update(m=types.SimpleNamespace(s=\"xexec\"))\nvars(x)[rn(\"m:s\")[1:]](payload)", "exec"),
+    ("import sys, types\ntry:\n    import absent\nexcept (sys.modules.update(m=types.SimpleNamespace(s=\"xexec\")) or ImportError):\n    from m import s\nvars(x)[s[1:]](payload)", "exec"),
     # A regex call's pattern is matched like its other arguments. It can
     # reach what the call gives (a group name, .re.pattern, a replacement
     # function that stores the match), and re cannot be shown to be the
