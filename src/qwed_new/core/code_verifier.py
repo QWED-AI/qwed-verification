@@ -203,9 +203,13 @@ class CodeVerifier:
         ast.ExceptHandler, ast.MatchAs, ast.MatchStar, ast.MatchMapping,
         *((ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple) if sys.version_info >= (3, 12) else ()),
     )
-    # What a module defines for the import system to call (PEP 562), of the
-    # names checked here (its __dir__ is on no list).
-    _MODULE_HOOKS: ClassVar[frozenset] = frozenset({"__getattr__"})
+    # A def hands its object, and with it its __name__, to a decorator, a
+    # load of the name, or dir() and vars() on its class, so a def is checked
+    # against every name refused in strings, methods included
+    # (def evaluate(self, x), def __setattr__). Only __getattr__ is left out:
+    # classes and modules (PEP 562) define it to answer attribute reads, and
+    # object has none, so its name looks up nothing the verifier refuses.
+    _DEF_NAMES: ClassVar[frozenset] = _ATTRIBUTE_READ_NAMES - {"__getattr__"}
     # The node types _critical_builtin_reference reads; others are skipped.
     _REFERENCE_NODE_TYPES: ClassVar[frozenset] = frozenset(
         {ast.Name, ast.Attribute, ast.MatchClass, ast.Import, ast.ImportFrom, ast.Constant, ast.keyword}
@@ -940,14 +944,13 @@ class CodeVerifier:
         compile_attributes: List[ast.Attribute] = []
         evaluate_attributes: List[ast.Attribute] = []
         reshapes: List[ast.AST] = []
-        lenient_defs = self._lenient_defs(nodes)
         for node in nodes:
             node_type = type(node)
             if node_type in string_steps.RESHAPE_NODE_TYPES:
                 reshapes.append(node)
             if node_type not in self._REFERENCE_NODE_TYPES:
                 continue
-            name = self._critical_builtin_reference(node, lenient_defs)
+            name = self._critical_builtin_reference(node)
             if name == "compile" and isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
                 compile_attributes.append(node)
             elif name in self.PYTHON_STRING_EVALUATING_METHODS and isinstance(node, ast.Attribute):
@@ -964,7 +967,7 @@ class CodeVerifier:
         unique = list(dict.fromkeys(found))  # (name, line) pairs, in order, once each
         return [self._critical_builtin_issue(name, line) for name, line in unique]
 
-    def _critical_builtin_reference(self, node: ast.AST, lenient_defs: frozenset = frozenset()) -> Optional[str]:
+    def _critical_builtin_reference(self, node: ast.AST) -> Optional[str]:
         """The critical builtin (or builtins module) ``node`` refers to."""
         if isinstance(node, ast.Name):
             return node.id if node.id in self._ATTRIBUTE_READ_NAMES else None
@@ -977,33 +980,17 @@ class CodeVerifier:
             return self._import_reference(node) or self._critical_name_bound_by(node, self._CRITICAL_NAMES)
         if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
             return self._critical_name_in_text(node.value, self._CRITICAL_BUILTIN_NAME)
+        return self._binding_reference(node)
+
+    def _binding_reference(self, node: ast.AST) -> Optional[str]:
+        """One of the names given as a keyword or bound other than by a Name."""
         if isinstance(node, ast.keyword):
             return node.arg if node.arg in self._ATTRIBUTE_READ_NAMES else None
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            names = self._CRITICAL_NAMES if id(node) in lenient_defs else self._ATTRIBUTE_READ_NAMES
-            return self._critical_name_bound_by(node, names)
+            return self._critical_name_bound_by(node, self._DEF_NAMES)
         if isinstance(node, self._BINDING_NODE_TYPES):
             return self._critical_name_bound_by(node, self._ATTRIBUTE_READ_NAMES)
         return None
-
-    @classmethod
-    def _lenient_defs(cls, nodes: List[ast.AST]) -> frozenset:
-        """The defs whose name counts only if it is a builtin or code-execution
-        name, so a model's ``def evaluate(self, x)`` and ``def __getattr__``
-        are admitted: undecorated methods, which only an attribute read (itself
-        checked) reaches, and the module hooks of PEP 562. Any other def hands
-        its object, and with it its ``__name__``, to whatever reads it: a
-        decorator, or a load of the name."""
-        lenient = set()
-        for node in nodes:
-            if isinstance(node, (ast.ClassDef, ast.Module)):
-                hooks = None if isinstance(node, ast.ClassDef) else cls._MODULE_HOOKS
-                lenient.update(
-                    id(statement) for statement in node.body
-                    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and not statement.decorator_list and (hooks is None or statement.name in hooks)
-                )
-        return frozenset(lenient)
 
     @classmethod
     def _critical_name_bound_by(cls, node: ast.AST, names: frozenset) -> Optional[str]:

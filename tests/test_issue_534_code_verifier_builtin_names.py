@@ -32,9 +32,6 @@ def _verify(code):
     "score = model.evaluate(x, y)",
     "score = model.evaluate(x=X, y=Y)",
     "score = model.evaluate(ds, verbose=0)",
-    # An undecorated method named evaluate is reached only through an
-    # attribute, which is checked.
-    "class Model:\n    def evaluate(self, data):\n        return 1",
     # sys.modules is a dict, not callable: model.modules() is not it, nor is
     # a name of that name, which only an attribute read, a class pattern or
     # an import binds.
@@ -43,16 +40,20 @@ def _verify(code):
     "def compile_report():\n    return 1\ncompile_report()",
     "run(execute=True)",
     "def build(compiled=True):\n    return compiled",
-    "class Model:\n    def evaluate(self, x):\n        return x",
     'import re as r\np = r.compile("a+")',
     "# we never call eval here\nx = 1",
     "my_getattr_helper = 1",
     "from ast import literal_eval\nvalue = literal_eval(s)",
-    # Defining the dunder accessors is not reading them.
+    # def __getattr__ answers attribute reads (PEP 562 for a module), and
+    # object has none: it is admitted wherever it is defined.
     "class Proxy:\n    def __getattr__(self, name):\n        return 1",
     "def __getattr__(name):\n    return 1",
     "def __dir__():\n    return []\ndef __getattr__(name):\n    return 1",
-    "def make():\n    class Proxy:\n        def __setattr__(self, name, value):\n            pass\n    return Proxy",
+    "def make():\n    class Proxy:\n        def __getattr__(self, name):\n            return 1\n    return Proxy",
+    "class C:\n    @cache\n    def __getattr__(self, name):\n        return 1",
+    "class C:\n    try:\n        def __getattr__(self, name):\n            return 1\n    except Exception:\n        pass",
+    "class C:\n    try:\n        from fast import Base\n    except ImportError:\n        def __getattr__(self, name):\n            return 1",
+    "import sys\nif sys.version_info >= (3, 7):\n    def __getattr__(name):\n        return 1",
     "# Proxy overrides __setattr__ here\nx = 1",
     # re.compile with its flags, by position or keyword, beside sys.
     'import re\np = re.compile(r"a+", re.I)',
@@ -442,8 +443,19 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("def __getattribute__():\n    pass\nvars(object)[__getattribute__.__name__](obj, \"x\")", "__getattribute__"),
     ("def outer():\n    def evaluate():\n        pass\n    return evaluate.__name__", "evaluate"),
     ("async def __setattr__():\n    pass", "__setattr__"),
+    ("if x:\n    def evaluate():\n        pass", "evaluate"),
+    ("class C:\n    def run(self):\n        def evaluate():\n            pass", "evaluate"),
+    ("class C:\n    def run(self):\n        if x:\n            def evaluate():\n                pass\n            return evaluate", "evaluate"),
     ("registry = []\ndef reg(f):\n    registry.append(f)\n    return f\nclass C:\n    @reg\n    def evaluate(self):\n        pass\nk = registry[0].__name__", "evaluate"),
     ("class C:\n    def evaluate(self):\n        pass\n    k = evaluate.__name__", "evaluate"),
+    # A method's name too, read back through dir() or vars() on its class;
+    # only __getattr__ is left out.
+    ("class M:\n    def evaluate(self):\n        pass\nfrom typing import ForwardRef\nref = ForwardRef(\"print(1)\")\nkey = [k for k in dir(M) if not k.startswith(\"_\")][0]\nvars(ForwardRef)[key](ref)", "evaluate"),
+    ("class P:\n    def __getattribute__(self, name):\n        pass\nkey = [k for k in vars(P) if k.endswith(\"attribute__\")][0]\nvars(object)[key](obj, \"x\")", "__getattribute__"),
+    ("class Model:\n    def evaluate(self, x):\n        return x", "evaluate"),
+    ("import sys\nclass Model:\n    if sys.version_info >= (3, 12):\n        def evaluate(self, x):\n            return x", "evaluate"),
+    ("class P:\n    def __setattr__(self, name, value):\n        pass", "__setattr__"),
+    ("class P:\n    def __delattr__(self, name):\n        pass", "__delattr__"),
     ("import pkg.exec as x\nvars(m)[x.__name__.split(\".\")[1]](payload)", "exec"),
     ("from pkg.exec import y\nvars(m)[y.__module__.split(\".\")[1]](payload)", "exec"),
     ("from .compile import y", "compile"),

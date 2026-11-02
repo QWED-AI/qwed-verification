@@ -364,12 +364,14 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     (`list(dict(exec=1))`, `inspect.signature`, `vars(C)`); a keyword, or a
     binding other than a `def` or an import, is refused for the names
     refused only in strings too (`dict(__getattribute__=1)`,
-    `def train(evaluate=False)`), and so are a name, a decorated or
-    module-level def, and an import whose module path holds one
-    (`import evaluate`, `import pkg.exec as x`), since the object carries
-    that name (`f.__name__`, `module.__name__`, `obj.__module__`), while an
-    undecorated method (`def evaluate(self, x)`, `def __getattr__`) and a
-    module's PEP 562 `__getattr__` are admitted; as an attribute, since the object may be the `builtins` module
+    `def train(evaluate=False)`), and so are a name, a def (a method
+    included: `def evaluate(self, x)`, `def __setattr__`), and an import
+    whose module path holds one (`import evaluate`, `import pkg.exec as x`),
+    since the object carries that name (`f.__name__`, `dir()` and `vars()`
+    on its class, `module.__name__`, `obj.__module__`), as at main. Only
+    `def __getattr__` is admitted, wherever it is defined: classes and
+    modules (PEP 562) define it to answer attribute reads, and `object` has
+    none; as an attribute, since the object may be the `builtins` module
     reached another way, whether read as `m.exec`, by `from m import exec`
     or by a match pattern (`case object(exec=run)`); and in a string as a
     whole identifier (`vars(module)["exec"]`). Steps on strings (a slice or
