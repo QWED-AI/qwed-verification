@@ -384,17 +384,12 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     removes characters (`re.sub("q", "", "qexec")`), as is `split` on a
     regex module or imported from one, whose pattern is not the text it
     cuts on; helpers that remove nothing (`re.escape`)
-    are not. Called on the module itself (`re.search(pattern, text)`, or
-    `search` from-imported), on a name bound once by its import, with a
-    `sub` replacement written as a string, a regex function leaves pieces of
-    its string and replacement, never of its pattern, so
-    `re.search("evaluation", text)` is admitted. Not where something else
-    binds the function's name (`other.search = f` through another alias, a
-    `def search`), or the code reaches the import system (`sys.modules`,
-    `sys.meta_path`), which can give `import re` another module. Anything
-    the pattern gives back (a group name, `.re.pattern`) is still matched by
-    a later step, and a compiled pattern's method or a `sub` given a
-    function is read as before. `%` with a number on the left is
+    are not. Its pattern is matched like its other arguments, so
+    `re.search("evaluation", text)` stays refused, as at main: the pattern
+    can reach what the call gives (a group name, `.re.pattern`), and the AST
+    cannot show that `re` is the module, since reflection on `sys` can give
+    `import re` another one whose function does the cut itself
+    (`operator.getitem` in place of `split`). `%` with a number on the left is
     arithmetic (`10 % n`); a number on the right is not, since `%c` and `%x`
     insert letters. A format's own text, its fields read as separators and
     as nothing, is matched anywhere by a later step
@@ -443,7 +438,8 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     code. The string steps live in `string_steps.py`. A name
     bound once, to a literal as written, is worked out like that literal,
     unless the code uses a namespace other than to read an item of it
-    (`vars(m)[k]`) or star-imports. Concatenation with a value that is not
+    (`vars(m)[k]`), captures one in a class pattern
+    (`case object(f_globals=g)`), or star-imports. Concatenation with a value that is not
     a literal, and names built by `chr` or `join`, are not followed. An
     import of the `builtins` module (`import builtins`) is refused too.
   - Admitted: longer identifiers (`execute`, `evaluation`, `compile_report`),
@@ -462,9 +458,11 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     object (`module.re = ...`), or can rebind it without an assignment: a
     namespace (`globals()`, `vars()`, `locals()`, a frame's `f_globals` or
     `f_locals`, a star import) or the import system (`sys.modules`,
-    `sys.meta_path`, `sys.path_hooks`, `sys.path_importer_cache`). None of
-    those tables is callable, so a method of that name that is called
-    (`model.modules()`) and a variable of that name do not drop it. Still
+    `sys.meta_path`, `sys.path_hooks`, `sys.path_importer_cache`), read as
+    an attribute, through a class pattern (`case object(modules=c)`) or by a
+    from-import. None of those tables is callable, so a method of that name
+    that is called (`model.modules()`) and a variable of that name do not
+    drop it. Still
     refused: `model.eval()`, an attribute named `eval`, and
     `from re import compile` followed by a bare `compile(...)`.
   - Longer names the substring scan refused that also run or compile code,

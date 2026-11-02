@@ -1085,6 +1085,8 @@ class CodeVerifier:
             return node.id in cls._NAMESPACE_FUNCTIONS
         if isinstance(node, ast.Attribute) and node.attr in cls._NAMESPACE_FUNCTIONS:
             return True
+        if isinstance(node, ast.MatchClass) and any(attr in cls._NAMESPACE_FUNCTIONS for attr in node.kwd_attrs):
+            return True
         return string_steps.reads_namespace_table(node, called)
 
     @classmethod

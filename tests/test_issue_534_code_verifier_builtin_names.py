@@ -34,20 +34,9 @@ def _verify(code):
     "score = model.evaluate(ds, verbose=0)",
     'import evaluate\nmetric = evaluate.load("accuracy")',
     "def evaluate(model, data):\n    return 1\nevaluate(m, d)",
-    # A regex module's own functions leave pieces of the string, never of
-    # the pattern, so a pattern holding a name inside a word is admitted.
-    'import re\nm = re.search("evaluation", text)',
-    'import re\nm = re.match(r"executing (\\w+)", line)',
-    'import re\nhits = re.findall("compiled", log)',
-    'import re\nfirst = re.split("executed", log)[0]',
-    'import re\nout = re.sub("evaluation", "", text)',
-    'import re\nout = re.sub(pattern="evaluation", repl="", string=text)',
-    'import re as r\nm = r.search("evaluation", text)',
-    'from re import sub as s\nout = s("evaluation", "", text)',
-    'from re import search\nm = search("evaluation", text)',
-    'import regex\nm = regex.search("evaluation", text)',
     # sys.modules is a dict, not callable: model.modules() is not it, nor is
-    # a name of that name, which only an attribute read or an import binds.
+    # a name of that name, which only an attribute read, a class pattern or
+    # an import binds.
     'import re\nfor layer in model.modules():\n    pass\np = re.compile(r"[0-9]+")',
     'import re\nmodules = ["a", "b"]\np = re.compile(r"[0-9]+")',
     "def compile_report():\n    return 1\ncompile_report()",
@@ -160,6 +149,11 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ('import re\nglobals()["re"] = m\nre.compile(p)', "compile"),
     ('import re\nglobals().update(re=m)\nre.compile(p)', "compile"),
     ('import re\nns.vars()["re"] = m\nre.compile(p)', "compile"),
+    # A class pattern reads an attribute too, without an Attribute node.
+    ('import sys\nmatch sys:\n    case object(modules=cache):\n        cache.update(re=m)\nimport re\nre.compile(p)', "compile"),
+    ('import re\nmatch ns:\n    case object(vars=v):\n        v()["re"] = m\nre.compile(p)', "compile"),
+    ('import sys\ns = "abc"\nmatch sys._getframe():\n    case object(f_globals=g):\n        g["s"] = "xexec"\nvars(m)[s[1:]](payload)', "exec"),
+    ('s = "abc"\nmatch ns:\n    case object(vars=v):\n        v()["s"] = "xexec"\nvars(m)[s[1:]](payload)', "exec"),
     ('import re\nimport sys\nsys._getframe().f_globals["re"] = m\nre.compile(p)', "compile"),
     ('import re\nfrom helpers import *\nre.compile(p)', "compile"),
     ('import re\nre.compile = f\nre.compile(p)', "compile"),
@@ -409,9 +403,14 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("import inspect\ndef g():\n    from math import pi as eval_str\n    return inspect.get_annotations(f, **locals())", "eval_str"),
     ("import inspect\ndef g():\n    import math as eval_str\n    return inspect.get_annotations(f, **locals())", "eval_str"),
     ("import inspect\ndef g():\n    import eval_str\n    return inspect.get_annotations(f, **locals())", "eval_str"),
-    # A regex call's pattern is still matched where it can reach what the
-    # call gives: a group name, .re.pattern, a replacement function that
-    # stores the match, or a call not provably on the module.
+    # A regex call's pattern is matched like its other arguments. It can
+    # reach what the call gives (a group name, .re.pattern, a replacement
+    # function that stores the match), and re cannot be shown to be the
+    # module: one the import system gives, or a function set on it, can do
+    # the cut itself (operator.getitem in place of split).
+    ("import re\nm = re.search(\"evaluation\", text)", "eval"),
+    ("import sys, operator, types\nvars(sys)[\"modules\"].update(re=types.SimpleNamespace(split=operator.getitem))\nimport re\nvars(m)[re.split(\"xexec\", slice(1, None))](payload)", "exec"),
+    ("import sys, types\nvars(sys)[\"modules\"].update(re=types.SimpleNamespace(split=str.lstrip))\nimport re\nvars(m)[re.split(\"xexec\", \"x\")](payload)", "exec"),
     ("import re\nvars(m)[list(re.search(\"(?P<xexec>.)\", \"a\").groupdict())[0][1:]](payload)", "exec"),
     ("import re\nvars(m)[re.search(\"a(?#xexec)\", \"a\").re.pattern[5:9]](payload)", "exec"),
     ("import re\nvars(m)[re.sub(\"a(?#xexec)\", lambda g: g.re.pattern, \"a\")[5:9]](payload)", "exec"),

@@ -39,14 +39,12 @@ REGEX_STEPS = frozenset({
 # What a from-import of a regex module can bind that removes characters:
 # split too, which on a module is read as str.split, but under an alias is not.
 REGEX_IMPORTS = REGEX_STEPS | {"split"}
-# Regex functions whose second argument (repl, or format for the regex
-# package) may be a function the call runs on each match.
-REGEX_REPLACERS = frozenset({"sub", "subn", "subf", "subfn"})
 # What can give ``import re`` another module (sys.modules, the finder lists
-# and cache) or rebind a name without an assignment (a frame's namespace).
-# None of them is callable, so an attribute of that name that is called is
-# not one (model.modules()), and a name is bound to one only through an
-# attribute read or an import, both matched (reads_namespace_table).
+# and cache) or rebind a name without an assignment (a frame's namespace),
+# for CodeVerifier's re.compile exception. None of them is callable, so an
+# attribute of that name that is called is not one (model.modules()), and a
+# name is bound to one only through an attribute read, a class pattern or an
+# import, all matched (reads_namespace_table).
 NAMESPACE_TABLES = frozenset({"f_globals", "f_locals", "modules", "meta_path", "path_hooks", "path_importer_cache"})
 
 LITERAL_RESHAPERS = {
@@ -257,22 +255,14 @@ def _method_call_parts(call: ast.Call) -> tuple[ast.AST, list[ast.AST]]:
 
 def reads_namespace_table(node: ast.AST, called: set) -> bool:
     """``node`` reads one of NAMESPACE_TABLES: an attribute not called
-    (``called`` holds the ids of called functions), or a from-import
-    (``from sys import modules``)."""
+    (``called`` holds the ids of called functions), a class pattern
+    (``case object(modules=cache)``), or a from-import (``from sys import
+    modules``)."""
     if isinstance(node, ast.ImportFrom):
         return any(alias.name in NAMESPACE_TABLES for alias in node.names)
+    if isinstance(node, ast.MatchClass):
+        return any(attr in NAMESPACE_TABLES for attr in node.kwd_attrs)
     return isinstance(node, ast.Attribute) and node.attr in NAMESPACE_TABLES and id(node) not in called
-
-
-def _literal_replacement(call: ast.Call) -> bool:
-    """A sub's replacement (repl, or format) written as a string, so the
-    call runs none of the caller's code: a function given instead receives
-    each match, and with it the pattern (``out.append``)."""
-    keywords = {keyword.arg: keyword.value for keyword in call.keywords}
-    replacement = keywords.get("repl", keywords.get("format"))
-    if replacement is None and "pattern" not in keywords and len(call.args) > 1:
-        replacement = call.args[1]
-    return isinstance(replacement, ast.Constant) and isinstance(replacement.value, (str, bytes))
 
 
 def keeps_words(call: ast.Call) -> bool:
@@ -447,7 +437,6 @@ class ReachingLiterals:
         self._only: dict[str, str] | None = None
         self._hits: dict[object, str] | None = None
         self._regex_reach: set = set()
-        self._regex_imports: tuple[frozenset, dict, frozenset] | None = None
 
     def hit(self, node: ast.AST) -> str | None:
         """A critical name a literal that can reach ``node`` holds anywhere."""
@@ -479,10 +468,7 @@ class ReachingLiterals:
                     seeds[id(node)] = hit
         if not (seeds or source):
             return {}
-        module_regex_calls = frozenset(
-            id(node) for node in self._nodes if type(node) is ast.Call and self.module_regex_call(node)
-        )
-        graph = LiteralGraph(self._names.in_word, source, self._imported_modules(), module_regex_calls)
+        graph = LiteralGraph(self._names.in_word, source, self._imported_modules())
         for node in self._nodes:
             graph.add_node(node)
         hits = graph.spread(seeds)
@@ -518,67 +504,13 @@ class ReachingLiterals:
         self.hit(func)
         return id(func) in self._regex_reach
 
-    def module_regex_call(self, node: ast.Call) -> bool:
-        """``re.search(pattern, string)``, or ``search`` from-imported from
-        re: a regex function called on the module, not on a compiled
-        pattern, so its first argument is the pattern, and with no code of
-        the caller's run inside it (a sub's replacement written as a
-        string). Only where the AST shows every binding, the module or
-        function name is bound once, by its import, and nothing else binds
-        the function's name: a function set on the module under it, through
-        any alias (``other.search = f``), may store into its arguments."""
-        if any(isinstance(arg, ast.Starred) for arg in node.args) or any(k.arg is None for k in node.keywords):
-            return False
-        if self._regex_imports is None:
-            self._regex_imports = self._bound_regex_imports()
-        modules, functions, replaced = self._regex_imports
-        func = node.func
-        if isinstance(func, ast.Attribute):
-            if not (isinstance(func.value, ast.Name) and func.value.id in modules and func.attr in REGEX_IMPORTS):
-                return False
-            name = func.attr
-        elif isinstance(func, ast.Name) and func.id in functions:
-            name = functions[func.id]
-        else:
-            return False
-        return name not in replaced and (name not in REGEX_REPLACERS or _literal_replacement(node))
-
-    def _bound_regex_imports(self) -> tuple[frozenset, dict, frozenset]:
-        """The names bound once, by ``import re`` (modules) or by a
-        from-import of a regex function (functions, with the function each
-        names), and the regex functions whose name something else binds
-        (replaced). Nothing is trusted where the import system can give
-        ``import re`` another module (``sys.modules.update(re=m)``)."""
-        bindings = self._binding_counts()
-        _, called = self._read_items_and_calls()
-        if bindings is None or any(reads_namespace_table(node, called) for node in self._nodes):
-            return frozenset(), {}, REGEX_IMPORTS
-        modules, functions = set(), {}
-        imported: dict[str, int] = {}
-        for node in self._nodes:
-            if type(node) is ast.Import:
-                modules.update(alias.asname or alias.name for alias in node.names
-                               if alias.name in LiteralGraph.REGEX_MODULES)
-            elif type(node) is ast.ImportFrom and not node.level and node.module in LiteralGraph.REGEX_MODULES:
-                for alias in node.names:
-                    if alias.name in REGEX_IMPORTS:
-                        bound = alias.asname or alias.name
-                        functions[bound] = alias.name
-                        imported[bound] = imported.get(bound, 0) + 1
-        once = {name for name, count in bindings.items() if count == 1}
-        # A regex function's name bound other than by importing it: set on
-        # the module through any alias, or defined (re.search = f).
-        replaced = frozenset(name for name in REGEX_IMPORTS if bindings.get(name, 0) > imported.get(name, 0))
-        return (frozenset(modules) & once, {bound: name for bound, name in functions.items() if bound in once},
-                replaced)
-
     # The node types that can bind a name (CriticalNames.bound_by), and
     # those that can reach a namespace.
     _BINDERS: ClassVar[frozenset] = frozenset({
         ast.Name, ast.Attribute, ast.arg, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
         ast.ExceptHandler, ast.MatchAs, ast.MatchStar, ast.MatchMapping, ast.Import, ast.ImportFrom,
     })
-    _NAMESPACE_USES: ClassVar[frozenset] = frozenset({ast.Name, ast.Attribute, ast.Call, ast.ImportFrom})
+    _NAMESPACE_USES: ClassVar[frozenset] = frozenset({ast.Name, ast.Attribute, ast.Call, ast.ImportFrom, ast.MatchClass})
 
     def _bound_once(self) -> dict[str, str]:
         """Names bound once, to a literal as written. No name is, where the
@@ -628,6 +560,9 @@ class ReachingLiterals:
             return node.func.id in LiteralGraph.NAMESPACE_CALLS and id(node) not in read_items
         if isinstance(node, ast.Attribute):
             return node.attr in LiteralGraph.NAMESPACE_ATTRIBUTES and id(node) not in read_items
+        if isinstance(node, ast.MatchClass):
+            # case object(f_globals=g) captures a namespace as g.
+            return any(attr in LiteralGraph.NAMESPACES for attr in node.kwd_attrs)
         return False
 
     @staticmethod
@@ -683,6 +618,7 @@ class LiteralGraph:
     RAISED = ("raise",)
     NAMESPACE_CALLS: ClassVar[frozenset] = frozenset({"globals", "vars", "locals"})
     NAMESPACE_ATTRIBUTES: ClassVar[frozenset] = frozenset({"__dict__", "f_globals", "f_locals"})
+    NAMESPACES: ClassVar[frozenset] = NAMESPACE_CALLS | NAMESPACE_ATTRIBUTES
     CONSTRUCTORS = ("__init__", "__new__", "__post_init__")
     # Names that read source text, or the names in it, back as strings,
     # whatever they are read on.
@@ -721,12 +657,8 @@ class LiteralGraph:
     ANY_CALL = ("()", "*")
     ANY_OUT = ("out", "*")
 
-    def __init__(self, in_word: re.Pattern, source: str | None, imported: dict[str, frozenset] | None = None,
-                 module_regex_calls: frozenset = frozenset()):
+    def __init__(self, in_word: re.Pattern, source: str | None, imported: dict[str, frozenset] | None = None):
         self._edges: dict[object, list[object]] = {}
-        # Calls of a regex module's own functions (ReachingLiterals.
-        # module_regex_call), which store nothing into their arguments.
-        self._module_regex_calls = module_regex_calls
         self._read: set = set()
         self._in_word = in_word
         self._source = source
@@ -994,9 +926,24 @@ class LiteralGraph:
     def _match(self, node: ast.Match) -> None:
         for case in node.cases:
             for pattern in ast.walk(case.pattern):
-                for name in (getattr(pattern, "name", None), getattr(pattern, "rest", None)):
-                    if isinstance(name, str):
-                        self.add(id(node.subject), name)
+                for name in self._captures(pattern):
+                    self.add(id(node.subject), name)
+                if isinstance(pattern, ast.MatchClass):
+                    self._namespace_captures(pattern)
+
+    @staticmethod
+    def _captures(pattern: ast.AST):
+        return [name for name in (getattr(pattern, "name", None), getattr(pattern, "rest", None))
+                if isinstance(name, str)]
+
+    def _namespace_captures(self, pattern: ast.MatchClass) -> None:
+        """``case object(f_globals=g)`` captures a namespace: a store into g
+        may bind any name, as g = frame.f_globals does (_bind)."""
+        for attr, sub in zip(pattern.kwd_attrs, pattern.kwd_patterns):
+            if attr in self.NAMESPACES:
+                for capture in ast.walk(sub):
+                    for name in self._captures(capture):
+                        self.add(name, self.WILDCARD)
 
     def _call(self, node: ast.Call) -> None:
         hub = ("args", id(node))
@@ -1006,18 +953,15 @@ class LiteralGraph:
             self.add(hub, ("()", callee))
         else:
             self.add(hub, self.ANY_CALL)
-        # A method may store its arguments in the object it is called on, or
-        # in another argument; re.search(pattern, text) stores nothing.
-        stores = id(node) not in self._module_regex_calls
-        if stores and isinstance(node.func, ast.Attribute):
+        if isinstance(node.func, ast.Attribute):
+            # A method may store its arguments in the object it is called on.
             self.add(hub, self._head(node.func.value))
         arguments = [arg.value if isinstance(arg, ast.Starred) else arg for arg in node.args]
         for argument in arguments + [keyword.value for keyword in node.keywords]:
             self.add(id(argument), hub)
-            if stores:
-                stored_in = self._stored_in(argument)
-                self.add(hub, stored_in)
-                self.add(self.ANY_OUT if callee is None else ("out", callee), stored_in)
+            stored_in = self._stored_in(argument)
+            self.add(hub, stored_in)
+            self.add(self.ANY_OUT if callee is None else ("out", callee), stored_in)
             passed = self._callee(argument)
             if passed is not None:
                 self.add(hub, ("()", passed))
@@ -1139,8 +1083,6 @@ class StringSteps:
         """Work out ``node`` and return the critical name it can leave."""
         if self._reach.regex_call(node):
             # A regex can remove anything it matches; it is not worked out.
-            if self._reach.module_regex_call(node):
-                return self._regex_text_hit(node)
             return self._unknown_hit(node, [*node.args, *(keyword.value for keyword in node.keywords)])
         kind, operands = string_step(node)
         if kind is None:
@@ -1157,19 +1099,6 @@ class StringSteps:
             return self._names.in_value(value)
         hit = self._unknown_hit(node, operands)
         return hit if kind == "remove" else None
-
-    def _regex_text_hit(self, node: ast.Call) -> str | None:
-        """A module regex call leaves pieces of its string and its
-        replacement, never of its pattern, which only selects them
-        (``re.search("evaluation", text)``). What else the pattern gives, a
-        group name or ``.re.pattern``, is cut by a later step, and that step
-        is still matched against the literals reaching it, the pattern
-        included."""
-        keywords = [keyword for keyword in node.keywords if keyword.arg != "pattern"]
-        positional = node.args if len(keywords) < len(node.keywords) else node.args[1:]
-        hit = self._operand_hit([*positional, *(keyword.value for keyword in keywords)])
-        self._hits[id(node)] = hit
-        return hit
 
     def _unknown_hit(self, node: ast.AST, operands) -> str | None:
         """The hit of a step not worked out: its operands' (an earlier
