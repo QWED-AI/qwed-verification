@@ -8,9 +8,10 @@ BLOCKED, and the taint analyzer raised on a sink argument that was neither a
 name nor a constant, which blocked deep code verification of that code.
 
 The CI ``test`` job runs 3.11, where these names still exist, so the scan below
-reads the source instead of relying on the interpreter that runs it.
-``qwed_sdk`` is left out: it checks ``hasattr(ast, ...)`` before each legacy
-name, for interpreters older than the server supports.
+reads the source instead of relying on the interpreter that runs it. It covers
+everything the wheel and the images ship: ``qwed_sdk`` named them too, behind
+``hasattr`` checks that every supported Python made dead code, since each
+function tested ``ast.Constant`` first.
 """
 
 import ast
@@ -19,12 +20,16 @@ from pathlib import Path
 
 import pytest
 
+from qwed_new.core.code_verifier import CodeVerifier
+from qwed_new.core.diagnostics import DiagnosticStatus
 from qwed_new.core.taint_analyzer import TaintAnalyzer
 
 REMOVED_AST_NAMES = {"Num", "Str", "Bytes", "NameConstant", "Ellipsis"}
+REPO = Path(__file__).resolve().parents[1]
 SHIPPED = [
-    *sorted((Path(__file__).resolve().parents[1] / "src" / "qwed_new").rglob("*.py")),
-    Path(__file__).resolve().parents[1] / "action_entrypoint.py",
+    *sorted((REPO / "src" / "qwed_new").rglob("*.py")),
+    *sorted((REPO / "qwed_sdk").rglob("*.py")),
+    REPO / "action_entrypoint.py",
 ]
 
 
@@ -79,3 +84,11 @@ def test_module_imports(module):
 def test_taint_node_to_str_handles_any_expression(source, expected):
     node = ast.parse(source, mode="eval").body
     assert TaintAnalyzer()._node_to_str(node) == expected
+
+
+def test_deep_verification_refuses_an_attribute_sink_argument_with_a_verdict():
+    # On 3.14 this was BLOCKED ("taint analysis failed"), not a verdict.
+    result = CodeVerifier().verify_python_deep("import os\nos.system(request.args)")
+
+    assert result.status is DiagnosticStatus.VERIFIED
+    assert result.developer_fields["is_safe"] is False

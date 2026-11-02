@@ -148,10 +148,6 @@ def _evaluate_literal_node(node: ast.AST):
     """Evaluate a literal AST node."""
     if isinstance(node, ast.Constant):
         return node.value
-    if hasattr(ast, "Str") and isinstance(node, ast.Str):
-        return node.s
-    if hasattr(ast, "Num") and isinstance(node, ast.Num):
-        return node.n
     return _MISSING_LITERAL
 
 
@@ -326,10 +322,8 @@ def _math_answers_match(llm_answer: str, verified_result: Any) -> bool:
         return False
 
 def _is_string_constant(node: ast.AST) -> bool:
-    """True for a string literal node (ast.Constant(str), or legacy ast.Str)."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return True
-    return bool(hasattr(ast, 'Str') and isinstance(node, ast.Str))
+    """True for a string literal node (ast.Constant(str))."""
+    return isinstance(node, ast.Constant) and isinstance(node.value, str)
 
 
 def _iter_string_constants(node: ast.AST):
@@ -415,13 +409,7 @@ def _is_safe_sympy_node(node: ast.AST) -> bool:
         return _is_safe_sympy_call(node)
     if isinstance(node, ast.Attribute):
         return _is_safe_sympy_attribute(node)
-    if isinstance(node, _SAFE_SYMPY_NODE_TYPES):
-        return True
-    if hasattr(ast, 'Str') and isinstance(node, ast.Str):
-        return True
-    if hasattr(ast, 'Num') and isinstance(node, ast.Num):
-        return True
-    return False
+    return isinstance(node, _SAFE_SYMPY_NODE_TYPES)
 
 
 def _collect_allowed_string_nodes(tree: ast.AST) -> set:
@@ -508,13 +496,7 @@ def _is_safe_z3_node(node: ast.AST) -> bool:
         return isinstance(node.func, ast.Name) and node.func.id in _ALLOWED_Z3_NAMES
     if isinstance(node, ast.Name):
         return node.id in _ALLOWED_Z3_NAMES
-    if isinstance(node, _SAFE_Z3_NODE_TYPES):
-        return True
-    if hasattr(ast, 'Str') and isinstance(node, ast.Str):
-        return True
-    if hasattr(ast, 'Num') and isinstance(node, ast.Num):
-        return True
-    return False
+    return isinstance(node, _SAFE_Z3_NODE_TYPES)
 
 
 def _is_safe_z3_ast(tree: ast.AST) -> bool:

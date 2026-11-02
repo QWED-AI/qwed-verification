@@ -148,7 +148,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     describing it.
   - Both failed closed, so nothing was admitted on the error. Both now rely
     on `ast.Constant`, which every literal has parsed to since Python 3.8,
-    so 3.10 to 3.13 behave as before.
+    so 3.10 to 3.13 behave as before. `qwed_sdk/qwed_local.py` named them
+    too, behind `hasattr` checks that never ran on a supported Python, since
+    each function tested `ast.Constant` first; those checks are gone.
   - A new CI job runs the tests on the Python that the Dockerfile's `FROM`
     line names, so a base-image bump is tested on the Python it moves to.
     The `test` job stays on 3.11, where both names still exist.
