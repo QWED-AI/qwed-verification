@@ -152,6 +152,13 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - A new CI job runs the tests on the Python that the Dockerfile's `FROM`
     line names, so a base-image bump is tested on the Python it moves to.
     The `test` job stays on 3.11, where both names still exist.
+  - From Python 3.14 the JSON parser is bounded by the C stack, not the
+    recursion limit, so whether a file nested 100,000 deep parses depends
+    on the platform. Where it parses (Linux), `qwed context validate` and
+    `resolve` still refuse it, with `validation_failed`, `resolved: false`
+    or `attestation_invalid` in place of `invalid_document_file` or
+    `attestation_keys_unavailable`. The CLI tests now raise the
+    `RecursionError` themselves, and check the real file on any platform.
 
 - **The audit log stores and returns real latency (#528).** `/audit/logs`
   returned `latency_ms` as a fixed 0 for every row, and nothing stored it,

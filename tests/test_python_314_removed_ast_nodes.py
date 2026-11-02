@@ -30,19 +30,37 @@ SHIPPED = [
 
 def _removed_references(path):
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    return [
-        f"{path.name}:{node.lineno} ast.{node.attr}"
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Attribute)
-        and node.attr in REMOVED_AST_NAMES
-        and isinstance(node.value, ast.Name)
-        and node.value.id == "ast"
-    ]
+    found = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr in REMOVED_AST_NAMES
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "ast"
+        ):
+            found.append(f"{path.name}:{node.lineno} ast.{node.attr}")
+        elif isinstance(node, ast.ImportFrom) and node.module == "ast":
+            found.extend(
+                f"{path.name}:{node.lineno} from ast import {alias.name}"
+                for alias in node.names
+                if alias.name in REMOVED_AST_NAMES
+            )
+    return found
 
 
 def test_shipped_code_names_no_ast_node_removed_in_314():
     found = [ref for path in SHIPPED for ref in _removed_references(path)]
     assert found == []
+
+
+def test_the_scan_finds_attribute_reads_and_from_imports(tmp_path):
+    path = tmp_path / "legacy.py"
+    path.write_text(
+        "import ast\nfrom ast import Num as N, Constant\nok = isinstance(n, ast.Str)\nfine = ast.Constant\n",
+        encoding="utf-8",
+    )
+
+    assert _removed_references(path) == ["legacy.py:2 from ast import Num", "legacy.py:3 ast.Str"]
 
 
 @pytest.mark.parametrize("module", [
