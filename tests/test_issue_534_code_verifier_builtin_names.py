@@ -32,8 +32,9 @@ def _verify(code):
     "score = model.evaluate(x, y)",
     "score = model.evaluate(x=X, y=Y)",
     "score = model.evaluate(ds, verbose=0)",
-    'import evaluate\nmetric = evaluate.load("accuracy")',
-    "def evaluate(model, data):\n    return 1\nevaluate(m, d)",
+    # An undecorated method named evaluate is reached only through an
+    # attribute, which is checked.
+    "class Model:\n    def evaluate(self, data):\n        return 1",
     # sys.modules is a dict, not callable: model.modules() is not it, nor is
     # a name of that name, which only an attribute read, a class pattern or
     # an import binds.
@@ -50,6 +51,8 @@ def _verify(code):
     # Defining the dunder accessors is not reading them.
     "class Proxy:\n    def __getattr__(self, name):\n        return 1",
     "def __getattr__(name):\n    return 1",
+    "def __dir__():\n    return []\ndef __getattr__(name):\n    return 1",
+    "def make():\n    class Proxy:\n        def __setattr__(self, name, value):\n            pass\n    return Proxy",
     "# Proxy overrides __setattr__ here\nx = 1",
     # re.compile with its flags, by position or keyword, beside sys.
     'import re\np = re.compile(r"a+", re.I)',
@@ -432,6 +435,21 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("from os import execv\nrun = execv\nrun(\"/bin/sh\", [\"sh\"])", "execv"),
     ("import os as o\nf = o.execvp\nf(\"sh\", [\"sh\"])", "execvp"),
     ("import os\nvars(os)[\"execve\"](\"/bin/sh\", [\"sh\"], {})", "execve"),
+    # An object carries the name it was defined or imported under: a def
+    # (unless an undecorated method or a PEP 562 hook), a decorator's
+    # argument, a load of the name, and a module path.
+    ("def evaluate():\n    pass\nfrom typing import ForwardRef\nr = ForwardRef(\"x\")\nvars(ForwardRef)[evaluate.__name__](r)", "evaluate"),
+    ("def __getattribute__():\n    pass\nvars(object)[__getattribute__.__name__](obj, \"x\")", "__getattribute__"),
+    ("def outer():\n    def evaluate():\n        pass\n    return evaluate.__name__", "evaluate"),
+    ("async def __setattr__():\n    pass", "__setattr__"),
+    ("registry = []\ndef reg(f):\n    registry.append(f)\n    return f\nclass C:\n    @reg\n    def evaluate(self):\n        pass\nk = registry[0].__name__", "evaluate"),
+    ("class C:\n    def evaluate(self):\n        pass\n    k = evaluate.__name__", "evaluate"),
+    ("import pkg.exec as x\nvars(m)[x.__name__.split(\".\")[1]](payload)", "exec"),
+    ("from pkg.exec import y\nvars(m)[y.__module__.split(\".\")[1]](payload)", "exec"),
+    ("from .compile import y", "compile"),
+    ("import evaluate\nfrom typing import ForwardRef\nvars(ForwardRef)[evaluate.__name__](ForwardRef(\"x\"))", "evaluate"),
+    ("import evaluate as ev\nk = ev.__name__", "evaluate"),
+    ("from evaluate import load\nk = load.__module__", "evaluate"),
     # A regex call's pattern is matched like its other arguments. It can
     # reach what the call gives (a group name, .re.pattern, a replacement
     # function that stores the match), and re cannot be shown to be the
