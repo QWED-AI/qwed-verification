@@ -155,9 +155,10 @@ class CodeVerifier:
     PYTHON_STRING_EVALUATING_METHODS: ClassVar[dict] = {
         "evaluate": "String evaluation via ForwardRef.evaluate() (Python 3.14)",
     }
-    # ForwardRef.evaluate(self, *, globals, locals, type_params, owner, format)
+    # ForwardRef.evaluate(self, *, globals, locals, type_params, owner, format):
+    # every name it binds by keyword, self included (evaluate(self=ref)).
     _FORWARD_REF_EVALUATE_KEYWORDS: ClassVar[frozenset] = frozenset(
-        {"globals", "locals", "type_params", "owner", "format"}
+        {"self", "globals", "locals", "type_params", "owner", "format"}
     )
     _ATTRIBUTE_READ_NAMES: ClassVar[frozenset] = (
         _CRITICAL_NAMES | PYTHON_ATTRIBUTE_ACCESSORS | frozenset(PYTHON_STRING_EVALUATING_METHODS)

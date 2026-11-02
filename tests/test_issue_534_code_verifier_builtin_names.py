@@ -393,6 +393,8 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("from typing import List\nList[\"print(1)\"].__args__[0].evaluate()", "evaluate"),
     ("ref.evaluate(globals=g, owner=o)", "evaluate"),
     ("type(ref).evaluate(ref)", "evaluate"),
+    ("type(ref).evaluate(self=ref)", "evaluate"),
+    ("ForwardRef.evaluate(self=ref, globals=g)", "evaluate"),
     ("score = model.evaluate(x)", "evaluate"),
     ("model.evaluate(*args)", "evaluate"),
     ("model.evaluate(x, *rest)", "evaluate"),
@@ -454,7 +456,10 @@ def test_forward_ref_evaluate_raises_on_the_admitted_shapes_before_running():
 
     method = typing.ForwardRef.evaluate
     parameters = inspect.signature(method).parameters.values()
-    assert {p.name for p in parameters if p.kind is p.KEYWORD_ONLY} == CodeVerifier._FORWARD_REF_EVALUATE_KEYWORDS
+    # Every parameter can be given by keyword, self included, and none
+    # collects extra arguments, so any other keyword raises.
+    assert all(p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY) for p in parameters)
+    assert {p.name for p in parameters} == CodeVerifier._FORWARD_REF_EVALUATE_KEYWORDS
 
     ran = []
     scope = {"ran": ran}
@@ -464,9 +469,11 @@ def test_forward_ref_evaluate_raises_on_the_admitted_shapes_before_running():
         lambda: ref.evaluate(x=1),
         lambda: ref.evaluate(globals=scope, verbose=0),
         lambda: method(ref, 1),
+        lambda: method(self=ref, x=1),
     ):
         with pytest.raises(TypeError):
             call()
     assert ran == []
+    method(self=ref, globals=scope)
     ref.evaluate(globals=scope)
-    assert ran == [1]
+    assert ran == [1, 1]
