@@ -462,6 +462,8 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("import evaluate\nfrom typing import ForwardRef\nvars(ForwardRef)[evaluate.__name__](ForwardRef(\"x\"))", "evaluate"),
     ("import evaluate as ev\nk = ev.__name__", "evaluate"),
     ("from evaluate import load\nk = load.__module__", "evaluate"),
+    # A star import can bind any name to a value stored anywhere.
+    ("import sys, types\nsys.modules.update(m=types.SimpleNamespace(s=\"xexec\"))\ns = \"abc\"\nfrom m import *\nvars(x)[s[1:]](payload)", "exec"),
     # A regex call's pattern is matched like its other arguments. It can
     # reach what the call gives (a group name, .re.pattern, a replacement
     # function that stores the match), and re cannot be shown to be the

@@ -471,6 +471,11 @@ class ReachingLiterals:
         graph = LiteralGraph(self._names.in_word, source, self._imported_modules())
         for node in self._nodes:
             graph.add_node(node)
+        if any(type(node) is ast.ImportFrom and any(alias.name == "*" for alias in node.names) for node in self._nodes):
+            # A star import can bind any name to a value stored anywhere
+            # (sys.modules.update(m=ns), then from m import *).
+            for vertex in seeds:
+                graph.add(vertex, LiteralGraph.WILDCARD)
         hits = graph.spread(seeds)
         self._regex_reach = graph.regex_reach
         return hits

@@ -431,7 +431,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     and its subclasses for what its dunder methods return; what a call can
     store into (the object a method is called on, another argument, an
     argument through a parameter, a name bound to the same object); and
-    every name, for a store through a namespace (`globals()["s"] = ...`).
+    every name, for a store through a namespace (`globals()["s"] = ...`),
+    and from every literal, where the code star-imports (a module made at
+    runtime can bind any name: `from m import *`).
     Where the source holds a name inside a word anywhere, identifiers and
     comments included, what can read the source or its names back as text
     is taken to hold it too: an exception caught with `except ... as` (its
