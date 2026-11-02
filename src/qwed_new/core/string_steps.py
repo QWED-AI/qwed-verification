@@ -70,10 +70,10 @@ _INTROSPECTION_MODULE_OBJECTS = {
 @functools.cache
 def module_exports(module: str) -> frozenset[str]:
     """The names ``from <module> import *`` binds, for the introspection
-    modules above; nothing for any other module."""
+    modules above. Any other module is an error, not an empty answer."""
     imported = _INTROSPECTION_MODULE_OBJECTS.get(module)
     if imported is None:
-        return frozenset()
+        raise ValueError(f"module_exports: {module!r} is not an introspection module")
     names = getattr(imported, "__all__", None)
     if names is None:
         names = [name for name in dir(imported) if not name.startswith("_")]

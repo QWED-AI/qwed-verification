@@ -351,7 +351,7 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     was a failed item carrying the parser's error text.
 - **The code verifier reads `exec`, `eval` and `compile` as names, not
   substrings (#534).** The Python line scan matched them anywhere in a line,
-  so `cur.execute("SELECT ?", params)`, `model.evaluate(x)`,
+  so `cur.execute("SELECT ?", params)`, `model.evaluate(x, y)`,
   `re.compile(r"[0-9]+")` and `compile_report()` came back VERIFIED with
   `is_valid` false (`dangerous_function`). Parameterised SQL, the safe way to
   run a query, was refused.
@@ -436,7 +436,7 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     (`vars(m)[k]`) or star-imports. Concatenation with a value that is not
     a literal, and names built by `chr` or `join`, are not followed. An
     import of the `builtins` module (`import builtins`) is refused too.
-  - Admitted: longer identifiers (`execute`, `evaluate`, `compile_report`),
+  - Admitted: longer identifiers (`execute`, `evaluation`, `compile_report`),
     the names inside longer words in strings and docstrings, also when
     formatted or split (`"SELECT * FROM evaluations WHERE id = %s" % uid`,
     `"executing job"`, `"executed,ok".split(",")`), or when they reach only
@@ -468,6 +468,22 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     imported from `asyncio.subprocess`, which the substring scan admitted,
     are refused too.
     `ast.literal_eval` is admitted.
+  - Calls that evaluate string annotations as code are refused:
+    `get_type_hints`, `evaluate_forward_ref`, and the `eval_str` keyword
+    (`inspect.get_annotations(f, eval_str=True)`, `inspect.signature`),
+    matched as a keyword, in a string and as any name bound, since
+    `**locals()` passes bound names as keywords.
+  - On Python 3.14, `ForwardRef.evaluate()` runs its string as code
+    (`List["..."].__args__[0].evaluate()`), and on the AST it cannot be told
+    apart from `model.evaluate(x)`. `evaluate` is therefore read like
+    `compile`: refused as an attribute, a from-import or a string, except
+    in a call that `ForwardRef.evaluate()` raises on before it evaluates, two
+    or more positional arguments or a keyword it does not take, with nothing
+    unpacked. `model.evaluate(x, y)`, `model.evaluate(ds, verbose=0)` and
+    `model.evaluate(x=X, y=Y)` are admitted; `model.evaluate(x)` and
+    `model.evaluate()` stay refused on every Python version, as they were
+    before this change. A function named `evaluate`, and the `evaluate`
+    package, are admitted.
   - `__self__` is a dangerous attribute, as `__dict__` and `__globals__`
     are: on a builtin function it is the `builtins` module, so
     `vars(print.__self__)["ex" + "ec"]` was admitted.

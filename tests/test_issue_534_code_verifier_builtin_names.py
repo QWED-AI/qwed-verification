@@ -5,9 +5,14 @@ so ``cur.execute(...)``, ``model.evaluate(x)`` and ``re.compile(...)`` were
 refused as ``dangerous_function``. The builtins are now matched on the AST:
 as names, as attributes (the object may be the builtins module reached
 another way) and in strings, with ``re.compile(pattern, flags)`` on an
-imported ``re`` the one attribute admitted. Python that does not parse is
-BLOCKED, since the AST checks cannot run on it.
+imported ``re`` the one attribute admitted. ``evaluate`` is read the same
+way for Python 3.14's ``ForwardRef.evaluate()``, which runs its string, so
+``model.evaluate(x)`` with one argument is refused and ``model.evaluate(x, y)``
+admitted. Python that does not parse is BLOCKED, since the AST checks cannot
+run on it.
 """
+
+import sys
 
 import pytest
 
@@ -24,7 +29,11 @@ def _verify(code):
     'cur.execute("SELECT ?", params)',
     'cur.execute("SELECT * FROM t WHERE id = ?", (uid,))',
     'import re\npat = re.compile(r"[0-9]+")',
-    "score = model.evaluate(x)",
+    "score = model.evaluate(x, y)",
+    "score = model.evaluate(x=X, y=Y)",
+    "score = model.evaluate(ds, verbose=0)",
+    'import evaluate\nmetric = evaluate.load("accuracy")',
+    "def evaluate(model, data):\n    return 1\nevaluate(m, d)",
     "def compile_report():\n    return 1\ncompile_report()",
     'import re as r\np = r.compile("a+")',
     "# we never call eval here\nx = 1",
@@ -369,6 +378,30 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("tcl.evalfile(path)", "evalfile"),
     ("ref._evaluate(g, l)", "_evaluate"),
     ("import typing\ntyping._eval_type(ref, g, l)", "_eval_type"),
+    # Calls that evaluate string annotations as code.
+    ("import typing\ntyping.evaluate_forward_ref(ref)", "evaluate_forward_ref"),
+    ("from typing import get_type_hints as hints\ndef f(x: \"y\"):\n    pass\nhints(f)", "get_type_hints"),
+    ("import typing\ntyping.get_type_hints(f)", "get_type_hints"),
+    ("import inspect\ninspect.get_annotations(f, eval_str=True)", "eval_str"),
+    ("from inspect import get_annotations\nget_annotations(f, eval_str=True)", "eval_str"),
+    ("import inspect\ninspect.signature(f, eval_str=True)", "eval_str"),
+    ("import inspect\ninspect.get_annotations(f, **{\"eval_str\": True})", "eval_str"),
+    ("import inspect\ninspect.get_annotations(f, **dict(eval_str=True))", "eval_str"),
+    ("import inspect\ndef g(eval_str=True):\n    return inspect.get_annotations(f, **locals())", "eval_str"),
+    ("import inspect\nk = \"xeval_str\"[1:]\ninspect.get_annotations(f, **{k: True})", "eval_str"),
+    # Python 3.14's ForwardRef.evaluate(), in every shape it can be called in.
+    ("from typing import List\nList[\"print(1)\"].__args__[0].evaluate()", "evaluate"),
+    ("ref.evaluate(globals=g, owner=o)", "evaluate"),
+    ("type(ref).evaluate(ref)", "evaluate"),
+    ("score = model.evaluate(x)", "evaluate"),
+    ("model.evaluate(*args)", "evaluate"),
+    ("model.evaluate(x, *rest)", "evaluate"),
+    ("model.evaluate(x, y, **kw)", "evaluate"),
+    ("f = model.evaluate", "evaluate"),
+    ("import operator\noperator.methodcaller(\"evaluate\")(ref)", "evaluate"),
+    ("import operator\noperator.methodcaller(\"xevaluate\"[1:])(ref)", "evaluate"),
+    ("from m import evaluate\nevaluate(ref)", "evaluate"),
+    ("match ref:\n    case C(evaluate=e):\n        e()", "evaluate"),
     ("from importlib._bootstrap import _exec\n_exec(spec, mod)", "_exec"),
     ("import _imp\n_imp.exec_dynamic(mod)", "exec_dynamic"),
     ("import _imp\n_imp.exec_builtin(mod)", "exec_builtin"),
@@ -403,8 +436,37 @@ def test_python_that_does_not_parse_is_blocked(code):
 
 def test_star_exports_are_read_for_every_introspection_module():
     # The exports come from modules imported by name, never from a module
-    # the code names, so the table must cover the whole list.
+    # the code names, so the table must cover the whole list, and any other
+    # module is an error rather than no exports.
     graph = string_steps.LiteralGraph
     assert set(string_steps._INTROSPECTION_MODULE_OBJECTS) == graph.INTROSPECTION_MODULES
     assert "get_annotations" in string_steps.module_exports("inspect")
-    assert string_steps.module_exports("os") == frozenset()
+    with pytest.raises(ValueError):
+        string_steps.module_exports("os")
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason="ForwardRef.evaluate() is new in Python 3.14")
+def test_forward_ref_evaluate_raises_on_the_admitted_shapes_before_running():
+    # The shapes admitted for evaluate must fail on ForwardRef.evaluate before
+    # its string runs, and the keyword list must match the real signature.
+    import inspect
+    import typing
+
+    method = typing.ForwardRef.evaluate
+    parameters = inspect.signature(method).parameters.values()
+    assert {p.name for p in parameters if p.kind is p.KEYWORD_ONLY} == CodeVerifier._FORWARD_REF_EVALUATE_KEYWORDS
+
+    ran = []
+    scope = {"ran": ran}
+    ref = typing.ForwardRef("ran.append(1) or int")
+    for call in (
+        lambda: ref.evaluate(1, 2),
+        lambda: ref.evaluate(x=1),
+        lambda: ref.evaluate(globals=scope, verbose=0),
+        lambda: method(ref, 1),
+    ):
+        with pytest.raises(TypeError):
+            call()
+    assert ran == []
+    ref.evaluate(globals=scope)
+    assert ran == [1]

@@ -118,6 +118,9 @@ class CodeVerifier:
         "evalfile": "Tcl script execution via evalfile()",
         "_evaluate": "String evaluation via ForwardRef._evaluate()",
         "_eval_type": "String evaluation via typing._eval_type()",
+        "evaluate_forward_ref": "String evaluation via typing.evaluate_forward_ref()",
+        "get_type_hints": "String annotation evaluation via typing.get_type_hints()",
+        "eval_str": "String annotation evaluation via eval_str=True",
         "compile_command": _DYNAMIC_COMPILATION,
         "_compile": _DYNAMIC_COMPILATION,
         "_maybe_compile": _DYNAMIC_COMPILATION,
@@ -144,7 +147,21 @@ class CodeVerifier:
     PYTHON_ATTRIBUTE_ACCESSORS: ClassVar[frozenset] = frozenset(
         {"__getattribute__", "__getattr__", "__setattr__", "__delattr__"}
     )
-    _ATTRIBUTE_READ_NAMES: ClassVar[frozenset] = _CRITICAL_NAMES | PYTHON_ATTRIBUTE_ACCESSORS
+    # Python 3.14's ForwardRef.evaluate() runs its string as code, and on the
+    # AST it looks like model.evaluate(x). It is refused as an attribute, a
+    # from-import or a string, except in a call it cannot take
+    # (_has_safe_evaluate_arguments). A bare name is not refused, since only
+    # those reads can bind it to the method.
+    PYTHON_STRING_EVALUATING_METHODS: ClassVar[dict] = {
+        "evaluate": "String evaluation via ForwardRef.evaluate() (Python 3.14)",
+    }
+    # ForwardRef.evaluate(self, *, globals, locals, type_params, owner, format)
+    _FORWARD_REF_EVALUATE_KEYWORDS: ClassVar[frozenset] = frozenset(
+        {"globals", "locals", "type_params", "owner", "format"}
+    )
+    _ATTRIBUTE_READ_NAMES: ClassVar[frozenset] = (
+        _CRITICAL_NAMES | PYTHON_ATTRIBUTE_ACCESSORS | frozenset(PYTHON_STRING_EVALUATING_METHODS)
+    )
     # Whole identifiers in a string, longest first, so prose such as
     # "executing job" or "SELECT * FROM evaluations" is not a match.
     _CRITICAL_BUILTIN_NAME: ClassVar = re.compile(
@@ -171,10 +188,21 @@ class CodeVerifier:
     # compile needs a source, a filename and a mode, so a call in this shape
     # cannot run it even on a name that turns out to be the builtins module.
     _REGEX_COMPILE_KEYWORDS: ClassVar[frozenset] = frozenset({"pattern", "flags"})
+    # Keyword names that make a call evaluate strings as code
+    # (inspect.get_annotations(f, eval_str=True)). Refused as a keyword and
+    # as any name bound with them, since **locals() passes the names bound in
+    # a function as keywords.
+    PYTHON_EVALUATING_KEYWORDS: ClassVar[frozenset] = frozenset({"eval_str"})
+    # Nodes that bind a name without an ast.Name: parameters, def and class
+    # names, ``except ... as`` and match-pattern captures.
+    _BINDING_NODE_TYPES: ClassVar[tuple] = (
+        ast.arg, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+        ast.ExceptHandler, ast.MatchAs, ast.MatchStar, ast.MatchMapping,
+    )
     # The node types _critical_builtin_reference reads; others are skipped.
     _REFERENCE_NODE_TYPES: ClassVar[frozenset] = frozenset(
-        {ast.Name, ast.Attribute, ast.MatchClass, ast.Import, ast.ImportFrom, ast.Constant}
-    )
+        {ast.Name, ast.Attribute, ast.MatchClass, ast.Import, ast.ImportFrom, ast.Constant, ast.keyword}
+    ) | frozenset(_BINDING_NODE_TYPES)
 
     # A subprocess call that pipes fetched content (curl/wget) into a shell is
     # flagged as remote_code_execution. subprocess.* is already CRITICAL
@@ -884,19 +912,24 @@ class CodeVerifier:
           exec as run`` and the match pattern ``case object(exec=run)``. The
           one exception is ``re.compile`` called as ``re.compile(pattern,
           flags)`` on a name every import binds to ``re`` and nothing
-          rebinds (_untrusted_compiles);
+          rebinds (_untrusted_compiles). ``evaluate`` is read the same way,
+          for Python 3.14's ``ForwardRef.evaluate()``, except in a call that
+          method cannot take (``model.evaluate(x, y)``; _unsafe_evaluates);
+        - a keyword, or any name bound, that makes a call evaluate strings
+          (``eval_str=True``), since ``**locals()`` passes bound names;
         - a string holding one of these names as a whole identifier, since
           ``vars(module)["exec"]`` reaches it by string, or a name that
           slicing, %-formatting or stripping a literal can leave, the literal
           written in place or reaching the step another way (``"xexec"[1:]``,
           ``s = "xexec"; s[1:]``, ``ident("xexec")[1:]``;
           string_steps.reshaped_references).
-        Comments, longer identifiers such as ``execute``, ``evaluate`` and
+        Comments, longer identifiers such as ``execute``, ``evaluation`` and
         ``compile_report``, prose in strings, and a class or module defining
         ``__getattr__`` are not matches.
         """
         found: List[tuple[str, int]] = []
         compile_attributes: List[ast.Attribute] = []
+        evaluate_attributes: List[ast.Attribute] = []
         reshapes: List[ast.AST] = []
         for node in nodes:
             node_type = type(node)
@@ -907,11 +940,15 @@ class CodeVerifier:
             name = self._critical_builtin_reference(node)
             if name == "compile" and isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
                 compile_attributes.append(node)
+            elif name in self.PYTHON_STRING_EVALUATING_METHODS and isinstance(node, ast.Attribute):
+                evaluate_attributes.append(node)
             elif name:
                 found.append((name, node.lineno))
         # Only code with a name.compile pays for the walk that finds re.
         if compile_attributes:
             found.extend(("compile", node.lineno) for node in self._untrusted_compiles(nodes, compile_attributes))
+        if evaluate_attributes:
+            found.extend((node.attr, node.lineno) for node in self._unsafe_evaluates(nodes, evaluate_attributes))
         if reshapes:
             found.extend(string_steps.reshaped_references(nodes, reshapes, code, _STRING_STEP_NAMES))
         unique = list(dict.fromkeys(found))  # (name, line) pairs, in order, once each
@@ -929,6 +966,10 @@ class CodeVerifier:
             return self._import_reference(node)
         if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
             return self._critical_name_in_text(node.value, self._CRITICAL_BUILTIN_NAME)
+        if isinstance(node, ast.keyword):
+            return node.arg if node.arg in self.PYTHON_EVALUATING_KEYWORDS else None
+        if isinstance(node, self._BINDING_NODE_TYPES):
+            return next((name for name in self._names_rebound_by(node) if name in self.PYTHON_EVALUATING_KEYWORDS), None)
         return None
 
     @staticmethod
@@ -964,6 +1005,26 @@ class CodeVerifier:
             if isinstance(node, ast.Call) and cls._has_regex_compile_arguments(node)
         }
         return [node for node in compile_attributes if node.value.id not in safe_re or id(node) not in regex_calls]
+
+    @classmethod
+    def _unsafe_evaluates(cls, nodes: List[ast.AST], evaluate_attributes: List[ast.Attribute]) -> List[ast.Attribute]:
+        """The ``x.evaluate`` reads that may be ForwardRef.evaluate(): all
+        but those called with arguments it refuses before evaluating."""
+        safe_calls = {
+            id(node.func) for node in nodes
+            if isinstance(node, ast.Call) and cls._has_safe_evaluate_arguments(node)
+        }
+        return [node for node in evaluate_attributes if id(node) not in safe_calls]
+
+    @classmethod
+    def _has_safe_evaluate_arguments(cls, call: ast.Call) -> bool:
+        """Two or more positional arguments (ForwardRef.evaluate takes self
+        alone, so even ForwardRef.evaluate(ref, x) fails), or a keyword it does
+        not take; nothing unpacked. Python binds the arguments, and raises,
+        before the method runs."""
+        if any(isinstance(arg, ast.Starred) for arg in call.args) or any(k.arg is None for k in call.keywords):
+            return False
+        return len(call.args) >= 2 or any(k.arg not in cls._FORWARD_REF_EVALUATE_KEYWORDS for k in call.keywords)
 
     @classmethod
     def _has_regex_compile_arguments(cls, call: ast.Call) -> bool:
@@ -1054,7 +1115,9 @@ class CodeVerifier:
             issue_type="dangerous_function",
             pattern=name,
             description=self.PYTHON_CRITICAL.get(
-                name, self.PYTHON_CODE_EXECUTION_NAMES.get(name, "Access to the builtins module")
+                name,
+                self.PYTHON_CODE_EXECUTION_NAMES.get(name)
+                or self.PYTHON_STRING_EVALUATING_METHODS.get(name, "Access to the builtins module"),
             ),
             line_number=line_number,
             recommendation="Remove or sandbox this operation",
