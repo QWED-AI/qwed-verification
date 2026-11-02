@@ -179,12 +179,11 @@ class CodeVerifier:
     )
     # Ways to rebind a name without an assignment the AST shows: a namespace
     # dict (globals()["re"] = ...) or the import system an import reads
-    # (sys.modules, sys.meta_path). Where code uses one, no name is trusted
-    # to still be the re module.
-    _NAMESPACE_ACCESS: ClassVar[frozenset] = frozenset(
-        {"globals", "vars", "locals", "f_globals", "f_locals",
-         "modules", "meta_path", "path_hooks", "path_importer_cache"}
-    )
+    # (sys.modules, sys.meta_path; string_steps.NAMESPACE_TABLES). Where
+    # code uses one, no name is trusted to still be the re module. These
+    # functions return a namespace, also read uncalled (g = globals) or as an
+    # attribute (builtins.vars).
+    _NAMESPACE_FUNCTIONS: ClassVar[frozenset] = frozenset({"globals", "vars", "locals"})
     # re.compile(pattern, flags=0) takes at most two arguments. The builtin
     # compile needs a source, a filename and a mode, so a call in this shape
     # cannot run it even on a name that turns out to be the builtins module.
@@ -1055,8 +1054,9 @@ class CodeVerifier:
         """
         bindings: Dict[str, set] = {}
         rebound = set()
+        called = {id(node.func) for node in nodes if isinstance(node, ast.Call)}
         for node in nodes:
-            if cls._writes_namespace(node):
+            if cls._writes_namespace(node, called):
                 return set()
             for bound, module in cls._import_targets(node):
                 bindings.setdefault(bound, set()).add(module)
@@ -1074,12 +1074,18 @@ class CodeVerifier:
         return []
 
     @classmethod
-    def _writes_namespace(cls, node: ast.AST) -> bool:
-        if isinstance(node, ast.ImportFrom):
-            return any(alias.name == "*" or alias.name in cls._NAMESPACE_ACCESS for alias in node.names)
+    def _writes_namespace(cls, node: ast.AST, called: set) -> bool:
+        """A namespace function read any way, a star import, or one of the
+        import system's tables (model.modules() is not one)."""
+        if isinstance(node, ast.ImportFrom) and any(
+            alias.name == "*" or alias.name in cls._NAMESPACE_FUNCTIONS for alias in node.names
+        ):
+            return True
         if isinstance(node, ast.Name):
-            return node.id in cls._NAMESPACE_ACCESS
-        return isinstance(node, ast.Attribute) and node.attr in cls._NAMESPACE_ACCESS
+            return node.id in cls._NAMESPACE_FUNCTIONS
+        if isinstance(node, ast.Attribute) and node.attr in cls._NAMESPACE_FUNCTIONS:
+            return True
+        return string_steps.reads_namespace_table(node, called)
 
     @classmethod
     def _names_bound_by(cls, node: ast.AST) -> tuple:

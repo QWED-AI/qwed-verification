@@ -44,7 +44,12 @@ def _verify(code):
     'import re\nout = re.sub(pattern="evaluation", repl="", string=text)',
     'import re as r\nm = r.search("evaluation", text)',
     'from re import sub as s\nout = s("evaluation", "", text)',
+    'from re import search\nm = search("evaluation", text)',
     'import regex\nm = regex.search("evaluation", text)',
+    # sys.modules is a dict, not callable: model.modules() is not it, nor is
+    # a name of that name, which only an attribute read or an import binds.
+    'import re\nfor layer in model.modules():\n    pass\np = re.compile(r"[0-9]+")',
+    'import re\nmodules = ["a", "b"]\np = re.compile(r"[0-9]+")',
     "def compile_report():\n    return 1\ncompile_report()",
     'import re as r\np = r.compile("a+")',
     "# we never call eval here\nx = 1",
@@ -154,6 +159,7 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     # ... or rebound through a namespace dict, or by setting re.compile.
     ('import re\nglobals()["re"] = m\nre.compile(p)', "compile"),
     ('import re\nglobals().update(re=m)\nre.compile(p)', "compile"),
+    ('import re\nns.vars()["re"] = m\nre.compile(p)', "compile"),
     ('import re\nimport sys\nsys._getframe().f_globals["re"] = m\nre.compile(p)', "compile"),
     ('import re\nfrom helpers import *\nre.compile(p)', "compile"),
     ('import re\nre.compile = f\nre.compile(p)', "compile"),
@@ -422,6 +428,14 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("import re\nimport types\nout = []\ndef keep(p, s):\n    out.append(p)\nglobals()[\"re\"] = types.SimpleNamespace(split=keep)\nre.split(\"xexec\", \"\")\nvars(m)[out[0][1:]](payload)", "exec"),
     ("import re\nglobals()[\"re\"] = c\nvars(m)[re.split(\"xexec\", \"\")[0][1:]](payload)", "exec"),
     ("import re\nvars(m)[re.split(*[\"^.\", \"xexec\"])[1]](payload)", "exec"),
+    # A function set on the module under a regex function's name, through any
+    # alias or before a from-import, may store into its arguments.
+    ("import re\nimport re as other\ndef keep(p, dest):\n    dest.append(p)\nother.search = keep\nitems = []\nre.search(\"xexec\", items)\nvars(m)[items[0][1:]](payload)", "exec"),
+    ("import re\ndef keep(p, dest):\n    dest.append(p)\nre.search = keep\nfrom re import search as s\nitems = []\ns(\"xexec\", items)\nvars(m)[items[0][1:]](payload)", "exec"),
+    # The import system can give import re another module, whose split is
+    # a function of the code's own.
+    ("import sys, types\nout = []\ndef keep(p, s):\n    out.append(p)\nsys.modules.update(re=types.SimpleNamespace(split=keep))\nimport re\nre.split(\"xexec\", \"\")\nvars(m)[out[0][1:]](payload)", "exec"),
+    ("import types\nfrom sys import modules as cache\nout = []\ndef keep(p, s):\n    out.append(p)\ncache.update(re=types.SimpleNamespace(split=keep))\nimport re\nre.split(\"xexec\", \"\")\nvars(m)[out[0][1:]](payload)", "exec"),
     # Python 3.14's ForwardRef.evaluate(), in every shape it can be called in.
     ("from typing import List\nList[\"print(1)\"].__args__[0].evaluate()", "evaluate"),
     ("ref.evaluate(globals=g, owner=o)", "evaluate"),

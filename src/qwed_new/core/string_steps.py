@@ -42,6 +42,12 @@ REGEX_IMPORTS = REGEX_STEPS | {"split"}
 # Regex functions whose second argument (repl, or format for the regex
 # package) may be a function the call runs on each match.
 REGEX_REPLACERS = frozenset({"sub", "subn", "subf", "subfn"})
+# What can give ``import re`` another module (sys.modules, the finder lists
+# and cache) or rebind a name without an assignment (a frame's namespace).
+# None of them is callable, so an attribute of that name that is called is
+# not one (model.modules()), and a name is bound to one only through an
+# attribute read or an import, both matched (reads_namespace_table).
+NAMESPACE_TABLES = frozenset({"f_globals", "f_locals", "modules", "meta_path", "path_hooks", "path_importer_cache"})
 
 LITERAL_RESHAPERS = {
     "strip": str.strip, "lstrip": str.lstrip, "rstrip": str.rstrip,
@@ -249,6 +255,15 @@ def _method_call_parts(call: ast.Call) -> tuple[ast.AST, list[ast.AST]]:
     return receiver, call.args
 
 
+def reads_namespace_table(node: ast.AST, called: set) -> bool:
+    """``node`` reads one of NAMESPACE_TABLES: an attribute not called
+    (``called`` holds the ids of called functions), or a from-import
+    (``from sys import modules``)."""
+    if isinstance(node, ast.ImportFrom):
+        return any(alias.name in NAMESPACE_TABLES for alias in node.names)
+    return isinstance(node, ast.Attribute) and node.attr in NAMESPACE_TABLES and id(node) not in called
+
+
 def _literal_replacement(call: ast.Call) -> bool:
     """A sub's replacement (repl, or format) written as a string, so the
     call runs none of the caller's code: a function given instead receives
@@ -432,7 +447,7 @@ class ReachingLiterals:
         self._only: dict[str, str] | None = None
         self._hits: dict[object, str] | None = None
         self._regex_reach: set = set()
-        self._regex_imports: tuple[frozenset, dict] | None = None
+        self._regex_imports: tuple[frozenset, dict, frozenset] | None = None
 
     def hit(self, node: ast.AST) -> str | None:
         """A critical name a literal that can reach ``node`` holds anywhere."""
@@ -508,15 +523,15 @@ class ReachingLiterals:
         re: a regex function called on the module, not on a compiled
         pattern, so its first argument is the pattern, and with no code of
         the caller's run inside it (a sub's replacement written as a
-        string). Only where the AST shows every binding and the module or
-        function name is bound once, by its import. A function set on the
-        module under that name (``other.split = f``) is still given the
-        arguments, through the name it is called by (LiteralGraph._call)."""
+        string). Only where the AST shows every binding, the module or
+        function name is bound once, by its import, and nothing else binds
+        the function's name: a function set on the module under it, through
+        any alias (``other.search = f``), may store into its arguments."""
         if any(isinstance(arg, ast.Starred) for arg in node.args) or any(k.arg is None for k in node.keywords):
             return False
         if self._regex_imports is None:
             self._regex_imports = self._bound_regex_imports()
-        modules, functions = self._regex_imports
+        modules, functions, replaced = self._regex_imports
         func = node.func
         if isinstance(func, ast.Attribute):
             if not (isinstance(func.value, ast.Name) and func.value.id in modules and func.attr in REGEX_IMPORTS):
@@ -526,25 +541,36 @@ class ReachingLiterals:
             name = functions[func.id]
         else:
             return False
-        return name not in REGEX_REPLACERS or _literal_replacement(node)
+        return name not in replaced and (name not in REGEX_REPLACERS or _literal_replacement(node))
 
-    def _bound_regex_imports(self) -> tuple[frozenset, dict]:
+    def _bound_regex_imports(self) -> tuple[frozenset, dict, frozenset]:
         """The names bound once, by ``import re`` (modules) or by a
         from-import of a regex function (functions, with the function each
-        names)."""
+        names), and the regex functions whose name something else binds
+        (replaced). Nothing is trusted where the import system can give
+        ``import re`` another module (``sys.modules.update(re=m)``)."""
         bindings = self._binding_counts()
-        if bindings is None:
-            return frozenset(), {}
+        _, called = self._read_items_and_calls()
+        if bindings is None or any(reads_namespace_table(node, called) for node in self._nodes):
+            return frozenset(), {}, REGEX_IMPORTS
         modules, functions = set(), {}
+        imported: dict[str, int] = {}
         for node in self._nodes:
             if type(node) is ast.Import:
                 modules.update(alias.asname or alias.name for alias in node.names
                                if alias.name in LiteralGraph.REGEX_MODULES)
             elif type(node) is ast.ImportFrom and not node.level and node.module in LiteralGraph.REGEX_MODULES:
-                functions.update((alias.asname or alias.name, alias.name) for alias in node.names
-                                 if alias.name in REGEX_IMPORTS)
+                for alias in node.names:
+                    if alias.name in REGEX_IMPORTS:
+                        bound = alias.asname or alias.name
+                        functions[bound] = alias.name
+                        imported[bound] = imported.get(bound, 0) + 1
         once = {name for name, count in bindings.items() if count == 1}
-        return frozenset(modules) & once, {bound: name for bound, name in functions.items() if bound in once}
+        # A regex function's name bound other than by importing it: set on
+        # the module through any alias, or defined (re.search = f).
+        replaced = frozenset(name for name in REGEX_IMPORTS if bindings.get(name, 0) > imported.get(name, 0))
+        return (frozenset(modules) & once, {bound: name for bound, name in functions.items() if bound in once},
+                replaced)
 
     # The node types that can bind a name (CriticalNames.bound_by), and
     # those that can reach a namespace.

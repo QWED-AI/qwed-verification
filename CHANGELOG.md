@@ -388,10 +388,13 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     `search` from-imported), on a name bound once by its import, with a
     `sub` replacement written as a string, a regex function leaves pieces of
     its string and replacement, never of its pattern, so
-    `re.search("evaluation", text)` is admitted. Anything the pattern gives
-    back (a group name, `.re.pattern`) is still matched by a later step,
-    and a compiled pattern's method or a `sub` given a function is read as
-    before. `%` with a number on the left is
+    `re.search("evaluation", text)` is admitted. Not where something else
+    binds the function's name (`other.search = f` through another alias, a
+    `def search`), or the code reaches the import system (`sys.modules`,
+    `sys.meta_path`), which can give `import re` another module. Anything
+    the pattern gives back (a group name, `.re.pattern`) is still matched by
+    a later step, and a compiled pattern's method or a `sub` given a
+    function is read as before. `%` with a number on the left is
     arithmetic (`10 % n`); a number on the right is not, since `%c` and `%x`
     insert letters. A format's own text, its fields read as separators and
     as nothing, is matched anywhere by a later step
@@ -459,7 +462,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     object (`module.re = ...`), or can rebind it without an assignment: a
     namespace (`globals()`, `vars()`, `locals()`, a frame's `f_globals` or
     `f_locals`, a star import) or the import system (`sys.modules`,
-    `sys.meta_path`, `sys.path_hooks`, `sys.path_importer_cache`). Still
+    `sys.meta_path`, `sys.path_hooks`, `sys.path_importer_cache`). None of
+    those tables is callable, so a method of that name that is called
+    (`model.modules()`) and a variable of that name do not drop it. Still
     refused: `model.eval()`, an attribute named `eval`, and
     `from re import compile` followed by a bare `compile(...)`.
   - Longer names the substring scan refused that also run or compile code,
