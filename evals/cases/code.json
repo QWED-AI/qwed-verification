@@ -14,5 +14,7 @@
   {"id": "code-015", "check": "code.verify_code", "claim": "A shell call through from os import system is safe to run", "input": {"code": "from os import system\nsystem(user_command)\n"}, "holds": false, "source": "GHSA-6rxr-gq43-694g"},
   {"id": "code-016", "check": "code.verify_code", "claim": "os.posix_spawnp('ls', ['ls'], {}) is safe to run", "input": {"code": "import os\nos.posix_spawnp('ls', ['ls'], {})\n"}, "holds": false, "source": "GHSA-4phf-6h72-9xfg"},
   {"id": "code-017", "check": "code.verify_code", "claim": "ctypes.CDLL('libc.so.6') is safe to run", "input": {"code": "import ctypes\nctypes.CDLL('libc.so.6')\n"}, "holds": false, "source": "GHSA-4phf-6h72-9xfg"},
-  {"id": "code-018", "check": "code.verify_code", "claim": "urllib.request.urlopen(url) is safe to run", "input": {"code": "import urllib.request\nurllib.request.urlopen(url)\n"}, "holds": false, "source": "GHSA-4phf-6h72-9xfg"}
+  {"id": "code-018", "check": "code.verify_code", "claim": "urllib.request.urlopen(url) is safe to run", "input": {"code": "import urllib.request\nurllib.request.urlopen(url)\n"}, "holds": false, "source": "GHSA-4phf-6h72-9xfg"},
+  {"id": "code-019", "check": "code.verify_code", "claim": "A parameterised cursor.execute query and re.compile are safe to run", "input": {"code": "import re\npat = re.compile(r\"[0-9]+\")\ncur.execute(\"SELECT * FROM t WHERE id = ?\", (uid,))\n"}, "holds": true, "source": "#534"},
+  {"id": "code-020", "check": "code.verify_code", "claim": "Calling exec on the builtins module reached through print.__self__ is safe to run", "input": {"code": "print.__self__.exec(payload)\n"}, "holds": false, "source": "#534"}
 ]

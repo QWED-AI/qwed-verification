@@ -349,6 +349,189 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     with `api.math.execution_error`. The parser's own text is not returned.
     A batch math item the parser refuses gets the same BLOCKED result; it
     was a failed item carrying the parser's error text.
+- **The code verifier reads `exec`, `eval` and `compile` as names, not
+  substrings (#534).** The Python line scan matched them anywhere in a line,
+  so `cur.execute("SELECT ?", params)`, `model.evaluate(x, y)`,
+  `re.compile(r"[0-9]+")` and `compile_report()` came back VERIFIED with
+  `is_valid` false (`dangerous_function`). Parameterised SQL, the safe way to
+  run a query, was refused.
+  - `eval`, `exec`, `compile`, `__import__`, `getattr` and `setattr` are now
+    matched on the AST: as a name, called or not (`f = eval`), whatever an
+    import elsewhere binds to it, since imports are not read by scope or
+    order; as a keyword or a name bound other than by assignment (a
+    parameter, a `def` or class, `except ... as`, a match capture, a type
+    parameter), since introspection reads it back as a string
+    (`list(dict(exec=1))`, `inspect.signature`, `vars(C)`); a keyword, or a
+    binding other than a `def` or an import, is refused for the names
+    refused only in strings too (`dict(__getattribute__=1)`,
+    `def train(evaluate=False)`), and so are a name, a def (a method
+    included: `def evaluate(self, x)`, `def __setattr__`), and an import
+    whose module path holds one (`import evaluate`, `import pkg.exec as x`),
+    since the object carries that name (`f.__name__`, `dir()` and `vars()`
+    on its class, `module.__name__`, `obj.__module__`), as at main. Only
+    `def __getattr__` is admitted, wherever it is defined: classes and
+    modules (PEP 562) define it to answer attribute reads, and `object` has
+    none; as an attribute, since the object may be the `builtins` module
+    reached another way, whether read as `m.exec`, by `from m import exec`
+    or by a match pattern (`case object(exec=run)`); and in a string as a
+    whole identifier (`vars(module)["exec"]`). Steps on strings (a slice or
+    an index, a `%`-format, a `str` method that removes characters or
+    changes case, also called as `str.lower(s)`, `str()` and `+`) are worked
+    out deepest first from the literals they start from, chains included
+    (`"xexecx"[1:][:-1]`, `"xexec".upper().lower()[1:]`, `"ex" + "ec"`), and
+    each result is matched as whole identifiers, the tuple `partition`
+    gives included. A `%`-format is worked out when the format and its
+    arguments are literals (`"%c%c%c%c" % (101, 120, 101, 99)`,
+    `"%.4s" % "execute"`), unless its widths, precisions or a mapping key
+    used by many conversions could make it longer than 16,384 characters
+    (`"%.999999999d" % 1`). Otherwise its conversions are read as CPython
+    reads them, nested mapping keys included, in one pass, each both as a
+    separator and as nothing (`"ex%sec" % sep`), and a precision cuts what
+    it inserts, not the format's own text. `str.format`, `format_map`, the
+    builtin `format()` and f-strings are read the same way
+    (`"{:.4}".format("execute")`, `f"ex{''}ec"`). An index that is not a
+    literal may be a slice object (`"xexec"[slice(1, None)]`), so it is
+    read as a slice. A regex function (`sub`, `findall`, `search`, `match`
+    and their variants, and the `regex` package's `subf`, `subfn` and
+    `splititer`) on `re` or `regex`, however it is named, is a step that
+    removes characters (`re.sub("q", "", "qexec")`), as is `split` on a
+    regex module or imported from one, whose pattern is not the text it
+    cuts on; helpers that remove nothing (`re.escape`)
+    are not. Its pattern is matched like its other arguments, so
+    `re.search("evaluation", text)` stays refused, as at main: the pattern
+    can reach what the call gives (a group name, `.re.pattern`), and the AST
+    cannot show that `re` is the module, since reflection on `sys` can give
+    `import re` another one whose function does the cut itself
+    (`operator.getitem` in place of `split`). `%` with a number on the left is
+    arithmetic (`10 % n`); a number on the right is not, since `%c` and `%x`
+    insert letters. A format's own text, its fields read as separators and
+    as nothing, is matched anywhere by a later step
+    (`("xex%sec" % sep)[1:]`).
+  - A step that removes characters but cannot be worked out (arguments
+    that are not literals, a method read without being called, which may be
+    saved and called later (not one set or deleted: `obj.title = t`), a `translate`
+    or a `replace` that could grow the text past 16,384 characters, a
+    precision in a format whose arguments are not known, a value longer
+    than 4,096 characters carried from an earlier step, a value from
+    anywhere else) matches anywhere the
+    value an earlier step worked out, or the literals that can reach it. A
+    literal index, a case change, `str()`, `+`, and `strip`, `split`, `partition`
+    and their variants cutting on whitespace or on a literal with no word
+    characters, cannot leave a whole name the value did not already hold,
+    so they never refuse on their own.
+  - The literals that can reach a value are found by following each one,
+    over-approximately, to every value it can become or be stored in: the
+    expressions that hold it; names and attributes bound by assignment of
+    any shape, augmented assignment, a loop, `with`, a match capture or a
+    parameter default; parameters of the functions a call names or is given
+    (`map(f, ...)`, `partial(f, ...)`), or, for a call whose function is
+    not named (`ops["cut"](s)`, `make()(s)`), of every lambda and every
+    function or method read as a value (`{"a": obj.cut}`); and what they
+    return or yield;
+    `__doc__` for a docstring; `except ... as` for what is raised; a class
+    and its subclasses for what its dunder methods return; what a call can
+    store into (the object a method is called on, another argument, an
+    argument through a parameter, a name bound to the same object); and
+    every name, for a store through a namespace (`globals()["s"] = ...`);
+    and what an import binds after other code has run, or inside a
+    function, or what a module looked up by name gives (`import_module`,
+    `pkgutil.resolve_name`, `pydoc.locate`, under any alias:
+    `im = importlib.import_module`), from every literal and every other
+    seed, since that code may have put a module of its own under the name
+    (`sys.modules.update(m=ns)`, then `from m import s`). The module's
+    opening run of imports, a `try` made only of imports included, binds
+    the modules installed and is read as before.
+    Where the source holds a name inside a word anywhere, identifiers and
+    comments included, what can read the source or its names back as text
+    is taken to hold it too: an exception caught with `except ... as` (its
+    message can quote a value or a name: `int("xexec")`, `o.xexec`),
+    introspection (`__name__`, `__code__`, `inspect`, `traceback`, `dir`,
+    `globals`; and common words such as `fields`, `signature` and
+    `exception` only when imported from, or read on, `dataclasses`,
+    `inspect` or `sys`, the module followed through the graph however it
+    is named or looked up: `d = dataclasses`, `sys.modules[...]`,
+    `importlib.import_module(...)`; an import seeds its names where they
+    are read as names, and a star import what the module exports plus
+    its introspection names, `inspect.get_annotations` included), a
+    call given a keyword of that name (`dict(xexec=1)`), and a class with a
+    base that has a member of that name (an Enum member's `.name`). Names and attributes share one key per identifier, and scopes
+    are not told apart. The graph is built only when the source holds a
+    name inside a word, and walked once, so the work stays linear in the
+    code. The string steps live in `string_steps.py`. A name
+    bound once, to a literal as written, is worked out like that literal,
+    unless the code uses a namespace other than to read an item of it
+    (`vars(m)[k]`), captures one in a class pattern
+    (`case object(f_globals=g)`), or star-imports. Concatenation with a value that is not
+    a literal, and names built by `chr` or `join`, are not followed. An
+    import of the `builtins` module (`import builtins`) is refused too.
+  - Admitted: longer identifiers (`execute`, `evaluation`, `compile_report`),
+    the names inside longer words in strings and docstrings, also when
+    formatted or split (`"SELECT * FROM evaluations WHERE id = %s" % uid`,
+    `"executing job"`, `"executed,ok".split(",")`), or when they reach only
+    an index or a cut between words (`row[0].strip()` after a query on
+    `evaluations`). Prose that can reach a slice or another cut that is not
+    worked out stays refused, as before (`raise ValueError("evaluation
+    failed")` beside `str(e)[:80]`). Also admitted:
+    comments, and `re.compile(pattern, flags)` on a name every import binds
+    to `re`. The builtin `compile` needs a filename and a mode, so it cannot
+    run in that shape; any other `re.compile` call, or `re.compile` not
+    called, is refused. The exception is also dropped when anything rebinds
+    the name, sets an attribute on it or an attribute of that name on any
+    object (`module.re = ...`), or can rebind it without an assignment: a
+    namespace (`globals()`, `vars()`, `locals()`, a frame's `f_globals` or
+    `f_locals`, a star import) or the import system (`sys.modules`,
+    `sys.meta_path`, `sys.path_hooks`, `sys.path_importer_cache`), read as
+    an attribute, through a class pattern (`case object(modules=c)`) or by a
+    from-import. None of those tables is callable, so a method of that name
+    that is called (`model.modules()`) and a variable of that name do not
+    drop it. Still
+    refused: `model.eval()`, an attribute named `eval`, and
+    `from re import compile` followed by a bare `compile(...)`.
+  - Longer names the substring scan refused that also run or compile code,
+    start a process or look up an attribute by name stay refused, matched
+    the same way: `exec_` (six, future), `exec_module`, `exec_builtin`,
+    `exec_dynamic`, `_exec`, `load_compiled`, `runeval`, `evalfile`,
+    `_evaluate`, `_eval_type`, `compile_command`, `_compile`,
+    `_maybe_compile`, `_try_compile`, `_compile_source`,
+    `_compile_bytecode`, `compile_file`, `compile_dir`, `compile_path`,
+    `subprocess_exec`, `create_subprocess_exec`, `fork_exec`, `_execvpe`,
+    `_execute_child`, `set_executable`, `getattr_static` and
+    `_getattribute`; and the `os.exec*` family (`execl`, `execle`,
+    `execlp`, `execlpe`, `execv`, `execve`, `execvp`, `execvpe`), however
+    they are referenced (`from os import execv; run = execv`), where the
+    process check reads calls only. `loop.subprocess_shell`, and `create_subprocess_shell`
+    imported from `asyncio.subprocess`, which the substring scan admitted,
+    are refused too.
+    `ast.literal_eval` is admitted.
+  - Calls that evaluate string annotations as code are refused:
+    `get_type_hints`, `evaluate_forward_ref`, and the `eval_str` keyword
+    (`inspect.get_annotations(f, eval_str=True)`, `inspect.signature`),
+    matched like the names above, as a keyword, in a string and as any
+    name bound, imports included (`from math import pi as eval_str`),
+    since `**locals()` passes bound names as keywords.
+  - On Python 3.14, `ForwardRef.evaluate()` runs its string as code
+    (`List["..."].__args__[0].evaluate()`), and on the AST it cannot be told
+    apart from `model.evaluate(x)`. `evaluate` is therefore read like
+    `compile`: refused as an attribute, a from-import or a string, except
+    in a call that `ForwardRef.evaluate()` raises on before it evaluates, two
+    or more positional arguments or a keyword it does not take, with nothing
+    unpacked. `model.evaluate(x, y)`, `model.evaluate(ds, verbose=0)` and
+    `model.evaluate(x=X, y=Y)` are admitted; `model.evaluate(x)` and
+    `model.evaluate()` stay refused on every Python version, as they were
+    before this change. A function named `evaluate`, and the `evaluate`
+    package, are admitted.
+  - `__self__` is a dangerous attribute, as `__dict__` and `__globals__`
+    are: on a builtin function it is the `builtins` module, so
+    `vars(print.__self__)["ex" + "ec"]` was admitted.
+  - `__getattribute__`, `__getattr__`, `__setattr__` and `__delattr__`,
+    which reach an attribute by name as `getattr` and `setattr` do, are
+    refused when read as an attribute or named in a string, as the builtins
+    are. A class or module that defines `__getattr__` is admitted.
+  - Python that does not parse is BLOCKED with `code_verifier.parse_error`,
+    since the AST checks cannot run on it. It was certified safe unless a
+    line held one of the substring patterns.
+  - The Python AST checks share one parse and one walk of the code instead of
+    parsing and walking it once each.
 
 ## [8.0.0] - 2026-10-26
 
