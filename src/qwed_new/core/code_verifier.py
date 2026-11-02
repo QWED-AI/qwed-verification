@@ -11,6 +11,7 @@ from bisect import bisect_left
 import ast
 import hashlib
 import re
+import sys
 
 from . import string_steps
 from .diagnostics import DiagnosticResult
@@ -51,6 +52,7 @@ CONSTRAINT_PARSE_ERROR = "code_verifier.parse_error"
 
 _DYNAMIC_COMPILATION = "Dynamic code compilation"
 _FILE_COMPILATION = "Bytecode compilation of files"
+_OS_EXEC = "Process execution via os.exec*()"
 
 
 class _UnparseablePython(Exception):
@@ -136,6 +138,8 @@ class CodeVerifier:
         "create_subprocess_shell": "Shell execution via asyncio",
         "fork_exec": "Process execution via _posixsubprocess.fork_exec()",
         "_execvpe": "Process execution via os._execvpe()",
+        "execl": _OS_EXEC, "execle": _OS_EXEC, "execlp": _OS_EXEC, "execlpe": _OS_EXEC,
+        "execv": _OS_EXEC, "execve": _OS_EXEC, "execvp": _OS_EXEC, "execvpe": _OS_EXEC,
         "_execute_child": "Process execution via Popen._execute_child()",
         "set_executable": "Sets the program multiprocessing runs",
         "getattr_static": "Dynamic attribute access",
@@ -197,7 +201,7 @@ class CodeVerifier:
     _BINDING_NODE_TYPES: ClassVar[tuple] = (
         ast.arg, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
         ast.ExceptHandler, ast.MatchAs, ast.MatchStar, ast.MatchMapping,
-        *(getattr(ast, name) for name in ("TypeVar", "ParamSpec", "TypeVarTuple") if hasattr(ast, name)),
+        *((ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple) if sys.version_info >= (3, 12) else ()),
     )
     # The node types _critical_builtin_reference reads; others are skipped.
     _REFERENCE_NODE_TYPES: ClassVar[frozenset] = frozenset(
@@ -966,19 +970,23 @@ class CodeVerifier:
             return next((attr for attr in node.kwd_attrs if attr in self._ATTRIBUTE_READ_NAMES), None)
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             # from math import pi as eval_str binds the name too.
-            return self._import_reference(node) or self._critical_name_bound_by(node)
+            return self._import_reference(node) or self._critical_name_bound_by(node, self._CRITICAL_NAMES)
         if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
             return self._critical_name_in_text(node.value, self._CRITICAL_BUILTIN_NAME)
         if isinstance(node, ast.keyword):
-            return node.arg if node.arg in self._CRITICAL_NAMES else None
+            return node.arg if node.arg in self._ATTRIBUTE_READ_NAMES else None
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # A def may be named __getattr__ (PEP 562) or evaluate (a model's
+            # own), so only the builtins and code-execution names count.
+            return self._critical_name_bound_by(node, self._CRITICAL_NAMES)
         if isinstance(node, self._BINDING_NODE_TYPES):
-            return self._critical_name_bound_by(node)
+            return self._critical_name_bound_by(node, self._ATTRIBUTE_READ_NAMES)
         return None
 
     @classmethod
-    def _critical_name_bound_by(cls, node: ast.AST) -> Optional[str]:
-        """A critical name ``node`` binds (_BINDING_NODE_TYPES)."""
-        return next((name for name in cls._names_bound_by(node) if name in cls._CRITICAL_NAMES), None)
+    def _critical_name_bound_by(cls, node: ast.AST, names: frozenset) -> Optional[str]:
+        """One of ``names`` that ``node`` binds."""
+        return next((name for name in cls._names_bound_by(node) if name in names), None)
 
     @staticmethod
     def _critical_name_in_text(value, pattern) -> Optional[str]:

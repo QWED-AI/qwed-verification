@@ -361,7 +361,11 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     order; as a keyword or a name bound other than by assignment (a
     parameter, a `def` or class, `except ... as`, a match capture, a type
     parameter), since introspection reads it back as a string
-    (`list(dict(exec=1))`, `inspect.signature`, `vars(C)`); as an attribute, since the object may be the `builtins` module
+    (`list(dict(exec=1))`, `inspect.signature`, `vars(C)`); a keyword, or a
+    binding other than a `def` or an import, is refused for the names
+    refused only in strings too (`dict(__getattribute__=1)`,
+    `def train(evaluate=False)`), while `def __getattr__`, a model's
+    `def evaluate` and `import evaluate` are admitted; as an attribute, since the object may be the `builtins` module
     reached another way, whether read as `m.exec`, by `from m import exec`
     or by a match pattern (`case object(exec=run)`); and in a string as a
     whole identifier (`vars(module)["exec"]`). Steps on strings (a slice or
@@ -477,7 +481,10 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     `_compile_bytecode`, `compile_file`, `compile_dir`, `compile_path`,
     `subprocess_exec`, `create_subprocess_exec`, `fork_exec`, `_execvpe`,
     `_execute_child`, `set_executable`, `getattr_static` and
-    `_getattribute`. `loop.subprocess_shell`, and `create_subprocess_shell`
+    `_getattribute`; and the `os.exec*` family (`execl`, `execle`,
+    `execlp`, `execlpe`, `execv`, `execve`, `execvp`, `execvpe`), however
+    they are referenced (`from os import execv; run = execv`), where the
+    process check reads calls only. `loop.subprocess_shell`, and `create_subprocess_shell`
     imported from `asyncio.subprocess`, which the substring scan admitted,
     are refused too.
     `ast.literal_eval` is admitted.

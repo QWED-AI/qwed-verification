@@ -42,6 +42,7 @@ def _verify(code):
     "def compile_report():\n    return 1\ncompile_report()",
     "run(execute=True)",
     "def build(compiled=True):\n    return compiled",
+    "class Model:\n    def evaluate(self, x):\n        return x",
     'import re as r\np = r.compile("a+")',
     "# we never call eval here\nx = 1",
     "my_getattr_helper = 1",
@@ -418,6 +419,19 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("match x:\n    case [exec]:\n        pass", "exec"),
     ("match x:\n    case [*exec]:\n        pass", "exec"),
     ("match x:\n    case {**exec}:\n        pass", "exec"),
+    # Keywords, and bindings other than a def or an import, with a name
+    # refused only in strings (an accessor, or evaluate): introspection
+    # reads them back the same way.
+    ("vars(object)[list(dict(__getattribute__=1))[0]](obj, name)", "__getattribute__"),
+    ("vars(object)[list(dict(__setattr__=1))[0]](obj, name, value)", "__setattr__"),
+    ("vars(ForwardRef)[list(dict(evaluate=1))[0]](ref)", "evaluate"),
+    ("def f(__getattribute__=1):\n    pass", "__getattribute__"),
+    ("def train(evaluate=False):\n    pass", "evaluate"),
+    ("f = lambda __setattr__: 0", "__setattr__"),
+    # os.exec* by any reference, not only a call the process check resolves.
+    ("from os import execv\nrun = execv\nrun(\"/bin/sh\", [\"sh\"])", "execv"),
+    ("import os as o\nf = o.execvp\nf(\"sh\", [\"sh\"])", "execvp"),
+    ("import os\nvars(os)[\"execve\"](\"/bin/sh\", [\"sh\"], {})", "execve"),
     # A regex call's pattern is matched like its other arguments. It can
     # reach what the call gives (a group name, .re.pattern, a replacement
     # function that stores the match), and re cannot be shown to be the
