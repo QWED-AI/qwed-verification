@@ -25,7 +25,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.11'
 
@@ -44,7 +44,7 @@ jobs:
         run: snyk test --org=${{ secrets.SNYK_ORG_ID }} --severity-threshold=high --sarif-file-output=snyk.sarif
 
       - name: Upload Snyk results to GitHub Security
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         if: always() && hashFiles('snyk.sarif') != ''
         with:
           sarif_file: snyk.sarif
@@ -67,7 +67,7 @@ jobs:
         run: snyk code test --org=${{ secrets.SNYK_ORG_ID }} --sarif-file-output=snyk-code.sarif
 
       - name: Upload Snyk Code results
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         if: always() && hashFiles('snyk-code.sarif') != ''
         with:
           sarif_file: snyk-code.sarif
