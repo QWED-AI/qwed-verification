@@ -188,16 +188,16 @@ class CodeVerifier:
     # compile needs a source, a filename and a mode, so a call in this shape
     # cannot run it even on a name that turns out to be the builtins module.
     _REGEX_COMPILE_KEYWORDS: ClassVar[frozenset] = frozenset({"pattern", "flags"})
-    # Keyword names that make a call evaluate strings as code
-    # (inspect.get_annotations(f, eval_str=True)). Refused as a keyword and
-    # as any name bound with them, since **locals() passes the names bound in
-    # a function as keywords.
-    PYTHON_EVALUATING_KEYWORDS: ClassVar[frozenset] = frozenset({"eval_str"})
     # Nodes that bind a name without an ast.Name: parameters, def and class
-    # names, ``except ... as`` and match-pattern captures.
+    # names, ``except ... as``, match-pattern captures and (Python 3.12+)
+    # type parameters. A critical name bound by one, or given as a keyword,
+    # is refused as a Name is: introspection reads it back as a string
+    # (list(dict(exec=1)), inspect.signature, vars(C)), and **locals() passes
+    # bound names as keywords (eval_str=True).
     _BINDING_NODE_TYPES: ClassVar[tuple] = (
         ast.arg, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
         ast.ExceptHandler, ast.MatchAs, ast.MatchStar, ast.MatchMapping,
+        *(getattr(ast, name) for name in ("TypeVar", "ParamSpec", "TypeVarTuple") if hasattr(ast, name)),
     )
     # The node types _critical_builtin_reference reads; others are skipped.
     _REFERENCE_NODE_TYPES: ClassVar[frozenset] = frozenset(
@@ -915,8 +915,10 @@ class CodeVerifier:
           rebinds (_untrusted_compiles). ``evaluate`` is read the same way,
           for Python 3.14's ``ForwardRef.evaluate()``, except in a call that
           method cannot take (``model.evaluate(x, y)``; _unsafe_evaluates);
-        - a keyword, or any name bound, that makes a call evaluate strings
-          (``eval_str=True``), since ``**locals()`` passes bound names;
+        - one of the names given as a keyword or bound other than by a Name
+          (a parameter, a def, a class), since introspection reads it back
+          (``list(dict(exec=1))``) and ``**locals()`` passes it as a keyword
+          (``eval_str=True``);
         - a string holding one of these names as a whole identifier, since
           ``vars(module)["exec"]`` reaches it by string, or a name that
           slicing, %-formatting or stripping a literal can leave, the literal
@@ -963,21 +965,20 @@ class CodeVerifier:
         if isinstance(node, ast.MatchClass):
             return next((attr for attr in node.kwd_attrs if attr in self._ATTRIBUTE_READ_NAMES), None)
         if isinstance(node, (ast.Import, ast.ImportFrom)):
-            # from math import pi as eval_str binds the keyword's name too.
-            return self._import_reference(node) or self._evaluating_name_bound_by(node)
+            # from math import pi as eval_str binds the name too.
+            return self._import_reference(node) or self._critical_name_bound_by(node)
         if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
             return self._critical_name_in_text(node.value, self._CRITICAL_BUILTIN_NAME)
         if isinstance(node, ast.keyword):
-            return node.arg if node.arg in self.PYTHON_EVALUATING_KEYWORDS else None
+            return node.arg if node.arg in self._CRITICAL_NAMES else None
         if isinstance(node, self._BINDING_NODE_TYPES):
-            return self._evaluating_name_bound_by(node)
+            return self._critical_name_bound_by(node)
         return None
 
     @classmethod
-    def _evaluating_name_bound_by(cls, node: ast.AST) -> Optional[str]:
-        """A keyword name that makes a call evaluate strings, bound by
-        ``node``: **locals() passes it as that keyword."""
-        return next((name for name in cls._names_bound_by(node) if name in cls.PYTHON_EVALUATING_KEYWORDS), None)
+    def _critical_name_bound_by(cls, node: ast.AST) -> Optional[str]:
+        """A critical name ``node`` binds (_BINDING_NODE_TYPES)."""
+        return next((name for name in cls._names_bound_by(node) if name in cls._CRITICAL_NAMES), None)
 
     @staticmethod
     def _critical_name_in_text(value, pattern) -> Optional[str]:

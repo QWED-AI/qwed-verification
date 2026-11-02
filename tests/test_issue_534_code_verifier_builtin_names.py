@@ -40,6 +40,8 @@ def _verify(code):
     'import re\nfor layer in model.modules():\n    pass\np = re.compile(r"[0-9]+")',
     'import re\nmodules = ["a", "b"]\np = re.compile(r"[0-9]+")',
     "def compile_report():\n    return 1\ncompile_report()",
+    "run(execute=True)",
+    "def build(compiled=True):\n    return compiled",
     'import re as r\np = r.compile("a+")',
     "# we never call eval here\nx = 1",
     "my_getattr_helper = 1",
@@ -403,6 +405,19 @@ def test_code_that_only_names_a_longer_identifier_is_admitted(code):
     ("import inspect\ndef g():\n    from math import pi as eval_str\n    return inspect.get_annotations(f, **locals())", "eval_str"),
     ("import inspect\ndef g():\n    import math as eval_str\n    return inspect.get_annotations(f, **locals())", "eval_str"),
     ("import inspect\ndef g():\n    import eval_str\n    return inspect.get_annotations(f, **locals())", "eval_str"),
+    # Any of the names given as a keyword or bound other than by a Name is
+    # read back as a string by introspection.
+    ("vars(m)[list(dict(exec=1))[0]](payload)", "exec"),
+    ("import inspect\ndef f(exec):\n    pass\nvars(m)[list(inspect.signature(f).parameters)[0]](payload)", "exec"),
+    ("class C:\n    def exec(self):\n        pass\nvars(m)[[k for k in vars(C) if not k.startswith(\"_\")][0]](payload)", "exec"),
+    ("class C:\n    async def eval(self):\n        pass", "eval"),
+    ("class compile:\n    pass", "compile"),
+    ("try:\n    pass\nexcept Exception as exec:\n    pass", "exec"),
+    ("f = lambda getattr: 0", "getattr"),
+    ("class C(Base, exec=1):\n    pass", "exec"),
+    ("match x:\n    case [exec]:\n        pass", "exec"),
+    ("match x:\n    case [*exec]:\n        pass", "exec"),
+    ("match x:\n    case {**exec}:\n        pass", "exec"),
     # A regex call's pattern is matched like its other arguments. It can
     # reach what the call gives (a group name, .re.pattern, a replacement
     # function that stores the match), and re cannot be shown to be the
@@ -491,6 +506,19 @@ def test_star_exports_are_read_for_every_introspection_module():
     assert "get_annotations" in string_steps.module_exports("inspect")
     with pytest.raises(ValueError):
         string_steps.module_exports("os")
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="type parameters are new in Python 3.12")
+@pytest.mark.parametrize("code", [
+    "def f[exec]():\n    pass\nvars(m)[f.__type_params__[0].__name__](payload)",
+    "class C[*eval]:\n    pass",
+    "type Alias[**compile] = int",
+])
+def test_a_type_parameter_with_one_of_the_names_is_refused(code):
+    is_valid, issues = _verify(code)
+
+    assert is_valid is False
+    assert {"exec", "eval", "compile"} & {pattern for _, pattern in issues}
 
 
 @pytest.mark.skipif(sys.version_info < (3, 14), reason="ForwardRef.evaluate() is new in Python 3.14")

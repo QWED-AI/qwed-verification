@@ -358,7 +358,10 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - `eval`, `exec`, `compile`, `__import__`, `getattr` and `setattr` are now
     matched on the AST: as a name, called or not (`f = eval`), whatever an
     import elsewhere binds to it, since imports are not read by scope or
-    order; as an attribute, since the object may be the `builtins` module
+    order; as a keyword or a name bound other than by assignment (a
+    parameter, a `def` or class, `except ... as`, a match capture, a type
+    parameter), since introspection reads it back as a string
+    (`list(dict(exec=1))`, `inspect.signature`, `vars(C)`); as an attribute, since the object may be the `builtins` module
     reached another way, whether read as `m.exec`, by `from m import exec`
     or by a match pattern (`case object(exec=run)`); and in a string as a
     whole identifier (`vars(module)["exec"]`). Steps on strings (a slice or
@@ -481,9 +484,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - Calls that evaluate string annotations as code are refused:
     `get_type_hints`, `evaluate_forward_ref`, and the `eval_str` keyword
     (`inspect.get_annotations(f, eval_str=True)`, `inspect.signature`),
-    matched as a keyword, in a string and as any name bound, imports
-    included (`from math import pi as eval_str`), since `**locals()`
-    passes bound names as keywords.
+    matched like the names above, as a keyword, in a string and as any
+    name bound, imports included (`from math import pi as eval_str`),
+    since `**locals()` passes bound names as keywords.
   - On Python 3.14, `ForwardRef.evaluate()` runs its string as code
     (`List["..."].__args__[0].evaluate()`), and on the AST it cannot be told
     apart from `model.evaluate(x)`. `evaluate` is therefore read like
