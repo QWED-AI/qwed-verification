@@ -16,9 +16,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import tempfile
 import unicodedata
-from decimal import Decimal
+from decimal import MAX_EMAX, MIN_ETINY, Decimal, InvalidOperation
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Dict, Iterable
@@ -32,6 +33,10 @@ from qwed_new.core.diagnostics import compute_proof_ref
 # end the text too, so a string match can never fail and nothing is ever
 # re-scanned. Runs of plain characters are consumed at once.
 _JSON_TOKEN = re.compile(r'"[^"\\]*(?:\\(?:.|\Z)[^"\\]*)*("|\Z)|[\[\]{}]', re.DOTALL)
+
+# A JSON number as json hands it to parse_float: whole digits, fraction
+# digits, exponent.
+_JSON_DECIMAL = re.compile(r"-?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?")
 
 
 class AgentStateGuard:
@@ -128,7 +133,7 @@ class AgentStateGuard:
         # a MemoryError from the check itself comes back BLOCKED. RecursionError
         # and MemoryError are caught so that a payload that defeats the check
         # is still BLOCKED, never raised (#469). ArithmeticError covers
-        # parse_float=Decimal on an exponent outside Decimal's range
+        # _parse_decimal on an exponent outside Decimal's range
         # (decimal.InvalidOperation is not a ValueError).
         try:
             if self._nesting_exceeds(proposed_state_json, self.MAX_PARSE_DEPTH):
@@ -329,8 +334,33 @@ class AgentStateGuard:
             object_pairs_hook=self._reject_duplicate_keys,
             parse_constant=self._reject_non_standard_constant,
             # Preserve deterministic numeric semantics for Phase 1 validation.
-            parse_float=Decimal,
+            parse_float=self._parse_decimal,
         )
+
+    @staticmethod
+    def _parse_decimal(text: str) -> Decimal:
+        """Parse a JSON number to Decimal with one result on either decimal module.
+
+        A CPython built without libmpdec (from 3.15 there is no fallback to the
+        bundled copy) runs the pure-Python decimal module. It accepts an
+        exponent the C module refuses, and refuses more digits than int()
+        reads, which the C module accepts. Both limits are checked on the text
+        first, so a payload gets the same verdict and message on either (#570).
+        """
+        match = _JSON_DECIMAL.fullmatch(text)
+        if match is None:
+            raise ValueError("Not a JSON number.")
+        whole, fraction, exponent = match.group(1), match.group(2) or "", match.group(3) or "0"
+        # sys.get_int_max_str_digits arrived in 3.10.7; int() had no limit before it.
+        digit_limit = getattr(sys, "get_int_max_str_digits", lambda: 0)()
+        if digit_limit and max(len(whole) + len(fraction), len(exponent)) > digit_limit:
+            raise ValueError(f"A JSON number has more than {digit_limit} digits.")
+        # Decimal(text) has exponent exp and adjusted exponent adjusted.
+        exp = int(exponent) - len(fraction)
+        adjusted = exp + max(len((whole + fraction).lstrip("0")), 1) - 1
+        if adjusted > MAX_EMAX or exp < MIN_ETINY:
+            raise InvalidOperation("A JSON number's exponent is outside the decimal range.")
+        return Decimal(text)
 
     @classmethod
     def _freeze_config(cls, value: Any) -> Any:
