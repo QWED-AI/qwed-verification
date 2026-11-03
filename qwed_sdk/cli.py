@@ -35,6 +35,13 @@ except ImportError:
     sys.exit(1)
 
 from qwed_new.core.security import redact_pii
+from qwed_sdk.cli_model import (
+    PROVIDER_MODEL_ENV as _PROVIDER_MODEL_ENV,
+    exit_without_model as _exit_without_model,
+    load_saved_env as _load_saved_env,
+    model_or_variable as _model_or_variable,
+    require_provider_model as _require_provider_model,
+)
 from qwed_sdk.init_owner import resolve_owner, signup_failure
 
 logger = logging.getLogger(__name__)
@@ -54,13 +61,6 @@ def cli():
 SEPARATOR = "-" * 41
 ANTHROPIC_CLAUDE_LABEL = "Anthropic Claude"
 OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434/v1"
-# Where `qwed verify` and `qwed interactive` read the model for --provider.
-# QWED names no model of its own.
-_PROVIDER_MODEL_ENV = {
-    "openai": "OPENAI_MODEL",
-    "anthropic": "ANTHROPIC_MODEL",
-    "gemini": "GEMINI_MODEL",
-}
 SQLITE_URL_PREFIX = "sqlite:///"
 SQLITE_MEMORY_URL = f"{SQLITE_URL_PREFIX}:memory:"
 DEFAULT_DATABASE_URL = f"{SQLITE_URL_PREFIX}./qwed.db"
@@ -127,22 +127,6 @@ def _load_dotenv_if_available(*, override: bool = False) -> None:
         load_dotenv_ordered(override=override)
     except ImportError:
         return
-
-
-def _load_saved_env() -> None:
-    """Load the .env files `qwed init` writes, as load_dotenv_ordered does,
-    without overriding the shell.
-
-    Unlike _load_dotenv_if_available, it does not import qwed_new.config,
-    whose Settings raise without the server's API_KEY_SECRET: a local
-    session has no server secrets.
-    """
-    try:
-        from dotenv import load_dotenv
-    except ImportError:
-        return
-    load_dotenv(Path.cwd() / ".env", override=False)
-    load_dotenv(Path.home() / ".qwed" / ".env", override=False)
 
 
 def _normalize_provider_choice(value: Optional[str]) -> str:
@@ -823,16 +807,6 @@ def _resolve_provider_credentials(
         resolved_model = click.prompt(f"{profile.name} default model").strip()
 
     return resolved_key, resolved_base_url, resolved_model
-
-
-def _require_provider_model(profile: OnboardingProvider, resolved_model: str) -> None:
-    """QWED names no model: without --model or the provider's model variable,
-    init stops instead of choosing one."""
-    if not resolved_model:
-        raise RuntimeError(
-            f"{profile.model_env} is required for provider '{profile.slug}'. "
-            f"Pass --model or set {profile.model_env}."
-        )
 
 
 def _resolve_provider_api_key(profile: OnboardingProvider, api_key: Optional[str]) -> str:
@@ -2139,26 +2113,6 @@ def test_command(verbose: bool):
     sys.exit(1)
 
 
-def _has_model(model: Optional[str]) -> bool:
-    """A blank model is no model."""
-    return bool(model and model.strip())
-
-
-def _exit_without_model(model: Optional[str], model_env: Optional[str]) -> None:
-    """Stop `qwed verify` or `qwed interactive` when no model is configured:
-    QWED names none itself."""
-    if _has_model(model):
-        return
-    hint = f"Pass --model or set {model_env}." if model_env else "Pass --model."
-    err_msg = (
-        f"{QWED.ERROR}ERROR: No model is configured. {hint}{QWED.RESET}"
-        if HAS_COLOR
-        else f"ERROR: No model is configured. {hint}"
-    )
-    click.echo(err_msg, err=True)
-    sys.exit(1)
-
-
 @cli.command()
 @click.argument('query')
 @click.option('--provider', '-p', default=None, help='LLM provider (openai/anthropic/gemini)')
@@ -2232,9 +2186,7 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
         # model variable, and with neither the command stops.
         if provider and not base_url:
             model_env = _PROVIDER_MODEL_ENV.get(provider)
-        if not _has_model(model) and model_env:
-            import os as _os
-            model = _os.getenv(model_env)
+        model = _model_or_variable(model, model_env)
         
         # Create client
         if base_url:
@@ -2339,8 +2291,7 @@ def interactive(provider: Optional[str], model: Optional[str]):
     # which may be in the .env file `qwed init` wrote.
     _load_saved_env()
     model_env = _PROVIDER_MODEL_ENV.get(provider) if provider else "OLLAMA_MODEL"
-    if not _has_model(model) and model_env:
-        model = os.getenv(model_env)
+    model = _model_or_variable(model, model_env)
     _exit_without_model(model, model_env)
 
     # Create client once

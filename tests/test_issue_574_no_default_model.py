@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from click.testing import CliRunner
@@ -38,8 +38,9 @@ ROOT = Path(__file__).resolve().parents[1]
 # No provider's model: an ID must reach the API exactly as the user set it.
 ANY_MODEL = "acme-labs/reasoner-v9:2026-11@eu-west"
 STATS_CODE = "result = df['a'].mean()"
-# Test-only key material: the providers are never reached over the network.
-FAKE_KEY = f"unit-test-{uuid4().hex}"
+# Test-only key material, the same on every run (uuid5 is derived from its
+# name); no test reaches a provider over the network.
+FAKE_KEY = f"unit-test-{uuid5(NAMESPACE_URL, 'qwed-tests/issue-574').hex}"
 
 # provider class -> (its model variable, the other settings it needs)
 PROVIDERS = {
