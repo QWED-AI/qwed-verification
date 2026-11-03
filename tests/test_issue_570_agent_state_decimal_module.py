@@ -26,7 +26,8 @@ NUMBER_SCHEMA = {
     "required": ["x"],
     "additionalProperties": False,
 }
-DIGIT_LIMIT = sys.get_int_max_str_digits()
+# sys.get_int_max_str_digits arrived in 3.10.7, and 0 means no limit.
+DIGIT_LIMIT = sys.get_int_max_str_digits() if hasattr(sys, "get_int_max_str_digits") else 0
 
 
 def _payload(number):
@@ -53,16 +54,20 @@ IN_RANGE = [
     "-0.0",
     "3.14",
 ]
-TOO_MANY_DIGITS = [
-    "1." + "7" * DIGIT_LIMIT,
-    "0." + "0" * DIGIT_LIMIT,
-    "1e" + "0" * DIGIT_LIMIT + "1",
-    "1e-" + "0" * (DIGIT_LIMIT - 1) + "1",
-]
-AT_THE_DIGIT_LIMIT = [
-    "1." + "7" * (DIGIT_LIMIT - 1),
-    "1e" + "0" * (DIGIT_LIMIT - 1) + "1",
-]
+# int() counts digits, leading zeros included, but not a sign. With no limit
+# these are empty, and the cases that need one are skipped.
+TOO_MANY_DIGITS = {
+    "coefficient": "1." + "7" * DIGIT_LIMIT,
+    "zero-fraction": "0." + "0" * DIGIT_LIMIT,
+    "exponent": "1e" + "0" * DIGIT_LIMIT + "1",
+    "negative-exponent": "1e-" + "0" * DIGIT_LIMIT + "1",
+} if DIGIT_LIMIT else {}
+AT_THE_DIGIT_LIMIT = {
+    "coefficient": "-1." + "7" * (DIGIT_LIMIT - 1),
+    "exponent": "1e" + "0" * (DIGIT_LIMIT - 1) + "1",
+    "negative-exponent": "1e-" + "0" * (DIGIT_LIMIT - 1) + "1",
+    "positive-exponent": "1e+" + "0" * (DIGIT_LIMIT - 1) + "1",
+} if DIGIT_LIMIT else {}
 
 
 @pytest.mark.parametrize("number", OUT_OF_RANGE)
@@ -82,9 +87,7 @@ def test_an_exponent_inside_decimal_range_is_verified(number):
     assert result["normalized_state"]["x"] == decimal.Decimal(number)
 
 
-@pytest.mark.parametrize(
-    "number", TOO_MANY_DIGITS, ids=["coefficient", "zero-fraction", "exponent", "negative-exponent"]
-)
+@pytest.mark.parametrize("number", TOO_MANY_DIGITS.values(), ids=TOO_MANY_DIGITS.keys())
 def test_more_digits_than_int_reads_is_a_parse_error(number):
     result = _guard().verify_state_payload(_payload(number))
 
@@ -93,9 +96,24 @@ def test_more_digits_than_int_reads_is_a_parse_error(number):
     assert f"more than {DIGIT_LIMIT} digits" in result["message"]
 
 
-@pytest.mark.parametrize("number", AT_THE_DIGIT_LIMIT, ids=["coefficient", "exponent"])
+@pytest.mark.parametrize("number", AT_THE_DIGIT_LIMIT.values(), ids=AT_THE_DIGIT_LIMIT.keys())
 def test_digits_up_to_the_int_limit_are_verified(number):
     assert _guard().verify_state_payload(_payload(number))["status"] == "VERIFIED"
+
+
+def test_with_the_int_digit_limit_off_a_long_number_is_verified():
+    if not hasattr(sys, "set_int_max_str_digits"):
+        pytest.skip("int() has no digit limit before 3.10.7")
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(0)
+    try:
+        long_coefficient = _guard().verify_state_payload(_payload("1." + "7" * 5000))
+        long_exponent = _guard().verify_state_payload(_payload("1e-" + "0" * 5000 + "1"))
+    finally:
+        sys.set_int_max_str_digits(previous)
+
+    assert long_coefficient["status"] == "VERIFIED"
+    assert long_exponent["status"] == "VERIFIED"
 
 
 def test_text_that_is_not_a_json_number_is_refused():
@@ -125,7 +143,7 @@ print(json.dumps(verdicts))
 
 
 def _verdicts(module):
-    numbers = OUT_OF_RANGE + IN_RANGE + TOO_MANY_DIGITS + AT_THE_DIGIT_LIMIT
+    numbers = OUT_OF_RANGE + IN_RANGE + [*TOO_MANY_DIGITS.values(), *AT_THE_DIGIT_LIMIT.values()]
     run = subprocess.run(
         [sys.executable, "-c", _VERDICTS, module],
         input=json.dumps([NUMBER_SCHEMA, numbers]),

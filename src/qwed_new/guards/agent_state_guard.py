@@ -352,8 +352,10 @@ class AgentStateGuard:
             raise ValueError("Not a JSON number.")
         whole, fraction, exponent = match.group(1), match.group(2) or "", match.group(3) or "0"
         # sys.get_int_max_str_digits arrived in 3.10.7; int() had no limit before it.
-        digit_limit = getattr(sys, "get_int_max_str_digits", lambda: 0)()
-        if digit_limit and max(len(whole) + len(fraction), len(exponent)) > digit_limit:
+        digit_limit = sys.get_int_max_str_digits() if hasattr(sys, "get_int_max_str_digits") else 0
+        # int() counts digits, leading zeros included, but not a sign.
+        exponent_digits = len(exponent.lstrip("+-"))
+        if digit_limit and max(len(whole) + len(fraction), exponent_digits) > digit_limit:
             raise ValueError(f"A JSON number has more than {digit_limit} digits.")
         # Decimal(text) has exponent exp and adjusted exponent adjusted.
         exp = int(exponent) - len(fraction)
