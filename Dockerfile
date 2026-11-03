@@ -7,7 +7,7 @@
 #           file without a target, so the Action stage must stay last.
 #
 # Base: python:3.14-slim-bookworm, pinned by digest.
-FROM python:3.14-slim-bookworm@sha256:82bc3c539b8813ada9d68c63b40158fa002f7f33de9bf3312a3dfdc0620dff56 AS base
+FROM python:3.15-slim-bookworm@sha256:4e03260adeeebafccd084f3584e6b84823aba5651cfb53ef8a078ed441ddf9cd AS base
 
 # Environment
 ENV PYTHONDONTWRITEBYTECODE=1 \
