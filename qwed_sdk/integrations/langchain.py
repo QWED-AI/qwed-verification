@@ -92,8 +92,8 @@ class QWEDTool(BaseTool):
     api_key: Optional[str] = None
     """API key for the LLM provider (or set via environment variable)"""
     
-    model: str = "gpt-4o-mini"
-    """Model name (e.g., 'gpt-4o-mini', 'claude-3-haiku-20240307')"""
+    model: Optional[str] = None
+    """Model name, required (e.g., 'gpt-4o-mini', 'claude-3-haiku-20240307'). QWED names no default model."""
     
     mask_pii: bool = False
     """Enable PII masking for privacy protection (requires qwed[pii])"""

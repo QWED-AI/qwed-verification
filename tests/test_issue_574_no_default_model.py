@@ -1,0 +1,553 @@
+"""QWED names no model: every provider runs the model its user configured.
+
+Runtime code used to fall back to a model of its own when none was set
+(gpt-4o-mini, gpt-3.5-turbo, llama3, gemini-1.5-pro, claude-sonnet-4-5, and a
+hardcoded Haiku 3 in the reasoning trace), and those names went stale as
+providers retired models. Now a provider with no model configured raises and
+names the variable to set, and any model ID the user sets reaches the
+provider's API unchanged.
+"""
+
+import ast
+import logging
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import pytest
+from click.testing import CliRunner
+
+import qwed_sdk.qwed_local as qwed_local_module
+from qwed_new.config import ProviderType
+from qwed_new.core.reasoning_verifier import _PROVIDER_NAMES, ReasoningVerifier
+from qwed_new.providers import gemini_provider
+from qwed_new.providers import registry as registry_module
+from qwed_new.providers.anthropic import AnthropicProvider
+from qwed_new.providers.auto_shift import AutoShiftProvider
+from qwed_new.providers.azure_openai import AzureOpenAIProvider
+from qwed_new.providers.claude_opus import ClaudeOpusProvider
+from qwed_new.providers.gemini_provider import GeminiProvider
+from qwed_new.providers.ollama_provider import OllamaProvider
+from qwed_new.providers.openai_compat import OpenAICompatProvider
+from qwed_new.providers.openai_direct import OpenAIDirectProvider
+from qwed_sdk.cli import OnboardingProvider, init, interactive, verify
+from qwed_sdk.qwed_local import QWEDLocal
+
+ROOT = Path(__file__).resolve().parents[1]
+
+# No provider's model: an ID must reach the API exactly as the user set it.
+ANY_MODEL = "acme-labs/reasoner-v9:2026-11@eu-west"
+STATS_CODE = "result = df['a'].mean()"
+
+# provider class -> (its model variable, the other settings it needs)
+PROVIDERS = {
+    OpenAIDirectProvider: ("OPENAI_MODEL", {"OPENAI_API_KEY": "test-sentinel"}),
+    AzureOpenAIProvider: (
+        "AZURE_OPENAI_DEPLOYMENT",
+        {
+            "AZURE_OPENAI_ENDPOINT": "http://localhost:1",
+            "AZURE_OPENAI_API_KEY": "test-sentinel",
+            "AZURE_OPENAI_API_VERSION": "2024-01-01",
+        },
+    ),
+    AnthropicProvider: (
+        "ANTHROPIC_DEPLOYMENT",
+        {"ANTHROPIC_ENDPOINT": "http://localhost:1", "ANTHROPIC_API_KEY": "test-sentinel"},
+    ),
+    ClaudeOpusProvider: (
+        "CLAUDE_OPUS_DEPLOYMENT",
+        {"CLAUDE_OPUS_ENDPOINT": "http://localhost:1", "CLAUDE_OPUS_API_KEY": "test-sentinel"},
+    ),
+    OllamaProvider: ("OLLAMA_MODEL", {}),
+    OpenAICompatProvider: ("CUSTOM_MODEL", {"CUSTOM_BASE_URL": "http://localhost:1/v1"}),
+    GeminiProvider: ("GEMINI_MODEL", {"GOOGLE_API_KEY": "test-sentinel"}),
+}
+MODEL_VARIABLES = {model_env for model_env, _ in PROVIDERS.values()} | {"ANTHROPIC_MODEL"}
+
+
+@pytest.fixture(autouse=True)
+def _no_model_configured(monkeypatch):
+    """Start with no model and no provider set, whatever the shell has."""
+    for name in MODEL_VARIABLES | {"ACTIVE_PROVIDER"}:
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def fake_genai(monkeypatch):
+    """Stand in for google.generativeai, recording the model each
+    GenerativeModel is built for."""
+    built = []
+
+    def generative_model(name):
+        built.append(name)
+        return SimpleNamespace(generate_content=lambda *_args, **_kwargs: SimpleNamespace(text=STATS_CODE))
+
+    fake = SimpleNamespace(
+        configure=lambda **_kwargs: None,
+        GenerativeModel=generative_model,
+        types=SimpleNamespace(GenerationConfig=lambda **kwargs: kwargs),
+    )
+    monkeypatch.setattr(gemini_provider, "genai", fake)
+    return built
+
+
+def _configure(monkeypatch, provider_cls, model):
+    model_env, env = PROVIDERS[provider_cls]
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    if model is not None:
+        monkeypatch.setenv(model_env, model)
+    return model_env
+
+
+def _chat_response(**_kwargs):
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=STATS_CODE))])
+
+
+def _text_response(**_kwargs):
+    return SimpleNamespace(content=[SimpleNamespace(type="text", text=STATS_CODE)])
+
+
+def _recorder(sent, make_response):
+    def create(**kwargs):
+        sent.append(kwargs["model"])
+        return make_response(**kwargs)
+
+    return create
+
+
+# --------------------------------------------------------------------------
+# Server providers
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("model", [None, "", "   "], ids=["unset", "empty", "blank"])
+@pytest.mark.parametrize("provider_cls", PROVIDERS, ids=lambda cls: cls.__name__)
+def test_a_provider_with_no_model_configured_raises(monkeypatch, fake_genai, provider_cls, model):
+    model_env = _configure(monkeypatch, provider_cls, model)
+
+    with pytest.raises(ValueError, match=f"No model is configured .* Set {model_env} "):
+        provider_cls()
+
+
+@pytest.mark.parametrize("provider_cls", PROVIDERS, ids=lambda cls: cls.__name__)
+def test_any_model_id_reaches_the_provider_api_unchanged(monkeypatch, fake_genai, provider_cls):
+    _configure(monkeypatch, provider_cls, ANY_MODEL)
+    provider = provider_cls()
+    # Gemini records its model as it is built; the others as they call the API.
+    sent = fake_genai
+    if provider_cls in (AnthropicProvider, ClaudeOpusProvider):
+        monkeypatch.setattr(provider.client.messages, "create", _recorder(sent, _text_response))
+    elif provider_cls is not GeminiProvider:
+        monkeypatch.setattr(provider.client.chat.completions, "create", _recorder(sent, _chat_response))
+
+    assert provider.translate_stats("mean of a", ["a"]) == STATS_CODE
+    assert sent == [ANY_MODEL]
+
+
+@pytest.mark.parametrize(
+    "provider_cls",
+    [OpenAIDirectProvider, OllamaProvider, OpenAICompatProvider, GeminiProvider],
+    ids=lambda cls: cls.__name__,
+)
+def test_a_model_passed_to_the_provider_wins_over_its_variable(monkeypatch, fake_genai, provider_cls):
+    _configure(monkeypatch, provider_cls, "a-model-from-the-environment")
+
+    provider = provider_cls(model=ANY_MODEL)
+
+    assert ANY_MODEL in (getattr(provider, "model", None), getattr(provider, "model_name", None))
+
+
+# --------------------------------------------------------------------------
+# ReasoningVerifier: the configured provider, and only its own call
+# --------------------------------------------------------------------------
+
+
+def test_reasoning_verifier_uses_the_configured_provider(monkeypatch):
+    monkeypatch.setenv("ACTIVE_PROVIDER", "gemini")
+
+    assert ReasoningVerifier().provider_names == ["gemini"]
+
+
+def test_reasoning_verifier_reads_an_unset_provider_as_the_server_does():
+    assert ReasoningVerifier().provider_names == [ProviderType.OLLAMA.value]
+
+
+LOADED = {
+    "anthropic": AnthropicProvider,
+    "claude_opus": ClaudeOpusProvider,
+    "azure": AzureOpenAIProvider,
+    "azure_openai": AzureOpenAIProvider,
+    "openai": OpenAIDirectProvider,
+    "openai_direct": OpenAIDirectProvider,
+    "openai_compat": OpenAICompatProvider,
+    "openai-compatible": OpenAICompatProvider,
+    "gemini": GeminiProvider,
+    "ollama": OllamaProvider,
+}
+
+
+def test_every_provider_name_the_reasoning_verifier_takes_is_covered():
+    assert set(_PROVIDER_NAMES) == (set(LOADED) - {"openai-compatible"}) | {"auto"}
+
+
+@pytest.mark.parametrize("name, provider_cls", LOADED.items())
+def test_reasoning_verifier_loads_each_provider_with_its_configured_model(
+    monkeypatch, fake_genai, name, provider_cls
+):
+    _configure(monkeypatch, provider_cls, ANY_MODEL)
+
+    provider = ReasoningVerifier(providers=[name], enable_cache=False).primary_llm
+
+    assert type(provider) is provider_cls
+    configured = (getattr(provider, attr, None) for attr in ("model", "model_name", "deployment"))
+    assert ANY_MODEL in configured
+
+
+def test_reasoning_verifier_takes_a_provider_type(monkeypatch):
+    _configure(monkeypatch, OllamaProvider, ANY_MODEL)
+
+    provider = ReasoningVerifier(providers=[ProviderType.OLLAMA], enable_cache=False).primary_llm
+
+    assert type(provider) is OllamaProvider
+
+
+def test_reasoning_verifier_loads_auto_shift(monkeypatch):
+    _configure(monkeypatch, AzureOpenAIProvider, ANY_MODEL)
+
+    provider = ReasoningVerifier(providers=["auto"], enable_cache=False).primary_llm
+
+    assert type(provider) is AutoShiftProvider
+    assert provider.primary.deployment == ANY_MODEL
+
+
+def test_reasoning_verifier_has_no_provider_when_its_provider_has_no_model(monkeypatch, caplog):
+    monkeypatch.setenv("ACTIVE_PROVIDER", "ollama")
+    verifier = ReasoningVerifier(enable_cache=False)
+
+    with caplog.at_level(logging.WARNING, logger="qwed_new.core.reasoning_verifier"):
+        result = verifier.verify_understanding(
+            query="Alice has 10 apples and gets 5 more. How many apples does she have?",
+            primary_task=SimpleNamespace(expression="10 + 5", reasoning=""),
+            enable_cross_validation=False,
+        )
+
+    assert not result.is_verified
+    assert result.developer_fields["constraint_id"] == "reasoning_verifier.no_provider"
+    assert "OLLAMA_MODEL" in caplog.text
+
+
+def test_reasoning_trace_comes_only_from_the_providers_own_call():
+    client = MagicMock()
+    verifier = ReasoningVerifier(providers=["anthropic"], enable_cache=False)
+    # A provider with a client but no complete(): QWED must not call the
+    # client itself, with a model of its choosing.
+    verifier._provider_loaders["anthropic"] = lambda: SimpleNamespace(client=client)
+
+    trace = verifier._generate_reasoning_trace("What is 10 + 5?", SimpleNamespace(expression="10 + 5"))
+
+    assert trace == ["Could not generate reasoning trace"]
+    assert client.mock_calls == []
+
+
+# --------------------------------------------------------------------------
+# SDK: QWEDLocal, verify() and the LangChain tool
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("model", [None, "", "   "], ids=["unset", "empty", "blank"])
+def test_qwedlocal_without_a_model_raises(model):
+    with pytest.raises(ValueError, match="QWEDLocal needs a model"):
+        QWEDLocal(base_url="http://localhost:1/v1", model=model, cache=False)
+
+
+def test_qwedlocal_sends_any_model_id_unchanged(monkeypatch):
+    client = QWEDLocal(base_url="http://localhost:1/v1", model=ANY_MODEL, cache=False)
+    sent = []
+    monkeypatch.setattr(client.llm_client.chat.completions, "create", _recorder(sent, _chat_response))
+
+    assert client._call_llm("What is 2 + 2?") == STATS_CODE
+    assert sent == [ANY_MODEL]
+
+
+def test_qwedlocal_anthropic_sends_any_model_id_unchanged(monkeypatch):
+    client = QWEDLocal(provider="anthropic", api_key="test-sentinel", model=ANY_MODEL, cache=False)
+    sent = []
+    monkeypatch.setattr(client.llm_client.messages, "create", _recorder(sent, _text_response))
+
+    assert client._call_llm("What is 2 + 2?") == STATS_CODE
+    assert sent == [ANY_MODEL]
+
+
+def test_verify_without_a_model_raises():
+    with pytest.raises(ValueError, match="verify\\(\\) needs model="):
+        qwed_local_module.verify("What is 2+2?")
+
+
+def test_verify_uses_the_llm_the_caller_names(monkeypatch):
+    built = []
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            built.append(kwargs)
+
+        def verify(self, query):
+            return f"verified {query}"
+
+    monkeypatch.setattr(qwed_local_module, "QWEDLocal", Recorder)
+
+    result = qwed_local_module.verify("2+2", provider="openai", api_key="test-sentinel", model=ANY_MODEL)
+
+    assert result == "verified 2+2"
+    assert built == [{"provider": "openai", "api_key": "test-sentinel", "model": ANY_MODEL}]
+
+
+def test_langchain_tool_names_no_model():
+    pytest.importorskip("langchain_core")
+    from qwed_sdk.integrations.langchain import QWEDTool
+
+    assert QWEDTool().model is None
+
+
+# --------------------------------------------------------------------------
+# CLI: qwed verify, qwed interactive and qwed init
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def no_dotenv():
+    """Keep a developer's .env from supplying the model `qwed verify` loads."""
+    with patch("qwed_new.config.load_dotenv_ordered", return_value=None):
+        yield
+
+
+def _verified():
+    return SimpleNamespace(verified=True, value="4", error=None)
+
+
+@pytest.mark.usefixtures("no_dotenv")
+def test_qwed_verify_stops_without_a_model(monkeypatch):
+    monkeypatch.setenv("ACTIVE_PROVIDER", "ollama")
+
+    with patch("qwed_sdk.cli.QWEDLocal") as built:
+        result = CliRunner().invoke(verify, ["What is 2+2?"])
+
+    assert result.exit_code == 1
+    assert "No model is configured. Pass --model or set OLLAMA_MODEL." in result.output
+    built.assert_not_called()
+
+
+@pytest.mark.usefixtures("no_dotenv")
+def test_qwed_verify_with_a_base_url_needs_model_flag():
+    with patch("qwed_sdk.cli.QWEDLocal") as built:
+        result = CliRunner().invoke(verify, ["What is 2+2?", "--base-url", "http://localhost:1/v1"])
+
+    assert result.exit_code == 1
+    assert "No model is configured. Pass --model." in result.output
+    built.assert_not_called()
+
+
+@pytest.mark.usefixtures("no_dotenv")
+def test_qwed_verify_sends_the_selected_providers_model(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_MODEL", ANY_MODEL)
+
+    with patch("qwed_sdk.cli.QWEDLocal") as built:
+        built.return_value.verify.return_value = _verified()
+        result = CliRunner().invoke(
+            verify, ["What is 2+2?", "--provider", "anthropic", "--api-key", "test-sentinel"]
+        )
+
+    assert result.exit_code == 0
+    assert built.call_args.kwargs["provider"] == "anthropic"
+    assert built.call_args.kwargs["model"] == ANY_MODEL
+
+
+def test_qwed_interactive_stops_without_a_model():
+    with patch("qwed_sdk.cli.QWEDLocal") as built:
+        result = CliRunner().invoke(interactive, [], input="exit\n")
+
+    assert result.exit_code == 1
+    assert "no model is configured. Pass --model or set OLLAMA_MODEL." in result.output
+    built.assert_not_called()
+
+
+def test_qwed_interactive_sends_the_configured_model(monkeypatch):
+    monkeypatch.setenv("OLLAMA_MODEL", ANY_MODEL)
+
+    with patch("qwed_sdk.cli.QWEDLocal") as built:
+        result = CliRunner().invoke(interactive, [], input="exit\n")
+
+    assert result.exit_code == 0
+    assert built.call_args.kwargs["model"] == ANY_MODEL
+
+
+def test_qwed_init_non_interactive_stops_without_a_model(monkeypatch):
+    profile = OnboardingProvider(
+        slug="openai",
+        name="OpenAI",
+        active_provider="openai",
+        key_env="OPENAI_API_KEY",
+        model_env="OPENAI_MODEL",
+        base_url_env=None,
+        default_base_url=None,
+        connection_slug="openai",
+        key_pattern=None,
+    )
+    engines = [{"name": "SymPy", "ready": True, "detail": "math engine ready", "install_hint": "", "version": "1"}]
+    monkeypatch.setenv("OPENAI_API_KEY", "test-sentinel")
+    monkeypatch.setattr("qwed_sdk.cli._load_dotenv_if_available", lambda: None)
+    monkeypatch.setattr("qwed_sdk.cli._required_engine_report", lambda: (True, engines))
+    monkeypatch.setattr("qwed_sdk.cli._build_onboarding_provider_map", lambda _get_provider: {"openai": profile})
+
+    result = CliRunner().invoke(
+        init,
+        ["--provider", "openai", "--organization-name", "demo-org", "--non-interactive", "--skip-tests"],
+    )
+
+    assert result.exit_code == 1
+    assert "OPENAI_MODEL is required for provider 'openai'. Pass --model or set OPENAI_MODEL." in result.output
+
+
+# --------------------------------------------------------------------------
+# Provider registry and imported provider YAML
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("slug", registry_module.PROVIDER_REGISTRY)
+def test_built_in_providers_name_no_model(slug):
+    meta = registry_module.PROVIDER_REGISTRY[slug]
+    model_vars = [env_var for env_var in meta.env_vars if env_var.name.endswith("_MODEL")]
+
+    assert meta.default_model is None
+    assert model_vars
+    assert all(env_var.required and env_var.default is None for env_var in model_vars)
+
+
+def _dynamic_provider(config):
+    class Manager:
+        def load_providers(self):
+            return {"do": config}
+
+    with patch("qwed_new.providers.config_manager.ProviderConfigManager", Manager):
+        registry_module._get_dynamic_providers.cache_clear()
+        try:
+            return registry_module._get_dynamic_providers()["yaml-do"]
+        finally:
+            registry_module._get_dynamic_providers.cache_clear()
+
+
+def test_a_provider_yaml_without_a_model_requires_one():
+    meta = _dynamic_provider({"base_url": "https://inference.do-ai.run/v1", "api_key_env": "DO_API_KEY"})
+    model_var = meta.env_vars[2]
+
+    assert meta.default_model is None
+    assert (model_var.name, model_var.required, model_var.default) == ("CUSTOM_MODEL", True, None)
+
+
+def test_a_provider_yaml_keeps_the_model_it_names():
+    meta = _dynamic_provider(
+        {"base_url": "https://inference.do-ai.run/v1", "api_key_env": "DO_API_KEY", "default_model": ANY_MODEL}
+    )
+    model_var = meta.env_vars[2]
+
+    assert meta.default_model == ANY_MODEL
+    assert (model_var.required, model_var.default) == (False, ANY_MODEL)
+
+
+# --------------------------------------------------------------------------
+# No runtime code names a default model
+# --------------------------------------------------------------------------
+
+RUNTIME_PACKAGES = ("src/qwed_new", "qwed_sdk", "qwed")
+MODEL_KEYS = ("model", "default_model", "model_name")
+# Model names that are not a user's LLM: a cache label, and the local NLI
+# classifier behind graph_fact_verifier's advisory check, with its unused
+# model parameter.
+NOT_A_USERS_LLM = {
+    ("qwed_sdk/qwed_local.py", "a literal model='code_verifier' argument"),
+    ("src/qwed_new/core/graph_fact_verifier.py", "a literal model='cross-encoder/nli-deberta-v3-small' argument"),
+    ("src/qwed_new/core/graph_fact_verifier.py", "parameter model defaults to 'default'"),
+}
+
+
+def _dotted(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return f"{_dotted(node.value)}.{node.attr}"
+    return ""
+
+
+def _is_text(node):
+    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+
+def _names_a_model_variable(node):
+    return _is_text(node) and node.value.endswith(("_MODEL", "_DEPLOYMENT"))
+
+
+def _call_model_defaults(node):
+    """A call that reads a model with a fallback, or passes a literal model."""
+    func = _dotted(node.func)
+    args = node.args
+    reads_a_variable = func.endswith(("getenv", "environ.get")) and args and _names_a_model_variable(args[0])
+    if reads_a_variable and len(args) > 1 and not (isinstance(args[1], ast.Constant) and args[1].value is None):
+        yield "a model variable read with a fallback"
+    if func.endswith(".get") and len(args) > 1 and _is_text(args[0]) and args[0].value in MODEL_KEYS:
+        if _is_text(args[1]) and args[1].value:
+            yield f"{args[0].value!r} looked up with a literal fallback"
+    if func.endswith("EnvVar") and args and _names_a_model_variable(args[0]):
+        if any(kw.arg == "default" and _is_text(kw.value) for kw in node.keywords):
+            yield "a model variable spec with a literal default"
+    for kw in node.keywords:
+        if kw.arg in MODEL_KEYS and _is_text(kw.value):
+            yield f"a literal {kw.arg}={kw.value.value!r} argument"
+        values = kw.value.values if isinstance(kw.value, ast.BoolOp) else []
+        if kw.arg in MODEL_KEYS and any(_is_text(value) for value in values):
+            yield f"{kw.arg}= with a literal fallback"
+
+
+def _model_defaults(source):
+    """Yield (line, what) for each place the code supplies a model itself."""
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call):
+            for what in _call_model_defaults(node):
+                yield node.lineno, what
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            params = node.args.args + node.args.kwonlyargs
+            defaults = [None] * (len(node.args.args) - len(node.args.defaults)) + node.args.defaults
+            defaults += node.args.kw_defaults
+            for param, default in zip(params, defaults):
+                if param.arg in MODEL_KEYS and default is not None and _is_text(default):
+                    yield node.lineno, f"parameter {param.arg} defaults to {default.value!r}"
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.target.id in MODEL_KEYS and node.value is not None and _is_text(node.value):
+                yield node.lineno, f"field {node.target.id} defaults to a literal"
+
+
+def test_the_scan_finds_each_way_code_named_a_model():
+    source = '''
+import os
+A = os.getenv("OLLAMA_MODEL", "llama3")
+B = os.environ.get("ANTHROPIC_DEPLOYMENT", "claude-sonnet-4-5")
+C = kwargs.get("model", "llama3")
+D = EnvVar("OPENAI_MODEL", "Model name", required=False, default="gpt-4o-mini")
+client.messages.create(model="claude-3-haiku-20240307")
+QWEDLocal(model=model or "gpt-3.5-turbo")
+def __init__(self, model: str = "gpt-3.5-turbo"): pass
+class Tool:
+    model: str = "gpt-4o-mini"
+'''
+    assert len(list(_model_defaults(source))) == 8
+
+
+def test_no_runtime_code_names_a_default_model():
+    found = [
+        f"{path.relative_to(ROOT).as_posix()}:{line}: {what}"
+        for package in RUNTIME_PACKAGES
+        for path in sorted((ROOT / package).rglob("*.py"))
+        for line, what in _model_defaults(path.read_text(encoding="utf-8"))
+        if (path.relative_to(ROOT).as_posix(), what) not in NOT_A_USERS_LLM
+    ]
+
+    assert found == []

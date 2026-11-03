@@ -8,7 +8,7 @@ import json
 from typing import Dict, Any
 from openai import AzureOpenAI
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider, sanitized_provider_error
+from qwed_new.providers.base import LLMProvider, configured_model, sanitized_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +34,12 @@ class AzureOpenAIProvider(LLMProvider):
     def __init__(self):
         self.endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
         self.api_key = os.getenv("AZURE_OPENAI_API_KEY")
-        self.deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
         self.api_version = os.getenv("AZURE_OPENAI_API_VERSION")
-        
-        if not all([self.endpoint, self.api_key, self.deployment, self.api_version]):
+
+        if not all([self.endpoint, self.api_key, self.api_version]):
             raise ValueError("Missing Azure OpenAI environment variables")
-            
+        self.deployment = configured_model(None, "AZURE_OPENAI_DEPLOYMENT", "Azure OpenAI")
+
         # #353: SDK default read timeout is 600s x retries — a silently
         # stalled endpoint would occupy its engine worker for ~30 minutes.
         # timeout=30 with retries DISABLED — worst-case worker occupancy

@@ -54,6 +54,13 @@ def cli():
 SEPARATOR = "-" * 41
 ANTHROPIC_CLAUDE_LABEL = "Anthropic Claude"
 OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434/v1"
+# Where `qwed verify` and `qwed interactive` read the model for --provider.
+# QWED names no model of its own.
+_PROVIDER_MODEL_ENV = {
+    "openai": "OPENAI_MODEL",
+    "anthropic": "ANTHROPIC_MODEL",
+    "gemini": "GEMINI_MODEL",
+}
 SQLITE_URL_PREFIX = "sqlite:///"
 SQLITE_MEMORY_URL = f"{SQLITE_URL_PREFIX}:memory:"
 DEFAULT_DATABASE_URL = f"{SQLITE_URL_PREFIX}./qwed.db"
@@ -101,7 +108,6 @@ class OnboardingProvider:
     key_env: str
     model_env: str
     base_url_env: Optional[str]
-    default_model: str
     default_base_url: Optional[str]
     connection_slug: Optional[str]
     key_pattern: Optional[str] = None
@@ -165,7 +171,6 @@ def _build_onboarding_provider_map(get_provider) -> Dict[str, OnboardingProvider
             key_env="CUSTOM_API_KEY",
             model_env="CUSTOM_MODEL",
             base_url_env="CUSTOM_BASE_URL",
-            default_model="nvidia/nemotron-3-super-120b-a12b",
             default_base_url="https://integrate.api.nvidia.com/v1",
             connection_slug="openai-compatible",
             key_pattern=None,
@@ -177,7 +182,6 @@ def _build_onboarding_provider_map(get_provider) -> Dict[str, OnboardingProvider
             key_env="OPENAI_API_KEY",
             model_env="OPENAI_MODEL",
             base_url_env=None,
-            default_model="gpt-4o-mini",
             default_base_url=None,
             connection_slug="openai",
             key_pattern=key_patterns.get("openai"),
@@ -189,7 +193,6 @@ def _build_onboarding_provider_map(get_provider) -> Dict[str, OnboardingProvider
             key_env="ANTHROPIC_API_KEY",
             model_env="ANTHROPIC_MODEL",
             base_url_env=None,
-            default_model="claude-sonnet-4-20250514",
             default_base_url=None,
             connection_slug="anthropic",
             key_pattern=key_patterns.get("anthropic"),
@@ -201,7 +204,6 @@ def _build_onboarding_provider_map(get_provider) -> Dict[str, OnboardingProvider
             key_env="GOOGLE_API_KEY",
             model_env="GEMINI_MODEL",
             base_url_env=None,
-            default_model="gemini-1.5-pro",
             default_base_url=None,
             connection_slug="gemini",
             key_pattern=None,
@@ -213,7 +215,6 @@ def _build_onboarding_provider_map(get_provider) -> Dict[str, OnboardingProvider
             key_env="CUSTOM_API_KEY",
             model_env="CUSTOM_MODEL",
             base_url_env="CUSTOM_BASE_URL",
-            default_model="gpt-4o-mini",
             default_base_url="https://api.openai.com/v1",
             connection_slug="openai-compatible",
             key_pattern=key_patterns.get("openai-compatible"),
@@ -802,13 +803,20 @@ def _resolve_provider_credentials(
     if not resolved_key and not non_interactive:
         resolved_key = click.prompt(f"{profile.name} API key", hide_input=True).strip()
     if not resolved_model and not non_interactive:
-        resolved_model = click.prompt(
-            f"{profile.name} default model",
-            default=profile.default_model,
-            show_default=True,
-        ).strip()
+        # No default: QWED names no model, so the user types one.
+        resolved_model = click.prompt(f"{profile.name} default model").strip()
 
     return resolved_key, resolved_base_url, resolved_model
+
+
+def _require_provider_model(profile: OnboardingProvider, resolved_model: str) -> None:
+    """QWED names no model: without --model or the provider's model variable,
+    init stops instead of choosing one."""
+    if not resolved_model:
+        raise RuntimeError(
+            f"{profile.model_env} is required for provider '{profile.slug}'. "
+            f"Pass --model or set {profile.model_env}."
+        )
 
 
 def _resolve_provider_api_key(profile: OnboardingProvider, api_key: Optional[str]) -> str:
@@ -874,7 +882,7 @@ def _resolve_provider_base_url(
 
 
 def _resolve_provider_model(profile: OnboardingProvider, model: Optional[str]) -> str:
-    return (model or os.getenv(profile.model_env) or profile.default_model).strip()
+    return (model or os.getenv(profile.model_env) or "").strip()
 
 
 def _validate_provider_credentials(
@@ -971,7 +979,7 @@ def _prompt_retry_credentials(
         ).strip()
     updated_model = click.prompt(
         f"{profile.name} default model",
-        default=resolved_model or profile.default_model,
+        default=resolved_model or None,
         show_default=True,
     ).strip()
     return updated_key, updated_base_url, updated_model
@@ -1432,6 +1440,7 @@ def init(
             non_interactive=non_interactive,
             validate_key_format=validate_key_format,
         )
+        _require_provider_model(profile, resolved_model)
         resolved_key, resolved_base_url, resolved_model = _test_provider_connection_loop(
             profile=profile,
             resolved_key=resolved_key,
@@ -2112,6 +2121,20 @@ def test_command(verbose: bool):
     sys.exit(1)
 
 
+def _exit_without_model(model: Optional[str], model_env: Optional[str]) -> None:
+    """Stop `qwed verify` when no model is configured: QWED names none itself."""
+    if model:
+        return
+    hint = f"Pass --model or set {model_env}." if model_env else "Pass --model."
+    err_msg = (
+        f"{QWED.ERROR}ERROR: No model is configured. {hint}{QWED.RESET}"
+        if HAS_COLOR
+        else f"ERROR: No model is configured. {hint}"
+    )
+    click.echo(err_msg, err=True)
+    sys.exit(1)
+
+
 @cli.command()
 @click.argument('query')
 @click.option('--provider', '-p', default=None, help='LLM provider (openai/anthropic/gemini)')
@@ -2140,6 +2163,7 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
     from qwed_new.config import load_dotenv_ordered
     load_dotenv_ordered()
     
+    model_env = None
     try:
         # Auto-detect provider/base_url from ACTIVE_PROVIDER
         if not provider and not base_url:
@@ -2148,7 +2172,7 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
             if active == "ollama" or not active:
                 # Use Ollama (LOCAL): respect user-configured env vars
                 base_url = _os.getenv("OLLAMA_BASE_URL", OLLAMA_DEFAULT_BASE_URL)
-                model = model or _os.getenv("OLLAMA_MODEL", "llama3")
+                model_env = "OLLAMA_MODEL"
                 if HAS_COLOR and not quiet:
                     click.echo(f"{QWED.INFO}\u2139\ufe0f  Using Ollama at {base_url}{QWED.RESET}")
             elif active == "openai-compatible" or active == "openai_compat":
@@ -2163,7 +2187,7 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
                     click.echo("Set CUSTOM_BASE_URL env var or run: qwed init", err=True)
                     sys.exit(1)
                 api_key = api_key or _os.getenv("CUSTOM_API_KEY", "")
-                model = model or _os.getenv("CUSTOM_MODEL", "gpt-4o-mini")
+                model_env = "CUSTOM_MODEL"
                 if HAS_COLOR and not quiet:
                     click.echo(f"{QWED.INFO}\u2139\ufe0f  Using configured provider: {active}{QWED.RESET}")
             else:
@@ -2174,25 +2198,26 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
                     "anthropic": "ANTHROPIC_API_KEY",
                     "gemini": "GOOGLE_API_KEY",
                 }
-                provider_model_env = {
-                    "openai": "OPENAI_MODEL",
-                    "anthropic": "ANTHROPIC_MODEL",
-                    "gemini": "GEMINI_MODEL",
-                }
                 if not api_key:
                     env_key = provider_key_env.get(provider, "QWED_API_KEY")
                     api_key = _os.getenv(env_key, _os.getenv("QWED_API_KEY", ""))
-                if not model:
-                    model_env = provider_model_env.get(provider, "")
-                    model = _os.getenv(model_env, model) if model_env else model
                 if HAS_COLOR and not quiet:
                     click.echo(f"{QWED.INFO}INFO: Using configured provider: {active}{QWED.RESET}")
+
+        # QWED names no model: it is --model, else the selected provider's
+        # model variable, and with neither the command stops.
+        if provider and not base_url:
+            model_env = _PROVIDER_MODEL_ENV.get(provider)
+        if not model and model_env:
+            import os as _os
+            model = _os.getenv(model_env)
         
         # Create client
         if base_url:
+            _exit_without_model(model, model_env)
             client = QWEDLocal(
                 base_url=base_url,
-                model=model or "llama3",
+                model=model,
                 api_key=api_key or None,
                 cache=not no_cache,
                 mask_pii=mask_pii
@@ -2202,11 +2227,12 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
                 click.echo(f"{QWED.ERROR}ERROR: API key required for {provider}{QWED.RESET}", err=True)
                 click.echo("Set QWED_API_KEY env var or use --api-key", err=True)
                 sys.exit(1)
+            _exit_without_model(model, model_env)
             
             client = QWEDLocal(
                 provider=provider,
                 api_key=api_key,
-                model=model or "gpt-3.5-turbo",
+                model=model,
                 cache=not no_cache,
                 mask_pii=mask_pii
             )
@@ -2285,6 +2311,15 @@ def interactive(provider: Optional[str], model: Optional[str]):
         click.echo("\nQWED Interactive Mode")
         click.echo("Type 'exit' or 'quit' to quit\n")
     
+    # QWED names no model: it is --model, else the provider's model variable.
+    model_env = _PROVIDER_MODEL_ENV.get(provider) if provider else "OLLAMA_MODEL"
+    if not model and model_env:
+        model = os.getenv(model_env)
+    if not model:
+        hint = f"Pass --model or set {model_env}." if model_env else "Pass --model."
+        click.echo(f"Error initializing client: no model is configured. {hint}", err=True)
+        sys.exit(1)
+
     # Create client once
     try:
         if provider:
@@ -2292,13 +2327,13 @@ def interactive(provider: Optional[str], model: Optional[str]):
             client = QWEDLocal(
                 provider=provider,
                 api_key=api_key,
-                model=model or "gpt-3.5-turbo"
+                model=model
             )
         else:
             # Default to Ollama
             client = QWEDLocal(
                 base_url=OLLAMA_DEFAULT_BASE_URL,
-                model=model or "llama3"
+                model=model
             )
     except Exception as e:
         click.echo(f"Error initializing client: {e}", err=True)

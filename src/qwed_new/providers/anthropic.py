@@ -7,7 +7,7 @@ import os
 from typing import Dict, Any
 from anthropic import AnthropicFoundry
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider, sanitized_provider_error
+from qwed_new.providers.base import LLMProvider, configured_model, sanitized_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +21,11 @@ class AnthropicProvider(LLMProvider):
         # Anthropic via Azure AI Foundry
         self.endpoint = os.getenv("ANTHROPIC_ENDPOINT")
         self.api_key = os.getenv("ANTHROPIC_API_KEY")
-        self.deployment = os.getenv("ANTHROPIC_DEPLOYMENT", "claude-sonnet-4-5")
-        
-        if not all([self.endpoint, self.api_key, self.deployment]):
+
+        if not all([self.endpoint, self.api_key]):
             raise ValueError("Missing Anthropic environment variables")
-            
+        self.deployment = configured_model(None, "ANTHROPIC_DEPLOYMENT", "Anthropic")
+
         # #353: SDK default read timeout is 600s x retries — bound every
         # wait like the openai providers — retries disabled, so
         # worst-case worker occupancy is one 30s attempt.

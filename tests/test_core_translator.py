@@ -8,7 +8,7 @@ from qwed_new.config import ProviderType
 from qwed_new.core.translator import SecurityError
 
 class TestTranslationLayerProviderFallback:
-    @patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-mock"})
+    @patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-mock", "OPENAI_MODEL": "gpt-4o-mini"})
     def test_get_provider_fallback_to_default(self):
         """Test that invalid provider falls back to default provider."""
         tl = TranslationLayer()

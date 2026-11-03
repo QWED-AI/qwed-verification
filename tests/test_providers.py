@@ -11,6 +11,14 @@ from unittest.mock import patch, MagicMock
 from qwed_new.providers.registry import PROVIDER_REGISTRY, get_provider, list_providers, AuthType
 
 
+@pytest.fixture(autouse=True)
+def _configured_models(monkeypatch):
+    """QWED names no model: each provider's model is set as a user sets it."""
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("CUSTOM_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("OLLAMA_MODEL", "llama3")
+
+
 # ── Registry Tests ──────────────────────────────────────────
 
 class TestProviderRegistry:
@@ -216,7 +224,7 @@ class TestOpenAICompatProvider:
         """No API key → uses 'dummy' for no-auth endpoints."""
         from qwed_new.providers.openai_compat import OpenAICompatProvider
         with patch.dict("os.environ", {}, clear=True):
-            OpenAICompatProvider(base_url="http://localhost:8080/v1")
+            OpenAICompatProvider(base_url="http://localhost:8080/v1", model="gpt-4o-mini")
         call_kwargs = mock_openai_cls.call_args
         assert call_kwargs.kwargs.get("api_key") == "dummy" or call_kwargs[1].get("api_key") == "dummy"
 

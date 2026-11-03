@@ -15,8 +15,10 @@ Enhanced Features:
 import ast
 import copy
 from decimal import Decimal, localcontext
+import functools
 import logging
 import operator
+import os
 import re
 import hashlib
 from typing import Dict, Any, List, Optional, Callable
@@ -28,6 +30,21 @@ from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck
 from .verification_context import VerificationContextDocument
 
 logger = logging.getLogger(__name__)
+
+# The provider names ReasoningVerifier can load: ACTIVE_PROVIDER's values,
+# plus "azure", the name it took before.
+_PROVIDER_NAMES = (
+    "anthropic",
+    "claude_opus",
+    "azure",
+    "azure_openai",
+    "openai",
+    "openai_direct",
+    "openai_compat",
+    "gemini",
+    "ollama",
+    "auto",
+)
 
 
 @dataclass
@@ -115,56 +132,70 @@ class ReasoningVerifier:
         Initialize Reasoning Verifier.
         
         Args:
-            providers: List of provider names ["anthropic", "azure", "openai"].
+            providers: Provider names, as ACTIVE_PROVIDER takes them
+                ("anthropic", "azure_openai", "openai", "gemini", "ollama", ...).
+                Defaults to the configured ACTIVE_PROVIDER.
             enable_cache: Whether to cache results.
             cache_ttl_seconds: Cache time-to-live.
 
         Example:
             >>> verifier = ReasoningVerifier(providers=["openai"], enable_cache=True)
         """
-        self.provider_names = providers if providers is not None else ["anthropic"]
+        # The provider the server is configured for: ACTIVE_PROVIDER, which
+        # Settings reads as Ollama when it is unset.
+        self.provider_names = (
+            providers if providers is not None else [os.getenv("ACTIVE_PROVIDER") or "ollama"]
+        )
         self.enable_cache = enable_cache
         self.cache_ttl = cache_ttl_seconds
         self._cache: Dict[str, ReasoningCacheEntry] = {}
-        
+
         # Lazy-loaded providers
         self._providers: Dict[str, Any] = {}
         self._provider_loaders: Dict[str, Callable] = {
-            "anthropic": self._load_anthropic,
-            "azure": self._load_azure,
-            "openai": self._load_openai,
+            name: functools.partial(self._load_provider, name) for name in _PROVIDER_NAMES
         }
-    
+
     # =========================================================================
     # Provider Loading
     # =========================================================================
-    
-    def _load_anthropic(self):
-        """Load Anthropic provider."""
+
+    @staticmethod
+    def _load_provider(name: str):
+        """Build the named provider, which runs the model configured for it.
+
+        A provider that is not installed or not configured (no model set, for
+        one) is no provider: the error is logged and None returned.
+        """
         try:
-            from qwed_new.providers.anthropic import AnthropicProvider
-            return AnthropicProvider()
-        except ImportError:
+            if name == "anthropic":
+                from qwed_new.providers.anthropic import AnthropicProvider as provider_cls
+            elif name == "claude_opus":
+                from qwed_new.providers.claude_opus import ClaudeOpusProvider as provider_cls
+            elif name in ("azure", "azure_openai"):
+                from qwed_new.providers.azure_openai import AzureOpenAIProvider as provider_cls
+            elif name in ("openai", "openai_direct"):
+                from qwed_new.providers.openai_direct import OpenAIDirectProvider as provider_cls
+            elif name == "openai_compat":
+                from qwed_new.providers.openai_compat import OpenAICompatProvider as provider_cls
+            elif name == "gemini":
+                from qwed_new.providers.gemini_provider import GeminiProvider as provider_cls
+            elif name == "ollama":
+                from qwed_new.providers.ollama_provider import OllamaProvider as provider_cls
+            elif name == "auto":
+                from qwed_new.providers.auto_shift import AutoShiftProvider as provider_cls
+            else:
+                return None
+            return provider_cls()
+        except Exception as exc:
+            logger.warning("Reasoning provider %r is unavailable: %s", name, exc)
             return None
-    
-    def _load_azure(self):
-        """Load Azure OpenAI provider."""
-        try:
-            from qwed_new.providers.azure_openai import AzureOpenAIProvider
-            return AzureOpenAIProvider()
-        except (ImportError, Exception):
-            return None
-    
-    def _load_openai(self):
-        """Load OpenAI provider."""
-        try:
-            from qwed_new.providers.openai import OpenAIProvider
-            return OpenAIProvider()
-        except ImportError:
-            return None
-    
+
     def _get_provider(self, name: str):
         """Get or load a provider by name."""
+        name = str(getattr(name, "value", name)).strip().lower().replace("-", "_")
+        if name == "openai_compatible":
+            name = "openai_compat"
         if name not in self._providers:
             loader = self._provider_loaders.get(name)
             if loader:
@@ -480,15 +511,10 @@ Format as a numbered list."""
             if hasattr(self.primary_llm, 'complete'):
                 response = self.primary_llm.complete(prompt)
                 trace_text = response if isinstance(response, str) else str(response)
-            elif hasattr(self.primary_llm, 'client'):
-                # Anthropic client
-                response = self.primary_llm.client.messages.create(
-                    model="claude-3-haiku-20240307",
-                    max_tokens=500,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                trace_text = response.content[0].text
             else:
+                # The trace comes only from the provider's own completion
+                # call, which runs the model configured for it. QWED never
+                # reaches into a provider's client or names a model itself.
                 return ["Could not generate reasoning trace"]
             
             # Parse into list

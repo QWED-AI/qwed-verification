@@ -6,9 +6,26 @@ This is the core of the "Model-Agnostic" architecture.
 """
 
 import logging
+import os
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from qwed_new.core.schemas import MathVerificationTask, LogicVerificationTask
+
+
+def configured_model(model: Optional[str], env_var: str, provider: str) -> str:
+    """Return the model the caller passed, else the one set in ``env_var``.
+
+    QWED is model-agnostic and names no model of its own: with neither set it
+    raises, rather than choosing one. The value is returned unchanged, so any
+    model or deployment ID the provider serves works.
+    """
+    for value in (model, os.getenv(env_var)):
+        if value and value.strip():
+            return value
+    raise ValueError(
+        f"No model is configured for {provider}. "
+        f"Set {env_var} to the model or deployment to use."
+    )
 
 
 def sanitized_provider_error(logger: logging.Logger, summary: str, exc: Exception) -> ValueError:

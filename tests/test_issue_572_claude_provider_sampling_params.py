@@ -26,11 +26,19 @@ CREATE_SIGNATURE = inspect.signature(Messages.create)
 PROVIDERS = {
     "anthropic": (
         AnthropicProvider,
-        {"ANTHROPIC_ENDPOINT": "http://localhost:1", "ANTHROPIC_API_KEY": "test-sentinel"},
+        {
+            "ANTHROPIC_ENDPOINT": "http://localhost:1",
+            "ANTHROPIC_API_KEY": "test-sentinel",
+            "ANTHROPIC_DEPLOYMENT": "claude-sonnet-4-5",
+        },
     ),
     "claude_opus": (
         ClaudeOpusProvider,
-        {"CLAUDE_OPUS_ENDPOINT": "http://localhost:1", "CLAUDE_OPUS_API_KEY": "test-sentinel"},
+        {
+            "CLAUDE_OPUS_ENDPOINT": "http://localhost:1",
+            "CLAUDE_OPUS_API_KEY": "test-sentinel",
+            "CLAUDE_OPUS_DEPLOYMENT": "claude-opus-4-5",
+        },
     ),
 }
 

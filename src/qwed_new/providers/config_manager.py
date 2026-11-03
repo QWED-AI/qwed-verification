@@ -194,7 +194,8 @@ class ProviderConfigManager:
             clean_config = {
                 "base_url": str(config["base_url"]),
                 "api_key_env": str(config["api_key_env"]),
-                "default_model": str(config.get("default_model", "gpt-4o-mini")),
+                # Only a model the YAML names: QWED supplies none.
+                "default_model": str(config.get("default_model") or ""),
                 "models_endpoint": str(config.get("models_endpoint", "/models")),
                 "auth_header": str(config.get("auth_header", "Authorization")),
                 "auth_prefix": str(config.get("auth_prefix", "Bearer"))

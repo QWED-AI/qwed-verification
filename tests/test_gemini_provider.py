@@ -18,6 +18,12 @@ class MockGenai:
         self.GenerativeModel = MagicMock()
 
 
+@pytest.fixture(autouse=True)
+def _configured_model(monkeypatch):
+    """QWED names no model: the Gemini model is set as a user sets it."""
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-1.5-pro")
+
+
 @pytest.fixture
 def mock_genai_module(monkeypatch):
     mock = MockGenai()

@@ -23,7 +23,7 @@ class TestQWEDLocalCoverage(unittest.TestCase):
         """Test initialization with OpenAI provider."""
         openai_test_token = _build_test_token("openai")
         with patch.object(qwed_local_module, "OpenAI") as MockOpenAI:
-            client = QWEDLocal(provider="openai", api_key=openai_test_token, cache=False)
+            client = QWEDLocal(model="gpt-3.5-turbo", provider="openai", api_key=openai_test_token, cache=False)
             self.assertEqual(client.client_type, "openai")
             MockOpenAI.assert_called_with(api_key=openai_test_token)
 
@@ -31,21 +31,21 @@ class TestQWEDLocalCoverage(unittest.TestCase):
         """Test initialization with Anthropic provider."""
         anthropic_test_token = _build_test_token("anthropic")
         with patch.object(qwed_local_module, "Anthropic") as MockAnthropic:
-            client = QWEDLocal(provider="anthropic", api_key=anthropic_test_token, cache=False)
+            client = QWEDLocal(model="gpt-3.5-turbo", provider="anthropic", api_key=anthropic_test_token, cache=False)
             self.assertEqual(client.client_type, "anthropic")
             MockAnthropic.assert_called_with(api_key=anthropic_test_token)
 
     def test_init_gemini_provider(self):
         """Test initialization with Gemini provider."""
         with patch.object(qwed_local_module, "genai") as MockGenAI:
-            client = QWEDLocal(provider="gemini", api_key="AIza", cache=False)
+            client = QWEDLocal(model="gpt-3.5-turbo", provider="gemini", api_key="AIza", cache=False)
             self.assertEqual(client.client_type, "gemini")
             MockGenAI.configure.assert_called_with(api_key="AIza")
 
     def test_init_custom_base_url(self):
         """Test initialization with custom base_url (Ollama style)."""
         with patch.object(qwed_local_module, "OpenAI") as MockOpenAI:
-            client = QWEDLocal(base_url="http://localhost:11434", cache=False)
+            client = QWEDLocal(model="gpt-3.5-turbo", base_url="http://localhost:11434", cache=False)
             self.assertEqual(client.client_type, "openai")
             MockOpenAI.assert_called()
 
@@ -55,7 +55,7 @@ class TestQWEDLocalCoverage(unittest.TestCase):
 
     def test_verify_auto_detect(self):
         """Test verify() method defaults to verify_math."""
-        client = QWEDLocal(base_url="http://mock", cache=False)
+        client = QWEDLocal(model="gpt-3.5-turbo", base_url="http://mock", cache=False)
         client.verify_math = MagicMock(return_value="math_result")
         
         res = client.verify("2+2")
@@ -64,14 +64,14 @@ class TestQWEDLocalCoverage(unittest.TestCase):
 
     def test_verify_code_unsupported_lang(self):
         """Test verify_code with unsupported language."""
-        client = QWEDLocal(base_url="http://mock", cache=False)
+        client = QWEDLocal(model="gpt-3.5-turbo", base_url="http://mock", cache=False)
         res = client.verify_code("print('h')", language="java")
         self.assertFalse(res.verified)
         self.assertIn("Only Python supported", res.error)
 
     def test_cache_stats_none(self):
         """Test cache stats when cache disabled."""
-        client = QWEDLocal(base_url="http://mock", cache=False)
+        client = QWEDLocal(model="gpt-3.5-turbo", base_url="http://mock", cache=False)
         self.assertIsNone(client.cache_stats)
         # Should not crash
         client.print_cache_stats()
@@ -80,7 +80,7 @@ class TestQWEDLocalCoverage(unittest.TestCase):
         """Test _check_verifiers when deps are missing."""
         with patch.object(qwed_local_module, "sympy", new=None), \
              patch.object(qwed_local_module, "Solver", new=None):
-            client = QWEDLocal(base_url="http://mock", cache=False)
+            client = QWEDLocal(model="gpt-3.5-turbo", base_url="http://mock", cache=False)
             self.assertFalse(client.has_sympy)
             self.assertFalse(client.has_z3)
 
@@ -137,7 +137,7 @@ class TestQWEDLocalCoverage(unittest.TestCase):
         """Test cache hit printing paths."""
         from qwed_sdk import qwed_local as mod
         
-        client = QWEDLocal(base_url="http://mock", cache=True)
+        client = QWEDLocal(model="gpt-3.5-turbo", base_url="http://mock", cache=True)
         # Mock the cache to return a valid VerificationResult-compatible dict
         mock_cache = MagicMock()
         mock_cache.get.return_value = {"verified": True, "value": 42, "confidence": 1.0}
@@ -206,7 +206,7 @@ class TestQWEDLocalCoverage(unittest.TestCase):
         
     def test_call_llm_routes(self):
         """Test _call_llm routing to different clients."""
-        client = QWEDLocal(base_url="http://mock", cache=False)
+        client = QWEDLocal(model="gpt-3.5-turbo", base_url="http://mock", cache=False)
         
         # 1. OpenAI
         client.client_type = "openai"

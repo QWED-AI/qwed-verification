@@ -97,7 +97,7 @@ qwed doctor   # health check: engines, provider, server, database
 qwed test     # runs the built-in engine tests
 ```
 
-`qwed init` supports `--provider nvidia | openai | anthropic | gemini | custom` (any OpenAI-compatible endpoint) and `--non-interactive` for CI. It asks for the organisation owner's email and password, so you can sign in later (for example to qwed-dashboard); pass `--owner-email`, and with `--non-interactive` set `QWED_OWNER_PASSWORD`. `qwed test` runs twelve deterministic checks and needs no model or server:
+`qwed init` supports `--provider nvidia | openai | anthropic | gemini | custom` (any OpenAI-compatible endpoint) and `--non-interactive` for CI. QWED names no default model, so `init` asks for the one to use; with `--non-interactive`, pass `--model` or set the provider's model variable (for example `OPENAI_MODEL`). It asks for the organisation owner's email and password, so you can sign in later (for example to qwed-dashboard); pass `--owner-email`, and with `--non-interactive` set `QWED_OWNER_PASSWORD`. `qwed test` runs twelve deterministic checks and needs no model or server:
 
 ```text
 Math:

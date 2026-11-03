@@ -35,7 +35,10 @@ def test_verify_success_provider(mock_qwedlocal, runner):
     mock_instance.verify.return_value = mock_result
     mock_qwedlocal.return_value = mock_instance
     
-    result = runner.invoke(verify, ["What is 2+2?", "--provider", "openai", "--api-key", _TEST_API_KEY, "--quiet"])
+    result = runner.invoke(
+        verify,
+        ["What is 2+2?", "--provider", "openai", "--model", "gpt-3.5-turbo", "--api-key", _TEST_API_KEY, "--quiet"],
+    )
     
     assert result.exit_code == 0
     assert "VERIFIED: 4" in result.output
@@ -78,9 +81,10 @@ def test_verify_failure_result(mock_qwedlocal, runner):
     mock_instance.verify.return_value = mock_result
     mock_qwedlocal.return_value = mock_instance
     
-    result = runner.invoke(verify, ["query", "--provider", "openai", "--api-key", _TEST_API_KEY])
+    result = runner.invoke(verify, ["query", "--provider", "openai", "--model", "gpt-3.5-turbo", "--api-key", _TEST_API_KEY])
     
     assert result.exit_code == 1
+    mock_instance.verify.assert_called_once_with("query")
 
 def test_verify_missing_provider_and_base_url(runner):
     """Test verify without any provider info."""
@@ -119,13 +123,16 @@ def test_verify_active_provider_named(mock_qwedlocal, runner):
     mock_instance.verify.return_value = mock_result
     mock_qwedlocal.return_value = mock_instance
     
-    with patch.dict(os.environ, {"ACTIVE_PROVIDER": "anthropic", "ANTHROPIC_API_KEY": _TEST_ANTHROPIC_KEY}):
+    with patch.dict(
+        os.environ,
+        {"ACTIVE_PROVIDER": "anthropic", "ANTHROPIC_API_KEY": _TEST_ANTHROPIC_KEY, "ANTHROPIC_MODEL": "claude-sonnet-4-5"},
+    ):
         result = runner.invoke(verify, ["query"])
         assert result.exit_code == 0
         mock_qwedlocal.assert_called_once_with(
             provider="anthropic",
             api_key=_TEST_ANTHROPIC_KEY,
-            model="gpt-3.5-turbo",
+            model="claude-sonnet-4-5",
             cache=True,
             mask_pii=False
         )
@@ -150,7 +157,9 @@ def test_verify_quiet_mode(mock_qwedlocal, runner):
     mock_instance.verify.return_value = mock_result
     mock_qwedlocal.return_value = mock_instance
     
-    result = runner.invoke(verify, ["query", "--provider", "openai", "--api-key", _TEST_API_KEY, "--quiet"])
+    result = runner.invoke(
+        verify, ["query", "--provider", "openai", "--model", "gpt-3.5-turbo", "--api-key", _TEST_API_KEY, "--quiet"]
+    )
     assert result.exit_code == 0
     assert "Using configured provider" not in result.output
     assert "VERIFIED: quiet-result" in result.output
@@ -159,7 +168,7 @@ def test_verify_quiet_mode(mock_qwedlocal, runner):
 def test_verify_exception_handling(mock_qwedlocal, runner):
     """Test unexpected exception inside verify."""
     mock_qwedlocal.side_effect = Exception("Surprise Crash")
-    result = runner.invoke(verify, ["query", "--provider", "openai", "--api-key", _TEST_API_KEY])
+    result = runner.invoke(verify, ["query", "--provider", "openai", "--model", "gpt-3.5-turbo", "--api-key", _TEST_API_KEY])
     assert result.exit_code == 1
     assert "Error: Surprise Crash" in result.output
 

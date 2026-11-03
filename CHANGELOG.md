@@ -105,6 +105,42 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ### Changed
 
+- **QWED names no model: each provider runs the model you configure
+  (#574).** Runtime code fell back to models of its own when none was set,
+  such as `gpt-4o-mini`, `gpt-3.5-turbo`, `llama3`, `gemini-1.5-pro`,
+  `claude-sonnet-4-5` and `claude-sonnet-4-20250514`, and those names went
+  stale as providers retired models. `qwed verify --provider anthropic`
+  with no `--model` sent `gpt-3.5-turbo` to Anthropic, and the reasoning
+  trace called `claude-3-haiku-20240307` through the provider's client,
+  whatever model was configured.
+  - Each provider takes its model from the argument you pass or from its
+    variable, and raises when neither is set, naming the variable:
+    `OPENAI_MODEL`, `AZURE_OPENAI_DEPLOYMENT`, `ANTHROPIC_DEPLOYMENT`,
+    `CLAUDE_OPUS_DEPLOYMENT`, `GEMINI_MODEL`, `OLLAMA_MODEL` or
+    `CUSTOM_MODEL`. The value is sent unchanged, so any model or deployment
+    ID the provider serves works, and nothing falls back to another model.
+  - `QWEDLocal`, `verify()` and the LangChain `QWEDTool` need `model=`.
+    `verify(query, provider=..., model=...)` uses the provider you name; it
+    always tried Ollama before.
+  - `qwed verify` and `qwed interactive` take `--model`, else the selected
+    provider's variable (`OLLAMA_MODEL`, `CUSTOM_MODEL`, `OPENAI_MODEL`,
+    `ANTHROPIC_MODEL` or `GEMINI_MODEL`), and stop with a message naming it
+    when neither is set. `qwed init` asks for the model without suggesting
+    one; with `--non-interactive`, pass `--model` or set the variable.
+  - `ReasoningVerifier()` uses the provider `ACTIVE_PROVIDER` selects
+    (Ollama when it is unset, as the server reads it), not always
+    Anthropic, and loads every provider the server can; `openai` named a
+    module that does not exist. A provider that is not configured is no
+    provider: the reason is logged and the result says
+    `reasoning_verifier.no_provider`. The reasoning trace comes only from a
+    provider's own `complete()` call, which no built-in provider has, so it
+    is unavailable for them. The verifier's results are advisory and
+    UNVERIFIABLE, before and after.
+  - A provider YAML's `default_model` is still used; one without it gets no
+    model in its place.
+  - To upgrade, set the model variable for the provider you use. Settings
+    that already name a model work as before.
+
 - **The CSV exports carry the stored verdict and admission, and take a
   period (#508).** `GET /admin/compliance/export/csv` was fixed to the last
   30 days, cut the query to 100 characters and the signature to 16, and had

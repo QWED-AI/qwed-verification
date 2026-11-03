@@ -24,6 +24,7 @@ from qwed_sdk.cli import _bootstrap_api_key, _ensure_local_server_running, init
 from qwed_sdk.init_owner import owner_password_problem, resolve_owner
 from tests.test_cli_init import (  # noqa: F401  (autouse fixtures: hermetic env, stubbed handshake)
     TEST_TOKEN_MARKER,
+    _configured_models,
     _engine_report,
     _provider_map,
     _stub_lookup_secret,
