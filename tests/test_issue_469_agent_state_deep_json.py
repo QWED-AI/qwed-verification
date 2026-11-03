@@ -114,8 +114,8 @@ def test_escaped_quotes_do_not_end_a_string():
 
 @pytest.mark.parametrize("number", ["1e9999999999999999999999", "-1e-9999999999999999999", "1.5E+99999999999999999999"])
 def test_a_number_outside_decimal_range_is_blocked_not_raised(number):
-    # parse_float=Decimal raises decimal.InvalidOperation, an ArithmeticError,
-    # for an exponent beyond Decimal's limits.
+    # The guard's parse_float raises decimal.InvalidOperation, an
+    # ArithmeticError, for an exponent beyond Decimal's limits.
     payload = '{"agent_id": "a1", "status": "pending", "step_count": ' + number + ', "tasks": []}'
 
     result = _build_guard().verify_state_payload(payload)

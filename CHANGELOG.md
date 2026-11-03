@@ -136,6 +136,21 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ### Fixed
 
+- **AgentStateGuard gives one verdict on a JSON number, whichever decimal
+  module Python has (#570).** The guard relied on `parse_float=Decimal` to
+  refuse a number it cannot hold, and the C and pure-Python decimal modules
+  refuse different numbers. A Python built without `_decimal` accepted
+  `1e9999999999999999999999`, so a `number` field holding it was VERIFIED
+  where the C module gives QWED-AGENT-STATE-102. From 3.15 configure no
+  longer falls back to the bundled libmpdec, and setup-python's 3.15.1 for
+  Ubuntu is built without it. The server image builds `_decimal`.
+  - The guard now checks the number's text first: an exponent outside the
+    C module's range, or more digits than `sys.get_int_max_str_digits()`
+    (4300 by default), is QWED-AGENT-STATE-102 with either module.
+  - With the C module the only change is the digit rule: a decimal with
+    more than 4300 digits is now refused, as a JSON integer with more than
+    4300 digits already was.
+
 - **Statistics verification and `verify_python_deep` work on Python 3.14
   and later (#568).** Python 3.14 removed `ast.Num` and `ast.Str`. The
   server image has run 3.14 since #356, and `requires-python` allows it.
