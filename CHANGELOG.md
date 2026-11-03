@@ -146,8 +146,10 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - The calls now leave `temperature` out and sample with the defaults.
     API version `2026-10-21`, which the 2.x SDK sends, refuses
     `temperature`, `top_p` and `top_k`, and no other setting replaces a
-    lower `temperature`. The verdict still comes from the deterministic
-    engines, not from the model's translation.
+    lower `temperature`. Sampling can now vary the model's translations,
+    and the verdicts that `verify_fact` and `verify_image` return, which
+    are model output. QWED's fact and image verifiers record those only as
+    advisory checks, never as a VERIFIED verdict.
 
 - **AgentStateGuard gives one verdict on a JSON number, whichever decimal
   module Python has (#570).** The guard relied on `parse_float=Decimal` to
