@@ -24,7 +24,11 @@ class AnthropicProvider(LLMProvider):
 
         if not all([self.endpoint, self.api_key]):
             raise ValueError("Missing Anthropic environment variables")
-        self.deployment = configured_model(None, "ANTHROPIC_DEPLOYMENT", "Anthropic")
+        # ANTHROPIC_MODEL is the variable qwed init and .env.example set.
+        # ANTHROPIC_DEPLOYMENT, which this provider read before, still wins.
+        self.deployment = configured_model(
+            os.getenv("ANTHROPIC_DEPLOYMENT"), "ANTHROPIC_MODEL", "Anthropic"
+        )
 
         # #353: SDK default read timeout is 600s x retries — bound every
         # wait like the openai providers — retries disabled, so

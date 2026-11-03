@@ -115,10 +115,13 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   whatever model was configured.
   - Each provider takes its model from the argument you pass or from its
     variable, and raises when neither is set, naming the variable:
-    `OPENAI_MODEL`, `AZURE_OPENAI_DEPLOYMENT`, `ANTHROPIC_DEPLOYMENT`,
+    `OPENAI_MODEL`, `AZURE_OPENAI_DEPLOYMENT`, `ANTHROPIC_MODEL`,
     `CLAUDE_OPUS_DEPLOYMENT`, `GEMINI_MODEL`, `OLLAMA_MODEL` or
     `CUSTOM_MODEL`. The value is sent unchanged, so any model or deployment
     ID the provider serves works, and nothing falls back to another model.
+  - The Anthropic provider reads `ANTHROPIC_MODEL`, the variable `qwed init`
+    and `.env.example` set; it read only `ANTHROPIC_DEPLOYMENT` before,
+    which still wins when set.
   - `QWEDLocal`, `verify()` and the LangChain `QWEDTool` need `model=`.
     `verify(query, provider=..., model=...)` uses the provider you name; it
     always tried Ollama before.

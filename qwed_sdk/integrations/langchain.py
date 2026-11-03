@@ -7,7 +7,7 @@ Usage:
     from qwed_sdk.integrations.langchain import QWEDTool
     from langchain.agents import initialize_agent
     
-    tool = QWEDTool()
+    tool = QWEDTool(model="gpt-4o-mini")
     agent = initialize_agent(tools=[tool], llm=llm)
 """
 from typing import Optional, Type
@@ -67,7 +67,7 @@ class QWEDTool(BaseTool):
         
     Examples:
         >>> from qwed_sdk.integrations.langchain import QWEDTool
-        >>> tool = QWEDTool(provider="openai", api_key="sk-...")
+        >>> tool = QWEDTool(provider="openai", api_key="sk-...", model="gpt-4o-mini")
         >>> result = tool.run("What is the derivative of x^2?")
         >>> print(result)
         ✅ VERIFIED: 2*x

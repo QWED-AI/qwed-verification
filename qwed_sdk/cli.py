@@ -129,6 +129,22 @@ def _load_dotenv_if_available(*, override: bool = False) -> None:
         return
 
 
+def _load_saved_env() -> None:
+    """Load the .env files `qwed init` writes, as load_dotenv_ordered does,
+    without overriding the shell.
+
+    Unlike _load_dotenv_if_available, it does not import qwed_new.config,
+    whose Settings raise without the server's API_KEY_SECRET: a local
+    session has no server secrets.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv(Path.cwd() / ".env", override=False)
+    load_dotenv(Path.home() / ".qwed" / ".env", override=False)
+
+
 def _normalize_provider_choice(value: Optional[str]) -> str:
     return (value or "").strip().lower().replace("_", "-")
 
@@ -982,6 +998,8 @@ def _prompt_retry_credentials(
         default=resolved_model or None,
         show_default=True,
     ).strip()
+    # A blank answer leaves no model: stop before a retry could save it.
+    _require_provider_model(profile, updated_model)
     return updated_key, updated_base_url, updated_model
 
 
@@ -2121,9 +2139,15 @@ def test_command(verbose: bool):
     sys.exit(1)
 
 
+def _has_model(model: Optional[str]) -> bool:
+    """A blank model is no model."""
+    return bool(model and model.strip())
+
+
 def _exit_without_model(model: Optional[str], model_env: Optional[str]) -> None:
-    """Stop `qwed verify` when no model is configured: QWED names none itself."""
-    if model:
+    """Stop `qwed verify` or `qwed interactive` when no model is configured:
+    QWED names none itself."""
+    if _has_model(model):
         return
     hint = f"Pass --model or set {model_env}." if model_env else "Pass --model."
     err_msg = (
@@ -2208,7 +2232,7 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
         # model variable, and with neither the command stops.
         if provider and not base_url:
             model_env = _PROVIDER_MODEL_ENV.get(provider)
-        if not model and model_env:
+        if not _has_model(model) and model_env:
             import os as _os
             model = _os.getenv(model_env)
         
@@ -2311,14 +2335,13 @@ def interactive(provider: Optional[str], model: Optional[str]):
         click.echo("\nQWED Interactive Mode")
         click.echo("Type 'exit' or 'quit' to quit\n")
     
-    # QWED names no model: it is --model, else the provider's model variable.
+    # QWED names no model: it is --model, else the provider's model variable,
+    # which may be in the .env file `qwed init` wrote.
+    _load_saved_env()
     model_env = _PROVIDER_MODEL_ENV.get(provider) if provider else "OLLAMA_MODEL"
-    if not model and model_env:
+    if not _has_model(model) and model_env:
         model = os.getenv(model_env)
-    if not model:
-        hint = f"Pass --model or set {model_env}." if model_env else "Pass --model."
-        click.echo(f"Error initializing client: no model is configured. {hint}", err=True)
-        sys.exit(1)
+    _exit_without_model(model, model_env)
 
     # Create client once
     try:

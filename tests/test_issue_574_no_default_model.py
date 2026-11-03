@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 import pytest
 from click.testing import CliRunner
@@ -30,39 +31,63 @@ from qwed_new.providers.gemini_provider import GeminiProvider
 from qwed_new.providers.ollama_provider import OllamaProvider
 from qwed_new.providers.openai_compat import OpenAICompatProvider
 from qwed_new.providers.openai_direct import OpenAIDirectProvider
-from qwed_sdk.cli import OnboardingProvider, init, interactive, verify
-from qwed_sdk.qwed_local import QWEDLocal
+from qwed_sdk.cli import OnboardingProvider, _test_provider_connection_loop, init, interactive, verify
 
 ROOT = Path(__file__).resolve().parents[1]
 
 # No provider's model: an ID must reach the API exactly as the user set it.
 ANY_MODEL = "acme-labs/reasoner-v9:2026-11@eu-west"
 STATS_CODE = "result = df['a'].mean()"
+# Test-only key material: the providers are never reached over the network.
+FAKE_KEY = f"unit-test-{uuid4().hex}"
 
 # provider class -> (its model variable, the other settings it needs)
 PROVIDERS = {
-    OpenAIDirectProvider: ("OPENAI_MODEL", {"OPENAI_API_KEY": "test-sentinel"}),
+    OpenAIDirectProvider: ("OPENAI_MODEL", {"OPENAI_API_KEY": FAKE_KEY}),
     AzureOpenAIProvider: (
         "AZURE_OPENAI_DEPLOYMENT",
         {
             "AZURE_OPENAI_ENDPOINT": "http://localhost:1",
-            "AZURE_OPENAI_API_KEY": "test-sentinel",
+            "AZURE_OPENAI_API_KEY": FAKE_KEY,
             "AZURE_OPENAI_API_VERSION": "2024-01-01",
         },
     ),
     AnthropicProvider: (
-        "ANTHROPIC_DEPLOYMENT",
-        {"ANTHROPIC_ENDPOINT": "http://localhost:1", "ANTHROPIC_API_KEY": "test-sentinel"},
+        "ANTHROPIC_MODEL",
+        {"ANTHROPIC_ENDPOINT": "http://localhost:1", "ANTHROPIC_API_KEY": FAKE_KEY},
     ),
     ClaudeOpusProvider: (
         "CLAUDE_OPUS_DEPLOYMENT",
-        {"CLAUDE_OPUS_ENDPOINT": "http://localhost:1", "CLAUDE_OPUS_API_KEY": "test-sentinel"},
+        {"CLAUDE_OPUS_ENDPOINT": "http://localhost:1", "CLAUDE_OPUS_API_KEY": FAKE_KEY},
     ),
     OllamaProvider: ("OLLAMA_MODEL", {}),
     OpenAICompatProvider: ("CUSTOM_MODEL", {"CUSTOM_BASE_URL": "http://localhost:1/v1"}),
-    GeminiProvider: ("GEMINI_MODEL", {"GOOGLE_API_KEY": "test-sentinel"}),
+    GeminiProvider: ("GEMINI_MODEL", {"GOOGLE_API_KEY": FAKE_KEY}),
 }
-MODEL_VARIABLES = {model_env for model_env, _ in PROVIDERS.values()} | {"ANTHROPIC_MODEL"}
+MODEL_VARIABLES = {model_env for model_env, _ in PROVIDERS.values()} | {"ANTHROPIC_DEPLOYMENT"}
+
+# provider class -> the model it runs
+MODEL_OF = {
+    OpenAIDirectProvider: lambda provider: provider.model,
+    AzureOpenAIProvider: lambda provider: provider.deployment,
+    AnthropicProvider: lambda provider: provider.deployment,
+    ClaudeOpusProvider: lambda provider: provider.deployment,
+    OllamaProvider: lambda provider: provider.model,
+    OpenAICompatProvider: lambda provider: provider.model,
+    GeminiProvider: lambda provider: provider.model_name,
+}
+
+OPENAI_PROFILE = OnboardingProvider(
+    slug="openai",
+    name="OpenAI",
+    active_provider="openai",
+    key_env="OPENAI_API_KEY",
+    model_env="OPENAI_MODEL",
+    base_url_env=None,
+    default_base_url=None,
+    connection_slug="openai",
+    key_pattern=None,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -155,7 +180,23 @@ def test_a_model_passed_to_the_provider_wins_over_its_variable(monkeypatch, fake
 
     provider = provider_cls(model=ANY_MODEL)
 
-    assert ANY_MODEL in (getattr(provider, "model", None), getattr(provider, "model_name", None))
+    assert MODEL_OF[provider_cls](provider) == ANY_MODEL
+
+
+@pytest.mark.parametrize("deployment", [None, "", "   "], ids=["unset", "empty", "blank"])
+def test_anthropic_runs_the_model_qwed_init_sets(monkeypatch, deployment):
+    _configure(monkeypatch, AnthropicProvider, ANY_MODEL)
+    if deployment is not None:
+        monkeypatch.setenv("ANTHROPIC_DEPLOYMENT", deployment)
+
+    assert AnthropicProvider().deployment == ANY_MODEL
+
+
+def test_anthropic_deployment_still_wins_over_its_model(monkeypatch):
+    _configure(monkeypatch, AnthropicProvider, "a-model-from-qwed-init")
+    monkeypatch.setenv("ANTHROPIC_DEPLOYMENT", ANY_MODEL)
+
+    assert AnthropicProvider().deployment == ANY_MODEL
 
 
 # --------------------------------------------------------------------------
@@ -200,8 +241,7 @@ def test_reasoning_verifier_loads_each_provider_with_its_configured_model(
     provider = ReasoningVerifier(providers=[name], enable_cache=False).primary_llm
 
     assert type(provider) is provider_cls
-    configured = (getattr(provider, attr, None) for attr in ("model", "model_name", "deployment"))
-    assert ANY_MODEL in configured
+    assert MODEL_OF[provider_cls](provider) == ANY_MODEL
 
 
 def test_reasoning_verifier_takes_a_provider_type(monkeypatch):
@@ -219,6 +259,10 @@ def test_reasoning_verifier_loads_auto_shift(monkeypatch):
 
     assert type(provider) is AutoShiftProvider
     assert provider.primary.deployment == ANY_MODEL
+
+
+def test_reasoning_verifier_loads_nothing_for_a_name_it_does_not_know():
+    assert ReasoningVerifier._load_provider("not-a-provider") is None
 
 
 def test_reasoning_verifier_has_no_provider_when_its_provider_has_no_model(monkeypatch, caplog):
@@ -258,11 +302,11 @@ def test_reasoning_trace_comes_only_from_the_providers_own_call():
 @pytest.mark.parametrize("model", [None, "", "   "], ids=["unset", "empty", "blank"])
 def test_qwedlocal_without_a_model_raises(model):
     with pytest.raises(ValueError, match="QWEDLocal needs a model"):
-        QWEDLocal(base_url="http://localhost:1/v1", model=model, cache=False)
+        qwed_local_module.QWEDLocal(base_url="http://localhost:1/v1", model=model, cache=False)
 
 
 def test_qwedlocal_sends_any_model_id_unchanged(monkeypatch):
-    client = QWEDLocal(base_url="http://localhost:1/v1", model=ANY_MODEL, cache=False)
+    client = qwed_local_module.QWEDLocal(base_url="http://localhost:1/v1", model=ANY_MODEL, cache=False)
     sent = []
     monkeypatch.setattr(client.llm_client.chat.completions, "create", _recorder(sent, _chat_response))
 
@@ -271,7 +315,7 @@ def test_qwedlocal_sends_any_model_id_unchanged(monkeypatch):
 
 
 def test_qwedlocal_anthropic_sends_any_model_id_unchanged(monkeypatch):
-    client = QWEDLocal(provider="anthropic", api_key="test-sentinel", model=ANY_MODEL, cache=False)
+    client = qwed_local_module.QWEDLocal(provider="anthropic", api_key=FAKE_KEY, model=ANY_MODEL, cache=False)
     sent = []
     monkeypatch.setattr(client.llm_client.messages, "create", _recorder(sent, _text_response))
 
@@ -296,10 +340,10 @@ def test_verify_uses_the_llm_the_caller_names(monkeypatch):
 
     monkeypatch.setattr(qwed_local_module, "QWEDLocal", Recorder)
 
-    result = qwed_local_module.verify("2+2", provider="openai", api_key="test-sentinel", model=ANY_MODEL)
+    result = qwed_local_module.verify("2+2", provider="openai", api_key=FAKE_KEY, model=ANY_MODEL)
 
     assert result == "verified 2+2"
-    assert built == [{"provider": "openai", "api_key": "test-sentinel", "model": ANY_MODEL}]
+    assert built == [{"provider": "openai", "api_key": FAKE_KEY, "model": ANY_MODEL}]
 
 
 def test_langchain_tool_names_no_model():
@@ -316,8 +360,11 @@ def test_langchain_tool_names_no_model():
 
 @pytest.fixture
 def no_dotenv():
-    """Keep a developer's .env from supplying the model `qwed verify` loads."""
-    with patch("qwed_new.config.load_dotenv_ordered", return_value=None):
+    """Keep a developer's .env from supplying the model `qwed verify` and
+    `qwed interactive` load."""
+    with patch("qwed_new.config.load_dotenv_ordered", return_value=None), patch(
+        "qwed_sdk.cli._load_saved_env", return_value=None
+    ):
         yield
 
 
@@ -354,7 +401,7 @@ def test_qwed_verify_sends_the_selected_providers_model(monkeypatch):
     with patch("qwed_sdk.cli.QWEDLocal") as built:
         built.return_value.verify.return_value = _verified()
         result = CliRunner().invoke(
-            verify, ["What is 2+2?", "--provider", "anthropic", "--api-key", "test-sentinel"]
+            verify, ["What is 2+2?", "--provider", "anthropic", "--api-key", FAKE_KEY]
         )
 
     assert result.exit_code == 0
@@ -362,15 +409,36 @@ def test_qwed_verify_sends_the_selected_providers_model(monkeypatch):
     assert built.call_args.kwargs["model"] == ANY_MODEL
 
 
+@pytest.mark.usefixtures("no_dotenv")
+def test_qwed_verify_reads_a_blank_model_flag_as_none(monkeypatch):
+    with patch("qwed_sdk.cli.QWEDLocal") as built:
+        stopped = CliRunner().invoke(
+            verify, ["What is 2+2?", "--provider", "anthropic", "--api-key", FAKE_KEY, "--model", "   "]
+        )
+        monkeypatch.setenv("ANTHROPIC_MODEL", ANY_MODEL)
+        built.return_value.verify.return_value = _verified()
+        ran = CliRunner().invoke(
+            verify, ["What is 2+2?", "--provider", "anthropic", "--api-key", FAKE_KEY, "--model", "   "]
+        )
+
+    assert stopped.exit_code == 1
+    assert "No model is configured. Pass --model or set ANTHROPIC_MODEL." in stopped.output
+    assert ran.exit_code == 0
+    assert built.call_count == 1
+    assert built.call_args.kwargs["model"] == ANY_MODEL
+
+
+@pytest.mark.usefixtures("no_dotenv")
 def test_qwed_interactive_stops_without_a_model():
     with patch("qwed_sdk.cli.QWEDLocal") as built:
         result = CliRunner().invoke(interactive, [], input="exit\n")
 
     assert result.exit_code == 1
-    assert "no model is configured. Pass --model or set OLLAMA_MODEL." in result.output
+    assert "No model is configured. Pass --model or set OLLAMA_MODEL." in result.output
     built.assert_not_called()
 
 
+@pytest.mark.usefixtures("no_dotenv")
 def test_qwed_interactive_sends_the_configured_model(monkeypatch):
     monkeypatch.setenv("OLLAMA_MODEL", ANY_MODEL)
 
@@ -381,23 +449,25 @@ def test_qwed_interactive_sends_the_configured_model(monkeypatch):
     assert built.call_args.kwargs["model"] == ANY_MODEL
 
 
+def test_qwed_interactive_reads_the_model_qwed_init_saved(monkeypatch, tmp_path):
+    (tmp_path / ".env").write_text(f"OLLAMA_MODEL={ANY_MODEL}\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    # patch.dict puts back the environment the .env load writes to.
+    with patch.dict("os.environ"), patch("qwed_sdk.cli.QWEDLocal") as built:
+        result = CliRunner().invoke(interactive, [], input="exit\n")
+
+    assert result.exit_code == 0
+    assert built.call_args.kwargs["model"] == ANY_MODEL
+
+
 def test_qwed_init_non_interactive_stops_without_a_model(monkeypatch):
-    profile = OnboardingProvider(
-        slug="openai",
-        name="OpenAI",
-        active_provider="openai",
-        key_env="OPENAI_API_KEY",
-        model_env="OPENAI_MODEL",
-        base_url_env=None,
-        default_base_url=None,
-        connection_slug="openai",
-        key_pattern=None,
-    )
     engines = [{"name": "SymPy", "ready": True, "detail": "math engine ready", "install_hint": "", "version": "1"}]
-    monkeypatch.setenv("OPENAI_API_KEY", "test-sentinel")
+    monkeypatch.setenv("OPENAI_API_KEY", FAKE_KEY)
     monkeypatch.setattr("qwed_sdk.cli._load_dotenv_if_available", lambda: None)
     monkeypatch.setattr("qwed_sdk.cli._required_engine_report", lambda: (True, engines))
-    monkeypatch.setattr("qwed_sdk.cli._build_onboarding_provider_map", lambda _get_provider: {"openai": profile})
+    monkeypatch.setattr("qwed_sdk.cli._build_onboarding_provider_map", lambda _get_provider: {"openai": OPENAI_PROFILE})
 
     result = CliRunner().invoke(
         init,
@@ -406,6 +476,26 @@ def test_qwed_init_non_interactive_stops_without_a_model(monkeypatch):
 
     assert result.exit_code == 1
     assert "OPENAI_MODEL is required for provider 'openai'. Pass --model or set OPENAI_MODEL." in result.output
+
+
+def test_qwed_init_retry_stops_on_a_blank_model(monkeypatch):
+    answers = iter([FAKE_KEY, "   "])  # the retry's API key, then its model
+    monkeypatch.setattr("qwed_sdk.cli.click.prompt", lambda *_args, **_kwargs: next(answers))
+    monkeypatch.setattr("qwed_sdk.cli.click.confirm", lambda *_args, **_kwargs: True)
+    connect = MagicMock(return_value=(False, "Connection refused"))
+
+    with pytest.raises(RuntimeError, match="OPENAI_MODEL is required for provider 'openai'"):
+        _test_provider_connection_loop(
+            profile=OPENAI_PROFILE,
+            resolved_key=FAKE_KEY,
+            resolved_base_url="",
+            resolved_model=ANY_MODEL,
+            non_interactive=False,
+            test_connection=connect,
+        )
+
+    # The blank model is never tested, so it can never be saved.
+    assert connect.call_count == 1
 
 
 # --------------------------------------------------------------------------
@@ -507,6 +597,20 @@ def _call_model_defaults(node):
             yield f"{kw.arg}= with a literal fallback"
 
 
+def _target_name(node):
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Name):
+        return node.id
+    return ""
+
+
+def _supplies_text(node):
+    """A non-empty literal, or an `x or "<literal>"` fallback."""
+    values = node.values if isinstance(node, ast.BoolOp) else [node]
+    return any(_is_text(value) and value.value for value in values)
+
+
 def _model_defaults(source):
     """Yield (line, what) for each place the code supplies a model itself."""
     for node in ast.walk(ast.parse(source)):
@@ -520,9 +624,11 @@ def _model_defaults(source):
             for param, default in zip(params, defaults):
                 if param.arg in MODEL_KEYS and default is not None and _is_text(default):
                     yield node.lineno, f"parameter {param.arg} defaults to {default.value!r}"
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            if node.target.id in MODEL_KEYS and node.value is not None and _is_text(node.value):
-                yield node.lineno, f"field {node.target.id} defaults to a literal"
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for name in map(_target_name, targets):
+                if name in MODEL_KEYS and _supplies_text(node.value):
+                    yield node.lineno, f"{name} is set to a literal"
 
 
 def test_the_scan_finds_each_way_code_named_a_model():
@@ -537,8 +643,11 @@ QWEDLocal(model=model or "gpt-3.5-turbo")
 def __init__(self, model: str = "gpt-3.5-turbo"): pass
 class Tool:
     model: str = "gpt-4o-mini"
+if not model:
+    model = "llama3"
+self.model_name = model_name or "gemini-1.5-pro"
 '''
-    assert len(list(_model_defaults(source))) == 8
+    assert len(list(_model_defaults(source))) == 10
 
 
 def test_no_runtime_code_names_a_default_model():
