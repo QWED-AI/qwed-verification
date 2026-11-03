@@ -136,6 +136,19 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ### Fixed
 
+- **The Anthropic and Claude Opus providers work with anthropic 1.0 and
+  later (#572).** Each `messages.create` call passed `temperature=0.0`,
+  which the SDK has not accepted since 1.0, so every call raised
+  `TypeError` before a request was sent. The server image has pinned
+  anthropic 1.15.0 since #474 and 2.3.0 since #565, so every Claude
+  translation there was refused, and `verify_image` returned its ERROR
+  verdict.
+  - The calls now leave `temperature` out and sample with the defaults.
+    API version `2026-10-21`, which the 2.x SDK sends, refuses
+    `temperature`, `top_p` and `top_k`, and no other setting replaces a
+    lower `temperature`. The verdict still comes from the deterministic
+    engines, not from the model's translation.
+
 - **AgentStateGuard gives one verdict on a JSON number, whichever decimal
   module Python has (#570).** The guard relied on `parse_float=Decimal` to
   refuse a number it cannot hold, and the C and pure-Python decimal modules

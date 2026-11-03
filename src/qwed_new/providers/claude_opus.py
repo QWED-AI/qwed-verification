@@ -62,7 +62,6 @@ You MUST use the submit_math_expression tool."""
                 messages=[{"role": "user", "content": user_query}],
                 tools=[self.tool_schema],
                 tool_choice={"type": "tool", "name": "submit_math_expression"},
-                temperature=0.0,
             )
             
             tool_use = next((block for block in response.content if block.type == "tool_use"), None)
@@ -126,7 +125,6 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
                 messages=[{"role": "user", "content": user_query}],
                 tools=[tool_schema],
                 tool_choice={"type": "tool", "name": "submit_z3_problem_v2"},
-                temperature=0.0,
             )
             
             tool_use = next((block for block in response.content if block.type == "tool_use"), None)
@@ -195,7 +193,6 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
                 messages=[{"role": "user", "content": user_query}],
                 tools=[tool_schema],
                 tool_choice={"type": "tool", "name": "submit_z3_problem_v2"},
-                temperature=0.0,
             )
             
             tool_use = next((block for block in response.content if block.type == "tool_use"), None)
@@ -244,7 +241,6 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
                 messages=[
                     {"role": "user", "content": f"<user_query>{user_prompt}</user_query>"}
                 ],
-                temperature=0.0
             )
             
             content = response.content[0].text
@@ -305,7 +301,6 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
                 messages=[{"role": "user", "content": user_prompt}],
                 tools=[tool_schema],
                 tool_choice={"type": "tool", "name": "submit_fact_verification"},
-                temperature=0.0,
             )
             
             tool_use = next((block for block in response.content if block.type == "tool_use"), None)
@@ -377,7 +372,6 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
                 ],
                 tools=[tool_schema],
                 tool_choice={"type": "tool", "name": "submit_image_verification"},
-                temperature=0.0,
             )
             
             tool_use = next((block for block in response.content if block.type == "tool_use"), None)
