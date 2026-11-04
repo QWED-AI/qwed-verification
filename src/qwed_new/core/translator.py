@@ -9,7 +9,7 @@ import ast
 
 from qwed_new.config import settings, ProviderType
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider
+from qwed_new.providers.base import LLMProvider, ProviderConfigError
 from qwed_new.providers.azure_openai import AzureOpenAIProvider
 from qwed_new.providers.anthropic import AnthropicProvider
 from qwed_new.providers.claude_opus import ClaudeOpusProvider
@@ -80,7 +80,7 @@ class TranslationLayer:
         
         self.last_resolved_provider = key
         if key not in self._provider_classes:
-            raise ValueError(
+            raise ProviderConfigError(
                 f"ACTIVE_PROVIDER is set to '{key}', which is not a provider QWED knows. "
                 f"Set it to one of: {', '.join(sorted(self._provider_classes))}."
             )

@@ -12,6 +12,15 @@ from typing import Any, Dict, List, Optional
 from qwed_new.core.schemas import MathVerificationTask, LogicVerificationTask
 
 
+class ProviderConfigError(ValueError):
+    """QWED cannot run a provider as configured: no model is set, or
+    ACTIVE_PROVIDER names no provider QWED knows.
+
+    The message names the setting to fix and carries nothing from a provider
+    or its SDK, so callers may pass it on where they hide other errors.
+    """
+
+
 def configured_model(model: Optional[str], env_var: str, provider: str) -> str:
     """Return the model the caller passed, else the one set in ``env_var``.
 
@@ -22,7 +31,7 @@ def configured_model(model: Optional[str], env_var: str, provider: str) -> str:
     for value in (model, os.getenv(env_var)):
         if value and value.strip():
             return value
-    raise ValueError(
+    raise ProviderConfigError(
         f"No model is configured for {provider}. "
         f"Set {env_var} to the model or deployment to use."
     )

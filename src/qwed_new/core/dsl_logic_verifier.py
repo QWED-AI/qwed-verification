@@ -15,6 +15,7 @@ from z3 import Solver, sat, unsat
 
 from qwed_new.core.dsl import parse_and_validate, compile_to_z3
 from qwed_new.core.translator import TranslationLayer
+from qwed_new.providers.base import ProviderConfigError
 
 from .diagnostics import DiagnosticResult
 from .verification_context import VerificationContextDocument
@@ -585,6 +586,19 @@ class DSLLogicVerifier:
                     provider_used=resolved_provider,
                 )
             return dsl_code, variables, resolved_provider, None
+        except ProviderConfigError as e:
+            # The setting to fix (no model, or an unknown ACTIVE_PROVIDER), not
+            # a provider failure: it reaches the operator and the caller, as on
+            # the math path. Its message carries nothing from a provider.
+            logger.warning("Logic translation stopped: %s", e)
+            resolved_provider = self._provider_label(
+                getattr(translator, "last_resolved_provider", None) or resolved_provider
+            )
+            return None, None, resolved_provider, DSLVerificationResult(
+                status="ERROR",
+                error=str(e),
+                provider_used=resolved_provider,
+            )
         except ValueError as e:
             resolved_provider = self._provider_label(
                 getattr(translator, "last_resolved_provider", None) or resolved_provider

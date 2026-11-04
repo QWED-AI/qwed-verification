@@ -31,6 +31,7 @@ from qwed_new.providers import registry as registry_module
 from qwed_new.providers.anthropic import AnthropicProvider
 from qwed_new.providers.auto_shift import AutoShiftProvider
 from qwed_new.providers.azure_openai import AzureOpenAIProvider
+from qwed_new.providers.base import ProviderConfigError
 from qwed_new.providers.claude_opus import ClaudeOpusProvider
 from qwed_new.providers.gemini_provider import GeminiProvider
 from qwed_new.providers.ollama_provider import OllamaProvider
@@ -157,7 +158,7 @@ def _recorder(sent, make_response):
 def test_a_provider_with_no_model_configured_raises(monkeypatch, fake_genai, provider_cls, model):
     model_env = _configure(monkeypatch, provider_cls, model)
 
-    with pytest.raises(ValueError, match=f"No model is configured .* Set {model_env} "):
+    with pytest.raises(ProviderConfigError, match=f"No model is configured .* Set {model_env} "):
         provider_cls()
 
 
@@ -327,8 +328,9 @@ def test_an_unknown_active_provider_is_refused_not_switched_to_auto(monkeypatch)
     monkeypatch.setattr("qwed_new.core.translator.AutoShiftProvider", auto)
 
     provider = Router().route("What is 2 + 2?")
-    with pytest.raises(ValueError, match="ACTIVE_PROVIDER is set to 'openia'"):
-        TranslationLayer().translate("What is 2 + 2?", provider=provider)
+    layer = TranslationLayer()
+    with pytest.raises(ProviderConfigError, match="ACTIVE_PROVIDER is set to 'openia'"):
+        layer.translate("What is 2 + 2?", provider=provider)
 
     assert provider == "openia"
     auto.assert_not_called()
@@ -356,6 +358,23 @@ def test_logic_verification_uses_the_configured_provider(monkeypatch):
 
     assert result.provider_used == "ollama"
     assert result.status == "UNSAT"
+
+
+@pytest.mark.parametrize(
+    "active_provider, setting_to_fix",
+    [("openia", "ACTIVE_PROVIDER is set to 'openia'"), ("ollama", "Set OLLAMA_MODEL")],
+    ids=["unknown-provider", "no-model"],
+)
+def test_logic_verification_names_the_setting_to_fix(monkeypatch, caplog, active_provider, setting_to_fix):
+    monkeypatch.setattr(settings, "ACTIVE_PROVIDER", active_provider)
+    verifier = DSLLogicVerifier()
+
+    with caplog.at_level(logging.WARNING, logger="qwed_new.core.dsl_logic_verifier"):
+        result = verifier.verify_from_natural_language("x is above 5 and below 3")
+
+    assert result.status == "ERROR"
+    assert setting_to_fix in result.error
+    assert setting_to_fix in caplog.text
 
 
 # --------------------------------------------------------------------------

@@ -146,7 +146,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - An `ACTIVE_PROVIDER` that names no provider QWED knows stops the request
     with an error naming `ACTIVE_PROVIDER`; before, it switched to `auto`
     (Azure OpenAI, then Anthropic). A blank one counts as unset, as a blank
-    model does.
+    model does. Logic verification returns this error, and the one naming a
+    missing model variable, and logs it; it said only `LLM translation
+    failed`. Other provider errors still give that generic message.
   - `DSLLogicVerifier.verify_from_natural_language()` and `translate_to_dsl()`
     with no `provider` use the configured one; they used Azure OpenAI.
   - A provider YAML's `default_model` is still used; one without it gets no
