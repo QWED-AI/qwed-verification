@@ -199,3 +199,92 @@ def test_request_attribute_get_is_source(analyzer):
     result = analyzer.analyze(safe)
     assert result["status"] == "SAFE", safe
     assert result["vulnerabilities"] == [], safe
+
+
+def test_request_object_methods_are_sources(analyzer):
+    """Request-object `get*` methods are sources; plain `dict.get` is not."""
+    for code in (
+        "import os\nfrom flask import request\n"
+        "cmd = request.get_data()\nos.system(cmd)",
+        "import os, flask\n"
+        "cmd = flask.request.args.get('q')\nos.system(cmd)",
+        "import os\nfrom flask import request\n"
+        "cmd = request.get_json()['cmd']\nos.system(cmd)",
+        "import os\nfrom flask import request\n"
+        "cmd = request.args.getlist('q')[0]\nos.system(cmd)",
+    ):
+        result = analyzer.analyze(code)
+        assert result["status"] == "VULNERABLE", code
+        assert len(result["vulnerabilities"]) >= 1, code
+
+    safe = "import os\nd = {}\nx = d.get('q')\nos.system(x)"
+    result = analyzer.analyze(safe)
+    assert result["status"] == "SAFE", safe
+    assert result["vulnerabilities"] == [], safe
+
+
+def test_sanitizer_result_transformed_is_not_clean(analyzer):
+    """A sanitizer whose result is then transformed does not clean."""
+    for code in (
+        "import os, shlex\nx = input()\n"
+        "y = shlex.quote(x).strip(\"'\")\nos.system(y)",
+        "import os, shlex\nx = input()\n"
+        "os.system(shlex.quote(x).strip(\"'\"))",
+    ):
+        result = analyzer.analyze(code)
+        assert result["status"] == "VULNERABLE", code
+        assert len(result["vulnerabilities"]) >= 1, code
+
+    for code in (
+        "import os, shlex\nx = input()\n"
+        'cmd = "ls " + shlex.quote(x)\nos.system(cmd)',
+        "import os, shlex\nx = input()\n"
+        'os.system(f"ls {shlex.quote(x)}")',
+    ):
+        result = analyzer.analyze(code)
+        assert result["status"] == "SAFE", code
+        assert result["vulnerabilities"] == [], code
+
+
+def test_sink_keywords_injectable_only(analyzer):
+    """Only injectable sink keywords are inspected."""
+    for code in (
+        "import os, subprocess\n"
+        "subprocess.run(['ls'], env=os.environ.copy())",
+        "import os, subprocess\n"
+        "subprocess.run(['ls'], cwd=os.environ['HOME'])",
+        "import subprocess\nd = input()\n"
+        "subprocess.run(['cat'], input=d)",
+        "import requests\np = input()\n"
+        "requests.post('https://x.example', json=p)",
+    ):
+        result = analyzer.analyze(code)
+        assert result["status"] == "SAFE", code
+        assert result["vulnerabilities"] == [], code
+
+    for code in (
+        "import requests\nu = input()\nrequests.get(url=u)",
+        "import subprocess\nc = input()\n"
+        "subprocess.run(args=c, shell=True)",
+        "q = input()\ncursor.execute(args=(), query=q)",
+    ):
+        result = analyzer.analyze(code)
+        assert result["status"] == "VULNERABLE", code
+        assert len(result["vulnerabilities"]) >= 1, code
+
+    safe = 'q = input()\ncursor.execute("SELECT ?", params=q)'
+    result = analyzer.analyze(safe)
+    assert result["status"] == "SAFE", safe
+    assert result["vulnerabilities"] == [], safe
+
+
+def test_starred_unpacking_target_is_tainted(analyzer):
+    """Starred unpacking targets inherit the whole RHS taint."""
+    for code in (
+        "import os, sys\nprog, *args = sys.argv\nos.system(args[0])",
+        "import os\nfirst, *rest = input().split()\n"
+        "os.system(rest[0])",
+    ):
+        result = analyzer.analyze(code)
+        assert result["status"] == "VULNERABLE", code
+        assert len(result["vulnerabilities"]) >= 1, code

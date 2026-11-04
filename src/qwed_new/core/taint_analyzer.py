@@ -47,6 +47,7 @@ class TaintSink:
     col: int = 0        # Column offset
     args: List[str] = field(default_factory=list)  # Arguments passed
     arg_nodes: List[Any] = field(default_factory=list)  # Raw argument ASTs
+    kw_names: List[Optional[str]] = field(default_factory=list)  # None per positional
 
 
 @dataclass
@@ -256,6 +257,15 @@ class TaintAnalyzer:
         UNIVERSAL_SANITIZERS | SHELL_SANITIZERS
         | HTML_SANITIZERS | PATH_SANITIZERS
     )
+
+    #: Keyword arguments that can carry injected payloads, by sink class.
+    #: A keyword value is inspected only when its sink class is absent
+    #: from this map (fail closed) or its name is in the class's set.
+    INJECTABLE_KEYWORDS: Dict[str, Set[str]] = {
+        "shell": {"args", "executable"},
+        "network": {"url"},
+        "sql": {"query", "operation", "sql"},
+    }
     def __init__(self):
         """Initialize the Taint Analyzer."""
         # var -> set of sink classes the variable is tainted for.
@@ -417,7 +427,9 @@ class TaintAnalyzer:
         sources: List[TaintSource],
     ) -> None:
         """Record that an assignment target now holds source taint."""
-        if isinstance(target, (ast.Tuple, ast.List)):
+        if isinstance(target, ast.Starred):
+            self._mark_source_target(target.value, source, lineno, sources)
+        elif isinstance(target, (ast.Tuple, ast.List)):
             for elt in target.elts:
                 self._mark_source_target(elt, source, lineno, sources)
         elif isinstance(target, ast.Name):
@@ -462,12 +474,24 @@ class TaintAnalyzer:
                     line=node.lineno
                 )
 
-            # Any ``request.<...>.get`` (or ``self.request.<...>.get``)
-            # reads untrusted request data, e.g. ``request.cookies.get``.
-            # Other ``.get`` calls (``some_dict.get``) stay non-sources.
-            if last == "get" and (
-                func_name.startswith("request.")
-                or func_name.startswith("self.request.")
+            # Request-object sources: ``request`` as the first segment,
+            # or as the second segment after ``self`` or ``flask``
+            # (``flask.request.args.get``), with a ``get*`` last segment
+            # (``get``, ``get_json``, ``get_data``, ``getlist``).
+            # Other ``.get`` calls (``some_dict.get``) stay non-sources,
+            # and ``urllib.request.urlopen`` (root ``urllib``) stays a sink.
+            parts = func_name.split(".") if func_name else []
+            if (
+                parts
+                and (
+                    parts[0] == "request"
+                    or (
+                        len(parts) >= 2
+                        and parts[1] == "request"
+                        and parts[0] in ("self", "flask")
+                    )
+                )
+                and last.startswith("get")
             ):
                 return TaintSource(
                     name=func_name,
@@ -556,7 +580,9 @@ class TaintAnalyzer:
                     self._record_assignment(elt, val)
             else:
                 for elt in target.elts:
-                    if not isinstance(elt, ast.Starred):
+                    if isinstance(elt, ast.Starred):
+                        self._record_assignment(elt.value, value)
+                    else:
                         self._record_assignment(elt, value)
         elif isinstance(target, ast.Name):
             self._flow_graph[target.id] = (
@@ -616,6 +642,25 @@ class TaintAnalyzer:
             return {"path"}
         return set()
 
+    @staticmethod
+    def _transformed_call_ids(node: ast.AST) -> Set[int]:
+        """Ids of calls whose result is the receiver of a method call.
+
+        ``shlex.quote(x).strip(...)`` transforms the sanitiser result, so
+        the sanitiser must not relieve anything. Only the direct receiver
+        (the ``Call`` that is the ``.value`` of the outer call's ``func``)
+        counts; plain arguments (``"ls " + shlex.quote(x)``) are untouched.
+        """
+        transformed: Set[int] = set()
+        for child in ast.walk(node):
+            if (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Attribute)
+                and isinstance(child.func.value, ast.Call)
+            ):
+                transformed.add(id(child.func.value))
+        return transformed
+
     def _expr_taint_categories(self, node: ast.AST) -> Set[str]:
         """Sink classes an expression is tainted for.
 
@@ -628,8 +673,11 @@ class TaintAnalyzer:
         exactly like the inline sink-argument form).
         """
         sanitisers: List[Tuple[Set[int], Set[str]]] = []
+        transformed = self._transformed_call_ids(node)
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
+                if id(child) in transformed:
+                    continue
                 relief = self._sanitizer_relief(
                     self._get_func_name(child.func)
                 )
@@ -756,16 +804,27 @@ class TaintAnalyzer:
                     # Keep the raw argument nodes (positional and keyword)
                     # so the vulnerability check can look *inside*
                     # expressions instead of only matching bare names.
-                    arg_nodes = list(node.args) + [
-                        kw.value for kw in node.keywords
-                    ]
+                    # Keyword values are kept only when the sink class is
+                    # absent from INJECTABLE_KEYWORDS (fail closed) or the
+                    # keyword name is injectable for that class.
+                    category = self._sink_category(func_name)
+                    allowed = self.INJECTABLE_KEYWORDS.get(category)
+                    arg_nodes: List[Any] = list(node.args)
+                    kw_names: List[Optional[str]] = [None] * len(node.args)
+                    for kw in node.keywords:
+                        if allowed is None or kw.arg is None or (
+                            kw.arg in allowed
+                        ):
+                            arg_nodes.append(kw.value)
+                            kw_names.append(kw.arg)
                     args = [self._node_to_str(arg) for arg in arg_nodes]
 
                     sinks.append(TaintSink(
                         name=func_name,
                         line=node.lineno,
                         args=args,
-                        arg_nodes=arg_nodes
+                        arg_nodes=arg_nodes,
+                        kw_names=kw_names
                     ))
         
         return sinks
@@ -789,11 +848,17 @@ class TaintAnalyzer:
     def _relieved_subtree_ids(
         self, arg: ast.AST, category: str
     ) -> Set[int]:
-        """Ids of nodes cleaned for ``category`` by an inline sanitiser."""
+        """Ids of nodes cleaned for ``category`` by an inline sanitiser.
+
+        Mirrors :meth:`_expr_taint_categories`: a sanitiser whose result is
+        transformed (``shlex.quote(x).strip(...)``) relieves nothing.
+        """
         relieved: Set[int] = set()
+        transformed = self._transformed_call_ids(arg)
         for child in ast.walk(arg):
             if (
                 isinstance(child, ast.Call)
+                and id(child) not in transformed
                 and category
                 in self._sanitizer_relief(self._get_func_name(child.func))
             ):
@@ -826,9 +891,26 @@ class TaintAnalyzer:
         for sink in sinks:
             category = self._sink_category(sink.name)
             # Parameter binding is the SQL sanitiser: only the query
-            # argument (the first) can inject; bound parameters cannot.
+            # argument can inject; bound parameters cannot. The query is
+            # the first positional argument if there is one, otherwise the
+            # ``query``/``operation``/``sql`` keyword.
             if sink.name.split(".")[-1] in ("execute", "executemany"):
-                relevant_args = sink.arg_nodes[:1]
+                kw_names = list(getattr(sink, "kw_names", []) or [])
+                if len(kw_names) != len(sink.arg_nodes):
+                    relevant_args = sink.arg_nodes[:1]
+                else:
+                    positionals = [
+                        arg for arg, name in
+                        zip(sink.arg_nodes, kw_names) if name is None
+                    ]
+                    if positionals:
+                        relevant_args = positionals[:1]
+                    else:
+                        relevant_args = [
+                            arg for arg, name in
+                            zip(sink.arg_nodes, kw_names)
+                            if name in ("query", "operation", "sql")
+                        ]
             else:
                 relevant_args = sink.arg_nodes
             for arg in relevant_args:
