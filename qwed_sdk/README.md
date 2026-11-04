@@ -291,44 +291,48 @@ except httpx.RequestError as e:
 
 ## Environment Variables
 
-The SDK can be configured via environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `QWED_API_KEY` | - | Your API key (required for CLI) |
-| `QWED_API_URL` | `http://localhost:8000` | API base URL |
+`QWEDClient` and `QWEDAsyncClient` read no environment variables: pass `api_key` and `base_url` when you create them.
 
 ---
 
 ## CLI Usage
 
-The SDK includes a command-line interface:
+The SDK includes the `qwed` command:
 
 ```bash
-# Set API key
-export QWED_API_KEY="qwed_your_key"
+qwed init      # set up a model provider and its model, and a local API key
+qwed doctor    # health check: engines, provider, server, database
+qwed test      # the built-in engine checks; needs no model or server
 
-# Health check
-qwed health
-
-# Verify queries
+# Verify with a model provider, from this machine
 qwed verify "What is 2+2?"
-qwed verify-math "x**2 + 2*x + 1 = (x+1)**2"
-qwed verify-logic "(AND (GT x 5) (LT y 10))"
-qwed verify-code -f script.py
+qwed verify "derivative of x^2" --provider openai --model <model> --api-key <openai-key>
+qwed verify "5!" --base-url http://localhost:11434/v1 --model <model>
+qwed interactive
 
-# Batch processing
-qwed batch input.json -o results.json
+qwed cache stats    # or: qwed cache clear
+qwed pii "My email is john@example.com"    # needs qwed[pii]
 ```
 
-### CLI Flags
+`qwed verify` and `qwed interactive` call the model provider directly, with no QWED server.
 
-| Flag | Description |
-|------|-------------|
-| `-j, --json` | Output raw JSON |
-| `-o, --output` | Write results to file |
-| `-f, --file` | Read input from file |
-| `-l, --language` | Programming language (for code) |
+- **Model.** QWED names no model. They use `--model`, else the selected provider's model variable (`OLLAMA_MODEL`, `CUSTOM_MODEL`, `OPENAI_MODEL`, `ANTHROPIC_MODEL` or `GEMINI_MODEL`), and stop with a message naming it when neither is set.
+- **Provider.** Without `--provider` (or `--base-url`, for `qwed verify`), they run the provider `ACTIVE_PROVIDER` selects: the one `qwed init` saved, and Ollama when it is unset. Its key comes from `--api-key` or its own variable (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY` or `CUSTOM_API_KEY`), never from `QWED_API_KEY`.
+- **Key with `--provider`.** `qwed verify --provider` takes the key from `--api-key` or `QWED_API_KEY`; `qwed interactive --provider` asks for it.
+
+### `qwed verify` options
+
+| Option | Description |
+|--------|-------------|
+| `-p, --provider` | `openai`, `anthropic` or `gemini` |
+| `-m, --model` | The model to run |
+| `--base-url` | An OpenAI-compatible endpoint, such as Ollama's |
+| `--api-key` | The provider's API key |
+| `--no-cache` | Do not use the result cache |
+| `-q, --quiet` | Minimal output |
+| `--mask-pii` | Mask emails, phone numbers and similar before the question goes to the model |
+
+Run `qwed <command> --help` for the other commands' options.
 
 ---
 

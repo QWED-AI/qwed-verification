@@ -123,10 +123,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     and `.env.example` set; it read only `ANTHROPIC_DEPLOYMENT` before,
     which still wins when set.
   - `QWEDLocal`, `verify()` and the LangChain `QWEDTool` need `model=`.
-    `QWEDTool` refuses a missing or blank model when it is built, not when
-    an agent first runs it.
     `verify(query, provider=..., model=...)` uses the provider you name; it
-    always tried Ollama before.
+    always tried Ollama before. `QWEDTool` refuses a missing or blank model
+    when it is built, not when an agent first runs it.
   - `qwed verify` and `qwed interactive` take `--model`, else the selected
     provider's variable (`OLLAMA_MODEL`, `CUSTOM_MODEL`, `OPENAI_MODEL`,
     `ANTHROPIC_MODEL` or `GEMINI_MODEL`), and stop with a message naming it
@@ -149,6 +148,10 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     with `ANTHROPIC_ENDPOINT` set now stops: the CLI calls the Anthropic API
     directly, and sent the key and the prompt there instead of to that
     endpoint. `--provider` with `QWED_API_KEY` works as before.
+  - `qwed verify` loads the `.env` files `qwed init` writes without loading
+    the server's settings, as `qwed interactive` does. It stopped with a
+    traceback when the server's `API_KEY_SECRET` was unset, though it calls
+    the model provider directly and uses no server secret.
   - `ReasoningVerifier()` uses the provider `ACTIVE_PROVIDER` selects
     (Ollama when it is unset, as the server reads it), not always
     Anthropic, and loads every provider the server can; `openai` named a
@@ -177,7 +180,10 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - To upgrade, set the model variable for the provider you use, and check
     that `ACTIVE_PROVIDER` is one of `openai`, `openai_direct`,
     `openai_compat`, `azure_openai`, `anthropic`, `claude_opus`, `gemini`,
-    `ollama` or `auto`. Settings that already name a model work as before.
+    `ollama` or `auto`. If `qwed verify` ran the saved provider with the key
+    in `QWED_API_KEY`, set that provider's key variable or pass `--api-key`.
+    A request that names a provider must name one of these. Settings that
+    already name a model work as before.
 
 - **The CSV exports carry the stored verdict and admission, and take a
   period (#508).** `GET /admin/compliance/export/csv` was fixed to the last

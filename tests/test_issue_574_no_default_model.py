@@ -11,6 +11,7 @@ selected, whatever its wording.
 
 import ast
 import logging
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -496,9 +497,7 @@ def test_langchain_tool_needs_a_model_when_it_is_built():
 def no_dotenv():
     """Keep a developer's .env from supplying the model `qwed verify` and
     `qwed interactive` load."""
-    with patch("qwed_new.config.load_dotenv_ordered", return_value=None), patch(
-        "qwed_sdk.cli._load_saved_env", return_value=None
-    ):
+    with patch("qwed_sdk.cli._load_saved_env", return_value=None):
         yield
 
 
@@ -559,6 +558,25 @@ def test_qwed_verify_reads_a_blank_model_flag_as_none(monkeypatch):
     assert "No model is configured. Pass --model or set ANTHROPIC_MODEL." in stopped.output
     assert ran.exit_code == 0
     assert built.call_count == 1
+    assert built.call_args.kwargs["model"] == ANY_MODEL
+
+
+def test_qwed_verify_reads_the_model_qwed_init_saved_without_server_settings(monkeypatch, tmp_path):
+    """`qwed verify` loads the .env `qwed init` writes, as `qwed interactive`
+    does, without the server's settings: they raise without API_KEY_SECRET,
+    which a command that calls the model provider directly does not use."""
+    (tmp_path / ".env").write_text(f"OLLAMA_MODEL={ANY_MODEL}\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    # With None in sys.modules, importing the server's settings fails.
+    monkeypatch.setitem(sys.modules, "qwed_new.config", None)
+
+    # patch.dict puts back the environment the .env load writes to.
+    with patch.dict("os.environ"), patch("qwed_sdk.cli.QWEDLocal") as built:
+        built.return_value.verify.return_value = _verified()
+        result = CliRunner().invoke(verify, ["What is 2+2?"])
+
+    assert result.exit_code == 0, result.output
     assert built.call_args.kwargs["model"] == ANY_MODEL
 
 

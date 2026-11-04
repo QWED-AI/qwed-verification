@@ -2139,10 +2139,9 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
         import os
         os.environ["QWED_QUIET"] = "1"
     
-    # Load .env file so credentials from qwed init are available
-    from qwed_new.config import load_dotenv_ordered
-    load_dotenv_ordered()
-    
+    # The .env files qwed init writes, without the server's settings.
+    _load_saved_env()
+
     model_env = None
     key_hint = "Set QWED_API_KEY env var or use --api-key"
     try:
