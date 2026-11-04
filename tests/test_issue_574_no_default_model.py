@@ -80,6 +80,13 @@ PROVIDERS = {
     GeminiProvider: ("GEMINI_MODEL", {"GOOGLE_API_KEY": FAKE_KEY}),
 }
 MODEL_VARIABLES = {model_env for model_env, _ in PROVIDERS.values()} | {"ANTHROPIC_DEPLOYMENT"}
+# Every key and endpoint a test here gives a provider; none may come from
+# the shell, so each test sets what it needs.
+PROVIDER_SETTINGS = {name for _, env in PROVIDERS.values() for name in env} | {
+    "CUSTOM_API_KEY",
+    "OLLAMA_BASE_URL",
+    "QWED_API_KEY",
+}
 
 # provider class -> the model it runs
 MODEL_OF = {
@@ -107,9 +114,9 @@ OPENAI_PROFILE = OnboardingProvider(
 
 @pytest.fixture(autouse=True)
 def _no_model_configured(monkeypatch):
-    """Start with no model, provider, Anthropic endpoint or QWED key set,
-    whatever the shell has."""
-    for name in MODEL_VARIABLES | {"ACTIVE_PROVIDER", "ANTHROPIC_ENDPOINT", "QWED_API_KEY"}:
+    """Start with no provider, model, key or endpoint set, whatever the
+    shell has."""
+    for name in MODEL_VARIABLES | PROVIDER_SETTINGS | {"ACTIVE_PROVIDER"}:
         monkeypatch.delenv(name, raising=False)
 
 

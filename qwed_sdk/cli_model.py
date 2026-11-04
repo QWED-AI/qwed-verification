@@ -69,7 +69,7 @@ def from_command_line(name: str, value: Optional[str]) -> Optional[str]:
     """``value`` when the option ``name`` was given on the command line, else
     None: not when it came from an environment variable."""
     source = click.get_current_context().get_parameter_source(name)
-    return value if source is ParameterSource.COMMANDLINE else None
+    return value if source == ParameterSource.COMMANDLINE else None
 
 
 def saved_provider(api_key: Optional[str] = None) -> SavedProvider:
