@@ -450,6 +450,18 @@ class TaintAnalyzer:
                     line=node.lineno
                 )
 
+            # Method-call sources match by last dotted segment, except the
+            # generic ``get`` (``sys.stdin.readline``, ``conn.recv``,
+            # ``f.read``, ``sock.recvfrom`` are sources; ``os.getcwd()``
+            # and ``some_dict.get()`` are still not).
+            last = func_name.rsplit(".", 1)[-1] if func_name else ""
+            if last in (self.SOURCE_FUNCTIONS - {"get"}):
+                return TaintSource(
+                    name=func_name,
+                    variable="",
+                    line=node.lineno
+                )
+
         return None
 
     def _check_source_expr(self, node: ast.AST) -> Optional[TaintSource]:

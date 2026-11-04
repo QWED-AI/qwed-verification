@@ -173,3 +173,15 @@ def test_tuple_unpacking_taints_per_element(analyzer):
     result = analyzer.analyze(vulnerable)
     assert result["status"] == "VULNERABLE"
     assert len(result["vulnerabilities"]) >= 1
+
+
+def test_method_call_sources_are_detected(analyzer):
+    """Dotted method calls match sources by last segment (not `get`)."""
+    for code in (
+        'import os, sys\ncmd = sys.stdin.readline()\nos.system(cmd)',
+        'import os, sys\ncmd = sys.stdin.read()\nos.system(cmd)',
+        'import os\ndata = conn.recv(1024)\nos.system(data)',
+    ):
+        result = analyzer.analyze(code)
+        assert result["status"] == "VULNERABLE", code
+        assert len(result["vulnerabilities"]) >= 1, code
