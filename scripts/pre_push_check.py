@@ -74,10 +74,16 @@ class Change(NamedTuple):
     base_path: Optional[str]  # its path on the base branch; None when added
 
 
+def run(
+    args: list[str], cwd: Path, *, capture: bool = True, check: bool = True, env: Optional[dict[str, str]] = None
+) -> subprocess.CompletedProcess:
+    """Run a command with a fixed argument list and no shell. It is the one
+    place this script starts a process: git, ruff or pytest."""
+    return subprocess.run(args, cwd=cwd, env=env, check=check, capture_output=capture)
+
+
 def git(*args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=REPO_ROOT, check=True, capture_output=True, text=True, encoding="utf-8"
-    ).stdout
+    return run(["git", *args], REPO_ROOT).stdout.decode("utf-8")
 
 
 def changed_files(base: str) -> list[Change]:
@@ -94,9 +100,7 @@ def changed_files(base: str) -> list[Change]:
 
 def blob_text(rev: str, path: str) -> Optional[str]:
     """The file at ``rev`` as text, or None for a binary file."""
-    data = subprocess.run(
-        ["git", "show", f"{rev}:{path}"], cwd=REPO_ROOT, check=True, capture_output=True
-    ).stdout
+    data = run(["git", "show", f"{rev}:{path}"], REPO_ROOT).stdout
     if b"\0" in data:
         return None
     return data.decode("utf-8", errors="replace").replace("\r\n", "\n")
@@ -128,14 +132,14 @@ def ruff_findings(root: Path, paths: list[str]) -> Counter:
     so a finding the branch only moves is not new."""
     if not paths:
         return Counter()
-    result = subprocess.run(
+    result = run(
         [sys.executable, "-m", "ruff", "check", "--select", "F,E9", "--no-cache",
          "--output-format", "json", "--exit-zero", *paths],
-        cwd=root, check=True, capture_output=True, text=True, encoding="utf-8",
+        root,
     )
     return Counter(
         (Path(item["filename"]).resolve().relative_to(root.resolve()).as_posix(), item["code"], item["message"])
-        for item in json.loads(result.stdout or "[]")
+        for item in json.loads(result.stdout or b"[]")
     )
 
 
@@ -198,10 +202,10 @@ def run_tests(paths: list[str]) -> int:
         cwd, home = Path(tmp, "cwd"), Path(tmp, "home")
         cwd.mkdir()
         home.mkdir()
-        return subprocess.run(
+        return run(
             [sys.executable, "-m", "pytest", "--rootdir", str(REPO_ROOT), "-c", str(REPO_ROOT / "pytest.ini"),
              "-p", "no:cacheprovider", "-q", *[str(REPO_ROOT / path) for path in paths]],
-            cwd=cwd, env=ci_environment(home), check=False,
+            cwd, capture=False, check=False, env=ci_environment(home),
         ).returncode
 
 
@@ -237,8 +241,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         try:
             failures += [f"ruff: {finding}" for finding in check_ruff(changes, args.base)]
         except subprocess.CalledProcessError as exc:
-            reason = (exc.stderr or "").strip().splitlines()[-1:] or [str(exc)]
-            warnings.append(f"ruff did not run ({reason[0]}); install it with: pip install ruff")
+            last_line = (exc.stderr or b"").decode("utf-8", errors="replace").strip().splitlines()[-1:]
+            reason = last_line[0] if last_line else f"exit status {exc.returncode}"
+            warnings.append(f"ruff did not run ({reason}); install it with: pip install ruff")
     if "secrets" not in args.skip:
         warnings += secret_literals(added_lines(args.base))
 

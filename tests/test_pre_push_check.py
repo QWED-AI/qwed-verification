@@ -112,6 +112,19 @@ def test_ruff_reports_only_what_the_branch_adds(repo):
     assert findings == ["a.py: F401 `sys` imported but unused"]
 
 
+def test_ruff_that_cannot_run_is_reported_not_failed(repo, monkeypatch, capsys):
+    (repo / "b.py").write_text("x = 1\n", encoding="utf-8")
+    _commit(repo)
+
+    def no_ruff(*_args):
+        raise subprocess.CalledProcessError(1, ["ruff"], stderr=b"No module named ruff\n")
+
+    monkeypatch.setattr(check, "check_ruff", no_ruff)
+
+    assert check.main(["--base", "main", "--skip", "tests"]) == 0
+    assert "WARN  ruff did not run (No module named ruff)" in capsys.readouterr().out
+
+
 # --------------------------------------------------------------------------
 # secrets: string literals set as keys, tokens, secrets or passwords
 # --------------------------------------------------------------------------
