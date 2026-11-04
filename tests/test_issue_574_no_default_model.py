@@ -464,11 +464,18 @@ def test_verify_uses_the_llm_the_caller_names(monkeypatch):
     assert built == [{"provider": "openai", "api_key": FAKE_KEY, "model": ANY_MODEL}]
 
 
-def test_langchain_tool_names_no_model():
+def test_langchain_tool_needs_a_model_when_it_is_built():
     pytest.importorskip("langchain_core")
+    from pydantic import ValidationError
+
     from qwed_sdk.integrations.langchain import QWEDTool
 
-    assert QWEDTool().model is None
+    # Refused when the tool is built, not when an agent first runs it.
+    with pytest.raises(ValidationError, match="model"):
+        QWEDTool()
+    with pytest.raises(ValidationError, match="QWEDTool needs a model"):
+        QWEDTool(model="   ")
+    assert QWEDTool(model=ANY_MODEL).model == ANY_MODEL
 
 
 # --------------------------------------------------------------------------
@@ -609,6 +616,20 @@ def test_qwed_interactive_uses_the_saved_endpoint(monkeypatch, saved, url_env, m
     assert result.exit_code == 0
     assert built.call_args.kwargs["base_url"] == "http://localhost:1/v1"
     assert built.call_args.kwargs["model"] == ANY_MODEL
+
+
+@pytest.mark.usefixtures("no_dotenv")
+@pytest.mark.parametrize("command, args", [(verify, ["What is 2+2?"]), (interactive, [])], ids=["verify", "interactive"])
+def test_a_provider_only_the_server_runs_stops_the_cli(monkeypatch, command, args):
+    # No other provider, Ollama included, stands in for the one saved.
+    monkeypatch.setenv("ACTIVE_PROVIDER", "azure_openai")
+
+    with patch("qwed_sdk.cli.QWEDLocal") as built:
+        result = CliRunner().invoke(command, args, input="exit\n")
+
+    assert result.exit_code == 1
+    assert "ACTIVE_PROVIDER is 'azure_openai', which the qwed CLI cannot run." in result.output
+    built.assert_not_called()
 
 
 @pytest.mark.parametrize("variable, expected", [(ANY_MODEL, ANY_MODEL), (None, "")], ids=["variable-set", "unset"])

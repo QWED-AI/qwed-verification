@@ -15,7 +15,7 @@ from typing import Optional, Type
 try:
     from langchain_core.tools import BaseTool
     from langchain_core.callbacks import CallbackManagerForToolRun
-    from pydantic import BaseModel, Field
+    from pydantic import BaseModel, Field, field_validator
     LANGCHAIN_AVAILABLE = True
 except ImportError:
     LANGCHAIN_AVAILABLE = False
@@ -92,9 +92,20 @@ class QWEDTool(BaseTool):
     api_key: Optional[str] = None
     """API key for the LLM provider (or set via environment variable)"""
     
-    model: Optional[str] = None
+    model: str
     """Model name, required (e.g., 'gpt-4o-mini', 'claude-3-haiku-20240307'). QWED names no default model."""
-    
+
+    @field_validator("model")
+    @classmethod
+    def _model_is_set(cls, model: str) -> str:
+        # Refused when the tool is built, not when an agent first runs it.
+        if not model.strip():
+            raise ValueError(
+                "QWEDTool needs a model: pass model='...' with a model your "
+                "provider serves. QWED names no default model."
+            )
+        return model
+
     mask_pii: bool = False
     """Enable PII masking for privacy protection (requires qwed[pii])"""
     

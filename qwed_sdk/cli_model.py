@@ -16,7 +16,7 @@ Kept out of cli.py, which is at the security scan's file size limit.
 import os
 import sys
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import NamedTuple, NoReturn, Optional
 
 import click
 
@@ -49,10 +49,22 @@ class SavedProvider(NamedTuple):
     notice: str  # the line that says which provider runs
 
 
+def stop(message: str, hint: Optional[str] = None) -> NoReturn:
+    """Print an error, and a hint when there is one, and stop the command."""
+    click.echo(f"{QWED.ERROR}{message}{QWED.RESET}" if HAS_COLOR else message, err=True)
+    if hint:
+        click.echo(hint, err=True)
+    sys.exit(1)
+
+
 def saved_provider(api_key: Optional[str] = None) -> SavedProvider:
     """The provider `qwed verify` and `qwed interactive` run without
     --provider or --base-url: the one ACTIVE_PROVIDER selects, and Ollama when
     it is unset, as the server reads it. ``api_key`` wins over the saved key.
+
+    A provider only the server runs (azure_openai or auto, say) stops the
+    command with a message naming ACTIVE_PROVIDER. No other provider stands
+    in for it.
     """
     active = os.getenv("ACTIVE_PROVIDER", "").strip()
     if active in ("", "ollama"):
@@ -61,15 +73,21 @@ def saved_provider(api_key: Optional[str] = None) -> SavedProvider:
     if active in ("openai-compatible", "openai_compat"):
         base_url = os.getenv("CUSTOM_BASE_URL", "")
         if not base_url:
-            message = "ERROR: CUSTOM_BASE_URL is required for openai-compatible provider"
-            click.echo(f"{QWED.ERROR}{message}{QWED.RESET}" if HAS_COLOR else message, err=True)
-            click.echo("Set CUSTOM_BASE_URL env var or run: qwed init", err=True)
-            sys.exit(1)
+            stop(
+                "ERROR: CUSTOM_BASE_URL is required for openai-compatible provider",
+                "Set CUSTOM_BASE_URL env var or run: qwed init",
+            )
         key = api_key or os.getenv("CUSTOM_API_KEY", "")
         return SavedProvider(None, base_url, key, "CUSTOM_MODEL", f"ℹ️  Using configured provider: {active}")
-    key = api_key or os.getenv(PROVIDER_KEY_ENV.get(active, "QWED_API_KEY"), os.getenv("QWED_API_KEY", ""))
+    if active not in PROVIDER_MODEL_ENV:
+        stop(
+            f"ERROR: ACTIVE_PROVIDER is '{active}', which the qwed CLI cannot run.",
+            "Pass --provider (openai, anthropic or gemini) or --base-url, or set ACTIVE_PROVIDER "
+            "to ollama, openai-compatible, openai, anthropic or gemini.",
+        )
+    key = api_key or os.getenv(PROVIDER_KEY_ENV[active], os.getenv("QWED_API_KEY", ""))
     return SavedProvider(
-        active, None, key, PROVIDER_MODEL_ENV.get(active), f"INFO: Using configured provider: {active}"
+        active, None, key, PROVIDER_MODEL_ENV[active], f"INFO: Using configured provider: {active}"
     )
 
 
@@ -105,9 +123,7 @@ def exit_without_model(model: Optional[str], model_env: Optional[str]) -> None:
     if has_model(model):
         return
     hint = f"Pass --model or set {model_env}." if model_env else "Pass --model."
-    message = f"ERROR: No model is configured. {hint}"
-    click.echo(f"{QWED.ERROR}{message}{QWED.RESET}" if HAS_COLOR else message, err=True)
-    sys.exit(1)
+    stop(f"ERROR: No model is configured. {hint}")
 
 
 def require_provider_model(profile, resolved_model: str) -> None:

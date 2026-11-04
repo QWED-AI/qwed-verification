@@ -123,6 +123,8 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     and `.env.example` set; it read only `ANTHROPIC_DEPLOYMENT` before,
     which still wins when set.
   - `QWEDLocal`, `verify()` and the LangChain `QWEDTool` need `model=`.
+    `QWEDTool` refuses a missing or blank model when it is built, not when
+    an agent first runs it.
     `verify(query, provider=..., model=...)` uses the provider you name; it
     always tried Ollama before.
   - `qwed verify` and `qwed interactive` take `--model`, else the selected
@@ -133,7 +135,10 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     `--model` or set the variable.
   - Without `--provider`, `qwed interactive` runs the provider `qwed init`
     saved (`ACTIVE_PROVIDER`), with its endpoint and key, as `qwed verify`
-    does. It always ran Ollama at its default address before.
+    does. It always ran Ollama at its default address before. An
+    `ACTIVE_PROVIDER` that only the server runs (`azure_openai` or `auto`,
+    say) stops `qwed verify` and `qwed interactive` with a message naming
+    it, where they asked for `--model` and then failed to start a client.
   - `ReasoningVerifier()` uses the provider `ACTIVE_PROVIDER` selects
     (Ollama when it is unset, as the server reads it), not always
     Anthropic, and loads every provider the server can; `openai` named a
