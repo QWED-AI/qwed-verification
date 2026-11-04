@@ -45,6 +45,7 @@ from qwed_sdk.cli import (
     interactive,
     verify,
 )
+from qwed_sdk.cli_model import saved_provider
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -616,6 +617,30 @@ def test_qwed_interactive_uses_the_saved_endpoint(monkeypatch, saved, url_env, m
     assert result.exit_code == 0
     assert built.call_args.kwargs["base_url"] == "http://localhost:1/v1"
     assert built.call_args.kwargs["model"] == ANY_MODEL
+
+
+@pytest.mark.parametrize(
+    "saved, provider, url_env",
+    [
+        ("OpenAI", "openai", None),
+        (" openai ", "openai", None),
+        ("openai_direct", "openai", None),
+        ("OPENAI-DIRECT", "openai", None),
+        ("Anthropic", "anthropic", None),
+        ("OpenAI-Compatible", None, "CUSTOM_BASE_URL"),
+        ("openai_compatible", None, "CUSTOM_BASE_URL"),
+        ("OLLAMA", None, "OLLAMA_BASE_URL"),
+    ],
+)
+def test_the_cli_reads_a_saved_provider_as_the_server_does(monkeypatch, saved, provider, url_env):
+    monkeypatch.setenv("ACTIVE_PROVIDER", saved)
+    if url_env:
+        monkeypatch.setenv(url_env, "http://localhost:1/v1")
+
+    resolved = saved_provider()
+
+    assert resolved.provider == provider
+    assert resolved.base_url == ("http://localhost:1/v1" if url_env else None)
 
 
 @pytest.mark.usefixtures("no_dotenv")

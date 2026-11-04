@@ -41,6 +41,7 @@ from qwed_sdk.cli_model import (
     exit_without_model as _exit_without_model,
     load_saved_env as _load_saved_env,
     model_or_variable as _model_or_variable,
+    normalized_provider as _normalized_provider,
     require_provider_model as _require_provider_model,
     saved_provider as _saved_provider,
 )
@@ -1604,10 +1605,7 @@ def _provider_connection_profile(active_provider: str) -> dict:
 
 
 def _normalized_active_provider_key() -> str:
-    active_provider = os.getenv("ACTIVE_PROVIDER", "ollama").strip().lower().replace("-", "_")
-    if active_provider == "openai_compatible":
-        return "openai_compat"
-    return active_provider
+    return _normalized_provider(os.getenv("ACTIVE_PROVIDER", "ollama"))
 
 
 def _resolve_provider_env_values(profile: dict) -> tuple[str, str, str]:

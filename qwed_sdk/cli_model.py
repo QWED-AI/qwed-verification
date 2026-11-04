@@ -39,6 +39,13 @@ PROVIDER_KEY_ENV = {
 }
 
 
+def normalized_provider(name: Optional[str]) -> str:
+    """A provider name as the server reads it: any case, "-" or " " for "_",
+    and openai_compatible for openai_compat."""
+    normalized = (name or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return "openai_compat" if normalized == "openai_compatible" else normalized
+
+
 class SavedProvider(NamedTuple):
     """The provider ACTIVE_PROVIDER selects, as `qwed init` saved it."""
 
@@ -62,15 +69,21 @@ def saved_provider(api_key: Optional[str] = None) -> SavedProvider:
     --provider or --base-url: the one ACTIVE_PROVIDER selects, and Ollama when
     it is unset, as the server reads it. ``api_key`` wins over the saved key.
 
-    A provider only the server runs (azure_openai or auto, say) stops the
-    command with a message naming ACTIVE_PROVIDER. No other provider stands
-    in for it.
+    ACTIVE_PROVIDER is read as the server reads it: any case, with "-", "_"
+    or a space.
+    openai_direct is openai here: the server runs both with the same
+    OPENAI_* settings. A provider only the server runs (azure_openai or auto,
+    say) stops the command with a message naming ACTIVE_PROVIDER. No other
+    provider stands in for it.
     """
-    active = os.getenv("ACTIVE_PROVIDER", "").strip()
+    saved = os.getenv("ACTIVE_PROVIDER", "").strip()
+    active = normalized_provider(saved)
+    if active == "openai_direct":
+        active = "openai"
     if active in ("", "ollama"):
         base_url = os.getenv("OLLAMA_BASE_URL", OLLAMA_DEFAULT_BASE_URL)
         return SavedProvider(None, base_url, api_key, "OLLAMA_MODEL", f"ℹ️  Using Ollama at {base_url}")
-    if active in ("openai-compatible", "openai_compat"):
+    if active == "openai_compat":
         base_url = os.getenv("CUSTOM_BASE_URL", "")
         if not base_url:
             stop(
@@ -78,16 +91,16 @@ def saved_provider(api_key: Optional[str] = None) -> SavedProvider:
                 "Set CUSTOM_BASE_URL env var or run: qwed init",
             )
         key = api_key or os.getenv("CUSTOM_API_KEY", "")
-        return SavedProvider(None, base_url, key, "CUSTOM_MODEL", f"ℹ️  Using configured provider: {active}")
+        return SavedProvider(None, base_url, key, "CUSTOM_MODEL", f"ℹ️  Using configured provider: {saved}")
     if active not in PROVIDER_MODEL_ENV:
         stop(
-            f"ERROR: ACTIVE_PROVIDER is '{active}', which the qwed CLI cannot run.",
+            f"ERROR: ACTIVE_PROVIDER is '{saved}', which the qwed CLI cannot run.",
             "Pass --provider (openai, anthropic or gemini) or --base-url, or set ACTIVE_PROVIDER "
             "to ollama, openai-compatible, openai, anthropic or gemini.",
         )
     key = api_key or os.getenv(PROVIDER_KEY_ENV[active], os.getenv("QWED_API_KEY", ""))
     return SavedProvider(
-        active, None, key, PROVIDER_MODEL_ENV[active], f"INFO: Using configured provider: {active}"
+        active, None, key, PROVIDER_MODEL_ENV[active], f"INFO: Using configured provider: {saved}"
     )
 
 

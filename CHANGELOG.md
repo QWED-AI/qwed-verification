@@ -139,6 +139,8 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     `ACTIVE_PROVIDER` that only the server runs (`azure_openai` or `auto`,
     say) stops `qwed verify` and `qwed interactive` with a message naming
     it, where they asked for `--model` and then failed to start a client.
+    Both read `ACTIVE_PROVIDER` as the server does: in any case, with `-`,
+    `_` or a space, and with `openai_direct` run as `openai`.
   - `ReasoningVerifier()` uses the provider `ACTIVE_PROVIDER` selects
     (Ollama when it is unset, as the server reads it), not always
     Anthropic, and loads every provider the server can; `openai` named a
