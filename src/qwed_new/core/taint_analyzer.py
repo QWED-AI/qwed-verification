@@ -462,6 +462,19 @@ class TaintAnalyzer:
                     line=node.lineno
                 )
 
+            # Any ``request.<...>.get`` (or ``self.request.<...>.get``)
+            # reads untrusted request data, e.g. ``request.cookies.get``.
+            # Other ``.get`` calls (``some_dict.get``) stay non-sources.
+            if last == "get" and (
+                func_name.startswith("request.")
+                or func_name.startswith("self.request.")
+            ):
+                return TaintSource(
+                    name=func_name,
+                    variable="",
+                    line=node.lineno
+                )
+
         return None
 
     def _check_source_expr(self, node: ast.AST) -> Optional[TaintSource]:

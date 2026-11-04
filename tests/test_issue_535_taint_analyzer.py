@@ -185,3 +185,17 @@ def test_method_call_sources_are_detected(analyzer):
         result = analyzer.analyze(code)
         assert result["status"] == "VULNERABLE", code
         assert len(result["vulnerabilities"]) >= 1, code
+
+
+def test_request_attribute_get_is_source(analyzer):
+    """Any `request.<attr>.get` is a source; plain `dict.get` is not."""
+    for attr in ("cookies", "headers", "values", "query_params"):
+        code = f"import os\nx = request.{attr}.get('q')\nos.system(x)"
+        result = analyzer.analyze(code)
+        assert result["status"] == "VULNERABLE", code
+        assert len(result["vulnerabilities"]) >= 1, code
+
+    safe = 'import os\nd = {"q": "ls"}\nx = d.get("q")\nos.system(x)'
+    result = analyzer.analyze(safe)
+    assert result["status"] == "SAFE", safe
+    assert result["vulnerabilities"] == [], safe
