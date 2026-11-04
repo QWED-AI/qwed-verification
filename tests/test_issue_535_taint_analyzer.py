@@ -66,8 +66,110 @@ def test_shlex_quote_still_tainted_for_html(analyzer):
 def test_html_escape_is_safe_for_html(analyzer):
     code = (
         'import html\nx = input()\ny = html.escape(x)\n'
-        'render_template_string(y)'
+        'mark_safe(y)'
     )
     result = analyzer.analyze(code)
     assert result["status"] == "SAFE"
     assert result["vulnerabilities"] == []
+
+
+# --- Regression tests for PR #586 review findings ---
+
+
+def test_aug_assign_keeps_existing_taint(analyzer):
+    """`y += "suffix"` must add RHS taint, not drop `y`'s taint."""
+    code = 'import os\nx = input()\ny = x\ny += "suffix"\nos.system(y)'
+    result = analyzer.analyze(code)
+    assert result["status"] == "VULNERABLE"
+    assert len(result["vulnerabilities"]) >= 1
+
+
+def test_attribute_subscript_sources_in_expressions(analyzer):
+    """Direct env/argv references inside expressions are sources."""
+    for code in (
+        'import os\ncmd = "echo " + os.environ["CMD"]\nos.system(cmd)',
+        'import os, sys\nx = "ls " + sys.argv[1]\nos.system(x)',
+        "import os, sys\nos.system('ls ' + sys.argv[1])",
+    ):
+        result = analyzer.analyze(code)
+        assert result["status"] == "VULNERABLE", code
+        assert len(result["vulnerabilities"]) >= 1, code
+        assert len(result["sources_found"]) >= 1 or any(
+            v["source"]["variable"].startswith("<direct:")
+            for v in result["vulnerabilities"]
+        ), code
+
+
+def test_branch_reassignment_keeps_taint(analyzer):
+    """Taint from any branch RHS survives; union, never last-write-wins."""
+    for code in (
+        "import os\nif c:\n    cmd = input()\nelse:\n    cmd = 'ls'\n"
+        "os.system(cmd)\n",
+        "import os\nx = input()\ny = x\nif ok:\n    y = 'ls'\n"
+        "os.system(y)\n",
+    ):
+        result = analyzer.analyze(code)
+        assert result["status"] == "VULNERABLE", code
+        assert len(result["vulnerabilities"]) >= 1, code
+
+
+def test_nested_sanitizer_matches_inline_form(analyzer):
+    """`cmd = "ls " + shlex.quote(x)` is SAFE, like the inline form."""
+    code = (
+        'import os, shlex\nx = input()\n'
+        'cmd = "ls " + shlex.quote(x)\nos.system(cmd)'
+    )
+    result = analyzer.analyze(code)
+    assert result["status"] == "SAFE"
+    assert result["vulnerabilities"] == []
+
+
+def test_template_sink_not_cleared_by_html_escape(analyzer):
+    """render_template_string is SSTI: html.escape must not clear it."""
+    code = (
+        'import html\nfrom flask import render_template_string\n'
+        'x = input()\nrender_template_string(html.escape(x))'
+    )
+    result = analyzer.analyze(code)
+    assert result["status"] == "VULNERABLE"
+    assert len(result["vulnerabilities"]) >= 1
+
+
+def test_source_matching_is_exact_name(analyzer):
+    """os.getcwd() and dict.get() are not sources."""
+    for code in (
+        'import os\nx = os.getcwd()\nos.system(x)',
+        'import os\nd = {"k": "ls"}\nx = d.get("k")\nos.system(x)',
+    ):
+        result = analyzer.analyze(code)
+        assert result["status"] == "SAFE", code
+        assert result["vulnerabilities"] == [], code
+
+
+def test_sql_parameter_binding_is_safe(analyzer):
+    """Taint only in execute() params is safe; taint in query is not."""
+    safe = (
+        "x = input()\n"
+        "cursor.execute('SELECT * FROM u WHERE id = %s', (x,))"
+    )
+    result = analyzer.analyze(safe)
+    assert result["status"] == "SAFE"
+    assert result["vulnerabilities"] == []
+
+    vulnerable = "x = input()\nq = 'SELECT ' + x\ncursor.execute(q, (1,))"
+    result = analyzer.analyze(vulnerable)
+    assert result["status"] == "VULNERABLE"
+    assert len(result["vulnerabilities"]) >= 1
+
+
+def test_tuple_unpacking_taints_per_element(analyzer):
+    """`safe, bad = "ls", input()`: only `bad` is tainted."""
+    safe = 'import os\nsafe, bad = "ls", input()\nos.system(safe)'
+    result = analyzer.analyze(safe)
+    assert result["status"] == "SAFE"
+    assert result["vulnerabilities"] == []
+
+    vulnerable = 'import os\nsafe, bad = "ls", input()\nos.system(bad)'
+    result = analyzer.analyze(vulnerable)
+    assert result["status"] == "VULNERABLE"
+    assert len(result["vulnerabilities"]) >= 1
