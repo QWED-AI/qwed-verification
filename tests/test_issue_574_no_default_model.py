@@ -107,8 +107,9 @@ OPENAI_PROFILE = OnboardingProvider(
 
 @pytest.fixture(autouse=True)
 def _no_model_configured(monkeypatch):
-    """Start with no model and no provider set, whatever the shell has."""
-    for name in MODEL_VARIABLES | {"ACTIVE_PROVIDER"}:
+    """Start with no model, provider, Anthropic endpoint or QWED key set,
+    whatever the shell has."""
+    for name in MODEL_VARIABLES | {"ACTIVE_PROVIDER", "ANTHROPIC_ENDPOINT", "QWED_API_KEY"}:
         monkeypatch.delenv(name, raising=False)
 
 
@@ -641,6 +642,66 @@ def test_the_cli_reads_a_saved_provider_as_the_server_does(monkeypatch, saved, p
 
     assert resolved.provider == provider
     assert resolved.base_url == ("http://localhost:1/v1" if url_env else None)
+
+
+@pytest.mark.usefixtures("no_dotenv")
+@pytest.mark.parametrize(
+    "saved, settings",
+    [
+        ("openai-compatible", {"CUSTOM_BASE_URL": "http://localhost:1/v1", "CUSTOM_MODEL": ANY_MODEL}),
+        ("openai", {"OPENAI_MODEL": ANY_MODEL}),
+    ],
+)
+def test_the_qwed_key_never_reaches_the_saved_provider(monkeypatch, saved, settings):
+    provider_key, qwed_key, flag_key = (f"{FAKE_KEY}-{name}" for name in ("provider", "qwed", "flag"))
+    monkeypatch.setenv("ACTIVE_PROVIDER", saved)
+    monkeypatch.setenv("QWED_API_KEY", qwed_key)
+    monkeypatch.setenv("CUSTOM_API_KEY" if saved == "openai-compatible" else "OPENAI_API_KEY", provider_key)
+    for name, value in settings.items():
+        monkeypatch.setenv(name, value)
+
+    with patch("qwed_sdk.cli.QWEDLocal") as built:
+        built.return_value.verify.return_value = _verified()
+        from_env = CliRunner().invoke(verify, ["What is 2+2?"])
+        sent_from_env = built.call_args.kwargs["api_key"]
+        from_flag = CliRunner().invoke(verify, ["What is 2+2?", "--api-key", flag_key])
+
+    assert from_env.exit_code == from_flag.exit_code == 0
+    # QWED_API_KEY, which --api-key also reads, may be the QWED server's key.
+    assert sent_from_env == provider_key
+    assert built.call_args.kwargs["api_key"] == flag_key
+
+
+@pytest.mark.usefixtures("no_dotenv")
+def test_a_saved_provider_without_its_key_names_its_variable(monkeypatch):
+    monkeypatch.setenv("ACTIVE_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_MODEL", ANY_MODEL)
+    monkeypatch.setenv("QWED_API_KEY", f"{FAKE_KEY}-qwed")
+
+    with patch("qwed_sdk.cli.QWEDLocal") as built:
+        result = CliRunner().invoke(verify, ["What is 2+2?"])
+
+    assert result.exit_code == 1
+    assert "Set OPENAI_API_KEY or use --api-key" in result.output
+    built.assert_not_called()
+
+
+@pytest.mark.usefixtures("no_dotenv")
+@pytest.mark.parametrize("command, args", [(verify, ["What is 2+2?"]), (interactive, [])], ids=["verify", "interactive"])
+def test_a_saved_anthropic_endpoint_is_never_bypassed(monkeypatch, command, args):
+    # The CLI calls the Anthropic API directly; the key and the prompt must
+    # not leave for it when another endpoint is configured.
+    monkeypatch.setenv("ACTIVE_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_ENDPOINT", "http://localhost:1")
+    monkeypatch.setenv("ANTHROPIC_MODEL", ANY_MODEL)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_KEY)
+
+    with patch("qwed_sdk.cli.QWEDLocal") as built:
+        result = CliRunner().invoke(command, args, input="exit\n")
+
+    assert result.exit_code == 1
+    assert "ANTHROPIC_ENDPOINT is set, but the qwed CLI calls the Anthropic API directly" in result.output
+    built.assert_not_called()
 
 
 @pytest.mark.usefixtures("no_dotenv")

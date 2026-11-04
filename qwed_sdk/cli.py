@@ -37,8 +37,10 @@ except ImportError:
 from qwed_new.core.security import redact_pii
 from qwed_sdk.cli_model import (
     OLLAMA_DEFAULT_BASE_URL,
+    PROVIDER_KEY_ENV as _PROVIDER_KEY_ENV,
     PROVIDER_MODEL_ENV as _PROVIDER_MODEL_ENV,
     exit_without_model as _exit_without_model,
+    from_command_line as _from_command_line,
     load_saved_env as _load_saved_env,
     model_or_variable as _model_or_variable,
     normalized_provider as _normalized_provider,
@@ -2142,10 +2144,16 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
     load_dotenv_ordered()
     
     model_env = None
+    key_hint = "Set QWED_API_KEY env var or use --api-key"
     try:
         # The provider `qwed init` saved (ACTIVE_PROVIDER), with its endpoint and key.
+        # It gets only a key given with --api-key: the option also reads
+        # QWED_API_KEY, which may be the QWED server's key.
         if not provider and not base_url:
-            provider, base_url, api_key, model_env, notice = _saved_provider(api_key)
+            explicit_key = _from_command_line("api_key", api_key)
+            provider, base_url, api_key, model_env, notice = _saved_provider(explicit_key)
+            if provider:
+                key_hint = f"Set {_PROVIDER_KEY_ENV[provider]} or use --api-key"
             if HAS_COLOR and not quiet:
                 click.echo(f"{QWED.INFO}{notice}{QWED.RESET}")
 
@@ -2168,7 +2176,7 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
         elif provider:
             if not api_key:
                 click.echo(f"{QWED.ERROR}ERROR: API key required for {provider}{QWED.RESET}", err=True)
-                click.echo("Set QWED_API_KEY env var or use --api-key", err=True)
+                click.echo(key_hint, err=True)
                 sys.exit(1)
             _exit_without_model(model, model_env)
             

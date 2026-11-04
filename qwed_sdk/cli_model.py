@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import NamedTuple, NoReturn, Optional
 
 import click
+from click.core import ParameterSource
 
 from qwed_sdk.qwed_local import HAS_COLOR, QWED
 
@@ -64,17 +65,28 @@ def stop(message: str, hint: Optional[str] = None) -> NoReturn:
     sys.exit(1)
 
 
+def from_command_line(name: str, value: Optional[str]) -> Optional[str]:
+    """``value`` when the option ``name`` was given on the command line, else
+    None: not when it came from an environment variable."""
+    source = click.get_current_context().get_parameter_source(name)
+    return value if source is ParameterSource.COMMANDLINE else None
+
+
 def saved_provider(api_key: Optional[str] = None) -> SavedProvider:
     """The provider `qwed verify` and `qwed interactive` run without
     --provider or --base-url: the one ACTIVE_PROVIDER selects, and Ollama when
-    it is unset, as the server reads it. ``api_key`` wins over the saved key.
+    it is unset, as the server reads it.
+
+    ``api_key`` is a key passed on the command line, which wins over the
+    provider's own variable. QWED_API_KEY never reaches a provider here: it
+    may be the QWED server's key, and the provider's endpoint must not get it.
 
     ACTIVE_PROVIDER is read as the server reads it: any case, with "-", "_"
-    or a space.
-    openai_direct is openai here: the server runs both with the same
-    OPENAI_* settings. A provider only the server runs (azure_openai or auto,
-    say) stops the command with a message naming ACTIVE_PROVIDER. No other
-    provider stands in for it.
+    or a space. openai_direct is openai here: the server runs both with the
+    same OPENAI_* settings. A provider only the server runs (azure_openai or
+    auto, say) stops the command with a message naming ACTIVE_PROVIDER, and
+    so does anthropic with ANTHROPIC_ENDPOINT set, since the CLI calls the
+    Anthropic API directly. No other provider or endpoint stands in.
     """
     saved = os.getenv("ACTIVE_PROVIDER", "").strip()
     active = normalized_provider(saved)
@@ -82,7 +94,7 @@ def saved_provider(api_key: Optional[str] = None) -> SavedProvider:
         active = "openai"
     if active in ("", "ollama"):
         base_url = os.getenv("OLLAMA_BASE_URL", OLLAMA_DEFAULT_BASE_URL)
-        return SavedProvider(None, base_url, api_key, "OLLAMA_MODEL", f"ℹ️  Using Ollama at {base_url}")
+        return SavedProvider(None, base_url, api_key, "OLLAMA_MODEL", f"\u2139\ufe0f  Using Ollama at {base_url}")
     if active == "openai_compat":
         base_url = os.getenv("CUSTOM_BASE_URL", "")
         if not base_url:
@@ -91,14 +103,21 @@ def saved_provider(api_key: Optional[str] = None) -> SavedProvider:
                 "Set CUSTOM_BASE_URL env var or run: qwed init",
             )
         key = api_key or os.getenv("CUSTOM_API_KEY", "")
-        return SavedProvider(None, base_url, key, "CUSTOM_MODEL", f"ℹ️  Using configured provider: {saved}")
+        return SavedProvider(None, base_url, key, "CUSTOM_MODEL", f"\u2139\ufe0f  Using configured provider: {saved}")
     if active not in PROVIDER_MODEL_ENV:
         stop(
             f"ERROR: ACTIVE_PROVIDER is '{saved}', which the qwed CLI cannot run.",
             "Pass --provider (openai, anthropic or gemini) or --base-url, or set ACTIVE_PROVIDER "
             "to ollama, openai-compatible, openai, anthropic or gemini.",
         )
-    key = api_key or os.getenv(PROVIDER_KEY_ENV[active], os.getenv("QWED_API_KEY", ""))
+    if active == "anthropic" and os.getenv("ANTHROPIC_ENDPOINT", "").strip():
+        stop(
+            "ERROR: ANTHROPIC_ENDPOINT is set, but the qwed CLI calls the Anthropic API directly "
+            "and cannot use that endpoint.",
+            "Unset ANTHROPIC_ENDPOINT to use the Anthropic API, or pass --base-url with an "
+            "OpenAI-compatible endpoint.",
+        )
+    key = api_key or os.getenv(PROVIDER_KEY_ENV[active], "")
     return SavedProvider(
         active, None, key, PROVIDER_MODEL_ENV[active], f"INFO: Using configured provider: {saved}"
     )

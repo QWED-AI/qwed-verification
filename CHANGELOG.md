@@ -141,6 +141,14 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     it, where they asked for `--model` and then failed to start a client.
     Both read `ACTIVE_PROVIDER` as the server does: in any case, with `-`,
     `_` or a space, and with `openai_direct` run as `openai`.
+  - The saved provider gets a key only from `--api-key` given on the command
+    line or from its own variable (`CUSTOM_API_KEY`, `OPENAI_API_KEY`,
+    `ANTHROPIC_API_KEY` or `GOOGLE_API_KEY`). `QWED_API_KEY`, which
+    `--api-key` also reads, may be the QWED server's key: it went to the
+    saved provider's endpoint before, over its own key. A saved `anthropic`
+    with `ANTHROPIC_ENDPOINT` set now stops: the CLI calls the Anthropic API
+    directly, and sent the key and the prompt there instead of to that
+    endpoint. `--provider` with `QWED_API_KEY` works as before.
   - `ReasoningVerifier()` uses the provider `ACTIVE_PROVIDER` selects
     (Ollama when it is unset, as the server reads it), not always
     Anthropic, and loads every provider the server can; `openai` named a
