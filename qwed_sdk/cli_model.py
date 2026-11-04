@@ -5,8 +5,10 @@
 
 QWED is model-agnostic and names no model of its own. ``qwed verify`` and
 ``qwed interactive`` take ``--model``, else the selected provider's model
-variable, and stop with a message naming it when neither is set. ``qwed init``
-stops the same way rather than choosing a model.
+variable, and stop with a message naming it when neither is set. Without
+``--provider``, the selected provider is the one ``qwed init`` saved
+(ACTIVE_PROVIDER). ``qwed init`` stops the same way rather than choosing a
+model.
 
 Kept out of cli.py, which is at the security scan's file size limit.
 """
@@ -14,11 +16,13 @@ Kept out of cli.py, which is at the security scan's file size limit.
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import click
 
 from qwed_sdk.qwed_local import HAS_COLOR, QWED
+
+OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434/v1"
 
 # Where `qwed verify` and `qwed interactive` read the model for --provider.
 PROVIDER_MODEL_ENV = {
@@ -26,6 +30,47 @@ PROVIDER_MODEL_ENV = {
     "anthropic": "ANTHROPIC_MODEL",
     "gemini": "GEMINI_MODEL",
 }
+
+# Where they read the API key of the provider `qwed init` saved.
+PROVIDER_KEY_ENV = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GOOGLE_API_KEY",
+}
+
+
+class SavedProvider(NamedTuple):
+    """The provider ACTIVE_PROVIDER selects, as `qwed init` saved it."""
+
+    provider: Optional[str]  # a named provider, for QWEDLocal(provider=...)
+    base_url: Optional[str]  # an endpoint, for QWEDLocal(base_url=...)
+    api_key: Optional[str]
+    model_env: Optional[str]  # the variable that names its model
+    notice: str  # the line that says which provider runs
+
+
+def saved_provider(api_key: Optional[str] = None) -> SavedProvider:
+    """The provider `qwed verify` and `qwed interactive` run without
+    --provider or --base-url: the one ACTIVE_PROVIDER selects, and Ollama when
+    it is unset, as the server reads it. ``api_key`` wins over the saved key.
+    """
+    active = os.getenv("ACTIVE_PROVIDER", "").strip()
+    if active in ("", "ollama"):
+        base_url = os.getenv("OLLAMA_BASE_URL", OLLAMA_DEFAULT_BASE_URL)
+        return SavedProvider(None, base_url, api_key, "OLLAMA_MODEL", f"ℹ️  Using Ollama at {base_url}")
+    if active in ("openai-compatible", "openai_compat"):
+        base_url = os.getenv("CUSTOM_BASE_URL", "")
+        if not base_url:
+            message = "ERROR: CUSTOM_BASE_URL is required for openai-compatible provider"
+            click.echo(f"{QWED.ERROR}{message}{QWED.RESET}" if HAS_COLOR else message, err=True)
+            click.echo("Set CUSTOM_BASE_URL env var or run: qwed init", err=True)
+            sys.exit(1)
+        key = api_key or os.getenv("CUSTOM_API_KEY", "")
+        return SavedProvider(None, base_url, key, "CUSTOM_MODEL", f"ℹ️  Using configured provider: {active}")
+    key = api_key or os.getenv(PROVIDER_KEY_ENV.get(active, "QWED_API_KEY"), os.getenv("QWED_API_KEY", ""))
+    return SavedProvider(
+        active, None, key, PROVIDER_MODEL_ENV.get(active), f"INFO: Using configured provider: {active}"
+    )
 
 
 def load_saved_env() -> None:

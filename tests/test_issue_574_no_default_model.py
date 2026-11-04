@@ -37,7 +37,14 @@ from qwed_new.providers.gemini_provider import GeminiProvider
 from qwed_new.providers.ollama_provider import OllamaProvider
 from qwed_new.providers.openai_compat import OpenAICompatProvider
 from qwed_new.providers.openai_direct import OpenAIDirectProvider
-from qwed_sdk.cli import OnboardingProvider, _test_provider_connection_loop, init, interactive, verify
+from qwed_sdk.cli import (
+    OnboardingProvider,
+    _resolve_provider_model,
+    _test_provider_connection_loop,
+    init,
+    interactive,
+    verify,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -344,20 +351,48 @@ def test_a_blank_active_provider_is_unset(monkeypatch, configured):
     assert TranslationLayer().default_provider == ProviderType.OLLAMA.value
 
 
-def test_logic_verification_uses_the_configured_provider(monkeypatch):
-    class LogicOnly:
-        def translate_logic(self, _user_query):
-            return LogicVerificationTask(
-                variables={"x": "Int"}, constraints=["x > 5", "x < 3"], goal="SATISFIABILITY"
-            )
+class _LogicOnly:
+    """A provider that translates one contradictory logic query."""
 
+    def translate_logic(self, _user_query):
+        return LogicVerificationTask(variables={"x": "Int"}, constraints=["x > 5", "x < 3"], goal="SATISFIABILITY")
+
+
+def test_logic_verification_uses_the_configured_provider(monkeypatch):
     monkeypatch.setattr(settings, "ACTIVE_PROVIDER", "ollama")
-    monkeypatch.setattr("qwed_new.core.translator.OllamaProvider", LogicOnly)
+    monkeypatch.setattr("qwed_new.core.translator.OllamaProvider", _LogicOnly)
 
     result = DSLLogicVerifier().verify_from_natural_language("x is above 5 and below 3")
 
     assert result.provider_used == "ollama"
     assert result.status == "UNSAT"
+
+
+def test_a_request_that_names_an_unknown_provider_is_refused(monkeypatch):
+    monkeypatch.setattr(settings, "ACTIVE_PROVIDER", "openai")
+    configured = MagicMock()
+    monkeypatch.setattr("qwed_new.core.translator.OpenAIDirectProvider", configured)
+
+    provider = Router().route("What is 2 + 2?", "ollmaa")
+    layer = TranslationLayer()
+    with pytest.raises(ProviderConfigError, match="The request names a provider QWED does not know"):
+        layer.translate("What is 2 + 2?", provider=provider)
+
+    assert provider == "unknown"
+    configured.assert_not_called()
+
+
+def test_logic_verification_refuses_an_unknown_provider_without_echoing_it(monkeypatch):
+    # The configured provider would answer; it must not stand in for the one named.
+    monkeypatch.setattr(settings, "ACTIVE_PROVIDER", "ollama")
+    monkeypatch.setattr("qwed_new.core.translator.OllamaProvider", _LogicOnly)
+    verifier = DSLLogicVerifier()
+
+    result = verifier.verify_from_natural_language("x is above 5 and below 3", provider="ollmaa")
+
+    assert result.status == "ERROR"
+    assert "The request names a provider QWED does not know" in result.error
+    assert result.provider_used == "unknown"
 
 
 @pytest.mark.parametrize(
@@ -543,6 +578,45 @@ def test_qwed_interactive_reads_the_model_qwed_init_saved(monkeypatch, tmp_path)
 
     assert result.exit_code == 0
     assert built.call_args.kwargs["model"] == ANY_MODEL
+
+
+@pytest.mark.usefixtures("no_dotenv")
+def test_qwed_interactive_runs_the_provider_qwed_init_saved(monkeypatch):
+    monkeypatch.setenv("ACTIVE_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_MODEL", ANY_MODEL)
+    monkeypatch.setenv("OPENAI_API_KEY", FAKE_KEY)
+
+    with patch("qwed_sdk.cli.QWEDLocal") as built:
+        result = CliRunner().invoke(interactive, [], input="exit\n")
+
+    assert result.exit_code == 0
+    assert built.call_args.kwargs == {"provider": "openai", "api_key": FAKE_KEY, "model": ANY_MODEL}
+
+
+@pytest.mark.usefixtures("no_dotenv")
+@pytest.mark.parametrize(
+    "saved, url_env, model_env",
+    [("ollama", "OLLAMA_BASE_URL", "OLLAMA_MODEL"), ("openai-compatible", "CUSTOM_BASE_URL", "CUSTOM_MODEL")],
+)
+def test_qwed_interactive_uses_the_saved_endpoint(monkeypatch, saved, url_env, model_env):
+    monkeypatch.setenv("ACTIVE_PROVIDER", saved)
+    monkeypatch.setenv(url_env, "http://localhost:1/v1")
+    monkeypatch.setenv(model_env, ANY_MODEL)
+
+    with patch("qwed_sdk.cli.QWEDLocal") as built:
+        result = CliRunner().invoke(interactive, [], input="exit\n")
+
+    assert result.exit_code == 0
+    assert built.call_args.kwargs["base_url"] == "http://localhost:1/v1"
+    assert built.call_args.kwargs["model"] == ANY_MODEL
+
+
+@pytest.mark.parametrize("variable, expected", [(ANY_MODEL, ANY_MODEL), (None, "")], ids=["variable-set", "unset"])
+def test_qwed_init_reads_a_blank_model_flag_as_none(monkeypatch, variable, expected):
+    if variable:
+        monkeypatch.setenv("OPENAI_MODEL", variable)
+
+    assert _resolve_provider_model(OPENAI_PROFILE, "   ") == expected
 
 
 def test_qwed_init_non_interactive_stops_without_a_model(monkeypatch):

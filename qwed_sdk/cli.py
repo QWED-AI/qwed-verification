@@ -36,11 +36,13 @@ except ImportError:
 
 from qwed_new.core.security import redact_pii
 from qwed_sdk.cli_model import (
+    OLLAMA_DEFAULT_BASE_URL,
     PROVIDER_MODEL_ENV as _PROVIDER_MODEL_ENV,
     exit_without_model as _exit_without_model,
     load_saved_env as _load_saved_env,
     model_or_variable as _model_or_variable,
     require_provider_model as _require_provider_model,
+    saved_provider as _saved_provider,
 )
 from qwed_sdk.init_owner import resolve_owner, signup_failure
 
@@ -60,7 +62,6 @@ def cli():
 
 SEPARATOR = "-" * 41
 ANTHROPIC_CLAUDE_LABEL = "Anthropic Claude"
-OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434/v1"
 SQLITE_URL_PREFIX = "sqlite:///"
 SQLITE_MEMORY_URL = f"{SQLITE_URL_PREFIX}:memory:"
 DEFAULT_DATABASE_URL = f"{SQLITE_URL_PREFIX}./qwed.db"
@@ -872,7 +873,8 @@ def _resolve_provider_base_url(
 
 
 def _resolve_provider_model(profile: OnboardingProvider, model: Optional[str]) -> str:
-    return (model or os.getenv(profile.model_env) or "").strip()
+    # A blank --model is no model, as for qwed verify: the variable's is used.
+    return (model or "").strip() or (os.getenv(profile.model_env) or "").strip()
 
 
 def _validate_provider_credentials(
@@ -2143,44 +2145,11 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
     
     model_env = None
     try:
-        # Auto-detect provider/base_url from ACTIVE_PROVIDER
+        # The provider `qwed init` saved (ACTIVE_PROVIDER), with its endpoint and key.
         if not provider and not base_url:
-            import os as _os
-            active = _os.getenv("ACTIVE_PROVIDER", "").strip()
-            if active == "ollama" or not active:
-                # Use Ollama (LOCAL): respect user-configured env vars
-                base_url = _os.getenv("OLLAMA_BASE_URL", OLLAMA_DEFAULT_BASE_URL)
-                model_env = "OLLAMA_MODEL"
-                if HAS_COLOR and not quiet:
-                    click.echo(f"{QWED.INFO}\u2139\ufe0f  Using Ollama at {base_url}{QWED.RESET}")
-            elif active == "openai-compatible" or active == "openai_compat":
-                base_url = _os.getenv("CUSTOM_BASE_URL", "")
-                if not base_url:
-                    err_msg = (
-                        f"{QWED.ERROR}ERROR: CUSTOM_BASE_URL is required for openai-compatible provider{QWED.RESET}"
-                        if HAS_COLOR
-                        else "ERROR: CUSTOM_BASE_URL is required for openai-compatible provider"
-                    )
-                    click.echo(err_msg, err=True)
-                    click.echo("Set CUSTOM_BASE_URL env var or run: qwed init", err=True)
-                    sys.exit(1)
-                api_key = api_key or _os.getenv("CUSTOM_API_KEY", "")
-                model_env = "CUSTOM_MODEL"
-                if HAS_COLOR and not quiet:
-                    click.echo(f"{QWED.INFO}\u2139\ufe0f  Using configured provider: {active}{QWED.RESET}")
-            else:
-                # Named provider (openai, anthropic, etc.)
-                provider = active
-                provider_key_env = {
-                    "openai": "OPENAI_API_KEY",
-                    "anthropic": "ANTHROPIC_API_KEY",
-                    "gemini": "GOOGLE_API_KEY",
-                }
-                if not api_key:
-                    env_key = provider_key_env.get(provider, "QWED_API_KEY")
-                    api_key = _os.getenv(env_key, _os.getenv("QWED_API_KEY", ""))
-                if HAS_COLOR and not quiet:
-                    click.echo(f"{QWED.INFO}INFO: Using configured provider: {active}{QWED.RESET}")
+            provider, base_url, api_key, model_env, notice = _saved_provider(api_key)
+            if HAS_COLOR and not quiet:
+                click.echo(f"{QWED.INFO}{notice}{QWED.RESET}")
 
         # QWED names no model: it is --model, else the selected provider's
         # model variable, and with neither the command stops.
@@ -2287,27 +2256,30 @@ def interactive(provider: Optional[str], model: Optional[str]):
         click.echo("\nQWED Interactive Mode")
         click.echo("Type 'exit' or 'quit' to quit\n")
     
-    # QWED names no model: it is --model, else the provider's model variable,
-    # which may be in the .env file `qwed init` wrote.
+    # QWED names no model: it is --model, else the provider's model variable.
+    # Without --provider, the provider is the one `qwed init` saved
+    # (ACTIVE_PROVIDER), as for qwed verify. Both may be in its .env file.
     _load_saved_env()
-    model_env = _PROVIDER_MODEL_ENV.get(provider) if provider else "OLLAMA_MODEL"
+    saved = None if provider else _saved_provider()
+    model_env = _PROVIDER_MODEL_ENV.get(provider) if provider else saved.model_env
     model = _model_or_variable(model, model_env)
     _exit_without_model(model, model_env)
+    if saved and HAS_COLOR:
+        click.echo(f"{QWED.INFO}{saved.notice}{QWED.RESET}")
 
     # Create client once
     try:
-        if provider:
-            api_key = click.prompt("API Key", hide_input=True)
+        if provider or saved.provider:
             client = QWEDLocal(
-                provider=provider,
-                api_key=api_key,
+                provider=provider or saved.provider,
+                api_key=(saved and saved.api_key) or click.prompt("API Key", hide_input=True),
                 model=model
             )
         else:
-            # Default to Ollama
             client = QWEDLocal(
-                base_url=OLLAMA_DEFAULT_BASE_URL,
-                model=model
+                base_url=saved.base_url,
+                model=model,
+                api_key=saved.api_key or None
             )
     except Exception as e:
         click.echo(f"Error initializing client: {e}", err=True)

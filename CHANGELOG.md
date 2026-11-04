@@ -128,8 +128,12 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - `qwed verify` and `qwed interactive` take `--model`, else the selected
     provider's variable (`OLLAMA_MODEL`, `CUSTOM_MODEL`, `OPENAI_MODEL`,
     `ANTHROPIC_MODEL` or `GEMINI_MODEL`), and stop with a message naming it
-    when neither is set. `qwed init` asks for the model without suggesting
-    one; with `--non-interactive`, pass `--model` or set the variable.
+    when neither is set. A blank `--model` counts as unset. `qwed init` asks
+    for the model without suggesting one; with `--non-interactive`, pass
+    `--model` or set the variable.
+  - Without `--provider`, `qwed interactive` runs the provider `qwed init`
+    saved (`ACTIVE_PROVIDER`), with its endpoint and key, as `qwed verify`
+    does. It always ran Ollama at its default address before.
   - `ReasoningVerifier()` uses the provider `ACTIVE_PROVIDER` selects
     (Ollama when it is unset, as the server reads it), not always
     Anthropic, and loads every provider the server can; `openai` named a
@@ -142,7 +146,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - The server sends each request to the provider the request names, else
     to the one `ACTIVE_PROVIDER` selects. A query with `write`, `compose`,
     `essay`, `creative` or `story` in it went to Anthropic, whatever was
-    configured.
+    configured. A request that names a provider QWED does not know is
+    refused, with `unknown` as its provider; before, the configured provider
+    ran it.
   - An `ACTIVE_PROVIDER` that names no provider QWED knows stops the request
     with an error naming `ACTIVE_PROVIDER`; before, it switched to `auto`
     (Azure OpenAI, then Anthropic). A blank one counts as unset, as a blank

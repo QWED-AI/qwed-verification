@@ -1,5 +1,7 @@
 from typing import Any
 
+import pytest
+
 from qwed_new.config import ProviderType
 from qwed_new.core.router import Router
 from qwed_new.core.schemas import MathVerificationTask
@@ -81,15 +83,16 @@ def test_translation_layer_normalizes_openai_compatible_alias(monkeypatch):
     assert layer.last_resolved_provider == "openai_compat"
 
 
-def test_translation_layer_invalid_provider_falls_back_to_default(monkeypatch):
+def test_translation_layer_refuses_an_invalid_provider(monkeypatch):
     monkeypatch.setattr("qwed_new.core.translator.OpenAICompatProvider", _DummyCompatProvider)
     monkeypatch.setattr("qwed_new.core.translator.settings.ACTIVE_PROVIDER", "openai_compat")
 
     layer = TranslationLayer()
-    task = layer.translate("2+2", provider=" definitely-not-valid ")
+    # The configured provider does not stand in for the one the request names (#574).
+    with pytest.raises(ValueError, match="The request names a provider QWED does not know"):
+        layer.translate("2+2", provider=" definitely-not-valid ")
 
-    assert task.claimed_answer == 4.0
-    assert layer.last_resolved_provider == "openai_compat"
+    assert layer.last_resolved_provider == "unknown"
 
 
 def test_translation_layer_delegates_logic_stats_and_fact_calls(monkeypatch):
@@ -126,8 +129,9 @@ def test_router_normalizes_preferred_provider_alias(monkeypatch):
     assert router.route("anything", preferred_provider=" OpenAI-Compatible ") == "openai_compat"
 
 
-def test_router_invalid_preferred_provider_falls_back_default(monkeypatch):
+def test_router_labels_an_invalid_preferred_provider_unknown(monkeypatch):
     monkeypatch.setattr("qwed_new.core.router.settings.ACTIVE_PROVIDER", "openai_compat")
     router = Router()
 
-    assert router.route("anything", preferred_provider="definitely-not-a-provider") == "openai_compat"
+    # Not the configured provider, and not the request's own text (#574).
+    assert router.route("anything", preferred_provider="definitely-not-a-provider") == "unknown"

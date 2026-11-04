@@ -13,8 +13,8 @@ from qwed_new.core.schemas import MathVerificationTask, LogicVerificationTask
 
 
 class ProviderConfigError(ValueError):
-    """QWED cannot run a provider as configured: no model is set, or
-    ACTIVE_PROVIDER names no provider QWED knows.
+    """QWED cannot run a provider as selected: no model is set, or
+    ACTIVE_PROVIDER or the request names no provider QWED knows.
 
     The message names the setting to fix and carries nothing from a provider
     or its SDK, so callers may pass it on where they hide other errors.

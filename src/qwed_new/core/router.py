@@ -8,6 +8,11 @@ It implements the "Model Routing" layer of the QWED OS.
 from typing import Optional
 from qwed_new.config import settings, ProviderType
 
+# The label for a provider a request names that QWED does not know. The router
+# passes it on, so the translator refuses the request; it never passes the
+# request's own text, which would reach responses and metrics (#574).
+UNKNOWN_PROVIDER = "unknown"
+
 class Router:
     """
     Routes each request to the provider its user selected.
@@ -33,13 +38,17 @@ class Router:
         """
         Return the provider for a request.
 
-        It is the provider the request names, when QWED knows it, else the
-        configured one (ACTIVE_PROVIDER). The query's wording never selects a
-        provider: a query with "write" or "story" in it once went to Anthropic
-        whatever the user had configured (#574).
+        It is the provider the request names, else the configured one
+        (ACTIVE_PROVIDER). A name QWED does not know gives UNKNOWN_PROVIDER,
+        which the translator refuses: no other provider stands in for the one
+        the request selected. The query's wording never selects a provider: a
+        query with "write" or "story" in it once went to Anthropic whatever the
+        user had configured (#574).
         """
         if preferred_provider:
             normalized = self._canonicalize_provider(preferred_provider)
             if normalized in {provider.value for provider in ProviderType}:
                 return normalized
+            if normalized:
+                return UNKNOWN_PROVIDER
         return self.default_provider

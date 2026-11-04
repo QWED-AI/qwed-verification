@@ -26,14 +26,15 @@ class TestRouter:
         assert result_str == "ollama"
 
     @patch("qwed_new.core.router.settings")
-    def test_route_unknown_provider_fallback(self, mock_settings):
-        """Unknown provider should fall back to default, not raw string."""
+    def test_route_unknown_provider_is_labelled_unknown(self, mock_settings):
+        """An unknown provider is labelled "unknown", which the translator
+        refuses: not the default, and not the raw string (#574)."""
         mock_settings.ACTIVE_PROVIDER = "openai"
         from qwed_new.core.router import Router
         r = Router()
         result = r.route("test query", preferred_provider="nonexistent-typo")
         result_str = getattr(result, "value", result)
-        assert result_str == "openai"
+        assert result_str == "unknown"
 
     @patch("qwed_new.core.router.settings")
     def test_route_slug_normalization(self, mock_settings):
