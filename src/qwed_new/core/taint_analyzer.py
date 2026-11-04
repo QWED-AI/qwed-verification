@@ -46,6 +46,7 @@ class TaintSink:
     line: int           # Line number
     col: int = 0        # Column offset
     args: List[str] = field(default_factory=list)  # Arguments passed
+    arg_nodes: List[Any] = field(default_factory=list)  # Raw argument ASTs
 
 
 @dataclass
@@ -116,6 +117,7 @@ class TaintAnalyzer:
         # Environment
         "os.environ.get": "Environment variable",
         "os.getenv": "Environment variable",
+        "os.environ": "Environment variables",
         
         # Command line
         "sys.argv": "Command line argument",
@@ -169,40 +171,96 @@ class TaintAnalyzer:
         "requests.get": ("MEDIUM", "SSRF"),
         "requests.post": ("MEDIUM", "SSRF"),
         "urllib.request.urlopen": ("MEDIUM", "SSRF"),
+
+        # HTML / template output (HIGH)
+        "render_template_string": ("HIGH", "Cross-site scripting (XSS)"),
+        "mark_safe": ("HIGH", "Cross-site scripting (XSS)"),
     }
     
     SINK_FUNCTIONS: Set[str] = {
         "eval", "exec", "compile", "system", "popen",
         "call", "run", "Popen", "check_output",
-        "loads", "load", "execute", "open"
+        "loads", "load", "execute", "open",
+        "render_template_string", "mark_safe"
     }
     
     # =========================================================================
     # Sanitizer Patterns (Functions that clean tainted data)
     # =========================================================================
     
-    SANITIZERS: Set[str] = {
-        # Explicit sanitizers
-        "escape", "html_escape", "quote", "sanitize", "clean",
-        "validate", "filter", "strip_tags", "bleach",
-        
-        # Type casting (converts to safe types)
-        "int", "float", "bool",
-        
-        # Validation patterns
-        "isdigit", "isalnum", "isalpha",
-        
-        # Security functions
-        "shlex.quote", "shlex.split",
-        "werkzeug.secure_filename",
-        "markupsafe.escape",
+    #: Maps a sink's short name (last dotted component) to its sink class.
+    #: Unknown sinks fall back to "generic", which no sanitiser cleans.
+    SINK_CATEGORIES: Dict[str, str] = {
+        "eval": "code",
+        "exec": "code",
+        "compile": "code",
+        "__import__": "code",
+        "system": "shell",
+        "popen": "shell",
+        "call": "shell",
+        "run": "shell",
+        "Popen": "shell",
+        "check_output": "shell",
+        "loads": "deserialize",
+        "load": "deserialize",
+        "unsafe_load": "deserialize",
+        "execute": "sql",
+        "open": "path",
+        "copy": "path",
+        "move": "path",
+        "remove": "path",
+        "unlink": "path",
+        "get": "network",
+        "post": "network",
+        "urlopen": "network",
+        "render_template_string": "html",
+        "mark_safe": "html",
     }
-    
+
+    #: Every sink class a fresh source is tainted for.
+    ALL_TAINT_CATEGORIES: Set[str] = {
+        "code", "shell", "deserialize", "sql",
+        "path", "network", "html", "generic",
+    }
+
+    #: Type casts and boolean checks produce a value safe for every sink.
+    UNIVERSAL_SANITIZERS: Set[str] = {
+        "int", "float", "bool",
+        "isdigit", "isalnum", "isalpha",
+    }
+
+    #: Only neutralises shell metacharacters.
+    SHELL_SANITIZERS: Set[str] = {
+        "shlex.quote", "quote", "shlex.split",
+    }
+
+    #: Only neutralises HTML markup (XSS), not shell/SQL metacharacters.
+    HTML_SANITIZERS: Set[str] = {
+        "escape", "html.escape", "html_escape", "markupsafe.escape",
+        "bleach", "bleach.clean", "strip_tags", "sanitize", "clean",
+    }
+
+    #: Only makes a filename safe for path operations.
+    PATH_SANITIZERS: Set[str] = {
+        "secure_filename", "werkzeug.secure_filename",
+    }
+
+    #: Backwards-compatible union of every known sanitiser name.
+    #: Prefer the sink-specific sets above; this union is no longer
+    #: consulted by the analysis itself.
+    SANITIZERS: Set[str] = (
+        UNIVERSAL_SANITIZERS | SHELL_SANITIZERS
+        | HTML_SANITIZERS | PATH_SANITIZERS
+    )
     def __init__(self):
         """Initialize the Taint Analyzer."""
-        self._taint_map: Dict[str, TaintStatus] = {}
+        # var -> set of sink classes the variable is tainted for.
+        # A variable absent from the map (or mapped to the empty set)
+        # is clean.
+        self._taint_map: Dict[str, Set[str]] = {}
         self._taint_sources: Dict[str, TaintSource] = {}
         self._flow_graph: Dict[str, Set[str]] = {}  # var -> depends_on
+        self._flow_rhs: Dict[str, ast.AST] = {}  # var -> assigned expression
     
     def analyze(self, code: str) -> Dict[str, Any]:
         """
@@ -224,6 +282,7 @@ class TaintAnalyzer:
         self._taint_map = {}
         self._taint_sources = {}
         self._flow_graph = {}
+        self._flow_rhs = {}
         
         try:
             tree = ast.parse(code)
@@ -274,7 +333,7 @@ class TaintAnalyzer:
                 }
                 for v in vulnerabilities
             ],
-            "tainted_variables": list(self._get_all_tainted()),
+            "tainted_variables": sorted(self._get_all_tainted()),
             "sources_found": [
                 {"name": s.name, "variable": s.variable, "line": s.line}
                 for s in sources
@@ -296,31 +355,45 @@ class TaintAnalyzer:
     def _find_sources(self, tree: ast.AST) -> List[TaintSource]:
         """Find all taint sources in the AST."""
         sources = []
-        
+
         for node in ast.walk(tree):
             # Assignment: x = input()
             if isinstance(node, ast.Assign):
-                source = self._check_source_call(node.value)
+                source = self._check_source_expr(node.value)
                 if source:
                     for target in node.targets:
-                        if isinstance(target, ast.Name):
-                            source.variable = target.id
-                            source.line = node.lineno
-                            sources.append(source)
-                            self._taint_map[target.id] = TaintStatus.TAINTED
-                            self._taint_sources[target.id] = source
-            
+                        self._mark_source_target(target, source, node.lineno, sources)
+            # Annotated assignment: x: str = input()
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                source = self._check_source_expr(node.value)
+                if source:
+                    self._mark_source_target(node.target, source, node.lineno, sources)
             # Named expr: if (x := input()):
             elif isinstance(node, ast.NamedExpr):
-                source = self._check_source_call(node.value)
+                source = self._check_source_expr(node.value)
                 if source:
-                    source.variable = node.target.id
-                    source.line = node.lineno
-                    sources.append(source)
-                    self._taint_map[node.target.id] = TaintStatus.TAINTED
-                    self._taint_sources[node.target.id] = source
-        
+                    self._mark_source_target(node.target, source, node.lineno, sources)
+
         return sources
+
+    def _mark_source_target(
+        self,
+        target: ast.AST,
+        source: TaintSource,
+        lineno: int,
+        sources: List[TaintSource],
+    ) -> None:
+        """Record that an assignment target now holds source taint."""
+        if isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                self._mark_source_target(elt, source, lineno, sources)
+        elif isinstance(target, ast.Name):
+            tainted = TaintSource(
+                name=source.name, variable=target.id, line=lineno
+            )
+            sources.append(tainted)
+            self._taint_map[target.id] = set(self.ALL_TAINT_CATEGORIES)
+            self._taint_sources[target.id] = tainted
     
     def _check_source_call(self, node: ast.AST) -> Optional[TaintSource]:
         """Check if a node is a taint source call."""
@@ -343,7 +416,32 @@ class TaintAnalyzer:
                         variable="",
                         line=node.lineno
                     )
-        
+
+        return None
+
+    def _check_source_expr(self, node: ast.AST) -> Optional[TaintSource]:
+        """Check if an expression directly introduces tainted data.
+
+        Covers source calls (``x = input()``) as well as direct reads of
+        source attributes/subscripts (``x = sys.argv[1]``).
+        """
+        if isinstance(node, ast.Call):
+            return self._check_source_call(node)
+        dotted = self._get_source_name(node)
+        if dotted is not None and dotted in self.SOURCES:
+            return TaintSource(
+                name=dotted,
+                variable="",
+                line=getattr(node, "lineno", 0)
+            )
+        return None
+
+    def _get_source_name(self, node: ast.AST) -> Optional[str]:
+        """Dotted name of a source reference, unwrapping subscripts."""
+        if isinstance(node, (ast.Name, ast.Attribute)):
+            return self._get_func_name(node)
+        if isinstance(node, ast.Subscript):
+            return self._get_source_name(node.value)
         return None
     
     def _get_func_name(self, node: ast.AST) -> str:
@@ -367,13 +465,42 @@ class TaintAnalyzer:
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        deps = self._extract_dependencies(node.value)
-                        self._flow_graph[target.id] = deps
-                        
-                        # Check if assigned from sanitizer
-                        if self._is_sanitized(node.value):
-                            self._taint_map[target.id] = TaintStatus.CLEAN
+                    self._record_assignment(target, node.value)
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                self._record_assignment(node.target, node.value)
+            elif isinstance(node, ast.AugAssign):
+                self._record_aug_assignment(node.target, node.value, node.op)
+            elif isinstance(node, ast.NamedExpr):
+                self._record_assignment(node.target, node.value)
+
+    def _record_assignment(self, target: ast.AST, value: ast.AST) -> None:
+        """Record an assignment target and the expression assigned to it."""
+        if isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                self._record_assignment(elt, value)
+        elif isinstance(target, ast.Name):
+            self._flow_graph[target.id] = self._extract_dependencies(value)
+            self._flow_rhs[target.id] = value
+
+    def _record_aug_assignment(
+        self, target: ast.AST, value: ast.AST, op: ast.AST
+    ) -> None:
+        """Record ``x <op>= value`` as ``x = x <op> value``."""
+        if not isinstance(target, ast.Name):
+            return
+        self._flow_graph[target.id] = (
+            self._flow_graph.get(target.id, set())
+            | self._extract_dependencies(value)
+            | {target.id}
+        )
+        if target.id not in self._flow_rhs:
+            self._flow_rhs[target.id] = value
+        else:
+            self._flow_rhs[target.id] = ast.BinOp(
+                left=ast.Name(id=target.id, ctx=ast.Load()),
+                op=op,
+                right=value,
+            )
     
     def _extract_dependencies(self, node: ast.AST) -> Set[str]:
         """Extract all variable names that this expression depends on."""
@@ -385,46 +512,96 @@ class TaintAnalyzer:
         
         return deps
     
-    def _is_sanitized(self, node: ast.AST) -> bool:
-        """Check if a value is sanitized (passed through a sanitizer)."""
+    def _sanitizer_relief(self, func_name: str) -> Set[str]:
+        """Sink classes a call to ``func_name`` cleans (exact match only).
+
+        Substring matching is deliberately NOT used: it misclassified
+        ``print_and_return`` as sanitised (contains ``int``) and treated
+        ``html.escape`` as a shell sanitiser.
+        """
+        if func_name in self.UNIVERSAL_SANITIZERS:
+            return set(self.ALL_TAINT_CATEGORIES)
+        if func_name in self.SHELL_SANITIZERS:
+            return {"shell"}
+        if func_name in self.HTML_SANITIZERS:
+            return {"html"}
+        if func_name in self.PATH_SANITIZERS:
+            return {"path"}
+        return set()
+
+    def _expr_taint_categories(self, node: ast.AST) -> Set[str]:
+        """Sink classes an expression is tainted for.
+
+        Any tainted variable, source call, or source reference anywhere
+        inside the expression taints the whole expression (covers BinOp,
+        JoinedStr/f-strings, %-formatting, str.format, join, ...). A call
+        to a sanitiser only relieves its own sink classes.
+        """
+        categories: Set[str] = set()
+        for child in ast.walk(node):
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+                categories |= self._taint_map.get(child.id, set())
+            elif isinstance(child, ast.Call):
+                if self._check_source_call(child) is not None:
+                    categories |= set(self.ALL_TAINT_CATEGORIES)
+            elif isinstance(child, (ast.Attribute, ast.Subscript)):
+                dotted = self._get_source_name(child)
+                if dotted is not None and dotted in self.SOURCES:
+                    categories |= set(self.ALL_TAINT_CATEGORIES)
         if isinstance(node, ast.Call):
-            func_name = self._get_func_name(node.func)
-            
-            # Direct sanitizer call
-            if func_name in self.SANITIZERS:
-                return True
-            
-            # Any sanitizer in the call chain
-            for sanitizer in self.SANITIZERS:
-                if sanitizer in func_name:
-                    return True
-        
-        return False
+            categories -= self._sanitizer_relief(
+                self._get_func_name(node.func)
+            )
+        return categories
+
+    def _find_contributing_source(self, node: ast.AST) -> Optional[TaintSource]:
+        """Find a source explaining taint flowing through an expression."""
+        for child in ast.walk(node):
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+                if child.id in self._taint_sources:
+                    return self._taint_sources[child.id]
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call):
+                source = self._check_source_call(child)
+                if source is not None:
+                    return TaintSource(
+                        name=source.name,
+                        variable=f"<direct:{source.name}>",
+                        line=getattr(node, "lineno", 0),
+                    )
+        return None
     
     def _propagate_taint(self) -> None:
         """Propagate taint through the flow graph (fixed-point iteration)."""
         changed = True
         iterations = 0
         max_iterations = 100  # Prevent infinite loops
-        
+
         while changed and iterations < max_iterations:
             changed = False
             iterations += 1
-            
-            for var, deps in self._flow_graph.items():
-                if self._taint_map.get(var) == TaintStatus.CLEAN:
-                    continue  # Already sanitized
-                
-                # If any dependency is tainted, this var is tainted
-                for dep in deps:
-                    if self._taint_map.get(dep) == TaintStatus.TAINTED:
-                        if self._taint_map.get(var) != TaintStatus.TAINTED:
-                            self._taint_map[var] = TaintStatus.TAINTED
-                            # Inherit the source
-                            if dep in self._taint_sources:
-                                self._taint_sources[var] = self._taint_sources[dep]
-                            changed = True
-                            break
+
+            for var, rhs in self._flow_rhs.items():
+                computed = self._expr_taint_categories(rhs)
+                if isinstance(rhs, ast.Call) and self._sanitizer_relief(
+                    self._get_func_name(rhs.func)
+                ):
+                    # A sanitiser call authoritatively defines the result:
+                    # tainted for every sink class except the ones it cleans.
+                    new_categories = computed
+                else:
+                    # Otherwise taint only ever accumulates (fail closed on
+                    # branches: a later reassignment never removes taint).
+                    new_categories = (
+                        self._taint_map.get(var, set()) | computed
+                    )
+                if new_categories != self._taint_map.get(var, set()):
+                    self._taint_map[var] = new_categories
+                    changed = True
+                if new_categories and var not in self._taint_sources:
+                    source = self._find_contributing_source(rhs)
+                    if source is not None:
+                        self._taint_sources[var] = source
     
     def _find_sinks(self, tree: ast.AST) -> List[TaintSink]:
         """Find all sink calls in the AST."""
@@ -446,31 +623,19 @@ class TaintAnalyzer:
                             break
                 
                 if is_sink:
-                    args = [self._node_to_str(arg) for arg in node.args]
-                    
-                    # Check for DIRECT source calls in arguments
-                    # e.g., eval(input()) - source directly inside sink
-                    has_direct_source = False
-                    for arg in node.args:
-                        if isinstance(arg, ast.Call):
-                            arg_func = self._get_func_name(arg.func)
-                            if arg_func in self.SOURCES or arg_func in self.SOURCE_FUNCTIONS:
-                                has_direct_source = True
-                                # Create a synthetic source for this
-                                direct_source = TaintSource(
-                                    name=arg_func,
-                                    variable=f"<direct:{arg_func}>",
-                                    line=node.lineno
-                                )
-                                self._taint_sources[f"<direct:{arg_func}>"] = direct_source
-                                self._taint_map[f"<direct:{arg_func}>"] = TaintStatus.TAINTED
-                                # Update args to include the synthetic tainted variable
-                                args = [f"<direct:{arg_func}>" if self._node_to_str(a) == f"{arg_func}(...)" else self._node_to_str(a) for a in node.args]
-                    
+                    # Keep the raw argument nodes (positional and keyword)
+                    # so the vulnerability check can look *inside*
+                    # expressions instead of only matching bare names.
+                    arg_nodes = list(node.args) + [
+                        kw.value for kw in node.keywords
+                    ]
+                    args = [self._node_to_str(arg) for arg in arg_nodes]
+
                     sinks.append(TaintSink(
                         name=func_name,
                         line=node.lineno,
-                        args=args
+                        args=args,
+                        arg_nodes=arg_nodes
                     ))
         
         return sinks
@@ -487,39 +652,125 @@ class TaintAnalyzer:
             return f"{self._get_func_name(node.func)}(...)"
         return "<expr>"
     
+    def _sink_category(self, func_name: str) -> str:
+        """Sink class of a sink call (falls back to "generic")."""
+        return self.SINK_CATEGORIES.get(func_name.split(".")[-1], "generic")
+
+    def _relieved_subtree_ids(
+        self, arg: ast.AST, category: str
+    ) -> Set[int]:
+        """Ids of nodes cleaned for ``category`` by an inline sanitiser."""
+        relieved: Set[int] = set()
+        for child in ast.walk(arg):
+            if (
+                isinstance(child, ast.Call)
+                and category
+                in self._sanitizer_relief(self._get_func_name(child.func))
+            ):
+                for sub in ast.walk(child):
+                    relieved.add(id(sub))
+        return relieved
+
+    def _tainted_names_in_arg(
+        self, arg: ast.AST, category: str, relieved: Set[int]
+    ) -> List[str]:
+        """Tainted variable names in an argument, honouring sanitisers."""
+        names = []
+        for child in ast.walk(arg):
+            if id(child) in relieved:
+                continue
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+                if category in self._taint_map.get(child.id, ()):
+                    names.append(child.id)
+        return names
+
     def _find_vulnerabilities(
-        self, 
-        sources: List[TaintSource], 
+        self,
+        sources: List[TaintSource],
         sinks: List[TaintSink]
     ) -> List[TaintVulnerability]:
         """Find vulnerabilities where tainted data reaches sinks."""
         vulnerabilities = []
-        
+        seen = set()
+
         for sink in sinks:
-            for arg in sink.args:
-                # Check if this argument is tainted
-                if arg in self._taint_map and self._taint_map[arg] == TaintStatus.TAINTED:
-                    # Find the original source
-                    source = self._taint_sources.get(arg)
-                    if source:
-                        severity, desc = self.SINKS.get(
-                            sink.name, 
-                            ("HIGH", f"Tainted data in {sink.name}")
+            category = self._sink_category(sink.name)
+            for arg in sink.arg_nodes:
+                relieved = self._relieved_subtree_ids(arg, category)
+                # Tainted variables anywhere inside the argument
+                # expression (BinOp, f-string, %, .format(), join, ...).
+                for name in self._tainted_names_in_arg(arg, category, relieved):
+                    source = self._taint_sources.get(name)
+                    if source is None:
+                        continue
+                    key = (sink.name, sink.line, source.variable)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    display = (
+                        name
+                        if isinstance(arg, ast.Name)
+                        else self._node_to_str(arg)
+                    )
+                    vulnerabilities.append(
+                        self._make_vulnerability(
+                            source, sink, name, display
                         )
-                        
-                        # Build flow path
-                        path = self._build_flow_path(source.variable, arg)
-                        
-                        vulnerabilities.append(TaintVulnerability(
-                            source=source,
-                            sink=sink,
-                            path=path,
-                            severity=severity,
-                            description=f"{desc}: tainted data from {source.name}() reaches {sink.name}()",
-                            recommendation=f"Sanitize '{arg}' before passing to {sink.name}()"
-                        ))
-        
+                    )
+                # Source calls nested anywhere inside the argument,
+                # e.g. os.system("ls " + input()).
+                for child in ast.walk(arg):
+                    if id(child) in relieved:
+                        continue
+                    if isinstance(child, ast.Call):
+                        nested = self._check_source_call(child)
+                        if nested is not None:
+                            direct = TaintSource(
+                                name=nested.name,
+                                variable=f"<direct:{nested.name}>",
+                                line=sink.line,
+                            )
+                            key = (sink.name, sink.line, direct.variable)
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            vulnerabilities.append(
+                                self._make_vulnerability(
+                                    direct,
+                                    sink,
+                                    self._node_to_str(arg),
+                                    self._node_to_str(arg),
+                                )
+                            )
+
         return vulnerabilities
+
+    def _make_vulnerability(
+        self,
+        source: TaintSource,
+        sink: TaintSink,
+        flow_target: str,
+        display: str,
+    ) -> TaintVulnerability:
+        """Build a vulnerability record for taint reaching a sink."""
+        severity, desc = self.SINKS.get(
+            sink.name,
+            ("HIGH", f"Tainted data in {sink.name}")
+        )
+        path = self._build_flow_path(source.variable, flow_target)
+        return TaintVulnerability(
+            source=source,
+            sink=sink,
+            path=path,
+            severity=severity,
+            description=(
+                f"{desc}: tainted data from {source.name}() "
+                f"reaches {sink.name}()"
+            ),
+            recommendation=(
+                f"Sanitize '{display}' before passing to {sink.name}()"
+            )
+        )
     
     def _build_flow_path(self, source_var: str, sink_var: str) -> List[str]:
         """Build the flow path from source variable to sink variable."""
@@ -547,9 +798,10 @@ class TaintAnalyzer:
         return [source_var, sink_var]
     
     def _get_all_tainted(self) -> Set[str]:
-        """Get all tainted variables."""
-        return {var for var, status in self._taint_map.items() 
-                if status == TaintStatus.TAINTED}
+        """Get all tainted variables (tainted for at least one sink class)."""
+        return {
+            var for var, categories in self._taint_map.items() if categories
+        }
     
     def analyze_with_context(
         self, 
