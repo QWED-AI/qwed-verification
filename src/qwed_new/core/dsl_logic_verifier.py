@@ -533,14 +533,15 @@ class DSLLogicVerifier:
     def verify_from_natural_language(
         self,
         query: str,
-        provider: str = "azure_openai"
+        provider: Optional[str] = None
     ) -> DSLVerificationResult:
         """
         Full pipeline: Natural Language → DSL → Z3.
         
         Args:
             query: Natural language logic query
-            provider: Which LLM provider to use
+            provider: Which LLM provider to use. None, the default, uses the
+                configured one (ACTIVE_PROVIDER).
             
         Returns:
             DSLVerificationResult
@@ -560,12 +561,15 @@ class DSLLogicVerifier:
             verification_result.dsl_code = dsl_code
         return verification_result
 
-    def translate_to_dsl(self, query: str, provider: str = "azure_openai"):
+    def translate_to_dsl(self, query: str, provider: Optional[str] = None):
         """Provider translation step (no z3). Returns
         (dsl_code, variables, resolved_provider, error_result); error_result is a
         DSLVerificationResult on failure and None on success. Safe to run in a
-        worker thread concurrently — it performs no z3 work."""
-        provider_label = self._provider_label(provider)
+        worker thread concurrently — it performs no z3 work. A provider of None
+        uses the configured one (ACTIVE_PROVIDER)."""
+        # None leaves the choice to the translator, which uses the configured
+        # provider. The default was Azure OpenAI whatever was configured (#574).
+        provider_label = None if provider is None else self._provider_label(provider)
         resolved_provider = provider_label
         translator = TranslationLayer()
         try:

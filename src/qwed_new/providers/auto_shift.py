@@ -18,8 +18,11 @@ logger = logging.getLogger(__name__)
 class AutoShiftProvider(LLMProvider):
     """
     A composite provider that implements the "Auto-Shift" failover logic.
-    Primary: Azure OpenAI (GPT-4)
-    Secondary: Anthropic (Claude 3.5 Sonnet)
+    Primary: Azure OpenAI, running AZURE_OPENAI_DEPLOYMENT (e.g. GPT-4)
+    Secondary: Anthropic, running ANTHROPIC_MODEL (e.g. Claude 3.5 Sonnet)
+
+    Each runs only its configured model. It runs only when ACTIVE_PROVIDER
+    (or the request) selects "auto".
     """
     
     def __init__(self):

@@ -47,11 +47,14 @@ class TranslationLayer:
             ProviderType.GEMINI.value: GeminiProvider,
             ProviderType.OLLAMA.value: OllamaProvider,
         }
-        # Default fallback
+        # The configured provider. A blank ACTIVE_PROVIDER is unset, which
+        # Settings reads as Ollama. A name QWED does not know is kept, so
+        # _get_provider refuses it and names ACTIVE_PROVIDER: it does not
+        # switch to "auto", a provider the user did not select (#574).
         configured_default = self._normalize_provider_key(
             getattr(settings.ACTIVE_PROVIDER, "value", settings.ACTIVE_PROVIDER)
         )
-        self.default_provider = configured_default if configured_default in self._provider_classes else ProviderType.AUTO.value
+        self.default_provider = configured_default or ProviderType.OLLAMA.value
         self.last_resolved_provider: str | None = None
 
     def _normalize_provider_key(self, provider_key: str | None = None) -> str | None:
@@ -76,6 +79,11 @@ class TranslationLayer:
             key = self.default_provider
         
         self.last_resolved_provider = key
+        if key not in self._provider_classes:
+            raise ValueError(
+                f"ACTIVE_PROVIDER is set to '{key}', which is not a provider QWED knows. "
+                f"Set it to one of: {', '.join(sorted(self._provider_classes))}."
+            )
 
         # Lazy instantiation: only create provider when first requested
         if key not in self._providers:

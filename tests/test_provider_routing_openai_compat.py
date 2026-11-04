@@ -115,7 +115,8 @@ def test_router_respects_default_provider_for_logic_queries(monkeypatch):
     router = Router()
 
     assert router.route("solve x > 5 and x < 3") == "openai_compat"
-    assert router.route("write a short story about moon") == "anthropic"
+    # The query's wording does not select a provider (#574).
+    assert router.route("write a short story about moon") == "openai_compat"
 
 
 def test_router_normalizes_preferred_provider_alias(monkeypatch):

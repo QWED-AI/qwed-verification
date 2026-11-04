@@ -139,10 +139,22 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     provider's own `complete()` call, which no built-in provider has, so it
     is unavailable for them. The verifier's results are advisory and
     UNVERIFIABLE, before and after.
+  - The server sends each request to the provider the request names, else
+    to the one `ACTIVE_PROVIDER` selects. A query with `write`, `compose`,
+    `essay`, `creative` or `story` in it went to Anthropic, whatever was
+    configured.
+  - An `ACTIVE_PROVIDER` that names no provider QWED knows stops the request
+    with an error naming `ACTIVE_PROVIDER`; before, it switched to `auto`
+    (Azure OpenAI, then Anthropic). A blank one counts as unset, as a blank
+    model does.
+  - `DSLLogicVerifier.verify_from_natural_language()` and `translate_to_dsl()`
+    with no `provider` use the configured one; they used Azure OpenAI.
   - A provider YAML's `default_model` is still used; one without it gets no
     model in its place.
-  - To upgrade, set the model variable for the provider you use. Settings
-    that already name a model work as before.
+  - To upgrade, set the model variable for the provider you use, and check
+    that `ACTIVE_PROVIDER` is one of `openai`, `openai_direct`,
+    `openai_compat`, `azure_openai`, `anthropic`, `claude_opus`, `gemini`,
+    `ollama` or `auto`. Settings that already name a model work as before.
 
 - **The CSV exports carry the stored verdict and admission, and take a
   period (#508).** `GET /admin/compliance/export/csv` was fixed to the last

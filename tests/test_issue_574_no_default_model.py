@@ -5,7 +5,8 @@ Runtime code used to fall back to a model of its own when none was set
 hardcoded Haiku 3 in the reasoning trace), and those names went stale as
 providers retired models. Now a provider with no model configured raises and
 names the variable to set, and any model ID the user sets reaches the
-provider's API unchanged.
+provider's API unchanged. Each request goes to the provider the user
+selected, whatever its wording.
 """
 
 import ast
@@ -19,8 +20,12 @@ import pytest
 from click.testing import CliRunner
 
 import qwed_sdk.qwed_local as qwed_local_module
-from qwed_new.config import ProviderType
+from qwed_new.config import ProviderType, settings
+from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
 from qwed_new.core.reasoning_verifier import _PROVIDER_NAMES, ReasoningVerifier
+from qwed_new.core.router import Router
+from qwed_new.core.schemas import LogicVerificationTask
+from qwed_new.core.translator import TranslationLayer
 from qwed_new.providers import gemini_provider
 from qwed_new.providers import registry as registry_module
 from qwed_new.providers.anthropic import AnthropicProvider
@@ -293,6 +298,64 @@ def test_reasoning_trace_comes_only_from_the_providers_own_call():
 
     assert trace == ["Could not generate reasoning trace"]
     assert client.mock_calls == []
+
+
+# --------------------------------------------------------------------------
+# Server routing: the provider the user selected, and only that one
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Write the sum of 2 and 3",
+        "Compose x so that x > 5 and x < 3",
+        "An essay question: what is 15% of 200?",
+        "A creative way to compute 3 * 4",
+        "A story problem: 7 - 2",
+    ],
+)
+def test_the_wording_of_a_query_never_selects_a_provider(monkeypatch, query):
+    monkeypatch.setattr(settings, "ACTIVE_PROVIDER", "openai")
+
+    assert Router().route(query) == "openai"
+
+
+def test_an_unknown_active_provider_is_refused_not_switched_to_auto(monkeypatch):
+    monkeypatch.setattr(settings, "ACTIVE_PROVIDER", "openia")
+    auto = MagicMock()
+    monkeypatch.setattr("qwed_new.core.translator.AutoShiftProvider", auto)
+
+    provider = Router().route("What is 2 + 2?")
+    with pytest.raises(ValueError, match="ACTIVE_PROVIDER is set to 'openia'"):
+        TranslationLayer().translate("What is 2 + 2?", provider=provider)
+
+    assert provider == "openia"
+    auto.assert_not_called()
+
+
+@pytest.mark.parametrize("configured", ["", "   "], ids=["empty", "blank"])
+def test_a_blank_active_provider_is_unset(monkeypatch, configured):
+    monkeypatch.setattr(settings, "ACTIVE_PROVIDER", configured)
+
+    assert Router().route("What is 2 + 2?") == ProviderType.OLLAMA.value
+    assert TranslationLayer().default_provider == ProviderType.OLLAMA.value
+
+
+def test_logic_verification_uses_the_configured_provider(monkeypatch):
+    class LogicOnly:
+        def translate_logic(self, _user_query):
+            return LogicVerificationTask(
+                variables={"x": "Int"}, constraints=["x > 5", "x < 3"], goal="SATISFIABILITY"
+            )
+
+    monkeypatch.setattr(settings, "ACTIVE_PROVIDER", "ollama")
+    monkeypatch.setattr("qwed_new.core.translator.OllamaProvider", LogicOnly)
+
+    result = DSLLogicVerifier().verify_from_natural_language("x is above 5 and below 3")
+
+    assert result.provider_used == "ollama"
+    assert result.status == "UNSAT"
 
 
 # --------------------------------------------------------------------------
