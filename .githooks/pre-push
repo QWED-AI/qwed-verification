@@ -1,0 +1,14 @@
+#!/bin/sh
+# Runs scripts/pre_push_check.py before each push.
+# Opt in once per clone:  git config core.hooksPath .githooks
+# Skip it for one push:   git push --no-verify
+
+# The first Python 3.10+ found. On Windows, "python3" can be the Microsoft
+# Store stub, which runs nothing, so each candidate is tried before use.
+for py in python3 python; do
+    if "$py" -c 'import sys; sys.exit(sys.version_info < (3, 10))' >/dev/null 2>&1; then
+        exec "$py" scripts/pre_push_check.py
+    fi
+done
+echo "pre-push: no Python 3.10 or newer found; push with --no-verify to skip this hook" >&2
+exit 1

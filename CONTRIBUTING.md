@@ -120,9 +120,14 @@ pytest tests/ -v
 # 5. Commit with conventional commits
 git commit -m "feat(engine): add capability X"
 
-# 6. Push and create PR
+# 6. Run the checks CI and the PR bots run (--full runs every test)
+python scripts/pre_push_check.py
+
+# 7. Push and create PR
 git push origin feat/your-feature
 ```
+
+`scripts/pre_push_check.py` checks what the branch changes: the 100,000 character file limit of the QWED Security scan, new ruff findings, string literals set as keys or passwords, and the changed tests, run as CI runs them, with no local `.env` or `~/.qwed` settings. To run it before every push, run `git config core.hooksPath .githooks` once in your clone.
 
 ### 4. Code Review Standards
 
