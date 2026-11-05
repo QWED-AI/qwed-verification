@@ -36,6 +36,7 @@ import math
 INVALID_TEMPERATURE_UNIT_ERROR = "Invalid temperature unit"
 INVALID_TOLERANCE_ERROR = "Invalid tolerance"
 TOLERANCE_POLICY_ERROR = "Tolerance exceeds deterministic verification bound"
+CLAIM_OUT_OF_RANGE_ERROR = "Claimed value is outside the range verify_math compares"
 VERIFY_LOGIC_RULE_DEPRECATED_ERROR = (
     "verify_logic_rule is deprecated and fail-closed; use LogicVerifier instead"
 )
@@ -60,6 +61,14 @@ def _is_finite_value(value: Any) -> bool:
     if isinstance(value, float):
         return math.isfinite(value)
     return getattr(value, "is_finite", None) is True
+
+
+def _fraction_text(value: Fraction) -> str:
+    """A bound as decimal text, for the result. Every bound is built from
+    decimals, so 50 significant digits show it exactly."""
+    with localcontext() as ctx:
+        ctx.prec = 50
+        return format((Decimal(value.numerator) / Decimal(value.denominator)).normalize(), "f")
 
 
 def _numeric_status(is_correct: bool, *values: Any) -> str:
@@ -787,14 +796,152 @@ class VerificationEngine:
 
         if not tolerance_decimal.is_finite() or tolerance_decimal < 0:
             raise ValueError(INVALID_TOLERANCE_ERROR)
+        if tolerance_decimal and (
+            abs(tolerance_decimal.adjusted()) > self._MAX_CLAIM_DIGITS
+            or len(tolerance_decimal.as_tuple().digits) > self._MAX_CLAIM_DIGITS
+        ):
+            # The comparison is exact (Fraction), so 1e-999999999 would build
+            # an integer of a billion digits; bounded as a claim is.
+            raise ValueError(INVALID_TOLERANCE_ERROR)
 
         return tolerance_decimal
 
     def _max_verify_math_tolerance(self, calculated_value: Decimal) -> Decimal:
-        """Bound tolerance as a deterministic function of computed magnitude."""
+        """Bound tolerance as a deterministic function of computed magnitude.
+
+        1% of the value, and at least the 0.01 floor, but never more than the
+        value itself: a tolerance wider than the value would accept 0 for any
+        small result (GHSA-8hp7).
+        """
         magnitude = abs(calculated_value)
         dynamic_cap = magnitude * self.MAX_VERIFY_MATH_TOLERANCE_RATIO
-        return max(self.MIN_VERIFY_MATH_TOLERANCE_CAP, dynamic_cap)
+        return max(min(self.MIN_VERIFY_MATH_TOLERANCE_CAP, magnitude), dynamic_cap)
+
+    # With no tolerance given, a claim must match the value to 9 significant
+    # digits, with an absolute floor at zero (the matrix rule), and never by
+    # more than the old 1e-6, so a large value is still compared to the unit
+    # (GHSA-j622). An absolute 1e-6 alone accepted any claim near 0 for a
+    # small value (GHSA-8hp7).
+    _DEFAULT_RELATIVE_TOLERANCE = _MATRIX_FLOAT_REL_TOLERANCE
+    _DEFAULT_ABSOLUTE_FLOOR = _MATRIX_FLOAT_ABS_TOLERANCE
+    _DEFAULT_ABSOLUTE_CAP = Decimal("1e-6")
+    # A claim with this many significant digits may be the value rounded to
+    # its last digit, as 6-decimal claims were accepted before.
+    _ROUNDED_CLAIM_MIN_DIGITS = 6
+    # Bound on a claim's digits and decimal exponent before exact arithmetic.
+    _MAX_CLAIM_DIGITS = 4000
+
+    def _claim_decimal(self, claim: Any) -> Decimal:
+        """The claim as a Decimal, its length bounded first: the pure-Python
+        decimal module (a CPython build without _decimal, #570) converts the
+        digits with int(), which refuses more than 4,300 of them."""
+        text = str(claim)
+        if len(text) > self._MAX_CLAIM_DIGITS + 32:
+            raise ValueError(CLAIM_OUT_OF_RANGE_ERROR)
+        return Decimal(text)
+
+    def _claim_difference(self, expr: Any, claim: Decimal) -> tuple:
+        """``(|value - claim|, |value|)`` without rounding either side.
+
+        An exact rational value is compared as a Fraction. Anything else is
+        evaluated at a precision that covers the value's integer digits and
+        every digit of the claim, so a wrong 7th decimal is not rounded away.
+        """
+        if getattr(expr, "is_Rational", False):
+            value = Fraction(int(expr.p), int(expr.q))
+            return abs(value - Fraction(claim)), abs(value)
+        try:
+            int_part = int(abs(expr))
+        except (TypeError, ValueError):
+            int_part = 0
+        int_digits = len(str(int_part)) if int_part else 1
+        precision = max(30, int_digits + 15, len(claim.as_tuple().digits) + 10)
+        with localcontext() as ctx:
+            ctx.prec = precision + 10
+            value = Decimal(str(expr.evalf(precision)))
+            return abs(value - claim), abs(value)
+
+    def _rounding_allowance(self, claim: Decimal) -> Fraction:
+        """Half a unit in the claim's last digit when the claim keeps at least
+        6 significant digits (1/3 = 0.333333, sqrt(2) = 1.414214), else 0. A
+        short claim such as 0 for 1e-9 says nothing about the digits it drops."""
+        sign_digits = claim.as_tuple()
+        significant = len(sign_digits.digits) if any(sign_digits.digits) else 0
+        if significant < self._ROUNDED_CLAIM_MIN_DIGITS or sign_digits.exponent < -30:
+            # Below 1e-30 the allowance is under the absolute floor anyway.
+            return Fraction(0)
+        if sign_digits.exponent >= 0:
+            # Half a unit or more: the 1e-6 cap applies instead.
+            return Fraction(self._DEFAULT_ABSOLUTE_CAP)
+        return Fraction(1, 2) * Fraction(10) ** sign_digits.exponent
+
+    def _claim_matches(self, expr: Any, claim: Decimal, tolerance: Optional[Decimal]) -> tuple:
+        """``(matches, |value - claim|, match)``: within ``tolerance``
+        (absolute, 0 is exact) when the caller gave one, else to the default
+        bound. A NaN or infinite claim never matches. ``match`` says how the
+        claim matched, so an exact match and a rounded one are told apart:
+
+        - ``{"kind": "exact"}`` when the claim is the value;
+        - ``{"kind": "caller_tolerance" | "default_bound" | "rounded_claim",
+          "tolerance_used": "<bound>"}`` otherwise, where ``rounded_claim``
+          means only the half-unit allowance for the claim's last digit
+          admitted it;
+        - ``None`` when it does not match.
+        """
+        if not claim.is_finite():
+            return False, Decimal("NaN"), None
+        if abs(claim.adjusted()) > self._MAX_CLAIM_DIGITS or len(claim.as_tuple().digits) > self._MAX_CLAIM_DIGITS:
+            # Exact arithmetic on such a claim would build an integer of that
+            # many digits; it is refused, not compared (fail closed).
+            raise ValueError(CLAIM_OUT_OF_RANGE_ERROR)
+        difference, magnitude = self._claim_difference(expr, claim)
+        exact_difference = Fraction(difference)
+        if tolerance is not None:
+            allowed = Fraction(tolerance)
+            kind = "caller_tolerance"
+        else:
+            without_rounding = min(
+                Fraction(self._DEFAULT_ABSOLUTE_CAP),
+                max(
+                    Fraction(self._DEFAULT_RELATIVE_TOLERANCE) * Fraction(magnitude),
+                    Fraction(self._DEFAULT_ABSOLUTE_FLOOR),
+                ),
+            )
+            allowed = min(Fraction(self._DEFAULT_ABSOLUTE_CAP), max(without_rounding, self._rounding_allowance(claim)))
+            kind = "default_bound" if exact_difference <= without_rounding else "rounded_claim"
+        if exact_difference > allowed:
+            return False, difference, None
+        if exact_difference == 0:
+            return True, difference, {"kind": "exact"}
+        return True, difference, {"kind": kind, "tolerance_used": _fraction_text(allowed)}
+
+    def _tolerance_over_cap(
+        self, expr: Any, calculated_value: Any, tolerance: Optional[Decimal], mode: str
+    ) -> Optional[Dict[str, Any]]:
+        """The BLOCKED result for a caller tolerance above the cap, else None.
+
+        The cap is taken from the displayed value, or from the exact value
+        when that displays as 0, so a value below 1e-6 does not get a 0 cap
+        nor the 0.01 floor.
+        """
+        if tolerance is None:
+            return None
+        base = Decimal(str(calculated_value))
+        if base == 0:
+            _, magnitude = self._claim_difference(expr, Decimal(0))
+            base = Decimal(magnitude.numerator) / Decimal(magnitude.denominator) if isinstance(magnitude, Fraction) else magnitude
+        max_tolerance = self._max_verify_math_tolerance(base)
+        if tolerance <= max_tolerance:
+            return None
+        return {
+            "is_correct": False,
+            "error": TOLERANCE_POLICY_ERROR,
+            "requested_tolerance": str(tolerance),
+            "max_allowed_tolerance": str(max_tolerance),
+            "calculated_value": str(calculated_value),
+            "precision_mode": mode,
+            "status": "BLOCKED",
+        }
 
     # Decimal places retained when comparing a computed value with a claim.
     _VERIFY_MATH_QUANTUM = Decimal("0.000001")
@@ -839,86 +986,77 @@ class VerificationEngine:
         self, 
         expression: str, 
         expected_value: float | Decimal, 
-        tolerance: float = 1e-6,
+        tolerance: Optional[float | Decimal] = None,
         use_decimal: bool = True
     ) -> Dict[str, Any]:
         """
         Verifies if a mathematical expression evaluates to the expected value.
-        
+
         Args:
             expression: The math string (e.g., "2 * (5 + 10)")
             expected_value: The value the LLM claims it is (e.g., 30 or Decimal("30"))
-            tolerance: Floating point tolerance
+            tolerance: Absolute tolerance; 0 compares exactly. When omitted,
+                the claim must match to 9 significant digits, or be the value
+                rounded to its last digit when it has at least 6, and in either
+                case lie within 1e-6.
             use_decimal: If True, use Decimal for exact arithmetic (financial)
-            
+
         Returns:
             Dict containing is_correct, calculated_value, and status.
         """
-        try:
-            tolerance_decimal = self._parse_tolerance(tolerance)
-        except ValueError as e:
-            return {
-                "is_correct": False,
-                "error": str(e),
-                "status": "BLOCKED"
-            }
+        tolerance_decimal = None
+        if tolerance is not None:
+            try:
+                tolerance_decimal = self._parse_tolerance(tolerance)
+            except ValueError:
+                # _parse_tolerance raises only INVALID_TOLERANCE_ERROR.
+                return {
+                    "is_correct": False,
+                    "error": INVALID_TOLERANCE_ERROR,
+                    "status": "BLOCKED"
+                }
 
         try:
             # 1. Parse the expression safely
             expr = safe_parse_expr(expression)
-            
+
             # 2. Evaluate deterministically
             if use_decimal:
                 calculated_value = self._calc_decimal(expr)
-                expected_decimal = Decimal(str(expected_value))
-                max_tolerance = self._max_verify_math_tolerance(calculated_value)
+                expected_decimal = self._claim_decimal(expected_value)
+                blocked = self._tolerance_over_cap(expr, calculated_value, tolerance_decimal, "decimal")
+                if blocked:
+                    return blocked
 
-                if tolerance_decimal > max_tolerance:
-                    return {
-                        "is_correct": False,
-                        "error": TOLERANCE_POLICY_ERROR,
-                        "requested_tolerance": str(tolerance_decimal),
-                        "max_allowed_tolerance": str(max_tolerance),
-                        "calculated_value": str(calculated_value),
-                        "precision_mode": "decimal",
-                        "status": "BLOCKED",
-                    }
-                
-                diff = abs(calculated_value - expected_decimal)
-                is_correct = diff <= tolerance_decimal
-                
+                # The comparison uses the unrounded value (GHSA-8hp7);
+                # calculated_value is the 6-decimal display form.
+                is_correct, diff, match = self._claim_matches(expr, expected_decimal, tolerance_decimal)
+
                 return {
                     "is_correct": is_correct,
                     "calculated_value": float(calculated_value),
                     "calculated_precise": str(calculated_value),
                     "claimed_value": expected_value,
                     "diff": float(diff),
+                    "match": match,
                     "precision_mode": "decimal",
                     "status": _numeric_status(is_correct, calculated_value, expected_decimal)
                 }
 
             calculated_value = float(expr.evalf())
-            max_tolerance = self._max_verify_math_tolerance(Decimal(str(calculated_value)))
+            blocked = self._tolerance_over_cap(expr, calculated_value, tolerance_decimal, "float")
+            if blocked:
+                return blocked
 
-            if tolerance_decimal > max_tolerance:
-                return {
-                    "is_correct": False,
-                    "error": TOLERANCE_POLICY_ERROR,
-                    "requested_tolerance": str(tolerance_decimal),
-                    "max_allowed_tolerance": str(max_tolerance),
-                    "calculated_value": str(calculated_value),
-                    "precision_mode": "float",
-                    "status": "BLOCKED",
-                }
+            is_correct, exact_diff, match = self._claim_matches(expr, self._claim_decimal(expected_value), tolerance_decimal)
+            diff = float(exact_diff)
 
-            diff = abs(calculated_value - expected_value)
-            is_correct = diff <= float(tolerance_decimal)
-            
             return {
                 "is_correct": is_correct,
                 "calculated_value": calculated_value,
                 "claimed_value": expected_value,
                 "diff": diff,
+                "match": match,
                 "precision_mode": "float",
                 "status": _numeric_status(is_correct, calculated_value, expected_value)
             }
