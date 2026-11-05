@@ -56,7 +56,9 @@ from sympy.parsing.sympy_parser import (
     convert_xor,
     parse_expr,
     standard_transformations,
-    implicit_multiplication_application,
+    function_exponentiation,
+    implicit_application,
+    implicit_multiplication,
 )
 
 __all__ = [
@@ -852,7 +854,9 @@ def _build_safe_local_dict(
         "a": Symbol("a"), "b": Symbol("b"), "c": Symbol("c"),
         "d": Symbol("d"), "f": Symbol("f"), "g": Symbol("g"),
         "h": Symbol("h"), "k": Symbol("k"), "m": Symbol("m"),
-        "n": Symbol("n", integer=True, positive=True),
+        # No assumptions: a positive-integer n made Abs(n) = n and
+        # sqrt(n**2) = n identities without saying so (GHSA-5h3v).
+        "n": Symbol("n"),
         "p": Symbol("p"), "q": Symbol("q"), "r": Symbol("r"),
         "s": Symbol("s"), "t": Symbol("t"), "u": Symbol("u"),
         "v": Symbol("v"), "w": Symbol("w"),
@@ -942,6 +946,34 @@ def _leibniz_differential(expression: str, names: Dict[str, Any]) -> Optional[st
     return None
 
 
+# A name in call position: before "(", before an operand with only
+# whitespace between (implicit application, "sin x"), or before a power and
+# "(" (function exponentiation, "sinc^2(0)").
+_CALL_HEAD = re.compile(
+    r"(?<![A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*)"
+    r"(?:\s*\(|\s+(?=[A-Za-z0-9_.(])|\s*(?:\*\*|\^)\s*[-+]?[A-Za-z0-9_.]+\s*\()"
+)
+# A lone name in parentheses applied to "(": "(sinc)(0)".
+_PARENTHESISED_CALL_HEAD = re.compile(r"\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\(")
+
+
+def _check_call_heads(expression: str, local_dict: Dict[str, Any]) -> None:
+    """Refuse a name in call position that is not a function the parser
+    binds (GHSA-5h3v). ``floor(7/2)`` or ``sinc(0)`` would otherwise be
+    split into letters, and ``zeta(0)`` read as the symbol zeta times 0, so a
+    claim about a function nobody evaluates could be VERIFIED. A one-letter
+    variable there is still a product: ``x(x + 1)``, ``2 x y``.
+    """
+    for match in (*_CALL_HEAD.finditer(expression), *_PARENTHESISED_CALL_HEAD.finditer(expression)):
+        name = match.group(1)
+        bound = local_dict.get(name)
+        if bound is not None and not isinstance(bound, Symbol):
+            continue
+        if len(name) == 1:
+            continue
+        raise SafeParserError(f"Unknown function: {name!r}")
+
+
 def safe_parse_expr(
     expression: str,
     *,
@@ -982,10 +1014,16 @@ def safe_parse_expr(
     if leibniz:
         raise DerivativeNotationError(f"{DERIVATIVE_NOTATION_MESSAGE}: {leibniz!r}")
     _check_ast_safety(stripped)
+    _check_call_heads(stripped, local_dict)
     if transformations is None:
+        # implicit_multiplication_application without split_symbols, which
+        # split an unknown name into a product of letters (sinc(0) read as
+        # s*i*n*c*0, GHSA-5h3v).
         transformations = standard_transformations + (
             convert_xor,
-            implicit_multiplication_application,
+            implicit_multiplication,
+            implicit_application,
+            function_exponentiation,
         )
     global_dict = dict(_SAFE_GLOBAL_DICT_TEMPLATE)
     try:
@@ -1029,9 +1067,9 @@ def validate_variable_name(variable: str) -> str:
 def get_safe_symbol(name: str) -> Symbol:
     """Return a Symbol consistent with safe_parse_expr's namespace.
 
-    Ensures calculus operation variables match any special assumptions
-    (e.g. Symbol(\"n\", integer=True, positive=True)) applied during parsing,
-    preventing symbol mismatch in diff/integrate/limit.
+    Ensures calculus operation variables are the same Symbol objects, with
+    the same assumptions, as the ones safe_parse_expr binds, preventing a
+    symbol mismatch in diff/integrate/limit.
     """
     name = validate_variable_name(name)
     safe = _build_safe_local_dict()

@@ -22,5 +22,9 @@
   {"id": "math-103", "check": "math.verify_identity", "claim": "sin(x)^2 + cos(x)^2 equals 1", "input": {"lhs": "sin(x)**2+cos(x)**2", "rhs": "1"}, "holds": true},
   {"id": "math-104", "check": "math.verify_identity", "claim": "sqrt(x^2) equals x for every x", "input": {"lhs": "sqrt(x**2)", "rhs": "x"}, "holds": false},
   {"id": "math-105", "check": "math.verify_identity", "claim": "log(x * y) equals log(x) + log(y) for every x and y", "input": {"lhs": "log(x*y)", "rhs": "log(x)+log(y)"}, "holds": false},
-  {"id": "math-106", "check": "math.verify_identity", "claim": "(a - b)(a + b) equals a^2 - b^2", "input": {"lhs": "(a-b)*(a+b)", "rhs": "a**2-b**2"}, "holds": true}
+  {"id": "math-106", "check": "math.verify_identity", "claim": "(a - b)(a + b) equals a^2 - b^2", "input": {"lhs": "(a-b)*(a+b)", "rhs": "a**2-b**2"}, "holds": true},
+  {"id": "math-112", "check": "math.verify_identity", "claim": "sinc(0) equals 0", "input": {"lhs": "sinc(0)", "rhs": "0"}, "holds": false, "source": "GHSA-5h3v-3463-78hf"},
+  {"id": "math-113", "check": "math.verify_identity", "claim": "zeta(0) equals 0", "input": {"lhs": "zeta(0)", "rhs": "0"}, "holds": false, "source": "GHSA-5h3v-3463-78hf"},
+  {"id": "math-114", "check": "math.verify_identity", "claim": "Abs(n) equals n for every n", "input": {"lhs": "Abs(n)", "rhs": "n"}, "holds": false, "source": "GHSA-5h3v-3463-78hf"},
+  {"id": "math-115", "check": "math.verify_identity", "claim": "sqrt(n**2) equals n for every n", "input": {"lhs": "sqrt(n**2)", "rhs": "n"}, "holds": false, "source": "GHSA-5h3v-3463-78hf"}
 ]

@@ -162,15 +162,14 @@ def test_api_true_identity_is_verified_admit(client, isolated_audit_chain):
     assert logged.is_verified is True
 
 
-def test_api_undecided_identity_stays_unverifiable(client, isolated_audit_chain):
-    # True for every positive integer n (the parser domain for n), but
-    # simplify cannot show it and the witnesses inside that domain are all
-    # zeros: undecided, so UNVERIFIABLE, never VERIFIED or a false disproof.
+def test_api_identity_true_only_for_integer_n_is_not_admitted(client, isolated_audit_chain):
+    # True for every positive integer n, but the parser no longer gives n
+    # that domain (GHSA-5h3v): over the reals n = 1/2 is a counterexample.
     expression = "Abs(sin(pi*n/2)) = sin(pi*n/2)**2"
     data = client.post("/verify/math", json={"expression": expression}).json()
 
-    assert data["status"] == "UNVERIFIABLE"
-    assert data["proof_ref"] is None
+    assert data["status"] == "VERIFIED"
+    assert data["is_valid"] is False
     assert data["admission"] == "BLOCKED"
 
 
@@ -296,8 +295,11 @@ def _diff(lhs, rhs):
 
 
 def test_witness_outside_symbol_domain_is_not_a_counterexample():
-    # n is a positive integer; n = 1/2, 0, -1 are outside its domain.
-    assert symbolic_difference_status(_diff("Abs(sin(pi*n/2))", "sin(pi*n/2)**2")) == INCONCLUSIVE_STATUS
+    # k is a positive integer; k = 1/2, 0, -1 are outside its domain. The
+    # parser gives no symbol a domain (GHSA-5h3v), so k is built directly.
+    k = sympy.Symbol("k", integer=True, positive=True)
+    difference = sympy.simplify(sympy.Abs(sympy.sin(sympy.pi * k / 2)) - sympy.sin(sympy.pi * k / 2) ** 2)
+    assert symbolic_difference_status(difference) == INCONCLUSIVE_STATUS
 
 
 def test_witness_inside_symbol_domain_still_disproves():
@@ -1014,7 +1016,7 @@ def test_irr_solver_step_halving_is_bounded(monkeypatch):
         ("1/x + 1/x", "2/x", "VERIFIED"),
         ("sin(x)**2 + cos(x)**2", "1", "VERIFIED"),
         ("x^2 - 9", "(x-3)*(x+3)", "VERIFIED"),
-        ("n/n", "1", "VERIFIED"),
+        ("n/n", "1", INCONCLUSIVE_STATUS),
         ("tan(x)*cos(x)", "sin(x)", INCONCLUSIVE_STATUS),
         ("sec(x)*cos(x)", "1", INCONCLUSIVE_STATUS),
     ],
@@ -1048,8 +1050,8 @@ def test_verify_identity_keeps_non_identities_not_equivalent():
         ("x^2 - 9", "(x-3)*(x+3)", True),
         ("x^2 + y", "y + x^2", True),
         ("1 + x^-1", "(x+1)/x", True),
-        # n is a positive integer: a denominator that is never zero.
-        ("n/n", "1", True),
+        # n has no domain (GHSA-5h3v): n/n is undefined at n = 0, like x/x.
+        ("n/n", "1", False),
         ("1/(n*(x-1))", "1/(n*x-n)", True),
         ("n*x/(n*x)", "1", False),
         # Fullwidth operators: the parser applies NFKC, so the scan must too.
@@ -1095,7 +1097,7 @@ def test_identity_domains_match(lhs, rhs, expected):
     assert identity_domains_match(lhs, rhs) is expected
 
 
-@pytest.mark.parametrize("expression", ["x/x = 1", "(x**2-1)/(x-1) = x+1"])
+@pytest.mark.parametrize("expression", ["x/x = 1", "(x**2-1)/(x-1) = x+1", "n/n = 1"])
 def test_api_identity_with_removable_singularity_is_unverifiable(client, expression, isolated_audit_chain):
     data = client.post("/verify/math", json={"expression": expression}).json()
 
@@ -1112,7 +1114,7 @@ def test_api_identity_with_matching_singularities_is_verified(client, isolated_a
 
 
 
-@pytest.mark.parametrize("expression", ["x^2 - 9 = (x-3)*(x+3)", "x^2 - 2*x = x*(x-2)", "n/n = 1"])
+@pytest.mark.parametrize("expression", ["x^2 - 9 = (x-3)*(x+3)", "x^2 - 2*x = x*(x-2)"])
 def test_api_true_identities_with_caret_or_nonzero_denominator_are_verified(client, expression, isolated_audit_chain):
     data = client.post("/verify/math", json={"expression": expression}).json()
 
