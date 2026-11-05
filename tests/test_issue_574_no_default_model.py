@@ -22,6 +22,7 @@ from click.testing import CliRunner
 
 import qwed_sdk.qwed_local as qwed_local_module
 from qwed_new.config import ProviderType, settings
+from qwed_new.core.diagnostics import DiagnosticStatus
 from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
 from qwed_new.core.reasoning_verifier import _PROVIDER_NAMES, ReasoningVerifier
 from qwed_new.core.router import Router
@@ -421,6 +422,64 @@ def test_logic_verification_names_the_setting_to_fix(monkeypatch, caplog, active
     assert result.status == "ERROR"
     assert setting_to_fix in result.error
     assert setting_to_fix in caplog.text
+
+
+@pytest.mark.parametrize(
+    "active_provider, setting_to_fix",
+    [("openia", "ACTIVE_PROVIDER is set to 'openia'"), ("ollama", "Set OLLAMA_MODEL")],
+    ids=["unknown-provider", "no-model"],
+)
+def test_stats_verification_names_the_setting_to_fix(monkeypatch, caplog, active_provider, setting_to_fix):
+    import pandas as pd
+
+    from qwed_new.core.stats_verifier import StatsVerifier
+
+    monkeypatch.setattr(settings, "ACTIVE_PROVIDER", active_provider)
+
+    with caplog.at_level(logging.WARNING, logger="qwed_new.core.stats_verifier"):
+        result = StatsVerifier().verify_stats("What is the mean of a?", pd.DataFrame({"a": [1, 2, 3]}))
+
+    assert result.status == DiagnosticStatus.BLOCKED
+    assert setting_to_fix in result.agent_message
+    assert setting_to_fix in caplog.text
+
+
+# A claim the context barely touches, so the advisory LLM fallback runs.
+LOW_CONFIDENCE_FACT = ("Random unrelated claim", "Completely different topic here")
+
+
+@pytest.mark.parametrize(
+    "provider, setting_to_fix",
+    [("ollmaa", "The request names a provider QWED does not know"), ("ollama", "Set OLLAMA_MODEL")],
+    ids=["unknown-provider", "no-model"],
+)
+def test_fact_advisory_names_the_setting_to_fix(caplog, provider, setting_to_fix):
+    from qwed_new.core.fact_verifier import FactVerifier
+
+    with caplog.at_level(logging.WARNING, logger="qwed_new.core.fact_verifier"):
+        result = FactVerifier().verify_fact(*LOW_CONFIDENCE_FACT, provider=provider)
+
+    # The provider the request names cannot run: no deterministic result
+    # stands in for the advisory it asked for.
+    assert result.status == DiagnosticStatus.BLOCKED
+    assert result.constraint_id == "fact_verifier.provider_config_error"
+    assert setting_to_fix in result.agent_message
+    assert setting_to_fix in caplog.text
+
+
+def test_a_failing_fact_advisory_still_leaves_the_deterministic_result():
+    from qwed_new.core.fact_verifier import FactVerifier
+
+    def fails(*_args, **_kwargs):
+        raise RuntimeError("provider unreachable")
+
+    verifier = FactVerifier()
+    verifier._translator = SimpleNamespace(verify_fact=fails)
+
+    result = verifier.verify_fact(*LOW_CONFIDENCE_FACT, provider="ollama")
+
+    assert result.status != DiagnosticStatus.BLOCKED
+    assert "deterministic_verdict" in result.developer_fields
 
 
 # --------------------------------------------------------------------------

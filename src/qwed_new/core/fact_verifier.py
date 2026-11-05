@@ -19,6 +19,8 @@ import hashlib
 import logging
 from collections import Counter
 
+from qwed_new.providers.base import ProviderConfigError
+
 from qwed_new.core.diagnostics import (
     AdvisoryCheck,
     DiagnosticResult,
@@ -199,7 +201,19 @@ class FactVerifier:
         llm_advisory = None
         if confidence < min_confidence and self.use_llm_fallback and provider:
             methods_used.append({"name": "llm_fallback", "advisory_only": True})
-            llm_result = self._llm_fallback(claim, context, provider)
+            try:
+                llm_result = self._llm_fallback(claim, context, provider)
+            except ProviderConfigError as e:
+                # The provider the request names cannot run (an unknown name,
+                # or no model): the setting to fix, not a provider failure, so
+                # the request is refused rather than answered without the
+                # advisory it asked for. Its message carries nothing from a
+                # provider.
+                logger.warning("Fact advisory stopped: %s", e)
+                return DiagnosticResult.blocked(
+                    str(e),
+                    {"constraint_id": "fact_verifier.provider_config_error"},
+                )
             if llm_result:
                 llm_advisory = AdvisoryCheck(
                     name="llm_fallback",
@@ -606,6 +620,9 @@ class FactVerifier:
     ) -> Optional[Dict]:
         """
         Use LLM as last resort when deterministic methods are insufficient.
+
+        A provider failure gives no advisory (None). ProviderConfigError is
+        raised: the provider cannot run as selected, which the caller must see.
         """
         try:
             if self._translator is None:
@@ -613,6 +630,8 @@ class FactVerifier:
                 self._translator = TranslationLayer()
             
             return self._translator.verify_fact(claim, context, provider=provider)
+        except ProviderConfigError:
+            raise
         except Exception:
             return None
     

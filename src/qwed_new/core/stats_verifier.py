@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 import ast
 
+from qwed_new.providers.base import ProviderConfigError
+
 from .diagnostics import AdvisoryCheck, DiagnosticResult, DiagnosticStatus, enforce_trust_decision
 from .json_bounding import bound_json_value
 from .secure_code_executor import _DANGEROUS_MODULE_ROOTS, _DANGEROUS_OS_CALLS
@@ -587,6 +589,21 @@ class StatsVerifier:
         # 1. Generate code from query
         try:
             code = self.translator.translate_stats(query, columns, provider=provider)
+        except ProviderConfigError as e:
+            # The setting to fix (no model, or an unknown ACTIVE_PROVIDER), not
+            # a provider failure: it reaches the operator and the caller, as on
+            # the logic path. Its message carries nothing from a provider.
+            logger.warning("Stats code generation stopped: %s", e)
+            return DiagnosticResult.blocked(
+                agent_message=str(e),
+                developer_fields={
+                    "constraint_id": CONSTRAINT_VALIDATION_ERROR,
+                    "is_valid": False,
+                    "is_error": True,
+                    "columns": columns,
+                    "execution_time_ms": _elapsed(),
+                },
+            )
         except Exception as e:
             logger.error(
                 "Stats code generation failed (exception_type=%s)",
