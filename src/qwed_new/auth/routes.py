@@ -2,6 +2,7 @@
 Authentication routes for QWED Enterprise Portal.
 """
 import asyncio
+import logging
 from fastapi import APIRouter, HTTPException, Depends, Header, Request
 from typing import Optional, List
 from datetime import datetime, timezone
@@ -25,6 +26,7 @@ from .roles import (
 )
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+logger = logging.getLogger(__name__)
 
 # bcrypt cost-12 verify burns ~270 ms on an unknown email and returns in the
 # same time for a known one, equalizing the email-enumeration timing oracle
@@ -127,24 +129,21 @@ async def signup(
 
     # Create user (first user is owner)
     try:
-        print(f"DEBUG: Creating user with email={request.email}, org_id={org.id}")
         user = User(
             email=request.email,
             password_hash=password_hash,
             organization_id=org.id,
             role="owner"
         )
-        print(f"DEBUG: User object created: {user}")
         session.add(user)
         session.commit()
         session.refresh(org)
         session.refresh(user)
-        print("DEBUG: User committed successfully")
     except Exception as e:
         session.rollback()
-        print(f"DEBUG: Error creating user: {e}")
-        import traceback
-        traceback.print_exc()
+        # The type only: a database error's message and parameters can hold
+        # the email and the password hash.
+        logger.error("User creation failed during signup: %s", type(e).__name__)
         raise HTTPException(status_code=500, detail="User creation failed")
     
     # Generate JWT token

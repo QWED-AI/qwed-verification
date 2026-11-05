@@ -157,6 +157,48 @@ class TestSignup:
         # Both rows were staged then rolled back — nothing persisted
         assert session.commits == 0
 
+    def test_signup_writes_neither_the_hash_nor_the_email_to_output(self, client, capsys, caplog):
+        # GHSA-mr5j-gm4f-6c27: debug prints wrote the User object, password
+        # hash included, and the email to standard output on every signup.
+        password_hash = "$2b$12$" + "outputcheck" * 4
+        _with_session(FakeSession([None, None]))
+        with caplog.at_level("DEBUG"), patch("qwed_new.auth.routes.hash_password") as fake_hash, patch(
+            "qwed_new.auth.routes.create_access_token", return_value="tok"
+        ):
+            fake_hash.return_value = password_hash
+            response = client.post("/auth/signup", json={
+                "email": "output-check@example.com",
+                "password": "correct horse battery staple",
+                "organization_name": "Acme",
+            })
+        assert response.status_code == 200
+        written = capsys.readouterr()
+        for text in (written.out, written.err, caplog.text):
+            assert password_hash not in text
+            assert "output-check@example.com" not in text
+
+    def test_signup_failure_logs_the_error_type_only(self, client, capsys, caplog):
+        # A database error's message can carry the row's parameters; only its
+        # type is logged, and nothing goes to standard output or error.
+        password_hash = "$2b$12$" + "failurecheck" * 4
+        error = RuntimeError(f"insert failed for failure-check@example.com {password_hash}")
+        _with_session(FakeSession([None, None], commit_error=error))
+        with caplog.at_level("DEBUG"), patch("qwed_new.auth.routes.hash_password") as fake_hash:
+            fake_hash.return_value = password_hash
+            response = client.post("/auth/signup", json={
+                "email": "failure-check@example.com",
+                "password": "correct horse battery staple",
+                "organization_name": "Acme",
+            })
+        assert response.status_code == 500
+        written = capsys.readouterr()
+        assert written.out == ""
+        assert password_hash not in written.err
+        assert "failure-check@example.com" not in written.err
+        assert "RuntimeError" in caplog.text
+        assert password_hash not in caplog.text
+        assert "failure-check@example.com" not in caplog.text
+
     def test_signup_rate_limited_per_ip(self, client):
         # Flood the bucket for TestClient's fixed source IP ("testclient"),
         # against the limiter's frozen clock (CodeRabbit on PR #345).
