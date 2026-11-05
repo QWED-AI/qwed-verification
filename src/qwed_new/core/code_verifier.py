@@ -1584,6 +1584,30 @@ class CodeVerifier:
     # SQL Checks
     # =========================================================================
     
+    @staticmethod
+    def _check_sql_tautologies(code: str) -> List[SecurityIssue]:
+        """SQLVerifier's value-based tautology findings for ``code``. SQL that
+        sqlglot cannot parse is left to the pattern checks around this."""
+        from sqlglot.errors import ParseError
+
+        from .sql_verifier import UNEVALUATED_PREDICATE, SQLVerifier, _parse_query
+
+        try:
+            parsed = _parse_query(code, "postgres")
+        except ParseError:
+            return []
+        tautology_types = {"injection_tautology", "injection_or_true", UNEVALUATED_PREDICATE}
+        return [
+            SecurityIssue(
+                severity="CRITICAL",
+                issue_type="sql_injection_tautology",
+                pattern=issue.issue_type,
+                description=issue.description,
+            )
+            for issue in SQLVerifier()._check_injection_patterns(parsed, code, "postgres")
+            if issue.severity == "CRITICAL" and issue.issue_type in tautology_types
+        ]
+
     def _check_sql(self, code: str) -> List[SecurityIssue]:
         """Check SQL for common injection patterns."""
         issues = []
@@ -1596,6 +1620,11 @@ class CodeVerifier:
                 pattern="1=1 or equivalent",
                 description="Tautology detected - likely injection attempt"
             ))
+
+        # Always-true filters found by value, as /verify/sql finds them
+        # (IN, IS, LIKE, BETWEEN, col = col, ...), not only the shapes above
+        # (GHSA-jvhg).
+        issues.extend(self._check_sql_tautologies(code))
         
         # Union injection
         if re.search(r"\bUNION\s+(ALL\s+)?SELECT\b", code, re.IGNORECASE):
