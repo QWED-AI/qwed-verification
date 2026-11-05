@@ -8,7 +8,7 @@ fails over to the secondary provider if the primary one fails.
 import logging
 from typing import Dict, Any, List
 from qwed_new.core.schemas import MathVerificationTask, LogicVerificationTask
-from qwed_new.providers.base import LLMProvider
+from qwed_new.providers.base import LLMProvider, ProviderConfigError
 from qwed_new.providers.azure_openai import AzureOpenAIProvider
 from qwed_new.providers.anthropic import AnthropicProvider
 
@@ -26,12 +26,14 @@ class AutoShiftProvider(LLMProvider):
     """
     
     def __init__(self):
+        errors = []
         try:
             self.primary = AzureOpenAIProvider()
             logger.info("Primary Provider (Azure OpenAI) initialized.")
         except Exception as e:
             logger.warning(f"Failed to initialize Primary Provider: {e}")
             self.primary = None
+            errors.append(e)
             
         try:
             self.secondary = AnthropicProvider()
@@ -39,8 +41,15 @@ class AutoShiftProvider(LLMProvider):
         except Exception as e:
             logger.warning(f"Failed to initialize Secondary Provider: {e}")
             self.secondary = None
+            errors.append(e)
             
         if not self.primary and not self.secondary:
+            # Neither side has a model: name both settings, as a single
+            # provider does. Their messages carry nothing from a provider.
+            if all(isinstance(e, ProviderConfigError) for e in errors):
+                raise ProviderConfigError(
+                    "Auto-shift can run neither of its providers. " + " ".join(map(str, errors))
+                )
             raise RuntimeError("CRITICAL: Both Primary and Secondary providers failed to initialize.")
 
     def _execute_with_fallback(self, method_name: str, *args, **kwargs):

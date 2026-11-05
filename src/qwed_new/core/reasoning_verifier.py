@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 import time
 
 from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck
+from qwed_new.providers.base import ProviderConfigError
 
 from .verification_context import VerificationContextDocument
 
@@ -152,6 +153,8 @@ class ReasoningVerifier:
 
         # Lazy-loaded providers
         self._providers: Dict[str, Any] = {}
+        # The first provider that could not run as configured (no model, say).
+        self._provider_config_error: Optional[ProviderConfigError] = None
         self._provider_loaders: Dict[str, Callable] = {
             name: functools.partial(self._load_provider, name) for name in _PROVIDER_NAMES
         }
@@ -164,8 +167,9 @@ class ReasoningVerifier:
     def _load_provider(name: str):
         """Build the named provider, which runs the model configured for it.
 
-        A provider that is not installed or not configured (no model set, for
-        one) is no provider: the error is logged and None returned.
+        A provider that cannot be built (not installed, say) is no provider:
+        the error is logged and None returned. ProviderConfigError (no model
+        set, say) is raised, so the result can name the setting to fix.
         """
         try:
             if name == "anthropic":
@@ -187,6 +191,8 @@ class ReasoningVerifier:
             else:
                 return None
             return provider_cls()
+        except ProviderConfigError:
+            raise
         except Exception as exc:
             logger.warning("Reasoning provider %r is unavailable: %s", name, exc)
             return None
@@ -199,7 +205,13 @@ class ReasoningVerifier:
         if name not in self._providers:
             loader = self._provider_loaders.get(name)
             if loader:
-                self._providers[name] = loader()
+                try:
+                    self._providers[name] = loader()
+                except ProviderConfigError as exc:
+                    logger.warning("Reasoning provider %r is unavailable: %s", name, exc)
+                    if self._provider_config_error is None:
+                        self._provider_config_error = exc
+                    self._providers[name] = None
         return self._providers.get(name)
     
     @property
@@ -236,7 +248,8 @@ class ReasoningVerifier:
 
         Returns:
             DiagnosticResult — VERIFIED only with provider-based proof;
-            UNVERIFIABLE when no provider path is available.
+            UNVERIFIABLE when no provider path is available; BLOCKED, naming
+            the setting to fix, when a provider cannot run as configured.
         """
         start_time = time.time()
 
@@ -315,6 +328,11 @@ class ReasoningVerifier:
             "cached": rv.cached,
         }
 
+        if not has_provider and self._provider_config_error is not None:
+            # The setting to fix, as on the stats and fact paths. Its message
+            # carries nothing from a provider.
+            fields["constraint_id"] = "reasoning_verifier.provider_config_error"
+            return DiagnosticResult.blocked(str(self._provider_config_error), fields)
         if not has_provider:
             fields["constraint_id"] = "reasoning_verifier.no_provider"
         elif rv.is_valid:

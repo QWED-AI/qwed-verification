@@ -596,6 +596,10 @@ class TestFactVerifierLLMAdvisoryOnly:
         assert hasattr(result, "status")
         assert "deterministic_verdict" in result.developer_fields
         assert result.developer_fields["deterministic_verdict"] != "SUPPORTED"
+        # The real _llm_fallback ran: its advisory is recorded beside the verdict.
+        llm_checks = [c for c in result.advisory_checks if c.name == "llm_fallback"]
+        assert len(llm_checks) == 1
+        assert llm_checks[0].details["llm_verdict"] == "SUPPORTED"
 
     def test_llm_advisory_check_populated(self, monkeypatch):
         """When LLM returns a result, advisory_checks are populated."""

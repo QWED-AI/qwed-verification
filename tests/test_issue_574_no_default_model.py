@@ -291,20 +291,46 @@ def test_reasoning_verifier_loads_nothing_for_a_name_it_does_not_know():
     assert ReasoningVerifier._load_provider("not-a-provider") is None
 
 
-def test_reasoning_verifier_has_no_provider_when_its_provider_has_no_model(monkeypatch, caplog):
+def _verify_apples(verifier):
+    return verifier.verify_understanding(
+        query="Alice has 10 apples and gets 5 more. How many apples does she have?",
+        primary_task=SimpleNamespace(expression="10 + 5", reasoning=""),
+        enable_cross_validation=False,
+    )
+
+
+def test_reasoning_verifier_names_the_setting_when_its_provider_has_no_model(monkeypatch, caplog):
     monkeypatch.setenv("ACTIVE_PROVIDER", "ollama")
     verifier = ReasoningVerifier(enable_cache=False)
 
     with caplog.at_level(logging.WARNING, logger="qwed_new.core.reasoning_verifier"):
-        result = verifier.verify_understanding(
-            query="Alice has 10 apples and gets 5 more. How many apples does she have?",
-            primary_task=SimpleNamespace(expression="10 + 5", reasoning=""),
-            enable_cross_validation=False,
-        )
+        result = _verify_apples(verifier)
 
-    assert not result.is_verified
-    assert result.developer_fields["constraint_id"] == "reasoning_verifier.no_provider"
+    assert result.status == DiagnosticStatus.BLOCKED
+    assert result.developer_fields["constraint_id"] == "reasoning_verifier.provider_config_error"
+    assert "Set OLLAMA_MODEL" in result.agent_message
     assert "OLLAMA_MODEL" in caplog.text
+
+
+def test_reasoning_verifier_has_no_provider_when_its_provider_cannot_be_built(monkeypatch):
+    def not_installed(*_args, **_kwargs):
+        raise ImportError("ollama client not installed")
+
+    monkeypatch.setenv("ACTIVE_PROVIDER", "ollama")
+    monkeypatch.setattr("qwed_new.providers.ollama_provider.OllamaProvider", not_installed)
+
+    result = _verify_apples(ReasoningVerifier(enable_cache=False))
+
+    assert result.status == DiagnosticStatus.UNVERIFIABLE
+    assert result.developer_fields["constraint_id"] == "reasoning_verifier.no_provider"
+
+
+def test_auto_names_both_variables_when_neither_side_has_a_model(monkeypatch):
+    for provider_cls in (AzureOpenAIProvider, AnthropicProvider):
+        _configure(monkeypatch, provider_cls, None)
+
+    with pytest.raises(ProviderConfigError, match="AZURE_OPENAI_DEPLOYMENT.*ANTHROPIC_MODEL"):
+        AutoShiftProvider()
 
 
 def test_reasoning_trace_comes_only_from_the_providers_own_call():

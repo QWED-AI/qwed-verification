@@ -119,6 +119,8 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     `CLAUDE_OPUS_DEPLOYMENT`, `GEMINI_MODEL`, `OLLAMA_MODEL` or
     `CUSTOM_MODEL`. The value is sent unchanged, so any model or deployment
     ID the provider serves works, and nothing falls back to another model.
+    `auto` raises the same error, naming both variables, when neither Azure
+    OpenAI nor Anthropic has a model; it raised a generic `RuntimeError`.
   - The Anthropic provider reads `ANTHROPIC_MODEL`, the variable `qwed init`
     and `.env.example` set; it read only `ANTHROPIC_DEPLOYMENT` before,
     which still wins when set.
@@ -156,12 +158,13 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - `ReasoningVerifier()` uses the provider `ACTIVE_PROVIDER` selects
     (Ollama when it is unset, as the server reads it), not always
     Anthropic, and loads every provider the server can; `openai` named a
-    module that does not exist. A provider that is not configured is no
-    provider: the reason is logged and the result says
-    `reasoning_verifier.no_provider`. The reasoning trace comes only from a
-    provider's own `complete()` call, which no built-in provider has, so it
-    is unavailable for them. The verifier's results are advisory and
-    UNVERIFIABLE, before and after.
+    module that does not exist. A provider with no model makes the result
+    BLOCKED with the setting to fix (`reasoning_verifier.provider_config_error`);
+    one that cannot be built for another reason is no provider: the reason
+    is logged and the result says `reasoning_verifier.no_provider`. The
+    reasoning trace comes only from a provider's own `complete()` call,
+    which no built-in provider has, so it is unavailable for them. The
+    verifier never returns VERIFIED, before and after.
   - The server sends each request to the provider the request names, else
     to the one `ACTIVE_PROVIDER` selects. A query with `write`, `compose`,
     `essay`, `creative` or `story` in it went to Anthropic, whatever was
