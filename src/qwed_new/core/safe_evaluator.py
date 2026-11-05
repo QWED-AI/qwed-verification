@@ -5,6 +5,35 @@ Replaces unsafe eval() with a restricted execution environment.
 import ast
 from typing import Any, Dict
 from z3 import *
+from z3 import is_arith, is_expr
+
+from qwed_new.core import z3_exact
+
+# Names the arithmetic rewrite calls; they are added to the namespace after
+# validation, so a constraint cannot name them itself.
+_EXACT_REAL = "_qwed_exact_real"
+_DIVIDE = "_qwed_divide"
+_MODULO = "_qwed_modulo"
+_POWER = "_qwed_power"
+_REWRITTEN_OPERATORS = {ast.Div: _DIVIDE, ast.Mod: _MODULO, ast.Pow: _POWER}
+
+
+class _ExactArithmetic(ast.NodeTransformer):
+    """Route decimal literals and /, % and ** through z3_exact, so numbers are
+    exact and one formula uses one arithmetic (GHSA-w73j)."""
+
+    def visit_Constant(self, node: ast.Constant) -> ast.AST:
+        if isinstance(node.value, float):
+            call = ast.Call(ast.Name(_EXACT_REAL, ast.Load()), [ast.Constant(repr(node.value))], [])
+            return ast.copy_location(call, node)
+        return node
+
+    def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        self.generic_visit(node)
+        helper = _REWRITTEN_OPERATORS.get(type(node.op))
+        if helper is None:
+            return node
+        return ast.copy_location(ast.Call(ast.Name(helper, ast.Load()), [node.left, node.right], []), node)
 
 # Cost bounds for statically-known integer exponentiation. Python computes
 # ``int ** int`` in full before Z3 ever sees the value, so an expression like
@@ -169,7 +198,15 @@ class SafeEvaluator:
         eval_locals = context.copy()
         restricted_globals = {k: v for k, v in self.allowed_globals.items() if k != "__builtins__"}
         restricted_globals["__builtins__"] = {}
-        
+        # Exact arithmetic for numbers (GHSA-w73j). Whether a division of two
+        # numbers may be a Real depends on whether any variable is an Int.
+        int_context = any(is_arith(value) and value.is_int() for value in context.values() if is_expr(value))
+        restricted_globals[_EXACT_REAL] = z3_exact.exact_real
+        restricted_globals[_DIVIDE] = lambda left, right: z3_exact.divide(left, right, int_context)
+        restricted_globals[_MODULO] = z3_exact.modulo
+        restricted_globals[_POWER] = lambda base, exponent: z3_exact.power(base, exponent, int_context)
+        tree = ast.fix_missing_locations(_ExactArithmetic().visit(tree))
+
         try:
             # 4. Execute the validated AST in a restricted namespace
             code = compile(tree, "<safe_z3_expr>", "eval")

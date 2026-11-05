@@ -13,6 +13,7 @@ try:
         Int, Bool, Real, And, Or, Not, Implies, Xor,
         BoolVal, ForAll, Exists, is_bool,
     )
+    from qwed_new.core import z3_exact
     Z3_AVAILABLE = True
 except ImportError:
     Z3_AVAILABLE = False
@@ -216,7 +217,9 @@ class Z3Compiler:
         if isinstance(node, bool):
             return node
         if isinstance(node, (int, float)):
-            return node
+            # A decimal literal is the exact value written (0.1 is 1/10), not
+            # its binary float, so Python never adds two of them (GHSA-w73j).
+            return z3_exact.literal(node)
         if isinstance(node, str):
             # A quoted string literal is not a variable name. The parser keeps
             # the surrounding quotes on such tokens, so ``"red"`` arrives here as
@@ -295,12 +298,12 @@ class Z3Compiler:
                 result = result * arg
             return result
         elif operator == 'DIV':
-            return compiled_args[0] / compiled_args[1]
+            return z3_exact.integer_divide(compiled_args[0], compiled_args[1])
         elif operator == 'POW':
             _check_pow_cost(compiled_args[0], compiled_args[1])
-            return compiled_args[0] ** compiled_args[1]
+            return z3_exact.power(compiled_args[0], compiled_args[1], int_context=True)
         elif operator == 'MOD':
-            return compiled_args[0] % compiled_args[1]
+            return z3_exact.modulo(compiled_args[0], compiled_args[1])
         elif operator == 'VAR':
             # Variable declaration - create the variable
             var_name = args[0]
