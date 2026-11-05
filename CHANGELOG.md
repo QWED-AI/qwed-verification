@@ -142,7 +142,8 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     `_` or a space, and with `openai_direct` run as `openai`.
   - The saved provider gets a key only from `--api-key` given on the command
     line or from its own variable (`CUSTOM_API_KEY`, `OPENAI_API_KEY`,
-    `ANTHROPIC_API_KEY` or `GOOGLE_API_KEY`). `QWED_API_KEY`, which
+    `ANTHROPIC_API_KEY`, or for Gemini `GOOGLE_API_KEY`, else
+    `GEMINI_API_KEY`, as the server reads them). `QWED_API_KEY`, which
     `--api-key` also reads, may be the QWED server's key: it went to the
     saved provider's endpoint before, over its own key. A saved `anthropic`
     with `ANTHROPIC_ENDPOINT` set now stops: the CLI calls the Anthropic API

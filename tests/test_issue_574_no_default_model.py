@@ -85,6 +85,7 @@ MODEL_VARIABLES = {model_env for model_env, _ in PROVIDERS.values()} | {"ANTHROP
 # the shell, so each test sets what it needs.
 PROVIDER_SETTINGS = {name for _, env in PROVIDERS.values() for name in env} | {
     "CUSTOM_API_KEY",
+    "GEMINI_API_KEY",
     "OLLAMA_BASE_URL",
     "QWED_API_KEY",
 }
@@ -568,6 +569,8 @@ def test_qwed_verify_reads_the_model_qwed_init_saved_without_server_settings(mon
     (tmp_path / ".env").write_text(f"OLLAMA_MODEL={ANY_MODEL}\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    # python-dotenv loads nothing while this is set in the shell.
+    monkeypatch.delenv("PYTHON_DOTENV_DISABLED", raising=False)
     # With None in sys.modules, importing the server's settings fails.
     monkeypatch.setitem(sys.modules, "qwed_new.config", None)
 
@@ -605,6 +608,8 @@ def test_qwed_interactive_reads_the_model_qwed_init_saved(monkeypatch, tmp_path)
     (tmp_path / ".env").write_text(f"OLLAMA_MODEL={ANY_MODEL}\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    # python-dotenv loads nothing while this is set in the shell.
+    monkeypatch.delenv("PYTHON_DOTENV_DISABLED", raising=False)
 
     # patch.dict puts back the environment the .env load writes to.
     with patch.dict("os.environ"), patch("qwed_sdk.cli.QWEDLocal") as built:
@@ -698,17 +703,37 @@ def test_the_qwed_key_never_reaches_the_saved_provider(monkeypatch, saved, setti
 
 
 @pytest.mark.usefixtures("no_dotenv")
-def test_a_saved_provider_without_its_key_names_its_variable(monkeypatch):
-    monkeypatch.setenv("ACTIVE_PROVIDER", "openai")
-    monkeypatch.setenv("OPENAI_MODEL", ANY_MODEL)
+@pytest.mark.parametrize(
+    "saved, model_env, hint",
+    [
+        ("openai", "OPENAI_MODEL", "Set OPENAI_API_KEY or use --api-key"),
+        ("gemini", "GEMINI_MODEL", "Set GOOGLE_API_KEY or GEMINI_API_KEY or use --api-key"),
+    ],
+)
+def test_a_saved_provider_without_its_key_names_its_variable(monkeypatch, saved, model_env, hint):
+    monkeypatch.setenv("ACTIVE_PROVIDER", saved)
+    monkeypatch.setenv(model_env, ANY_MODEL)
     monkeypatch.setenv("QWED_API_KEY", f"{FAKE_KEY}-qwed")
 
     with patch("qwed_sdk.cli.QWEDLocal") as built:
         result = CliRunner().invoke(verify, ["What is 2+2?"])
 
     assert result.exit_code == 1
-    assert "Set OPENAI_API_KEY or use --api-key" in result.output
+    assert hint in result.output
     built.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "keys, sent",
+    [({"GEMINI_API_KEY": "gemini"}, "gemini"), ({"GOOGLE_API_KEY": "google", "GEMINI_API_KEY": "gemini"}, "google")],
+    ids=["gemini-only", "google-first"],
+)
+def test_a_saved_gemini_reads_its_key_as_the_server_does(monkeypatch, keys, sent):
+    monkeypatch.setenv("ACTIVE_PROVIDER", "gemini")
+    for name, value in keys.items():
+        monkeypatch.setenv(name, f"{FAKE_KEY}-{value}")
+
+    assert saved_provider().api_key == f"{FAKE_KEY}-{sent}"
 
 
 @pytest.mark.usefixtures("no_dotenv")

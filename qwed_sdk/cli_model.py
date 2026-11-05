@@ -32,11 +32,12 @@ PROVIDER_MODEL_ENV = {
     "gemini": "GEMINI_MODEL",
 }
 
-# Where they read the API key of the provider `qwed init` saved.
+# Where they read the API key of the provider `qwed init` saved, in the
+# order the server reads them.
 PROVIDER_KEY_ENV = {
-    "openai": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "gemini": "GOOGLE_API_KEY",
+    "openai": ("OPENAI_API_KEY",),
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "gemini": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
 }
 
 
@@ -117,7 +118,7 @@ def saved_provider(api_key: Optional[str] = None) -> SavedProvider:
             "Unset ANTHROPIC_ENDPOINT to use the Anthropic API, or pass --base-url with an "
             "OpenAI-compatible endpoint.",
         )
-    key = api_key or os.getenv(PROVIDER_KEY_ENV[active], "")
+    key = api_key or next(filter(None, map(os.getenv, PROVIDER_KEY_ENV[active])), "")
     return SavedProvider(
         active, None, key, PROVIDER_MODEL_ENV[active], f"INFO: Using configured provider: {saved}"
     )

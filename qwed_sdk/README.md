@@ -317,7 +317,7 @@ qwed pii "My email is john@example.com"    # needs qwed[pii]
 `qwed verify` and `qwed interactive` call the model provider directly, with no QWED server.
 
 - **Model.** QWED names no model. They use `--model`, else the selected provider's model variable (`OLLAMA_MODEL`, `CUSTOM_MODEL`, `OPENAI_MODEL`, `ANTHROPIC_MODEL` or `GEMINI_MODEL`), and stop with a message naming it when neither is set.
-- **Provider.** Without `--provider` (or `--base-url`, for `qwed verify`), they run the provider `ACTIVE_PROVIDER` selects: the one `qwed init` saved, and Ollama when it is unset. Its key comes from `--api-key` or its own variable (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY` or `CUSTOM_API_KEY`), never from `QWED_API_KEY`.
+- **Provider.** Without `--provider` (or `--base-url`, for `qwed verify`), they run the provider `ACTIVE_PROVIDER` selects: the one `qwed init` saved, and Ollama when it is unset. Its key comes from its own variable (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CUSTOM_API_KEY`, or for Gemini `GOOGLE_API_KEY`, else `GEMINI_API_KEY`), never from `QWED_API_KEY`. `qwed verify --api-key` overrides it. `qwed interactive` has no `--api-key`: for OpenAI, Anthropic or Gemini it asks for the key when the variable is unset.
 - **Key with `--provider`.** `qwed verify --provider` takes the key from `--api-key` or `QWED_API_KEY`; `qwed interactive --provider` asks for it.
 
 ### `qwed verify` options

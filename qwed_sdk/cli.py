@@ -2152,7 +2152,7 @@ def verify(query: str, provider: Optional[str], model: Optional[str],
             explicit_key = _from_command_line("api_key", api_key)
             provider, base_url, api_key, model_env, notice = _saved_provider(explicit_key)
             if provider:
-                key_hint = f"Set {_PROVIDER_KEY_ENV[provider]} or use --api-key"
+                key_hint = f"Set {' or '.join(_PROVIDER_KEY_ENV[provider])} or use --api-key"
             if HAS_COLOR and not quiet:
                 click.echo(f"{QWED.INFO}{notice}{QWED.RESET}")
 
