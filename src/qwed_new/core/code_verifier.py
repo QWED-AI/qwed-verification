@@ -53,6 +53,8 @@ CONSTRAINT_PARSE_ERROR = "code_verifier.parse_error"
 _DYNAMIC_COMPILATION = "Dynamic code compilation"
 _FILE_COMPILATION = "Bytecode compilation of files"
 _OS_EXEC = "Process execution via os.exec*()"
+_MODULE_BY_NAME = "Module acquisition by name through the import system"
+_IMPORT_INTERNALS = "Import system internals (module acquisition by name)"
 
 
 class _UnparseablePython(Exception):
@@ -112,6 +114,26 @@ class CodeVerifier:
     PYTHON_CODE_EXECUTION_NAMES: ClassVar[dict] = {
         "exec_": "Remote code execution via exec_() (six, future)",
         "exec_module": "Module execution via a loader's exec_module()",
+        # The import system hands back any module by its name as a string,
+        # with no import statement, through a loader (__loader__,
+        # __spec__.loader, sys.meta_path, BuiltinImporter) or its internals.
+        # The call on the module it returns cannot be resolved statically.
+        "load_module": _MODULE_BY_NAME,
+        "create_module": _MODULE_BY_NAME,
+        "module_from_spec": _MODULE_BY_NAME,
+        "create_builtin": _MODULE_BY_NAME,
+        "create_dynamic": _MODULE_BY_NAME,
+        "init_builtin": _MODULE_BY_NAME,
+        "init_frozen": _MODULE_BY_NAME,
+        "_gcd_import": _MODULE_BY_NAME,
+        "_find_and_load": _MODULE_BY_NAME,
+        "_find_and_load_unlocked": _MODULE_BY_NAME,
+        "_load_unlocked": _MODULE_BY_NAME,
+        "_builtin_from_name": _MODULE_BY_NAME,
+        "_bootstrap": _IMPORT_INTERNALS,
+        "_bootstrap_external": _IMPORT_INTERNALS,
+        "_frozen_importlib": _IMPORT_INTERNALS,
+        "_frozen_importlib_external": _IMPORT_INTERNALS,
         "exec_builtin": "Module execution via _imp.exec_builtin()",
         "exec_dynamic": "Module execution via _imp.exec_dynamic()",
         "_exec": "Module execution via importlib's _exec()",
@@ -188,6 +210,9 @@ class CodeVerifier:
     # functions return a namespace, also read uncalled (g = globals) or as an
     # attribute (builtins.vars).
     _NAMESPACE_FUNCTIONS: ClassVar[frozenset] = frozenset({"globals", "vars", "locals"})
+    # Tables of loaded modules: reading one in any form returns a module by
+    # its name (GHSA-qrp4).
+    _MODULE_TABLES: ClassVar[frozenset] = frozenset({"sys.modules"})
     # re.compile(pattern, flags=0) takes at most two arguments. The builtin
     # compile needs a source, a filename and a mode, so a call in this shape
     # cannot run it even on a name that turns out to be the builtins module.
@@ -258,6 +283,9 @@ class CodeVerifier:
         # "environment.".
         "importlib.import_module",
         "importlib.__import__",
+        # Both resolve a "module:attribute" or dotted string to the object.
+        "pkgutil.resolve_name",
+        "pydoc.locate",
         "runpy.run_module",
         "runpy.run_path",
         "ctypes.CDLL",
@@ -315,6 +343,9 @@ class CodeVerifier:
         "__builtins__", "__import__", "__code__", "__dict__",
         # A builtin function's __self__ is the builtins module (print.__self__).
         "__self__",
+        # Every module's loader and spec: the loader returns any module by name
+        # and reads files (get_data).
+        "__loader__", "__spec__",
     }
     
     # =========================================================================
@@ -810,6 +841,9 @@ class CodeVerifier:
                 continue
             issues.append(issue)
 
+        # The table of loaded modules read in any form, not only subscripted.
+        issues.extend(self._check_python_module_tables(nodes, issues))
+
         # AST-based subprocess checks to catch nested expression forms that regex can miss.
         for issue in self._check_python_subprocess_ast(nodes):
             if any(
@@ -1183,6 +1217,34 @@ class CodeVerifier:
             )
             if issue:
                 issues.append(issue)
+        return issues
+
+    def _check_python_module_tables(self, nodes: List[ast.AST], found: List[SecurityIssue]) -> List[SecurityIssue]:
+        """Flag any read of a table of loaded modules, which hands back a
+        module by its name as a string: ``sys.modules.get("os")``,
+        ``import sys as s; s.modules``, ``from sys import modules``,
+        ``m = sys.modules``. The line scan sees only ``sys.modules[``; a line
+        it (in ``found``) already reported is not reported twice."""
+        aliases, star_modules = self._import_aliases(nodes)
+        reported = {i.line_number for i in found if i.pattern.startswith("sys.modules")}
+        issues: List[SecurityIssue] = []
+        for node in nodes:
+            if not isinstance(node, (ast.Attribute, ast.Name)):
+                continue
+            name = self._dotted_name(node)
+            line = getattr(node, "lineno", None)
+            if line in reported or not name:
+                continue
+            if any(c in self._MODULE_TABLES for c in self._call_candidates(name, aliases, star_modules)):
+                reported.add(line)
+                issues.append(SecurityIssue(
+                    severity="CRITICAL",
+                    issue_type="dangerous_function",
+                    pattern="sys.modules",
+                    description=self.PYTHON_CRITICAL["sys.modules["],
+                    line_number=getattr(node, "lineno", None),
+                    recommendation="Import the modules the code needs; do not take them out of the interpreter by name.",
+                ))
         return issues
 
     @staticmethod
