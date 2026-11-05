@@ -258,16 +258,20 @@ def test_a_derivative_the_domain_check_cannot_reread_has_no_known_domain(monkeyp
     assert identity_domains_match("diff(x**2, x)", "2*x + 0") is False
 
 
-def test_a_parse_error_does_not_echo_what_sympy_raised(client):
-    with patch("qwed_new.core.safe_parser.parse_expr", side_effect=ValueError("SENSITIVE SYMPY TEXT")):
-        result = client.post("/verify/math", json={"expression": "1+1"}).json()
+def test_a_parse_error_does_not_echo_what_sympy_raised():
+    # SymPy runs in a math worker process (GHSA-qgjc), where a patch here does
+    # not reach, so the worker's job is run in this process.
+    from qwed_new.core.math_worker import verify_math_request
 
-    assert (result["constraint_id"], result["agent_message"]) == ("math.parse_error", "Expression could not be parsed")
-    assert "SENSITIVE SYMPY TEXT" not in str(result)
+    with patch("qwed_new.core.safe_parser.parse_expr", side_effect=ValueError("SENSITIVE SYMPY TEXT")):
+        result = verify_math_request("1+1", {})
+
+    assert (result.developer_fields["constraint_id"], result.agent_message) == ("math.parse_error", "Expression could not be parsed")
+    assert "SENSITIVE SYMPY TEXT" not in str(result.to_dict())
 
 
 def test_any_other_failure_is_still_an_internal_error(client):
-    with patch("qwed_new.api.main.math_identity_result", side_effect=RuntimeError("boom")):
+    with patch("qwed_new.api.main.run_math_async", side_effect=RuntimeError("boom")):
         result = client.post("/verify/math", json={"expression": "x = x"}).json()
 
     assert result["status"] == "BLOCKED"

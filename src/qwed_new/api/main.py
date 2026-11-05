@@ -21,7 +21,8 @@ from qwed_new.core.diagnostics import (
     admission_decision,
     merge_diagnostic_result,
 )
-from qwed_new.core.math_identity import math_identity_result, math_parse_error_result
+from qwed_new.core.math_identity import math_parse_error_result
+from qwed_new.core.math_worker import run_math_async
 from qwed_new.core.safe_parser import SafeParserError
 from qwed_new.api.verification_context_routes import router as verification_context_router
 
@@ -1058,69 +1059,9 @@ async def verify_math(
         raise HTTPException(status_code=400, detail="Missing 'expression'")
 
     try:
-        import sympy
-        from qwed_new.core.safe_parser import safe_parse_expr
-        from sympy import simplify, symbols, Eq, solve
-
-        context_data = request.get("context", {})
-
-        if "=" in expression:
-            # Shared with batch math items (#530): proven false is VERIFIED
-            # with is_valid False (#437), an undecided difference UNVERIFIABLE.
-            dr = math_identity_result(expression)
-        else:
-            import re
-            expression_normalized = re.sub(r'(\d)(\()', r'\1*\2', expression)
-            is_ambiguous = False
-            if "/" in expression and "(" in expression:
-                if re.search(r'/\d+\(', expression.replace(" ", "")):
-                    is_ambiguous = True
-
-            parsed = safe_parse_expr(expression_normalized)
-            simplified = simplify(parsed)
-
-            if simplified.has(sympy.zoo) or simplified.has(sympy.nan):
-                dr = DiagnosticResult.blocked(
-                    "Expression contains division by zero",
-                    developer_fields={"is_valid": False, "error": "Division by zero"},
-                )
-            elif simplified.has(sympy.oo) or simplified.has(-sympy.oo):
-                dr = DiagnosticResult.blocked(
-                    "Expression is undefined",
-                    developer_fields={"is_valid": False, "error": "undefined"},
-                )
-            elif simplified.is_real is False and context_data.get("domain") == "real":
-                dr = DiagnosticResult.blocked(
-                    "Expression is not real-valued in the requested real domain",
-                    developer_fields={"is_valid": False, "error": "domain error"},
-                )
-            elif is_ambiguous:
-                dr = DiagnosticResult.blocked(
-                    "Expression may be ambiguous due to implicit multiplication after division",
-                    developer_fields={"is_valid": False, "result": False, "status": "BLOCKED", "warning": "ambiguous", "simplified": str(simplified), "note": "Interpreted using standard order of operations", "original": str(parsed)},
-                )
-            else:
-                is_numeric = simplified.free_symbols == set()
-                if not is_numeric:
-                    dr = DiagnosticResult.verified(
-                        "Expression simplified",
-                        developer_fields={"is_valid": True, "simplified": str(simplified), "original": str(parsed), "is_symbolic": True},
-                        evidence={"simplified": str(simplified)},
-                    )
-                else:
-                    try:
-                        exact = sympy.nsimplify(simplified)
-                        value = float(simplified)
-                        dr = DiagnosticResult.verified(
-                            "Expression evaluated",
-                            developer_fields={"is_valid": True, "value": value, "exact_value": str(exact), "simplified": str(simplified), "original": str(parsed)},
-                            evidence={"exact_value": str(exact), "simplified": str(simplified)},
-                        )
-                    except (TypeError, ValueError, OverflowError):
-                        dr = DiagnosticResult.unverifiable(
-                            "Expression is not numeric",
-                            developer_fields={"is_valid": False, "simplified": str(simplified), "original": str(parsed)},
-                        )
+        # SymPy runs in a worker process with a wall-clock limit (GHSA-qgjc):
+        # off the event loop, and killed if it does not finish.
+        dr = await run_math_async("request", (expression, request.get("context", {})))
 
         # Precision advisory (issue #347): flag binary floating-point
         # constants WITHOUT affecting the verdict — advisory_checks are

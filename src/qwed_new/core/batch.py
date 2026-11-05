@@ -6,6 +6,7 @@ with progress tracking and result aggregation.
 """
 
 import asyncio
+import contextvars
 import os
 import time
 import uuid
@@ -17,9 +18,17 @@ from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
 
-from qwed_new.core.diagnostics import DiagnosticResult, admission_decision, merge_diagnostic_result
+from qwed_new.core.diagnostics import admission_decision, merge_diagnostic_result
 from qwed_new.core.route_diagnostics import logic_diagnostic, natural_language_diagnostic
 from qwed_new.core.trust import attest_and_enforce
+
+# An item whose job had no math budget left (GHSA-qgjc).
+BATCH_MATH_BUDGET = "batch.math_budget"
+# The job's math deadline (time.monotonic()), set by process_job for the items
+# it runs. Each item task, and the thread it hands math to, copies it.
+_math_deadline: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar(
+    "qwed_batch_math_deadline", default=None
+)
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +122,10 @@ class BatchVerificationService:
     # Wall-clock bound per item, so a stalled verification is marked failed
     # rather than keeping the job active forever (#447 review).
     _ITEM_TIMEOUT_SECONDS = float(os.environ.get("QWED_BATCH_ITEM_TIMEOUT", "60"))
+    # Wall-clock budget for all math items of one job together (GHSA-qgjc):
+    # each item also has the math time limit, so a batch of slow items cannot
+    # hold the math workers for batch size times that limit.
+    _MATH_BUDGET_SECONDS = float(os.environ.get("QWED_BATCH_MATH_BUDGET_SECONDS", "120"))
 
     def __init__(self, max_concurrency: int = 10):
         self.max_concurrency = max_concurrency
@@ -224,8 +237,13 @@ class BatchVerificationService:
                 if audit is not None:
                     await self._audit_item(job, item, audit)
         
-        # Process all items concurrently
-        await asyncio.gather(*[process_item(item) for item in job.items])
+        # Process all items concurrently. The tasks copy the job's math
+        # deadline from this context (GHSA-qgjc).
+        deadline_token = _math_deadline.set(time.monotonic() + self._MATH_BUDGET_SECONDS)
+        try:
+            await asyncio.gather(*[process_item(item) for item in job.items])
+        finally:
+            _math_deadline.reset(deadline_token)
         
         # Update job status
         job.completed_at = datetime.utcnow()
@@ -301,9 +319,12 @@ class BatchVerificationService:
             return merge_diagnostic_result(dr)
         
         elif item.verification_type == VerificationType.MATH:
-            # sympy is CPU-bound; run it in a worker thread so a batch does not
-            # block the event loop per item (#391).
-            return await asyncio.to_thread(self._verify_batch_math, item)
+            # SymPy runs in a math worker process (GHSA-qgjc); the wait for it
+            # runs on a math thread, not asyncio's shared executor, so it does
+            # not block the event loop (#391) or other routes' threads.
+            from qwed_new.core.math_worker import run_in_math_thread
+
+            return await run_in_math_thread(self._verify_batch_math, item)
 
         elif item.verification_type == VerificationType.CODE:
             from qwed_new.core.code_verifier import CodeVerifier
@@ -365,34 +386,21 @@ class BatchVerificationService:
             raise ValueError(f"Unknown verification type: {item.verification_type}")
 
     def _verify_batch_math(self, item: BatchItem) -> Dict[str, Any]:
-        """Verify a MATH batch item through the DiagnosticResult + attestation trust boundary (#271)."""
-        from qwed_new.core.math_identity import math_identity_result, math_parse_error_result
-        from qwed_new.core.safe_parser import SafeParserError, safe_parse_expr
-        from sympy import simplify
+        """Verify a MATH batch item through the DiagnosticResult + attestation trust boundary (#271).
 
-        expression = item.query.strip()
-        try:
-            if "=" not in expression:
-                parsed = safe_parse_expr(expression)
-                simplified = simplify(parsed)
-                dr = DiagnosticResult.unverifiable(
-                    "Expression simplified, but no equality or proof claim was provided",
-                    developer_fields={"simplified": str(simplified), "type": "math", "is_valid": False, "query": expression},
-                )
-            else:
-                # The verdict /verify/math gives (#530): a claim proven false is
-                # VERIFIED with is_valid False (#437), an undecided one UNVERIFIABLE.
-                dr = math_identity_result(expression)
-                dr.developer_fields.update({
-                    "query": expression,
-                    "type": "math",
-                    "diff": dr.developer_fields["simplified_difference"],
-                })
-        except SafeParserError as exc:
-            # As /verify/math (#522): refused input is BLOCKED with
-            # math.parse_error, not a failed item carrying the parser's text.
-            dr = math_parse_error_result(exc)
-            dr.developer_fields.update({"query": expression, "type": "math"})
+        SymPy runs in a math worker process with a wall-clock limit
+        (GHSA-qgjc): the item's limit is the math time limit, cut to what is
+        left of its job's math budget. An item with no budget left is not run."""
+        from qwed_new.core import math_worker
+
+        deadline = _math_deadline.get()
+        if deadline is not None and deadline <= time.monotonic():
+            dr = math_worker.timeout_result(0.0)
+            dr.developer_fields.update({"query": item.query.strip(), "type": "math", "constraint_id": BATCH_MATH_BUDGET})
+        else:
+            # Waits for a free worker within the item's limit, so a batch
+            # larger than the pool runs in turn rather than being refused.
+            dr = math_worker.run_math("batch", (item.query.strip(),), deadline=deadline)
 
         # As /verify/math: a VERIFIED identity is signed and its attestation
         # enforced, and is BLOCKED if signing fails (#271, #320). Admission is

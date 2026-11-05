@@ -173,6 +173,21 @@ _ALLOWED_AST_NODES = frozenset(
 )
 
 _SAFE_GLOBAL_DICT_TEMPLATE: Dict[str, Any] = {"__builtins__": {}}
+# The cost gate parses with evaluate=False, which rewrites operators and
+# literals into these classes; nothing else is added (GHSA-qgjc).
+_COST_GATE_GLOBAL_DICT_TEMPLATE: Dict[str, Any] = {
+    "__builtins__": {},
+    **{name: getattr(sympy, name) for name in ("Symbol", "Function", "Integer", "Float", "Rational", "Add", "Mul", "Pow")},
+}
+# implicit_multiplication_application without split_symbols, which split an
+# unknown name into a product of letters (sinc(0) read as s*i*n*c*0,
+# GHSA-5h3v). Used by safe_parse_expr and by its cost gate.
+_PARSER_TRANSFORMATIONS = standard_transformations + (
+    convert_xor,
+    implicit_multiplication,
+    implicit_application,
+    function_exponentiation,
+)
 
 
 _BINOP_EVALUATORS = {
@@ -531,27 +546,19 @@ def _check_unevaluated_sympy_cost(expression: str) -> None:
             )
 
     try:
-        import sympy
-        from sympy.parsing.sympy_parser import (
-            parse_expr,
-            standard_transformations,
-            convert_xor,
-            implicit_multiplication_application,
-        )
-        transformations = standard_transformations + (
-            convert_xor,
-            implicit_multiplication_application,
-        )
-        # NB: a restricted global_dict (empty __builtins__) makes
-        # parse_expr(evaluate=False) raise, so use sympy's default namespace —
-        # this call only inspects structure for cost, it does not feed the result
-        # to the engine (safe_parse_expr re-parses with the hardened namespace).
+        # The same transformations and the same restricted namespace as
+        # safe_parse_expr (GHSA-qgjc): SymPy's default namespace, which this
+        # gate used before, holds every SymPy function and Python's builtins.
+        # evaluate=False also needs the classes it rewrites operators into.
         # diff/Derivative stay unevaluated here (#522): evaluating them is
         # what the order budget in the main parse bounds.
+        local_dict = _build_safe_local_dict(None)
+        local_dict.update({"diff": _unevaluated_derivative, "Derivative": _unevaluated_derivative})
         expr = parse_expr(
             expression,
-            local_dict={"diff": _unevaluated_derivative, "Derivative": _unevaluated_derivative},
-            transformations=transformations,
+            local_dict=local_dict,
+            global_dict=dict(_COST_GATE_GLOBAL_DICT_TEMPLATE),
+            transformations=_PARSER_TRANSFORMATIONS,
             evaluate=False,
         )
     except SafeParserError:
@@ -1016,15 +1023,7 @@ def safe_parse_expr(
     _check_ast_safety(stripped)
     _check_call_heads(stripped, local_dict)
     if transformations is None:
-        # implicit_multiplication_application without split_symbols, which
-        # split an unknown name into a product of letters (sinc(0) read as
-        # s*i*n*c*0, GHSA-5h3v).
-        transformations = standard_transformations + (
-            convert_xor,
-            implicit_multiplication,
-            implicit_application,
-            function_exponentiation,
-        )
+        transformations = _PARSER_TRANSFORMATIONS
     global_dict = dict(_SAFE_GLOBAL_DICT_TEMPLATE)
     try:
         result = parse_expr(
