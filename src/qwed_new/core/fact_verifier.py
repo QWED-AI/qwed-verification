@@ -19,6 +19,8 @@ import hashlib
 import logging
 from collections import Counter
 
+from qwed_new.providers.base import ProviderConfigError
+
 from qwed_new.core.diagnostics import (
     AdvisoryCheck,
     DiagnosticResult,
@@ -197,9 +199,17 @@ class FactVerifier:
 
         # Step 8: LLM fallback is advisory-only (fixes #133), confidence-gated
         llm_advisory = None
+        provider_config_error: Optional[ProviderConfigError] = None
         if confidence < min_confidence and self.use_llm_fallback and provider:
             methods_used.append({"name": "llm_fallback", "advisory_only": True})
-            llm_result = self._llm_fallback(claim, context, provider)
+            try:
+                llm_result = self._llm_fallback(claim, context, provider)
+            except ProviderConfigError as e:
+                # The provider the request names cannot run (an unknown name,
+                # or no model): the setting to fix, not a provider failure.
+                logger.warning("Fact advisory stopped: %s", e)
+                provider_config_error = e
+                llm_result = None
             if llm_result:
                 llm_advisory = AdvisoryCheck(
                     name="llm_fallback",
@@ -228,6 +238,12 @@ class FactVerifier:
             ],
             "scores": {k: round(v, 3) for k, v in scores.items()},
         }
+        if provider_config_error is not None:
+            # The request is refused rather than answered without the advisory
+            # it asked for. Its message carries nothing from a provider, and
+            # what the deterministic pass computed is kept.
+            developer_fields["constraint_id"] = "fact_verifier.provider_config_error"
+            return DiagnosticResult.blocked(str(provider_config_error), developer_fields)
         if advisory_checks:
             developer_fields["advisory_checks"] = advisory_checks
 
@@ -606,6 +622,9 @@ class FactVerifier:
     ) -> Optional[Dict]:
         """
         Use LLM as last resort when deterministic methods are insufficient.
+
+        A provider failure gives no advisory (None). ProviderConfigError is
+        raised: the provider cannot run as selected, which the caller must see.
         """
         try:
             if self._translator is None:
@@ -613,6 +632,8 @@ class FactVerifier:
                 self._translator = TranslationLayer()
             
             return self._translator.verify_fact(claim, context, provider=provider)
+        except ProviderConfigError:
+            raise
         except Exception:
             return None
     

@@ -15,6 +15,7 @@ from z3 import Solver, sat, unsat
 
 from qwed_new.core.dsl import parse_and_validate, compile_to_z3
 from qwed_new.core.translator import TranslationLayer
+from qwed_new.providers.base import ProviderConfigError
 
 from .diagnostics import DiagnosticResult
 from .verification_context import VerificationContextDocument
@@ -533,14 +534,15 @@ class DSLLogicVerifier:
     def verify_from_natural_language(
         self,
         query: str,
-        provider: str = "azure_openai"
+        provider: Optional[str] = None
     ) -> DSLVerificationResult:
         """
         Full pipeline: Natural Language → DSL → Z3.
         
         Args:
             query: Natural language logic query
-            provider: Which LLM provider to use
+            provider: Which LLM provider to use. None, the default, uses the
+                configured one (ACTIVE_PROVIDER).
             
         Returns:
             DSLVerificationResult
@@ -560,12 +562,15 @@ class DSLLogicVerifier:
             verification_result.dsl_code = dsl_code
         return verification_result
 
-    def translate_to_dsl(self, query: str, provider: str = "azure_openai"):
+    def translate_to_dsl(self, query: str, provider: Optional[str] = None):
         """Provider translation step (no z3). Returns
         (dsl_code, variables, resolved_provider, error_result); error_result is a
         DSLVerificationResult on failure and None on success. Safe to run in a
-        worker thread concurrently — it performs no z3 work."""
-        provider_label = self._provider_label(provider)
+        worker thread concurrently — it performs no z3 work. A provider of None
+        uses the configured one (ACTIVE_PROVIDER)."""
+        # None leaves the choice to the translator, which uses the configured
+        # provider. The default was Azure OpenAI whatever was configured (#574).
+        provider_label = None if provider is None else self._provider_label(provider)
         resolved_provider = provider_label
         translator = TranslationLayer()
         try:
@@ -581,6 +586,19 @@ class DSLLogicVerifier:
                     provider_used=resolved_provider,
                 )
             return dsl_code, variables, resolved_provider, None
+        except ProviderConfigError as e:
+            # The setting to fix (no model, or an unknown ACTIVE_PROVIDER), not
+            # a provider failure: it reaches the operator and the caller, as on
+            # the math path. Its message carries nothing from a provider.
+            logger.warning("Logic translation stopped: %s", e)
+            resolved_provider = self._provider_label(
+                getattr(translator, "last_resolved_provider", None) or resolved_provider
+            )
+            return None, None, resolved_provider, DSLVerificationResult(
+                status="ERROR",
+                error=str(e),
+                provider_used=resolved_provider,
+            )
         except ValueError as e:
             resolved_provider = self._provider_label(
                 getattr(translator, "last_resolved_provider", None) or resolved_provider

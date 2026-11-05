@@ -12,7 +12,7 @@ from typing import Dict, Any, List
 
 from openai import OpenAI
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider
+from qwed_new.providers.base import LLMProvider, configured_model
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ class OllamaProvider(LLMProvider):
         model: str = None,
     ):
         self.base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-        self.model = model or os.getenv("OLLAMA_MODEL", "llama3")
+        self.model = configured_model(model, "OLLAMA_MODEL", "Ollama")
 
         # Ollama doesn't require auth — use env var or dummy token
         fallback_token = "dummy" + "-token"

@@ -6,7 +6,7 @@ import logging
 import os
 from anthropic import AnthropicFoundry
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider, sanitized_provider_error
+from qwed_new.providers.base import LLMProvider, configured_model, sanitized_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +21,11 @@ class ClaudeOpusProvider(LLMProvider):
         # Claude Opus 4.5 configuration
         self.endpoint = os.getenv("CLAUDE_OPUS_ENDPOINT")
         self.api_key = os.getenv("CLAUDE_OPUS_API_KEY")
-        self.deployment = os.getenv("CLAUDE_OPUS_DEPLOYMENT", "claude-opus-4-5")
-        
-        if not all([self.endpoint, self.api_key, self.deployment]):
+
+        if not all([self.endpoint, self.api_key]):
             raise ValueError("Missing Claude Opus environment variables")
-            
+        self.deployment = configured_model(None, "CLAUDE_OPUS_DEPLOYMENT", "Claude Opus")
+
         # #353: SDK default read timeout is 600s x retries — bound every
         # wait like the openai providers — retries disabled, so
         # worst-case worker occupancy is one 30s attempt.

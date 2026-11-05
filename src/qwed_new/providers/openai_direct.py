@@ -12,7 +12,7 @@ from typing import Dict, Any, List, Optional
 
 from openai import OpenAI
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider
+from qwed_new.providers.base import LLMProvider, configured_model
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +25,13 @@ class OpenAIDirectProvider(LLMProvider):
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
         if not self.api_key:
             raise ValueError(
                 "OpenAI API key not found. "
                 "Set OPENAI_API_KEY env var or run: qwed init"
             )
+        self.model = configured_model(model, "OPENAI_MODEL", "OpenAI")
 
         self.client = OpenAI(
             api_key=self.api_key,

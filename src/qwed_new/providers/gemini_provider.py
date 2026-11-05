@@ -13,7 +13,7 @@ except ImportError:
     genai = None
 
 from qwed_new.core.schemas import MathVerificationTask, LogicVerificationTask
-from qwed_new.providers.base import LLMProvider, sanitized_provider_error
+from qwed_new.providers.base import LLMProvider, configured_model, sanitized_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class GeminiProvider(LLMProvider):
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-        self.model_name = model or os.getenv("GEMINI_MODEL", "gemini-1.5-pro")
+        self.model_name = configured_model(model, "GEMINI_MODEL", "Gemini")
 
         if genai is not None:
             if not self.api_key:

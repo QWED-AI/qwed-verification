@@ -78,6 +78,16 @@ def _stub_lookup_secret():
     os.environ.update(before)
 
 
+@pytest.fixture(autouse=True)
+def _configured_models(monkeypatch):
+    """QWED names no model, so each provider's model is configured the way a
+    user configures it: in its model variable. Tests of a missing model
+    delete these."""
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("CUSTOM_MODEL", "model-1")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-1.5-pro")
+
+
 def _engine_report():
     return [
         {"name": "SymPy", "ready": True, "detail": "math engine ready", "install_hint": "", "version": "1.14.0"},
@@ -96,7 +106,6 @@ def _provider_map():
             key_env="OPENAI_API_KEY",
             model_env="OPENAI_MODEL",
             base_url_env=None,
-            default_model="gpt-4o-mini",
             default_base_url=None,
             connection_slug="openai",
             key_pattern=r"^sk-",
@@ -104,7 +113,7 @@ def _provider_map():
     }
 
 
-def _custom_provider_map(default_base_url="https://api.example.com/v1", default_model="model-1"):
+def _custom_provider_map(default_base_url="https://api.example.com/v1"):
     return {
         "custom": OnboardingProvider(
             slug="custom",
@@ -113,7 +122,6 @@ def _custom_provider_map(default_base_url="https://api.example.com/v1", default_
             key_env="CUSTOM_API_KEY",
             model_env="CUSTOM_MODEL",
             base_url_env="CUSTOM_BASE_URL",
-            default_model=default_model,
             default_base_url=default_base_url,
             connection_slug="openai-compatible",
             key_pattern=None,
@@ -130,7 +138,6 @@ def _gemini_provider_map():
             key_env="GOOGLE_API_KEY",
             model_env="GEMINI_MODEL",
             base_url_env=None,
-            default_model="gemini-1.5-pro",
             default_base_url=None,
             connection_slug="gemini",
             key_pattern=None,
@@ -1320,7 +1327,6 @@ def test_init_non_interactive_openai_does_not_use_nvidia_fallback(
             key_env="OPENAI_API_KEY",
             model_env="OPENAI_MODEL",
             base_url_env=None,
-            default_model="gpt-4o-mini",
             default_base_url=None,
             connection_slug="openai",
             key_pattern=None,
@@ -1357,7 +1363,6 @@ def test_resolve_provider_api_key_ignores_nvidia_placeholder_env(monkeypatch):
         key_env="CUSTOM_API_KEY",
         model_env="CUSTOM_MODEL",
         base_url_env="CUSTOM_BASE_URL",
-        default_model="nvidia/nemotron-3-super-120b-a12b",
         default_base_url="https://integrate.api.nvidia.com/v1",
         connection_slug="openai-compatible",
         key_pattern=None,
@@ -1375,7 +1380,6 @@ def test_resolve_provider_api_key_uses_nvidia_fallback_when_primary_is_placehold
         key_env="CUSTOM_API_KEY",
         model_env="CUSTOM_MODEL",
         base_url_env="CUSTOM_BASE_URL",
-        default_model="nvidia/nemotron-3-super-120b-a12b",
         default_base_url="https://integrate.api.nvidia.com/v1",
         connection_slug="openai-compatible",
         key_pattern=None,
@@ -1393,7 +1397,6 @@ def test_resolve_provider_api_key_ignores_generic_placeholder_for_any_provider(m
         key_env="OPENAI_API_KEY",
         model_env="OPENAI_MODEL",
         base_url_env=None,
-        default_model="gpt-4o-mini",
         default_base_url=None,
         connection_slug="openai",
         key_pattern=None,
@@ -1410,7 +1413,6 @@ def test_resolve_provider_api_key_ignores_placeholder_cli_argument(monkeypatch):
         key_env="OPENAI_API_KEY",
         model_env="OPENAI_MODEL",
         base_url_env=None,
-        default_model="gpt-4o-mini",
         default_base_url=None,
         connection_slug="openai",
         key_pattern=None,
@@ -1427,7 +1429,6 @@ def test_resolve_provider_api_key_ignores_placeholder_nvidia_fallback(monkeypatc
         key_env="CUSTOM_API_KEY",
         model_env="CUSTOM_MODEL",
         base_url_env="CUSTOM_BASE_URL",
-        default_model="nvidia/nemotron-3-super-120b-a12b",
         default_base_url="https://integrate.api.nvidia.com/v1",
         connection_slug="openai-compatible",
         key_pattern=None,
@@ -1880,7 +1881,7 @@ def test_init_interactive_shows_warning_on_invalid_key_format(
 
 @patch("qwed_sdk.cli._bootstrap_api_key", return_value=("qwed_live_test_key", "demo-org"))
 @patch("qwed_sdk.cli._ensure_local_server_running", return_value=(True, False))
-@patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_custom_provider_map(default_model=""))
+@patch("qwed_sdk.cli._build_onboarding_provider_map", return_value=_custom_provider_map())
 @patch("qwed_sdk.cli._required_engine_report", return_value=(True, _engine_report()))
 @patch("qwed_sdk.cli._ensure_gitignore_protection_noninteractive")
 @patch("qwed_sdk.cli._ensure_gitignore_protection")
@@ -1889,7 +1890,7 @@ def test_init_interactive_shows_warning_on_invalid_key_format(
 @patch("qwed_new.providers.key_validator.test_connection", return_value=(True, "Connected"))
 @patch("qwed_new.providers.credential_store.write_env_file", return_value=".env")
 @patch("qwed_new.config.ensure_jwt_secret", return_value=TEST_TOKEN_MARKER)
-def test_init_interactive_prompts_for_model_when_default_empty(
+def test_init_interactive_prompts_for_model_when_none_is_set(
     _mock_jwt,
     _mock_write_env,
     _mock_test_connection,
@@ -1952,7 +1953,7 @@ def test_init_interactive_custom_retry_prompts_base_url_again(
     result = runner.invoke(
         init,
         ["--provider", "custom", "--skip-tests"],
-        input="custom-key\nhttps://custom.example/v1\ny\ncustom-key-2\nhttps://custom2.example/v1\nmodel-y\ndemo-org\n"
+        input="custom-key\nhttps://custom.example/v1\nmodel-x\ny\ncustom-key-2\nhttps://custom2.example/v1\nmodel-y\ndemo-org\n"
         + OWNER_INPUT,
     )
     assert result.exit_code == 0

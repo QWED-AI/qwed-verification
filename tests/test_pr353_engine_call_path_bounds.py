@@ -201,21 +201,25 @@ class TestProviderClientBounds:
 
     @pytest.mark.parametrize("provider_cls,env", [
         (OpenAIDirectProvider,
-         {"OPENAI_API_KEY": "sk-" + "test-sentinel-key-value"}),
+         {"OPENAI_API_KEY": "sk-" + "test-sentinel-key-value",
+          "OPENAI_MODEL": "gpt-4o-mini"}),
         (AzureOpenAIProvider,
          {"AZURE_OPENAI_ENDPOINT": "http://localhost:1",
           "AZURE_OPENAI_API_KEY": "test-sentinel",
           "AZURE_OPENAI_DEPLOYMENT": "test-deploy",
           "AZURE_OPENAI_API_VERSION": "2024-01-01"}),
-        (OllamaProvider, {}),
+        (OllamaProvider, {"OLLAMA_MODEL": "llama3"}),
         (OpenAICompatProvider,
-         {"CUSTOM_BASE_URL": "http://localhost:1/v1"}),
+         {"CUSTOM_BASE_URL": "http://localhost:1/v1",
+          "CUSTOM_MODEL": "gpt-4o-mini"}),
         (AnthropicProvider,
          {"ANTHROPIC_ENDPOINT": "http://localhost:1",
-          "ANTHROPIC_API_KEY": "test-sentinel"}),
+          "ANTHROPIC_API_KEY": "test-sentinel",
+          "ANTHROPIC_DEPLOYMENT": "claude-sonnet-4-5"}),
         (ClaudeOpusProvider,
          {"CLAUDE_OPUS_ENDPOINT": "http://localhost:1",
-          "CLAUDE_OPUS_API_KEY": "test-sentinel"}),
+          "CLAUDE_OPUS_API_KEY": "test-sentinel",
+          "CLAUDE_OPUS_DEPLOYMENT": "claude-opus-4-5"}),
     ])
     def test_client_carries_explicit_timeout_and_retries(self, monkeypatch, provider_cls, env):
         for key, value in env.items():

@@ -105,6 +105,99 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ### Changed
 
+- **QWED names no model: each provider runs the model you configure
+  (#574).** Runtime code fell back to models of its own when none was set,
+  such as `gpt-4o-mini`, `gpt-3.5-turbo`, `llama3`, `gemini-1.5-pro`,
+  `claude-sonnet-4-5` and `claude-sonnet-4-20250514`, and those names went
+  stale as providers retired models. `qwed verify --provider anthropic`
+  with no `--model` sent `gpt-3.5-turbo` to Anthropic, and the reasoning
+  trace called `claude-3-haiku-20240307` through the provider's client,
+  whatever model was configured.
+  - Each provider takes its model from the argument you pass or from its
+    variable, and raises when neither is set, naming the variable:
+    `OPENAI_MODEL`, `AZURE_OPENAI_DEPLOYMENT`, `ANTHROPIC_MODEL`,
+    `CLAUDE_OPUS_DEPLOYMENT`, `GEMINI_MODEL`, `OLLAMA_MODEL` or
+    `CUSTOM_MODEL`. The value is sent unchanged, so any model or deployment
+    ID the provider serves works, and nothing falls back to another model.
+    `auto` raises the same error when neither Azure OpenAI nor Anthropic can
+    run and either has no model, naming the variable of each side with none;
+    it raised a generic `RuntimeError`.
+  - The Anthropic provider reads `ANTHROPIC_MODEL`, the variable `qwed init`
+    and `.env.example` set; it read only `ANTHROPIC_DEPLOYMENT` before,
+    which still wins when set.
+  - `QWEDLocal`, `verify()` and the LangChain `QWEDTool` need `model=`.
+    `verify(query, provider=..., model=...)` uses the provider you name; it
+    always tried Ollama before. `QWEDTool` refuses a missing or blank model
+    when it is built, not when an agent first runs it.
+  - `qwed verify` and `qwed interactive` take `--model`, else the selected
+    provider's variable (`OLLAMA_MODEL`, `CUSTOM_MODEL`, `OPENAI_MODEL`,
+    `ANTHROPIC_MODEL` or `GEMINI_MODEL`), and stop with a message naming it
+    when neither is set. A blank `--model` counts as unset. `qwed init` asks
+    for the model without suggesting one; with `--non-interactive`, pass
+    `--model` or set the variable.
+  - Without `--provider`, `qwed interactive` runs the provider `qwed init`
+    saved (`ACTIVE_PROVIDER`), with its endpoint and key, as `qwed verify`
+    does. It always ran Ollama at its default address before. An
+    `ACTIVE_PROVIDER` that only the server runs (`azure_openai` or `auto`,
+    say) stops `qwed verify` and `qwed interactive` with a message naming
+    it, where they asked for `--model` and then failed to start a client.
+    Both read `ACTIVE_PROVIDER` as the server does: in any case, with `-`,
+    `_` or a space, and with `openai_direct` run as `openai`.
+  - The saved provider gets a key only from `--api-key` given on the command
+    line or from its own variable (`CUSTOM_API_KEY`, `OPENAI_API_KEY`,
+    `ANTHROPIC_API_KEY`, or for Gemini `GOOGLE_API_KEY`, else
+    `GEMINI_API_KEY`, as the server reads them). `QWED_API_KEY`, which
+    `--api-key` also reads, may be the QWED server's key: it went to the
+    saved provider's endpoint before, over its own key. A saved `anthropic`
+    with `ANTHROPIC_ENDPOINT` set now stops: the CLI calls the Anthropic API
+    directly, and sent the key and the prompt there instead of to that
+    endpoint. `--provider` with `QWED_API_KEY` works as before.
+  - `qwed verify` loads the `.env` files `qwed init` writes without loading
+    the server's settings, as `qwed interactive` does. It stopped with a
+    traceback when the server's `API_KEY_SECRET` was unset, though it calls
+    the model provider directly and uses no server secret.
+  - `ReasoningVerifier()` uses the provider `ACTIVE_PROVIDER` selects
+    (Ollama when it is unset, as the server reads it), not always
+    Anthropic, and loads every provider the server can; `openai` named a
+    module that does not exist. A provider with no model, or a name QWED does
+    not know, makes the result BLOCKED with the setting to fix
+    (`reasoning_verifier.provider_config_error`);
+    one that cannot be built for another reason is no provider: the reason
+    is logged and the result says `reasoning_verifier.no_provider`. The
+    reasoning trace comes only from a provider's own `complete()` call,
+    which no built-in provider has, so it is unavailable for them (#587). The
+    verifier never returns VERIFIED, before and after.
+  - The server sends each request to the provider the request names, else
+    to the one `ACTIVE_PROVIDER` selects. A query with `write`, `compose`,
+    `essay`, `creative` or `story` in it went to Anthropic, whatever was
+    configured. A request that names a provider QWED does not know is
+    refused, with `unknown` as its provider; before, the configured provider
+    ran it.
+  - An `ACTIVE_PROVIDER` that names no provider QWED knows stops the request
+    with an error naming `ACTIVE_PROVIDER`; before, it switched to `auto`
+    (Azure OpenAI, then Anthropic). A blank one counts as unset, as a blank
+    model does. Logic and statistics verification return this error, and
+    the one naming a missing model variable, and log it; they gave only a
+    generic translation failure. Other provider errors still do.
+  - `/verify/fact` with a `provider` its advisory fallback cannot run (one
+    QWED does not know, or one with no model) is BLOCKED with that error,
+    and keeps the deterministic verdict and evidence; before, the fallback
+    dropped the advisory without saying why. Other advisory failures still
+    leave the deterministic result.
+  - `DSLLogicVerifier.verify_from_natural_language()` and `translate_to_dsl()`
+    with no `provider` use the configured one; they used Azure OpenAI.
+  - A provider YAML's `default_model` is still used; one without it gets no
+    model in its place.
+  - To upgrade, set the model variable for the provider you use; code that
+    builds `QWEDLocal`, calls `verify()` or builds the LangChain `QWEDTool`
+    passes `model=`, and gets a `ValueError` without it. Check
+    that `ACTIVE_PROVIDER` is one of `openai`, `openai_direct`,
+    `openai_compat`, `azure_openai`, `anthropic`, `claude_opus`, `gemini`,
+    `ollama` or `auto`. If `qwed verify` ran the saved provider with the key
+    in `QWED_API_KEY`, set that provider's key variable or pass `--api-key`.
+    A request that names a provider must name one of these. Settings that
+    already name a model work as before.
+
 - **The CSV exports carry the stored verdict and admission, and take a
   period (#508).** `GET /admin/compliance/export/csv` was fixed to the last
   30 days, cut the query to 100 characters and the signature to 16, and had

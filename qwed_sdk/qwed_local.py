@@ -613,7 +613,7 @@ class QWEDLocal:
         provider: Optional[str] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        model: str = "gpt-3.5-turbo",
+        model: Optional[str] = None,
         cache: bool = True,  # NEW: Enable caching by default
         cache_ttl: int = 86400,  # 24 hours
         mask_pii: bool = False,  # NEW: Enable PII masking
@@ -627,7 +627,8 @@ class QWEDLocal:
             provider: 'openai', 'anthropic', 'gemini', or None for custom
             api_key: API key for cloud providers (not needed for Ollama)
             base_url: Custom endpoint (e.g., http://localhost:11434/v1 for Ollama)
-            model: Model name (e.g., 'llama3', 'gpt-4o-mini', 'claude-3-opus')
+            model: Model name, required (e.g., 'llama3', 'gpt-4o-mini', 'claude-3-opus').
+                QWED names no default model.
             cache: Enable smart caching (default: True)
             cache_ttl: Cache time-to-live in seconds (default: 24 hours)
             **kwargs: Additional arguments for LLM client
@@ -648,6 +649,11 @@ class QWEDLocal:
                 cache=False  # Always fresh
             )
         """
+        if not model or not model.strip():
+            raise ValueError(
+                "QWEDLocal needs a model: pass model='...' with a model your "
+                "provider serves. QWED names no default model."
+            )
         self.provider = provider
         self.model = model
         self.api_key = api_key
@@ -1326,17 +1332,28 @@ def verify(query: str, **kwargs) -> VerificationResult:
     """
     Quick verification without creating client.
     
-    Uses Ollama by default if available, falls back to requiring API key.
+    Uses Ollama by default if available; pass provider= or base_url= to use
+    another LLM. model= is required: QWED names no default model.
     
     Example:
-        result = verify("What is 2+2?")
+        result = verify("What is 2+2?", model="llama3")
         print(result.value)  # 4
     """
+    model = kwargs.get("model")
+    if not model:
+        raise ValueError(
+            "verify() needs model=..., e.g. verify(query, model='llama3'). "
+            "QWED names no default model."
+        )
+    # The caller chose the LLM: use it, not Ollama.
+    if kwargs.get("provider") or kwargs.get("base_url"):
+        return QWEDLocal(**kwargs).verify(query)
+
     # Try Ollama first (FREE!)
     try:
         client = QWEDLocal(
             base_url="http://localhost:11434/v1",
-            model=kwargs.get("model", "llama3")
+            model=model
         )
         return client.verify(query)
     except Exception:
@@ -1345,5 +1362,5 @@ def verify(query: str, **kwargs) -> VerificationResult:
             "Ollama not running. Either:\n"
             "1. Start Ollama: ollama serve\n"
             "2. Or specify provider explicitly:\n"
-            "   verify(query, provider='openai', api_key='sk-...')"
+            "   verify(query, provider='openai', api_key='sk-...', model='...')"
         )

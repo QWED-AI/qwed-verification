@@ -8,7 +8,7 @@ fails over to the secondary provider if the primary one fails.
 import logging
 from typing import Dict, Any, List
 from qwed_new.core.schemas import MathVerificationTask, LogicVerificationTask
-from qwed_new.providers.base import LLMProvider
+from qwed_new.providers.base import LLMProvider, ProviderConfigError
 from qwed_new.providers.azure_openai import AzureOpenAIProvider
 from qwed_new.providers.anthropic import AnthropicProvider
 
@@ -18,17 +18,22 @@ logger = logging.getLogger(__name__)
 class AutoShiftProvider(LLMProvider):
     """
     A composite provider that implements the "Auto-Shift" failover logic.
-    Primary: Azure OpenAI (GPT-4)
-    Secondary: Anthropic (Claude 3.5 Sonnet)
+    Primary: Azure OpenAI, running AZURE_OPENAI_DEPLOYMENT (e.g. GPT-4)
+    Secondary: Anthropic, running ANTHROPIC_MODEL (e.g. Claude 3.5 Sonnet)
+
+    Each runs only its configured model. It runs only when ACTIVE_PROVIDER
+    (or the request) selects "auto".
     """
     
     def __init__(self):
+        errors = []
         try:
             self.primary = AzureOpenAIProvider()
             logger.info("Primary Provider (Azure OpenAI) initialized.")
         except Exception as e:
             logger.warning(f"Failed to initialize Primary Provider: {e}")
             self.primary = None
+            errors.append(e)
             
         try:
             self.secondary = AnthropicProvider()
@@ -36,8 +41,17 @@ class AutoShiftProvider(LLMProvider):
         except Exception as e:
             logger.warning(f"Failed to initialize Secondary Provider: {e}")
             self.secondary = None
+            errors.append(e)
             
         if not self.primary and not self.secondary:
+            # A side with no model names the setting to fix, as a single
+            # provider does. Only those messages are passed on: they carry
+            # nothing from a provider, where another failure's may.
+            config_errors = [e for e in errors if isinstance(e, ProviderConfigError)]
+            if config_errors:
+                raise ProviderConfigError(
+                    "Auto-shift can run neither of its providers. " + " ".join(map(str, config_errors))
+                )
             raise RuntimeError("CRITICAL: Both Primary and Secondary providers failed to initialize.")
 
     def _execute_with_fallback(self, method_name: str, *args, **kwargs):

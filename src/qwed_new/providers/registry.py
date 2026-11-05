@@ -42,7 +42,9 @@ class ProviderMeta:
     install_cmd: Optional[str] = None
     docs_url: str = ""
     is_local: bool = False             # No network needed (Ollama)
-    default_model: str = "gpt-4o-mini"
+    # QWED names no model: this is set only from a model the user configured
+    # (a provider YAML's default_model).
+    default_model: Optional[str] = None
 
 
 # Shared descriptions
@@ -60,13 +62,12 @@ PROVIDER_REGISTRY: Dict[str, ProviderMeta] = {
         auth_type=AuthType.API_KEY,
         env_vars=[
             EnvVar("OPENAI_API_KEY", "Your OpenAI API key"),
-            EnvVar("OPENAI_MODEL", _MODEL_DESC, required=False, default="gpt-4o-mini"),
+            EnvVar("OPENAI_MODEL", _MODEL_DESC),
         ],
         key_pattern=r"^sk-(proj-)?[A-Za-z0-9_-]{20,}$",
         key_hint="sk-... or sk-proj-...",
         install_cmd="pip install openai",
         docs_url="https://platform.openai.com/api-keys",
-        default_model="gpt-4o-mini",
     ),
 
     "anthropic": ProviderMeta(
@@ -75,13 +76,12 @@ PROVIDER_REGISTRY: Dict[str, ProviderMeta] = {
         auth_type=AuthType.API_KEY,
         env_vars=[
             EnvVar("ANTHROPIC_API_KEY", "Your Anthropic API key"),
-            EnvVar("ANTHROPIC_MODEL", _MODEL_DESC, required=False, default="claude-sonnet-4-20250514"),
+            EnvVar("ANTHROPIC_MODEL", _MODEL_DESC),
         ],
         key_pattern=r"^sk-ant-[A-Za-z0-9_-]{20,}$",
         key_hint="sk-ant-...",
         install_cmd="pip install anthropic",
         docs_url="https://console.anthropic.com/settings/keys",
-        default_model="claude-sonnet-4-20250514",
     ),
 
     "ollama": ProviderMeta(
@@ -90,13 +90,12 @@ PROVIDER_REGISTRY: Dict[str, ProviderMeta] = {
         auth_type=AuthType.LOCAL,
         env_vars=[
             EnvVar("OLLAMA_BASE_URL", "Ollama endpoint", required=False, default="http://localhost:11434/v1"),
-            EnvVar("OLLAMA_MODEL", _MODEL_DESC, required=False, default="llama3"),
+            EnvVar("OLLAMA_MODEL", _MODEL_DESC),
         ],
         key_hint="No API key needed — runs locally",
         install_cmd="ollama pull llama3",
         docs_url="https://ollama.com/library",
         is_local=True,
-        default_model="llama3",
     ),
 
     "openai-compatible": ProviderMeta(
@@ -106,12 +105,11 @@ PROVIDER_REGISTRY: Dict[str, ProviderMeta] = {
         env_vars=[
             EnvVar("CUSTOM_BASE_URL", "API endpoint URL (e.g., https://inference.do-ai.run/v1)"),
             EnvVar("CUSTOM_API_KEY", "API key for the endpoint"),
-            EnvVar("CUSTOM_MODEL", _MODEL_DESC, required=False, default="gpt-4o-mini"),
+            EnvVar("CUSTOM_MODEL", _MODEL_DESC),
         ],
         key_hint="Any bearer token format",
         install_cmd="pip install openai",
         docs_url="",
-        default_model="gpt-4o-mini",
     ),
 }
 
@@ -129,7 +127,7 @@ def _get_dynamic_providers() -> Dict[str, ProviderMeta]:
             name = slug.capitalize()
             base_url = config.get("base_url", "")
             api_key_env = config.get("api_key_env", "CUSTOM_API_KEY")
-            def_model = config.get("default_model", "gpt-4o-mini")
+            def_model = config.get("default_model") or None
             
             p = ProviderMeta(
                 slug=f"yaml-{slug}",
@@ -138,7 +136,7 @@ def _get_dynamic_providers() -> Dict[str, ProviderMeta]:
                 env_vars=[
                     EnvVar("CUSTOM_BASE_URL", f"Base URL (default: {base_url})", default=base_url),
                     EnvVar("CUSTOM_API_KEY", f"API Key for {name} (Maps to {api_key_env})"),
-                    EnvVar("CUSTOM_MODEL", _MODEL_DESC, required=False, default=def_model),
+                    EnvVar("CUSTOM_MODEL", _MODEL_DESC, required=def_model is None, default=def_model),
                 ],
                 key_hint=f"Mapped to {api_key_env}",
                 default_model=def_model,

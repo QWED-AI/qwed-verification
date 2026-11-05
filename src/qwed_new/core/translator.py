@@ -8,8 +8,9 @@ It selects the active provider based on configuration.
 import ast
 
 from qwed_new.config import settings, ProviderType
+from qwed_new.core.router import UNKNOWN_PROVIDER
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider
+from qwed_new.providers.base import LLMProvider, ProviderConfigError
 from qwed_new.providers.azure_openai import AzureOpenAIProvider
 from qwed_new.providers.anthropic import AnthropicProvider
 from qwed_new.providers.claude_opus import ClaudeOpusProvider
@@ -47,11 +48,14 @@ class TranslationLayer:
             ProviderType.GEMINI.value: GeminiProvider,
             ProviderType.OLLAMA.value: OllamaProvider,
         }
-        # Default fallback
+        # The configured provider. A blank ACTIVE_PROVIDER is unset, which
+        # Settings reads as Ollama. A name QWED does not know is kept, so
+        # _get_provider refuses it and names ACTIVE_PROVIDER: it does not
+        # switch to "auto", a provider the user did not select (#574).
         configured_default = self._normalize_provider_key(
             getattr(settings.ACTIVE_PROVIDER, "value", settings.ACTIVE_PROVIDER)
         )
-        self.default_provider = configured_default if configured_default in self._provider_classes else ProviderType.AUTO.value
+        self.default_provider = configured_default or ProviderType.OLLAMA.value
         self.last_resolved_provider: str | None = None
 
     def _normalize_provider_key(self, provider_key: str | None = None) -> str | None:
@@ -68,13 +72,21 @@ class TranslationLayer:
         return aliases.get(normalized, normalized)
     
     def _get_provider(self, provider_key: str | None = None) -> LLMProvider:
-        """Get the requested provider or default (lazy initialization)."""
-        requested = self._normalize_provider_key(provider_key) or self.default_provider
-        key = requested
+        """Get the provider the caller names, else the configured one (lazy
+        initialization). A name QWED does not know is refused, never replaced
+        by another provider (#574)."""
+        key = self._normalize_provider_key(provider_key) or self.default_provider
         if key not in self._provider_classes:
-            # Fallback to default if key is invalid/unknown.
-            key = self.default_provider
-        
+            # A label, never the caller's text: it reaches responses and metrics.
+            self.last_resolved_provider = UNKNOWN_PROVIDER
+            names = ", ".join(sorted(self._provider_classes))
+            if key == self.default_provider:
+                raise ProviderConfigError(
+                    f"ACTIVE_PROVIDER is set to '{key}', which is not a provider QWED knows. "
+                    f"Set it to one of: {names}."
+                )
+            raise ProviderConfigError(f"The request names a provider QWED does not know. Name one of: {names}.")
+
         self.last_resolved_provider = key
 
         # Lazy instantiation: only create provider when first requested

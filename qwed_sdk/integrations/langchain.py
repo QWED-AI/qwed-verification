@@ -7,7 +7,7 @@ Usage:
     from qwed_sdk.integrations.langchain import QWEDTool
     from langchain.agents import initialize_agent
     
-    tool = QWEDTool()
+    tool = QWEDTool(model="gpt-4o-mini")
     agent = initialize_agent(tools=[tool], llm=llm)
 """
 from typing import Optional, Type
@@ -15,7 +15,7 @@ from typing import Optional, Type
 try:
     from langchain_core.tools import BaseTool
     from langchain_core.callbacks import CallbackManagerForToolRun
-    from pydantic import BaseModel, Field
+    from pydantic import BaseModel, Field, field_validator
     LANGCHAIN_AVAILABLE = True
 except ImportError:
     LANGCHAIN_AVAILABLE = False
@@ -67,7 +67,7 @@ class QWEDTool(BaseTool):
         
     Examples:
         >>> from qwed_sdk.integrations.langchain import QWEDTool
-        >>> tool = QWEDTool(provider="openai", api_key="sk-...")
+        >>> tool = QWEDTool(provider="openai", api_key="sk-...", model="gpt-4o-mini")
         >>> result = tool.run("What is the derivative of x^2?")
         >>> print(result)
         ✅ VERIFIED: 2*x
@@ -92,9 +92,20 @@ class QWEDTool(BaseTool):
     api_key: Optional[str] = None
     """API key for the LLM provider (or set via environment variable)"""
     
-    model: str = "gpt-4o-mini"
-    """Model name (e.g., 'gpt-4o-mini', 'claude-3-haiku-20240307')"""
-    
+    model: str
+    """Model name, required (e.g., 'gpt-4o-mini', 'claude-3-haiku-20240307'). QWED names no default model."""
+
+    @field_validator("model")
+    @classmethod
+    def _model_is_set(cls, model: str) -> str:
+        # Refused when the tool is built, not when an agent first runs it.
+        if not model.strip():
+            raise ValueError(
+                "QWEDTool needs a model: pass model='...' with a model your "
+                "provider serves. QWED names no default model."
+            )
+        return model
+
     mask_pii: bool = False
     """Enable PII masking for privacy protection (requires qwed[pii])"""
     

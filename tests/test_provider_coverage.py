@@ -6,6 +6,14 @@ from qwed_new.providers.openai_compat import OpenAICompatProvider
 from qwed_new.providers.ollama_provider import OllamaProvider
 from qwed_new.core.schemas import MathVerificationTask, LogicVerificationTask
 
+
+@pytest.fixture(autouse=True)
+def _configured_models(monkeypatch):
+    """QWED names no model: each provider's model is set as a user sets it."""
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("CUSTOM_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("OLLAMA_MODEL", "llama3")
+
 def _create_mock_response(content: str):
     """Creates a mock completion text response."""
     mock_msg = MagicMock()

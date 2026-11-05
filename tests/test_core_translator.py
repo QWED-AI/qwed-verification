@@ -8,19 +8,18 @@ from qwed_new.config import ProviderType
 from qwed_new.core.translator import SecurityError
 
 class TestTranslationLayerProviderFallback:
-    @patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-mock"})
-    def test_get_provider_fallback_to_default(self):
-        """Test that invalid provider falls back to default provider."""
+    @patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-mock", "OPENAI_MODEL": "gpt-4o-mini"})
+    def test_get_provider_refuses_an_unknown_key(self):
+        """An unknown provider is refused: the default does not stand in for
+        the one the caller named (#574)."""
         tl = TranslationLayer()
         # Mock default provider setting
         tl.default_provider = ProviderType.OPENAI
-        
-        # Requesting a non-existent provider key
-        provider = tl._get_provider("invalid-provider-key-123")
-        
-        # It should fall back to OPENAI
-        assert list(tl._providers.keys())[0] == ProviderType.OPENAI
-        assert tl._providers[ProviderType.OPENAI] is provider
+
+        with pytest.raises(ValueError, match="The request names a provider QWED does not know"):
+            tl._get_provider("invalid-provider-key-123")
+
+        assert tl._providers == {}
 
 
 def test_validate_math_output_uses_generic_message_for_unsafe_expression():

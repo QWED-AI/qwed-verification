@@ -17,7 +17,7 @@ from typing import Dict, Any, List
 
 from openai import OpenAI
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider
+from qwed_new.providers.base import LLMProvider, configured_model
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +42,12 @@ class OpenAICompatProvider(LLMProvider):
     ):
         self.base_url = base_url or os.getenv("CUSTOM_BASE_URL")
         self.api_key = api_key or os.getenv("CUSTOM_API_KEY")
-        self.model = model or os.getenv("CUSTOM_MODEL", "gpt-4o-mini")
 
         if not self.base_url:
             raise ValueError(
                 "Base URL not found. Set CUSTOM_BASE_URL env var or run: qwed init"
             )
+        self.model = configured_model(model, "CUSTOM_MODEL", "the OpenAI-compatible provider")
 
         # Handle no-auth endpoints: use dummy key if None
         client_api_key = self.api_key if self.api_key else "dummy"
