@@ -165,14 +165,21 @@ def test_one_unreadable_file_denies_an_otherwise_clean_scan(monkeypatch, workspa
     name, content = MODES[mode]
     _write(workspace, name, content)
     _write(workspace, "locked" + Path(name).suffix, content)
-    real_read_text = Path.read_text
+    real_read_text, real_read_bytes = Path.read_text, Path.read_bytes
 
     def read_text(self, *args, **kwargs):
         if self.name.startswith("locked"):
             raise PermissionError("denied")
         return real_read_text(self, *args, **kwargs)
 
+    def read_bytes(self):
+        # scan-code reads bytes, to decode them as Python does.
+        if self.name.startswith("locked"):
+            raise PermissionError("denied")
+        return real_read_bytes(self)
+
     monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
 
     exit_code, out = _run(monkeypatch, workspace, mode)
 

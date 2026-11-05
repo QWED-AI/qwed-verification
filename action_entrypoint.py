@@ -7,7 +7,11 @@ Supports:
 - scan-code: Batch scan Python files for dangerous patterns
 - verify-shell: Lint shell scripts for RCE patterns
 """
+import ast
+import codecs
+import io
 import os
+import tokenize
 import sys
 import json
 import hashlib
@@ -25,6 +29,8 @@ from qwed_sdk.guards.system_guard import SystemGuard
 from qwed_sdk.guards.config_guard import ConfigGuard
 from qwed_new.guards.process_guard import ProcessVerifier
 from qwed_new.core.verification_context import _canonical_json
+from qwed_new.core.code_verifier import CodeVerifier
+from qwed_new.core.diagnostics import DiagnosticStatus
 
 
 def get_env(name: str, default: str = "") -> str:
@@ -301,8 +307,6 @@ def action_scan_secrets():
 # ============== SCAN-CODE MODE ==============
 def action_scan_code():
     """Batch scan Python files for dangerous patterns."""
-    import ast
-    
     paths = get_env("PATHS")
     output_format = get_env("OUTPUT_FORMAT", "text")
 
@@ -311,58 +315,220 @@ def action_scan_code():
 
     files, errors = expand_paths(paths, CODE_PATTERNS, (".py",))
     findings = []
-    files_scanned = 0
-    
-    dangerous_calls = ["eval", "exec", "compile", "__import__", "subprocess", "os.system"]
-    dangerous_imports = ["os", "subprocess", "sys", "shutil"]
-    
-    for filepath in files:
-        try:
-            content = filepath.read_text(errors="ignore")
-            tree = ast.parse(content)
-            files_scanned += 1
+    warnings = []
+    files_scanned = sum(_scan_code_file(filepath, findings, warnings, errors) for filepath in files)
 
-            for node in ast.walk(tree):
-                # Check dangerous function calls
-                if isinstance(node, ast.Call):
-                    if isinstance(node.func, ast.Name):
-                        if node.func.id in dangerous_calls:
-                            findings.append({
-                                "file": str(filepath),
-                                "line": node.lineno,
-                                "type": "DANGEROUS_CALL",
-                                "message": f"Dangerous function: {node.func.id}()"
-                            })
-                    elif isinstance(node.func, ast.Attribute):
-                        full_name = f"{getattr(node.func.value, 'id', '')}.{node.func.attr}"
-                        if full_name in dangerous_calls or node.func.attr in ["system", "popen", "call", "run"]:
-                            findings.append({
-                                "file": str(filepath),
-                                "line": node.lineno,
-                                "type": "DANGEROUS_CALL",
-                                "message": f"Dangerous function: {full_name}()"
-                            })
-                
-                # Check dangerous imports
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        if alias.name in dangerous_imports:
-                            findings.append({
-                                "file": str(filepath),
-                                "line": node.lineno,
-                                "type": "DANGEROUS_IMPORT",
-                                "message": f"System module imported: {alias.name}"
-                            })
-                            
-        except SyntaxError:
-            print(f"   ⚠️  Could not parse {filepath}")
-            errors.append(f"could not parse {filepath}")
-        except Exception as e:
-            print(f"   ⚠️  Could not scan {filepath}: {e}")
-            errors.append(f"could not scan {filepath}")
-    
-    output_results(findings, output_format, "code", files_scanned)
+    output_results(findings, output_format, "code", files_scanned, warnings=warnings)
     _finish_scan("code", findings, files_scanned, errors)
+
+
+_SCAN_DANGEROUS_CALLS = ("eval", "exec", "compile", "__import__", "subprocess", "os.system")
+_SCAN_DANGEROUS_ATTRIBUTE_CALLS = ("system", "popen", "call", "run")
+_SCAN_DANGEROUS_IMPORTS = ("os", "subprocess", "sys", "shutil")
+
+
+def _scan_code_file(filepath, findings: list, warnings: list, errors: list) -> bool:
+    """Scan one file into ``findings``, ``warnings`` and ``errors``; True
+    when it was read and parsed (it counts as scanned)."""
+    try:
+        content = _read_python_source(filepath)
+        tree = ast.parse(content)
+    except UnicodeError:
+        print(f"   ⚠️  Could not read {filepath}: Python source here must be UTF-8")
+        errors.append(f"{filepath} is not UTF-8 source")
+        return False
+    except SyntaxError:
+        print(f"   ⚠️  Could not parse {filepath}")
+        errors.append(f"could not parse {filepath}")
+        return False
+    except Exception as e:
+        print(f"   ⚠️  Could not scan {filepath}: {e}")
+        errors.append(f"could not scan {filepath}")
+        return False
+    try:
+        _local_scan_findings(tree, filepath, findings, warnings)
+        # The local checks match names as written, so an alias, a
+        # from-import, importlib or getattr reaches the same calls unseen.
+        # CodeVerifier, the /verify/code engine, resolves those; a file it
+        # could not verify is not admitted.
+        verdict = CodeVerifier().verify_code(content, language="python")
+        if verdict.status is not DiagnosticStatus.VERIFIED:
+            print(f"   ⚠️  Could not verify {filepath}")
+            errors.append(f"could not verify {filepath}")
+            return True
+        findings.extend(_code_verifier_findings(filepath, verdict.developer_fields, findings))
+    except Exception as e:
+        print(f"   ⚠️  Could not scan {filepath}: {e}")
+        errors.append(f"could not scan {filepath}")
+    return True
+
+
+def _local_scan_findings(tree, filepath, findings: list, warnings: list) -> None:
+    """The scan's own name checks: dangerous calls (by name, attribute or a
+    constant getattr) and imports of system modules."""
+    aliases = _import_aliases(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in _REFLECTION_CALLS:
+                _check_reflection(node, filepath, aliases, findings, warnings)
+            name = _dangerous_call_name(node.func)
+            if name:
+                findings.append({
+                    "file": str(filepath),
+                    "line": node.lineno,
+                    "type": "DANGEROUS_CALL",
+                    "message": f"Dangerous function: {name}()",
+                })
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            modules = [alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module or ""]
+            findings.extend(
+                {
+                    "file": str(filepath),
+                    "line": node.lineno,
+                    "type": "DANGEROUS_IMPORT",
+                    "message": f"System module imported: {module}",
+                }
+                for module in modules if module in _SCAN_DANGEROUS_IMPORTS
+            )
+
+
+def _dangerous_call_name(func) -> str:
+    """The name to report when a call's target is one the scan lists."""
+    if isinstance(func, ast.Name):
+        return func.id if func.id in _SCAN_DANGEROUS_CALLS else ""
+    if isinstance(func, ast.Attribute):
+        full_name = f"{getattr(func.value, 'id', '')}.{func.attr}"
+        if full_name in _SCAN_DANGEROUS_CALLS or func.attr in _SCAN_DANGEROUS_ATTRIBUTE_CALLS:
+            return full_name
+    return ""
+
+
+# getattr(x, "name") reaches x.name as surely as writing it, so a constant name
+# is checked as that attribute: against the scan's own list and CodeVerifier's
+# code- and process-execution tables, with import aliases resolved. A name
+# computed at run time cannot be checked; it is reported as a warning, which
+# does not fail the scan.
+_REFLECTION_CALLS = frozenset({"getattr", "setattr", "delattr"})
+_SCAN_ATTRIBUTE_NAMES = frozenset({"system", "popen", "call", "run", "eval", "exec", "compile", "__import__"})
+_CODE_EXECUTION_NAMES = frozenset(CodeVerifier.PYTHON_CODE_EXECUTION_NAMES)
+_PROCESS_EXECUTION = tuple(CodeVerifier.PYTHON_PROCESS_EXECUTION)
+
+
+def _read_python_source(path) -> str:
+    """The text Python runs from *path*: decoded by its coding declaration,
+    as the interpreter does. A declaration other than UTF-8 is refused: in
+    UTF-7, "#+AAo-..." is a comment to a UTF-8 reader and new statements to
+    Python, so the scan would read different code from what runs. Bytes that
+    are not valid UTF-8 are refused too, rather than dropped."""
+    data = path.read_bytes()
+    encoding, _ = tokenize.detect_encoding(io.BytesIO(data).readline)
+    # By codec, so the spellings Python accepts for UTF-8 (UTF8, utf_8) pass.
+    if codecs.lookup(encoding).name not in ("utf-8", "utf-8-sig"):
+        raise UnicodeError(f"source encoding {encoding}")
+    return data.decode(encoding)
+
+
+def _import_aliases(tree) -> dict:
+    """Local name -> dotted name it was imported as, for one file."""
+    aliases = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    aliases[alias.asname] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    return aliases
+
+
+def _dotted(node, aliases: dict) -> str:
+    """Dotted name of a Name or Attribute chain, its first part resolved."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return ""
+    parts.append(aliases.get(node.id, node.id))
+    return ".".join(reversed(parts))
+
+
+def _dangerous_attribute_name(owner: str, name: str) -> bool:
+    full = f"{owner}.{name}" if owner else name
+    return (
+        name in _SCAN_ATTRIBUTE_NAMES
+        or name in _CODE_EXECUTION_NAMES
+        or full.startswith(_PROCESS_EXECUTION)
+    )
+
+
+def _check_reflection(node, filepath, aliases: dict, findings: list, warnings: list) -> None:
+    """A getattr, setattr or delattr call: a finding when its constant name is
+    dangerous, a warning when its name is computed."""
+    if len(node.args) < 2:
+        return
+    name = node.args[1]
+    if isinstance(name, ast.Constant) and isinstance(name.value, str):
+        owner = _dotted(node.args[0], aliases)
+        if _dangerous_attribute_name(owner, name.value):
+            findings.append({
+                "file": str(filepath),
+                "line": node.lineno,
+                "type": "DANGEROUS_CALL",
+                "message": f"Dangerous attribute by name: {owner or '<object>'}.{name.value}",
+            })
+        return
+    warnings.append({
+        "file": str(filepath),
+        "line": node.lineno,
+        "type": "DYNAMIC_ATTRIBUTE",
+        "message": f"{node.func.id}() with a computed name was not checked",
+    })
+
+
+# scan-code checks repository code for code and process execution, the scope
+# of its own list. CodeVerifier also refuses file and network access, which
+# code it is asked to admit for running must not do but a repository's code
+# normally does, so those findings are not taken. getattr, setattr,
+# __class__ and __dict__ are ordinary reflection; what they can reach (the
+# builtins, a string naming exec, __subclasses__) is a finding of its own.
+_SCAN_CODE_FINDING_TYPES = frozenset(
+    {"dangerous_function", "dangerous_attribute", "process_execution", "remote_code_execution"}
+)
+_SCAN_CODE_REFLECTION = frozenset({"getattr", "setattr", "__class__", "__dict__"})
+
+
+def _code_verifier_findings(filepath, fields: dict, findings: list) -> list:
+    """CodeVerifier's code- and process-execution findings for one file, on
+    lines the scan has not already reported. A file it calls unsafe without
+    saying where gets one finding for the file."""
+    reported = {f["line"] for f in findings if f["file"] == str(filepath)}
+    added = []
+    for issue in fields.get("issues", []):
+        line = issue.get("line_number")
+        if (
+            issue.get("severity") != "CRITICAL"
+            or issue.get("type") not in _SCAN_CODE_FINDING_TYPES
+            or issue.get("pattern") in _SCAN_CODE_REFLECTION
+            or line in reported
+        ):
+            continue
+        reported.add(line)
+        added.append({
+            "file": str(filepath),
+            "line": line if line is not None else "?",
+            "type": str(issue.get("type") or "unsafe_code").upper(),
+            "message": str(issue.get("description") or "Unsafe code"),
+        })
+    if fields.get("is_safe") is not True and not fields.get("issues"):
+        added.append({
+            "file": str(filepath),
+            "line": "?",
+            "type": "UNSAFE_CODE",
+            "message": "CodeVerifier did not admit this file",
+        })
+    return added
 
 
 # ============== VERIFY-SHELL MODE ==============
@@ -482,58 +648,82 @@ def action_verify_process():
 
 
 # ============== OUTPUT HELPERS ==============
-def output_results(findings: list, format: str, scan_type: str, files_scanned: int | None = None):
-    """Output findings in requested format."""
-    
-    """Output findings in requested format."""
-    
+def output_results(findings: list, format: str, scan_type: str, files_scanned: int | None = None, warnings: list | None = None):
+    """Output findings in requested format. Warnings are shown but do not fail
+    the scan: a pass means no known dangerous pattern was found, not that the
+    code is safe."""
+    warnings = warnings or []
+
     # NOTE: This function is NO LONGER called for "secrets" scan type.
     # Secret scanning handles its own output to prevent taint flow.
 
     # For valid non-secret scans (code, shell), we can show safe details
     if format == "json":
-        # Sanitize findings for JSON output
-        safe_findings = []
-        for f in findings:
-            safe_findings.append({
-                "type": f.get("type", "UNKNOWN"),
-                "file": os.path.basename(f.get("file", "")), # Only show basename
-                "line": f.get("line", "?")
-            })
-        print(json.dumps({"findings": safe_findings, "count": len(findings)}, indent=2))
-        
+        print(json.dumps(_json_report(findings, warnings), indent=2))
     elif format == "sarif":
-        sarif = generate_sarif(findings, scan_type)
+        sarif = generate_sarif(findings, scan_type, warnings=warnings)
         sarif_path = "qwed-results.sarif"
         with open(sarif_path, "w") as f:
             json.dump(sarif, f, indent=2)
         print(f"📊 SARIF output written to: {sarif_path}")
         set_output("sarif_file", sarif_path)
-        
     else:  # text
-        if findings:
-            print(f"\n❌ Found {len(findings)} issue(s):\n")
-            for f in findings[:20]:  # Limit output
-                safe_file = os.path.basename(f.get("file", "?"))
-                # Sanitize output variables to prevent injection/leakage (CodeQL Requirement)
-                raw_type = str(f.get("type", "UNKNOWN"))
-                safe_type = "".join(ch for ch in raw_type if ch.isalnum() or ch in ("_", "-")) or "UNKNOWN"
-                
-                raw_line = f.get("line", "?")
-                safe_line = str(raw_line) if isinstance(raw_line, (int, str)) else "?"
-                
-                print(f"   [{safe_type}] {safe_file}:{safe_line}")
-                print(f"   └── Detected potential {safe_type} issue.\n")
-            if len(findings) > 20:
-                print(f"   ... and {len(findings) - 20} more issues.")
-        elif files_scanned is None:
+        _print_text_findings(findings, files_scanned)
+        _print_text_warnings(warnings)
+    if scan_type == "code":
+        set_output("warnings_count", str(len(warnings)))
+
+
+def _safe_line(item: dict) -> str:
+    raw_line = item.get("line", "?")
+    return str(raw_line) if isinstance(raw_line, (int, str)) else "?"
+
+
+def _json_report(findings: list, warnings: list) -> dict:
+    """Findings and warnings for JSON output, with file basenames only."""
+    def safe(item: dict) -> dict:
+        return {
+            "type": item.get("type", "UNKNOWN"),
+            "file": os.path.basename(item.get("file", "")),  # Only show basename
+            "line": item.get("line", "?"),
+        }
+
+    return {"findings": [safe(f) for f in findings], "count": len(findings), "warnings": [safe(w) for w in warnings]}
+
+
+def _print_text_findings(findings: list, files_scanned: int | None) -> None:
+    if not findings:
+        if files_scanned is None:
             print("\n✅ No issues found!\n")
         elif files_scanned:
             print(f"\n✅ No issues found in {files_scanned} file(s).\n")
+        return
+    print(f"\n❌ Found {len(findings)} issue(s):\n")
+    for f in findings[:20]:  # Limit output
+        safe_file = os.path.basename(f.get("file", "?"))
+        # Sanitize output variables to prevent injection/leakage (CodeQL Requirement)
+        raw_type = str(f.get("type", "UNKNOWN"))
+        safe_type = "".join(ch for ch in raw_type if ch.isalnum() or ch in ("_", "-")) or "UNKNOWN"
+        print(f"   [{safe_type}] {safe_file}:{_safe_line(f)}")
+        print(f"   └── Detected potential {safe_type} issue.\n")
+    if len(findings) > 20:
+        print(f"   ... and {len(findings) - 20} more issues.")
 
 
-def generate_sarif(findings: list, scan_type: str) -> dict:
-    """Generate SARIF 2.1.0 output for GitHub Security tab."""
+def _print_text_warnings(warnings: list) -> None:
+    if not warnings:
+        return
+    print(f"⚠️  {len(warnings)} warning(s), not checked and not failing the scan:\n")
+    for w in warnings[:20]:
+        print(f"   [DYNAMIC_ATTRIBUTE] {os.path.basename(w.get('file', '?'))}:{_safe_line(w)}")
+    if len(warnings) > 20:
+        print(f"   ... and {len(warnings) - 20} more warnings.")
+
+
+def generate_sarif(findings: list, scan_type: str, warnings: list | None = None) -> dict:
+    """Generate SARIF 2.1.0 output for GitHub Security tab. Warnings are
+    results at level "warning"."""
+    results = [(f, "error") for f in findings] + [(w, "warning") for w in warnings or []]
     return {
         "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
         "version": "2.1.0",
@@ -556,7 +746,7 @@ def generate_sarif(findings: list, scan_type: str) -> dict:
             "results": [
                 {
                     "ruleId": f"qwed/{scan_type}/security",
-                    "level": "error",
+                    "level": level,
                     "message": {"text": f["message"]},
                     "locations": [{
                         "physicalLocation": {
@@ -565,7 +755,7 @@ def generate_sarif(findings: list, scan_type: str) -> dict:
                         }
                     }]
                 }
-                for f in findings
+                for f, level in results
             ]
         }]
     }

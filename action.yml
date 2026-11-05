@@ -67,6 +67,8 @@ outputs:
     description: 'Number of security issues found (for scan modes)'
   files_scanned:
     description: 'Number of files scanned (for scan modes). Zero means the scan was not admitted.'
+  warnings_count:
+    description: 'Number of warnings from scan-code: attribute access by a computed name, which is not checked and does not fail the scan'
   badge_url:
     description: 'URL for QWED verified badge'
   sarif_file:

@@ -207,6 +207,8 @@ The Stats engine executes statistical code in a sandbox and returns `UNVERIFIABL
     output_format: sarif
 ```
 
+A passing scan means no known dangerous pattern was found, not that the code is safe. `scan-code` also reports attribute access by a computed name (`getattr(obj, name)`) as a warning: it cannot be checked, and it does not fail the scan.
+
 With `output_format: sarif` the action writes `qwed-results.sarif`; add [`github/codeql-action/upload-sarif`](https://github.com/github/codeql-action) to show the findings in the Security tab. The `verify` action calls a QWED API and needs `api_key` and a reachable server.
 
 [QWED Security](https://github.com/marketplace/qwed-security) is a separate GitHub App built on QWED that checks pull requests.
