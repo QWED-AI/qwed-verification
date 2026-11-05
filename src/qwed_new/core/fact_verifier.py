@@ -197,6 +197,32 @@ class FactVerifier:
                 {"constraint_id": "fact_verifier.execution_error", "error_type": type(exc).__name__},
             )
 
+        # Step 8: LLM fallback is advisory-only (fixes #133), confidence-gated
+        llm_advisory = None
+        provider_config_error: Optional[ProviderConfigError] = None
+        if confidence < min_confidence and self.use_llm_fallback and provider:
+            methods_used.append({"name": "llm_fallback", "advisory_only": True})
+            try:
+                llm_result = self._llm_fallback(claim, context, provider)
+            except ProviderConfigError as e:
+                # The provider the request names cannot run (an unknown name,
+                # or no model): the setting to fix, not a provider failure.
+                logger.warning("Fact advisory stopped: %s", e)
+                provider_config_error = e
+                llm_result = None
+            if llm_result:
+                llm_advisory = AdvisoryCheck(
+                    name="llm_fallback",
+                    constraint_id="fact_verifier.llm_advisory_only",
+                    details={
+                        "llm_verdict": llm_result.get("verdict"),
+                        "llm_confidence": llm_result.get("confidence"),
+                        "llm_reasoning": llm_result.get("reasoning"),
+                        "advisory_only": True,
+                    }
+                )
+                advisory_checks.append(llm_advisory)
+
         developer_fields: Dict[str, Any] = {
             "methods_used": methods_used,
             "deterministic_confidence": round(confidence, 3),
@@ -212,35 +238,12 @@ class FactVerifier:
             ],
             "scores": {k: round(v, 3) for k, v in scores.items()},
         }
-
-        # Step 8: LLM fallback is advisory-only (fixes #133), confidence-gated
-        llm_advisory = None
-        if confidence < min_confidence and self.use_llm_fallback and provider:
-            methods_used.append({"name": "llm_fallback", "advisory_only": True})
-            try:
-                llm_result = self._llm_fallback(claim, context, provider)
-            except ProviderConfigError as e:
-                # The provider the request names cannot run (an unknown name,
-                # or no model): the setting to fix, not a provider failure, so
-                # the request is refused rather than answered without the
-                # advisory it asked for. Its message carries nothing from a
-                # provider, and what the deterministic pass computed is kept.
-                logger.warning("Fact advisory stopped: %s", e)
-                developer_fields["constraint_id"] = "fact_verifier.provider_config_error"
-                return DiagnosticResult.blocked(str(e), developer_fields)
-            if llm_result:
-                llm_advisory = AdvisoryCheck(
-                    name="llm_fallback",
-                    constraint_id="fact_verifier.llm_advisory_only",
-                    details={
-                        "llm_verdict": llm_result.get("verdict"),
-                        "llm_confidence": llm_result.get("confidence"),
-                        "llm_reasoning": llm_result.get("reasoning"),
-                        "advisory_only": True,
-                    }
-                )
-                advisory_checks.append(llm_advisory)
-
+        if provider_config_error is not None:
+            # The request is refused rather than answered without the advisory
+            # it asked for. Its message carries nothing from a provider, and
+            # what the deterministic pass computed is kept.
+            developer_fields["constraint_id"] = "fact_verifier.provider_config_error"
+            return DiagnosticResult.blocked(str(provider_config_error), developer_fields)
         if advisory_checks:
             developer_fields["advisory_checks"] = advisory_checks
 
