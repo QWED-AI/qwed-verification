@@ -262,9 +262,16 @@ class TaintAnalyzer:
     #: A keyword value is inspected only when its sink class is absent
     #: from this map (fail closed) or its name is in the class's set.
     INJECTABLE_KEYWORDS: Dict[str, Set[str]] = {
-        "shell": {"args", "executable"},
+        "shell": {"args", "cmd", "command", "executable"},
         "network": {"url"},
         "sql": {"query", "operation", "sql"},
+    }
+
+    #: Request attributes whose direct subscript/attribute read is a
+    #: source (``request.form['cmd']``). ``request.method`` is not one.
+    REQUEST_DATA_ATTRS: Set[str] = {
+        "args", "form", "values", "cookies", "headers", "json",
+        "data", "files", "GET", "POST", "query_params",
     }
     def __init__(self):
         """Initialize the Taint Analyzer."""
@@ -501,6 +508,29 @@ class TaintAnalyzer:
 
         return None
 
+    @classmethod
+    def _is_request_data_reference(cls, dotted: Optional[str]) -> bool:
+        """Whether a dotted name is a request-data read (a source).
+
+        Matches ``request.<attr>``, ``self.request.<attr>`` and
+        ``flask.request.<attr>`` with ``<attr>`` in
+        :attr:`REQUEST_DATA_ATTRS` (``request.form['cmd']`` unwraps to
+        ``request.form``). ``request.method`` and ``some_obj.form['x']``
+        are not sources.
+        """
+        if not dotted:
+            return False
+        parts = dotted.split(".")
+        if len(parts) == 2 and parts[0] == "request":
+            return parts[1] in cls.REQUEST_DATA_ATTRS
+        if (
+            len(parts) == 3
+            and parts[1] == "request"
+            and parts[0] in ("self", "flask")
+        ):
+            return parts[2] in cls.REQUEST_DATA_ATTRS
+        return False
+
     def _check_source_expr(self, node: ast.AST) -> Optional[TaintSource]:
         """Check if an expression directly introduces tainted data.
 
@@ -510,7 +540,13 @@ class TaintAnalyzer:
         if isinstance(node, ast.Call):
             return self._check_source_call(node)
         dotted = self._get_source_name(node)
-        if dotted is not None and dotted in self.SOURCES:
+        if (
+            dotted is not None
+            and (
+                dotted in self.SOURCES
+                or self._is_request_data_reference(dotted)
+            )
+        ):
             return TaintSource(
                 name=dotted,
                 variable="",
@@ -644,11 +680,12 @@ class TaintAnalyzer:
 
     @staticmethod
     def _transformed_call_ids(node: ast.AST) -> Set[int]:
-        """Ids of calls whose result is the receiver of a method call.
+        """Ids of calls whose result is transformed after the call.
 
-        ``shlex.quote(x).strip(...)`` transforms the sanitiser result, so
-        the sanitiser must not relieve anything. Only the direct receiver
-        (the ``Call`` that is the ``.value`` of the outer call's ``func``)
+        ``shlex.quote(x).strip(...)`` and ``shlex.quote(x)[1:-1]``
+        transform the sanitiser result, so the sanitiser must not relieve
+        anything. Only the direct receiver (the ``Call`` that is the
+        ``.value`` of the outer call's ``func`` or of a ``Subscript``)
         counts; plain arguments (``"ls " + shlex.quote(x)``) are untouched.
         """
         transformed: Set[int] = set()
@@ -659,6 +696,11 @@ class TaintAnalyzer:
                 and isinstance(child.func.value, ast.Call)
             ):
                 transformed.add(id(child.func.value))
+            elif (
+                isinstance(child, ast.Subscript)
+                and isinstance(child.value, ast.Call)
+            ):
+                transformed.add(id(child.value))
         return transformed
 
     def _expr_taint_categories(self, node: ast.AST) -> Set[str]:
@@ -695,7 +737,10 @@ class TaintAnalyzer:
                 contributed = set(self.ALL_TAINT_CATEGORIES)
             elif isinstance(child, (ast.Attribute, ast.Subscript)):
                 dotted = self._get_source_name(child)
-                if dotted is None or dotted not in self.SOURCES:
+                if dotted is None or (
+                    dotted not in self.SOURCES
+                    and not self._is_request_data_reference(dotted)
+                ):
                     continue
                 contributed = set(self.ALL_TAINT_CATEGORIES)
             else:
@@ -716,7 +761,10 @@ class TaintAnalyzer:
         """
         if isinstance(node, (ast.Attribute, ast.Subscript)):
             dotted = self._get_source_name(node)
-            if dotted is not None and dotted in self.SOURCES:
+            if dotted is not None and (
+                dotted in self.SOURCES
+                or self._is_request_data_reference(dotted)
+            ):
                 return TaintSource(name=dotted, variable="", line=0)
         return None
 
@@ -816,7 +864,10 @@ class TaintAnalyzer:
                             kw.arg in allowed
                         ):
                             arg_nodes.append(kw.value)
-                            kw_names.append(kw.arg)
+                            # ``**`` expansions (kw.arg is None) are
+                            # marked distinctly so they are never
+                            # mistaken for positional arguments.
+                            kw_names.append(kw.arg if kw.arg is not None else "**")
                     args = [self._node_to_str(arg) for arg in arg_nodes]
 
                     sinks.append(TaintSink(
@@ -892,8 +943,10 @@ class TaintAnalyzer:
             category = self._sink_category(sink.name)
             # Parameter binding is the SQL sanitiser: only the query
             # argument can inject; bound parameters cannot. The query is
-            # the first positional argument if there is one, otherwise the
-            # ``query``/``operation``/``sql`` keyword.
+            # the first true positional argument if there is one,
+            # otherwise every ``query``/``operation``/``sql`` keyword AND
+            # every ``**`` expansion (fail closed: an expansion may
+            # carry the query).
             if sink.name.split(".")[-1] in ("execute", "executemany"):
                 kw_names = list(getattr(sink, "kw_names", []) or [])
                 if len(kw_names) != len(sink.arg_nodes):
@@ -910,6 +963,7 @@ class TaintAnalyzer:
                             arg for arg, name in
                             zip(sink.arg_nodes, kw_names)
                             if name in ("query", "operation", "sql")
+                            or name == "**"
                         ]
             else:
                 relevant_args = sink.arg_nodes

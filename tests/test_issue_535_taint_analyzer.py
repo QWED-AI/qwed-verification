@@ -278,6 +278,68 @@ def test_sink_keywords_injectable_only(analyzer):
     assert result["vulnerabilities"] == [], safe
 
 
+def test_shell_command_keywords_inspected(analyzer):
+    """os.popen(cmd=...) is a shell sink keyword."""
+    code = 'import os\nx = input()\nos.popen(cmd=x)'
+    result = analyzer.analyze(code)
+    assert result["status"] == "VULNERABLE", code
+    assert len(result["vulnerabilities"]) >= 1, code
+
+
+def test_sql_keyword_query_with_expansion(analyzer):
+    """`**` expansions are fail-closed for the SQL query argument."""
+    vulnerable = "x = input()\ncursor.execute(query=x, **{'args': ()})"
+    result = analyzer.analyze(vulnerable)
+    assert result["status"] == "VULNERABLE", vulnerable
+    assert len(result["vulnerabilities"]) >= 1, vulnerable
+
+    safe = 'x = input()\ncursor.execute("SELECT ?", params=x)'
+    result = analyzer.analyze(safe)
+    assert result["status"] == "SAFE", safe
+    assert result["vulnerabilities"] == [], safe
+
+
+def test_request_subscript_reads_are_sources(analyzer):
+    """request.<attr>['k'] reads are sources; method/plain attrs are not."""
+    for code in (
+        'import os\nx = request.form["cmd"]\nos.system(x)',
+        'import os\nx = request.args["cmd"]\nos.system(x)',
+        'import os\nx = request.cookies["c"]\nos.system(x)',
+    ):
+        result = analyzer.analyze(code)
+        assert result["status"] == "VULNERABLE", code
+        assert len(result["vulnerabilities"]) >= 1, code
+
+    for code in (
+        'import os\nx = request.method\nos.system(x)',
+        'import os\nx = some_obj.form["x"]\nos.system(x)',
+    ):
+        result = analyzer.analyze(code)
+        assert result["status"] == "SAFE", code
+        assert result["vulnerabilities"] == [], code
+
+
+def test_sliced_sanitizer_is_not_clean(analyzer):
+    """A sliced sanitizer result does not clean; plain concat is safe."""
+    for code in (
+        "import os, shlex\nx = input()\n"
+        "y = shlex.quote(x)[1:-1]\nos.system(y)",
+        "import os, shlex\nx = input()\n"
+        "os.system('ls ' + shlex.quote(x)[1:-1])",
+    ):
+        result = analyzer.analyze(code)
+        assert result["status"] == "VULNERABLE", code
+        assert len(result["vulnerabilities"]) >= 1, code
+
+    safe = (
+        "import os, shlex\nx = input()\n"
+        'cmd = "ls " + shlex.quote(x)\nos.system(cmd)'
+    )
+    result = analyzer.analyze(safe)
+    assert result["status"] == "SAFE", safe
+    assert result["vulnerabilities"] == [], safe
+
+
 def test_starred_unpacking_target_is_tainted(analyzer):
     """Starred unpacking targets inherit the whole RHS taint."""
     for code in (
