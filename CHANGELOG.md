@@ -165,7 +165,7 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     one that cannot be built for another reason is no provider: the reason
     is logged and the result says `reasoning_verifier.no_provider`. The
     reasoning trace comes only from a provider's own `complete()` call,
-    which no built-in provider has, so it is unavailable for them. The
+    which no built-in provider has, so it is unavailable for them (#587). The
     verifier never returns VERIFIED, before and after.
   - The server sends each request to the provider the request names, else
     to the one `ACTIVE_PROVIDER` selects. A query with `write`, `compose`,
@@ -188,7 +188,9 @@ Versions 7.3.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     with no `provider` use the configured one; they used Azure OpenAI.
   - A provider YAML's `default_model` is still used; one without it gets no
     model in its place.
-  - To upgrade, set the model variable for the provider you use, and check
+  - To upgrade, set the model variable for the provider you use; code that
+    builds `QWEDLocal`, calls `verify()` or builds the LangChain `QWEDTool`
+    passes `model=`, and gets a `ValueError` without it. Check
     that `ACTIVE_PROVIDER` is one of `openai`, `openai_direct`,
     `openai_compat`, `azure_openai`, `anthropic`, `claude_opus`, `gemini`,
     `ollama` or `auto`. If `qwed verify` ran the saved provider with the key
