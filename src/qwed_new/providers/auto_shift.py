@@ -44,11 +44,13 @@ class AutoShiftProvider(LLMProvider):
             errors.append(e)
             
         if not self.primary and not self.secondary:
-            # Neither side has a model: name both settings, as a single
-            # provider does. Their messages carry nothing from a provider.
-            if all(isinstance(e, ProviderConfigError) for e in errors):
+            # A side with no model names the setting to fix, as a single
+            # provider does. Only those messages are passed on: they carry
+            # nothing from a provider, where another failure's may.
+            config_errors = [e for e in errors if isinstance(e, ProviderConfigError)]
+            if config_errors:
                 raise ProviderConfigError(
-                    "Auto-shift can run neither of its providers. " + " ".join(map(str, errors))
+                    "Auto-shift can run neither of its providers. " + " ".join(map(str, config_errors))
                 )
             raise RuntimeError("CRITICAL: Both Primary and Secondary providers failed to initialize.")
 

@@ -204,15 +204,28 @@ class ReasoningVerifier:
             name = "openai_compat"
         if name not in self._providers:
             loader = self._provider_loaders.get(name)
-            if loader:
+            if loader is None:
+                # A name QWED does not know: the setting to fix. The name is
+                # not repeated, since a caller can pass it.
+                names = ", ".join(sorted(_PROVIDER_NAMES))
+                self._record_config_error(ProviderConfigError(
+                    "The reasoning verifier was given a provider QWED does not know. "
+                    f"Set ACTIVE_PROVIDER, or pass providers, to one of: {names}."
+                ))
+                self._providers[name] = None
+            else:
                 try:
                     self._providers[name] = loader()
                 except ProviderConfigError as exc:
-                    logger.warning("Reasoning provider %r is unavailable: %s", name, exc)
-                    if self._provider_config_error is None:
-                        self._provider_config_error = exc
+                    self._record_config_error(exc)
                     self._providers[name] = None
         return self._providers.get(name)
+
+    def _record_config_error(self, exc: ProviderConfigError) -> None:
+        """Log a provider that cannot run as configured, and keep the first."""
+        logger.warning("Reasoning provider unavailable: %s", exc)
+        if self._provider_config_error is None:
+            self._provider_config_error = exc
     
     @property
     def primary_llm(self):

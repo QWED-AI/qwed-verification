@@ -325,6 +325,29 @@ def test_reasoning_verifier_has_no_provider_when_its_provider_cannot_be_built(mo
     assert result.developer_fields["constraint_id"] == "reasoning_verifier.no_provider"
 
 
+def test_reasoning_verifier_refuses_a_provider_it_does_not_know(monkeypatch):
+    monkeypatch.setenv("ACTIVE_PROVIDER", "openia")
+
+    result = _verify_apples(ReasoningVerifier(enable_cache=False))
+
+    assert result.status == DiagnosticStatus.BLOCKED
+    assert result.developer_fields["constraint_id"] == "reasoning_verifier.provider_config_error"
+    assert "ACTIVE_PROVIDER" in result.agent_message
+    # The name is not echoed: a caller can pass it.
+    assert "openia" not in result.agent_message
+
+
+def test_auto_names_the_variable_when_the_other_side_fails_for_another_reason(monkeypatch):
+    # Azure has its key and endpoint but no deployment; Anthropic has no key.
+    _configure(monkeypatch, AzureOpenAIProvider, None)
+
+    with pytest.raises(ProviderConfigError, match="AZURE_OPENAI_DEPLOYMENT") as raised:
+        AutoShiftProvider()
+
+    # Only configuration errors are passed on, never another failure's text.
+    assert "Missing Anthropic" not in str(raised.value)
+
+
 def test_auto_names_both_variables_when_neither_side_has_a_model(monkeypatch):
     for provider_cls in (AzureOpenAIProvider, AnthropicProvider):
         _configure(monkeypatch, provider_cls, None)
@@ -491,6 +514,9 @@ def test_fact_advisory_names_the_setting_to_fix(caplog, provider, setting_to_fix
     assert result.constraint_id == "fact_verifier.provider_config_error"
     assert setting_to_fix in result.agent_message
     assert setting_to_fix in caplog.text
+    # What the deterministic pass computed is still reported.
+    for field in ("deterministic_verdict", "deterministic_confidence", "evidence", "citations", "scores"):
+        assert field in result.developer_fields
 
 
 def test_a_failing_fact_advisory_still_leaves_the_deterministic_result():
