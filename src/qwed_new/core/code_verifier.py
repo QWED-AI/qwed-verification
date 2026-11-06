@@ -301,6 +301,20 @@ class CodeVerifier:
     # is treated as process execution. Matched by module head in the AST pass.
     PYTHON_RAW_OS_MODULES: ClassVar[tuple[str, ...]] = ("posix", "nt")
 
+    # Standard-library modules whose job is to compile and run code given as a
+    # string: timeit.timeit(s), cProfile.run(s), pdb.run(s),
+    # code.InteractiveInterpreter().runsource(s), trace.Trace().run(s),
+    # doctest.run_docstring_examples(...), logging.config.fileConfig (which
+    # evaluates a handler's args) and dictConfig (which calls the dotted name
+    # under "()"), idlelib's shell (GHSA-jrxf). Importing one is refused: the
+    # run can be reached through an alias, an instance or a stored reference,
+    # which name matching on calls does not follow. A dotted entry is also
+    # refused when read as an attribute (import logging; logging.config).
+    PYTHON_CODE_RUNNING_MODULES: ClassVar[frozenset] = frozenset(
+        {"timeit", "cProfile", "profile", "pdb", "bdb", "code", "codeop", "trace", "doctest",
+         "logging.config", "idlelib"}
+    )
+
     # File and network access. For a firewall that certifies code "safe to
     # execute", code that reads/writes files or does network I/O must not be
     # admitted — these are the impact and exfiltration sinks (GHSA-4phf). Policy:
@@ -315,6 +329,15 @@ class CodeVerifier:
         "os.makedirs", "os.rmdir", "os.removedirs", "os.chmod", "os.chown",
         "os.open", "os.truncate", "os.link", "os.symlink", "os.rmtree",
         "pathlib.Path",
+        # Archives, compressed files and other readers that open a path, and
+        # directory listing (GHSA-jrxf).
+        "tarfile.", "zipfile.",
+        "gzip.open", "gzip.GzipFile", "bz2.open", "bz2.BZ2File", "lzma.open", "lzma.LZMAFile",
+        "codecs.open", "linecache.", "fileinput.",
+        "os.listdir", "os.scandir", "os.walk", "os.fwalk", "os.stat", "os.lstat", "glob.",
+        "tempfile.", "sqlite3.connect", "shelve.", "dbm.",
+        # Package data readers: a resource name with ".." reads any file.
+        "pkgutil.get_data", "importlib.resources.",
         # Network
         "socket.socket", "socket.create_connection", "socket.create_server",
         "urllib.request", "urllib.urlopen",
@@ -853,7 +876,10 @@ class CodeVerifier:
             ):
                 continue
             issues.append(issue)
-        
+
+        # Modules that run code given as a string (GHSA-jrxf).
+        issues.extend(self._check_python_code_running_imports(nodes))
+
         # Weak crypto in password context
         code_lower = code.lower()
         has_password = any(p in code_lower for p in self.PASSWORD_INDICATORS)
@@ -1196,6 +1222,50 @@ class CodeVerifier:
             line_number=line_number,
             recommendation="Remove or sandbox this operation",
         )
+
+    def _code_running_module(self, name: str) -> Optional[str]:
+        """The entry of PYTHON_CODE_RUNNING_MODULES that dotted ``name`` is or
+        lies under, if any."""
+        return next(
+            (m for m in self.PYTHON_CODE_RUNNING_MODULES if name == m or name.startswith(m + ".")),
+            None,
+        )
+
+    def _check_python_code_running_imports(self, nodes: List[ast.AST]) -> List[SecurityIssue]:
+        """Refuse an import of a module that runs code given as a string
+        (``from logging import config`` included), and a read of a dotted one
+        as an attribute, with import aliases resolved."""
+        aliases, star_modules = self._import_aliases(nodes)
+        issues: List[SecurityIssue] = []
+        reported = set()
+        for node in nodes:
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names = [node.module] + [f"{node.module}.{alias.name}" for alias in node.names]
+            elif isinstance(node, ast.Attribute):
+                dotted = self._dotted_name(node)
+                names = [
+                    c for c in self._call_candidates(dotted, aliases, star_modules) if "." in c
+                ] if dotted else []
+            else:
+                continue
+            hit = next((m for m in map(self._code_running_module, names) if m), None)
+            line = getattr(node, "lineno", None)
+            if not hit or (hit, line) in reported or (isinstance(node, ast.Attribute) and "." not in hit):
+                continue
+            # Once per module and line: logging.config.fileConfig reads
+            # logging.config inside a longer attribute chain.
+            reported.add((hit, line))
+            issues.append(SecurityIssue(
+                severity="CRITICAL",
+                issue_type="dangerous_function",
+                pattern=hit,
+                description=f"Module that runs code given as a string: {hit}",
+                line_number=line,
+                recommendation="Remove or sandbox this operation",
+            ))
+        return issues
 
     def _check_python_process_ast(self, nodes: List[ast.AST]) -> List[SecurityIssue]:
         """Flag process-execution and file/network calls, resolving import aliases.
