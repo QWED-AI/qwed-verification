@@ -6,6 +6,7 @@ that fails, a deadline that passes, a cancelled request) are exercised with
 stand-ins, so no process is started.
 """
 import asyncio
+import importlib.util
 import threading
 import time
 
@@ -37,15 +38,42 @@ def test_a_setting_that_is_not_finite_uses_its_default(monkeypatch, raw):
     assert int(value) == 2
 
 
-@pytest.mark.parametrize(("raw", "expected"), [("inf", 120.0), ("nan", 120.0), ("-1", 120.0), ("0", 0.0), ("30", 30.0)])
-def test_the_batch_math_budget_is_a_finite_number_of_seconds(monkeypatch, raw, expected):
+_MATH_SETTINGS = ("QWED_MATH_WORKERS", "QWED_MATH_TIMEOUT_SECONDS", "QWED_MATH_MAX_WAITING", "QWED_MATH_WORKER_MEMORY_MB")
+
+
+def _fresh_copy(module, name):
+    """A new copy of *module*, run with the environment as it is now. Both
+    modules read their settings at import; the copy is not put in
+    sys.modules, so the imported module keeps its state."""
+    spec = importlib.util.spec_from_file_location(name, module.__file__)
+    copy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(copy)
+    return copy
+
+
+@pytest.mark.parametrize("name", _MATH_SETTINGS)
+def test_an_infinite_math_setting_leaves_its_default_at_import(monkeypatch, name):
+    # int() of an infinite count raised OverflowError at import, so the
+    # server did not start; an infinite time limit removed the limit.
+    for other in _MATH_SETTINGS:
+        monkeypatch.delenv(other, raising=False)
+    monkeypatch.setenv(name, "inf")
+    fresh = _fresh_copy(mw, "qwed_math_worker_settings_copy")
+    assert fresh.WORKERS == 2
+    assert fresh.TIMEOUT_SECONDS == pytest.approx(10.0)
+    assert fresh.MAX_WAITING == 32
+    assert fresh.MEMORY_MB == 2048
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("inf", 120.0), ("nan", 120.0), ("-1", 0.0), ("0", 0.0), ("30", 30.0)])
+def test_the_batch_service_stores_a_finite_math_budget(monkeypatch, raw, expected):
     from qwed_new.core import batch
 
-    # The batch service reads its budget with the math worker's check, at
-    # least 0 seconds, as it does here.
-    assert batch._numeric_setting is mw._setting
+    # Not a finite number: the default. A negative budget leaves none, as 0
+    # does and as it did before, so a bad value never loosens the bound.
     monkeypatch.setenv("QWED_BATCH_MATH_BUDGET_SECONDS", raw)
-    assert batch._numeric_setting("QWED_BATCH_MATH_BUDGET_SECONDS", 120.0, 0) == pytest.approx(expected)
+    fresh = _fresh_copy(batch, "qwed_batch_budget_copy")
+    assert fresh.BatchVerificationService._MATH_BUDGET_SECONDS == pytest.approx(expected)
 
 
 # ---------------------------------------------------------------------- jobs
