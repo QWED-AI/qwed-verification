@@ -37,6 +37,7 @@ import atexit
 import contextlib
 import contextvars
 import logging
+import math
 import multiprocessing
 import os
 import re
@@ -58,8 +59,10 @@ INTERNAL_VERIFICATION_ERROR = "Internal verification error"
 
 
 def _setting(name: str, default: float, minimum: float) -> float:
-    """A numeric setting; a value that is not a number, or is below
-    ``minimum``, is logged and replaced by the default."""
+    """A numeric setting; a value that is not a finite number, or is below
+    ``minimum``, is logged and replaced by the default. ``float`` reads
+    "inf" and "nan", and an infinite limit would remove the limit (or, for a
+    count, make ``int()`` raise at import)."""
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
         return default
@@ -68,8 +71,8 @@ def _setting(name: str, default: float, minimum: float) -> float:
     except ValueError:
         logger.warning("%s is not a number; using %s", name, default)
         return default
-    if value != value or value < minimum:
-        logger.warning("%s must be at least %s; using %s", name, minimum, default)
+    if not math.isfinite(value) or value < minimum:
+        logger.warning("%s must be a finite number of at least %s; using %s", name, minimum, default)
         return default
     return value
 

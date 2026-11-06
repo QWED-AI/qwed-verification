@@ -19,6 +19,7 @@ from enum import Enum
 from datetime import datetime
 
 from qwed_new.core.diagnostics import admission_decision, merge_diagnostic_result
+from qwed_new.core.math_worker import _setting as _numeric_setting
 from qwed_new.core.route_diagnostics import logic_diagnostic, natural_language_diagnostic
 from qwed_new.core.trust import attest_and_enforce
 
@@ -124,8 +125,10 @@ class BatchVerificationService:
     _ITEM_TIMEOUT_SECONDS = float(os.environ.get("QWED_BATCH_ITEM_TIMEOUT", "60"))
     # Wall-clock budget for all math items of one job together (GHSA-qgjc):
     # each item also has the math time limit, so a batch of slow items cannot
-    # hold the math workers for batch size times that limit.
-    _MATH_BUDGET_SECONDS = float(os.environ.get("QWED_BATCH_MATH_BUDGET_SECONDS", "120"))
+    # hold the math workers for batch size times that limit. A value that is
+    # not a finite number of at least 0 is logged and the default used: an
+    # infinite budget would remove the bound.
+    _MATH_BUDGET_SECONDS = _numeric_setting("QWED_BATCH_MATH_BUDGET_SECONDS", 120.0, 0)
 
     def __init__(self, max_concurrency: int = 10):
         self.max_concurrency = max_concurrency

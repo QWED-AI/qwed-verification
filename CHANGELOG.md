@@ -171,7 +171,9 @@ entry, above or below.
   only; 0 turns it off) and `QWED_BATCH_MATH_BUDGET_SECONDS` (120). A job
   past its limit is `UNVERIFIABLE` (`math.timeout`), and a request that
   finds the pool full is `BLOCKED` (`math.capacity`) at once. Size these for
-  your load.
+  your load. A setting that is not a finite number (`inf` and `nan`
+  included), or is below its minimum, is logged and its default used;
+  `QWED_BATCH_MATH_BUDGET_SECONDS` may be 0.
 - **Code verification.** CodeVerifier refuses more code: the modules, names
   and attributes in the advisories above, and a coding declaration other
   than UTF-8. Code that used them is no longer admitted.

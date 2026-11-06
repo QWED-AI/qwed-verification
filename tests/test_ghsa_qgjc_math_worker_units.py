@@ -27,6 +27,27 @@ def test_a_setting_that_is_missing_invalid_or_too_small_uses_its_default(monkeyp
     assert mw._setting("QWED_TEST_MATH_SETTING", 2.0, 1) == expected
 
 
+@pytest.mark.parametrize("raw", ["inf", "-inf", "Infinity", "1e999", "NaN"])
+def test_a_setting_that_is_not_finite_uses_its_default(monkeypatch, raw):
+    # float() reads all of these. An infinite time limit would remove the
+    # limit, and int() of an infinite count raised at import.
+    monkeypatch.setenv("QWED_TEST_MATH_SETTING", raw)
+    value = mw._setting("QWED_TEST_MATH_SETTING", 2.0, 1)
+    assert value == pytest.approx(2.0)
+    assert int(value) == 2
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("inf", 120.0), ("nan", 120.0), ("-1", 120.0), ("0", 0.0), ("30", 30.0)])
+def test_the_batch_math_budget_is_a_finite_number_of_seconds(monkeypatch, raw, expected):
+    from qwed_new.core import batch
+
+    # The batch service reads its budget with the math worker's check, at
+    # least 0 seconds, as it does here.
+    assert batch._numeric_setting is mw._setting
+    monkeypatch.setenv("QWED_BATCH_MATH_BUDGET_SECONDS", raw)
+    assert batch._numeric_setting("QWED_BATCH_MATH_BUDGET_SECONDS", 120.0, 0) == pytest.approx(expected)
+
+
 # ---------------------------------------------------------------------- jobs
 
 
