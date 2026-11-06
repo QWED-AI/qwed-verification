@@ -6,6 +6,7 @@ that fails, a deadline that passes, a cancelled request) are exercised with
 stand-ins, so no process is started.
 """
 import asyncio
+import importlib.util
 import threading
 import time
 
@@ -18,13 +19,109 @@ from qwed_new.core.diagnostics import admission_decision
 # ------------------------------------------------------------------ settings
 
 
-@pytest.mark.parametrize(("raw", "expected"), [(None, 2.0), ("", 2.0), ("abc", 2.0), ("0", 2.0), ("nan", 2.0), ("3", 3.0)])
-def test_a_setting_that_is_missing_invalid_or_too_small_uses_its_default(monkeypatch, raw, expected):
+_SETTING = "QWED_TEST_MATH_SETTING"
+_MATH_SETTINGS = ("QWED_MATH_WORKERS", "QWED_MATH_TIMEOUT_SECONDS", "QWED_MATH_MAX_WAITING", "QWED_MATH_WORKER_MEMORY_MB")
+
+
+@pytest.mark.parametrize(("raw", "expected"), [(None, 2.0), ("", 2.0), ("  ", 2.0), ("1", 1.0), ("3", 3.0)])
+def test_an_unset_setting_uses_its_default_and_a_valid_one_its_value(monkeypatch, raw, expected):
+    """An unset or blank setting takes its default; a valid one is read as written."""
     if raw is None:
-        monkeypatch.delenv("QWED_TEST_MATH_SETTING", raising=False)
+        monkeypatch.delenv(_SETTING, raising=False)
     else:
-        monkeypatch.setenv("QWED_TEST_MATH_SETTING", raw)
-    assert mw._setting("QWED_TEST_MATH_SETTING", 2.0, 1) == expected
+        monkeypatch.setenv(_SETTING, raw)
+    assert mw._setting(_SETTING, 2.0, 1) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("raw", ["abc", "0", "-1", "nan", "NaN", "inf", "-inf", "Infinity", "1e999"])
+def test_a_setting_it_cannot_use_stops_with_its_name(monkeypatch, raw):
+    # float() reads "inf" and "nan", and an infinite limit would remove the
+    # limit. Nothing is guessed in its place (QWED_RULES 6).
+    monkeypatch.setenv(_SETTING, raw)
+    with pytest.raises(mw.MathSettingError, match=_SETTING):
+        mw._setting(_SETTING, 2.0, 1)
+
+
+def test_a_setting_above_its_maximum_stops(monkeypatch):
+    monkeypatch.setenv(_SETTING, "3601")
+    with pytest.raises(mw.MathSettingError, match=r"from 0\.001 to 3600"):
+        mw._setting(_SETTING, 10.0, 0.001, mw.MAX_TIMEOUT_SECONDS)
+
+
+def test_a_count_must_be_a_whole_number(monkeypatch):
+    monkeypatch.setenv(_SETTING, "2.5")
+    with pytest.raises(mw.MathSettingError, match="whole number"):
+        mw._setting(_SETTING, 2, 1, whole=True)
+
+
+def test_a_count_written_with_a_zero_fraction_is_whole(monkeypatch):
+    monkeypatch.setenv(_SETTING, "4.0")
+    assert mw._setting(_SETTING, 2, 1, whole=True) == pytest.approx(4.0)
+
+
+def _fresh_copy(module, name):
+    """A new copy of *module*, run with the environment as it is now. Both
+    modules read their settings at import; the copy is not put in
+    sys.modules, so the imported module keeps its state."""
+    spec = importlib.util.spec_from_file_location(name, module.__file__)
+    copy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(copy)
+    return copy
+
+
+def _clear_math_settings(monkeypatch):
+    """Unset the four math worker settings, so a fresh copy reads only the one a test sets."""
+    for name in _MATH_SETTINGS:
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.parametrize(
+    ("name", "raw"),
+    [(name, "inf") for name in _MATH_SETTINGS] + [("QWED_MATH_TIMEOUT_SECONDS", "1e7"), ("QWED_MATH_WORKERS", "0")],
+)
+def test_the_math_worker_does_not_import_with_a_setting_it_cannot_use(monkeypatch, name, raw):
+    # An infinite count made int() raise OverflowError at import, an infinite
+    # time limit removed the limit, and one past what poll() takes raised in
+    # every job. Each now stops the import with an error naming the setting.
+    _clear_math_settings(monkeypatch)
+    monkeypatch.setenv(name, raw)
+    with pytest.raises(ValueError, match=name):
+        _fresh_copy(mw, "qwed_math_worker_settings_copy")
+
+
+def test_the_math_worker_stores_valid_settings(monkeypatch):
+    _clear_math_settings(monkeypatch)
+    monkeypatch.setenv("QWED_MATH_WORKERS", "3")
+    monkeypatch.setenv("QWED_MATH_TIMEOUT_SECONDS", "3600")
+    fresh = _fresh_copy(mw, "qwed_math_worker_settings_copy")
+    assert fresh.WORKERS == 3
+    assert fresh.TIMEOUT_SECONDS == pytest.approx(3600.0)
+    assert fresh.MAX_WAITING == 32
+    assert fresh.MEMORY_MB == 2048
+
+
+@pytest.mark.parametrize("raw", ["inf", "-inf", "nan", "-1", "abc"])
+def test_the_batch_service_does_not_import_with_a_budget_it_cannot_use(monkeypatch, raw):
+    from qwed_new.core import batch
+
+    # An infinite budget removed the bound, and a negative one is no budget:
+    # neither is replaced by a guess.
+    monkeypatch.setenv("QWED_BATCH_MATH_BUDGET_SECONDS", raw)
+    with pytest.raises(ValueError, match="QWED_BATCH_MATH_BUDGET_SECONDS"):
+        _fresh_copy(batch, "qwed_batch_budget_copy")
+
+
+@pytest.mark.parametrize(("raw", "expected"), [(None, 120.0), ("0", 0.0), ("30", 30.0)])
+def test_the_batch_service_stores_its_math_budget(monkeypatch, raw, expected):
+    """Unset, the batch math budget is 120 seconds; 0 and 30 are kept as given."""
+    from qwed_new.core import batch
+
+    if raw is None:
+        monkeypatch.delenv("QWED_BATCH_MATH_BUDGET_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("QWED_BATCH_MATH_BUDGET_SECONDS", raw)
+    fresh = _fresh_copy(batch, "qwed_batch_budget_copy")
+    assert fresh.BatchVerificationService._MATH_BUDGET_SECONDS == pytest.approx(expected)
 
 
 # ---------------------------------------------------------------------- jobs

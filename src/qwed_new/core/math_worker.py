@@ -26,6 +26,10 @@ Settings (environment, read once at import):
 - ``QWED_MATH_WORKER_MEMORY_MB``: address-space limit per worker on Linux,
   default 2048; 0 turns it off.
 
+A value the worker cannot use (not a number, not finite, out of range, a
+fraction for a count, or a time limit over an hour) raises MathSettingError
+at import, naming the setting, so the server does not start with it.
+
 Attestation stays in the calling process: a worker returns the
 DiagnosticResult, and the route signs it as before.
 """
@@ -37,6 +41,7 @@ import atexit
 import contextlib
 import contextvars
 import logging
+import math
 import multiprocessing
 import os
 import re
@@ -57,27 +62,41 @@ MATH_WORKER_ERROR = "math.worker_error"
 INTERNAL_VERIFICATION_ERROR = "Internal verification error"
 
 
-def _setting(name: str, default: float, minimum: float) -> float:
-    """A numeric setting; a value that is not a number, or is below
-    ``minimum``, is logged and replaced by the default."""
+class MathSettingError(ValueError):
+    """A math setting holds a value the math worker cannot use. It is raised
+    at import, so the server does not start on a limit it would have to
+    guess (QWED_RULES 6: no silent degradation)."""
+
+
+def _setting(name: str, default: float, minimum: float, maximum: float = math.inf, whole: bool = False) -> float:
+    """A numeric setting from the environment, *default* when it is unset or
+    blank. A value that is not a number, not finite, outside *minimum* to
+    *maximum* or, with *whole*, not a whole number raises MathSettingError
+    naming the setting. ``float`` reads "inf" and "nan": an infinite limit
+    would remove the limit, and an infinite count made ``int()`` raise."""
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
         return default
     try:
         value = float(raw)
     except ValueError:
-        logger.warning("%s is not a number; using %s", name, default)
-        return default
-    if value != value or value < minimum:
-        logger.warning("%s must be at least %s; using %s", name, minimum, default)
-        return default
+        value = math.nan
+    if not (math.isfinite(value) and minimum <= value <= maximum) or (whole and not value.is_integer()):
+        kind = "a whole number" if whole else "a number"
+        bound = f"from {minimum:g} to {maximum:g}" if math.isfinite(maximum) else f"of at least {minimum:g}"
+        raise MathSettingError(f"{name} must be {kind} {bound}")
     return value
 
 
-WORKERS = int(_setting("QWED_MATH_WORKERS", 2, 1))
-TIMEOUT_SECONDS = _setting("QWED_MATH_TIMEOUT_SECONDS", 10.0, 0.001)
-MAX_WAITING = int(_setting("QWED_MATH_MAX_WAITING", 32, 0))
-MEMORY_MB = int(_setting("QWED_MATH_WORKER_MEMORY_MB", 2048, 0))
+# A job waits for a worker, and then runs, for at most this limit each. An
+# hour keeps it far below what the pipe and lock waits accept on every
+# platform (about 24 days for poll()), where a larger value raised.
+MAX_TIMEOUT_SECONDS = 3600.0
+
+WORKERS = int(_setting("QWED_MATH_WORKERS", 2, 1, whole=True))
+TIMEOUT_SECONDS = _setting("QWED_MATH_TIMEOUT_SECONDS", 10.0, 0.001, MAX_TIMEOUT_SECONDS)
+MAX_WAITING = int(_setting("QWED_MATH_MAX_WAITING", 32, 0, whole=True))
+MEMORY_MB = int(_setting("QWED_MATH_WORKER_MEMORY_MB", 2048, 0, whole=True))
 # A new worker imports SymPy before it is ready; this bounds that start, not
 # a job.
 _START_SECONDS = 120.0
