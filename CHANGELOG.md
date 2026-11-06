@@ -137,10 +137,12 @@ entry, above or below.
   `OPENAI_MODEL`, `AZURE_OPENAI_DEPLOYMENT`, `ANTHROPIC_MODEL`,
   `CLAUDE_OPUS_DEPLOYMENT`, `GEMINI_MODEL`, `OLLAMA_MODEL` or
   `CUSTOM_MODEL`. Nothing falls back to a model QWED picks, so a server or
-  CLI with none set stops with an error naming the variable.
-  `ACTIVE_PROVIDER`, and the provider a request names, must be one QWED
-  knows: `openai`, `openai_direct`, `openai_compat`, `azure_openai`,
-  `anthropic`, `claude_opus`, `gemini`, `ollama` or `auto`.
+  CLI with none set stops with an error naming the variable. For Anthropic,
+  `ANTHROPIC_DEPLOYMENT` still wins over `ANTHROPIC_MODEL` when it is set:
+  change or unset it to run another model. `ACTIVE_PROVIDER`, and the
+  provider a request names, must be one QWED knows: `openai`,
+  `openai_direct`, `openai_compat`, `azure_openai`, `anthropic`,
+  `claude_opus`, `gemini`, `ollama` or `auto`.
 - **Python SDK.** `QWEDLocal`, `verify()` and the LangChain `QWEDTool` need
   `model=` and raise `ValueError` without it. If `qwed verify` ran the saved
   provider with the key in `QWED_API_KEY`, set that provider's key variable

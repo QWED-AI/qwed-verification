@@ -31,7 +31,9 @@ Every verification API endpoint except `/verify/batch` returns a `DiagnosticResu
 | `status` | `VERIFIED`, `UNVERIFIABLE`, `BLOCKED` | Whether QWED could establish the result deterministically. `VERIFIED` always carries a `proof_ref`, a SHA-256 commitment to the evidence. |
 | `admission` | `ADMIT`, `BLOCKED` | Whether the checked output may be acted on. In a Verification Context document this is `ADMIT` or `DENY`. |
 
-`/verify/batch` returns a job whose `status` is the job's state (`pending`, `processing`, `completed`, `partial` or `failed`). Each item carries its own result, and math, code, SQL and natural-language items include `admission`. In Python, an engine returns a `DiagnosticResult` without an `admission` field; `admission_decision(result)` gives it.
+`/verify/batch` returns a job whose `status` is the job's state (`pending`, `processing`, `completed`, `partial` or `failed`). Each item has its own `status` and `error`, and its `result` is null when the item failed. Check those first: a math, code, SQL or natural-language item's admission is in its `result`, as `result.admission`.
+
+In Python, an engine returns a `DiagnosticResult` without an `admission` field. `admission_decision(result)` applies the rule of the math, code and SQL routes. A natural-language result is admitted by `natural_language_admission`, which blocks unless the query's meaning was verified (`query_semantics_verified`); QWED does not verify that yet ([#585](https://github.com/QWED-AI/qwed-verification/issues/585)), so a natural-language result is not admitted, even when its translated expression is verified.
 
 The two are independent. Proving that a SQL statement is destructive is a verified result that must not run:
 
