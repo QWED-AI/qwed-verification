@@ -25,6 +25,7 @@ _MATH_SETTINGS = ("QWED_MATH_WORKERS", "QWED_MATH_TIMEOUT_SECONDS", "QWED_MATH_M
 
 @pytest.mark.parametrize(("raw", "expected"), [(None, 2.0), ("", 2.0), ("  ", 2.0), ("1", 1.0), ("3", 3.0)])
 def test_an_unset_setting_uses_its_default_and_a_valid_one_its_value(monkeypatch, raw, expected):
+    """An unset or blank setting takes its default; a valid one is read as written."""
     if raw is None:
         monkeypatch.delenv(_SETTING, raising=False)
     else:
@@ -43,7 +44,7 @@ def test_a_setting_it_cannot_use_stops_with_its_name(monkeypatch, raw):
 
 def test_a_setting_above_its_maximum_stops(monkeypatch):
     monkeypatch.setenv(_SETTING, "3601")
-    with pytest.raises(mw.MathSettingError, match="from 0.001 to 3600"):
+    with pytest.raises(mw.MathSettingError, match=r"from 0\.001 to 3600"):
         mw._setting(_SETTING, 10.0, 0.001, mw.MAX_TIMEOUT_SECONDS)
 
 
@@ -69,6 +70,7 @@ def _fresh_copy(module, name):
 
 
 def _clear_math_settings(monkeypatch):
+    """Unset the four math worker settings, so a fresh copy reads only the one a test sets."""
     for name in _MATH_SETTINGS:
         monkeypatch.delenv(name, raising=False)
 
@@ -111,6 +113,7 @@ def test_the_batch_service_does_not_import_with_a_budget_it_cannot_use(monkeypat
 
 @pytest.mark.parametrize(("raw", "expected"), [(None, 120.0), ("0", 0.0), ("30", 30.0)])
 def test_the_batch_service_stores_its_math_budget(monkeypatch, raw, expected):
+    """Unset, the batch math budget is 120 seconds; 0 and 30 are kept as given."""
     from qwed_new.core import batch
 
     if raw is None:
