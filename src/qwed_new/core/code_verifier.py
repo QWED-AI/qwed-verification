@@ -9,9 +9,12 @@ from typing import Dict, Any, List, Optional, ClassVar
 from dataclasses import dataclass, field
 from bisect import bisect_left
 import ast
+import codecs
 import hashlib
+import io
 import re
 import sys
+import tokenize
 
 from . import string_steps
 from .diagnostics import DiagnosticResult
@@ -808,12 +811,40 @@ class CodeVerifier:
             ))
         return issues
 
+    @staticmethod
+    def _check_python_source_encoding(code: str) -> List[SecurityIssue]:
+        """Refuse a coding declaration other than UTF-8 (GHSA-pr6c).
+
+        The checks read the text as given, but Python decodes a file, an
+        import or bytes passed to compile/exec by the declaration in its
+        first two lines (PEP 263). Under utf-7 or unicode_escape, what reads
+        here as a comment decodes to new statements. tokenize finds the
+        declaration as the interpreter does; one it cannot decode with is
+        refused too.
+        """
+        try:
+            encoding, _ = tokenize.detect_encoding(io.BytesIO(code.encode("utf-8", "surrogatepass")).readline)
+        except SyntaxError:
+            encoding = None
+        # By codec, so the spellings Python accepts for UTF-8 (UTF8, utf_8)
+        # pass.
+        if encoding is not None and codecs.lookup(encoding).name in ("utf-8", "utf-8-sig"):
+            return []
+        return [SecurityIssue(
+            severity="CRITICAL",
+            issue_type="source_encoding",
+            pattern=f"coding: {encoding or 'unknown'}",
+            description="Source encoding other than UTF-8: Python would decode different code from what was checked",
+            line_number=1,
+            recommendation="Remove the coding declaration or declare utf-8",
+        )]
+
     def _check_python(self, code: str) -> List[SecurityIssue]:
         """Check Python code for security issues."""
         # The AST checks share one parse and one walk of it; code that does
         # not parse stops here.
         nodes = list(ast.walk(self._parse_python(code)))
-        issues = []
+        issues = self._check_python_source_encoding(code)
         lines = code.split('\n')
         
         for line_num, line in enumerate(lines, 1):
