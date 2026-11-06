@@ -369,8 +369,31 @@ class CodeVerifier:
         # Every module's loader and spec: the loader returns any module by name
         # and reads files (get_data).
         "__loader__", "__spec__",
+        # A ForwardRef's compiled string and its source, and the annotations
+        # dict typing reads strings from (GHSA-p75q). From Python 3.14 the
+        # annotations come from __annotate__ (PEP 649), the server image's
+        # Python.
+        "__forward_code__", "__forward_arg__", "__annotations__", "__annotate__", "__annotate_func__",
     }
-    
+
+    # Calls whose string arguments typing turns into a ForwardRef and compiles
+    # (TypeVar("T", bound="...")); string annotations and strings in a
+    # subscript (List["..."]) are compiled the same way (GHSA-p75q). The
+    # functional NamedTuple, TypedDict and make_dataclass take field types as
+    # strings, and the methods they build carry them as annotations.
+    _TYPING_STRING_CALLS: ClassVar[frozenset] = frozenset(
+        {"ForwardRef", "TypeVar", "NewType", "ParamSpec", "TypeVarTuple", "TypeAliasType",
+         "NamedTuple", "TypedDict", "make_dataclass"}
+    )
+    # Nodes that run code when an expression is evaluated: a string that holds
+    # one is code, not a type. Operators, names, attributes and subscripts are
+    # allowed, so a dict key such as "Content-Type" is not refused.
+    _CODE_RUNNING_NODES: ClassVar[tuple] = (
+        ast.Call, ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
+        ast.NamedExpr, ast.Await, ast.Yield, ast.YieldFrom,
+    )
+    _TYPING_STRING_MAX_DEPTH: ClassVar[int] = 8
+
     # =========================================================================
     # JavaScript/TypeScript Patterns
     # =========================================================================
@@ -879,6 +902,8 @@ class CodeVerifier:
 
         # Modules that run code given as a string (GHSA-jrxf).
         issues.extend(self._check_python_code_running_imports(nodes))
+        # Strings that typing compiles and runs (GHSA-p75q).
+        issues.extend(self._check_python_typing_strings(nodes))
 
         # Weak crypto in password context
         code_lower = code.lower()
@@ -1266,6 +1291,106 @@ class CodeVerifier:
                 recommendation="Remove or sandbox this operation",
             ))
         return issues
+
+    def _check_python_typing_strings(self, nodes: List[ast.AST]) -> List[SecurityIssue]:
+        """Refuse a string that typing evaluates when evaluating it would run
+        code (GHSA-p75q).
+
+        typing compiles and runs string annotations (singledispatch's
+        .register calls get_type_hints while it decorates), strings in a
+        subscript (List["..."] creates a ForwardRef) and the strings given to
+        TypeVar, ForwardRef and the like. The other checks read strings only
+        for critical names, so open(...).read() inside one was never seen.
+        """
+        issues: List[SecurityIssue] = []
+        for string in self._typing_strings(nodes):
+            if self._string_runs_code(string.value, 0):
+                issues.append(SecurityIssue(
+                    severity="CRITICAL",
+                    issue_type="dangerous_function",
+                    pattern="typing string",
+                    description="A string that typing evaluates holds code, not a type",
+                    line_number=getattr(string, "lineno", None),
+                    recommendation="Write annotations and forward references as plain type names",
+                ))
+        return issues
+
+    @classmethod
+    def _typing_strings(cls, nodes: List[ast.AST]):
+        """String constants that typing may compile: anywhere in an
+        annotation, directly in a subscript (or a tuple or list there), and
+        in the arguments of the _TYPING_STRING_CALLS, under their own name,
+        an import alias (from typing import TypeVar as TV) or a name assigned
+        one (md = dataclasses.make_dataclass)."""
+        aliases, _ = cls._import_aliases(nodes)
+        calls = set(cls._TYPING_STRING_CALLS) | {
+            local for local, target in aliases.items() if target.rpartition(".")[2] in cls._TYPING_STRING_CALLS
+        }
+        assignments = [
+            (target.id, node.value) for node in nodes if isinstance(node, ast.Assign)
+            for target in node.targets if isinstance(target, ast.Name)
+        ]
+        # Twice, so an alias of an alias is followed as well.
+        for _ in range(2):
+            calls |= {name for name, value in assignments if cls._call_head(value) in calls}
+        calls = frozenset(calls)
+        for node in nodes:
+            for root in cls._typing_string_roots(node, calls):
+                yield from (
+                    child for child in ast.walk(root)
+                    if isinstance(child, ast.Constant) and isinstance(child.value, str)
+                )
+
+    @classmethod
+    def _typing_string_roots(cls, node: ast.AST, calls: frozenset) -> list:
+        if isinstance(node, ast.arg):
+            return [node.annotation] if node.annotation is not None else []
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return [node.returns] if node.returns is not None else []
+        if isinstance(node, ast.AnnAssign):
+            return [node.annotation]
+        if isinstance(node, ast.Subscript):
+            return cls._slice_strings(node.slice)
+        if isinstance(node, ast.Call) and cls._call_head(node.func) in calls:
+            return [*node.args, *(keyword.value for keyword in node.keywords)]
+        return []
+
+    @classmethod
+    def _slice_strings(cls, node: ast.AST) -> list:
+        """The string constants a subscript passes as type arguments: the
+        slice itself, or the elements of a tuple or list there."""
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return [node]
+        if isinstance(node, (ast.Tuple, ast.List)):
+            return [string for element in node.elts for string in cls._slice_strings(element)]
+        return []
+
+    @staticmethod
+    def _call_head(func: ast.AST) -> Optional[str]:
+        if isinstance(func, ast.Name):
+            return func.id
+        if isinstance(func, ast.Attribute):
+            return func.attr
+        return None
+
+    @classmethod
+    def _string_runs_code(cls, text: str, depth: int) -> bool:
+        """Whether evaluating ``text`` as an expression could run code: a
+        call, a lambda, a comprehension, an assignment expression, await or
+        yield, here or in a string literal inside it. A string that does not
+        parse cannot be evaluated."""
+        if depth > cls._TYPING_STRING_MAX_DEPTH:
+            return True
+        try:
+            tree = ast.parse(text.strip(), mode="eval")
+        except (SyntaxError, ValueError):
+            return False
+        for child in ast.walk(tree):
+            if isinstance(child, cls._CODE_RUNNING_NODES):
+                return True
+            if isinstance(child, ast.Constant) and isinstance(child.value, str) and cls._string_runs_code(child.value, depth + 1):
+                return True
+        return False
 
     def _check_python_process_ast(self, nodes: List[ast.AST]) -> List[SecurityIssue]:
         """Flag process-execution and file/network calls, resolving import aliases.
