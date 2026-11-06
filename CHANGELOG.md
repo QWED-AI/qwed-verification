@@ -80,11 +80,13 @@ sign-up fix are paths the eval runner does not exercise.
   ([GHSA-5h3v-3463-78hf](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-5h3v-3463-78hf),
   medium). Unknown names were split into products of letters (`sinc(0)` read
   as 0), and `n` was a positive integer, so `/verify/math` returned
-  `VERIFIED · ADMIT` for `sinc(0) = 0` and `Abs(n) = n`. A name in call
-  position must now be a supported function, a multi-letter name is one
-  symbol, and `n` is a plain variable. **Upgrade note:** write `*` between
-  names you mean to multiply. `xy` is now one name, so `xy` and `yx` are
-  different symbols; `2x`, `x(x+1)` and `sin x` read as before.
+  `VERIFIED · ADMIT` for `sinc(0) = 0` and `Abs(n) = n`. A name of two or
+  more letters in call position must now be a supported function, a
+  multi-letter name is one symbol, and `n` is a plain variable. A single
+  letter before a bracket is still a product, as before: `x(x+1)` is
+  `x*(x+1)` and `f(0)` is `f*0`, not a call. **Upgrade note:** write `*`
+  between names you mean to multiply. `xy` is now one name, so `xy` and `yx`
+  are different symbols; `2x`, `x(x+1)` and `sin x` read as before.
 - **/verify/math and batch math run in worker processes with a time limit**
   ([GHSA-qgjc-92m3-fcr6](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-qgjc-92m3-fcr6),
   medium). SymPy ran on the event loop or in a thread with no limit, so
@@ -148,11 +150,12 @@ entry, above or below.
   1,000 rows (`X-Export-Truncated: true` when more matched). A client that
   read the old columns by position or name must update.
 - **Maths input.** Write `*` between names you mean to multiply: `xy` is now
-  one name. A name in call position must be a supported function, and `n` is
-  a plain variable. With no tolerance, `verify_math` needs a claim to match
-  to 9 significant digits, or to be correctly rounded with at least 6,
-  within 1e-6. `VerificationEngine.verify_math`'s `tolerance` defaults to
-  `None`.
+  one name. A name of two or more letters in call position must be a
+  supported function; a single letter there is still a product (`f(0)` is
+  `f*0`). `n` is a plain variable. With no tolerance, `verify_math` needs a
+  claim to match to 9 significant digits, or to be correctly rounded with at
+  least 6, within 1e-6. `VerificationEngine.verify_math`'s `tolerance`
+  defaults to `None`.
 - **Maths limits.** `/verify/math` and batch maths run in worker processes,
   set by `QWED_MATH_WORKERS` (default 2), `QWED_MATH_TIMEOUT_SECONDS` (10),
   `QWED_MATH_MAX_WAITING` (32), `QWED_MATH_WORKER_MEMORY_MB` (2048, Linux
@@ -168,9 +171,9 @@ entry, above or below.
   is not UTF-8, and reports attribute access by a computed name as a warning
   (new `warnings_count` output) that does not fail the scan.
 - **Go module path.** The module is
-  `github.com/QWED-AI/qwed-verification/sdk-go/v9`; update imports and `go
-  get .../sdk-go/v9@v9.0.0`. The Go, TypeScript and Rust SDKs have no API
-  changes in this release.
+  `github.com/QWED-AI/qwed-verification/sdk-go/v9`. Update imports and run
+  `go get github.com/QWED-AI/qwed-verification/sdk-go/v9@v9.0.0`. The Go,
+  TypeScript and Rust SDKs have no API changes in this release.
 
 ### Other changes since 8.0.0
 

@@ -18,18 +18,20 @@
 
 ---
 
-QWED is an open-source (Apache-2.0) verification layer that checks claims in LLM and AI-agent output with deterministic engines, including SymPy, Z3, SQLGlot and Python AST analysis. It is designed to fail closed: a claim it cannot check should not be reported as verified. Known exceptions, on the logic, consensus, process and RAG routes and on `/verify/math` without `=`, are tracked in [#320](https://github.com/QWED-AI/qwed-verification/issues/320) and [#576](https://github.com/QWED-AI/qwed-verification/issues/576). It runs in your own environment as a Python library, a CLI, a self-hosted API or a Docker image, with SDKs for TypeScript, Go and Rust.
+QWED is an open-source (Apache-2.0) verification layer that checks claims in LLM and AI-agent output with deterministic engines, including SymPy, Z3, SQLGlot and Python AST analysis. It is designed to fail closed: a claim it cannot check should not be reported as verified. Known exceptions, on the logic, consensus, process, RAG and image routes and on `/verify/math` without `=`, are tracked in [#320](https://github.com/QWED-AI/qwed-verification/issues/320), [#576](https://github.com/QWED-AI/qwed-verification/issues/576) and [#581](https://github.com/QWED-AI/qwed-verification/issues/581). It runs in your own environment as a Python library, a CLI, a self-hosted API or a Docker image, with SDKs for TypeScript, Go and Rust.
 
 This repository is the reference implementation of the QWED verification protocol and of [Verification Context v1.0 and v1.1](spec/), the record format for a verification result. A v1.1 document carries the issuing server's signature.
 
 ## How a result reads
 
-Every verification API endpoint returns a `DiagnosticResult` with a `status`. `/verify/math`, `/verify/code`, `/verify/sql`, `/verify/natural_language` and `/agents/{agent_id}/verify` also return a separate `admission`; the other routes do not yet ([#581](https://github.com/QWED-AI/qwed-verification/issues/581)):
+Every verification API endpoint except `/verify/batch` returns a `DiagnosticResult` with a `status`. `/verify/math`, `/verify/code`, `/verify/sql`, `/verify/natural_language` and `/agents/{agent_id}/verify` also return a separate `admission`; the other routes do not yet ([#581](https://github.com/QWED-AI/qwed-verification/issues/581)):
 
 | Field | Values | Meaning |
 |---|---|---|
 | `status` | `VERIFIED`, `UNVERIFIABLE`, `BLOCKED` | Whether QWED could establish the result deterministically. `VERIFIED` always carries a `proof_ref`, a SHA-256 commitment to the evidence. |
 | `admission` | `ADMIT`, `BLOCKED` | Whether the checked output may be acted on. In a Verification Context document this is `ADMIT` or `DENY`. |
+
+`/verify/batch` returns a job whose `status` is the job's state (`pending`, `processing`, `completed`, `partial` or `failed`). Each item carries its own result, and math, code, SQL and natural-language items include `admission`. In Python, an engine returns a `DiagnosticResult` without an `admission` field; `admission_decision(result)` gives it.
 
 The two are independent. Proving that a SQL statement is destructive is a verified result that must not run:
 
