@@ -179,6 +179,26 @@ entry, above or below.
   process-execution findings, refuses a Python file whose coding declaration
   is not UTF-8, and reports attribute access by a computed name as a warning
   (new `warnings_count` output) that does not fail the scan.
+- **Audit log.** Each row's `latency_ms` is now covered by its entry hash,
+  so an 8.x process cannot verify rows that 9.0.0 writes: upgrade every
+  server process together. An existing database gets the column at startup.
+  Natural-language rows are stored with the domain `NATURAL_LANGUAGE`, not
+  `MATH`; rows already written keep `MATH`. The audit row of a signed
+  Verification Context document stores the document as returned, with any
+  personal data in it; its `query` column is still redacted.
+- **Route results.** A batch maths item proven false is `VERIFIED` with
+  `is_valid` false and admission `BLOCKED`, as on `/verify/math`; it was
+  `UNVERIFIABLE`. Input the maths parser refuses is `BLOCKED` with
+  `math.parse_error`, not `api.math.execution_error`, on the route and as a
+  batch item, and Python that does not parse is `BLOCKED` with
+  `code_verifier.parse_error`. `/auth/me` answers 403 for an inactive user
+  or organisation or an unknown role, and sign-in refuses a user of an
+  inactive organisation. A password over 72 bytes is 400 at sign-up and 401
+  at sign-in, not 500.
+- **Dependencies.** `qwed` now requires `z3-solver==5.3.2.0` (it required
+  5.1.0.0), so an environment that pins another z3 version must move with
+  it. The server image moves to sqlglot 30.25.0, anthropic 2.3.0, FastAPI
+  0.162.0, openai 3.41.0 and python-dateutil 3.0.0.
 - **Go module path.** The module is
   `github.com/QWED-AI/qwed-verification/sdk-go/v9`. Update imports and run
   `go get github.com/QWED-AI/qwed-verification/sdk-go/v9@v9.0.0`. The Go,
@@ -407,6 +427,14 @@ entry, above or below.
   - `/admin/compliance/export/csv` moves from `api/main.py` to
     `api/compliance_routes.py`; its path, its checks and its
     `organization_id` parameter are unchanged.
+
+- **Dependencies (#565).** `pyproject.toml` pins `z3-solver==5.3.2.0`, up
+  from 5.1.0.0, and the build backend `hatchling==1.33.0`. The server
+  image's `requirements-server.txt` moves to sqlglot 30.25.0 (from 30.23.0
+  in 8.0.0), anthropic 2.3.0 (from 1.15.0), FastAPI 0.162.0 (from 0.151.0),
+  openai 3.41.0 (from 3.35.1), python-dateutil 3.0.0 (from 2.9.0.post0) and
+  certifi 2026.10.23 (from 2026.10.19), among other updates. SymPy stays at
+  1.14.0.
 
 #### Fixed
 
