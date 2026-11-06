@@ -136,10 +136,13 @@ entry, above or below.
 - **Model settings.** Set the model variable of the provider you use:
   `OPENAI_MODEL`, `AZURE_OPENAI_DEPLOYMENT`, `ANTHROPIC_MODEL`,
   `CLAUDE_OPUS_DEPLOYMENT`, `GEMINI_MODEL`, `OLLAMA_MODEL` or
-  `CUSTOM_MODEL`. Nothing falls back to a model QWED picks, so a server or
-  CLI with none set stops with an error naming the variable. For Anthropic,
+  `CUSTOM_MODEL`. Nothing falls back to a model QWED picks. With none set,
+  the CLI stops at once with an error naming the variable; the server
+  starts, since it builds a provider on first use, and each request that
+  needs the provider fails with that error. On the server,
   `ANTHROPIC_DEPLOYMENT` still wins over `ANTHROPIC_MODEL` when it is set:
-  change or unset it to run another model. `ACTIVE_PROVIDER`, and the
+  change or unset it to run another model. The CLI reads only
+  `ANTHROPIC_MODEL` or `--model`. `ACTIVE_PROVIDER`, and the
   provider a request names, must be one QWED knows: `openai`,
   `openai_direct`, `openai_compat`, `azure_openai`, `anthropic`,
   `claude_opus`, `gemini`, `ollama` or `auto`.
