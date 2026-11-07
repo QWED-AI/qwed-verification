@@ -5,6 +5,41 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ## [Unreleased]
 
+### Fixed
+
+- **The server reads `.env` before any of its settings (#591).** With
+  `uvicorn qwed_new.api.main:app`, the math worker, the database, the rate
+  limiter and the auth module read their settings when imported, before
+  anything loaded `.env`, so a value written only there was ignored.
+  - `QWED_MATH_WORKERS`, `QWED_MATH_TIMEOUT_SECONDS`, `QWED_MATH_MAX_WAITING`,
+    `QWED_MATH_WORKER_MEMORY_MB`, `DATABASE_URL`, `QWED_RATE_LIMIT_PER_KEY`,
+    `QWED_RATE_LIMIT_GLOBAL`, `QWED_RATE_LIMIT_PER_IP`,
+    `QWED_AUTH_TRUSTED_PROXIES` and `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` kept
+    their defaults. The database fell back to `sqlite:///./qwed.db`.
+  - With `QWED_JWT_SECRET_KEY` or `QWED_API_KEY_LOOKUP_SECRET` only in
+    `.env`, the server did not start.
+  - A math setting the worker cannot use did not stop the start: each
+    worker refused it, and every maths job was `BLOCKED`
+    (`math.worker_error`). It now stops the start with an error naming the
+    setting, as it does when set in the process environment.
+  - `api/main.py` now imports `qwed_new.config`, which loads `.env` (the
+    working directory's, then `~/.qwed/.env`), before any other QWED module.
+    Values set in the process environment (the shell, Docker `-e`,
+    Kubernetes `env`, Compose) were read before and still win over `.env`.
+  - **Before upgrading,** check `.env` (the working directory's and
+    `~/.qwed/.env`) for any of the settings above that the process
+    environment does not set: the server now uses them. A `DATABASE_URL`
+    there is now the database the server opens, where before it used
+    `sqlite:///./qwed.db`; `QWED_AUTH_TRUSTED_PROXIES` there now decides
+    which proxies' `X-Forwarded-For` the server trusts for the client
+    address; and a maths setting there that the server cannot use now
+    stops the start.
+  - `.env.example`, `deploy/.env.example` and
+    `deploy/kubernetes/configmap.yaml` list the five maths settings with
+    their ranges, and `deploy/docker-compose.yml` passes them to the
+    server by name, so one that is not set stays unset and keeps its
+    default.
+
 ## [9.0.0] - 2026-11-06
 
 A major release. It fixes eleven private advisories: CodeVerifier admitted
