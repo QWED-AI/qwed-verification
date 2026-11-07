@@ -15,6 +15,7 @@ import asyncio
 import csv
 import io
 import json
+import time
 from unittest.mock import patch
 
 import pytest
@@ -37,7 +38,15 @@ SLOW_SECONDS = 0.06
 
 
 @pytest.fixture
-def client(isolated_audit_chain):
+def slept():
+    """How long each slow_nl call took, on the clock the latency is measured
+    with. asyncio.sleep runs on time.monotonic, which ticks every 15.6 ms on
+    Windows, so a sleep can end before SLOW_SECONDS have passed."""
+    return []
+
+
+@pytest.fixture
+def client(isolated_audit_chain, slept):
     # The audit-chain engine also holds the organisation and its owner, so
     # /audit/logs reads the rows the routes wrote.
     SQLModel.metadata.create_all(isolated_audit_chain)
@@ -48,7 +57,9 @@ def client(isolated_audit_chain):
     tenant = TenantContext(organization_id=ORG_ID, organization_name="Acme", tier="free", api_key="k")
 
     async def slow_nl(query, organization_id=None, preferred_provider=None):
+        start = time.perf_counter()
         await asyncio.sleep(SLOW_SECONDS)
+        slept.append(time.perf_counter() - start)
         return dict(NL_OUTPUT)
 
     def session_for_request():
@@ -88,13 +99,14 @@ def _trail_valid(org_id=ORG_ID):
 
 # ---------------------------------------------------------------- measuring
 
-def test_a_route_stores_how_long_it_took(client, isolated_audit_chain):
+def test_a_route_stores_how_long_it_took(client, isolated_audit_chain, slept):
     assert client.post("/verify/natural_language", json={"query": "what is 2+2"}).status_code == 200
 
     (row,) = _rows(isolated_audit_chain)
     assert isinstance(row.latency_ms, int)
-    # The verifier slept SLOW_SECONDS; the row's latency includes it.
-    assert row.latency_ms >= SLOW_SECONDS * 1000 - 1
+    # The verifier slept; the row's latency includes that time.
+    (verifier_seconds,) = slept
+    assert row.latency_ms >= verifier_seconds * 1000 - 1
     assert _trail_valid()
 
 
