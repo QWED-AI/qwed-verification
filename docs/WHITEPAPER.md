@@ -680,8 +680,8 @@ This DSL-based approach is **why QWED can safely process logic from untrusted LL
 **Verification Approach:** From 9.1.0 the engine parses Python and admits it only when:
 
 - every module it imports, and every name it uses from one, is a listed standard-library module that computes without files, the network, processes, the environment or the import system;
-- every builtin it reads is listed: the public exceptions and the builtins that compute;
-- every special attribute (`__x__`) it uses is listed, and it reads no attribute by a name made at run time (a format field, a class pattern, or a helper that reads attributes by name);
+- every builtin it reads is listed: the public exceptions, the builtins that compute, `print` and `input` (which use standard output and standard input, so code run outside the sandbox can wait on input) and `exit` and `quit`;
+- every special attribute (`__x__`) it uses is listed, and it reads no attribute's value by a name made at run time (a format field, a class pattern, or a helper that reads attributes by name); `hasattr` is admitted and answers only whether an attribute exists, though the lookup can run a property;
 - no module is used as a value or written to, and no frame or traceback is read.
 
 Anything else is refused, and the finding names the module, builtin or attribute. A caller whose own runtime confines a module, such as the code-execution sandbox, can pass it as trusted: the module checks then skip it (it may be used as a value or written to), and the others still apply. Ordinary attributes of the code's own objects are not listed. The lists cover Python 3.10 to 3.15.

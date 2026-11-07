@@ -12,9 +12,9 @@ project: CodeVerifier admitted Python that read and wrote files, sent data
 over the network, unpickled, started processes and read the environment
 through names its lists of dangerous calls did not hold. Python code is now
 admitted only when the modules, module names, builtins and special
-attributes it uses are listed and it reads no attribute by a name made at
-run time, so code that 9.0.0 admitted may now be refused: read "Upgrading
-to 9.1.0" below. The server also reads `.env` before any of its settings
+attributes it uses are listed and it reads no attribute's value by a name
+made at run time, so code that 9.0.0 admitted may now be refused: read
+"Upgrading to 9.1.0" below. The server also reads `.env` before any of its settings
 (#591, the known issue in the 9.0.0 release notes). The soundness eval has
 156 known-answer claims, 0 accepted wrongly.
 
@@ -36,11 +36,13 @@ versions up to 9.0.0; upgrading is recommended. It has regression tests in
     `code_admission`'s list of standard-library modules that compute
     without files, the network, processes, the environment or the import
     system. Third-party modules are not admitted;
-  - every builtin it reads is listed: the public exceptions and the
-    builtins that compute;
+  - every builtin it reads is listed: the public exceptions, the builtins
+    that compute, `print` and `input` (which use standard output and
+    standard input) and `exit` and `quit` (which raise `SystemExit`);
   - every special attribute (`__x__`) it uses is listed (protocol methods
-    and plain data), and it reads no attribute by a name made at run time:
-    not through a `str.format` field that names an attribute, a bound
+    and plain data), and it reads no attribute's value by a name made at
+    run time (`hasattr`, which is admitted, answers only whether one exists,
+    though the lookup can run a property): not through a `str.format` field that names an attribute, a bound
     method's `__reduce__` (which returns the builtin `getattr`), a class
     pattern on a class whose `__match_args__` is set at run time, or
     `copy.copy`, `functools.update_wrapper`, `ast.iter_fields`,
