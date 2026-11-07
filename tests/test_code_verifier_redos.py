@@ -6,19 +6,36 @@ import time
 from qwed_new.core.code_verifier import CodeVerifier
 
 
-def _best_times(time_small, time_large, factor, slack=0.2, rounds=3, max_rounds=9):
-    """The fastest small and large runs, measured in turn, so that a busy
-    moment on a shared runner slows a run of each size, not one of them.
+# The large input is four times the small one: linear work takes about 4x as
+# long, work quadratic in the input about 16x. The bound sits between them
+# with room on both sides, so cache and scheduling effects on a busy runner
+# do not reach it. The slack only absorbs timer jitter: it must stay far below
+# what a quadratic slowdown adds to the fastest small run (about 20 ms).
+SCALE_BOUND = 8
+SLACK_SECONDS = 0.02
+
+
+def _assert_scales_linearly(time_small, time_large, what, rounds=3, max_rounds=9):
+    """Compare the fastest small and large runs, measured in turn and in
+    alternating order, so that a busy moment on a shared runner, or a cost
+    that falls on whichever run comes second, slows both sizes, not one.
     Past the bound after ``rounds`` rounds, measure more, up to ``max_rounds``:
     noise only adds time, so more runs bring the best back down, while work
     that really grows faster than the input stays past the bound."""
     small, large = [], []
     for done in range(1, max_rounds + 1):
-        small.append(time_small())
-        large.append(time_large())
-        if done >= rounds and min(large) < min(small) * factor + slack:
+        if done % 2:
+            small.append(time_small())
+            large.append(time_large())
+        else:
+            large.append(time_large())
+            small.append(time_small())
+        if done >= rounds and min(large) < min(small) * SCALE_BOUND + SLACK_SECONDS:
             break
-    return min(small), min(large)
+    best_small, best_large = min(small), min(large)
+    assert best_large < best_small * SCALE_BOUND + SLACK_SECONDS, (
+        f"{what} scaled {best_large / max(best_small, 1e-6):.1f}x on 4x input"
+    )
 
 
 def _detector_time(verifier, reps):
@@ -33,11 +50,9 @@ def _detector_time(verifier, reps):
 def test_detector_scales_near_linearly():
     verifier = CodeVerifier()
     _detector_time(verifier, 2000)  # warm up
-    # Four times the input: a linear detector takes about 4x as long, a
-    # quadratic one about 16x. The bound sits between them with room on both
-    # sides, so cache and scheduling effects on a busy runner do not reach it.
-    small, large = _best_times(lambda: _detector_time(verifier, 10000), lambda: _detector_time(verifier, 40000), 8)
-    assert large < small * 8 + 0.2, f"detector scaled {large / max(small, 1e-6):.1f}x on 4x input"
+    _assert_scales_linearly(
+        lambda: _detector_time(verifier, 10000), lambda: _detector_time(verifier, 40000), "detector"
+    )
 
 
 def test_non_matching_subprocess_input_stays_fast():
@@ -96,15 +111,13 @@ def _verify_time(code):
 
 
 def _assert_linear(build, n):
-    # Four times the input must not blow up: linear work takes about 4x as
-    # long, work quadratic in it about 16x, and the bound sits between them.
-    # A ratio, not a time limit, so the runner's speed (or coverage tracing)
-    # does not decide the result; the best runs, taken in turn (_best_times),
-    # so a busy runner (pytest -n) does not either.
+    # Four times the input must not blow up (SCALE_BOUND). A ratio, not a time
+    # limit, so the runner's speed (or coverage tracing) does not decide the
+    # result; the best runs, taken in turn, so a busy runner (pytest -n) does
+    # not either.
     _verify_time(build(n // 4))  # warm up
     small_code, large_code = build(n // 2), build(2 * n)
-    small, large = _best_times(lambda: _verify_time(small_code), lambda: _verify_time(large_code), 8)
-    assert large < small * 8 + 0.2, f"scaled {large / max(small, 1e-6):.1f}x on 4x input"
+    _assert_scales_linearly(lambda: _verify_time(small_code), lambda: _verify_time(large_code), "verify_code")
 
 
 def test_names_reshaped_many_times_stay_fast():
