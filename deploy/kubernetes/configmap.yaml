@@ -15,3 +15,14 @@ data:
   # to 2592000 (30 days); 86400 is the default (#319). Anything else stops
   # the server at startup.
   QWED_ATTESTATION_TTL_SECONDS: "86400"
+  # Maths limits (#591), optional: unset keeps the default shown. Workers:
+  # a whole number, at least 1. Time limit per job: 0.001 to 3600 seconds.
+  # Waiting jobs and the per-worker memory limit in MB (0 turns it off):
+  # whole numbers, at least 0. Batch maths budget per job, wall-clock from
+  # the job's start: at least 0 seconds. Anything else stops the server at
+  # startup. The root .env.example describes each one.
+  # QWED_MATH_WORKERS: "2"
+  # QWED_MATH_TIMEOUT_SECONDS: "10"
+  # QWED_MATH_MAX_WAITING: "32"
+  # QWED_MATH_WORKER_MEMORY_MB: "2048"
+  # QWED_BATCH_MATH_BUDGET_SECONDS: "120"

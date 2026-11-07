@@ -26,8 +26,17 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     working directory's, then `~/.qwed/.env`), before any other QWED module.
     Values set in the process environment (the shell, Docker `-e`,
     Kubernetes `env`, Compose) were read before and still win over `.env`.
-  - `.env.example` and `deploy/.env.example` list the five maths settings
-    with their ranges, and `deploy/docker-compose.yml` passes them to the
+  - **Before upgrading,** check `.env` (the working directory's and
+    `~/.qwed/.env`) for any of the settings above that the process
+    environment does not set: the server now uses them. A `DATABASE_URL`
+    there is now the database the server opens, where before it used
+    `sqlite:///./qwed.db`; `QWED_AUTH_TRUSTED_PROXIES` there now decides
+    which proxies' `X-Forwarded-For` the server trusts for the client
+    address; and a maths setting there that the server cannot use now
+    stops the start.
+  - `.env.example`, `deploy/.env.example` and
+    `deploy/kubernetes/configmap.yaml` list the five maths settings with
+    their ranges, and `deploy/docker-compose.yml` passes them to the
     server by name, so one that is not set stays unset and keeps its
     default.
 
