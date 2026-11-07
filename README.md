@@ -189,7 +189,7 @@ QWED has 13 engines and 9 policy guards. What an engine may claim depends on its
 | Math | SymPy | Arithmetic and algebraic identities |
 | Logic | Z3 | Satisfiability of constraints (QWED DSL) |
 | SQL | SQLGlot | Query structure, destructive statements, injection patterns, schema |
-| Code | Python AST and lists | Python: admits only listed standard-library modules, names, builtins and attributes; other languages: dangerous calls and patterns |
+| Code | Python AST and lists | Python: admits only listed standard-library modules and module names, listed builtins and listed special attributes, with no attribute read by a name made at run time; other languages: dangerous calls and patterns |
 | Schema | JSON Schema | Structure of JSON output |
 | Symbolic | CrossHair, in the Docker sandbox | Searches for counterexamples; returns `UNVERIFIABLE` or `BLOCKED`, not proofs |
 

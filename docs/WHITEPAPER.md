@@ -673,21 +673,21 @@ This DSL-based approach is **why QWED can safely process logic from untrusted LL
 
 ### 4.3 Code Security Engine
 
-**Technology Stack:** Python AST; for Python, lists of the modules, names, builtins and attributes code may use (`code_admission`); pattern rules for the other languages it scans
+**Technology Stack:** Python AST; for Python, lists of the modules, module names, builtins and special attributes code may use (`code_admission`); pattern rules for the other languages it scans
 
 **Problem Addressed:** AI-generated code can read files, send data, start processes or run strings as code. A list of dangerous calls cannot be complete: up to 9.0.0 the engine admitted Python that used `io.FileIO`, `urllib3`, `pickle.Unpickler`, `multiprocessing` or `os.environ`, because its lists did not name them ([GHSA-9r7q-mx75-hcj7](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-9r7q-mx75-hcj7)).
 
-**Verification Approach:** From 9.1.0 the engine parses Python and admits it only when everything it uses is listed:
+**Verification Approach:** From 9.1.0 the engine parses Python and admits it only when:
 
 - every module it imports, and every name it uses from one, is a listed standard-library module that computes without files, the network, processes, the environment or the import system;
 - every builtin it reads is listed: the public exceptions and the builtins that compute;
 - every special attribute (`__x__`) it uses is listed, and it reads no attribute by a name made at run time (a format field, a class pattern, or a helper that reads attributes by name);
 - no module is used as a value or written to, and no frame or traceback is read.
 
-Anything else is refused, and the finding names the module, builtin or attribute. A caller whose own runtime confines a module, such as the code-execution sandbox, can pass it as trusted. The lists cover Python 3.10 to 3.15.
+Anything else is refused, and the finding names the module, builtin or attribute. A caller whose own runtime confines a module, such as the code-execution sandbox, can pass it as trusted: the module checks then skip it (it may be used as a value or written to), and the others still apply. Ordinary attributes of the code's own objects are not listed. The lists cover Python 3.10 to 3.15.
 
 **Detection Capabilities:**
-- Modules, names, builtins and attributes outside the lists (Python)
+- Modules, module names, builtins and special attributes outside the lists (Python)
 - Dangerous function calls (`eval`, `exec`, `pickle.loads`)
 - SQL injection patterns
 - Command injection

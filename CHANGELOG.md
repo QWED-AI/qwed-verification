@@ -11,9 +11,10 @@ A minor release. It fixes one private advisory, reported from outside the
 project: CodeVerifier admitted Python that read and wrote files, sent data
 over the network, unpickled, started processes and read the environment
 through names its lists of dangerous calls did not hold. Python code is now
-admitted only when every module, builtin and attribute it uses is on a
-list, so code that 9.0.0 admitted may now be refused: read "Upgrading to
-9.1.0" below. The server also reads `.env` before any of its settings
+admitted only when the modules, module names, builtins and special
+attributes it uses are listed and it reads no attribute by a name made at
+run time, so code that 9.0.0 admitted may now be refused: read "Upgrading
+to 9.1.0" below. The server also reads `.env` before any of its settings
 (#591, the known issue in the 9.0.0 release notes). The soundness eval has
 156 known-answer claims, 0 accepted wrongly.
 
@@ -23,7 +24,7 @@ One advisory, published on the repository Security tab. It affects all
 versions up to 9.0.0; upgrading is recommended. It has regression tests in
 `tests/` and is reproduced in the soundness eval (`evals/`).
 
-- **CodeVerifier admits only listed modules, builtins and attributes**
+- **CodeVerifier admits only listed modules, builtins and special attributes**
   ([GHSA-9r7q-mx75-hcj7](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-9r7q-mx75-hcj7),
   high). Reported by kta1kri. `/verify/code` returned `VERIFIED · ADMIT`
   for Python that read and wrote files with `io.FileIO`, sent data with
@@ -95,8 +96,10 @@ module, builtin or attribute.
 
 - **`CodeVerifier(trusted_modules=...)`.** Top-level module names that the
   caller's own runtime confines, such as the code-execution sandbox and its
-  import guard. Code may use them although `code_admission` does not list
-  them; every other check still applies.
+  import guard. Code may use them, also as values or by writing to them,
+  although `code_admission` does not list them: the module checks skip a
+  trusted module, so a caller must not rely on those for one. The builtin,
+  attribute and frame checks still apply.
 
 ### Fixed
 
