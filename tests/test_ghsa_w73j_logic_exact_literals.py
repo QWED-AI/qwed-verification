@@ -111,7 +111,8 @@ def test_divide_numbers_exactly(left, right, expected):
     if isinstance(expected, int):
         assert value == expected
     else:
-        assert is_rational_value(value) and value.as_fraction() == expected
+        assert is_rational_value(value)
+        assert value.as_fraction() == expected
 
 
 def test_divide_by_zero_is_refused():

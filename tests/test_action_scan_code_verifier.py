@@ -198,7 +198,8 @@ def test_warnings_reach_sarif_at_warning_level(monkeypatch, workspace):
 
     results = json.loads((workspace / "qwed-results.sarif").read_text())["runs"][0]["results"]
     levels = sorted(r["level"] for r in results)
-    assert "warning" in levels and "error" in levels
+    assert "warning" in levels
+    assert "error" in levels
 
 
 def test_constant_names_that_are_not_dangerous_are_not_warned_about(monkeypatch, workspace):
