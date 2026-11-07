@@ -15,6 +15,7 @@ import ast
 import builtins
 import importlib
 import inspect
+import sys
 import types
 import uuid
 from unittest.mock import MagicMock, patch
@@ -346,9 +347,19 @@ def test_every_listed_class_holding_a_reflective_private_is_listed():
     )
 
 
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="type parameters are Python 3.12 syntax")
+def test_a_type_parameter_does_not_count_as_a_binding_of_its_name_elsewhere():
+    # def f[P] binds P only inside f, as a TypeVar; the class P stays static.
+    _assert_admitted(
+        "def f[P](x: P) -> P:\n    return x\nclass P:\n    __match_args__ = ('a',)\n    a = 1\n"
+        "match P():\n    case P(v):\n        print(v)"
+    )
+
+
 def test_the_special_attribute_lists_hold_only_special_names():
     for name in code_admission.ADMITTED_DUNDERS | code_admission.WRITABLE_DUNDERS:
-        assert name.startswith("__") and name.endswith("__"), name
+        assert name.startswith("__"), name
+        assert name.endswith("__"), name
     assert code_admission.WRITABLE_DUNDERS - code_admission.ADMITTED_DUNDERS == set()
     assert "__match_args__" not in code_admission.WRITABLE_DUNDERS
 

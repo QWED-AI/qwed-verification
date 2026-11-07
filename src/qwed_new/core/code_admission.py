@@ -39,7 +39,6 @@ import ast
 import builtins
 import functools
 import string
-import sys
 from typing import Any, Dict, FrozenSet, Iterable, Iterator, List, Optional, Set, Tuple
 
 
@@ -572,10 +571,11 @@ def _class_scope(cls: ast.ClassDef) -> Iterator[ast.AST]:
 # class patterns and decorator helpers ---------------------------------------
 
 # Statements that bind their own name (def, class, except ... as, case
-# captures, Python 3.12 type parameters).
+# captures). Not a Python 3.12 type parameter (def f[T]): it binds T only
+# inside the definition it parameterises, as a TypeVar, which is no class,
+# string or module there, so it does not count as a binding of T elsewhere.
 _NAMED_BINDINGS: Tuple[type, ...] = (
     ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.ExceptHandler, ast.MatchAs, ast.MatchStar,
-    *((ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple) if sys.version_info >= (3, 12) else ()),
 )
 
 
