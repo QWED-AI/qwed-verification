@@ -14,6 +14,8 @@ third-party modules its import guard confines as trusted.
 import ast
 import builtins
 import importlib
+import inspect
+import sys
 import types
 import uuid
 from unittest.mock import MagicMock, patch
@@ -325,17 +327,39 @@ def test_a_dataclass_on_a_class_this_check_cannot_resolve_is_refused():
     assert code_admission._holds_reflective_private("json.dumps") is False  # not a class
     assert code_admission._holds_reflective_private("json.JSONEncoder") is False
     assert code_admission._holds_reflective_private("enum.Enum") is True
-    code_admission._holds_reflective_private.cache_clear()
-    try:
-        with patch.object(code_admission.importlib, "import_module", side_effect=ImportError):
-            assert code_admission._holds_reflective_private("json.JSONEncoder") is True
-    finally:
-        code_admission._holds_reflective_private.cache_clear()
+    assert code_admission._holds_reflective_private("numpy.ndarray") is True  # not listed
+    assert code_admission._holds_reflective_private("ast.Name.ctx") is True  # nested
+
+
+def test_every_listed_class_holding_a_reflective_private_is_listed():
+    holding = set()
+    for module, names in ADMITTED_MODULES.items():
+        namespace = vars(importlib.import_module(module))
+        for name in names:
+            value = namespace.get(name)
+            if isinstance(value, type):
+                owners = inspect.getmro(value) + inspect.getmro(type(value))
+                if any(private in vars(owner) for owner in owners for private in code_admission.REFLECTIVE_PRIVATES):
+                    holding.add(f"{module}.{name}")
+    assert holding, "the scan found nothing; it no longer looks where it should"
+    assert holding <= code_admission.CLASSES_WITH_REFLECTIVE_PRIVATES, sorted(
+        holding - code_admission.CLASSES_WITH_REFLECTIVE_PRIVATES
+    )
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="type parameters are Python 3.12 syntax")
+def test_a_type_parameter_does_not_count_as_a_binding_of_its_name_elsewhere():
+    # def f[P] binds P only inside f, as a TypeVar; the class P stays static.
+    _assert_admitted(
+        "def f[P](x: P) -> P:\n    return x\nclass P:\n    __match_args__ = ('a',)\n    a = 1\n"
+        "match P():\n    case P(v):\n        print(v)"
+    )
 
 
 def test_the_special_attribute_lists_hold_only_special_names():
     for name in code_admission.ADMITTED_DUNDERS | code_admission.WRITABLE_DUNDERS:
-        assert name.startswith("__") and name.endswith("__"), name
+        assert name.startswith("__"), name
+        assert name.endswith("__"), name
     assert code_admission.WRITABLE_DUNDERS - code_admission.ADMITTED_DUNDERS == set()
     assert "__match_args__" not in code_admission.WRITABLE_DUNDERS
 
@@ -364,7 +388,7 @@ def _listed_classes_and_metaclasses():
     seen = set()
     while pending:
         klass = pending.pop()
-        new = {*klass.__mro__, *type(klass).__mro__} - seen
+        new = {*inspect.getmro(klass), *inspect.getmro(type(klass))} - seen
         seen |= new
         pending.extend(new)
     return {klass for klass in seen if klass.__module__ != "builtins"}
@@ -468,6 +492,9 @@ def test_a_star_import_is_admitted_only_where_every_name_it_binds_is_listed():
     _assert_admitted("from json import *\nprint(dumps(1))")
     _, issues = _issues("from typing import *\nx = 1")
     assert ("attribute_not_admitted", "typing.*") in issues
+    # On Linux, time's star import also binds clock_settime and tzset.
+    _, issues = _issues("from time import *\nx = 1")
+    assert ("attribute_not_admitted", "time.*") in issues
 
 
 # --- the sandbox's executor ----------------------------------------------

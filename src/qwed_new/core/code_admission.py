@@ -38,7 +38,6 @@ then not checked here. The other checks still apply.
 import ast
 import builtins
 import functools
-import importlib
 import string
 from typing import Any, Dict, FrozenSet, Iterable, Iterator, List, Optional, Set, Tuple
 
@@ -329,12 +328,12 @@ ADMITTED_MODULES: Dict[str, FrozenSet[str]] = {
 # Modules a star import may name: every name it binds from them (their
 # __all__, or every public name where there is none) is listed above, on
 # Python 3.10 to 3.15. From any other module it would bind names this check
-# does not see.
+# does not see. Not time: on Linux it also binds clock_settime and tzset.
 STAR_IMPORT_MODULES: FrozenSet[str] = _names(
     "abc array base64 binascii bisect calendar cmath collections collections.abc csv "
     "datetime decimal difflib fractions graphlib hashlib heapq hmac "
     "html itertools json keyword math numbers random re reprlib secrets statistics struct "
-    "textwrap time unicodedata urllib.parse zlib"
+    "textwrap unicodedata urllib.parse zlib"
 )
 
 # A frame reaches the builtins, its globals and its caller's frame; a
@@ -430,14 +429,25 @@ WRITABLE_DUNDERS: FrozenSet[str] = _PROTOCOL_DUNDERS | _names("__doc__ __module_
 # module table or a frame, write to a standard stream, or evaluate, compile
 # or look attributes up by a name they are given (enum.Enum._convert_ reads
 # any loaded module's namespace). Found by scanning their code on Python
-# 3.10 to 3.15; refused by name, on any object. Also _ip: under IPython and
-# Jupyter, exit and quit hold the shell, which runs commands, there.
+# 3.10 to 3.15; refused by name, on any object.
 REFLECTIVE_PRIVATES: FrozenSet[str] = _names(
     "_add_member_ _compile_pattern _convert_ _create_ _determine_new_args _evaluate _find_new_ "
     "_fix_up_module _fstring_FormattedValue _fstring_JoinedStr _get_theme "
     "_guess_quote_and_delimiter _make_substitution _new_member_ _pprint_dataclass "
     "_resolve_filename _safe_repr"
-) | _names("_ip")
+)
+# Under IPython and Jupyter, exit and quit hold the shell, which runs
+# commands, in _ip; refused by name, on any object.
+_RUNNER_PRIVATES: FrozenSet[str] = _names("_ip")
+
+# The listed classes that define one of REFLECTIVE_PRIVATES, or whose
+# metaclass does (Enum's metaclass defines _convert_). Found by scanning the
+# listed modules on Python 3.10 to 3.15; a test rescans the running Python.
+CLASSES_WITH_REFLECTIVE_PRIVATES: FrozenSet[str] = _names(
+    "calendar.Day calendar.Month csv.Sniffer enum.Enum enum.EnumCheck enum.EnumMeta enum.EnumType "
+    "enum.Flag enum.FlagBoundary enum.IntEnum enum.IntFlag enum.ReprEnum enum.StrEnum "
+    "re.RegexFlag string.Template typing.ForwardRef uuid.SafeUUID"
+)
 
 # str.format and format_map read the attribute a field names
 # ("{0.__globals__}"), so their template must be a string written in the
@@ -456,15 +466,6 @@ DECORATOR_ONLY: Dict[str, Tuple[type, ...]] = {
     "dataclasses.dataclass": (ast.ClassDef,),
     "functools.wraps": (ast.FunctionDef, ast.AsyncFunctionDef),
 }
-
-# A class pattern with positional parts (case P(x)) reads the attributes the
-# class's __match_args__ names, so the class must be one whose
-# __match_args__ is fixed: a builtin class, a listed one, or a class
-# statement in the code whose bases are such and whose __match_args__, if it
-# sets one, is a literal tuple of names.
-_BUILTIN_CLASSES: FrozenSet[str] = frozenset(
-    name for name in ADMITTED_BUILTINS if isinstance(getattr(builtins, name, None), type)
-)
 
 _DESCRIPTIONS = {
     "module_not_admitted": "Import of a module that admitted code may not use",
@@ -503,7 +504,8 @@ def findings(nodes: Iterable[ast.AST], trusted: FrozenSet[str] = frozenset()) ->
         for finding, line in _node_findings(node, trusted) + _reflection_findings(node, scope):
             _add(found, finding, line)
         if isinstance(node, (ast.Name, ast.Attribute)) and id(node) not in inner:
-            finding = _chain_finding(node, bindings, trusted) or _decorator_only_finding(node, scope)
+            targets = _chain_targets(node, bindings)
+            finding = _chain_finding(node, targets, trusted) or _decorator_only_finding(node, targets, scope)
             if finding:
                 _add(found, finding, node.lineno)
     return list(found.values())
@@ -569,39 +571,71 @@ def _class_scope(cls: ast.ClassDef) -> Iterator[ast.AST]:
 # class patterns and decorator helpers ---------------------------------------
 
 # Statements that bind their own name (def, class, except ... as, case
-# captures, Python 3.12 type parameters).
-_NAMED_BINDINGS: Tuple[type, ...] = tuple(
-    getattr(ast, name) for name in (
-        "FunctionDef", "AsyncFunctionDef", "ClassDef", "ExceptHandler", "MatchAs", "MatchStar",
-        "TypeVar", "ParamSpec", "TypeVarTuple",
-    ) if hasattr(ast, name)
+# captures). Not a Python 3.12 type parameter (def f[T]): it binds T only
+# inside the definition it parameterises, as a TypeVar, which is no class,
+# string or module there, so it does not count as a binding of T elsewhere.
+_NAMED_BINDINGS: Tuple[type, ...] = (
+    ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.ExceptHandler, ast.MatchAs, ast.MatchStar,
 )
 
 
 class _Scope:
     """What the reflection checks need to know about the whole code: where
     each name is bound, which statements decorate what, and which classes
-    have a fixed __match_args__ (static) or may be a dataclass's base (safe)."""
+    have a fixed __match_args__ (static) or may be a dataclass's base (safe).
+    Each index is built the first time a check needs it; most code needs
+    none of them."""
 
     def __init__(self, nodes: List[ast.AST], bindings: Dict[str, Set[str]]):
-        """Index ``nodes`` once; ``bindings`` are the admitted import bindings."""
+        """Keep ``nodes`` and the admitted import ``bindings``."""
+        self.nodes = nodes
         self.bindings = bindings
-        self.parents = {id(child): parent for parent in nodes for child in ast.iter_child_nodes(parent)}
-        self.sites: Dict[str, List[ast.AST]] = {}
-        for node in nodes:
+        self.templates: Dict[str, bool] = {}  # name -> bound only to fixed templates
+
+    @functools.cached_property
+    def parents(self) -> Dict[int, ast.AST]:
+        """Each node's parent, by the child's id."""
+        return {id(child): parent for parent in self.nodes for child in ast.iter_child_nodes(parent)}
+
+    @functools.cached_property
+    def sites(self) -> Dict[str, List[ast.AST]]:
+        """The nodes that bind each name."""
+        sites: Dict[str, List[ast.AST]] = {}
+        for node in self.nodes:
             for name in _bound_names(node):
-                self.sites.setdefault(name, []).append(node)
-        # A star import binds names this check does not see.
-        self.star = "*" in self.sites
-        self.decorations: Dict[int, Tuple[ast.AST, Optional[ast.Call]]] = {}
-        for node in nodes:
+                sites.setdefault(name, []).append(node)
+        return sites
+
+    @functools.cached_property
+    def star(self) -> bool:
+        """Whether a star import binds names this check does not see."""
+        return "*" in self.sites
+
+    @functools.cached_property
+    def decorations(self) -> Dict[int, Tuple[ast.AST, Optional[ast.Call]]]:
+        """For each decorator's name node, the statement it decorates and the
+        call it is the function of, if any."""
+        found: Dict[int, Tuple[ast.AST, Optional[ast.Call]]] = {}
+        for node in self.nodes:
             for decorator in getattr(node, "decorator_list", ()):
                 call = decorator if isinstance(decorator, ast.Call) else None
-                self.decorations[id(call.func if call else decorator)] = (node, call)
-        self.templates: Dict[str, bool] = {}  # name -> bound only to fixed templates
-        self.static: Set[str] = set()
-        self.safe: Set[str] = set()
-        _settle_classes(nodes, self)
+                found[id(call.func if call else decorator)] = (node, call)
+        return found
+
+    @functools.cached_property
+    def classes(self) -> Tuple[Set[str], Set[str]]:
+        """The static and the safe class statements' names."""
+        return _settle_classes(self)
+
+    @property
+    def static(self) -> Set[str]:
+        """Classes whose __match_args__ code cannot set at run time."""
+        return self.classes[0]
+
+    @property
+    def safe(self) -> Set[str]:
+        """Static classes that may be a dataclass's base."""
+        return self.classes[1]
 
     def bound_only_by(self, name: str, node: ast.AST) -> bool:
         """Whether ``node`` is the only statement that binds ``name``."""
@@ -652,7 +686,8 @@ def _special_name_finding(name: str, write: bool) -> Optional[_Finding]:
     if len(name) > 4 and name.startswith("__") and name.endswith("__"):
         listed = WRITABLE_DUNDERS if write else ADMITTED_DUNDERS
         return None if name in listed else ("special_attribute", name)
-    return ("special_attribute", name) if name in REFLECTIVE_PRIVATES else None
+    found = name in REFLECTIVE_PRIVATES or name in _RUNNER_PRIVATES
+    return ("special_attribute", name) if found else None
 
 
 def _format_finding(node: ast.Attribute, scope: _Scope) -> Optional[_Finding]:
@@ -724,8 +759,9 @@ def _class_pattern_finding(node: ast.MatchClass, scope: _Scope) -> Optional[_Fin
 
 def _static_class(expr: ast.AST, scope: _Scope, classes: Set[str]) -> bool:
     """Whether ``expr`` names a class whose attributes code cannot have set
-    at run time: a listed one (through an import), a builtin class the code
-    does not rebind, or one of ``classes``."""
+    at run time: a listed one (through an import), a builtin the code does
+    not rebind, or one of ``classes``. (A builtin that is not a class, such
+    as print, fails at run time as a class pattern or a base.)"""
     if isinstance(expr, ast.Subscript):
         expr = expr.value  # Generic[T] is based on Generic
     dotted = _dotted_name(expr)
@@ -736,24 +772,27 @@ def _static_class(expr: ast.AST, scope: _Scope, classes: Set[str]) -> bool:
         return True
     if rest or scope.star:
         return False
-    return head in classes or (head in _BUILTIN_CLASSES and head not in scope.sites)
+    return head in classes or (head in ADMITTED_BUILTINS and head not in scope.sites)
 
 
-def _settle_classes(nodes: List[ast.AST], scope: _Scope) -> None:
-    """Fill ``scope.static`` and ``scope.safe`` with the class statements
-    whose bases and metaclass are static (safe: and hold no reflective
-    private), whose decorators are listed names, and whose __match_args__
-    is a literal tuple of names. One pass in source order: a base defined
+def _settle_classes(scope: _Scope) -> Tuple[Set[str], Set[str]]:
+    """The names of the class statements whose bases and metaclass are
+    static, whose decorators are listed names, and whose __match_args__ is
+    a literal tuple of names (static); and of those whose bases also hold
+    no reflective private (safe). One pass in source order: a base defined
     later in the source does not count, which keeps the check linear."""
+    static: Set[str] = set()
+    safe: Set[str] = set()
     classes = sorted(
-        (node for node in nodes if isinstance(node, ast.ClassDef) and scope.bound_only_by(node.name, node)),
+        (node for node in scope.nodes if isinstance(node, ast.ClassDef) and scope.bound_only_by(node.name, node)),
         key=lambda node: (node.lineno, node.col_offset),
     )
     for cls in classes:
-        if _class_is_static(cls, scope):
-            scope.static.add(cls.name)
-            if _bases_are_safe(cls, scope):
-                scope.safe.add(cls.name)
+        if _class_is_static(cls, scope, static):
+            static.add(cls.name)
+            if _bases_are_safe(cls, scope, safe):
+                safe.add(cls.name)
+    return static, safe
 
 
 def _class_parents(cls: ast.ClassDef) -> List[ast.AST]:
@@ -766,13 +805,13 @@ def _metaclasses(cls: ast.ClassDef) -> List[ast.AST]:
     return [keyword.value for keyword in cls.keywords if keyword.arg == "metaclass"]
 
 
-def _class_is_static(cls: ast.ClassDef, scope: _Scope) -> bool:
+def _class_is_static(cls: ast.ClassDef, scope: _Scope, static: Set[str]) -> bool:
     """Whether code cannot have set ``cls``'s __match_args__ at run time."""
     # A metaclass of the code's own can set __match_args__ in the namespace
     # it builds (ns["__match_args__"] = ...) and answer isinstance for any
     # object, so only a listed or builtin metaclass keeps a class static.
     return (
-        all(_static_class(base, scope, scope.static) for base in cls.bases)
+        all(_static_class(base, scope, static) for base in cls.bases)
         and all(_static_class(meta, scope, set()) for meta in _metaclasses(cls))
         and all(scope.import_bound(_head(decorator)) for decorator in cls.decorator_list)
         and all(_literal_names(site, scope) for site in ast.walk(cls) if "__match_args__" in _bound_names(site))
@@ -797,10 +836,11 @@ def _literal_names(site: ast.AST, scope: _Scope) -> bool:
     )
 
 
-def _bases_are_safe(cls: ast.ClassDef, scope: _Scope) -> bool:
-    """Whether each base and the metaclass of ``cls`` is a builtin class, a
-    safe class statement, or a listed class that holds no reflective
-    private, nor does its metaclass (Enum's metaclass holds _convert_)."""
+def _bases_are_safe(cls: ast.ClassDef, scope: _Scope, safe: Set[str]) -> bool:
+    """Whether each base and the metaclass of ``cls`` is a builtin, one of
+    the ``safe`` class statements, or a listed class that holds no
+    reflective private, nor does its metaclass (Enum's metaclass holds
+    _convert_)."""
     for parent in _class_parents(cls):
         if isinstance(parent, ast.Subscript):
             parent = parent.value
@@ -808,33 +848,20 @@ def _bases_are_safe(cls: ast.ClassDef, scope: _Scope) -> bool:
         if dotted and scope.import_bound(dotted.partition(".")[0]):
             if any(_holds_reflective_private(target) for target in _chain_targets(parent, scope.bindings)):
                 return False
-        elif not _static_class(parent, scope, scope.safe):
+        elif not _static_class(parent, scope, safe):
             return False
     return True
 
 
-@functools.lru_cache(maxsize=1024)
 def _holds_reflective_private(target: str) -> bool:
-    """Whether the listed name ``target`` is a class that, or whose
-    metaclass, defines a name in REFLECTIVE_PRIVATES. A name this check
-    cannot resolve here (another Python's, or a trusted module's) counts as
-    one that does."""
-    parts = target.split(".")
-    depth = len(parts)
-    while depth and ".".join(parts[:depth]) not in ADMITTED_MODULES:
-        depth -= 1
-    if not depth:
+    """Whether the dotted name ``target`` may be a class that, or whose
+    metaclass, defines a name in REFLECTIVE_PRIVATES: one of
+    CLASSES_WITH_REFLECTIVE_PRIVATES, or any name that is not listed
+    directly in a listed module (a trusted module's, or a nested one)."""
+    module, _, name = target.rpartition(".")
+    if name not in ADMITTED_MODULES.get(module, ()):
         return True
-    try:
-        value: Any = importlib.import_module(".".join(parts[:depth]))
-        for part in parts[depth:]:
-            value = getattr(value, part)
-    except (ImportError, AttributeError):
-        return True
-    if not isinstance(value, type):
-        return False
-    owners = (*value.__mro__, *type(value).__mro__)
-    return any(name in vars(owner) for owner in owners for name in REFLECTIVE_PRIVATES)
+    return target in CLASSES_WITH_REFLECTIVE_PRIVATES
 
 
 def _is_dataclass(cls: ast.ClassDef, scope: _Scope) -> bool:
@@ -847,10 +874,11 @@ def _is_dataclass(cls: ast.ClassDef, scope: _Scope) -> bool:
     )
 
 
-def _decorator_only_finding(node: ast.AST, scope: _Scope) -> Optional[_Finding]:
-    """The finding for a use of a DECORATOR_ONLY name other than as the
-    decorator it is admitted as."""
-    for target in _chain_targets(node, scope.bindings):
+def _decorator_only_finding(node: ast.AST, targets: List[str], scope: _Scope) -> Optional[_Finding]:
+    """The finding for a use of a DECORATOR_ONLY name, among the dotted
+    names ``node`` can stand for, other than as the decorator it is
+    admitted as."""
+    for target in targets:
         owners = DECORATOR_ONLY.get(target)
         if owners and not _decorates(node, target, owners, scope):
             return ("dynamic_lookup", target)
@@ -869,7 +897,7 @@ def _decorates(node: ast.AST, target: str, owners: Tuple[type, ...], scope: _Sco
             call.args[0], ast.Starred
         )
     # dataclass or dataclass(frozen=True, ...), on a class with safe bases.
-    return (call is None or not call.args) and _bases_are_safe(owner, scope)
+    return (call is None or not call.args) and _bases_are_safe(owner, scope, scope.safe)
 
 
 def _import_bindings(
@@ -928,9 +956,10 @@ def _module_admitted(path: str, trusted: FrozenSet[str]) -> bool:
     return path.split(".")[0] in trusted or path in ADMITTED_MODULES
 
 
-def _chain_finding(node: ast.AST, bindings: Dict[str, Set[str]], trusted: FrozenSet[str]) -> Optional[_Finding]:
-    """The finding for a Name or attribute chain whose head an import binds."""
-    for target in _chain_targets(node, bindings):
+def _chain_finding(node: ast.AST, targets: List[str], trusted: FrozenSet[str]) -> Optional[_Finding]:
+    """The finding for a Name or attribute chain whose head an import binds,
+    given the dotted names it can stand for (_chain_targets)."""
+    for target in targets:
         finding = _module_use(target, node.ctx, trusted)
         if finding:
             return finding
