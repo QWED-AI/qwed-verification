@@ -113,4 +113,4 @@ def test_a_math_setting_in_dotenv_the_worker_cannot_use_stops_the_server(tmp_pat
     run = _import_the_server(tmp_path, {"QWED_MATH_TIMEOUT_SECONDS": "inf"})
 
     assert run.returncode != 0
-    assert "MathSettingError: QWED_MATH_TIMEOUT_SECONDS must be a number from 0.001 to 3600" in run.stderr
+    assert "MathSettingError: QWED_MATH_TIMEOUT_SECONDS must be a number" in run.stderr

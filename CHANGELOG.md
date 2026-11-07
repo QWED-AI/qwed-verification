@@ -28,7 +28,8 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     Kubernetes `env`, Compose) were read before and still win over `.env`.
   - `.env.example` and `deploy/.env.example` list the five maths settings
     with their ranges, and `deploy/docker-compose.yml` passes them to the
-    server; empty keeps each default.
+    server by name, so one that is not set stays unset and keeps its
+    default.
 
 ## [9.0.0] - 2026-11-06
 

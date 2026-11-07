@@ -38,13 +38,15 @@ services:
       # How long an attestation stays valid, in seconds (#319): unset is 24
       # hours; 60 to 2592000 (30 days), anything else stops the server.
       - QWED_ATTESTATION_TTL_SECONDS=${QWED_ATTESTATION_TTL_SECONDS:-}
-      # Maths limits (#591), optional: empty keeps each default. A value the
-      # server cannot use stops it; deploy/.env.example lists the ranges.
-      - QWED_MATH_WORKERS=${QWED_MATH_WORKERS:-}
-      - QWED_MATH_TIMEOUT_SECONDS=${QWED_MATH_TIMEOUT_SECONDS:-}
-      - QWED_MATH_MAX_WAITING=${QWED_MATH_MAX_WAITING:-}
-      - QWED_MATH_WORKER_MEMORY_MB=${QWED_MATH_WORKER_MEMORY_MB:-}
-      - QWED_BATCH_MATH_BUDGET_SECONDS=${QWED_BATCH_MATH_BUDGET_SECONDS:-}
+      # Maths limits (#591), optional, passed by name: Compose takes each
+      # from the shell or deploy/.env, and one set in neither stays unset in
+      # the container, so the server keeps its default. A value the server
+      # cannot use stops it; deploy/.env.example lists the ranges.
+      - QWED_MATH_WORKERS
+      - QWED_MATH_TIMEOUT_SECONDS
+      - QWED_MATH_MAX_WAITING
+      - QWED_MATH_WORKER_MEMORY_MB
+      - QWED_BATCH_MATH_BUDGET_SECONDS
       # All-tenant metrics operator allowlist (issue #337): user IDs permitted
       # to read /metrics and /metrics/prometheus. Unset = deny every caller,
       # including the Prometheus scraper. Set it to the scraper identity's
