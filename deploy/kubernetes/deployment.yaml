@@ -24,10 +24,10 @@ spec:
       containers:
         - name: qwed-core
           # The API server image (#467). Before 8.0.0 this tag ran the GitHub
-          # Action, not the server, so no earlier tag works here. Until 9.0.0
+          # Action, not the server, so no earlier tag works here. Until 9.1.0
           # is published, this tag does not exist and the pod stays in
           # ImagePullBackOff.
-          image: docker.io/qwedai/qwed-verification:9.0.0
+          image: docker.io/qwedai/qwed-verification:9.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000

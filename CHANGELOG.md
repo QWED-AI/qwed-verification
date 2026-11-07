@@ -5,6 +5,104 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ## [Unreleased]
 
+## [9.1.0] - 2026-11-08
+
+A minor release. It fixes one private advisory, reported from outside the
+project: CodeVerifier admitted Python that read and wrote files, sent data
+over the network, unpickled, started processes and read the environment
+through names its lists of dangerous calls did not hold. Python code is now
+admitted only when the modules, module names, builtins and special
+attributes it uses are listed and it reads no attribute's value by a name
+made at run time, so code that 9.0.0 admitted may now be refused: read
+"Upgrading to 9.1.0" below. The server also reads `.env` before any of its settings
+(#591, the known issue in the 9.0.0 release notes). The soundness eval has
+156 known-answer claims, 0 accepted wrongly.
+
+### Security fixes (advisories)
+
+One advisory, published on the repository Security tab. It affects all
+versions up to 9.0.0; upgrading is recommended. It has regression tests in
+`tests/` and is reproduced in the soundness eval (`evals/`).
+
+- **CodeVerifier admits only listed modules, builtins and special attributes**
+  ([GHSA-9r7q-mx75-hcj7](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-9r7q-mx75-hcj7),
+  high). Reported by kta1kri. `/verify/code` returned `VERIFIED · ADMIT`
+  for Python that read and wrote files with `io.FileIO`, sent data with
+  `urllib3`, unpickled with `pickle.Unpickler`, started processes with
+  `multiprocessing` and read `os.environ`, because it refused code by lists
+  of dangerous names and admitted whatever they did not hold. Python code is
+  now admitted only when:
+  - every module it imports, and every name it uses from one, is on
+    `code_admission`'s list of standard-library modules that compute
+    without files, the network, processes, the environment or the import
+    system. Third-party modules are not admitted;
+  - every builtin it reads is listed: the public exceptions, the builtins
+    that compute, `print` and `input` (which use standard output and
+    standard input) and `exit` and `quit` (which raise `SystemExit`);
+  - every special attribute (`__x__`) it uses is listed (protocol methods
+    and plain data), and it reads no attribute's value by a name made at
+    run time (`hasattr`, which is admitted, answers only whether one exists,
+    though the lookup can run a property): not through a `str.format` field that names an attribute, a bound
+    method's `__reduce__` (which returns the builtin `getattr`), a class
+    pattern on a class whose `__match_args__` is set at run time, or
+    `copy.copy`, `functools.update_wrapper`, `ast.iter_fields`,
+    `types.MethodType` and `dataclasses.make_dataclass`, which are no longer
+    listed. `dataclass` and `wraps` are admitted as decorators. Private
+    methods of listed classes that read the module table, such as
+    `enum.Enum._convert_`, are refused by name;
+  - no module is used as a value or written to, and no frame or traceback
+    is read.
+
+  The code-execution sandbox passes the third-party modules its import
+  guard confines (`numpy`, `pandas`, `scipy`, `sklearn`, `statsmodels`,
+  `patsy`) as trusted, so the stats engine still runs that code. The GitHub
+  Action's `scan-code` takes none of the new finding types, so repository
+  scans do not change.
+
+### Upgrading to 9.1.0
+
+These changes can make `/verify/code`, `QWEDLocal.verify_code` and the CLI
+refuse code that 9.0.0 admitted. Each refusal is a finding that names the
+module, builtin or attribute.
+
+- **Imports.** Code that imports a third-party module (`numpy`, `pandas`,
+  `requests`, ...), or `asyncio`, `logging`, `warnings`, `subprocess`,
+  `importlib`, `pathlib` or another standard-library module that is not
+  listed, is refused even if it calls nothing from it. So are the
+  `os.path` functions that read the file system, the working directory or
+  the environment (`os.path.exists`, `getsize`, `abspath`, `expanduser`,
+  ...); `sys.stdin`, `sys.stdout` and `sys.stderr`;
+  `contextlib.redirect_stdout`; `pprint.PrettyPrinter`; and star imports
+  from `copy`, `dataclasses`, `enum`, `functools` and `time` (on Linux,
+  `time`'s also binds `clock_settime` and `tzset`).
+- **Builtins.** A read of `open`, `vars`, `globals`, `locals`, `getattr`,
+  `setattr`, `delattr`, `help`, `license`, `credits`, `copyright`,
+  `breakpoint`, `memoryview` or `__build_class__` is refused, also where it
+  is the name of the code's own variable or parameter (rename it, such as
+  `help_text`). `exit` and `quit` are still admitted.
+- **Attributes.** Special attributes not on the list (`__func__`,
+  `__wrapped__`, `__get__`, `__getstate__`, `__reduce__`, ...) are refused,
+  as `__dict__` and `__class__` already were. `.format` and `.format_map`
+  need a template written in the code (`"{} items".format(n)`, or a name
+  bound only to such strings) with no attribute in a field; use an f-string
+  otherwise. A class pattern with positional parts (`case Point(x, y)`)
+  needs a class whose `__match_args__` is fixed: a builtin or listed class,
+  or a class statement whose bases are such and whose decorators are
+  listed.
+- **SDK cache.** `QWEDLocal` does not serve code results it cached before
+  9.1.0: its cache policy version is now `code_verifier-v3`.
+- **`.env`.** The server now uses the settings written in `.env` that the
+  process environment does not set; see the #591 entry under "Fixed".
+
+### Added
+
+- **`CodeVerifier(trusted_modules=...)`.** Top-level module names that the
+  caller's own runtime confines, such as the code-execution sandbox and its
+  import guard. Code may use them, also as values or by writing to them,
+  although `code_admission` does not list them: the module checks skip a
+  trusted module, so a caller must not rely on those for one. The builtin,
+  attribute and frame checks still apply.
+
 ### Fixed
 
 - **The server reads `.env` before any of its settings (#591).** With

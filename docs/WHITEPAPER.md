@@ -673,42 +673,21 @@ This DSL-based approach is **why QWED can safely process logic from untrusted LL
 
 ### 4.3 Code Security Engine
 
-**Technology Stack:** Python AST, Semgrep patterns
+**Technology Stack:** Python AST; for Python, lists of the modules, module names, builtins and special attributes code may use (`code_admission`); pattern rules for the other languages it scans
 
-**Problem Addressed:** AI-generated code contains security vulnerabilities including injection attacks, hardcoded secrets, and dangerous function calls.
+**Problem Addressed:** AI-generated code can read files, send data, start processes or run strings as code. A list of dangerous calls cannot be complete: up to 9.0.0 the engine admitted Python that used `io.FileIO`, `urllib3`, `pickle.Unpickler`, `multiprocessing` or `os.environ`, because its lists did not name them ([GHSA-9r7q-mx75-hcj7](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-9r7q-mx75-hcj7)).
 
-**Verification Approach:**
+**Verification Approach:** From 9.1.0 the engine parses Python and admits it only when:
 
-```python
-import ast
+- every module it imports, and every name it uses from one, is a listed standard-library module that computes without files, the network, processes, the environment or the import system;
+- every builtin it reads is listed: the public exceptions, the builtins that compute, `print` and `input` (which use standard output and standard input, so code run outside the sandbox can wait on input) and `exit` and `quit`;
+- every special attribute (`__x__`) it uses is listed, and it reads no attribute's value by a name made at run time (a format field, a class pattern, or a helper that reads attributes by name); `hasattr` is admitted and answers only whether an attribute exists, though the lookup can run a property;
+- no module is used as a value or written to, and no frame or traceback is read.
 
-DANGEROUS_FUNCTIONS = {'eval', 'exec', 'compile', '__import__'}
-DANGEROUS_MODULES = {'os', 'subprocess', 'pickle'}
-
-def verify_code_safety(code: str) -> Dict[str, Any]:
-    """
-    Static analysis for security vulnerabilities.
-    """
-    tree = ast.parse(code)
-    vulnerabilities = []
-    
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name):
-                if node.func.id in DANGEROUS_FUNCTIONS:
-                    vulnerabilities.append({
-                        'type': 'dangerous_function',
-                        'function': node.func.id,
-                        'line': node.lineno
-                    })
-    
-    return {
-        'is_safe': len(vulnerabilities) == 0,
-        'vulnerabilities': vulnerabilities
-    }
-```
+Anything else is refused, and the finding names the module, builtin or attribute. A caller whose own runtime confines a module, such as the code-execution sandbox, can pass it as trusted: the module checks then skip it (it may be used as a value or written to), and the others still apply. Ordinary attributes of the code's own objects are not listed. The lists cover Python 3.10 to 3.15.
 
 **Detection Capabilities:**
+- Modules, module names, builtins and special attributes outside the lists (Python)
 - Dangerous function calls (`eval`, `exec`, `pickle.loads`)
 - SQL injection patterns
 - Command injection
