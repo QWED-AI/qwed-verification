@@ -1,6 +1,6 @@
 [project]
 name = "qwed"
-version = "9.0.0"
+version = "9.1.0"
 description = "Open-source AI verification infrastructure for deterministic verification of LLM outputs, tool calls, code, schemas, and agent state before production execution."
 authors = [
     {name = "Rahul Dass", email = "rahul@qwedai.tech"}

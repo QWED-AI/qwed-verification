@@ -28,7 +28,8 @@ Release history is in [CHANGELOG.md](CHANGELOG.md) and on [GitHub Releases](http
 - Verification Context v1.0 (v7.1.0)
 - Attestations delivered with every `VERIFIED` result, a JWKS to verify them, and Verification Context v1.1, signed by the issuing server (v8.0.0)
 - QWED names no model: each provider runs the model you configure (v9.0.0)
-- Security and soundness fixes (v7.2.0 to v9.0.0)
+- CodeVerifier admits only listed modules, builtins and attributes in Python (v9.1.0)
+- Security and soundness fixes (v7.2.0 to v9.1.0)
 - OpenSSF Best Practices: Gold
 - SDKs for TypeScript, Go and Rust
 

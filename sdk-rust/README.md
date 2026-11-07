@@ -11,7 +11,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-qwed = "9.0.0"
+qwed = "9.1.0"
 tokio = { version = "1.0", features = ["rt-multi-thread", "macros"] }
 ```
 

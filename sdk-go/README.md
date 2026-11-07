@@ -14,7 +14,7 @@ go get github.com/QWED-AI/qwed-verification/sdk-go/v9
 
 The module lives in the `sdk-go/` subdirectory and tracks the main QWED version
 line, so it carries the `/v9` major-version suffix and is released under
-`sdk-go/vX.Y.Z` tags — e.g. `go get github.com/QWED-AI/qwed-verification/sdk-go/v9@v9.0.0`.
+`sdk-go/vX.Y.Z` tags, such as `go get github.com/QWED-AI/qwed-verification/sdk-go/v9@v9.1.0`.
 
 ## Quick Start
 
