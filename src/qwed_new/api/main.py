@@ -13,6 +13,11 @@ import logging
 import time
 from fractions import Fraction
 
+# First of the QWED imports: importing qwed_new.config loads .env (the
+# working directory's, then ~/.qwed/.env). The math worker, the database, the
+# rate limiter and the auth module read their settings when they are imported,
+# so a value written only in .env must be loaded before them (#591).
+import qwed_new.config  # noqa: F401
 from qwed_new.core.security import redact_pii
 from qwed_new.core.diagnostics import (
     AdmissionDecision,
