@@ -6,6 +6,21 @@ import time
 from qwed_new.core.code_verifier import CodeVerifier
 
 
+def _best_times(time_small, time_large, factor, slack=0.2, rounds=3, max_rounds=9):
+    """The fastest small and large runs, measured in turn, so that a busy
+    moment on a shared runner slows a run of each size, not one of them.
+    Past the bound after ``rounds`` rounds, measure more, up to ``max_rounds``:
+    noise only adds time, so more runs bring the best back down, while work
+    that really grows faster than the input stays past the bound."""
+    small, large = [], []
+    for done in range(1, max_rounds + 1):
+        small.append(time_small())
+        large.append(time_large())
+        if done >= rounds and min(large) < min(small) * factor + slack:
+            break
+    return min(small), min(large)
+
+
 def _detector_time(verifier, reps):
     # Worst case for a rescan-per-match detector: many subprocess matches, with
     # the only shell token at the very end so every match must look past them all.
@@ -18,11 +33,11 @@ def _detector_time(verifier, reps):
 def test_detector_scales_near_linearly():
     verifier = CodeVerifier()
     _detector_time(verifier, 2000)  # warm up
-    small = _detector_time(verifier, 20000)
-    large = _detector_time(verifier, 40000)
-    # Doubling the input must not blow up: a quadratic detector would be ~4x or
-    # worse. A generous bound catches a superlinear regression without flaking.
-    assert large < small * 2.5 + 0.2, f"detector scaled {large / max(small, 1e-6):.1f}x on 2x input"
+    # Four times the input: a linear detector takes about 4x as long, a
+    # quadratic one about 16x. The bound sits between them with room on both
+    # sides, so cache and scheduling effects on a busy runner do not reach it.
+    small, large = _best_times(lambda: _detector_time(verifier, 10000), lambda: _detector_time(verifier, 40000), 8)
+    assert large < small * 8 + 0.2, f"detector scaled {large / max(small, 1e-6):.1f}x on 4x input"
 
 
 def test_non_matching_subprocess_input_stays_fast():
@@ -81,15 +96,15 @@ def _verify_time(code):
 
 
 def _assert_linear(build, n):
-    # Doubling the input must not blow up: work that is quadratic in it would
-    # be about 4x. A ratio, not a time limit, so the runner's speed (or
-    # coverage tracing) does not decide the result; the best of three runs,
+    # Four times the input must not blow up: linear work takes about 4x as
+    # long, work quadratic in it about 16x, and the bound sits between them.
+    # A ratio, not a time limit, so the runner's speed (or coverage tracing)
+    # does not decide the result; the best runs, taken in turn (_best_times),
     # so a busy runner (pytest -n) does not either.
     _verify_time(build(n // 4))  # warm up
-    small_code, large_code = build(n), build(2 * n)
-    small = min(_verify_time(small_code) for _ in range(3))
-    large = min(_verify_time(large_code) for _ in range(3))
-    assert large < small * 3 + 0.2, f"scaled {large / max(small, 1e-6):.1f}x on 2x input"
+    small_code, large_code = build(n // 2), build(2 * n)
+    small, large = _best_times(lambda: _verify_time(small_code), lambda: _verify_time(large_code), 8)
+    assert large < small * 8 + 0.2, f"scaled {large / max(small, 1e-6):.1f}x on 4x input"
 
 
 def test_names_reshaped_many_times_stay_fast():
