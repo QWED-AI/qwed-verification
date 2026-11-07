@@ -301,6 +301,11 @@ DANGEROUS_KEYWORDS = [
 # are caught at the attribute-chain check below.
 _DANGEROUS_MODULE_ROOTS = {"os", "sys", "subprocess", "socket", "urllib", "requests", "http", "posix", "nt", "importlib", "ctypes", "builtins"}
 _DANGEROUS_BUILTINS = {"eval", "exec", "compile", "__import__", "open", "file", "input", "raw_input"}
+# The third-party modules the sandbox lets executed code import (its
+# _ALLOWED_MODULES, in _wrap_code). CodeVerifier admits no third-party module
+# (GHSA-9r7q); for code this executor runs, the sandbox confines these, so
+# they are passed to it as trusted.
+SANDBOX_THIRD_PARTY_MODULES = frozenset({"numpy", "pandas", "scipy", "sklearn", "statsmodels", "patsy"})
 # OS primitives reachable through module indirection (#336): `system` /
 # `popen` via package-internal re-exports, `import_module` via importlib, the
 # full exec/spawn family (v and l variants) and fork via posix/nt. Matched on
@@ -1020,7 +1025,7 @@ class SecureCodeExecutor:
             # Try to use existing CodeVerifier
             from qwed_new.core.code_verifier import CodeVerifier
 
-            verifier = CodeVerifier()
+            verifier = CodeVerifier(trusted_modules=SANDBOX_THIRD_PARTY_MODULES)
             result = verifier.verify_code(code, language="python")
 
         except ImportError:

@@ -72,8 +72,12 @@ def test_a_code_verifier_error_is_unverifiable(local, monkeypatch):
     assert (result.verified, result.value) == (False, "UNVERIFIABLE")
 
 
+# Policy versions older checks cached results under.
+OLD_POLICY_VERSIONS = {"v1", "code_verifier-v2"}
+
+
 class _FakeCache:
-    """A cache holding a SAFE result the old AST check stored under "v1"."""
+    """A cache holding SAFE results older checks stored under their versions."""
 
     def __init__(self):
         self.stored = {}
@@ -81,7 +85,7 @@ class _FakeCache:
 
     def get(self, key, ctx):
         self.contexts.append(ctx)
-        if ctx.policy_version == "v1":
+        if ctx.policy_version in OLD_POLICY_VERSIONS:
             return {"verified": True, "value": "SAFE", "confidence": 1.0, "evidence": {"method": "ast_analysis"}}
         return self.stored.get((key, ctx.policy_version))
 
@@ -97,8 +101,20 @@ def test_a_result_the_old_check_cached_is_not_served(local):
     result = local.verify_code(UNSAFE[0])
 
     assert result.verified is False
-    assert cache.contexts[0].policy_version == qwed_local.CODE_CACHE_POLICY_VERSION != "v1"
+    assert cache.contexts[0].policy_version == qwed_local.CODE_CACHE_POLICY_VERSION
+    assert qwed_local.CODE_CACHE_POLICY_VERSION not in OLD_POLICY_VERSIONS
     assert cache.contexts[0].model == "code_verifier"
+
+
+def test_a_result_cached_before_the_module_lists_is_not_served(local):
+    # 9.0.0 admitted this and cached SAFE under "code_verifier-v2" (GHSA-9r7q).
+    cache = _FakeCache()
+    local._cache = cache
+    local._cache_context_class = lambda **kwargs: SimpleNamespace(**kwargs)
+
+    result = local.verify_code("import io\nio.FileIO('/etc/passwd').read()")
+
+    assert (result.verified, result.value) == (False, "UNSAFE")
 
 
 def test_a_cached_result_from_this_version_is_served(local):

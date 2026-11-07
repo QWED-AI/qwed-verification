@@ -3,10 +3,10 @@
   "agent_message": "The code failed security verification and is not safe to use.",
   "attestation": "SAMPLE-ATTESTATION: an ES256 JWT in a live response; see README",
   "constraint_id": "code_verifier.code_unsafe",
-  "critical_count": 1,
+  "critical_count": 2,
   "developer_fields": {
     "constraint_id": "code_verifier.code_unsafe",
-    "critical_count": 1,
+    "critical_count": 2,
     "engine": "CodeVerifier-Pattern-Scanner",
     "info_count": 0,
     "is_safe": false,
@@ -19,6 +19,14 @@
         "recommendation": "Do not run commands from generated code; route them through a reviewed, sandboxed tool.",
         "severity": "CRITICAL",
         "type": "process_execution"
+      },
+      {
+        "description": "Use of a module name that admitted code may not use",
+        "line_number": 2,
+        "pattern": "os.system",
+        "recommendation": "Use only the standard-library modules and names QWED admits; route anything else through a reviewed, sandboxed tool.",
+        "severity": "CRITICAL",
+        "type": "attribute_not_admitted"
       }
     ],
     "language": "python",
@@ -37,10 +45,18 @@
       "recommendation": "Do not run commands from generated code; route them through a reviewed, sandboxed tool.",
       "severity": "CRITICAL",
       "type": "process_execution"
+    },
+    {
+      "description": "Use of a module name that admitted code may not use",
+      "line_number": 2,
+      "pattern": "os.system",
+      "recommendation": "Use only the standard-library modules and names QWED admits; route anything else through a reviewed, sandboxed tool.",
+      "severity": "CRITICAL",
+      "type": "attribute_not_admitted"
     }
   ],
   "language": "python",
-  "proof_ref": "sha256:7af9783bae4f34b7d986203f9ef27d2ebf323cbad8dae0a0a9afdad5133b264a",
+  "proof_ref": "sha256:e73f5e6242973bd96498c025e20cb401e708d27df47f827bc4529d3ec5cb5d66",
   "status": "VERIFIED",
   "warning_count": 0
 }

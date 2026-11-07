@@ -63,9 +63,9 @@ def test_deep_verification_is_never_admitted(code):
 @pytest.mark.parametrize("code", [
     "def add(a, b):\n    return a + b\n",
     "import os\nprint(os.path.join('a', 'b'))\n",
-    "import subprocess\n",
+    # Importing subprocess or asyncio is no longer admitted on its own
+    # (GHSA-9r7q): neither module is on the list of modules code may use.
     "from os import path\nprint(path.basename('/tmp/x'))\n",
-    "import asyncio\nasyncio.run(main())\n",
 ])
 def test_code_without_process_execution_is_unchanged(code):
     result = CodeVerifier().verify_code(code)

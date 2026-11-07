@@ -545,9 +545,11 @@ def _safe_eval_z3_expr(expr_str: str, z3_namespace: dict):
     return _evaluate_validated_ast(tree, restricted_ns)
 
 
-# The code-cache policy: results cached under another version (the old AST
-# check's "v1") are never served (GHSA-v8qq-v427-qrqc).
-CODE_CACHE_POLICY_VERSION = "code_verifier-v2"
+# The code-cache policy: results cached under another version are never
+# served: the old AST check's "v1" (GHSA-v8qq-v427-qrqc), and "v2", before
+# CodeVerifier admitted only listed modules, builtins and attributes
+# (GHSA-9r7q-mx75-hcj7). Bump it whenever CodeVerifier admits less.
+CODE_CACHE_POLICY_VERSION = "code_verifier-v3"
 
 
 @dataclass

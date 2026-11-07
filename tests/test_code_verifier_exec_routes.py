@@ -82,7 +82,8 @@ def test_go_syscall_process_creation_is_critical():
     "def add(a, b):\n    return a + b\n",
     "import os\nprint(os.path.join('a', 'b'))\n",       # path strings, not I/O
     "from os import path\nprint(path.basename('/tmp/x'))\n",
-    "import asyncio\nasyncio.run(main())\n",             # not create_subprocess_*
+    # asyncio is not admitted (GHSA-9r7q): its event loop opens connections.
+    "import math\nprint(math.sqrt(2))\n",
     "total = sum(range(10))\n",
 ])
 def test_pure_computation_still_verifies(code):

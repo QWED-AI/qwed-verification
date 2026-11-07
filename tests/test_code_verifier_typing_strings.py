@@ -79,11 +79,11 @@ ADMITTED = {
     # Formatting runs only __format__ of the value, as an operator runs its
     # dunder: no call, nothing new runs.
     "f_string_without_a_call": "from typing import List" + N + "name = 'a'" + N + "x: List[\"f'{name}'\"] = []",
-    "make_dataclass_types": "import dataclasses" + N + "P = dataclasses.make_dataclass('P', [('x', int), ('y', 'float')])",
     "functional_named_tuple_types": "from typing import NamedTuple" + N + "P = NamedTuple('P', [('x', int), ('y', 'Optional[int]')])",
     "functional_typed_dict_types": "from typing import TypedDict" + N + "M = TypedDict('M', {'name': str, 'year': 'int'}, total=False)",
     "typevar_alias_bound_name": "from typing import TypeVar as TV" + N + "T = TV('T', bound='Comparable')",
-    "stored_alias_types": "import dataclasses" + N + "md = dataclasses.make_dataclass" + N + "P = md('P', [('x', int)])",
+    # make_dataclass is not admitted at all (GHSA-9r7q: its field names are
+    # made at run time), so its type strings have no admitted case here.
 }
 
 

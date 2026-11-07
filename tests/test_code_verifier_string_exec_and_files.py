@@ -100,7 +100,7 @@ ADMITTED = [
     "status_code = 200\nprint(status_code)",
     "class Response:\n    code = 1\n\nprint(Response.code)",
     "import statistics\nprint(statistics.mean([1, 2]))",
-    "import logging\nlogging.basicConfig(level=logging.INFO)\nlogging.getLogger(__name__).info('ok')",
+    # logging is not admitted (GHSA-9r7q): its handlers hold sys.stderr.
     "code = 'abc'\nprint(code.upper(), code.strip())",
     "config = {'a': 1}\nprint(config.get('a'))",
 ]

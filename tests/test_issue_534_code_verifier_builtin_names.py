@@ -38,10 +38,12 @@ def _verify(code):
     'import re\nfor layer in model.modules():\n    pass\np = re.compile(r"[0-9]+")',
     'import re\nmodules = ["a", "b"]\np = re.compile(r"[0-9]+")',
     "def compile_report():\n    return 1\ncompile_report()",
-    # The module's opening run of imports binds the modules installed.
-    'import pandas as pd\nq = "SELECT * FROM evaluations"\ncur.execute(q)\nrows = pd.read_csv(path)\nprint(rows[1:])',
-    'try:\n    import orjson as json\nexcept ImportError:\n    import json\nlabel = "evaluation"\nprint(json.loads(s)[1:])',
-    'from os.path import *\nlabel = "evaluation"\nprint(name[1:])',
+    # The module's opening run of imports binds the modules installed. Only
+    # modules code_admission lists are admitted at all (GHSA-9r7q), so these
+    # import listed ones.
+    'import csv as pd\nq = "SELECT * FROM evaluations"\ncur.execute(q)\nrows = pd.reader(path)\nprint(rows[1:])',
+    'try:\n    import json\nexcept ImportError:\n    import json as json\nlabel = "evaluation"\nprint(json.loads(s)[1:])',
+    'from math import *\nlabel = "evaluation"\nprint(name[1:])',
     "run(execute=True)",
     "def build(compiled=True):\n    return compiled",
     'import re as r\np = r.compile("a+")',
@@ -56,7 +58,7 @@ def _verify(code):
     "def make():\n    class Proxy:\n        def __getattr__(self, name):\n            return 1\n    return Proxy",
     "class C:\n    @cache\n    def __getattr__(self, name):\n        return 1",
     "class C:\n    try:\n        def __getattr__(self, name):\n            return 1\n    except Exception:\n        pass",
-    "class C:\n    try:\n        from fast import Base\n    except ImportError:\n        def __getattr__(self, name):\n            return 1",
+    "class C:\n    try:\n        from typing import Any as Base\n    except ImportError:\n        def __getattr__(self, name):\n            return 1",
     "import sys\nif sys.version_info >= (3, 7):\n    def __getattr__(name):\n        return 1",
     "# Proxy overrides __setattr__ here\nx = 1",
     # re.compile with its flags, by position or keyword, beside sys.
@@ -95,7 +97,7 @@ def _verify(code):
     'class Runner:\n    def __init__(self, path):\n        """Set up the evaluator."""\n        self.path = path\nprint(Runner("a").path[1:])',
     # Names in identifiers, where nothing reads them back as strings.
     'def run():\n    cur.execute("SELECT 1")\nif __name__ == "__main__":\n    run()\nprint(sys.argv[1:])',
-    "import logging\nlog = logging.getLogger(__name__)\ncur.execute(q)\nprint(args.path[1:])",
+    "import json\nlog = json.dumps(__name__)\ncur.execute(q)\nprint(args.path[1:])",
     "class Runner:\n    def execute(self):\n        return 1\nprint(Runner().items[1:])",
     # Common words are introspection only when an introspection module
     # gives them.
@@ -117,10 +119,11 @@ def _verify(code):
     'import re\nprint(re.sub(r"\\s+", " ", text))\nprint("executing")',
     'res = es.search(index="evaluations")',
     'from re import escape as quote\nprint(quote("executing"))',
-    # A star import of an introspection module seeds its introspection
-    # names only, and only where they are read as names.
-    "from dataclasses import *\ndef compile_report():\n    return 1\nprint(value[1:])",
-    "from dataclasses import *\ncur.execute(q)\nprint(form.fields[1:])",
+    # An import from an introspection module seeds its introspection names
+    # only, and only where they are read as names. (A star import from
+    # dataclasses is not admitted (GHSA-9r7q), so these import by name.)
+    "from dataclasses import fields, asdict\ndef compile_report():\n    return 1\nprint(value[1:])",
+    "from dataclasses import fields, asdict\ncur.execute(q)\nprint(form.fields[1:])",
     "from dataclasses import fields\nprint(fields(C))\ncur.execute(q)\nprint(form.fields[1:])",
     # A call through a table reaches functions read as values, not every one.
     'handlers = {"a": print}\nhandlers["a"]("executing")\ndef parse(line):\n    return line[1:]\nparse(x)',

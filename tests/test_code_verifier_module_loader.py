@@ -62,14 +62,16 @@ def test_module_by_name_routes_are_blocked(code):
     assert admission_decision(result).value == "BLOCKED"
 
 
+# Third-party modules, importlib and pkgutil are not admitted at all
+# (GHSA-9r7q); the look-alikes here are names, not imports of them.
 ADMITTED = [
     "x = [1, 2, 3]\nprint(sum(x))",
-    "from torch.utils.data import DataLoader\nloader = DataLoader([1, 2])",
+    "class DataLoader:\n    pass\nloader = DataLoader()",
     "def load_module_config(path):\n    return path.upper()",
-    "import importlib.util\nspec = importlib.util.find_spec('json')\nprint(spec is not None)",
+    "spec = {'json': True}\nprint(spec.get('json'))",
     "class Loader:\n    def load(self, path):\n        return path",
     "msg = 'module loaded from spec'\nprint(msg)",
-    "import pkgutil\nprint([m.name for m in pkgutil.iter_modules()][:1])",
+    "iter_modules = ['a']\nprint([m for m in iter_modules][:1])",
     "bootstrap = True\nprint(bootstrap)",
     "import sys\nprint(sys.argv[1:], sys.version_info >= (3, 11))",
     "modules = ['a', 'b']\nprint(modules[0])",
