@@ -42,7 +42,8 @@ def test_n_has_no_hidden_domain(expression):
 def test_n_is_a_plain_symbol():
     n = safe_parse_expr("n")
     assert n == sympy.Symbol("n")
-    assert n.is_positive is None and n.is_integer is None
+    assert n.is_positive is None
+    assert n.is_integer is None
 
 
 @pytest.mark.parametrize(

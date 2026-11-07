@@ -215,7 +215,8 @@ class CodeVerifier:
     _NAMESPACE_FUNCTIONS: ClassVar[frozenset] = frozenset({"globals", "vars", "locals"})
     # Tables of loaded modules: reading one in any form returns a module by
     # its name (GHSA-qrp4).
-    _MODULE_TABLES: ClassVar[frozenset] = frozenset({"sys.modules"})
+    _SYS_MODULES: ClassVar[str] = "sys.modules"
+    _MODULE_TABLES: ClassVar[frozenset] = frozenset({_SYS_MODULES})
     # re.compile(pattern, flags=0) takes at most two arguments. The builtin
     # compile needs a source, a filename and a mode, so a call in this shape
     # cannot run it even on a name that turns out to be the builtins module.
@@ -1452,7 +1453,7 @@ class CodeVerifier:
         ``m = sys.modules``. The line scan sees only ``sys.modules[``; a line
         it (in ``found``) already reported is not reported twice."""
         aliases, star_modules = self._import_aliases(nodes)
-        reported = {i.line_number for i in found if i.pattern.startswith("sys.modules")}
+        reported = {i.line_number for i in found if i.pattern.startswith(self._SYS_MODULES)}
         issues: List[SecurityIssue] = []
         for node in nodes:
             if not isinstance(node, (ast.Attribute, ast.Name)):
@@ -1466,7 +1467,7 @@ class CodeVerifier:
                 issues.append(SecurityIssue(
                     severity="CRITICAL",
                     issue_type="dangerous_function",
-                    pattern="sys.modules",
+                    pattern=self._SYS_MODULES,
                     description=self.PYTHON_CRITICAL["sys.modules["],
                     line_number=getattr(node, "lineno", None),
                     recommendation="Import the modules the code needs; do not take them out of the interpreter by name.",

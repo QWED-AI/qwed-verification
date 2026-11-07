@@ -531,7 +531,7 @@ def _is_always_true(node: Optional[exp.Expression]) -> bool:
         return False
     try:
         return bool(_const_eval(node))
-    except (_NotConstant, TypeError, ValueError, ZeroDivisionError, ArithmeticError):
+    except (_NotConstant, TypeError, ValueError, ArithmeticError):
         return False
 
 
@@ -570,7 +570,7 @@ def _unevaluated_data_free_predicates(parsed: exp.Expression):
             continue
         try:
             _const_eval(predicate)
-        except (_NotConstant, TypeError, ValueError, ZeroDivisionError, ArithmeticError):
+        except (_NotConstant, TypeError, ValueError, ArithmeticError):
             yield predicate
 
 
