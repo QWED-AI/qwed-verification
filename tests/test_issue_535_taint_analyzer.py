@@ -6,6 +6,8 @@ it treated html.escape as a shell sanitiser. Unknown helper calls also
 dropped taint (substring sanitiser matching, e.g. "int" in
 "print_and_return").
 """
+import ast
+
 import pytest
 
 from src.qwed_new.core.taint_analyzer import TaintAnalyzer
@@ -42,11 +44,33 @@ def test_tainted_input_reaching_shell_is_vulnerable(analyzer, name):
     assert len(result["vulnerabilities"]) >= 1, name
 
 
-def test_shlex_quote_is_safe_for_shell(analyzer):
-    code = 'import os, shlex\nx = input()\ny = shlex.quote(x)\nos.system(y)'
-    result = analyzer.analyze(code)
-    assert result["status"] == "SAFE"
-    assert result["vulnerabilities"] == []
+def test_shlex_quote_gives_no_shell_relief(analyzer):
+    """shlex.quote protects one word; the command around it decides the rest.
+
+    The quoted word still names the program, runs under ``sh -c``, or is
+    read as an option (``--to-command=id`` needs no quoting, so tar runs
+    ``id``), so no shell sink is relieved.
+    """
+    for code in (
+        'import os, shlex\nx = input()\ny = shlex.quote(x)\nos.system(y)',
+        'import os, shlex\nx = input()\nos.system(shlex.quote(x))',
+        'import os, shlex\nx = input()\ny = shlex.quote(x)\n'
+        'os.system("ls " + y)',
+        'import os, shlex\nx = input()\nos.system("sh -c " + shlex.quote(x))',
+        'import os, shlex\nx = input()\n'
+        'os.system("tar xf a.tar " + shlex.quote(x))',
+        'import os, shlex\nx = input()\n'
+        'os.system(\'echo "\' + shlex.quote(x) + \'"\')',
+        'import os, shlex\nx = input()\nos.system(f"echo {shlex.quote(x)!r}")',
+        'import os, shlex\nx = input()\nos.system("echo %r" % shlex.quote(x))',
+        'import os, shlex\nx = input()\n'
+        'os.system("echo " + repr(shlex.quote(x)))',
+        'from shlex import quote\nimport os\nx = input()\n'
+        'os.system("ls " + quote(x))',
+    ):
+        result = analyzer.analyze(code)
+        assert result["status"] == "VULNERABLE", code
+        assert len(result["vulnerabilities"]) >= 1, code
 
 
 def test_shlex_quote_still_tainted_for_sql(analyzer):
@@ -114,14 +138,15 @@ def test_branch_reassignment_keeps_taint(analyzer):
 
 
 def test_nested_sanitizer_matches_inline_form(analyzer):
-    """`cmd = "ls " + shlex.quote(x)` is SAFE, like the inline form."""
-    code = (
-        'import os, shlex\nx = input()\n'
-        'cmd = "ls " + shlex.quote(x)\nos.system(cmd)'
-    )
-    result = analyzer.analyze(code)
-    assert result["status"] == "SAFE"
-    assert result["vulnerabilities"] == []
+    """`s = "<p>" + html.escape(x)` is SAFE, like the inline form."""
+    for code in (
+        'import html\nx = input()\n'
+        's = "<p>" + html.escape(x)\nmark_safe(s)',
+        'import html\nx = input()\nmark_safe("<p>" + html.escape(x))',
+    ):
+        result = analyzer.analyze(code)
+        assert result["status"] == "SAFE", code
+        assert result["vulnerabilities"] == [], code
 
 
 def test_template_sink_not_cleared_by_html_escape(analyzer):
@@ -236,10 +261,10 @@ def test_sanitizer_result_transformed_is_not_clean(analyzer):
         assert len(result["vulnerabilities"]) >= 1, code
 
     for code in (
-        "import os, shlex\nx = input()\n"
-        'cmd = "ls " + shlex.quote(x)\nos.system(cmd)',
-        "import os, shlex\nx = input()\n"
-        'os.system(f"ls {shlex.quote(x)}")',
+        "import html\nx = input()\n"
+        'cmd = "<p>" + html.escape(x)\nmark_safe(cmd)',
+        "import html\nx = input()\n"
+        'mark_safe(f"<p>{html.escape(x)}</p>")',
     ):
         result = analyzer.analyze(code)
         assert result["status"] == "SAFE", code
@@ -247,14 +272,10 @@ def test_sanitizer_result_transformed_is_not_clean(analyzer):
 
 
 def test_sink_keywords_injectable_only(analyzer):
-    """Only injectable sink keywords are inspected."""
+    """Every sink keyword is inspected except those that carry no payload."""
     for code in (
         "import os, subprocess\n"
         "subprocess.run(['ls'], env=os.environ.copy())",
-        "import os, subprocess\n"
-        "subprocess.run(['ls'], cwd=os.environ['HOME'])",
-        "import subprocess\nd = input()\n"
-        "subprocess.run(['cat'], input=d)",
         "import requests\np = input()\n"
         "requests.post('https://x.example', json=p)",
     ):
@@ -267,6 +288,12 @@ def test_sink_keywords_injectable_only(analyzer):
         "import subprocess\nc = input()\n"
         "subprocess.run(args=c, shell=True)",
         "q = input()\ncursor.execute(args=(), query=q)",
+        # cwd picks which ./tool a relative program path runs.
+        "import os, subprocess\n"
+        "subprocess.run(['ls'], cwd=os.environ['HOME'])",
+        # input= is the script when the program is a shell.
+        "import subprocess\nd = input()\n"
+        "subprocess.run(['cat'], input=d)",
     ):
         result = analyzer.analyze(code)
         assert result["status"] == "VULNERABLE", code
@@ -310,13 +337,15 @@ def test_request_subscript_reads_are_sources(analyzer):
         assert result["status"] == "VULNERABLE", code
         assert len(result["vulnerabilities"]) >= 1, code
 
-    for code in (
-        'import os\nx = request.method\nos.system(x)',
-        'import os\nx = some_obj.form["x"]\nos.system(x)',
-    ):
-        result = analyzer.analyze(code)
-        assert result["status"] == "SAFE", code
-        assert result["vulnerabilities"] == [], code
+    # The HTTP method grammar allows |, &, $ and backticks.
+    code = 'import os\nx = request.method\nos.system(x)'
+    result = analyzer.analyze(code)
+    assert result["status"] == "VULNERABLE", code
+
+    code = 'import os\nx = some_obj.form["x"]\nos.system(x)'
+    result = analyzer.analyze(code)
+    assert result["status"] == "SAFE", code
+    assert result["vulnerabilities"] == [], code
 
 
 def test_sliced_sanitizer_is_not_clean(analyzer):
@@ -332,8 +361,8 @@ def test_sliced_sanitizer_is_not_clean(analyzer):
         assert len(result["vulnerabilities"]) >= 1, code
 
     safe = (
-        "import os, shlex\nx = input()\n"
-        'cmd = "ls " + shlex.quote(x)\nos.system(cmd)'
+        "import html\nx = input()\n"
+        'cmd = "<p>" + html.escape(x)\nmark_safe(cmd)'
     )
     result = analyzer.analyze(safe)
     assert result["status"] == "SAFE", safe
@@ -350,3 +379,476 @@ def test_starred_unpacking_target_is_tainted(analyzer):
         result = analyzer.analyze(code)
         assert result["status"] == "VULNERABLE", code
         assert len(result["vulnerabilities"]) >= 1, code
+
+
+# --- Maintainer review of PR #586: sanitiser relief must be backed ---
+
+
+def _assert_vulnerable(analyzer, code):
+    result = analyzer.analyze(code)
+    assert result["status"] == "VULNERABLE", code
+    assert len(result["vulnerabilities"]) >= 1, code
+
+
+def _assert_safe(analyzer, code):
+    result = analyzer.analyze(code)
+    assert result["status"] == "SAFE", code
+    assert result["vulnerabilities"] == [], code
+
+
+def test_shlex_split_is_not_a_sanitizer(analyzer):
+    """shlex.split only splits words: the caller still picks the program."""
+    _assert_vulnerable(
+        analyzer,
+        "import shlex, subprocess\nsubprocess.run(shlex.split(input()))",
+    )
+
+
+def test_shlex_quote_still_tainted_for_mark_safe(analyzer):
+    """shlex.quote does nothing for HTML, so mark_safe stays tainted."""
+    _assert_vulnerable(
+        analyzer, "import shlex\nx = input()\ny = shlex.quote(x)\nmark_safe(y)"
+    )
+
+
+TRANSFORMED_SANITIZER_CASES = {
+    "unquote-inline": (
+        'import os, shlex\nx = input()\n'
+        'os.system("echo " + unquote(shlex.quote(x)))'
+    ),
+    "unescape-inline": (
+        "import html\nx = input()\nmark_safe(html.unescape(html.escape(x)))"
+    ),
+    "slice-variable": (
+        "import html\nx = input()\ny = html.escape(x)\nmark_safe(y[1:-1])"
+    ),
+    "strip-variable": (
+        "import html\nx = input()\ny = html.escape(x)\n"
+        "mark_safe(y.strip(\"'\"))"
+    ),
+    "call-variable": (
+        "import html\nx = input()\ny = html.escape(x)\nmark_safe(unquote(y))"
+    ),
+    "shell-slice-variable": (
+        'import os, shlex\nx = input()\ny = shlex.quote(x)\n'
+        'os.system("echo " + y[1:-1])'
+    ),
+    "repr": "import html\nx = input()\nmark_safe(repr(html.escape(x)))",
+    "fstring-conversion": (
+        'import html\nx = input()\nmark_safe(f"<p>{html.escape(x)!r}</p>")'
+    ),
+    "fstring-format-spec": (
+        'import html\nx = input()\nmark_safe(f"<p>{html.escape(x):>9}</p>")'
+    ),
+    "percent-r": (
+        'import html\nx = input()\nmark_safe("<p>%r</p>" % html.escape(x))'
+    ),
+    "percent-width": (
+        'import html\nx = input()\nmark_safe("<p>%9s</p>" % html.escape(x))'
+    ),
+    "percent-mapping": (
+        'import html\nx = input()\n'
+        'mark_safe("<p>%(v)s</p>" % {"v": html.escape(x)})'
+    ),
+    "format-conversion": (
+        'import html\nx = input()\nmark_safe("<p>{!r}</p>".format(html.escape(x)))'
+    ),
+    "format-numbered": (
+        'import html\nx = input()\nmark_safe("<p>{0}</p>".format(html.escape(x)))'
+    ),
+    "format-spec": (
+        'import html\nx = input()\nmark_safe("<p>{:>9}</p>".format(html.escape(x)))'
+    ),
+    "join": 'import html\nx = input()\nmark_safe("".join([html.escape(x)]))',
+    "number-to-str": 'import os\nx = input()\nos.system("kill " + str(int(x)))',
+    "number-to-chr": 'import os\nx = input()\nos.system("echo " + chr(int(x)))',
+}
+
+
+@pytest.mark.parametrize("name", sorted(TRANSFORMED_SANITIZER_CASES))
+def test_transformed_sanitized_value_is_tainted(analyzer, name):
+    """Relief ends as soon as anything transforms the sanitised value."""
+    _assert_vulnerable(analyzer, TRANSFORMED_SANITIZER_CASES[name])
+
+
+DIRECT_POSITION_SAFE_CASES = {
+    "argument": "import html\nx = input()\nmark_safe(html.escape(x))",
+    "concat": "import html\nx = input()\nmark_safe('<b>' + html.escape(x) + '</b>')",
+    "fstring": "import html\nx = input()\nmark_safe(f'<p>{html.escape(x)}</p>')",
+    "percent-s": "import html\nx = input()\nmark_safe('<p>%s %%</p>' % html.escape(x))",
+    "percent-tuple": (
+        "import html\nx = input()\n"
+        "mark_safe('<p>%s</p><p>%s</p>' % (html.escape(x), html.escape(x)))"
+    ),
+    "format": "import html\nx = input()\nmark_safe('<p>{}</p>'.format(html.escape(x)))",
+    "format-escaped-braces": (
+        "import html\nx = input()\n"
+        "mark_safe('<p>{{}} {}</p>'.format(html.escape(x), 1))"
+    ),
+    "two-escaped-values": (
+        "import html\nx = input()\n"
+        "mark_safe(f'<b>{html.escape(x)}</b> said {html.escape(x)}')"
+    ),
+    "variable": "import html\nx = input()\ny = html.escape(x)\nmark_safe('<b>' + y)",
+    "variable-chain": (
+        "import html\nx = input()\ny = html.escape(x)\nz = '<p>' + y\n"
+        "mark_safe(z + '</p>')"
+    ),
+    "aug-assign": (
+        "import html\nx = input()\ny = html.escape(x)\ny += '</b>'\nmark_safe(y)"
+    ),
+    "quote-true": "import html\nx = input()\nmark_safe(html.escape(x, True))",
+    "keyword-s": "import html\nx = input()\nmark_safe(html.escape(s=x, quote=True))",
+    "number-fstring": "import os\nx = input()\nos.system(f'kill {int(x)}')",
+    "number-variable": "import os\nx = input()\ny = int(x)\nos.system('kill %s' % y)",
+    "number-in-attribute": (
+        "import os\nx = input()\nmark_safe('<a href=' + f'{int(x)}' + '>')"
+    ),
+    "path": (
+        "from werkzeug.utils import secure_filename\nx = input()\n"
+        "open('/srv/' + secure_filename(x))"
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(DIRECT_POSITION_SAFE_CASES))
+def test_sanitizer_relieves_only_in_direct_positions(analyzer, name):
+    """+, plain f-string fields, %s and plain {} keep the relief."""
+    _assert_safe(analyzer, DIRECT_POSITION_SAFE_CASES[name])
+
+
+HTML_CONTEXT_CASES = {
+    "unquoted-attribute": "mark_safe('<a href=' + html.escape(x) + '>')",
+    "quoted-attribute": "mark_safe('<a title=\"' + html.escape(x) + '\">')",
+    "attribute-gt-in-quotes": (
+        "mark_safe('<a title=\"a>b\" onclick=' + html.escape(x) + '>')"
+    ),
+    "unclosed-quote": "mark_safe('<a title=\"x ' + html.escape(x))",
+    "script": "mark_safe('<script>var a = ' + html.escape(x))",
+    "style": "mark_safe('<p><style>p { color: ' + html.escape(x))",
+    "comment": "mark_safe('<!-- ' + html.escape(x) + ' -->')",
+    "unclosed-tag": "mark_safe('a < b ' + html.escape(x))",
+    "unclosed-script-close": "mark_safe('<script>a()</script ' + html.escape(x))",
+    "after-unknown-value": "mark_safe(prefix + html.escape(x))",
+    "after-unescaped-value": "mark_safe(html.escape(x) + '<a href=' + html.escape(x))",
+    "quote-false": "mark_safe(html.escape(x, quote=False))",
+    "quote-false-positional": "mark_safe(html.escape(x, False))",
+    "quote-variable": "mark_safe(html.escape(x, quote=q))",
+    "starred": "mark_safe(html.escape(*[x, False]))",
+    "unknown-keyword": "mark_safe(html.escape(x, other=True))",
+}
+
+
+@pytest.mark.parametrize("name", sorted(HTML_CONTEXT_CASES))
+def test_html_relief_needs_text_content(analyzer, name):
+    """HTML escaping relieves only in text content, with quotes escaped."""
+    code = "import html\nx = input()\n" + HTML_CONTEXT_CASES[name]
+    _assert_vulnerable(analyzer, code)
+
+
+@pytest.mark.parametrize("prefix", [
+    "<p>",
+    "<a href=\"/x\">link</a> ",
+    "<a title='a>b'>t</a>",
+    "<script>a()</script><p>",
+    "<style>p {}</style>",
+    "<!-- note --><p>",
+    "<!DOCTYPE html><p>",
+])
+def test_html_relief_after_closed_markup(analyzer, prefix):
+    """Constant markup that ends in text content keeps the relief."""
+    code = f"import html\nx = input()\nmark_safe({prefix!r} + html.escape(x))"
+    _assert_safe(analyzer, code)
+
+
+SANITIZER_NAME_CASES = {
+    "own-def": "def clean(s):\n    return s\nx = input()\nmark_safe(clean(x))",
+    "wrong-module": "from re import escape\nx = input()\nmark_safe(escape(x))",
+    "not-imported": "x = input()\nmark_safe(escape(x))",
+    "unimported-module": "x = input()\nmark_safe(html.escape(x))",
+    "lambda": "escape = lambda s: s\nx = input()\nmark_safe(escape(x))",
+    "rebound-module": (
+        "import html\nhtml = make_html()\nx = input()\nmark_safe(html.escape(x))"
+    ),
+    "two-imports": (
+        "try:\n    from markupsafe import escape\nexcept ImportError:\n"
+        "    from html import escape\nx = input()\nmark_safe(escape(x))"
+    ),
+    "relative-import": "from . import html\nx = input()\nmark_safe(html.escape(x))",
+    "parameter": (
+        "import html\ndef f(html):\n    return html\nx = input()\n"
+        "mark_safe(html.escape(x))"
+    ),
+    "class": (
+        "class html:\n    escape = staticmethod(str)\nx = input()\n"
+        "mark_safe(html.escape(x))"
+    ),
+    "except-as": (
+        "import html\ntry:\n    pass\nexcept Exception as html:\n    pass\n"
+        "x = input()\nmark_safe(html.escape(x))"
+    ),
+    "match-capture": (
+        "import html\nmatch v:\n    case [*html]:\n        pass\n"
+        "x = input()\nmark_safe(html.escape(x))"
+    ),
+    "match-as": (
+        "import html\nmatch v:\n    case html:\n        pass\n"
+        "x = input()\nmark_safe(html.escape(x))"
+    ),
+    "match-rest": (
+        "import html\nmatch v:\n    case {**html}:\n        pass\n"
+        "x = input()\nmark_safe(html.escape(x))"
+    ),
+    "async-def": (
+        "import html\nasync def html():\n    pass\nx = input()\n"
+        "mark_safe(html.escape(x))"
+    ),
+    "call-root": "import html\nx = input()\nmark_safe(get_html().escape(x))",
+    "own-int": "import os\ndef int(s):\n    return s\nx = input()\nos.system(int(x))",
+    "int-from-module": (
+        "import os\nfrom numpy import int64 as int\nx = input()\nos.system(int(x))"
+    ),
+    "int-attribute": "import os\nx = input()\nos.system(int.real(x))",
+}
+
+
+@pytest.mark.parametrize("name", sorted(SANITIZER_NAME_CASES))
+def test_sanitizer_must_be_imported_from_its_module(analyzer, name):
+    """Only a sanitiser the code imports itself, never rebinds, relieves."""
+    _assert_vulnerable(analyzer, SANITIZER_NAME_CASES[name])
+
+
+@pytest.mark.parametrize("code", [
+    "from html import escape\nx = input()\nmark_safe(escape(x))",
+    "from html import escape as e\nx = input()\nmark_safe(e(x))",
+    "import html as h\nx = input()\nmark_safe(h.escape(x))",
+    "import html\nimport html\nx = input()\nmark_safe(html.escape(x))",
+    "import markupsafe\nx = input()\nmark_safe(markupsafe.escape(x))",
+    "from markupsafe import Markup\nx = input()\nmark_safe(Markup.escape(x))",
+    "from django.utils.html import escape\nx = input()\nmark_safe(escape(x))",
+    "import django.utils.html\nx = input()\nmark_safe(django.utils.html.escape(x))",
+    "import html\nclass A:\n    def __init__(self):\n        super().__init__()\n"
+    "x = input()\nmark_safe(html.escape(x))",
+])
+def test_imported_sanitizer_relieves(analyzer, code):
+    """The right module's sanitiser, however it is imported, relieves."""
+    _assert_safe(analyzer, code)
+
+
+PATCHED_SANITIZER_CASES = {
+    "attribute-store": "import html\nhtml.escape = str",
+    "attribute-store-alias": "import html\nm = html\nm.escape = str",
+    "store-on-import": "import html\nhtml.helper = 1",
+    "code-swap": "import html\nhtml.escape.__code__ = (lambda s: s).__code__",
+    "setattr": "import html\nsetattr(html, 'escape', str)",
+    "namespace": "import html\nvars(html)['escape'] = str",
+    "module-dict": "import html\nhtml.__dict__['escape'] = str",
+    "modules": "import html, sys\nsys.modules['html'] = fake",
+    "builtins": "import builtins, html\nbuiltins.int = str",
+    "builtin-module": "import html\nprint.__self__.int = str",
+    "star-import": "from markupsafe import *\nimport html",
+    "from-reflective": "from builtins import setattr\nimport html",
+    "from-sys-modules": "from sys import modules\nimport html",
+    "exec": "import html\nexec('html.escape = str')",
+}
+
+
+@pytest.mark.parametrize("name", sorted(PATCHED_SANITIZER_CASES))
+def test_code_that_may_patch_a_sanitizer_gets_no_relief(analyzer, name):
+    """Patching, reflection, star imports and object loaders end relief."""
+    code = (
+        PATCHED_SANITIZER_CASES[name]
+        + "\nx = input()\nmark_safe(html.escape(x))"
+    )
+    _assert_vulnerable(analyzer, code)
+
+
+def test_shell_input_and_env_keywords_are_inspected(analyzer):
+    """input= feeds a shell script; env= can set LD_PRELOAD."""
+    for code in (
+        'import subprocess\nx = input()\nsubprocess.run(["bash"], input=x)',
+        'import subprocess\nx = input()\n'
+        'subprocess.run(["ls"], env={"LD_PRELOAD": x})',
+        "import os, subprocess\nx = input()\n"
+        "subprocess.run(['ls'], env=dict(os.environ, X=x))",
+        # os is not imported here, so os.environ is not known to be it.
+        "import subprocess\nsubprocess.run(['ls'], env=os.environ.copy())",
+        # Reflection anywhere: no passthrough exemption either.
+        "import os, subprocess\nsetattr(os, 'environ', {})\n"
+        "subprocess.run(['ls'], env=os.environ)",
+    ):
+        _assert_vulnerable(analyzer, code)
+
+    for code in (
+        "import os, subprocess\nsubprocess.run(['ls'], env=os.environ)",
+        "import os, subprocess\nsubprocess.run(['ls'], env=os.environ.copy())",
+        "import subprocess\nx = input()\n"
+        "subprocess.run(['ls'], check=True, timeout=float(x), text=True)",
+    ):
+        _assert_safe(analyzer, code)
+
+
+def test_unlisted_keywords_are_inspected(analyzer):
+    """An allowlist of safe keywords: anything else is inspected."""
+    for code in (
+        "import requests\nu = input()\n"
+        "requests.get('https://x.example', proxies={'https': u})",
+        "q = input()\ncursor.execute(statement=q)",
+        "q = input()\ncursor.execute(**{'query': q})",
+    ):
+        _assert_vulnerable(analyzer, code)
+    _assert_safe(
+        analyzer,
+        "import requests\nq = input()\n"
+        "requests.get('https://x.example', params={'q': q}, timeout=5)",
+    )
+
+
+@pytest.mark.parametrize("read", [
+    "request.path",
+    "request.full_path",
+    "request.url",
+    "request.body",
+    'request.META["HTTP_X"]',
+    "request.query_string",
+    "request.method",
+    "request.args.to_dict()",
+    "self.request.path",
+    "flask.request.url",
+])
+def test_every_request_attribute_read_is_a_source(analyzer, read):
+    """Any request.<attr> read is a source, request.method included."""
+    _assert_vulnerable(analyzer, f'import os\nos.system("ls " + {read})')
+    _assert_vulnerable(analyzer, f"import os\nv = {read}\nos.system(v)")
+
+
+def test_urllib_request_is_not_a_request_source(analyzer):
+    """urllib.request.urlopen is a sink, not a request read."""
+    _assert_safe(
+        analyzer,
+        "import urllib.request\nurllib.request.urlopen('https://x.example')",
+    )
+
+
+@pytest.mark.parametrize("length", [99, 100, 101, 250])
+def test_reverse_assignment_chain_reaches_fixed_point(analyzer, length):
+    """No pass limit: a long chain written in reverse order inside a loop."""
+    lines = ["import os"] + [f"v{i} = ''" for i in range(length, -1, -1)]
+    lines.append("while True:")
+    lines += [f"    v{i} = v{i - 1}" for i in range(length, 0, -1)]
+    lines += ["    v0 = input()", f"    os.system(v{length})"]
+    result = analyzer.analyze("\n".join(lines))
+    assert result["status"] == "VULNERABLE"
+    assert result["vulnerabilities"][0]["source"]["variable"] == "v0"
+
+
+def test_long_augmented_assignment_chain(analyzer):
+    """Many += on one variable keep its taint (and stay linear in size)."""
+    lines = ["import os", "y = ''", "y += input()"] + ["y += 'a'"] * 500
+    lines.append("os.system(y)")
+    result = analyzer.analyze("\n".join(lines))
+    assert result["status"] == "VULNERABLE"
+
+
+def test_inline_source_call_is_reported_once(analyzer):
+    """os.system(request.args.get("c")) is one finding, not two."""
+    result = analyzer.analyze('import os\nos.system(request.args.get("c"))')
+    assert result["status"] == "VULNERABLE"
+    assert len(result["vulnerabilities"]) == 1
+    assert result["vulnerabilities"][0]["source"]["name"] == "request.args.get"
+
+
+def test_source_found_through_intermediate_variables(analyzer):
+    """A finding names the source behind a chain of assignments."""
+    result = analyzer.analyze(
+        'import os\ny = "ls " + input()\nz = y\nos.system(z)'
+    )
+    assert result["status"] == "VULNERABLE"
+    source = result["vulnerabilities"][0]["source"]
+    assert source["name"] == "input"
+    assert source["variable"] == "<direct:input>"
+
+
+def test_tainted_name_without_source_is_still_reported(analyzer, monkeypatch):
+    """Fail closed: no source found for a tainted variable is still a finding."""
+    monkeypatch.setattr(analyzer, "_source_for", lambda _var: None)
+    result = analyzer.analyze("import os\nx = input()\ny = x\nos.system(y)")
+    assert result["status"] == "VULNERABLE"
+    source = result["vulnerabilities"][0]["source"]
+    assert source["name"] == "<unknown>"
+    assert source["variable"] == "y"
+
+
+@pytest.mark.parametrize("code", [
+    'mark_safe("<p>%y</p>" % html.escape(x))',
+    'mark_safe("<p>%*s</p>" % (5, html.escape(x)))',
+    'mark_safe("<p>{</p>".format(html.escape(x)))',
+    'mark_safe("<p>{v}</p>".format(v=html.escape(x)))',
+    'mark_safe("<p>{:{}}</p>".format(html.escape(x), 5))',
+    'mark_safe("<p>%s %s</p>" % (html.escape(x),))',
+    'mark_safe("<p>%s</p>" % (*[html.escape(x)],))',
+    'mark_safe("<p>{} {}</p>".format(html.escape(x)))',
+    'mark_safe(b"<p>" + html.escape(x))',
+])
+def test_templates_that_cannot_be_followed_give_no_relief(analyzer, code):
+    """A template that is malformed or not plain is not a direct position."""
+    _assert_vulnerable(analyzer, "import html\nx = input()\n" + code)
+
+
+def test_template_starting_with_a_field_keeps_relief(analyzer):
+    """A plain field first in the template is still a direct position."""
+    _assert_safe(
+        analyzer,
+        'import html\nx = input()\nmark_safe("{}</p>".format(html.escape(x)))',
+    )
+
+
+def test_assignment_forms_carry_taint(analyzer):
+    """Annotated assignment and named expressions carry taint."""
+    for code in (
+        "import os\nx: str = input()\nos.system(x)",
+        "import os\nif (x := input()):\n    os.system(x)",
+        "import os\nos.system((y := input()))",
+        "import os\nx: str\nx = input()\nos.system(x)",
+    ):
+        _assert_vulnerable(analyzer, code)
+
+
+def test_untracked_targets_do_not_break_analysis(analyzer):
+    """Attribute and subscript targets are not tracked, but do not fail."""
+    result = analyzer.analyze(
+        "import os\nd = {}\nself.cmd = input()\nd['k'] += input()\n"
+        "n: int = 5\nos.system('ls')"
+    )
+    assert result["status"] == "SAFE"
+
+
+def test_reads_with_no_dotted_name(analyzer):
+    """A call with no dotted name is neither a source nor a sanitiser."""
+    _assert_safe(analyzer, "import os\nos.system((lambda: 'ls')())")
+    assert analyzer._check_source_call(ast.Name(id="input", ctx=ast.Load())) is None
+    assert analyzer._source_for("never_assigned") is None
+
+
+def test_case_mapping_without_rest_binds_nothing(analyzer):
+    """`case {"k": 1}` binds no name, so html stays the imported module."""
+    _assert_safe(
+        analyzer,
+        "import html\nmatch v:\n    case {'k': 1}:\n        pass\n"
+        "x = input()\nmark_safe(html.escape(x))",
+    )
+
+
+def test_store_through_a_call_ends_relief(analyzer):
+    """An attribute stored through a call result may patch a sanitiser."""
+    _assert_vulnerable(
+        analyzer,
+        "import html\nget_html().escape = str\nx = input()\n"
+        "mark_safe(html.escape(x))",
+    )
+
+
+def test_same_source_twice_in_one_argument_is_one_finding(analyzer):
+    """One sink argument reading the same tainted variable twice."""
+    result = analyzer.analyze("import os\nx = input()\nos.system(x + x)")
+    assert len(result["vulnerabilities"]) == 1
