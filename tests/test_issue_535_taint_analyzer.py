@@ -692,6 +692,23 @@ PATCHED_SANITIZER_CASES = {
         "string.Formatter().get_field('0.__dict__', [html], {})[0]['escape'] = str"
     ),
     "inspect": "import html, inspect\nm = inspect.getmodule(html.escape)",
+    "mock-patch": "import html\nfrom unittest import mock\nmock.patch('html.escape', str).start()",
+    "mock-patch-object": (
+        "import html\nfrom unittest import mock\n"
+        "mock.patch.object(html, 'escape', str).start()"
+    ),
+    "unittest-mock": "import html, unittest.mock\nunittest.mock.patch('html.escape', str).start()",
+    "pydoc-locate": "import html, pydoc\npydoc.locate('html.__dict__')['escape'] = str",
+    "pkgutil-resolve": (
+        "import html, pkgutil\npkgutil.resolve_name('html:__dict__')['escape'] = str"
+    ),
+    "monkeypatch": (
+        "import html\ndef test(monkeypatch):\n    monkeypatch.setattr('html.escape', str)"
+    ),
+    "code-in-string": (
+        "import html, timeit\n"
+        "timeit.timeit('pass', setup='import html; html.escape = str', number=1)"
+    ),
 }
 
 
@@ -711,6 +728,47 @@ def test_builtin_patched_by_string_lookup_gets_no_relief(analyzer):
         analyzer,
         "import os\ngetattr(getattr(print, '__self__'), '__dict__')['int'] = str\n"
         "x = input()\nos.system(int(x))",
+    )
+
+
+def test_builtin_patched_by_mock_gets_no_relief(analyzer):
+    """mock.patch replaces int() by a dotted string: int() is not trusted."""
+    _assert_vulnerable(
+        analyzer,
+        "import os\nfrom unittest import mock\n"
+        "mock.patch('builtins.int', str).start()\nx = input()\nos.system(int(x))",
+    )
+
+
+@pytest.mark.parametrize("code", [
+    "import os\nfrom os import environ\nos.system(environ.get('X'))",
+    "import os\nfrom os import environ\nc = environ.get('X')\nos.system(c)",
+    "import os\nfrom os import environ\nos.system(environ['X'])",
+    "import os\nfrom os import getenv as env\nos.system(env('X'))",
+    "import os\nfrom sys import argv\nos.system(argv[1])",
+    "import os as o\no.system(o.environ.get('X'))",
+    "import os\nfrom flask import request as req\nos.system(req.args.get('c'))",
+    "import os\nfrom flask import request as req\nc = req.path\nos.system(c)",
+])
+def test_sources_resolve_through_imports(analyzer, code):
+    """A source imported under another name is still a source."""
+    _assert_vulnerable(analyzer, code)
+
+
+def test_imported_source_is_named_by_its_full_name(analyzer):
+    """sources_found names an imported source by its module path."""
+    result = analyzer.analyze(
+        "import os\nfrom os import environ\nc = environ.get('X')\nos.system(c)"
+    )
+    assert result["sources_found"][0]["name"] == "os.environ.get"
+    assert result["sources_found"][0]["variable"] == "c"
+
+
+def test_get_on_another_module_is_not_a_source(analyzer):
+    """environ from some other module is not os.environ."""
+    _assert_safe(
+        analyzer,
+        "import os\nfrom settings import environ\nos.system(environ.get('X'))",
     )
 
 

@@ -528,8 +528,9 @@ class TaintAnalyzer:
     })
     REFLECTIVE_ATTRIBUTES: FrozenSet[str] = frozenset({
         "modules", "f_globals", "f_locals", "f_builtins", "_getframe",
-        # Attribute lookups by a string.
+        # Attribute lookups and patches by a string.
         "getattr", "attrgetter", "methodcaller", "Formatter", "get_field",
+        "setattr", "delattr", "mock", "locate", "resolve_name",
         "__dict__", "__setattr__", "__delattr__", "__getattribute__",
         "__globals__", "__builtins__", "__code__", "__closure__",
         "__self__", "__func__", "__class__", "__base__", "__bases__",
@@ -540,6 +541,9 @@ class TaintAnalyzer:
         "builtins", "importlib", "gc", "ctypes", "pickle", "_pickle",
         "marshal", "shelve", "dill", "cloudpickle", "joblib", "copyreg",
         "yaml", "runpy", "code", "codeop", "inspect",
+        # Patching by a dotted string, or running code given as a string.
+        "unittest", "mock", "pydoc", "pkgutil", "doctest", "timeit",
+        "cProfile", "profile", "trace", "pdb", "bdb",
     })
     #: Every part of every sanitiser name (``html``, ``escape``, ``int``).
     SANITIZER_PARTS: FrozenSet[str] = frozenset(
@@ -568,6 +572,7 @@ class TaintAnalyzer:
         self._stored_roots: Set[str] = set()
         self._relief_allowed = True
         self._calls: List[ast.Call] = []
+        self._assignments: List[ast.AST] = []
         self._sources: List[TaintSource] = []
     
     def analyze(self, code: str) -> Dict[str, Any]:
@@ -678,6 +683,7 @@ class TaintAnalyzer:
             # may replace a sanitiser.
             if any(site is not None for site in self._bindings.get(root, ())):
                 self._relief_allowed = False
+        self._mark_sources()
 
     def _bind(self, name: str, imported: Optional[str] = None) -> None:
         """Record one binding of ``name``."""
@@ -760,17 +766,30 @@ class TaintAnalyzer:
             self._bind(node.rest)
 
     def _scan_assignment(self, node: ast.AST) -> None:
-        """Record what an assignment stores and any direct source in it."""
+        """Record what an assignment stores.
+
+        Its direct sources are marked after the walk, once every import
+        is known (``environ.get(...)`` after ``from os import environ``).
+        """
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 self._record_assignment(target, node.value)
-                self._mark_assign_source(target, node.value, node.lineno)
+            self._assignments.append(node)
         elif isinstance(node, ast.AugAssign):
             self._record_aug_assignment(node.target, node.value, node.op)
         elif node.value is not None:
             # Annotated assignment (x: str = input()) or named expression
             # (if (x := input()):).
             self._record_assignment(node.target, node.value)
+            self._assignments.append(node)
+
+    def _mark_sources(self) -> None:
+        """Mark the direct sources of every assignment, in walk order."""
+        for node in self._assignments:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    self._mark_assign_source(target, node.value, node.lineno)
+                continue
             source = self._check_source_expr(node.value)
             if source:
                 self._mark_source_target(node.target, source, node.lineno)
@@ -874,20 +893,29 @@ class TaintAnalyzer:
         name is a listed source function, when its last dotted segment is
         a listed source function other than the generic ``get``
         (``sys.stdin.readline``, ``conn.recv``; not ``os.getcwd`` or
-        ``some_dict.get``), or when it reads from the request object.
+        ``some_dict.get``), or when it reads from the request object. The
+        name is also resolved through the code's own imports, so
+        ``environ.get(...)`` after ``from os import environ`` is
+        ``os.environ.get``.
         """
         if not isinstance(node, ast.Call):
             return None
         func_name = self._get_func_name(node.func)
         last = func_name.rsplit(".", 1)[-1]
         if (
-            func_name in self.SOURCES
+            self._is_source_name(func_name)
             or func_name in self.SOURCE_FUNCTIONS
             or (last != "get" and last in self.SOURCE_FUNCTIONS)
-            or self._is_request_reference(func_name)
         ):
             return TaintSource(name=func_name, variable="", line=node.lineno)
+        resolved = self._resolve(node.func)
+        if resolved is not None and self._is_source_name(resolved):
+            return TaintSource(name=resolved, variable="", line=node.lineno)
         return None
+
+    def _is_source_name(self, dotted: str) -> bool:
+        """Whether a dotted name is a listed source or a request read."""
+        return dotted in self.SOURCES or self._is_request_reference(dotted)
 
     @staticmethod
     def _is_request_reference(dotted: Optional[str]) -> bool:
@@ -918,15 +946,18 @@ class TaintAnalyzer:
         """
         if isinstance(node, ast.Call):
             return self._check_source_call(node)
-        dotted = self._get_source_name(node)
-        if dotted is not None and (
-            dotted in self.SOURCES or self._is_request_reference(dotted)
-        ):
-            return TaintSource(
-                name=dotted,
-                variable="",
-                line=getattr(node, "lineno", 0)
-            )
+        base = node
+        while isinstance(base, ast.Subscript):
+            base = base.value
+        if not isinstance(base, (ast.Name, ast.Attribute)):
+            return None
+        for dotted in (self._get_func_name(base), self._resolve(base)):
+            if dotted is not None and self._is_source_name(dotted):
+                return TaintSource(
+                    name=dotted,
+                    variable="",
+                    line=getattr(node, "lineno", 0)
+                )
         return None
 
     def _source_of(self, node: ast.AST) -> Optional[TaintSource]:
@@ -937,14 +968,6 @@ class TaintAnalyzer:
             return self._check_source_expr(node)
         return None
 
-    def _get_source_name(self, node: ast.AST) -> Optional[str]:
-        """Dotted name of a source reference, unwrapping subscripts."""
-        while isinstance(node, ast.Subscript):
-            node = node.value
-        if isinstance(node, (ast.Name, ast.Attribute)):
-            return self._get_func_name(node)
-        return None
-    
     def _get_func_name(self, node: ast.AST) -> str:
         """Extract function name from a call node."""
         if isinstance(node, ast.Name):
