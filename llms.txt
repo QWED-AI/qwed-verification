@@ -1,23 +1,13 @@
-# QWED Verification
+# qwed-verification
 
-> Open-source (Apache-2.0) verification layer for LLM and AI-agent output. It checks claims with deterministic engines (SymPy, Z3, SQLGlot, Python AST analysis, CrossHair) and is designed to fail closed: a claim it cannot check should not be reported as verified. Known exceptions, on the logic, consensus, process, RAG and image routes and on math without "=", are tracked in issues #320, #576 and #581. Each verification result from the API has a status (VERIFIED, UNVERIFIABLE, BLOCKED). API responses from the math, code, SQL, natural-language and agent verification routes also carry a separate admission decision (ADMIT, BLOCKED). In a batch, a math, code, SQL or natural-language item carries it as result.admission, and a failed item has result null. In Python, admission_decision(result) applies the math, code and SQL rule to a DiagnosticResult; VerificationEngine.verify_math() returns a dict with its own status values. An engine called in process runs without some of the server's limits, such as the time and memory limits of /verify/math, so send untrusted input through the API. Natural-language results use natural_language_admission, which blocks unless the query's meaning was verified (query_semantics_verified), so they are not admitted today (#585).
+> Open-source AI verification infrastructure for deterministic verification of LLM outputs, tool calls, code, schemas, and agent state before production execution.
 
-QWED has 13 engines and 9 policy guards. Proof engines (Math, Logic, SQL, Code, Schema) can return VERIFIED with a proof_ref; the Symbolic engine (CrossHair) searches for counterexamples and returns UNVERIFIABLE or BLOCKED; policy guards block or hold; advisory engines (Fact, Graph, Image, Reasoning, Consensus) add signals for review.
+## Core Resources
 
-## Documentation
-- [Documentation](https://docs.qwedai.tech): installation, engines, API reference, guides
-- [Engine tiers](https://docs.qwedai.tech/engines/overview): what each tier may claim
-- [README](https://github.com/QWED-AI/qwed-verification/blob/main/README.md): install, first run, limits
-- [Verification Context v1.0](https://github.com/QWED-AI/qwed-verification/tree/main/spec): the result record format
-- [Security policy](https://github.com/QWED-AI/qwed-verification/blob/main/SECURITY.md) and [advisories](https://github.com/QWED-AI/qwed-verification/security/advisories)
-- [Website](https://qwedai.tech), with Markdown copies of every page listed in https://qwedai.tech/llms.txt
+- [GitHub Repository](https://github.com/QWED-AI/qwed-verification): Source code, documentation, and issue tracker.
+- [Website](https://docs.qwedai.tech): Official website and documentation.
 
-## Related packages
-- [qwed-finance](https://github.com/QWED-AI/qwed-finance): banking and payment calculations, ISO 20022
-- [qwed-legal](https://github.com/QWED-AI/qwed-legal): deadlines, amounts and legal claims
-- [qwed-tax](https://github.com/QWED-AI/qwed-tax): tax compliance and withholding
-- [qwed-infra](https://github.com/QWED-AI/qwed-infra): Terraform, IAM and cloud cost
-- [qwed-open-responses](https://github.com/QWED-AI/qwed-open-responses): agent tool calls, before they run
-- [qwed-mcp](https://github.com/QWED-AI/qwed-mcp): MCP server for MCP clients
-- [qwed-a2a](https://github.com/QWED-AI/qwed-a2a): agent-to-agent messages
-- [qwed-ucp](https://github.com/QWED-AI/qwed-ucp): Universal Commerce Protocol transactions
+## AI Agent & LLM Indexing
+
+- Structured following the standard /llms.txt specification for AI search engines and coding assistants.
+- Validated via [AccessGuard AI-Readiness Suite](https://ronanchnlps-bit.github.io/).
