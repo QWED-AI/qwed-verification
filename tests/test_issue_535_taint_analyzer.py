@@ -527,7 +527,32 @@ HTML_CONTEXT_CASES = {
     "script": "mark_safe('<script>var a = ' + html.escape(x))",
     "style": "mark_safe('<p><style>p { color: ' + html.escape(x))",
     "comment": "mark_safe('<!-- ' + html.escape(x) + ' -->')",
-    "unclosed-tag": "mark_safe('a < b ' + html.escape(x))",
+    "trailing-lt": "mark_safe('<p><' + html.escape(x))",
+    "trailing-end-tag-open": "mark_safe('<p></' + html.escape(x))",
+    "unclosed-end-tag": "mark_safe('<p></a ' + html.escape(x))",
+    "unclosed-bogus-comment": "mark_safe('<p><!x ' + html.escape(x))",
+    # A quote opens a value only after "=": in a name it is a plain
+    # character, so it cannot pair with a later quote.
+    "quote-in-attribute-name": (
+        "mark_safe(\"<a b'c><img src=x onerror='1>\" + html.escape(x) + \"'>\")"
+    ),
+    "quote-in-bogus-comment": (
+        "mark_safe(\"<?x a='><img src=x onerror='1>\" + html.escape(x) + \"'>\")"
+    ),
+    "lt-before-space": (
+        "mark_safe(\"< a='><img src=x onerror='1>\" + html.escape(x) + \"'>\")"
+    ),
+    "abrupt-empty-comment": "mark_safe(\"<!--><a href='-->\" + html.escape(x))",
+    "bang-comment-end": "mark_safe(\"<!-- --!><a href='-->\" + html.escape(x))",
+    # Elements that change how the rest is read: no relief after them.
+    "closed-script": "mark_safe('<script>a()</script><p>' + html.escape(x))",
+    "closed-style": "mark_safe('<style>p {}</style>' + html.escape(x))",
+    "script-escape": "mark_safe('<script><!--<script></script>' + html.escape(x))",
+    "textarea": (
+        "mark_safe(\"<textarea><a title='</textarea><img src=x onerror='1>\""
+        " + html.escape(x))"
+    ),
+    "svg": "mark_safe(\"<svg><style><a href='</style>\" + html.escape(x))",
     "unclosed-script-close": "mark_safe('<script>a()</script ' + html.escape(x))",
     "after-unknown-value": "mark_safe(prefix + html.escape(x))",
     "after-unescaped-value": "mark_safe(html.escape(x) + '<a href=' + html.escape(x))",
@@ -550,10 +575,18 @@ def test_html_relief_needs_text_content(analyzer, name):
     "<p>",
     "<a href=\"/x\">link</a> ",
     "<a title='a>b'>t</a>",
-    "<script>a()</script><p>",
-    "<style>p {}</style>",
     "<!-- note --><p>",
+    "<!----><p>",
     "<!DOCTYPE html><p>",
+    "a < b ",
+    "<p></>",
+    "<p></ x>",
+    "<a b'c>t</a>",
+    "<input value=a'b>",
+    "<a title=\"x'y\">t</a>",
+    "<img src=x/>",
+    "<br/><p>",
+    "<!---><p>",
 ])
 def test_html_relief_after_closed_markup(analyzer, prefix):
     """Constant markup that ends in text content keeps the relief."""
@@ -650,6 +683,15 @@ PATCHED_SANITIZER_CASES = {
     "from-reflective": "from builtins import setattr\nimport html",
     "from-sys-modules": "from sys import modules\nimport html",
     "exec": "import html\nexec('html.escape = str')",
+    "getattr": "import html\ngetattr(html, '__dict__')['escape'] = str",
+    "attrgetter": (
+        "import html, operator\noperator.attrgetter('__dict__')(html)['escape'] = str"
+    ),
+    "formatter": (
+        "import html, string\n"
+        "string.Formatter().get_field('0.__dict__', [html], {})[0]['escape'] = str"
+    ),
+    "inspect": "import html, inspect\nm = inspect.getmodule(html.escape)",
 }
 
 
@@ -661,6 +703,15 @@ def test_code_that_may_patch_a_sanitizer_gets_no_relief(analyzer, name):
         + "\nx = input()\nmark_safe(html.escape(x))"
     )
     _assert_vulnerable(analyzer, code)
+
+
+def test_builtin_patched_by_string_lookup_gets_no_relief(analyzer):
+    """getattr reaches a builtin's module by strings: int() is not trusted."""
+    _assert_vulnerable(
+        analyzer,
+        "import os\ngetattr(getattr(print, '__self__'), '__dict__')['int'] = str\n"
+        "x = input()\nos.system(int(x))",
+    )
 
 
 def test_shell_input_and_env_keywords_are_inspected(analyzer):

@@ -101,7 +101,14 @@ _Term = Tuple[
 _PERCENT_FIELD = re.compile(r"%(\([^)]*\))?([#0\- +]*)(\*|\d+)?(?:\.(\*|\d*))?[hlL]?(.?)", re.S)
 _PERCENT_CONVERSIONS = frozenset("diouxXeEfFgGcrsa")
 _FORMATTER = string.Formatter()
-_RAW_TEXT_TAGS = ("script", "style")
+_HTML_SPACE = " \t\n\f\r"
+# Elements after which the HTML tokenizer reads text differently: raw text
+# and RCDATA (script, style, textarea, title, ...), plaintext, and foreign
+# content (svg, math). Constant text with one of these gets no relief.
+_UNFOLLOWED_TAGS = frozenset({
+    "script", "style", "textarea", "title", "xmp", "iframe", "noembed",
+    "noframes", "noscript", "plaintext", "svg", "math",
+})
 
 
 def _percent_plan(template: str) -> Optional[List[Any]]:
@@ -152,38 +159,128 @@ def _format_plan(template: str) -> Optional[List[Any]]:
     return plan
 
 
-def _tag_end(low: str, start: int) -> int:
-    """Index of the ``>`` that ends a tag, or -1.
+def _next_tag_state(state: str, char: str) -> str:
+    """The HTML tokenizer's next state inside a tag, after ``char``.
 
-    A quote inside the tag must close before a ``>`` counts.
+    ``before``: before an attribute name (also after a quoted value or
+    a ``/``); ``attr``: in an attribute name; ``after``: after one;
+    ``value``: before an attribute value; ``unquoted``: in an unquoted
+    value. A quote opens a value only in ``value``; anywhere else it is
+    an ordinary character, as in a browser.
     """
+    space = char in _HTML_SPACE
+    if state == "value":
+        if char in "\"'":
+            return char
+        return "value" if space else "unquoted"
+    if state == "unquoted":
+        return "before" if space else "unquoted"
+    if char == "/":
+        return "before"
+    if char == "=" and state in ("attr", "after"):
+        return "value"
+    if space:
+        return "after" if state == "attr" else state
+    return "attr"
+
+
+def _tag_end(low: str, start: int) -> int:
+    """Index of the ``>`` that ends a tag whose name ends at ``start``.
+
+    -1 if the text ends first, inside the tag or a quoted value.
+    """
+    state = "before"
     index = start
     while index < len(low):
+        if state in ("\"", "'"):
+            close = low.find(state, index)
+            if close < 0:
+                return -1
+            index, state = close + 1, "before"
+            continue
         char = low[index]
         if char == ">":
             return index
-        if char in "\"'":
-            index = low.find(char, index + 1)
-            if index < 0:
-                return -1
+        state = _next_tag_state(state, char)
         index += 1
     return -1
 
 
-def _tag_name(low: str, start: int) -> str:
-    """The tag name that starts at ``start`` (empty for ``</`` or ``<!``)."""
+def _after_tag(low: str, start: int) -> int:
+    """Where text content resumes after the tag whose name is at ``start``.
+
+    -1 for a tag that changes how what follows is read (raw text such as
+    ``<script>`` or ``<textarea>``, foreign content such as ``<svg>``).
+    """
     end = start
-    while end < len(low) and low[end].isalnum():
+    while end < len(low) and low[end] not in _HTML_SPACE and low[end] not in "/>":
         end += 1
-    return low[start:end]
+    if low[start:end] in _UNFOLLOWED_TAGS:
+        return -1
+    close = _tag_end(low, end)
+    return close + 1 if close >= 0 else -1
+
+
+def _after_bogus_comment(low: str, start: int) -> int:
+    """``<?...``, ``<!...`` and ``</ ...`` end at the first ``>``."""
+    close = low.find(">", start)
+    return close + 1 if close >= 0 else -1
+
+
+def _after_comment(low: str, start: int) -> int:
+    """Where text content resumes after a comment whose ``<!--`` ends at
+    ``start``: at ``-->`` or ``--!>``, or at once for ``<!-->`` and
+    ``<!--->``."""
+    if low.startswith(">", start):
+        return start + 1
+    if low.startswith("->", start):
+        return start + 2
+    ends = [e for e in (low.find("-->", start), low.find("--!>", start)) if e >= 0]
+    if not ends:
+        return -1
+    close = min(ends)
+    return close + (3 if low.startswith("-->", close) else 4)
+
+
+def _after_end_tag_open(low: str, start: int) -> int:
+    """Where text content resumes after ``</`` (which ends at ``start``).
+
+    ``</>`` is dropped, ``</name`` is an end tag, and anything else is a
+    bogus comment; ``</`` at the very end is not known to be text.
+    """
+    name = low[start:start + 1]
+    if name == ">":
+        return start + 1
+    if name.isascii() and name.isalpha():
+        return _after_tag(low, start)
+    return _after_bogus_comment(low, start) if name else -1
+
+
+def _after_markup(low: str, start: int) -> int:
+    """Where text content resumes after the ``<`` at ``start``, or -1.
+
+    Follows the HTML tokenizer: a ``<`` not followed by a letter, ``/``,
+    ``!`` or ``?`` is text; a ``<`` at the very end is not known to be.
+    """
+    following = low[start + 1:start + 2]
+    if following == "!":
+        if low.startswith("--", start + 2):
+            return _after_comment(low, start + 4)
+        return _after_bogus_comment(low, start + 2)
+    if following == "?":
+        return _after_bogus_comment(low, start + 2)
+    if following == "/":
+        return _after_end_tag_open(low, start + 2)
+    if following.isascii() and following.isalpha():
+        return _after_tag(low, start + 1)
+    return start + 1 if following else -1
 
 
 def _html_ends_in_text(html_text: str) -> bool:
     """Whether HTML that starts in text content also ends in text content.
 
-    Conservative: every ``<`` opens a tag, a tag ends only at a ``>``
-    outside quotes, and a comment or a ``<script>`` or ``<style>`` element
-    must be closed again. Anything it cannot follow is not text.
+    Anything it cannot follow counts as not text: text that ends inside
+    markup, and any element that changes how the rest is read.
     """
     low = html_text.lower()
     index = 0
@@ -193,24 +290,6 @@ def _html_ends_in_text(html_text: str) -> bool:
             return True
         index = _after_markup(low, start)
     return False
-
-
-def _after_markup(low: str, start: int) -> int:
-    """Where text content resumes after the markup at ``start``, or -1.
-
-    After a comment or a tag; after a ``<script>`` or ``<style>`` tag, at
-    the ``</`` that closes it, which is read as a tag in turn.
-    """
-    if low.startswith("<!--", start):
-        end = low.find("-->", start + 4)
-        return end + 3 if end >= 0 else -1
-    end = _tag_end(low, start + 1)
-    if end < 0:
-        return -1
-    name = _tag_name(low, start + 1)
-    if name in _RAW_TEXT_TAGS:
-        return low.find("</" + name, end + 1)
-    return end + 1
 
 
 def _is_str_constant(node: ast.AST) -> bool:
@@ -436,17 +515,21 @@ class TaintAnalyzer:
     #: Code that could replace a sanitiser at run time gets no sanitiser
     #: relief at all: code that reads one of these names (reflection,
     #: dynamic code), reads one of these attributes (namespaces, frames,
-    #: code objects, a builtin's module), imports one of these modules
+    #: code objects, a builtin's module, attribute lookups by a string),
+    #: imports one of these modules
     #: (reflection, object loaders), stores to any special ``__name__``
     #: attribute or to an attribute named like part of a sanitiser
     #: (``html.escape = str``), or stores to any attribute of a name it
     #: imports.
     REFLECTIVE_NAMES: FrozenSet[str] = frozenset({
-        "setattr", "delattr", "vars", "globals", "locals", "exec", "eval",
-        "compile", "__import__", "__builtins__", "breakpoint",
+        "getattr", "setattr", "delattr", "vars", "globals", "locals",
+        "exec", "eval", "compile", "__import__", "__builtins__",
+        "breakpoint",
     })
     REFLECTIVE_ATTRIBUTES: FrozenSet[str] = frozenset({
         "modules", "f_globals", "f_locals", "f_builtins", "_getframe",
+        # Attribute lookups by a string.
+        "getattr", "attrgetter", "methodcaller", "Formatter", "get_field",
         "__dict__", "__setattr__", "__delattr__", "__getattribute__",
         "__globals__", "__builtins__", "__code__", "__closure__",
         "__self__", "__func__", "__class__", "__base__", "__bases__",
@@ -456,7 +539,7 @@ class TaintAnalyzer:
     REFLECTIVE_MODULES: FrozenSet[str] = frozenset({
         "builtins", "importlib", "gc", "ctypes", "pickle", "_pickle",
         "marshal", "shelve", "dill", "cloudpickle", "joblib", "copyreg",
-        "yaml", "runpy", "code", "codeop",
+        "yaml", "runpy", "code", "codeop", "inspect",
     })
     #: Every part of every sanitiser name (``html``, ``escape``, ``int``).
     SANITIZER_PARTS: FrozenSet[str] = frozenset(
