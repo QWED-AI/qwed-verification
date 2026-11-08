@@ -808,6 +808,26 @@ def test_imported_source_is_named_by_its_full_name(analyzer):
     assert result["sources_found"][0]["variable"] == "c"
 
 
+@pytest.mark.parametrize("code", [
+    "import os\nos.system({'k': 'ls'}.get('k'))",
+    "import os, json\nc = json.loads('{}').get('k', 'ls')\nos.system(c)",
+    "import os\nos.system(make_config()['opts'].get('k'))",
+])
+def test_get_on_an_expression_is_not_a_source(analyzer, code):
+    """.get() on a dict literal or a call result is no source, like d.get()."""
+    _assert_safe(analyzer, code)
+
+
+def test_source_receiver_of_get_is_still_a_source(analyzer):
+    """A .get() on a source's result is tainted through its receiver."""
+    _assert_vulnerable(
+        analyzer,
+        "import os\nfrom flask import request\n"
+        "c = request.get_json().get('cmd')\nos.system(c)",
+    )
+    _assert_vulnerable(analyzer, "import os\nos.system(input().strip())")
+
+
 def test_get_on_another_module_is_not_a_source(analyzer):
     """environ from some other module is not os.environ."""
     _assert_safe(

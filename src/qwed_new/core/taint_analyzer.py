@@ -897,14 +897,14 @@ class TaintAnalyzer:
     def _check_source_call(self, node: ast.AST) -> Optional[TaintSource]:
         """Check if a node is a taint source call.
 
-        A call is a source when its full dotted name is listed, when its
-        name is a listed source function, when its last dotted segment is
-        a listed source function other than the generic ``get``
-        (``sys.stdin.readline``, ``conn.recv``; not ``os.getcwd`` or
-        ``some_dict.get``), or when it reads from the request object. The
-        name is also resolved through the code's own imports, so
-        ``environ.get(...)`` after ``from os import environ`` is
-        ``os.environ.get``.
+        A call is a source when its full dotted name is listed, when it is
+        a bare call of a listed source function (``input()``), when its
+        last dotted segment is a listed source function other than the
+        generic ``get`` (``sys.stdin.readline``, ``conn.recv``; not
+        ``os.getcwd``, ``some_dict.get`` or ``{...}.get``), or when it
+        reads from the request object. The name is also resolved through
+        the code's own imports, so ``environ.get(...)`` after ``from os
+        import environ`` is ``os.environ.get``.
         """
         if not isinstance(node, ast.Call):
             return None
@@ -912,7 +912,7 @@ class TaintAnalyzer:
         last = func_name.rsplit(".", 1)[-1]
         if (
             self._is_source_name(func_name)
-            or func_name in self.SOURCE_FUNCTIONS
+            or (isinstance(node.func, ast.Name) and func_name in self.SOURCE_FUNCTIONS)
             or (last != "get" and last in self.SOURCE_FUNCTIONS)
         ):
             return TaintSource(name=func_name, variable="", line=node.lineno)
