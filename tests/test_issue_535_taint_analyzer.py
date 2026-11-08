@@ -779,6 +779,21 @@ def test_star_imported_source_names(analyzer, code):
     _assert_vulnerable(analyzer, code)
 
 
+@pytest.mark.parametrize("code, status", [
+    ("from sys import argv\nargv += ['x']", "SAFE"),
+    ("from sys import *\nargv += ['x']", "SAFE"),
+    ("from os import environ\nenviron |= {'A': 'b'}", "SAFE"),
+    ("import os\nfrom sys import argv\nargv += ['x']\nos.system(' '.join(argv))",
+     "VULNERABLE"),
+    ("from os import environ\nenviron |= {'A': 'b'}\neval(environ['A'])",
+     "VULNERABLE"),
+])
+def test_augmented_assignment_to_imported_source(analyzer, code, status):
+    """x += ... on an imported source name is analysed, not a crash."""
+    result = analyzer.analyze(code)
+    assert result["status"] == status, code
+
+
 def test_relative_star_import_binds_no_source(analyzer):
     """A relative star import names no known module."""
     _assert_safe(analyzer, "from . import *\nx = 'ls'\neval(x)")

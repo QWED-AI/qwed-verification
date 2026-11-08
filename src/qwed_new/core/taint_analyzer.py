@@ -881,8 +881,12 @@ class TaintAnalyzer:
         """
         if not isinstance(target, ast.Name):
             return
-        combined = ast.BinOp(
-            left=ast.Name(id=target.id, ctx=ast.Load()), op=op, right=value
+        # The made-up nodes take the target's location, so a source found
+        # through them (``argv += [...]`` after ``from sys import argv``)
+        # has a line like any other.
+        read = ast.copy_location(ast.Name(id=target.id, ctx=ast.Load()), target)
+        combined = ast.copy_location(
+            ast.BinOp(left=read, op=op, right=value), target
         )
         self._flow_rhs.setdefault(target.id, []).append(combined)
 
@@ -1264,7 +1268,9 @@ class TaintAnalyzer:
         """
         for full_name in self._import_names(node):
             if self._is_source_name(full_name):
-                source = TaintSource(name=full_name, variable="", line=node.lineno)
+                source = TaintSource(
+                    name=full_name, variable="", line=getattr(node, "lineno", 0)
+                )
                 terms.append((None, source, _READ_RAW, relief))
                 break
         terms.append((node.id, None, reads, relief))
