@@ -755,6 +755,35 @@ def test_sources_resolve_through_imports(analyzer, code):
     _assert_vulnerable(analyzer, code)
 
 
+@pytest.mark.parametrize("code", [
+    "from sys import argv\nimport subprocess\nsubprocess.call(argv)",
+    "import os\nfrom sys import argv\nos.system(' '.join(argv))",
+    "import os\nfrom sys import argv\nc = ' '.join(argv)\nos.system(c)",
+    "from os import environ\nx = environ\neval(x['X'])",
+    # An import counts even if the name is assigned too (fail closed).
+    "import os\nfrom os import environ\nenviron = {}\nos.system(environ['X'])",
+])
+def test_imported_source_name_read_on_its_own(analyzer, code):
+    """A bare name imported from a source module is a source read."""
+    _assert_vulnerable(analyzer, code)
+
+
+@pytest.mark.parametrize("code", [
+    "from os import *\neval(environ['X'])",
+    "from os import *\neval(environ.get('X'))",
+    "from sys import *\neval(argv[1])",
+    "from sys import *\nx = argv\neval(x[1])",
+])
+def test_star_imported_source_names(analyzer, code):
+    """A star import may bind a source name."""
+    _assert_vulnerable(analyzer, code)
+
+
+def test_relative_star_import_binds_no_source(analyzer):
+    """A relative star import names no known module."""
+    _assert_safe(analyzer, "from . import *\nx = 'ls'\neval(x)")
+
+
 def test_imported_source_is_named_by_its_full_name(analyzer):
     """sources_found names an imported source by its module path."""
     result = analyzer.analyze(

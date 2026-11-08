@@ -573,6 +573,7 @@ class TaintAnalyzer:
         self._relief_allowed = True
         self._calls: List[ast.Call] = []
         self._assignments: List[ast.AST] = []
+        self._star_modules: List[str] = []
         self._sources: List[TaintSource] = []
     
     def analyze(self, code: str) -> Dict[str, Any]:
@@ -718,8 +719,11 @@ class TaintAnalyzer:
         """Record what each imported name is bound to."""
         for alias in node.names:
             if alias.name == "*":
-                # A star import may bind any name, sanitisers included.
+                # A star import may bind any name, sanitisers and sources
+                # included.
                 self._relief_allowed = False
+                if isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                    self._star_modules.append(node.module)
                 continue
             if isinstance(node, ast.Import):
                 root, bound, imported = self._import_binding(alias)
@@ -908,10 +912,30 @@ class TaintAnalyzer:
             or (last != "get" and last in self.SOURCE_FUNCTIONS)
         ):
             return TaintSource(name=func_name, variable="", line=node.lineno)
-        resolved = self._resolve(node.func)
-        if resolved is not None and self._is_source_name(resolved):
-            return TaintSource(name=resolved, variable="", line=node.lineno)
+        for full_name in self._import_names(node.func):
+            if self._is_source_name(full_name):
+                return TaintSource(name=full_name, variable="", line=node.lineno)
         return None
+
+    def _import_names(self, node: ast.AST) -> List[str]:
+        """Every full name a name or dotted name may have through imports.
+
+        For finding sources only, so it fails closed: every import of the
+        root name counts, even if the name is also bound some other way,
+        and so does every module the code star-imports (``environ`` after
+        ``from os import *`` may be ``os.environ``). Sanitisers use the
+        strict :meth:`_resolve` instead.
+        """
+        parts: List[str] = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if not isinstance(node, ast.Name):
+            return []
+        roots = [site for site in self._bindings.get(node.id, ()) if site]
+        roots.extend(f"{module}.{node.id}" for module in self._star_modules)
+        suffix = "".join("." + part for part in reversed(parts))
+        return [root + suffix for root in roots]
 
     def _is_source_name(self, dotted: str) -> bool:
         """Whether a dotted name is a listed source or a request read."""
@@ -951,8 +975,8 @@ class TaintAnalyzer:
             base = base.value
         if not isinstance(base, (ast.Name, ast.Attribute)):
             return None
-        for dotted in (self._get_func_name(base), self._resolve(base)):
-            if dotted is not None and self._is_source_name(dotted):
+        for dotted in (self._get_func_name(base), *self._import_names(base)):
+            if self._is_source_name(dotted):
                 return TaintSource(
                     name=dotted,
                     variable="",
@@ -1151,9 +1175,10 @@ class TaintAnalyzer:
         is constant text or a sanitiser result, whose output holds no
         ``<`` or quote. Each stretch of text is scanned once.
         """
-        if isinstance(root, ast.Name):
-            return [(root.id, None, (_RAW, _OPEN, _TEXT), _NO_RELIEF)]
         terms: List[_Term] = []
+        if isinstance(root, ast.Name):
+            self._name_terms(root, (_RAW, _OPEN, _TEXT), _NO_RELIEF, terms)
+            return terms
         # Constant text written since the HTML was last known to be in
         # text content, or None once something unknown was written.
         pending: Optional[List[str]] = []
@@ -1186,7 +1211,7 @@ class TaintAnalyzer:
         """
         if isinstance(node, ast.Name):
             reads = (_RAW, _OPEN, _TEXT if in_text else _OPEN)
-            terms.append((node.id, None, reads, _NO_RELIEF))
+            self._name_terms(node, reads, _NO_RELIEF, terms)
             return False
         relief = None
         if isinstance(node, ast.Call):
@@ -1216,13 +1241,33 @@ class TaintAnalyzer:
             current = stack.pop()
             if isinstance(current, ast.Name):
                 if isinstance(current.ctx, ast.Load):
-                    terms.append((current.id, None, _READ_RAW, relief))
+                    self._name_terms(current, _READ_RAW, relief, terms)
                 continue
             source = self._source_of(current)
             if source is not None:
                 terms.append((None, source, _READ_RAW, relief))
                 continue
             stack.extend(ast.iter_child_nodes(current))
+
+    def _name_terms(
+        self,
+        node: ast.Name,
+        reads: Tuple[int, int, int],
+        relief: Tuple[FrozenSet[str], FrozenSet[str], FrozenSet[str]],
+        terms: List[_Term],
+    ) -> None:
+        """A name read: the variable, and the source it was imported as.
+
+        ``argv`` after ``from sys import argv`` (or ``from sys import *``)
+        is ``sys.argv``. The variable is read too, since the name may also
+        be assigned.
+        """
+        for full_name in self._import_names(node):
+            if self._is_source_name(full_name):
+                source = TaintSource(name=full_name, variable="", line=node.lineno)
+                terms.append((None, source, _READ_RAW, relief))
+                break
+        terms.append((node.id, None, reads, relief))
 
     def _compile_assignments(self) -> None:
         """Compile every assigned expression into reads, once."""
