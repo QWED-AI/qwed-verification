@@ -223,16 +223,21 @@ def _expression_result(sympy, parsed, simplified, is_ambiguous: bool, context: D
                 "original": str(parsed),
             },
         )
+    developer_fields = {
+        "constraint_id": MATH_NO_CLAIM,
+        "is_valid": False,
+        "exact_value": str(exact),
+        "simplified": str(simplified),
+        "original": str(parsed),
+    }
+    # float() turns a finite value past the double range, such as 1e400,
+    # into inf, and JSON cannot carry inf: the response failed, and in a
+    # batch it failed for every item. The exact value stays, as a string.
+    if math.isfinite(value):
+        developer_fields["value"] = value
     return DiagnosticResult.unverifiable(
         "Expression evaluated, but no equality or proof claim was provided",
-        developer_fields={
-            "constraint_id": MATH_NO_CLAIM,
-            "is_valid": False,
-            "value": value,
-            "exact_value": str(exact),
-            "simplified": str(simplified),
-            "original": str(parsed),
-        },
+        developer_fields=developer_fields,
     )
 
 

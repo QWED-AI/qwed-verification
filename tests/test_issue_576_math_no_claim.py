@@ -106,5 +106,33 @@ def test_an_undefined_or_ambiguous_batch_item_is_blocked_as_on_the_route(client,
     assert route["status"] == item["status"] == "BLOCKED"
     assert route["admission"] == item["admission"] == "BLOCKED"
     assert route[field] == item[field] == value
-    assert route.get("constraint_id") is None and item.get("constraint_id") is None
-    assert item["query"] == expression and item["type"] == "math"
+    assert route.get("constraint_id") is None
+    assert item.get("constraint_id") is None
+    assert item["query"] == expression
+    assert item["type"] == "math"
+
+
+@pytest.mark.parametrize("expression", ["1e400", "-1e400", "10**400"])
+def test_a_value_past_the_float_range_is_kept_as_a_string(client, expression):
+    # float() gave inf, which JSON cannot carry: the route answered 500, and
+    # one such item made the whole batch answer 500 (Greptile on PR #603).
+    route = client.post("/verify/math", json={"expression": expression})
+    batch = client.post("/verify/batch", json={"items": [
+        {"query": expression, "type": "math"},
+        {"query": "1+1 = 2", "type": "math"},
+    ]})
+
+    assert route.status_code == 200
+    assert batch.status_code == 200
+    body = route.json()
+    item, other = (entry["result"] for entry in batch.json()["items"])
+    for result in (body, item):
+        assert result["status"] == "UNVERIFIABLE"
+        assert result["admission"] == "BLOCKED"
+        assert result["constraint_id"] == "math.no_claim"
+        assert "value" not in result
+        assert result["exact_value"].lstrip("-").startswith("1")
+    assert body["exact_value"] == item["exact_value"]
+    # The other item in the batch is still answered.
+    assert other["status"] == "VERIFIED"
+    assert other["admission"] == "ADMIT"
