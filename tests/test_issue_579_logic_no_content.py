@@ -14,6 +14,7 @@
    ``dsl_logic_verifier.no_constraint``.
 """
 
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -86,16 +87,39 @@ def test_a_false_theorem_from_premises_that_can_hold_is_still_disproved():
 
 
 def test_premises_the_solver_cannot_decide_stop_the_proof():
-    verifier = LogicVerifier()
-    with patch("qwed_new.core.logic_verifier.Solver") as solver_class:
-        solver = MagicMock()
-        solver_class.return_value = solver
-        from z3 import unknown
-        solver.check.return_value = unknown
-        result = verifier.prove_theorem(INT_X, ["x > 0"], "x < 10")
+    # x^3 + y^3 = z^3 has no solution in positive integers, and Z3 cannot
+    # prove that, so the real solver gives up when its time runs out.
+    variables = {"x": "Int", "y": "Int", "z": "Int"}
+    premises = ["x > 0", "y > 0", "z > 0", "x*x*x + y*y*y == z*z*z"]
+
+    result = LogicVerifier(timeout_ms=200).prove_theorem(variables, premises, "x == x")
 
     assert result.status is DiagnosticStatus.UNVERIFIABLE
     assert result.developer_fields["constraint_id"] == "logic_verifier.premises_undecided"
+    assert result.developer_fields["deterministic_verdict"] == "UNKNOWN"
+    assert "unsat_core" not in result.developer_fields
+
+
+@pytest.mark.parametrize("premise", [
+    # A premise can name any constant, also one shaped like a label.
+    "Not(Bool('_' + '_qwed_premise_0'))",
+    "Not(Bool('qwed_premise_0'))",
+    "Not(Bool('_qwed_premise_0'))",
+])
+def test_a_premise_cannot_name_a_label_of_the_premises_check(premise):
+    result = LogicVerifier().prove_theorem(INT_X, [premise, "x > 1"], "x > 0")
+
+    assert result.status is DiagnosticStatus.VERIFIED
+    assert result.developer_fields["deterministic_verdict"] == "contradiction_confirmed"
+
+
+def test_the_proof_gets_what_the_premises_check_left_of_the_timeout():
+    verifier = LogicVerifier(timeout_ms=1000)
+
+    # Started 250 ms ago: 750 ms are left (less any time this line takes).
+    assert 700 <= verifier._remaining_ms(time.monotonic() - 0.25) <= 750
+    # All spent: the proof still gets a positive limit.
+    assert verifier._remaining_ms(time.monotonic() - 5) == 1
 
 
 # ---------------------------------------------------------------- the DSL

@@ -355,20 +355,6 @@ def test_prove_theorem_unknown():
             assert "constraint_id" not in result.developer_fields
 
 
-def test_prove_theorem_premises_the_solver_cannot_decide_are_unverifiable():
-    """#579: a proof is not VERIFIED when the premises' consistency is unknown."""
-    v = LogicVerifier()
-    with patch("qwed_new.core.logic_verifier.Solver") as mock_solver_cls:
-        mock_solver = MagicMock()
-        mock_solver_cls.return_value = mock_solver
-        from z3 import unknown
-        mock_solver.check.return_value = unknown
-        result = v.prove_theorem({"x": "Int"}, ["x > 0"], "x < 10")
-    assert result.status == DiagnosticStatus.UNVERIFIABLE
-    assert result.developer_fields["constraint_id"] == "logic_verifier.premises_undecided"
-    assert result.developer_fields["deterministic_verdict"] == "UNKNOWN"
-
-
 def test_prove_theorem_exception():
     """Cover prove_theorem exception handler."""
     v = LogicVerifier()

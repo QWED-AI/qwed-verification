@@ -31,9 +31,28 @@ def _logic_scope(result: dict) -> dict:
         scope.update({
             "query_interpretation_source": "llm_translation",
             "verification_scope": "translated_expression_only",
-            "translated_expression": dsl_code,
+            "translated_expression": _typed_statement(dsl_code, result.get("declarations")),
         })
     return scope
+
+
+def _typed_statement(dsl_code: str, declarations: Any) -> str:
+    """The statement Z3 decided: the DSL, after a ``(VAR name Sort)`` for
+    each declared variable.
+
+    The DSL alone does not fix the sorts (an undeclared name is an Int):
+    ``(AND (GT x 0) (LT x 1))`` is satisfiable for a Real ``x`` and not for
+    an Int one, so a statement without the declarations would name a
+    different claim from the one decided.
+    """
+    if not isinstance(declarations, dict):
+        return dsl_code
+    parts = [
+        f"(VAR {name} {sort})"
+        for name, sort in sorted(declarations.items())
+        if isinstance(name, str) and isinstance(sort, str)
+    ]
+    return " ".join([*parts, dsl_code])
 
 
 def logic_diagnostic(result: dict) -> DiagnosticResult:
@@ -43,10 +62,13 @@ def logic_diagnostic(result: dict) -> DiagnosticResult:
     fields = {**result, **_logic_scope(result)}
     status = result.get("status", "ERROR")
     if status == "SAT":
+        evidence = {"model": str(result.get("model")), "dsl_code": result.get("dsl_code", "")}
+        if isinstance(result.get("declarations"), dict) and result["declarations"]:
+            evidence["declarations"] = result["declarations"]
         return DiagnosticResult.verified(
             "Logic constraints are satisfiable",
             developer_fields=fields,
-            evidence={"model": str(result.get("model")), "dsl_code": result.get("dsl_code", "")},
+            evidence=evidence,
         )
     if status == "UNSAT":
         return DiagnosticResult.unverifiable(

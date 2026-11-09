@@ -415,6 +415,11 @@ class ControlPlane:
             constraint_id = getattr(result, "constraint_id", None)
             if constraint_id:
                 response["constraint_id"] = constraint_id
+            # The sorts Z3 decided the declared variables as: part of the
+            # statement the verdict is about, beside the DSL.
+            declarations = getattr(result, "declarations", None)
+            if declarations:
+                response["declarations"] = declarations
 
             # Sanitize Output
             response = self.output_sanitizer.sanitize_output(

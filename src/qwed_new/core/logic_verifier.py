@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 import re
 import logging
+import time
 
 from qwed_new.core.diagnostics import DiagnosticResult
 
@@ -614,10 +615,14 @@ class LogicVerifier:
             fields["premises"] = premises
             fields["conclusion"] = conclusion
 
+            started = time.monotonic()
             inconsistent = self._premises_inconsistent(parsed_premises, fields)
             if inconsistent is not None:
                 return inconsistent
 
+            # One budget for both solves: the proof gets what the premises'
+            # check left of timeout_ms.
+            solver.set("timeout", self._remaining_ms(started))
             solver.add(Not(conclusion_z3))
             result = solver.check()
 
@@ -671,14 +676,20 @@ class LogicVerifier:
         solver = Solver()
         solver.set("timeout", self.timeout_ms)
         # Each premise is assumed through its own label, so the unsat core
-        # names the premises that conflict. The labels hold a double
-        # underscore, which no constraint can contain, so they cannot be
-        # confused with a declared variable.
+        # names the premises that conflict. Z3 treats two constants with the
+        # same name and sort as one, and a premise can name any constant
+        # (``Bool('...')``), so the labels take a prefix that no symbol in the
+        # premises starts with.
+        exprs = [BoolVal(expr) if isinstance(expr, bool) else expr for _, expr in premises]
+        prefix = "qwed_premise_"
+        taken = self._symbol_names(exprs)
+        while any(name.startswith(prefix) for name in taken):
+            prefix = "_" + prefix
         labels = {}
-        for i, (text, expr) in enumerate(premises):
-            label = Bool(f"__qwed_premise_{i}")
+        for i, ((text, _), expr) in enumerate(zip(premises, exprs)):
+            label = Bool(f"{prefix}{i}")
             labels[str(label)] = (label, text)
-            solver.add(Implies(label, BoolVal(expr) if isinstance(expr, bool) else expr))
+            solver.add(Implies(label, expr))
 
         result = solver.check(*(label for label, _ in labels.values()))
         if result == sat:
@@ -698,6 +709,26 @@ class LogicVerifier:
             "Could not decide whether the premises can all hold",
             fields,
         )
+
+    @staticmethod
+    def _symbol_names(exprs: List[Any]) -> set:
+        """The names of the uninterpreted constants in ``exprs``."""
+        names, seen, pending = set(), set(), list(exprs)
+        while pending:
+            node = pending.pop()
+            if not is_expr(node) or node.get_id() in seen:
+                continue
+            seen.add(node.get_id())
+            if is_const(node) and node.decl().kind() == Z3_OP_UNINTERPRETED:
+                names.add(node.decl().name())
+            pending.extend(node.children())
+        return names
+
+    def _remaining_ms(self, started: float) -> int:
+        """What is left of ``timeout_ms`` since ``started`` (time.monotonic),
+        and at least 1 ms, so the next solve always has a positive limit."""
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        return max(1, self.timeout_ms - elapsed_ms)
 
     def _create_z3_variables(self, variables: Dict[str, str]) -> dict | DiagnosticResult:
         """Create Z3 variables from type declarations."""

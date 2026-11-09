@@ -31,6 +31,9 @@ from qwed_new.core.tenant_context import TenantContext
 
 QUESTION = "Prove that x > 5 implies x > 10"
 MISTRANSLATION = "(AND (GT x 5) (GT x 10))"
+# What Z3 decided: the DSL with the sort of each variable (an undeclared
+# name is an Int).
+DECIDED = "(VAR x Int) " + MISTRANSLATION
 
 
 @pytest.fixture
@@ -51,10 +54,10 @@ def client(isolated_audit_chain):
         api_main.app.dependency_overrides.clear()
 
 
-def _translated_to(dsl):
+def _translated_to(dsl, variables=None):
     """The translator of both the route's and the batch's control plane
     returns ``dsl``; Z3 then decides it for real."""
-    translated = (dsl, None, "mock", None)
+    translated = (dsl, variables, "mock", None)
     return (
         patch.object(api_main.control_plane.logic_verifier, "translate_to_dsl", return_value=translated),
         patch.object(api_main.batch_service.control_plane.logic_verifier, "translate_to_dsl", return_value=translated),
@@ -85,7 +88,7 @@ def test_a_mistranslated_question_is_verified_for_its_constraints_only(client, i
     fields = body["developer_fields"]
     assert fields["query_semantics_verified"] is False
     assert fields["verification_scope"] == "translated_expression_only"
-    assert fields["translated_expression"] == MISTRANSLATION
+    assert fields["translated_expression"] == DECIDED
     assert fields["query_interpretation_source"] == "llm_translation"
 
     (row,) = _rows(isolated_audit_chain)
@@ -100,7 +103,24 @@ def test_the_attestation_signs_the_admission_and_binds_the_constraints(client):
 
     qwed = _claims(body["attestation"])["qwed"]
     assert qwed["admission"] == "BLOCKED"
-    assert qwed["query_hash"] == "sha256:" + hashlib.sha256(MISTRANSLATION.encode()).hexdigest()
+    assert qwed["query_hash"] == "sha256:" + hashlib.sha256(DECIDED.encode()).hexdigest()
+
+
+@pytest.mark.parametrize("sort, status", [("Real", "VERIFIED"), ("Int", "UNVERIFIABLE")])
+def test_the_signed_statement_carries_the_sorts_z3_decided(client, sort, status):
+    # Satisfiable for a Real x and not for an Int one: the DSL alone would
+    # name either claim.
+    dsl = "(AND (GT x 0) (LT x 1))"
+    route_patch, _ = _translated_to(dsl, [{"name": "x", "type": sort}])
+    with route_patch:
+        body = client.post("/verify/logic", json={"query": "Is there an x between 0 and 1?"}).json()
+
+    statement = f"(VAR x {sort}) {dsl}"
+    assert body["status"] == status
+    assert body["developer_fields"]["translated_expression"] == statement
+    if status == "VERIFIED":
+        qwed = _claims(body["attestation"])["qwed"]
+        assert qwed["query_hash"] == "sha256:" + hashlib.sha256(statement.encode()).hexdigest()
 
 
 @pytest.mark.parametrize("output", [
@@ -148,7 +168,7 @@ def test_a_batch_logic_item_is_admitted_by_the_same_rule(client, isolated_audit_
     result = body["items"][0]["result"]
     assert result["status"] == "VERIFIED"
     assert result["admission"] == "BLOCKED"
-    assert result["developer_fields"]["translated_expression"] == MISTRANSLATION
+    assert result["developer_fields"]["translated_expression"] == DECIDED
     assert _claims(result["attestation"])["qwed"]["admission"] == "BLOCKED"
 
     (row,) = _rows(isolated_audit_chain)
