@@ -32,6 +32,7 @@ _CONSTRAINT_ID_EXPLICIT_DECLARATIONS = "logic_verifier.explicit_declarations_req
 _CONSTRAINT_ID_EXECUTION_ERROR = "logic_verifier.execution_error"
 _CONSTRAINT_ID_INVALID_CONSTRAINT = "logic_verifier.invalid_constraint"
 _CONSTRAINT_ID_TYPE_VALIDATION = "dsl_compiler.type_validation"
+_CONSTRAINT_ID_NO_CONSTRAINT = "logic_verifier.no_constraint"
 _CONSTRAINT_ID_VACUOUS_PREMISES = "logic_verifier.vacuous_premises"
 _CONSTRAINT_ID_PREMISES_UNDECIDED = "logic_verifier.premises_undecided"
 
@@ -123,13 +124,25 @@ class LogicVerifier:
 
     def _add_z3_constraint(
         self, solver: Solver, constr: str, z3_vars: Dict, prove_unsat: bool, i: int
-    ) -> None:
+    ) -> bool:
+        """Assert one constraint; True when it was asserted."""
         z3_constraint = self._parse_constraint(constr, z3_vars)
-        if z3_constraint is not None:
-            if prove_unsat:
-                solver.assert_and_track(z3_constraint, f"c{i}")
-            else:
-                solver.add(z3_constraint)
+        if z3_constraint is None:
+            return False
+        if prove_unsat:
+            solver.assert_and_track(z3_constraint, f"c{i}")
+        else:
+            solver.add(z3_constraint)
+        return True
+
+    @staticmethod
+    def _nothing_to_verify() -> DiagnosticResult:
+        """BLOCKED for input that asserts no constraint (#579). Every
+        assignment satisfies an empty set, so SAT would verify nothing."""
+        return DiagnosticResult.blocked(
+            "Nothing to verify: no constraint was given",
+            {"constraint_id": _CONSTRAINT_ID_NO_CONSTRAINT},
+        )
 
     def _handle_opt_sat(
         self, opt: Optimize, handle, fields: Dict, objective: str, maximize: bool
@@ -212,9 +225,11 @@ class LogicVerifier:
             if isinstance(z3_vars, DiagnosticResult):
                 return z3_vars
 
+            asserted = 0
             for i, constr in enumerate(constraints):
                 try:
-                    self._add_z3_constraint(solver, constr, z3_vars, prove_unsat, i)
+                    if self._add_z3_constraint(solver, constr, z3_vars, prove_unsat, i):
+                        asserted += 1
                 except Exception as e:
                     return DiagnosticResult.blocked(
                         "Logic verification blocked: invalid constraint",
@@ -224,6 +239,8 @@ class LogicVerifier:
                             "constraint": constr,
                         },
                     )
+            if not asserted:
+                return self._nothing_to_verify()
 
             result = solver.check()
 
@@ -287,6 +304,7 @@ class LogicVerifier:
 
             solver = Solver()
             solver.set("timeout", self.timeout_ms)
+            asserted = 0
 
             for qf in quantified_formulas:
                 scope_vars = dict(variables)
@@ -343,6 +361,7 @@ class LogicVerifier:
                         {"constraint_id": "logic_verifier.unknown_quantifier", "quantifier": qf.quantifier},
                     )
                 solver.add(quantified)
+                asserted += 1
 
             if constraints:
                 blocked = self._ensure_sanitizer()
@@ -360,6 +379,9 @@ class LogicVerifier:
                     z3_constraint = self._parse_constraint(constr, z3_vars)
                     if z3_constraint is not None:
                         solver.add(z3_constraint)
+                        asserted += 1
+            if not asserted:
+                return self._nothing_to_verify()
 
             result = solver.check()
 
@@ -437,10 +459,14 @@ class LogicVerifier:
             solver = Solver()
             solver.set("timeout", self.timeout_ms)
 
+            asserted = 0
             for constr in constraints:
                 z3_constraint = self._parse_constraint(constr, z3_vars)
                 if z3_constraint is not None:
                     solver.add(z3_constraint)
+                    asserted += 1
+            if not asserted:
+                return self._nothing_to_verify()
 
             result = solver.check()
 
@@ -525,10 +551,14 @@ class LogicVerifier:
             z3_vars['Select'] = Select
             z3_vars['Store'] = Store
 
+            asserted = 0
             for constr in constraints:
                 z3_constraint = self._parse_constraint(constr, z3_vars)
                 if z3_constraint is not None:
                     solver.add(z3_constraint)
+                    asserted += 1
+            if not asserted:
+                return self._nothing_to_verify()
 
             result = solver.check()
 

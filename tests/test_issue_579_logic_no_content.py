@@ -12,6 +12,10 @@
    constraint, and an empty set of constraints is satisfiable, so
    ``/verify/logic`` returned VERIFIED. It is now BLOCKED with
    ``dsl_logic_verifier.no_constraint``.
+3. The same held in the library: ``verify_logic``, ``verify_bitvector``,
+   ``verify_array`` and ``verify_with_quantifiers`` returned VERIFIED when
+   no constraint was asserted. They are now BLOCKED with
+   ``logic_verifier.no_constraint``.
 """
 
 from types import SimpleNamespace
@@ -23,7 +27,7 @@ from fastapi.testclient import TestClient
 from qwed_new.api import main as api_main
 from qwed_new.core.diagnostics import DiagnosticStatus
 from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
-from qwed_new.core.logic_verifier import LogicVerifier
+from qwed_new.core.logic_verifier import LogicVerifier, QuantifiedFormula
 from qwed_new.core.route_diagnostics import logic_diagnostic
 from qwed_new.core.tenant_context import TenantContext
 
@@ -125,6 +129,43 @@ def test_the_proof_gets_what_the_premises_check_left_of_the_timeout(monkeypatch)
     assert verifier._remaining_ms(9.75) == 750
     # All spent: the proof still gets a positive limit.
     assert verifier._remaining_ms(5.0) == 1
+
+
+# ---------------------------------------------------------------- the other checks
+
+ARRAY = {"a": ("Int", "Int")}
+SQUARES = QuantifiedFormula("forall", [("y", "Int")], "y * y >= 0")
+
+NO_CONSTRAINT = {
+    "verify_logic": lambda v: v.verify_logic(INT_X, []),
+    "verify_logic, prove_unsat": lambda v: v.verify_logic(INT_X, [], prove_unsat=True),
+    "verify_bitvector": lambda v: v.verify_bitvector({"x": 8}, []),
+    "verify_array": lambda v: v.verify_array(ARRAY, {"i": "Int"}, []),
+    "verify_with_quantifiers": lambda v: v.verify_with_quantifiers(INT_X, [], []),
+}
+WITH_A_CONSTRAINT = {
+    "verify_logic": lambda v: v.verify_logic(INT_X, ["x > 5"]),
+    "verify_bitvector": lambda v: v.verify_bitvector({"x": 8}, ["x > 1"]),
+    "verify_array": lambda v: v.verify_array(ARRAY, {"i": "Int"}, ["Select(a, i) == 3"]),
+    "verify_with_quantifiers": lambda v: v.verify_with_quantifiers({}, [SQUARES]),
+}
+
+
+@pytest.mark.parametrize("check", NO_CONSTRAINT.values(), ids=NO_CONSTRAINT.keys())
+def test_a_check_with_no_constraint_is_blocked(check):
+    result = check(LogicVerifier())
+
+    assert result.status is DiagnosticStatus.BLOCKED
+    assert result.developer_fields["constraint_id"] == "logic_verifier.no_constraint"
+    assert result.proof_ref is None
+
+
+@pytest.mark.parametrize("check", WITH_A_CONSTRAINT.values(), ids=WITH_A_CONSTRAINT.keys())
+def test_a_check_with_a_constraint_is_still_decided(check):
+    result = check(LogicVerifier())
+
+    assert result.status is DiagnosticStatus.VERIFIED
+    assert result.proof_ref
 
 
 # ---------------------------------------------------------------- the DSL
