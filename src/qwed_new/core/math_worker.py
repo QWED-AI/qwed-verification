@@ -59,6 +59,7 @@ MATH_TIMEOUT = "math.timeout"
 MATH_CAPACITY = "math.capacity"
 MATH_OUT_OF_MEMORY = "math.out_of_memory"
 MATH_WORKER_ERROR = "math.worker_error"
+MATH_NO_CLAIM = "math.no_claim"
 INTERNAL_VERIFICATION_ERROR = "Internal verification error"
 
 
@@ -183,11 +184,20 @@ def _expression_result(sympy, parsed, simplified, is_ambiguous: bool, context: D
             "Expression may be ambiguous due to implicit multiplication after division",
             developer_fields={"is_valid": False, "result": False, "status": "BLOCKED", "warning": "ambiguous", "simplified": str(simplified), "note": "Interpreted using standard order of operations", "original": str(parsed)},
         )
+    # An expression without "=" states no claim, so there is nothing to
+    # verify: the value SymPy computes is evidence for the caller, who can
+    # send "expression = value" to have it checked (#576). This is what a
+    # batch math item without "=" returns.
     if simplified.free_symbols != set():
-        return DiagnosticResult.verified(
-            "Expression simplified",
-            developer_fields={"is_valid": True, "simplified": str(simplified), "original": str(parsed), "is_symbolic": True},
-            evidence={"simplified": str(simplified)},
+        return DiagnosticResult.unverifiable(
+            "Expression simplified, but no equality or proof claim was provided",
+            developer_fields={
+                "constraint_id": MATH_NO_CLAIM,
+                "is_valid": False,
+                "simplified": str(simplified),
+                "original": str(parsed),
+                "is_symbolic": True,
+            },
         )
     try:
         exact = sympy.nsimplify(simplified)
@@ -197,10 +207,16 @@ def _expression_result(sympy, parsed, simplified, is_ambiguous: bool, context: D
             "Expression is not numeric",
             developer_fields={"is_valid": False, "simplified": str(simplified), "original": str(parsed)},
         )
-    return DiagnosticResult.verified(
-        "Expression evaluated",
-        developer_fields={"is_valid": True, "value": value, "exact_value": str(exact), "simplified": str(simplified), "original": str(parsed)},
-        evidence={"exact_value": str(exact), "simplified": str(simplified)},
+    return DiagnosticResult.unverifiable(
+        "Expression evaluated, but no equality or proof claim was provided",
+        developer_fields={
+            "constraint_id": MATH_NO_CLAIM,
+            "is_valid": False,
+            "value": value,
+            "exact_value": str(exact),
+            "simplified": str(simplified),
+            "original": str(parsed),
+        },
     )
 
 
@@ -216,7 +232,7 @@ def verify_batch_math(expression: str) -> DiagnosticResult:
             simplified = simplify(safe_parse_expr(expression))
             return DiagnosticResult.unverifiable(
                 "Expression simplified, but no equality or proof claim was provided",
-                developer_fields={"simplified": str(simplified), "type": "math", "is_valid": False, "query": expression},
+                developer_fields={"constraint_id": MATH_NO_CLAIM, "simplified": str(simplified), "type": "math", "is_valid": False, "query": expression},
             )
         # The verdict /verify/math gives (#530): a claim proven false is
         # VERIFIED with is_valid False (#437), an undecided one UNVERIFIABLE.

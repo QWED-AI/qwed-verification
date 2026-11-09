@@ -134,8 +134,9 @@ def test_the_batch_service_stores_its_math_budget(monkeypatch, raw, expected):
         ("oo", {}, "BLOCKED", "error", "undefined"),
         ("sqrt(-1)", {"domain": "real"}, "BLOCKED", "error", "domain error"),
         ("1/2(3)", {}, "BLOCKED", "warning", "ambiguous"),
-        ("x + x", {}, "VERIFIED", "simplified", "2*x"),
-        ("2 + 2", {}, "VERIFIED", "value", 4.0),
+        # Without "=" there is no claim: the value is evidence only (#576).
+        ("x + x", {}, "UNVERIFIABLE", "simplified", "2*x"),
+        ("2 + 2", {}, "UNVERIFIABLE", "value", 4.0),
         ("I", {}, "UNVERIFIABLE", "simplified", "I"),
         ("x + 1 = 1 + x", {}, "VERIFIED", "is_valid", True),
         ("sinc(0)", {}, "BLOCKED", "constraint_id", "math.parse_error"),
