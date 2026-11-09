@@ -165,7 +165,10 @@ def _no_claim_result(expression: str, context: Dict[str, Any]) -> DiagnosticResu
 
     from qwed_new.core.safe_parser import safe_parse_expr
 
-    expression_normalized = re.sub(r'(\d)(\()', r'\1*\2', expression)
+    # "2(3)" is 2*(3). Only a number is rewritten, not a name that ends in
+    # a digit: atan2(1, 1) became "atan2*(1, 1)", which does not parse, and
+    # x2(3) stays a call, refused as an unknown function as it is with "=".
+    expression_normalized = re.sub(r'\b(\d+)\(', r'\1*(', expression)
     is_ambiguous = "/" in expression and "(" in expression and bool(
         re.search(r'/\d+\(', expression.replace(" ", ""))
     )

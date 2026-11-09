@@ -112,6 +112,38 @@ def test_an_undefined_or_ambiguous_batch_item_is_blocked_as_on_the_route(client,
     assert item["type"] == "math"
 
 
+@pytest.mark.parametrize("expression, field, value", [
+    ("atan2(1, 1)", "simplified", "pi/4"),
+    ("3atan2(1, 1)", "simplified", "3*pi/4"),
+    ("12(3)", "exact_value", "36"),
+    ("1.5(2)", "value", 3.0),
+])
+def test_a_number_before_a_bracket_is_a_product_but_a_function_name_is_not(client, expression, field, value):
+    # Rewriting "2(3)" as "2*(3)" also turned atan2(1, 1) into
+    # "atan2*(1, 1)", a parse error; since round 1 batch items take the same
+    # path (Sentry on PR #603).
+    route = client.post("/verify/math", json={"expression": expression}).json()
+    item = _batch_item(client, expression)
+
+    for result in (route, item):
+        assert result["status"] == "UNVERIFIABLE"
+        assert result["constraint_id"] == "math.no_claim"
+        assert result[field] == value
+
+
+def test_a_name_ending_in_a_digit_before_a_bracket_is_a_call_with_or_without_a_claim(client):
+    # x2(3) was rewritten to x2*(3) without "=", but refused as an unknown
+    # function with "=". Both are now refused.
+    route = client.post("/verify/math", json={"expression": "x2(3)"}).json()
+    item = _batch_item(client, "x2(3)")
+    claim = client.post("/verify/math", json={"expression": "x2(3) = 3*x2"}).json()
+
+    for result in (route, item, claim):
+        assert result["status"] == "BLOCKED"
+        assert result["admission"] == "BLOCKED"
+        assert result["constraint_id"] == "math.parse_error"
+
+
 @pytest.mark.parametrize("expression", ["1e400", "-1e400", "10**400"])
 def test_a_value_past_the_float_range_is_kept_as_a_string(client, expression):
     # float() gave inf, which JSON cannot carry: the route answered 500, and
