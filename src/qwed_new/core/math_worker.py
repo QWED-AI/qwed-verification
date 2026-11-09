@@ -139,28 +139,39 @@ def _worker_error_result() -> DiagnosticResult:
 
 def verify_math_request(expression: str, context: Dict[str, Any]) -> DiagnosticResult:
     """The /verify/math verdict for *expression*, before attestation."""
-    import sympy
-    from sympy import simplify
-
     from qwed_new.core.math_identity import math_identity_result, math_parse_error_result
-    from qwed_new.core.safe_parser import SafeParserError, safe_parse_expr
+    from qwed_new.core.safe_parser import SafeParserError
 
     try:
         if "=" in expression:
             # Shared with batch math items (#530): proven false is VERIFIED
             # with is_valid False (#437), an undecided difference UNVERIFIABLE.
             return math_identity_result(expression)
-        expression_normalized = re.sub(r'(\d)(\()', r'\1*\2', expression)
-        is_ambiguous = "/" in expression and "(" in expression and bool(
-            re.search(r'/\d+\(', expression.replace(" ", ""))
-        )
-        parsed = safe_parse_expr(expression_normalized)
-        simplified = simplify(parsed)
-        return _expression_result(sympy, parsed, simplified, is_ambiguous, context or {})
+        return _no_claim_result(expression, context or {})
     except SafeParserError as e:
         # Input the parser refused is the caller's to fix, not an internal
         # error (#522); SQL and schema use the same shape.
         return math_parse_error_result(e)
+
+
+def _no_claim_result(expression: str, context: Dict[str, Any]) -> DiagnosticResult:
+    """The verdict for an expression without "=", shared by /verify/math and
+    batch math items so the two cannot disagree (#576): BLOCKED when the
+    expression is undefined, outside the requested domain or ambiguous,
+    otherwise UNVERIFIABLE with ``math.no_claim``. Raises SafeParserError
+    for input the parser refuses."""
+    import sympy
+    from sympy import simplify
+
+    from qwed_new.core.safe_parser import safe_parse_expr
+
+    expression_normalized = re.sub(r'(\d)(\()', r'\1*\2', expression)
+    is_ambiguous = "/" in expression and "(" in expression and bool(
+        re.search(r'/\d+\(', expression.replace(" ", ""))
+    )
+    parsed = safe_parse_expr(expression_normalized)
+    simplified = simplify(parsed)
+    return _expression_result(sympy, parsed, simplified, is_ambiguous, context)
 
 
 def _expression_result(sympy, parsed, simplified, is_ambiguous: bool, context: Dict[str, Any]) -> DiagnosticResult:
@@ -186,8 +197,7 @@ def _expression_result(sympy, parsed, simplified, is_ambiguous: bool, context: D
         )
     # An expression without "=" states no claim, so there is nothing to
     # verify: the value SymPy computes is evidence for the caller, who can
-    # send "expression = value" to have it checked (#576). This is what a
-    # batch math item without "=" returns.
+    # send "expression = value" to have it checked (#576).
     if simplified.free_symbols != set():
         return DiagnosticResult.unverifiable(
             "Expression simplified, but no equality or proof claim was provided",
@@ -203,9 +213,15 @@ def _expression_result(sympy, parsed, simplified, is_ambiguous: bool, context: D
         exact = sympy.nsimplify(simplified)
         value = float(simplified)
     except (TypeError, ValueError, OverflowError):
+        # A complex value such as I: still no claim to verify.
         return DiagnosticResult.unverifiable(
-            "Expression is not numeric",
-            developer_fields={"is_valid": False, "simplified": str(simplified), "original": str(parsed)},
+            "Expression is not numeric, and no equality or proof claim was provided",
+            developer_fields={
+                "constraint_id": MATH_NO_CLAIM,
+                "is_valid": False,
+                "simplified": str(simplified),
+                "original": str(parsed),
+            },
         )
     return DiagnosticResult.unverifiable(
         "Expression evaluated, but no equality or proof claim was provided",
@@ -222,18 +238,17 @@ def _expression_result(sympy, parsed, simplified, is_ambiguous: bool, context: D
 
 def verify_batch_math(expression: str) -> DiagnosticResult:
     """The verdict for a /verify/batch math item, before attestation."""
-    from sympy import simplify
-
     from qwed_new.core.math_identity import math_identity_result, math_parse_error_result
-    from qwed_new.core.safe_parser import SafeParserError, safe_parse_expr
+    from qwed_new.core.safe_parser import SafeParserError
 
     try:
         if "=" not in expression:
-            simplified = simplify(safe_parse_expr(expression))
-            return DiagnosticResult.unverifiable(
-                "Expression simplified, but no equality or proof claim was provided",
-                developer_fields={"constraint_id": MATH_NO_CLAIM, "simplified": str(simplified), "type": "math", "is_valid": False, "query": expression},
-            )
+            # The verdict /verify/math gives (#576): division by zero,
+            # undefined and ambiguous input is BLOCKED, as there, not
+            # math.no_claim.
+            dr = _no_claim_result(expression, {})
+            dr.developer_fields.update({"query": expression, "type": "math"})
+            return dr
         # The verdict /verify/math gives (#530): a claim proven false is
         # VERIFIED with is_valid False (#437), an undecided one UNVERIFIABLE.
         dr = math_identity_result(expression)

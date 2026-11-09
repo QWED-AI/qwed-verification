@@ -48,6 +48,10 @@ def _last_row(engine):
     ("2+2", "exact_value", "4"),
     ("1/3 + 1/6", "exact_value", "1/2"),
     ("x + x", "simplified", "2*x"),
+    # A complex value: "Expression is not numeric" had no constraint_id
+    # (CodeRabbit on PR #603).
+    ("I", "simplified", "I"),
+    ("sqrt(-1)", "simplified", "I"),
 ])
 def test_an_expression_without_a_claim_is_not_verified_or_admitted(client, isolated_audit_chain, expression, field, value):
     body = client.post("/verify/math", json={"expression": expression}).json()
@@ -72,12 +76,35 @@ def test_the_same_expression_with_a_claim_is_still_verified_and_admitted(client)
     assert body["is_valid"] is True
 
 
-@pytest.mark.parametrize("expression", ["2+2", "x + x"])
+def _batch_item(client, expression):
+    batch = client.post("/verify/batch", json={"items": [{"query": expression, "type": "math"}]}).json()
+    return batch["items"][0]["result"]
+
+
+@pytest.mark.parametrize("expression", ["2+2", "x + x", "I"])
 def test_the_route_and_a_batch_item_agree(client, expression):
     route = client.post("/verify/math", json={"expression": expression}).json()
-    batch = client.post("/verify/batch", json={"items": [{"query": expression, "type": "math"}]}).json()
-    item = batch["items"][0]["result"]
+    item = _batch_item(client, expression)
 
     assert route["status"] == item["status"] == "UNVERIFIABLE"
     assert route["admission"] == item["admission"] == "BLOCKED"
     assert route["constraint_id"] == item["constraint_id"] == "math.no_claim"
+
+
+@pytest.mark.parametrize("expression, field, value", [
+    ("1/0", "error", "Division by zero"),
+    ("0/0", "error", "Division by zero"),
+    ("oo", "error", "undefined"),
+    ("6/2(1+2)", "warning", "ambiguous"),
+])
+def test_an_undefined_or_ambiguous_batch_item_is_blocked_as_on_the_route(client, expression, field, value):
+    # A batch item was UNVERIFIABLE with math.no_claim, while the route
+    # BLOCKED the same input (CodeAnt on PR #603). Both now run one function.
+    route = client.post("/verify/math", json={"expression": expression}).json()
+    item = _batch_item(client, expression)
+
+    assert route["status"] == item["status"] == "BLOCKED"
+    assert route["admission"] == item["admission"] == "BLOCKED"
+    assert route[field] == item[field] == value
+    assert route.get("constraint_id") is None and item.get("constraint_id") is None
+    assert item["query"] == expression and item["type"] == "math"
