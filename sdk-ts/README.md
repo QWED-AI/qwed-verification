@@ -39,7 +39,7 @@ Every verification returns the server's DiagnosticResult envelope:
 |-------|---------|
 | `status` | `VERIFIED`, `UNVERIFIABLE` or `BLOCKED` (`UNKNOWN` for a missing value or one this SDK does not know) |
 | `rawStatus` | The server's status text exactly as sent, such as `SAT` where `status` is `UNKNOWN`; never used for admission |
-| `admission` | `ADMIT` or `BLOCKED` where the endpoint decides (`UNKNOWN` for a value this SDK does not know); absent where it does not, as on `/verify/logic`, `/verify/fact` and batch logic and fact items |
+| `admission` | `ADMIT` or `BLOCKED` where the endpoint decides (`UNKNOWN` for a value this SDK does not know); absent where it does not, as on `/verify/fact` and batch fact items |
 | `proof_ref` | Set only when `status` is `VERIFIED` |
 | `attestation` | The server's signed token on a `VERIFIED` answer (see [Attestations](#attestations)) |
 | `agent_message`, `developer_fields`, `is_authoritative`, `constraint_id` | Explanation and detail |
@@ -47,7 +47,7 @@ Every verification returns the server's DiagnosticResult envelope:
 
 **Gate on `isAdmitted(result)`, not on `status`.** `VERIFIED` means the engine reached a deterministic answer, not that the claim holds: `2 + 2 = 5` is `VERIFIED · BLOCKED` (proven false), and unsafe code is `VERIFIED · BLOCKED` (proven unsafe). `isAdmitted()` is true only for `ADMIT` together with `VERIFIED` and a `proof_ref`; a missing or unknown admission is never admitted.
 
-`verified` and `isVerified()` are deprecated. The parser always sets `verified` to `isAdmitted(result)`, whatever the body says, and `isVerified()` returns `isAdmitted()`. Endpoints that make no admission decision (`/verify/logic`, `/verify/fact`, `/verify/rag`, `/verify/process`, and batch logic and fact items) are therefore never admitted. `/verify/rag` and `/verify/process` do send a top-level `verified`, which is their guard's own result; the parser replaces it, and the guard's value stays in `developer_fields.verified`. If you fetch responses yourself, pass the parsed JSON to `parseVerificationResponse()` or `parseBatchResponse()`.
+`verified` and `isVerified()` are deprecated. The parser always sets `verified` to `isAdmitted(result)`, whatever the body says, and `isVerified()` returns `isAdmitted()`. Endpoints that make no admission decision (`/verify/fact`, `/verify/rag`, `/verify/process`, and batch fact items) are therefore never admitted. `/verify/logic` and batch logic items decide one as `/verify/natural_language` does: their verdict covers the constraints an LLM translated the question into, so the admission is `BLOCKED` until QWED verifies the translation itself ([#585](https://github.com/QWED-AI/qwed-verification/issues/585)). `/verify/rag` and `/verify/process` do send a top-level `verified`, which is their guard's own result; the parser replaces it, and the guard's value stays in `developer_fields.verified`. If you fetch responses yourself, pass the parsed JSON to `parseVerificationResponse()` or `parseBatchResponse()`.
 
 ## Verification Methods
 
@@ -69,8 +69,8 @@ console.log(result.is_valid);
 
 ```typescript
 const result = await client.verifyLogic('(AND (GT x 5) (LT y 10))');
-// /verify/logic makes no admission decision: admission is undefined and
-// isAdmitted() is false, whatever the status.
+// The verdict covers the translated constraints only: admission is BLOCKED
+// and isAdmitted() is false, whatever the status.
 console.log(result.status, result.admission);
 ```
 

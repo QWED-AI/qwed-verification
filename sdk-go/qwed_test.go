@@ -148,8 +148,8 @@ func TestVerifyLogic(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if result.Status != StatusBlocked || result.Admission != "" || result.IsAdmitted() {
-		t.Errorf("expected BLOCKED with no admission, got %s / %q", result.Status, result.Admission)
+	if result.Status != StatusBlocked || result.Admission != AdmissionBlocked || result.IsAdmitted() {
+		t.Errorf("expected BLOCKED · BLOCKED, got %s / %q", result.Status, result.Admission)
 	}
 }
 

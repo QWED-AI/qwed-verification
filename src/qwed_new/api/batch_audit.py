@@ -33,12 +33,13 @@ def batch_item_is_verified(item: BatchItem) -> bool:
 
     Each item's result is the DiagnosticResult (merged) its route returns
     (#494), so the routes' own rules apply:
-    - logic, fact and sql: VERIFIED with a proof_ref (is_authoritative, as on
+    - fact and sql: VERIFIED with a proof_ref (is_authoritative, as on
       their routes; a proven-malicious query is VERIFIED);
     - math and code: VERIFIED with is_valid True (/verify/math and
       /verify/code record is_valid; code proven unsafe is VERIFIED but not
       valid);
-    - natural language: admitted, as /verify/natural_language records it.
+    - natural language and logic: admitted, as /verify/natural_language and
+      /verify/logic record it (#320).
     A failed item, or a type not listed, is never verified.
     """
     if item.status != "completed" or not isinstance(item.result, dict):
@@ -46,25 +47,25 @@ def batch_item_is_verified(item: BatchItem) -> bool:
     result = item.result
     kind = item.verification_type.value
     fields = result.get("developer_fields") or {}
-    if kind in ("logic", "fact", "sql"):
+    if kind in ("fact", "sql"):
         return result.get("status") == "VERIFIED" and bool(result.get("proof_ref"))
     if kind in ("math", "code"):
         return result.get("status") == "VERIFIED" and fields.get("is_valid") is True
-    if kind == "natural_language":
+    if kind in ("natural_language", "logic"):
         return result.get("admission") == AdmissionDecision.ADMIT.value
     return False
 
 
-# Batch item types whose route decides an admission and returns it (#307, #494).
-_ADMISSION_TYPES = ("code", "natural_language", "math", "sql")
+# Batch item types whose route decides an admission and returns it (#307, #494, #320).
+_ADMISSION_TYPES = ("code", "natural_language", "logic", "math", "sql")
 
 
 def batch_item_admission(item: BatchItem) -> str | None:
     """The admission a batch item's result carries, or None (#307).
 
-    Code, natural-language, maths and SQL items decide one in a batch, as
-    their routes do (#494); a failed item, or a logic or fact item, stores
-    None: no admission was decided.
+    Code, natural-language, logic, maths and SQL items decide one in a batch,
+    as their routes do (#494); a failed item, or a fact item, stores None: no
+    admission was decided.
     """
     if item.status != "completed" or item.verification_type.value not in _ADMISSION_TYPES:
         return None

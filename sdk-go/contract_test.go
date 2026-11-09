@@ -51,8 +51,9 @@ func TestContractEveryFixture(t *testing.T) {
 		{"code_unsafe", StatusVerified, AdmissionBlocked, true, false},
 		{"sql", StatusVerified, AdmissionAdmit, true, true},
 		{"natural_language", StatusUnverifiable, AdmissionBlocked, false, false},
-		// /verify/logic and /verify/fact make no admission decision.
-		{"logic", StatusBlocked, "", false, false},
+		// /verify/logic decides admission as /verify/natural_language does (#320).
+		{"logic", StatusBlocked, AdmissionBlocked, false, false},
+		// /verify/fact makes no admission decision.
 		{"fact", StatusUnverifiable, "", false, false},
 	}
 	for _, tt := range tests {

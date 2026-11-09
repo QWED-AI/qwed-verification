@@ -125,6 +125,9 @@ def test_verify_logic_sat_path(client):
     assert data["status"] == "VERIFIED"
     assert data["agent_message"] == "Logic constraints are satisfiable"
     assert data["proof_ref"]
+    # The verdict covers the translated constraints, not the query (#320).
+    assert data["admission"] == "BLOCKED"
+    assert data["developer_fields"]["verification_scope"] == "translated_expression_only"
 
 
 def test_verify_logic_unsat_path(client):

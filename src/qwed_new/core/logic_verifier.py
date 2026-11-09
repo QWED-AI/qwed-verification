@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 import re
 import logging
+import time
 
 from qwed_new.core.diagnostics import DiagnosticResult
 
@@ -31,6 +32,9 @@ _CONSTRAINT_ID_EXPLICIT_DECLARATIONS = "logic_verifier.explicit_declarations_req
 _CONSTRAINT_ID_EXECUTION_ERROR = "logic_verifier.execution_error"
 _CONSTRAINT_ID_INVALID_CONSTRAINT = "logic_verifier.invalid_constraint"
 _CONSTRAINT_ID_TYPE_VALIDATION = "dsl_compiler.type_validation"
+_CONSTRAINT_ID_NO_CONSTRAINT = "logic_verifier.no_constraint"
+_CONSTRAINT_ID_VACUOUS_PREMISES = "logic_verifier.vacuous_premises"
+_CONSTRAINT_ID_PREMISES_UNDECIDED = "logic_verifier.premises_undecided"
 
 
 @dataclass
@@ -118,15 +122,44 @@ class LogicVerifier:
     def _base_developer_fields(self, variables: Dict[str, str]) -> Dict[str, Any]:
         return {"symbol_table": self._build_symbol_table(variables)}
 
-    def _add_z3_constraint(
-        self, solver: Solver, constr: str, z3_vars: Dict, prove_unsat: bool, i: int
-    ) -> None:
-        z3_constraint = self._parse_constraint(constr, z3_vars)
-        if z3_constraint is not None:
-            if prove_unsat:
-                solver.assert_and_track(z3_constraint, f"c{i}")
-            else:
-                solver.add(z3_constraint)
+    def _assert_constraints(
+        self, solver: Solver, constraints: List[str], z3_vars: Dict, prove_unsat: bool
+    ) -> Optional[DiagnosticResult]:
+        """Assert the constraints for verify_logic. The BLOCKED result for a
+        constraint that is not a Boolean formula, or for none at all (#579);
+        otherwise None."""
+        formulas = []
+        for constr in constraints:
+            try:
+                formulas.append(self._parse_formula(constr, z3_vars))
+            except (ValueError, Z3Exception) as e:
+                # The evaluator raises ValueError for anything it refuses;
+                # any other error reaches verify_logic's own handler.
+                return DiagnosticResult.blocked(
+                    "Logic verification blocked: invalid constraint",
+                    {
+                        "constraint_id": _CONSTRAINT_ID_INVALID_CONSTRAINT,
+                        "error_type": type(e).__name__,
+                        "constraint": constr,
+                    },
+                )
+        if not formulas:
+            return self._nothing_to_verify()
+        if prove_unsat:
+            for formula, label in zip(formulas, self._labels("c", formulas), strict=True):
+                solver.assert_and_track(formula, label)
+        else:
+            solver.add(*formulas)
+        return None
+
+    @staticmethod
+    def _nothing_to_verify() -> DiagnosticResult:
+        """BLOCKED for input that asserts no constraint (#579). Every
+        assignment satisfies an empty set, so SAT would verify nothing."""
+        return DiagnosticResult.blocked(
+            "Nothing to verify: no constraint was given",
+            {"constraint_id": _CONSTRAINT_ID_NO_CONSTRAINT},
+        )
 
     def _handle_opt_sat(
         self, opt: Optimize, handle, fields: Dict, objective: str, maximize: bool
@@ -209,18 +242,9 @@ class LogicVerifier:
             if isinstance(z3_vars, DiagnosticResult):
                 return z3_vars
 
-            for i, constr in enumerate(constraints):
-                try:
-                    self._add_z3_constraint(solver, constr, z3_vars, prove_unsat, i)
-                except Exception as e:
-                    return DiagnosticResult.blocked(
-                        "Logic verification blocked: invalid constraint",
-                        {
-                            "constraint_id": _CONSTRAINT_ID_INVALID_CONSTRAINT,
-                            "error_type": type(e).__name__,
-                            "constraint": constr,
-                        },
-                    )
+            blocked = self._assert_constraints(solver, constraints, z3_vars, prove_unsat)
+            if blocked:
+                return blocked
 
             result = solver.check()
 
@@ -284,6 +308,7 @@ class LogicVerifier:
 
             solver = Solver()
             solver.set("timeout", self.timeout_ms)
+            asserted = 0
 
             for qf in quantified_formulas:
                 scope_vars = dict(variables)
@@ -324,7 +349,7 @@ class LogicVerifier:
                 if blocked:
                     return blocked
                 sanitized_body = self._sanitize([qf.body], scope_vars)[0]
-                body = self._parse_constraint(sanitized_body, scope_z3)
+                body = self._parse_formula(sanitized_body, scope_z3)
                 if body is None:
                     continue
 
@@ -340,6 +365,7 @@ class LogicVerifier:
                         {"constraint_id": "logic_verifier.unknown_quantifier", "quantifier": qf.quantifier},
                     )
                 solver.add(quantified)
+                asserted += 1
 
             if constraints:
                 blocked = self._ensure_sanitizer()
@@ -354,9 +380,12 @@ class LogicVerifier:
                 if isinstance(z3_vars, DiagnosticResult):
                     return z3_vars
                 for constr in constraints:
-                    z3_constraint = self._parse_constraint(constr, z3_vars)
+                    z3_constraint = self._parse_formula(constr, z3_vars)
                     if z3_constraint is not None:
                         solver.add(z3_constraint)
+                        asserted += 1
+            if not asserted:
+                return self._nothing_to_verify()
 
             result = solver.check()
 
@@ -434,10 +463,14 @@ class LogicVerifier:
             solver = Solver()
             solver.set("timeout", self.timeout_ms)
 
+            asserted = 0
             for constr in constraints:
-                z3_constraint = self._parse_constraint(constr, z3_vars)
+                z3_constraint = self._parse_formula(constr, z3_vars)
                 if z3_constraint is not None:
                     solver.add(z3_constraint)
+                    asserted += 1
+            if not asserted:
+                return self._nothing_to_verify()
 
             result = solver.check()
 
@@ -522,10 +555,14 @@ class LogicVerifier:
             z3_vars['Select'] = Select
             z3_vars['Store'] = Store
 
+            asserted = 0
             for constr in constraints:
-                z3_constraint = self._parse_constraint(constr, z3_vars)
+                z3_constraint = self._parse_formula(constr, z3_vars)
                 if z3_constraint is not None:
                     solver.add(z3_constraint)
+                    asserted += 1
+            if not asserted:
+                return self._nothing_to_verify()
 
             result = solver.check()
 
@@ -594,24 +631,34 @@ class LogicVerifier:
             if isinstance(z3_vars, DiagnosticResult):
                 return z3_vars
 
+            parsed_premises = []
             for premise in premises:
-                z3_constraint = self._parse_constraint(premise, z3_vars)
+                z3_constraint = self._parse_formula(premise, z3_vars)
                 if z3_constraint is not None:
                     solver.add(z3_constraint)
+                    parsed_premises.append((premise, z3_constraint))
 
-            conclusion_z3 = self._parse_constraint(conclusion, z3_vars)
+            conclusion_z3 = self._parse_formula(conclusion, z3_vars)
             if conclusion_z3 is None:
                 return DiagnosticResult.blocked(
                     "Logic verification blocked: invalid conclusion",
                     {"constraint_id": _CONSTRAINT_ID_INVALID_CONSTRAINT, "constraint": conclusion},
                 )
-            solver.add(Not(conclusion_z3))
-
-            result = solver.check()
 
             fields = self._base_developer_fields(variables)
             fields["premises"] = premises
             fields["conclusion"] = conclusion
+
+            started_ns = time.monotonic_ns()
+            inconsistent = self._premises_inconsistent(parsed_premises, fields)
+            if inconsistent is not None:
+                return inconsistent
+
+            # One budget for both solves: the proof gets what the premises'
+            # check left of timeout_ms.
+            solver.set("timeout", self._remaining_ms(started_ns))
+            solver.add(Not(conclusion_z3))
+            result = solver.check()
 
             if result == unsat:
                 fields["deterministic_verdict"] = "contradiction_confirmed"
@@ -648,6 +695,80 @@ class LogicVerifier:
     # =========================================================================
     # Helper Methods
     # =========================================================================
+
+    def _premises_inconsistent(
+        self, premises: List[Tuple[str, Any]], fields: Dict[str, Any]
+    ) -> Optional[DiagnosticResult]:
+        """The result that stops a proof whose premises cannot all hold, or
+        None when they can (#579).
+
+        Every conclusion follows from premises that contradict each other, so
+        a proof from them says nothing about the conclusion; it almost always
+        means the premises were written or translated wrongly. Premises the
+        solver cannot decide stop the proof as well.
+        """
+        solver = Solver()
+        solver.set("timeout", self.timeout_ms)
+        # Each premise is assumed through its own label, so the unsat core
+        # names the premises that conflict.
+        exprs = [BoolVal(expr) if isinstance(expr, bool) else expr for _, expr in premises]
+        labels = {}
+        # strict: a premise left without a label would escape this check.
+        for (text, _), expr, label in zip(premises, exprs, self._labels("qwed_premise_", exprs), strict=True):
+            labels[str(label)] = (label, text)
+            solver.add(Implies(label, expr))
+
+        result = solver.check(*(label for label, _ in labels.values()))
+        if result == sat:
+            return None
+        if result == unsat:
+            core = {str(name) for name in solver.unsat_core()}
+            fields["unsat_core"] = [text for name, (_, text) in labels.items() if name in core]
+            fields["deterministic_verdict"] = "VACUOUS_PREMISES"
+            fields["constraint_id"] = _CONSTRAINT_ID_VACUOUS_PREMISES
+            return DiagnosticResult.unverifiable(
+                "The premises contradict each other, so any conclusion would follow from them",
+                fields,
+            )
+        fields["deterministic_verdict"] = "UNKNOWN"
+        fields["constraint_id"] = _CONSTRAINT_ID_PREMISES_UNDECIDED
+        return DiagnosticResult.unverifiable(
+            "Could not decide whether the premises can all hold",
+            fields,
+        )
+
+    def _labels(self, base: str, exprs: List[Any]) -> List[Any]:
+        """One Boolean label per expression, for an assumption-based unsat
+        core, none of them a constant of ``exprs``. Z3 treats two constants
+        with the same name and sort as one, and a constraint can name any
+        constant (``Bool('...')``), so a label that shared a constant's name
+        would assume that constant true."""
+        taken = self._symbol_names(exprs)
+        prefix = base
+        while any(f"{prefix}{i}" in taken for i in range(len(exprs))):
+            prefix = "_" + prefix
+        return [Bool(f"{prefix}{i}") for i in range(len(exprs))]
+
+    @staticmethod
+    def _symbol_names(exprs: List[Any]) -> set:
+        """The names of the uninterpreted constants in ``exprs``."""
+        names, seen, pending = set(), set(), list(exprs)
+        while pending:
+            node = pending.pop()
+            if not is_expr(node) or node.get_id() in seen:
+                continue
+            seen.add(node.get_id())
+            if is_const(node) and node.decl().kind() == Z3_OP_UNINTERPRETED:
+                names.add(node.decl().name())
+            pending.extend(node.children())
+        return names
+
+    def _remaining_ms(self, started_ns: int) -> int:
+        """What is left of ``timeout_ms`` since ``started_ns``
+        (``time.monotonic_ns``, as QWED_RULES asks for sub-second deadlines),
+        and at least 1 ms, so the next solve always has a positive limit."""
+        elapsed_ms = (time.monotonic_ns() - started_ns) // 1_000_000
+        return max(1, self.timeout_ms - elapsed_ms)
 
     def _create_z3_variables(self, variables: Dict[str, str]) -> dict | DiagnosticResult:
         """Create Z3 variables from type declarations."""
@@ -703,6 +824,23 @@ class LogicVerifier:
             return self.safe_evaluator.safe_eval(constr, z3_vars)
         raise RuntimeError("SafeEvaluator is required for constraint parsing")
 
+    def _parse_formula(self, constr: str, z3_vars: Dict) -> Any:
+        """Parse a constraint that must be a Boolean formula (#579).
+
+        The evaluator also yields None, lists, tuples and numbers. A None was
+        skipped and Z3's ``add`` takes a list apart, so ``"None"`` or
+        ``"[]"`` stood for a constraint while it asserted nothing, and the
+        rest could be satisfiable without it. Only True, False (as Z3 values)
+        and Z3 Boolean expressions are formulas; anything else raises
+        ValueError, and the check is BLOCKED.
+        """
+        value = self._parse_constraint(constr, z3_vars)
+        if is_expr(value) and is_bool(value):
+            return value
+        if isinstance(value, bool):
+            return BoolVal(value)
+        raise ValueError("Constraint is not a Boolean formula")
+
     def _explain_unsat(self, solver: Solver, constraints: List[str]) -> str:
         """Try to explain why constraints are unsatisfiable."""
         try:
@@ -755,8 +893,8 @@ class LogicVerifier:
             if isinstance(z3_vars, DiagnosticResult):
                 return z3_vars
 
-            f1 = self._parse_constraint(formula1, z3_vars)
-            f2 = self._parse_constraint(formula2, z3_vars)
+            f1 = self._parse_formula(formula1, z3_vars)
+            f2 = self._parse_formula(formula2, z3_vars)
             if f1 is None:
                 return DiagnosticResult.blocked(
                     "Logic verification blocked: invalid formula",
@@ -841,7 +979,7 @@ class LogicVerifier:
                 return z3_vars
 
             for constr in constraints:
-                z3_constraint = self._parse_constraint(constr, z3_vars)
+                z3_constraint = self._parse_formula(constr, z3_vars)
                 if z3_constraint is not None:
                     opt.add(z3_constraint)
 
@@ -912,7 +1050,7 @@ class LogicVerifier:
             if isinstance(z3_vars, DiagnosticResult):
                 return z3_vars
 
-            ant_expr = self._parse_constraint(antecedent, z3_vars)
+            ant_expr = self._parse_formula(antecedent, z3_vars)
             if ant_expr is None:
                 return DiagnosticResult.blocked(
                     "Logic verification blocked: invalid antecedent",

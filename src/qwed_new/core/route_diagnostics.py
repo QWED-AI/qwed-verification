@@ -15,24 +15,69 @@ from typing import Any
 from qwed_new.core.diagnostics import DiagnosticResult
 
 
+def _logic_scope(result: dict) -> dict:
+    """What a logic verdict covers (#320).
+
+    An LLM writes the constraints from the question, and the engine decides
+    only those constraints: nothing checks that they mean what was asked. So
+    the query semantics are never verified here, whatever the input says, and
+    where the constraints are known the verdict names them as its scope, as
+    the natural-language maths verdict does. The route admits the verdict
+    through ``natural_language_admission``, which reads this.
+    """
+    scope: dict = {"query_semantics_verified": False}
+    dsl_code = result.get("dsl_code")
+    if isinstance(dsl_code, str) and dsl_code:
+        scope.update({
+            "query_interpretation_source": "llm_translation",
+            "verification_scope": "translated_expression_only",
+            "translated_expression": _typed_statement(dsl_code, result.get("declarations")),
+        })
+    return scope
+
+
+def _typed_statement(dsl_code: str, declarations: Any) -> str:
+    """The statement Z3 decided: the DSL, after a ``(VAR name Sort)`` for
+    each declared variable.
+
+    The DSL alone does not fix the sorts (an undeclared name is an Int):
+    ``(AND (GT x 0) (LT x 1))`` is satisfiable for a Real ``x`` and not for
+    an Int one, so a statement without the declarations would name a
+    different claim from the one decided.
+    """
+    if not isinstance(declarations, dict):
+        return dsl_code
+    parts = [
+        f"(VAR {name} {sort})"
+        for name, sort in sorted(declarations.items())
+        if isinstance(name, str) and isinstance(sort, str)
+    ]
+    return " ".join([*parts, dsl_code])
+
+
 def logic_diagnostic(result: dict) -> DiagnosticResult:
     """``/verify/logic``'s mapping: SAT is VERIFIED with the model as evidence,
-    UNSAT is UNVERIFIABLE, anything else (an error) is BLOCKED."""
+    UNSAT is UNVERIFIABLE, anything else (an error) is BLOCKED. The verdict
+    covers the translated constraints only (see ``_logic_scope``)."""
+    fields = {**result, **_logic_scope(result)}
     status = result.get("status", "ERROR")
     if status == "SAT":
+        evidence = {"model": str(result.get("model")), "dsl_code": result.get("dsl_code", "")}
+        if isinstance(result.get("declarations"), dict) and result["declarations"]:
+            evidence["declarations"] = result["declarations"]
         return DiagnosticResult.verified(
             "Logic constraints are satisfiable",
-            developer_fields=result,
-            evidence={"model": str(result.get("model")), "dsl_code": result.get("dsl_code", "")},
+            developer_fields=fields,
+            evidence=evidence,
         )
     if status == "UNSAT":
         return DiagnosticResult.unverifiable(
             "Logic constraints are unsatisfiable",
-            developer_fields=result,
+            developer_fields=fields,
         )
     return DiagnosticResult.blocked(
         result.get("error", "Logic verification failed"),
-        developer_fields=result,
+        developer_fields=fields,
     )
 
 

@@ -123,18 +123,20 @@ def test_a_verification_context_row_stores_the_admission_it_returned(client, iso
         assert _last_row(isolated_audit_chain).admission is None
 
 
-# ---------------------------------------------------------------- routes that do not
-
-def test_a_route_that_decides_no_admission_stores_null(client, isolated_audit_chain):
+def test_the_logic_route_stores_the_admission_it_returned(client, isolated_audit_chain):
+    """/verify/logic decides an admission since #320: its verdict covers the
+    constraints an LLM translated the question into, so it is BLOCKED."""
     async def logic(query, organization_id=None, preferred_provider=None):
-        return {"status": "SAT", "model": {"x": "6"}}
+        return {"status": "SAT", "model": {"x": "6"}, "dsl_code": "(GT x 5)"}
 
     with patch.object(api_main.control_plane, "process_logic_query", logic):
-        response = client.post("/verify/logic", json={"query": "(GT x 5)"})
+        response = client.post("/verify/logic", json={"query": "is there an x above 5"})
 
     row = _last_row(isolated_audit_chain)
-    assert "admission" not in response.json()
-    assert row.admission is None
+    assert response.json()["status"] == "VERIFIED"
+    assert response.json()["admission"] == "BLOCKED"
+    assert row.admission == "BLOCKED"
+    assert row.is_verified is False
     assert _verify(isolated_audit_chain, row.id)["valid"] is True
 
 
@@ -149,6 +151,8 @@ def test_a_route_that_decides_no_admission_stores_null(client, isolated_audit_ch
     # Maths and SQL items decide one too, as their routes do (#307 follow-up).
     ("math", "completed", {"status": "VERIFIED", "admission": "ADMIT"}, "ADMIT"),
     ("sql", "completed", {"status": "VERIFIED", "admission": "BLOCKED"}, "BLOCKED"),
+    # Logic items decide one since #320, as /verify/logic does.
+    ("logic", "completed", {"status": "VERIFIED", "admission": "BLOCKED"}, "BLOCKED"),
     ("logic", "completed", {"status": "SAT"}, None),
     ("fact", "completed", {"status": "VERIFIED", "admission": "ADMIT"}, None),
 ])

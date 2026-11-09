@@ -173,9 +173,11 @@ def _nl(semantics_verified):
     ("code", "completed", {"status": "VERIFIED", "proof_ref": PROOF, "developer_fields": {"is_valid": True}}, True),
     # Code proven unsafe is VERIFIED but not valid.
     ("code", "completed", {"status": "VERIFIED", "proof_ref": PROOF, "developer_fields": {"is_valid": False}}, False),
-    # logic: SAT, which /verify/logic turns into VERIFIED with a proof_ref.
-    # logic: the DiagnosticResult /verify/logic returns (#494): authoritative.
-    ("logic", "completed", {"status": "VERIFIED", "proof_ref": PROOF}, True),
+    # logic: the /verify/logic admission rule (#320). A VERIFIED result covers
+    # the translated constraints only, so it is not verified unless admitted.
+    ("logic", "completed", {"status": "VERIFIED", "proof_ref": PROOF}, False),  # no admission
+    ("logic", "completed", {"status": "VERIFIED", "proof_ref": PROOF, "admission": "BLOCKED"}, False),
+    ("logic", "completed", {"status": "VERIFIED", "proof_ref": PROOF, "admission": "ADMIT"}, True),
     ("logic", "completed", {"status": "UNVERIFIABLE", "proof_ref": None}, False),
     ("logic", "completed", {"status": "SAT"}, False),  # the raw control-plane shape is no longer trusted
     # fact and sql: is_authoritative; a proven-malicious query is VERIFIED.

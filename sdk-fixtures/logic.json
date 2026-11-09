@@ -1,4 +1,5 @@
 {
+  "admission": "BLOCKED",
   "agent_message": "LLM translation failed",
   "developer_fields": {
     "dsl_code": null,
@@ -6,6 +7,7 @@
     "latency_ms": 313.7392997741699,
     "model": null,
     "provider_used": "openai_compat",
+    "query_semantics_verified": false,
     "status": "ERROR"
   },
   "dsl_code": null,
@@ -15,5 +17,6 @@
   "model": null,
   "proof_ref": null,
   "provider_used": "openai_compat",
+  "query_semantics_verified": false,
   "status": "BLOCKED"
 }
