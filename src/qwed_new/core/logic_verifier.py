@@ -686,7 +686,8 @@ class LogicVerifier:
         while any(name.startswith(prefix) for name in taken):
             prefix = "_" + prefix
         labels = {}
-        for i, ((text, _), expr) in enumerate(zip(premises, exprs)):
+        # strict: a premise left without a label would escape this check.
+        for i, ((text, _), expr) in enumerate(zip(premises, exprs, strict=True)):
             label = Bool(f"{prefix}{i}")
             labels[str(label)] = (label, text)
             solver.add(Implies(label, expr))

@@ -14,7 +14,7 @@
    ``dsl_logic_verifier.no_constraint``.
 """
 
-import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -113,13 +113,18 @@ def test_a_premise_cannot_name_a_label_of_the_premises_check(premise):
     assert result.developer_fields["deterministic_verdict"] == "contradiction_confirmed"
 
 
-def test_the_proof_gets_what_the_premises_check_left_of_the_timeout():
+def test_the_proof_gets_what_the_premises_check_left_of_the_timeout(monkeypatch):
+    from qwed_new.core import logic_verifier
+
+    # A fixed clock for the module only, so the test does not depend on how
+    # long it runs.
+    monkeypatch.setattr(logic_verifier, "time", SimpleNamespace(monotonic=lambda: 10.0))
     verifier = LogicVerifier(timeout_ms=1000)
 
-    # Started 250 ms ago: 750 ms are left (less any time this line takes).
-    assert 700 <= verifier._remaining_ms(time.monotonic() - 0.25) <= 750
+    # Started 250 ms ago: 750 ms are left.
+    assert verifier._remaining_ms(9.75) == 750
     # All spent: the proof still gets a positive limit.
-    assert verifier._remaining_ms(time.monotonic() - 5) == 1
+    assert verifier._remaining_ms(5.0) == 1
 
 
 # ---------------------------------------------------------------- the DSL
