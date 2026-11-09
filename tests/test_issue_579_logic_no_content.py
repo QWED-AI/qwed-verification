@@ -16,6 +16,13 @@
    ``verify_array`` and ``verify_with_quantifiers`` returned VERIFIED when
    no constraint was asserted. They are now BLOCKED with
    ``logic_verifier.no_constraint``.
+4. A constraint that is not a Boolean formula, such as ``"[]"``, counted as a
+   constraint while it asserted nothing. Every check now takes only True,
+   False and Z3 Boolean expressions, and BLOCKS anything else.
+5. ``verify_logic(..., prove_unsat=True)`` labelled constraints ``c0``,
+   ``c1``, ..., the names of constants a constraint can declare, so a
+   satisfiable set came back UNSAT. Its labels, like those of the premises
+   check, now avoid every constant of the constraints.
 """
 
 from types import SimpleNamespace
@@ -167,6 +174,69 @@ def test_a_check_with_a_constraint_is_still_decided(check):
 
     assert result.status is DiagnosticStatus.VERIFIED
     assert result.proof_ref
+
+
+# The evaluator also yields lists, tuples and numbers. Z3's add takes a list
+# apart, so "[]" stood for a constraint while it asserted nothing.
+NOT_A_FORMULA = ["[]", "()", "[[]]", "1", "[x > 5]"]
+CHECKS_OF_ONE_FORMULA = {
+    "verify_logic": lambda v, c: v.verify_logic(INT_X, [c]),
+    "verify_logic, prove_unsat": lambda v, c: v.verify_logic(INT_X, [c], prove_unsat=True),
+    "verify_bitvector": lambda v, c: v.verify_bitvector({"x": 8}, [c]),
+    "verify_array": lambda v, c: v.verify_array(ARRAY, {"i": "Int"}, [c]),
+    "verify_with_quantifiers": lambda v, c: v.verify_with_quantifiers(INT_X, [], [c]),
+    "verify_optimization": lambda v, c: v.verify_optimization(INT_X, [c], "x", maximize=False),
+    "check_vacuity": lambda v, c: v.check_vacuity(INT_X, c),
+    "check_equivalence": lambda v, c: v.check_equivalence(INT_X, c, c),
+    "prove_theorem, premise": lambda v, c: v.prove_theorem(INT_X, [c], "x == x"),
+    "prove_theorem, conclusion": lambda v, c: v.prove_theorem(INT_X, ["x > 0"], c),
+}
+
+
+@pytest.mark.parametrize("value", NOT_A_FORMULA)
+@pytest.mark.parametrize("check", CHECKS_OF_ONE_FORMULA.values(), ids=CHECKS_OF_ONE_FORMULA.keys())
+def test_a_constraint_that_is_not_a_boolean_formula_is_blocked(check, value):
+    result = check(LogicVerifier(), value)
+
+    assert result.status is DiagnosticStatus.BLOCKED
+    assert result.proof_ref is None
+
+
+def test_verify_logic_names_a_constraint_that_is_not_a_formula():
+    result = LogicVerifier().verify_logic(INT_X, ["x > 5", "[]"])
+
+    assert result.developer_fields["constraint_id"] == "logic_verifier.invalid_constraint"
+    assert result.developer_fields["constraint"] == "[]"
+
+
+@pytest.mark.parametrize("value", ["True", "1 == 1"])
+def test_a_constant_formula_is_still_a_formula(value):
+    assert LogicVerifier().verify_logic(INT_X, [value]).status is DiagnosticStatus.VERIFIED
+
+
+# ---------------------------------------------------------------- prove_unsat labels
+
+@pytest.mark.parametrize("variables, constraints", [
+    ({"c0": "Bool"}, ["Not(c0)"]),
+    ({"c1": "Bool", "x": "Int"}, ["x > 0", "Not(c1)"]),
+    ({"x": "Int"}, ["x > 0", "Not(Bool('c' + '0'))"]),
+])
+def test_prove_unsat_labels_cannot_name_a_constant_of_the_constraints(variables, constraints):
+    # Satisfiable: each constraint can hold. A label named like one of their
+    # constants made Z3 assume that constant true, and reported UNSAT.
+    result = LogicVerifier().verify_logic(variables, constraints, prove_unsat=True)
+
+    assert result.status is DiagnosticStatus.VERIFIED
+
+
+def test_prove_unsat_still_names_the_constraints_that_conflict():
+    result = LogicVerifier().verify_logic(INT_X, ["x > 5", "x < 3"], prove_unsat=True)
+
+    assert result.status is DiagnosticStatus.UNVERIFIABLE
+    explanation = result.developer_fields["explanation"]
+    # Z3 lists the core in no fixed order.
+    assert explanation.startswith("Conflicting constraints: ")
+    assert "'c0'" in explanation and "'c1'" in explanation
 
 
 # ---------------------------------------------------------------- the DSL
