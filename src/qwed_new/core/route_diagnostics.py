@@ -15,24 +15,47 @@ from typing import Any
 from qwed_new.core.diagnostics import DiagnosticResult
 
 
+def _logic_scope(result: dict) -> dict:
+    """What a logic verdict covers (#320).
+
+    An LLM writes the constraints from the question, and the engine decides
+    only those constraints: nothing checks that they mean what was asked. So
+    the query semantics are never verified here, whatever the input says, and
+    where the constraints are known the verdict names them as its scope, as
+    the natural-language maths verdict does. The route admits the verdict
+    through ``natural_language_admission``, which reads this.
+    """
+    scope: dict = {"query_semantics_verified": False}
+    dsl_code = result.get("dsl_code")
+    if isinstance(dsl_code, str) and dsl_code:
+        scope.update({
+            "query_interpretation_source": "llm_translation",
+            "verification_scope": "translated_expression_only",
+            "translated_expression": dsl_code,
+        })
+    return scope
+
+
 def logic_diagnostic(result: dict) -> DiagnosticResult:
     """``/verify/logic``'s mapping: SAT is VERIFIED with the model as evidence,
-    UNSAT is UNVERIFIABLE, anything else (an error) is BLOCKED."""
+    UNSAT is UNVERIFIABLE, anything else (an error) is BLOCKED. The verdict
+    covers the translated constraints only (see ``_logic_scope``)."""
+    fields = {**result, **_logic_scope(result)}
     status = result.get("status", "ERROR")
     if status == "SAT":
         return DiagnosticResult.verified(
             "Logic constraints are satisfiable",
-            developer_fields=result,
+            developer_fields=fields,
             evidence={"model": str(result.get("model")), "dsl_code": result.get("dsl_code", "")},
         )
     if status == "UNSAT":
         return DiagnosticResult.unverifiable(
             "Logic constraints are unsatisfiable",
-            developer_fields=result,
+            developer_fields=fields,
         )
     return DiagnosticResult.blocked(
         result.get("error", "Logic verification failed"),
-        developer_fields=result,
+        developer_fields=fields,
     )
 
 

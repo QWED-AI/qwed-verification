@@ -164,7 +164,9 @@ def test_batch_rows_now_carry_a_verdict_and_the_natural_language_admission(clien
     rows = {json.loads(r.result)["batch_item_type"]: r for r in _batch_rows(isolated_audit_chain)}
     # /audit/logs reads the verdict from the stored result: no longer null.
     assert stored_verdict(rows["logic"].result) == "VERIFIED"
-    assert rows["logic"].is_verified is True
     assert stored_verdict(rows["natural_language"].result) == "UNVERIFIABLE"
     assert rows["natural_language"].admission == "BLOCKED"
-    assert rows["logic"].admission is None  # /verify/logic decides no admission
+    # As /verify/logic since #320: the verdict covers the translated
+    # constraints only, so the row is BLOCKED and not verified.
+    assert rows["logic"].admission == "BLOCKED"
+    assert rows["logic"].is_verified is False

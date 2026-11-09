@@ -33,6 +33,7 @@ class DSLVerificationResult:
     error: Optional[str] = None
     rejection_reason: Optional[str] = None  # Human-readable explanation for UNSAT
     provider_used: Optional[str] = None
+    constraint_id: Optional[str] = None  # Names the rule that blocked the result, where one does
 
 
 # Text that ends an operand ("x", "3", ")" or "]"), unless that text is itself
@@ -155,16 +156,24 @@ class DSLLogicVerifier:
                 dsl_code=dsl_code,
                 parsed_ast=ast
             )
-        
+
+        if compile_result.compiled is None:
+            # Declarations alone state no constraint. Every assignment
+            # satisfies an empty set, so SAT would verify nothing (#579).
+            return DSLVerificationResult(
+                status="BLOCKED",
+                error="Nothing to verify: the program declares variables but states no constraint",
+                dsl_code=dsl_code,
+                parsed_ast=ast,
+                constraint_id="dsl_logic_verifier.no_constraint",
+            )
+
         # 4. Solve with Z3
         try:
             solver = Solver()
             solver.set("timeout", self.timeout_ms)
-            
-            # Add the compiled constraint
-            if compile_result.compiled is not None:
-                solver.add(compile_result.compiled)
-            
+            solver.add(compile_result.compiled)
+
             # Check satisfiability
             result = solver.check()
             

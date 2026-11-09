@@ -85,14 +85,18 @@ fn unverifiable_natural_language_is_not_admitted() {
 }
 
 #[test]
-fn responses_without_an_admission_are_not_admitted() {
-    // /verify/logic and /verify/fact make no admission decision.
+fn a_logic_response_is_blocked_like_a_natural_language_one() {
+    // /verify/logic decides admission as /verify/natural_language does (#320).
     let logic = response("logic");
     assert_eq!(logic.status, VerificationStatus::Blocked);
-    assert_eq!(logic.admission, None);
+    assert_eq!(logic.admission, Some(Admission::Blocked));
     assert!(logic.extra["error"].is_string());
     assert!(!logic.is_admitted());
+}
 
+#[test]
+fn responses_without_an_admission_are_not_admitted() {
+    // /verify/fact makes no admission decision.
     let fact = response("fact");
     assert_eq!(fact.status, VerificationStatus::Unverifiable);
     assert_eq!(fact.admission, None);

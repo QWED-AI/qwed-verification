@@ -338,7 +338,7 @@ def test_implication_false():
 # =========================================================================
 
 def test_prove_theorem_unknown():
-    """Cover prove_theorem unknown result path."""
+    """Cover prove_theorem unknown result path (premises found consistent)."""
     v = LogicVerifier()
     with patch("qwed_new.core.logic_verifier.Solver") as mock_solver_cls:
         mock_solver = MagicMock()
@@ -347,10 +347,26 @@ def test_prove_theorem_unknown():
         mock_solver.check.return_value = unknown
         from z3 import Int
         mock_z3 = {"x": Int("x")}
-        with patch.object(v, "_create_z3_variables", return_value=mock_z3):
+        with patch.object(v, "_create_z3_variables", return_value=mock_z3), \
+             patch.object(v, "_premises_inconsistent", return_value=None):
             result = v.prove_theorem({"x": "Int"}, ["x > 0"], "x < 10")
             assert result.status == DiagnosticStatus.UNVERIFIABLE
             assert result.developer_fields.get("deterministic_verdict") == "UNKNOWN"
+            assert "constraint_id" not in result.developer_fields
+
+
+def test_prove_theorem_premises_the_solver_cannot_decide_are_unverifiable():
+    """#579: a proof is not VERIFIED when the premises' consistency is unknown."""
+    v = LogicVerifier()
+    with patch("qwed_new.core.logic_verifier.Solver") as mock_solver_cls:
+        mock_solver = MagicMock()
+        mock_solver_cls.return_value = mock_solver
+        from z3 import unknown
+        mock_solver.check.return_value = unknown
+        result = v.prove_theorem({"x": "Int"}, ["x > 0"], "x < 10")
+    assert result.status == DiagnosticStatus.UNVERIFIABLE
+    assert result.developer_fields["constraint_id"] == "logic_verifier.premises_undecided"
+    assert result.developer_fields["deterministic_verdict"] == "UNKNOWN"
 
 
 def test_prove_theorem_exception():

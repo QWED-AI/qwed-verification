@@ -316,12 +316,22 @@ class BatchVerificationService:
             return merge_diagnostic_result(dr) | {"admission": natural_language_admission(dr).value}
 
         elif item.verification_type == VerificationType.LOGIC:
+            from qwed_new.core.control_plane import natural_language_admission
+
             result = await self.control_plane.process_logic_query(
                 item.query,
                 organization_id=organization_id
             )
-            dr = attest_and_enforce(logic_diagnostic(result), engine="logic", query=item.query)
-            return merge_diagnostic_result(dr)
+            dr = attest_and_enforce(
+                logic_diagnostic(result),
+                engine="logic",
+                query=item.query,
+                admission=natural_language_admission,
+            )
+            # As /verify/logic: the verdict covers the constraints an LLM
+            # translated the question into, so it is admitted by the same rule
+            # as a natural-language verdict (#320).
+            return merge_diagnostic_result(dr) | {"admission": natural_language_admission(dr).value}
         
         elif item.verification_type == VerificationType.MATH:
             # SymPy runs in a math worker process (GHSA-qgjc); the wait for it

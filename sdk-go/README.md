@@ -52,7 +52,7 @@ Every verification returns the server's DiagnosticResult envelope:
 |-------|---------|
 | `Status` | `StatusVerified`, `StatusUnverifiable` or `StatusBlocked` (`StatusUnknown` for a missing value or one this SDK does not know) |
 | `RawStatus` | The server's status text exactly as sent, such as `SAT` where `Status` is `StatusUnknown`; never used for admission |
-| `Admission` | `AdmissionAdmit` or `AdmissionBlocked` where the endpoint decides (`AdmissionUnknown` for a value this SDK does not know); empty where it does not, as on `/verify/logic`, `/verify/fact` and batch logic and fact items |
+| `Admission` | `AdmissionAdmit` or `AdmissionBlocked` where the endpoint decides (`AdmissionUnknown` for a value this SDK does not know); empty where it does not, as on `/verify/fact` and batch fact items |
 | `ProofRef` | Set only when `Status` is `StatusVerified` |
 | `Attestation` | On a `StatusVerified` answer, the server's signed token: an ES256 JWT whose header `kid` names a key at `GET /.well-known/jwks.json`, and whose `qwed.proof_hash` claim is the answer's `ProofRef`. Verify it with `client.VerifyAttestation` (below). |
 | `AgentMessage`, `DeveloperFields`, `IsAuthoritative`, `ConstraintID` | Explanation and detail |
@@ -60,7 +60,7 @@ Every verification returns the server's DiagnosticResult envelope:
 
 **Gate on `IsAdmitted()`, not on `Status`.** `VERIFIED` means the engine reached a deterministic answer, not that the claim holds: `2 + 2 = 5` is `VERIFIED · BLOCKED` (proven false), and unsafe code is `VERIFIED · BLOCKED` (proven unsafe). `IsAdmitted()` is true only for `ADMIT` together with `VERIFIED` and a `ProofRef`; a missing or unknown admission is never admitted.
 
-The `Verified` field and `IsVerified()` are deprecated. Decoding always sets `Verified` to `IsAdmitted()`, whatever the body says, and `IsVerified()` returns `IsAdmitted()`. Endpoints that make no admission decision (`/verify/logic`, `/verify/fact`, `/verify/rag`, `/verify/process`, and batch logic and fact items) are therefore never admitted. `/verify/rag` and `/verify/process` do send a top-level `verified`, which is their guard's own result; it is kept in `Extra["verified"]` and `DeveloperFields["verified"]`.
+The `Verified` field and `IsVerified()` are deprecated. Decoding always sets `Verified` to `IsAdmitted()`, whatever the body says, and `IsVerified()` returns `IsAdmitted()`. Endpoints that make no admission decision (`/verify/fact`, `/verify/rag`, `/verify/process`, and batch fact items) are therefore never admitted. `/verify/logic` and batch logic items decide one as `/verify/natural_language` does: their verdict covers the constraints an LLM translated the question into, so the admission is `AdmissionBlocked` until QWED verifies the translation itself ([#585](https://github.com/QWED-AI/qwed-verification/issues/585)). `/verify/rag` and `/verify/process` do send a top-level `verified`, which is their guard's own result; it is kept in `Extra["verified"]` and `DeveloperFields["verified"]`.
 
 ### Verifying the attestation
 

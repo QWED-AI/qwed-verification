@@ -675,6 +675,31 @@ async def verify_natural_language(
 # Shared with /verify/batch so a batch item gets what its route returns (#494).
 _natural_language_diagnostic = natural_language_diagnostic
 
+
+def _logic_route_response(dr: DiagnosticResult, query: str, organization_id) -> dict:
+    """Enforce, log and return a /verify/logic verdict.
+
+    The verdict covers the constraints an LLM wrote from the question, not the
+    question, so it is admitted only once that translation is verified, as on
+    /verify/natural_language (#320). The verdict stays as produced.
+    """
+    dr = _enforce_trust(dr, query=query, engine="logic", admission=natural_language_admission)
+    admission = natural_language_admission(dr)
+    log = VerificationLog(
+        organization_id=organization_id,
+        query=query,
+        result=_cap_log_result(dr.to_dict()),
+        # The row is keyed by the question, which is verified only when admitted.
+        is_verified=admission is AdmissionDecision.ADMIT,
+        domain="LOGIC",
+        admission=admission.value,
+    )
+    _safe_commit_log(log)
+    response = _merge_response(dr)
+    response["admission"] = admission.value
+    return response
+
+
 @app.post(
     "/verify/logic",
     responses={403: {"description": "Logic verification blocked by engine"}},
@@ -695,19 +720,7 @@ async def verify_logic(
         )
 
         # Shared with /verify/batch (#494).
-        dr = _enforce_trust(logic_diagnostic(result), query=request.query, engine="logic")
-
-        log = VerificationLog(
-            organization_id=tenant.organization_id,
-            query=request.query,
-            result=_cap_log_result(dr.to_dict()),
-            is_verified=dr.is_authoritative,
-            domain="LOGIC"
-        )
-        _safe_commit_log(log)
-
-        return _merge_response(dr)
-
+        return _logic_route_response(logic_diagnostic(result), request.query, tenant.organization_id)
 
     except HTTPException:
         raise
@@ -722,16 +735,7 @@ async def verify_logic(
             INTERNAL_VERIFICATION_ERROR,
             {"constraint_id": "api.logic.execution_error", "provider_used": provider_used},
         )
-        dr = _enforce_trust(dr, query=request.query, engine="logic")
-        log = VerificationLog(
-            organization_id=tenant.organization_id,
-            query=request.query,
-            result=_cap_log_result(dr.to_dict()),
-            is_verified=False,
-            domain="LOGIC"
-        )
-        _safe_commit_log(log)
-        return _merge_response(dr)
+        return _logic_route_response(dr, request.query, tenant.organization_id)
 
 # #353 (CodeAnt + CodeRabbit on PR #354): the byte cap bounds TRANSFER,
 # not pandas memory — parse in chunks and abort the moment the accumulated

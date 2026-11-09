@@ -41,8 +41,9 @@ describe('captured server responses', () => {
         ['code_unsafe', VerificationStatus.Verified, Admission.Blocked, true, false],
         ['sql', VerificationStatus.Verified, Admission.Admit, true, true],
         ['natural_language', VerificationStatus.Unverifiable, Admission.Blocked, false, false],
-        // /verify/logic and /verify/fact make no admission decision.
-        ['logic', VerificationStatus.Blocked, undefined, false, false],
+        // /verify/logic decides admission as /verify/natural_language does (#320).
+        ['logic', VerificationStatus.Blocked, Admission.Blocked, false, false],
+        // /verify/fact makes no admission decision.
         ['fact', VerificationStatus.Unverifiable, undefined, false, false],
     ] as const)('%s is %s / %s', (name, status, admission, proof, admitted) => {
         const r = response(name);
@@ -417,11 +418,11 @@ describe('client', () => {
         expect(isAdmitted(await client.verifyCode('unsafe code placeholder'))).toBe(false);
     });
 
-    it('verifyLogic parses a response without an admission', async () => {
+    it('verifyLogic parses a blocked response', async () => {
         serve('logic');
         const r = await client.verifyLogic('(A AND B) implies B');
         expect(r.status).toBe(VerificationStatus.Blocked);
-        expect(r.admission).toBeUndefined();
+        expect(r.admission).toBe(Admission.Blocked);
         expect(isAdmitted(r)).toBe(false);
     });
 

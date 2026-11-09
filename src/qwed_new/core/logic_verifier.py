@@ -31,6 +31,8 @@ _CONSTRAINT_ID_EXPLICIT_DECLARATIONS = "logic_verifier.explicit_declarations_req
 _CONSTRAINT_ID_EXECUTION_ERROR = "logic_verifier.execution_error"
 _CONSTRAINT_ID_INVALID_CONSTRAINT = "logic_verifier.invalid_constraint"
 _CONSTRAINT_ID_TYPE_VALIDATION = "dsl_compiler.type_validation"
+_CONSTRAINT_ID_VACUOUS_PREMISES = "logic_verifier.vacuous_premises"
+_CONSTRAINT_ID_PREMISES_UNDECIDED = "logic_verifier.premises_undecided"
 
 
 @dataclass
@@ -594,10 +596,12 @@ class LogicVerifier:
             if isinstance(z3_vars, DiagnosticResult):
                 return z3_vars
 
+            parsed_premises = []
             for premise in premises:
                 z3_constraint = self._parse_constraint(premise, z3_vars)
                 if z3_constraint is not None:
                     solver.add(z3_constraint)
+                    parsed_premises.append((premise, z3_constraint))
 
             conclusion_z3 = self._parse_constraint(conclusion, z3_vars)
             if conclusion_z3 is None:
@@ -605,13 +609,17 @@ class LogicVerifier:
                     "Logic verification blocked: invalid conclusion",
                     {"constraint_id": _CONSTRAINT_ID_INVALID_CONSTRAINT, "constraint": conclusion},
                 )
-            solver.add(Not(conclusion_z3))
-
-            result = solver.check()
 
             fields = self._base_developer_fields(variables)
             fields["premises"] = premises
             fields["conclusion"] = conclusion
+
+            inconsistent = self._premises_inconsistent(parsed_premises, fields)
+            if inconsistent is not None:
+                return inconsistent
+
+            solver.add(Not(conclusion_z3))
+            result = solver.check()
 
             if result == unsat:
                 fields["deterministic_verdict"] = "contradiction_confirmed"
@@ -648,6 +656,48 @@ class LogicVerifier:
     # =========================================================================
     # Helper Methods
     # =========================================================================
+
+    def _premises_inconsistent(
+        self, premises: List[Tuple[str, Any]], fields: Dict[str, Any]
+    ) -> Optional[DiagnosticResult]:
+        """The result that stops a proof whose premises cannot all hold, or
+        None when they can (#579).
+
+        Every conclusion follows from premises that contradict each other, so
+        a proof from them says nothing about the conclusion; it almost always
+        means the premises were written or translated wrongly. Premises the
+        solver cannot decide stop the proof as well.
+        """
+        solver = Solver()
+        solver.set("timeout", self.timeout_ms)
+        # Each premise is assumed through its own label, so the unsat core
+        # names the premises that conflict. The labels hold a double
+        # underscore, which no constraint can contain, so they cannot be
+        # confused with a declared variable.
+        labels = {}
+        for i, (text, expr) in enumerate(premises):
+            label = Bool(f"__qwed_premise_{i}")
+            labels[str(label)] = (label, text)
+            solver.add(Implies(label, BoolVal(expr) if isinstance(expr, bool) else expr))
+
+        result = solver.check(*(label for label, _ in labels.values()))
+        if result == sat:
+            return None
+        if result == unsat:
+            core = {str(name) for name in solver.unsat_core()}
+            fields["unsat_core"] = [text for name, (_, text) in labels.items() if name in core]
+            fields["deterministic_verdict"] = "VACUOUS_PREMISES"
+            fields["constraint_id"] = _CONSTRAINT_ID_VACUOUS_PREMISES
+            return DiagnosticResult.unverifiable(
+                "The premises contradict each other, so any conclusion would follow from them",
+                fields,
+            )
+        fields["deterministic_verdict"] = "UNKNOWN"
+        fields["constraint_id"] = _CONSTRAINT_ID_PREMISES_UNDECIDED
+        return DiagnosticResult.unverifiable(
+            "Could not decide whether the premises can all hold",
+            fields,
+        )
 
     def _create_z3_variables(self, variables: Dict[str, str]) -> dict | DiagnosticResult:
         """Create Z3 variables from type declarations."""

@@ -40,10 +40,11 @@ logger = logging.getLogger(__name__)
 def _attested_statement(dr: DiagnosticResult, query: str) -> str:
     """What the verdict is about, for the attestation's query binding.
 
-    A natural-language verdict covers the expression the LLM translated the
-    question into, not the question (the control plane marks it with
-    ``verification_scope``), so its attestation binds that expression, as the
-    control plane's own attestation does. Any other verdict binds the query.
+    A natural-language or logic verdict covers the expression or constraints
+    the LLM translated the question into, not the question (the control plane
+    and ``logic_diagnostic`` mark it with ``verification_scope``), so its
+    attestation binds that translation, as the control plane's own attestation
+    does. Any other verdict binds the query.
     """
     fields = dr.developer_fields
     expression = fields.get("translated_expression")

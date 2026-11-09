@@ -412,7 +412,10 @@ class ControlPlane:
                 "provider_used": resolved_provider,
                 "latency_ms": (time.time() - start_time) * 1000
             }
-            
+            constraint_id = getattr(result, "constraint_id", None)
+            if constraint_id:
+                response["constraint_id"] = constraint_id
+
             # Sanitize Output
             response = self.output_sanitizer.sanitize_output(
                 result=response,
