@@ -165,10 +165,10 @@ export interface VerificationResponse {
     developer_fields?: Record<string, unknown> | null;
     /**
      * Set by the parser to `isAdmitted(response)`, whatever the body says.
-     * Endpoints that make no admission decision (logic, fact, rag, process
-     * and batch logic and fact items) are never admitted. The `verified` that
-     * `/verify/rag` and `/verify/process` send is their guard's own result;
-     * it stays in `developer_fields.verified`.
+     * Endpoints that make no admission decision (fact, rag, process and
+     * batch fact items) are never admitted. A top-level `verified`, which
+     * `/verify/rag` and `/verify/process` sent before they returned
+     * UNVERIFIABLE (#320), stays in `developer_fields.verified`.
      * @deprecated Use {@link isAdmitted}.
      */
     verified?: boolean;

@@ -353,8 +353,8 @@ func TestAQuarantinedResponseStaysUnknown(t *testing.T) {
 }
 
 func TestARagOrProcessGuardResultIsNotAnAdmission(t *testing.T) {
-	// /verify/rag and /verify/process merge the guard's result to the top
-	// level and make no admission decision.
+	// /verify/rag and /verify/process make no admission decision. Before
+	// #320 they also merged the guard's result to the top level, as here.
 	body := `{"status": "VERIFIED", "proof_ref": "sha256:ab", "verified": true,
 		"developer_fields": {"verified": true}}`
 	var r VerificationResponse
