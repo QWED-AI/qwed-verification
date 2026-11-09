@@ -428,8 +428,12 @@ def test_verify_math_returns_symbolic_result_for_non_numeric_expression(monkeypa
 
     result = asyncio.run(api_main.verify_math({"expression": "x + 1"}, tenant, session))
 
-    assert result["is_valid"] is True
+    # Still a symbolic result, not an error. Without "=" there is no claim,
+    # so it is evidence only, never a verified one (#576).
+    assert result["status"] == "UNVERIFIABLE"
+    assert result["is_valid"] is False
     assert result["is_symbolic"] is True
+    assert result["simplified"] == "x + 1"
 
 
 def test_attestation_guard_requires_secret(monkeypatch):

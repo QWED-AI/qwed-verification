@@ -18,7 +18,7 @@
 
 ---
 
-QWED is an open-source (Apache-2.0) verification layer that checks claims in LLM and AI-agent output with deterministic engines, including SymPy, Z3, SQLGlot and Python AST analysis. It is designed to fail closed: a claim it cannot check should not be reported as verified. Known exceptions, on the logic, consensus and image routes and on `/verify/math` without `=`, are tracked in [#320](https://github.com/QWED-AI/qwed-verification/issues/320), [#576](https://github.com/QWED-AI/qwed-verification/issues/576) and [#581](https://github.com/QWED-AI/qwed-verification/issues/581). It runs in your own environment as a Python library, a CLI, a self-hosted API or a Docker image, with SDKs for TypeScript, Go and Rust.
+QWED is an open-source (Apache-2.0) verification layer that checks claims in LLM and AI-agent output with deterministic engines, including SymPy, Z3, SQLGlot and Python AST analysis. It is designed to fail closed: a claim it cannot check should not be reported as verified. Known exceptions, on the logic, consensus and image routes, are tracked in [#320](https://github.com/QWED-AI/qwed-verification/issues/320) and [#581](https://github.com/QWED-AI/qwed-verification/issues/581). It runs in your own environment as a Python library, a CLI, a self-hosted API or a Docker image, with SDKs for TypeScript, Go and Rust.
 
 This repository is the reference implementation of the QWED verification protocol and of [Verification Context v1.0 and v1.1](spec/), the record format for a verification result. A v1.1 document carries the issuing server's signature.
 

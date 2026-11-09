@@ -32,7 +32,7 @@ CANCELLING = ["2**((10000*x/x)**9)", "(9**9999*x)**9999", "(x/x*9**9999)**9999"]
 def pool():
     pool = mw.MathWorkerPool(workers=1, max_waiting=0)
     # Warm the worker, so later limits measure jobs, not SymPy's import.
-    assert pool.run("request", ("1+1", {}), time_limit=120).status.value == "VERIFIED"
+    assert pool.run("request", ("1+1 = 2", {}), time_limit=120).status.value == "VERIFIED"
     yield pool
     pool.close()
 
@@ -63,7 +63,8 @@ def test_the_killed_worker_is_gone_and_a_new_one_serves_the_next_request(pool):
     before.process.join(timeout=10)
     assert not before.process.is_alive()
     result = pool.run("request", ("3*4", {}), time_limit=120)
-    assert result.status.value == "VERIFIED"
+    # No "=", so no claim (#576): UNVERIFIABLE, with the value still computed.
+    assert result.status.value == "UNVERIFIABLE"
     assert result.developer_fields["value"] == 12.0
 
 
@@ -183,7 +184,7 @@ def test_a_full_pool_and_a_timeout_never_admit(pool):
 def test_a_job_past_the_memory_limit_fails_closed():
     pool = mw.MathWorkerPool(workers=1, max_waiting=0, memory_mb=600)
     try:
-        assert pool.run("request", ("1+1", {}), time_limit=120).status.value == "VERIFIED"
+        assert pool.run("request", ("1+1 = 2", {}), time_limit=120).status.value == "VERIFIED"
         # Builds an integer of about 95 million digits once x/x cancels.
         result = pool.run("request", (CANCELLING[2], {}), time_limit=60)
         assert admission_decision(result).value == "BLOCKED"
@@ -277,7 +278,7 @@ def test_math_waits_do_not_hold_the_shared_thread_pool(monkeypatch):
 
     pool = mw.MathWorkerPool(workers=1, max_waiting=8)
     try:
-        assert pool.run("request", ("1+1", {}), time_limit=120).status.value == "VERIFIED"
+        assert pool.run("request", ("1+1 = 2", {}), time_limit=120).status.value == "VERIFIED"
         monkeypatch.setattr(mw, "get_pool", lambda: pool)
 
         async def scenario():
