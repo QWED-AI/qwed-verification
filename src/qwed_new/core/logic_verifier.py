@@ -135,6 +135,28 @@ class LogicVerifier:
             solver.add(z3_constraint)
         return True
 
+    def _assert_constraints(
+        self, solver: Solver, constraints: List[str], z3_vars: Dict, prove_unsat: bool
+    ) -> Optional[DiagnosticResult]:
+        """Assert each constraint for verify_logic. The BLOCKED result for a
+        constraint that does not parse, or for none asserted at all (#579);
+        otherwise None."""
+        asserted = 0
+        for i, constr in enumerate(constraints):
+            try:
+                if self._add_z3_constraint(solver, constr, z3_vars, prove_unsat, i):
+                    asserted += 1
+            except Exception as e:
+                return DiagnosticResult.blocked(
+                    "Logic verification blocked: invalid constraint",
+                    {
+                        "constraint_id": _CONSTRAINT_ID_INVALID_CONSTRAINT,
+                        "error_type": type(e).__name__,
+                        "constraint": constr,
+                    },
+                )
+        return None if asserted else self._nothing_to_verify()
+
     @staticmethod
     def _nothing_to_verify() -> DiagnosticResult:
         """BLOCKED for input that asserts no constraint (#579). Every
@@ -225,22 +247,9 @@ class LogicVerifier:
             if isinstance(z3_vars, DiagnosticResult):
                 return z3_vars
 
-            asserted = 0
-            for i, constr in enumerate(constraints):
-                try:
-                    if self._add_z3_constraint(solver, constr, z3_vars, prove_unsat, i):
-                        asserted += 1
-                except Exception as e:
-                    return DiagnosticResult.blocked(
-                        "Logic verification blocked: invalid constraint",
-                        {
-                            "constraint_id": _CONSTRAINT_ID_INVALID_CONSTRAINT,
-                            "error_type": type(e).__name__,
-                            "constraint": constr,
-                        },
-                    )
-            if not asserted:
-                return self._nothing_to_verify()
+            blocked = self._assert_constraints(solver, constraints, z3_vars, prove_unsat)
+            if blocked:
+                return blocked
 
             result = solver.check()
 
@@ -645,14 +654,14 @@ class LogicVerifier:
             fields["premises"] = premises
             fields["conclusion"] = conclusion
 
-            started = time.monotonic()
+            started_ns = time.monotonic_ns()
             inconsistent = self._premises_inconsistent(parsed_premises, fields)
             if inconsistent is not None:
                 return inconsistent
 
             # One budget for both solves: the proof gets what the premises'
             # check left of timeout_ms.
-            solver.set("timeout", self._remaining_ms(started))
+            solver.set("timeout", self._remaining_ms(started_ns))
             solver.add(Not(conclusion_z3))
             result = solver.check()
 
@@ -755,10 +764,11 @@ class LogicVerifier:
             pending.extend(node.children())
         return names
 
-    def _remaining_ms(self, started: float) -> int:
-        """What is left of ``timeout_ms`` since ``started`` (time.monotonic),
+    def _remaining_ms(self, started_ns: int) -> int:
+        """What is left of ``timeout_ms`` since ``started_ns``
+        (``time.monotonic_ns``, as QWED_RULES asks for sub-second deadlines),
         and at least 1 ms, so the next solve always has a positive limit."""
-        elapsed_ms = int((time.monotonic() - started) * 1000)
+        elapsed_ms = (time.monotonic_ns() - started_ns) // 1_000_000
         return max(1, self.timeout_ms - elapsed_ms)
 
     def _create_z3_variables(self, variables: Dict[str, str]) -> dict | DiagnosticResult:

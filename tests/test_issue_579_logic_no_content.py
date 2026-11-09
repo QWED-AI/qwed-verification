@@ -122,13 +122,14 @@ def test_the_proof_gets_what_the_premises_check_left_of_the_timeout(monkeypatch)
 
     # A fixed clock for the module only, so the test does not depend on how
     # long it runs.
-    monkeypatch.setattr(logic_verifier, "time", SimpleNamespace(monotonic=lambda: 10.0))
+    now_ns = 10_000_000_000
+    monkeypatch.setattr(logic_verifier, "time", SimpleNamespace(monotonic_ns=lambda: now_ns))
     verifier = LogicVerifier(timeout_ms=1000)
 
     # Started 250 ms ago: 750 ms are left.
-    assert verifier._remaining_ms(9.75) == 750
+    assert verifier._remaining_ms(now_ns - 250_000_000) == 750
     # All spent: the proof still gets a positive limit.
-    assert verifier._remaining_ms(5.0) == 1
+    assert verifier._remaining_ms(now_ns - 5_000_000_000) == 1
 
 
 # ---------------------------------------------------------------- the other checks
