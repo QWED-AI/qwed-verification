@@ -164,10 +164,10 @@ type VerificationResponse struct {
 	Extra map[string]interface{} `json:"-"`
 
 	// Verified is set to IsAdmitted() on every decode, whatever the body
-	// says. Endpoints that make no admission decision (logic, fact, rag,
-	// process, and batch logic and fact items) are never admitted. The verified field
-	// /verify/rag and /verify/process send is their guard's own result; it is
-	// kept in Extra["verified"] and DeveloperFields["verified"].
+	// says. Endpoints that make no admission decision (fact, rag, process,
+	// and batch fact items) are never admitted. A top-level verified, which
+	// /verify/rag and /verify/process sent before they returned UNVERIFIABLE
+	// (#320), is kept in Extra["verified"] and DeveloperFields["verified"].
 	//
 	// Deprecated: use IsAdmitted.
 	Verified bool `json:"-"`

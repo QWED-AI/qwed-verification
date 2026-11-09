@@ -8,11 +8,41 @@ helpers, so a batch item gets what its route returns.
 
 Trust enforcement and admission stay with the caller, which applies them the
 same way in both places.
+
+``/verify/rag`` and ``/verify/process`` build theirs with ``guard_diagnostic``.
 """
 
 from typing import Any
 
-from qwed_new.core.diagnostics import DiagnosticResult
+from qwed_new.core.diagnostics import AdvisoryCheck, DiagnosticResult
+
+
+def guard_diagnostic(result: dict, *, route: str, passed: str, failed: str) -> DiagnosticResult:
+    """The verdict of a route whose guard checks only what the request says (#320).
+
+    ``/verify/rag`` compares the document labels on the chunks with a target
+    label and a threshold, all sent in the same request, and the server holds
+    no documents. ``/verify/process`` looks for keywords in the trace, and in
+    milestones mode the request names the keywords too. Neither can establish
+    that the retrieval or the reasoning is right, so the verdict is always
+    UNVERIFIABLE, and the guard's own result is advisory only: it sits in
+    ``advisory_checks``, so its ``verified`` key never reaches the response's
+    top level. ``passed`` and ``failed`` are the messages for the guard's two
+    outcomes.
+    """
+    guard_passed = result.get("verified") is True
+    check = AdvisoryCheck(
+        name=f"{route}_guard",
+        constraint_id=f"api.{route}.guard",
+        details=dict(result),
+    )
+    return DiagnosticResult.unverifiable(
+        passed if guard_passed else failed,
+        developer_fields={
+            "constraint_id": f"api.{route}.{'advisory_only' if guard_passed else 'guard_failed'}",
+            "advisory_checks": [check],
+        },
+    )
 
 
 def _logic_scope(result: dict) -> dict:

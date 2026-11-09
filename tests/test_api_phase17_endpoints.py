@@ -26,11 +26,15 @@ def test_verify_process_endpoint(client):
     # 200 required
     assert response.status_code == 200
     data = response.json()
-    assert "verified" in data
-    assert data["irac.issue"].lower() == "issue"
-    assert data["irac.rule"].lower() == "rule"
-    assert data["irac.application"].lower() == "application"
-    assert data["irac.conclusion"].lower() == "conclusion"
+    # Keyword matching is advisory only (#320): UNVERIFIABLE, and the guard's
+    # result sits in advisory_checks, not at the top level.
+    assert data["status"] == "UNVERIFIABLE"
+    assert "verified" not in data
+    details = data["advisory_checks"][0]["details"]
+    assert details["irac.issue"].lower() == "issue"
+    assert details["irac.rule"].lower() == "rule"
+    assert details["irac.application"].lower() == "application"
+    assert details["irac.conclusion"].lower() == "conclusion"
 
 @patch("qwed_new.guards.process_guard.ProcessVerifier.verify_trace")
 def test_verify_process_endpoint_milestones_mode(mock_verify_trace, client):
@@ -48,10 +52,13 @@ def test_verify_process_endpoint_milestones_mode(mock_verify_trace, client):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["verified"] is True
-    assert data["score"] == 1.0
-    assert data["process_rate"] == 1.0
-    assert data["missed_milestones"] == []
+    assert data["status"] == "UNVERIFIABLE"
+    assert "verified" not in data
+    details = data["advisory_checks"][0]["details"]
+    assert details["verified"] is True  # the guard's own result, advisory only
+    assert details["score"] == 1.0
+    assert details["process_rate"] == 1.0
+    assert details["missed_milestones"] == []
     mock_verify_trace.assert_called_once_with(
         "Step 1: collect evidence\nStep 2: apply rule",
         ["collect evidence", "apply rule"]
@@ -76,7 +83,7 @@ def test_verify_process_endpoint_rejects_invalid_mode(client):
     assert response.json()["detail"] == "Invalid mode. Use 'irac' or 'milestones'."
 
 @patch("qwed_new.guards.process_guard.ProcessVerifier.verify_irac_structure", side_effect=RuntimeError("secret process failure"))
-def test_verify_process_endpoint_exception_uses_verified_flag(mock_verify_irac, client):
+def test_verify_process_endpoint_exception_is_blocked(mock_verify_irac, client):
     response = client.post("/verify/process", json={
         "trace": "Issue: test\nRule: test\nApplication: test\nConclusion: test",
         "mode": "irac"
@@ -86,7 +93,7 @@ def test_verify_process_endpoint_exception_uses_verified_flag(mock_verify_irac, 
     data = response.json()
     assert data["status"] == "BLOCKED"
     assert data["agent_message"] == "Internal processing error"
-    assert data["verified"] is False
+    assert "verified" not in data
 
 @patch("qwed_sdk.guards.rag_guard.RAGGuard.verify_retrieval_context")
 def test_verify_rag_endpoint(mock_verify_retrieval_context, client):
@@ -103,9 +110,12 @@ def test_verify_rag_endpoint(mock_verify_retrieval_context, client):
     }, headers={"x-api-key": "fake-key"})
     assert response.status_code == 200
     data = response.json()
-    assert data["verified"] is True
-    assert data["drm_rate"] == 0.0
-    assert data["chunks_checked"] == 1
+    # The labels and threshold come from the request: advisory only (#320).
+    assert data["status"] == "UNVERIFIABLE"
+    assert "verified" not in data
+    details = data["advisory_checks"][0]["details"]
+    assert details["drm_rate"] == 0.0
+    assert details["chunks_checked"] == 1
     mock_verify_retrieval_context.assert_called_once_with(
         target_document_id="doc123",
         retrieved_chunks=[{"text": "Hello world"}]

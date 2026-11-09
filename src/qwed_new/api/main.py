@@ -38,7 +38,7 @@ INTERNAL_VERIFICATION_ERROR = "Internal verification error"
 INTERNAL_PROCESSING_ERROR = "Internal processing error"
 
 from qwed_new.core.control_plane import ControlPlane, natural_language_admission
-from qwed_new.core.route_diagnostics import logic_diagnostic, natural_language_diagnostic
+from qwed_new.core.route_diagnostics import guard_diagnostic, logic_diagnostic, natural_language_diagnostic
 from qwed_new.core.trust import AdmissionRule, attest_and_enforce
 from qwed_new.core.tenant_context import get_current_tenant, TenantContext
 from qwed_new.core.database import create_db_and_tables, get_session
@@ -1347,18 +1347,13 @@ async def verify_rag(
             _safe_commit_log(log)
             return _merge_response(dr)
         
-        is_verified = result.get("verified", False)
-        if is_verified:
-            dr = DiagnosticResult.verified(
-                "RAG context verified",
-                developer_fields=result,
-                evidence={"verified": True, "drm_rate": result.get("drm_rate")},
-            )
-        else:
-            dr = DiagnosticResult.unverifiable(
-                "RAG context mismatch detected",
-                developer_fields=result,
-            )
+        # The labels and the threshold come from the request: advisory only (#320).
+        dr = guard_diagnostic(
+            result,
+            route="rag",
+            passed="RAG chunks carry the requested document label, but the request supplies the labels and the threshold, so this is not verified",
+            failed="RAG context mismatch detected",
+        )
         dr = _enforce_trust(dr, query=request.target_document_id, engine="rag")
 
         log = VerificationLog(
@@ -1379,7 +1374,7 @@ async def verify_rag(
         doc_id = getattr(request, 'target_document_id', 'unknown')
         dr = DiagnosticResult.blocked(
             INTERNAL_PROCESSING_ERROR,
-            {"constraint_id": "api.rag.execution_error", "verified": False},
+            {"constraint_id": "api.rag.execution_error"},
         )
         dr = _enforce_trust(dr, query=doc_id, engine="rag")
         log = VerificationLog(
@@ -1433,17 +1428,13 @@ async def verify_process(
                 detail="Invalid mode. Use 'irac' or 'milestones'."
             )
         
-        if result.get("verified"):
-            dr = DiagnosticResult.verified(
-                "Process verification passed",
-                developer_fields=result,
-                evidence={"mode": request.mode, "verified": True},
-            )
-        else:
-            dr = DiagnosticResult.unverifiable(
-                "Process verification did not pass",
-                developer_fields=result,
-            )
+        # Keyword matching cannot show the reasoning is right: advisory only (#320).
+        dr = guard_diagnostic(
+            result,
+            route="process",
+            passed="The trace has the expected markers, but keyword matching does not verify the reasoning",
+            failed="Process verification did not pass",
+        )
         dr = _enforce_trust(dr, query=request.trace, engine="process")
             
         log = VerificationLog(
@@ -1463,7 +1454,7 @@ async def verify_process(
         logger.error(f"Process verification error: {redact_pii(str(e))}", exc_info=False)
         dr = DiagnosticResult.blocked(
             INTERNAL_PROCESSING_ERROR,
-            {"constraint_id": "api.process.execution_error", "verified": False},
+            {"constraint_id": "api.process.execution_error"},
         )
         dr = _enforce_trust(dr, query=request.trace, engine="process")
         log = VerificationLog(
