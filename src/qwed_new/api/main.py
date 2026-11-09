@@ -1351,7 +1351,7 @@ async def verify_rag(
         dr = guard_diagnostic(
             result,
             route="rag",
-            passed="RAG chunks carry the requested document label, but the request supplies the labels and the threshold, so this is not verified",
+            passed="The RAG label and threshold check passed, but the request supplies both the labels and the threshold, so this is not verified",
             failed="RAG context mismatch detected",
         )
         dr = _enforce_trust(dr, query=request.target_document_id, engine="rag")

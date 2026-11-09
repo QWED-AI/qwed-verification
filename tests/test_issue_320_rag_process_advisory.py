@@ -88,6 +88,12 @@ def test_rag_evidence_the_request_supplies_is_advisory_only(client, isolated_aud
 
     _assert_advisory_only(body, "api.rag.advisory_only", guard_passed=True)
     assert _last_row(isolated_audit_chain).is_verified is False
+    # With a threshold of 1 every label can be wrong, so the message reports
+    # only that the check passed, not that the labels match.
+    assert body["agent_message"] == (
+        "The RAG label and threshold check passed, but the request supplies "
+        "both the labels and the threshold, so this is not verified"
+    )
 
 
 def test_a_rag_mismatch_is_still_unverifiable(client, isolated_audit_chain):
