@@ -131,8 +131,10 @@ class LogicVerifier:
         formulas = []
         for constr in constraints:
             try:
-                formula = self._parse_formula(constr, z3_vars)
-            except Exception as e:
+                formulas.append(self._parse_formula(constr, z3_vars))
+            except (ValueError, Z3Exception) as e:
+                # The evaluator raises ValueError for anything it refuses;
+                # any other error reaches verify_logic's own handler.
                 return DiagnosticResult.blocked(
                     "Logic verification blocked: invalid constraint",
                     {
@@ -141,8 +143,6 @@ class LogicVerifier:
                         "constraint": constr,
                     },
                 )
-            if formula is not None:
-                formulas.append(formula)
         if not formulas:
             return self._nothing_to_verify()
         if prove_unsat:
@@ -827,14 +827,15 @@ class LogicVerifier:
     def _parse_formula(self, constr: str, z3_vars: Dict) -> Any:
         """Parse a constraint that must be a Boolean formula (#579).
 
-        The evaluator also yields lists, tuples and numbers. Z3's ``add``
-        takes a list apart, so ``"[]"`` stood for a constraint while it
-        asserted nothing, and the empty solver was satisfiable. Only True,
-        False (as Z3 values) and Z3 Boolean expressions are formulas;
-        anything else raises ValueError, and the check is BLOCKED.
+        The evaluator also yields None, lists, tuples and numbers. A None was
+        skipped and Z3's ``add`` takes a list apart, so ``"None"`` or
+        ``"[]"`` stood for a constraint while it asserted nothing, and the
+        rest could be satisfiable without it. Only True, False (as Z3 values)
+        and Z3 Boolean expressions are formulas; anything else raises
+        ValueError, and the check is BLOCKED.
         """
         value = self._parse_constraint(constr, z3_vars)
-        if value is None or (is_expr(value) and is_bool(value)):
+        if is_expr(value) and is_bool(value):
             return value
         if isinstance(value, bool):
             return BoolVal(value)

@@ -16,9 +16,11 @@
    ``verify_array`` and ``verify_with_quantifiers`` returned VERIFIED when
    no constraint was asserted. They are now BLOCKED with
    ``logic_verifier.no_constraint``.
-4. A constraint that is not a Boolean formula, such as ``"[]"``, counted as a
-   constraint while it asserted nothing. Every check now takes only True,
-   False and Z3 Boolean expressions, and BLOCKS anything else.
+4. A constraint that is not a Boolean formula, such as ``"[]"`` or
+   ``"None"``, counted as a constraint (or was skipped) while it asserted
+   nothing, so the rest could be satisfiable without it. Every check now
+   takes only True, False and Z3 Boolean expressions, and BLOCKS anything
+   else.
 5. ``verify_logic(..., prove_unsat=True)`` labelled constraints ``c0``,
    ``c1``, ..., the names of constants a constraint can declare, so a
    satisfiable set came back UNSAT. Its labels, like those of the premises
@@ -176,9 +178,10 @@ def test_a_check_with_a_constraint_is_still_decided(check):
     assert result.proof_ref
 
 
-# The evaluator also yields lists, tuples and numbers. Z3's add takes a list
-# apart, so "[]" stood for a constraint while it asserted nothing.
-NOT_A_FORMULA = ["[]", "()", "[[]]", "1", "[x > 5]"]
+# The evaluator also yields None, lists, tuples and numbers. A None was
+# skipped and Z3's add takes a list apart, so "None" or "[]" stood for a
+# constraint while it asserted nothing.
+NOT_A_FORMULA = ["None", "[None]", "[]", "()", "[[]]", "1", "[x > 5]"]
 CHECKS_OF_ONE_FORMULA = {
     "verify_logic": lambda v, c: v.verify_logic(INT_X, [c]),
     "verify_logic, prove_unsat": lambda v, c: v.verify_logic(INT_X, [c], prove_unsat=True),
@@ -202,11 +205,36 @@ def test_a_constraint_that_is_not_a_boolean_formula_is_blocked(check, value):
     assert result.proof_ref is None
 
 
-def test_verify_logic_names_a_constraint_that_is_not_a_formula():
-    result = LogicVerifier().verify_logic(INT_X, ["x > 5", "[]"])
+@pytest.mark.parametrize("value", ["None", "[]"])
+def test_verify_logic_names_a_constraint_that_is_not_a_formula(value):
+    result = LogicVerifier().verify_logic(INT_X, ["x > 5", value])
 
+    assert result.status is DiagnosticStatus.BLOCKED
     assert result.developer_fields["constraint_id"] == "logic_verifier.invalid_constraint"
-    assert result.developer_fields["constraint"] == "[]"
+    assert result.developer_fields["constraint"] == value
+
+
+# Beside a constraint that holds, one that is not a formula was dropped, and
+# the check came back VERIFIED for the rest.
+CHECKS_BESIDE_A_FORMULA = {
+    "verify_bitvector": lambda v, c: v.verify_bitvector({"x": 8}, ["x > 1", c]),
+    "verify_array": lambda v, c: v.verify_array(ARRAY, {"i": "Int"}, ["Select(a, i) == 3", c]),
+    "verify_with_quantifiers, constraint": lambda v, c: v.verify_with_quantifiers(INT_X, [], ["x > 1", c]),
+    "verify_with_quantifiers, body": lambda v, c: v.verify_with_quantifiers(
+        {}, [SQUARES, QuantifiedFormula("forall", [("z", "Int")], c)]
+    ),
+    "verify_optimization": lambda v, c: v.verify_optimization(INT_X, ["x < 5", c], "x"),
+    "prove_theorem, premise": lambda v, c: v.prove_theorem(INT_X, ["x > 5", c], "x > 3"),
+}
+
+
+@pytest.mark.parametrize("value", ["None", "[]"])
+@pytest.mark.parametrize("check", CHECKS_BESIDE_A_FORMULA.values(), ids=CHECKS_BESIDE_A_FORMULA.keys())
+def test_a_constraint_that_is_not_a_formula_is_not_dropped_beside_one_that_holds(check, value):
+    result = check(LogicVerifier(), value)
+
+    assert result.status is DiagnosticStatus.BLOCKED
+    assert result.proof_ref is None
 
 
 @pytest.mark.parametrize("value", ["True", "1 == 1"])
@@ -236,7 +264,8 @@ def test_prove_unsat_still_names_the_constraints_that_conflict():
     explanation = result.developer_fields["explanation"]
     # Z3 lists the core in no fixed order.
     assert explanation.startswith("Conflicting constraints: ")
-    assert "'c0'" in explanation and "'c1'" in explanation
+    assert "'c0'" in explanation
+    assert "'c1'" in explanation
 
 
 # ---------------------------------------------------------------- the DSL
