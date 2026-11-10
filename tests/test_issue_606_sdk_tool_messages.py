@@ -121,7 +121,7 @@ def test_safe_code_is_still_safe(client, monkeypatch, tool_class, method):  # no
 
 @pytest.mark.parametrize("tool_class, expected", [
     (langchain.QWEDCodeTool, "⚠️ SECURITY ISSUES: Code is not safe"),
-    (crewai.QWEDCodeTool, "❌ UNSAFE: Code contains security vulnerabilities."),
+    (crewai.QWEDCodeTool, "❌ UNSAFE: Code is not safe"),
 ])
 def test_unsafe_code_with_no_issues_listed_is_still_unsafe(monkeypatch, tool_class, expected):
     response = {"status": "VERIFIED", "admission": "BLOCKED", "is_valid": False, "agent_message": "Code is not safe"}

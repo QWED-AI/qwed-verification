@@ -137,7 +137,7 @@ class QWEDCodeTool(QWEDVerificationTool):
             lines = code_issue_lines(result, 3)
             if lines:
                 return "⚠️ SECURITY ISSUES FOUND:\n" + "\n".join(f"• {line}" for line in lines)
-            return "❌ UNSAFE: Code contains security vulnerabilities."
+            return f"❌ UNSAFE: {server_message(result) or 'Code contains security vulnerabilities.'}"
         except Exception as e:
             return f"⚠️ ERROR: {str(e)}"
 
