@@ -575,8 +575,17 @@ def action_verify_shell():
 
 
 # ============== VERIFY-PROCESS MODE ==============
+# Keyword matching cannot show that the reasoning is right, so this mode is a
+# lint gate, never a verification (#602; /verify/process since #601): the
+# result is UNVERIFIABLE and DENY whatever the keywords show.
+PROCESS_NOT_VERIFIED = "keyword matching does not verify the reasoning"
+
+
 def action_verify_process():
-    """Verify reasoning process integrity (IRAC & Milestones)."""
+    """Check a reasoning trace for IRAC steps and milestones, by keyword.
+
+    Missing steps or milestones are findings and fail the step; finding them
+    all does not verify the reasoning, so the result is never admitted."""
     llm_output = get_env("LLM_OUTPUT")
     milestones = get_env("MILESTONES", "")  # Comma-separated
     output_format = get_env("OUTPUT_FORMAT", "text")
@@ -595,9 +604,9 @@ def action_verify_process():
     milestone_list = [m.strip() for m in milestones.split(",") if m.strip()]
     milestone_result = verifier.verify_trace(llm_output, milestone_list)
     
-    # Combined Verdict
-    authorized = irac_result["verified"] and milestone_result["verified"]
-    
+    # Every IRAC step and milestone was found: a lint pass, not a verdict.
+    markers_found = irac_result["verified"] and milestone_result["verified"]
+
     findings = []
     if not irac_result["verified"]:
         findings.append({
@@ -616,7 +625,10 @@ def action_verify_process():
     # Output
     if output_format == "json":
         print(json.dumps({
-            "verified": authorized,
+            "verified": False,
+            "verdict": "UNVERIFIABLE",
+            "admission": "DENY",
+            "markers_found": markers_found,
             "irac_score": irac_result["score"],
             "process_rate": milestone_result["process_rate"],
             "findings": findings
@@ -630,20 +642,25 @@ def action_verify_process():
             for f in findings:
                 print(f"   - [{f['type']}] {f['message']}")
         else:
-            print("\n✅ Reasoning Process Verified (IRAC Compliant)")
-            
-            
-    set_output("verified", str(authorized).lower())
-    set_output("badge_url", generate_badge_url(authorized))
+            print("\n✅ The trace has the expected markers.")
+        print(f"   Not verified: {PROCESS_NOT_VERIFIED} (UNVERIFIABLE · DENY).")
+
+    set_output("verified", "false")
+    set_output("badge_url", generate_badge_url(False))
     set_output("irac_score", f"{irac_result['score']:.4f}")
     set_output("process_rate", f"{milestone_result['process_rate']:.4f}")
     set_output("findings", json.dumps(findings))
-    
-    verdict = "VERIFIED" if authorized else "UNVERIFIABLE"
-    admission = "ADMIT" if authorized else "DENY"
-    _set_vc_outputs(verdict, admission, {"irac_score": irac_result["score"], "process_rate": milestone_result["process_rate"]}, "process")
-    
-    if not authorized and get_env("FAIL_ON_FINDINGS", "true") == "true":
+
+    evidence = {
+        "irac_score": irac_result["score"],
+        "process_rate": milestone_result["process_rate"],
+        "markers_found": markers_found,
+        "findings_count": len(findings),
+    }
+    _set_vc_outputs("UNVERIFIABLE", "DENY", evidence, "process", reason=PROCESS_NOT_VERIFIED)
+
+    # The lint gate: a missing step or milestone fails the step, as before.
+    if findings and get_env("FAIL_ON_FINDINGS", "true") == "true":
         sys.exit(1)
 
 

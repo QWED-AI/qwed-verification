@@ -12,7 +12,7 @@ inputs:
   
   # New: Action type selector
   action:
-    description: 'Action type: verify, scan-secrets, scan-code, verify-shell'
+    description: 'Action type: verify, scan-secrets, scan-code, verify-shell, verify-process. verify-process checks a reasoning trace for IRAC steps by keyword: a missing step is a finding, but the result is never VERIFIED or ADMIT.'
     required: false
     default: 'verify'
 
@@ -33,7 +33,7 @@ inputs:
     description: 'The user query (e.g. "Derivative of x^2") - used with action=verify'
     required: false
   llm_output:
-    description: 'The LLM output to verify - used with action=verify'
+    description: 'The LLM output to verify - used with action=verify, and the reasoning trace for action=verify-process'
     required: false
   engine:
     description: 'Verification Engine: math, logic, code, sql, shell'
@@ -60,7 +60,7 @@ inputs:
 
 outputs:
   verified:
-    description: 'True if verification passed or no issues found'
+    description: 'True only when the result is admitted (admission ADMIT). Always false for verify-process, whose keyword check does not verify the reasoning'
   explanation:
     description: 'Detailed proof or error explanation'
   findings_count:
