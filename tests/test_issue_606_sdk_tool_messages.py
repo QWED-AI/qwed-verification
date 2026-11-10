@@ -21,6 +21,7 @@ patched.
 
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 from qwed_new.api import main as api_main
@@ -116,6 +117,48 @@ def test_unsafe_code_lists_the_issues_the_server_sends(client, monkeypatch, tool
 @pytest.mark.parametrize("tool_class, method", CODE_TOOLS)
 def test_safe_code_is_still_safe(client, monkeypatch, tool_class, method):  # noqa: F811
     assert _answer(monkeypatch, tool_class, method, _code(client, "x = 1")).startswith("✅ SAFE")
+
+
+@pytest.mark.parametrize("tool_class, expected", [
+    (langchain.QWEDCodeTool, "⚠️ SECURITY ISSUES: Code is not safe"),
+    (crewai.QWEDCodeTool, "❌ UNSAFE: Code contains security vulnerabilities."),
+])
+def test_unsafe_code_with_no_issues_listed_is_still_unsafe(monkeypatch, tool_class, expected):
+    response = {"status": "VERIFIED", "admission": "BLOCKED", "is_valid": False, "agent_message": "Code is not safe"}
+
+    assert _answer(monkeypatch, tool_class, "verify_code", response) == expected
+
+
+# ---------------------------------------------------------------- server unreachable
+
+def _unreachable(monkeypatch, tool_class):
+    tool = tool_class(api_key="x")
+
+    def refuse(*args, **kwargs):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(tool._client, "_request", refuse)
+    return tool._run("input")
+
+
+@pytest.mark.parametrize("tool_class", [langchain.QWEDCodeTool, crewai.QWEDCodeTool, crewai.QWEDSQLTool])
+def test_a_server_that_cannot_be_reached_is_named_as_the_reason(monkeypatch, tool_class):
+    # The client's own UNVERIFIABLE result for an unreachable server keeps its
+    # reason in "message" and "error", not "agent_message". Without it the
+    # agent could not tell an outage, worth a retry, from an input QWED could
+    # not decide.
+    answer = _unreachable(monkeypatch, tool_class)
+
+    assert answer.startswith("⚠️ UNVERIFIABLE: The QWED server could not be reached")
+    assert not any(word in answer for word in WRONG_WORDS)
+
+
+def test_the_clients_error_is_the_reason_when_there_is_no_message(monkeypatch):
+    tool = crewai.QWEDSQLTool(api_key="x")
+    result = VerificationResult(status="UNVERIFIABLE", result={}, error="server unreachable")
+    monkeypatch.setattr(tool._client, "verify_sql", lambda *args, **kwargs: result)
+
+    assert tool._run("SELECT 1") == "⚠️ UNVERIFIABLE: server unreachable"
 
 
 # ---------------------------------------------------------------- SQL (CrewAI)

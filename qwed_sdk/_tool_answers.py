@@ -15,6 +15,11 @@ and read ``message``, ``corrected`` and ``vulnerabilities``, which no route
 sends. These helpers give each case its own answer, from the fields the
 server does send: ``agent_message``, ``is_valid``, ``issues`` and, for
 natural language, ``translated_expression`` and ``calculated_value``.
+
+The client's own ``UNVERIFIABLE`` result for a server it could not reach
+(``verify_code``, ``verify_sql``) puts its reason in ``message`` and
+``error``, so those are read after the server's fields: an agent can then
+tell an outage from an input QWED could not decide.
 """
 
 from typing import Any, List, Optional
@@ -25,9 +30,17 @@ TRANSLATION_NOT_VERIFIED = (
 
 
 def server_message(result: Any) -> str:
-    """The server's own message for *result*, or an empty string."""
+    """The server's own message for *result*, or an empty string. For a
+    server the client could not reach, the client's reason (``message``,
+    then ``error``)."""
     data = result.result or {}
-    return str(data.get("agent_message") or data.get("error") or "")
+    return str(
+        data.get("agent_message")
+        or data.get("error")
+        or data.get("message")
+        or result.error
+        or ""
+    )
 
 
 def undecided_answer(result: Any) -> Optional[str]:
