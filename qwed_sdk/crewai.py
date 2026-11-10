@@ -18,6 +18,8 @@ Usage:
 from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass, field
 
+from ._tool_answers import code_issue_lines, natural_language_answer, server_message, undecided_answer
+
 # Import QWED client
 try:
     from qwed_sdk import QWEDClient
@@ -86,17 +88,9 @@ class QWEDVerificationTool(BaseTool if CREWAI_AVAILABLE else object):
         """Run verification on the given query."""
         try:
             result = self._client.verify(query)
-            
-            if result.is_verified:
-                return f"✅ VERIFIED: The statement '{query[:50]}...' is correct."
-            else:
-                msg = ""
-                if hasattr(result, "result") and result.result:
-                    msg = result.result.get("message", "")
-                    corrected = result.result.get("corrected")
-                    if corrected:
-                        return f"❌ INCORRECT: {msg}. Correct answer: {corrected}"
-                return f"❌ FAILED: {msg or 'Verification failed'}"
+            # /verify/natural_language admits nothing while the translation is
+            # unverified, so not admitted is not "failed" (#606).
+            return natural_language_answer(result, f"✅ VERIFIED: The statement '{query[:50]}...' is correct.")
         except Exception as e:
             return f"⚠️ ERROR: Unable to verify - {str(e)}"
 
@@ -115,8 +109,8 @@ class QWEDMathTool(QWEDVerificationTool):
             result = self._client.verify_math(expression)
             if result.is_verified:
                 return f"✅ VERIFIED: {expression} is mathematically correct."
-            else:
-                return f"❌ INCORRECT: {expression} is not valid."
+            # Incorrect only when proven false; undecided is not wrong (#606).
+            return undecided_answer(result) or f"❌ INCORRECT: {expression} is false. {server_message(result)}".rstrip()
         except Exception as e:
             return f"⚠️ ERROR: {str(e)}"
 
@@ -135,12 +129,15 @@ class QWEDCodeTool(QWEDVerificationTool):
             result = self._client.verify_code(code)
             if result.is_verified:
                 return "✅ SAFE: No security vulnerabilities detected in the code."
-            else:
-                vulns = result.result.get("vulnerabilities", []) if hasattr(result, "result") else []
-                if vulns:
-                    issues = [f"• {v.get('severity', '').upper()}: {v.get('message', '')}" for v in vulns[:3]]
-                    return f"⚠️ SECURITY ISSUES FOUND:\n" + "\n".join(issues)
-                return "❌ BLOCKED: Code contains security vulnerabilities."
+            # Unsafe only when proven unsafe: code that does not parse is
+            # BLOCKED, not a vulnerability (#606).
+            undecided = undecided_answer(result)
+            if undecided is not None:
+                return undecided
+            lines = code_issue_lines(result, 3)
+            if lines:
+                return "⚠️ SECURITY ISSUES FOUND:\n" + "\n".join(f"• {line}" for line in lines)
+            return "❌ UNSAFE: Code contains security vulnerabilities."
         except Exception as e:
             return f"⚠️ ERROR: {str(e)}"
 
@@ -159,8 +156,9 @@ class QWEDSQLTool(QWEDVerificationTool):
             result = self._client.verify_sql(query, "")
             if result.is_verified:
                 return "✅ SAFE: SQL query is valid and secure."
-            else:
-                return "❌ BLOCKED: SQL query contains security issues (possible injection)."
+            # Unsafe only when proven unsafe: SQL that does not parse is
+            # BLOCKED, not an injection (#606).
+            return undecided_answer(result) or f"❌ UNSAFE: {server_message(result) or 'the SQL query is not safe to execute'}"
         except Exception as e:
             return f"⚠️ ERROR: {str(e)}"
 

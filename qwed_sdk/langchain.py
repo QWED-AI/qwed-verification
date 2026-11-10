@@ -17,6 +17,8 @@ Usage:
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
+from ._tool_answers import code_issue_lines, natural_language_answer, server_message, undecided_answer
+
 # Import QWED client
 try:
     from qwed_sdk import QWEDClient
@@ -86,14 +88,9 @@ class QWEDTool(BaseTool if LANGCHAIN_AVAILABLE else object):
         """Synchronous verification."""
         try:
             result = self._client.verify(query)
-            
-            if result.is_verified:
-                return f"✅ VERIFIED: {result.result.get('message', 'Correct')}"
-            else:
-                correction = result.result.get('corrected', '')
-                if correction:
-                    return f"❌ INCORRECT: {result.result.get('message', '')}. Correct answer: {correction}"
-                return f"❌ FAILED: {result.result.get('message', 'Verification failed')}"
+            # /verify/natural_language admits nothing while the translation is
+            # unverified, so not admitted is not "failed" (#606).
+            return natural_language_answer(result, f"✅ VERIFIED: {server_message(result) or 'Correct'}")
         except Exception as e:
             return f"⚠️ ERROR: {str(e)}"
     
@@ -116,8 +113,8 @@ class QWEDMathTool(QWEDTool):
             result = self._client.verify_math(expression)
             if result.is_verified:
                 return f"✅ VERIFIED: {expression} is correct"
-            else:
-                return f"❌ INCORRECT: {result.result.get('message', 'Invalid')}"
+            # Incorrect only when proven false; undecided is not wrong (#606).
+            return undecided_answer(result) or f"❌ INCORRECT: {server_message(result) or 'the claim is false'}"
         except Exception as e:
             return f"⚠️ ERROR: {str(e)}"
 
@@ -195,10 +192,15 @@ class QWEDCodeTool(QWEDTool):
             result = self._client.verify_code(code)
             if result.is_verified:
                 return "✅ SAFE: No security issues detected"
-            else:
-                vulns = result.result.get('vulnerabilities', [])
-                issues = [f"- {v['severity']}: {v['message']}" for v in vulns[:5]]
-                return f"⚠️ SECURITY ISSUES:\n" + "\n".join(issues)
+            # Unsafe only when proven unsafe: code that does not parse is
+            # BLOCKED, not a list of issues (#606).
+            undecided = undecided_answer(result)
+            if undecided is not None:
+                return undecided
+            lines = code_issue_lines(result, 5)
+            if lines:
+                return "⚠️ SECURITY ISSUES:\n" + "\n".join(f"- {line}" for line in lines)
+            return f"⚠️ SECURITY ISSUES: {server_message(result) or 'the code is not safe'}"
         except Exception as e:
             return f"⚠️ ERROR: {str(e)}"
 
