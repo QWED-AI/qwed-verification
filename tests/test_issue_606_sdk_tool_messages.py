@@ -164,9 +164,12 @@ def test_the_clients_error_is_the_reason_when_there_is_no_message(monkeypatch):
 # ---------------------------------------------------------------- SQL (CrewAI)
 
 def test_sql_that_does_not_parse_is_blocked_not_an_injection(client, monkeypatch):  # noqa: F811
-    answer = _answer(monkeypatch, crewai.QWEDSQLTool, "verify_sql", _sql(client, "SELEC * FRM"))
+    response = _sql(client, "SELEC * FRM")
+    answer = _answer(monkeypatch, crewai.QWEDSQLTool, "verify_sql", response)
 
     assert answer.startswith("⛔ BLOCKED")
+    assert response["agent_message"]
+    assert response["agent_message"] in answer
     assert not any(word in answer for word in WRONG_WORDS)
 
 
@@ -214,6 +217,8 @@ def test_a_blocked_natural_language_result_gives_the_servers_message(client, mon
     answer = _answer(monkeypatch, tool_class, method, response)
 
     assert answer.startswith("⛔ BLOCKED")
+    assert response["agent_message"]
+    assert response["agent_message"] in answer
     assert not any(word in answer for word in WRONG_WORDS)
 
 
