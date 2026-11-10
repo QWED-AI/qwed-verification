@@ -34,8 +34,15 @@ WRONG_WORDS = ("INCORRECT", "UNSAFE", "SECURITY ISSUES", "injection", "vulnerabi
 SCHEMA = "CREATE TABLE t (id INT, a INT)"
 
 
+def _tool(tool_class):
+    # The SQL tool checks a query against the schema it runs on (#608).
+    if tool_class is crewai.QWEDSQLTool:
+        return tool_class(api_key="x", schema_ddl=SCHEMA)
+    return tool_class(api_key="x")
+
+
 def _answer(monkeypatch, tool_class, method, response):
-    tool = tool_class(api_key="x")
+    tool = _tool(tool_class)
     result = VerificationResult.from_dict(response)
     monkeypatch.setattr(tool._client, method, lambda *args, **kwargs: result)
     return tool._run("input")
@@ -132,7 +139,7 @@ def test_unsafe_code_with_no_issues_listed_is_still_unsafe(monkeypatch, tool_cla
 # ---------------------------------------------------------------- server unreachable
 
 def _unreachable(monkeypatch, tool_class):
-    tool = tool_class(api_key="x")
+    tool = _tool(tool_class)
 
     def refuse(*args, **kwargs):
         raise httpx.ConnectError("connection refused")
@@ -154,7 +161,7 @@ def test_a_server_that_cannot_be_reached_is_named_as_the_reason(monkeypatch, too
 
 
 def test_the_clients_error_is_the_reason_when_there_is_no_message(monkeypatch):
-    tool = crewai.QWEDSQLTool(api_key="x")
+    tool = _tool(crewai.QWEDSQLTool)
     result = VerificationResult(status="UNVERIFIABLE", result={}, error="server unreachable")
     monkeypatch.setattr(tool._client, "verify_sql", lambda *args, **kwargs: result)
 

@@ -17,7 +17,13 @@ Usage:
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
-from ._tool_answers import code_issue_lines, natural_language_answer, server_message, undecided_answer
+from ._tool_answers import (
+    NO_SQL_SCHEMA,
+    code_issue_lines,
+    natural_language_answer,
+    server_message,
+    undecided_answer,
+)
 
 # Import QWED client
 try:
@@ -209,11 +215,25 @@ class QWEDCodeTool(QWEDTool):
 # LangChain Callback Handler
 # ============================================================================
 
+def _unverified_check(kind: str, reason: str) -> Dict[str, Any]:
+    """The record of a check the callback could not make (#608). It is not
+    verified, so get_summary does not count the output as verified."""
+    return {"type": kind, "verified": False, "status": "UNVERIFIABLE", "reason": reason}
+
+
+def _check_not_run(kind: str, exc: Exception) -> Dict[str, Any]:
+    """The record of a check that raised: not verified (#608)."""
+    return _unverified_check(kind, f"the check could not be run ({type(exc).__name__})")
+
+
 class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else object):
     """
     LangChain Callback that automatically verifies all LLM outputs.
-    
-    Attaches verification results to each generation.
+
+    Attaches verification results to each generation. SQL is checked against
+    ``sql_schema_ddl``, the tables it runs on (#608); without it, SQL is
+    recorded as UNVERIFIABLE. A check that cannot run is recorded as
+    UNVERIFIABLE too, never left out.
     
     Example:
         from langchain.llms import OpenAI
@@ -223,7 +243,8 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
         callback = QWEDVerificationCallback(
             verify_math=True,
             verify_code=True,
-            block_on_failure=False
+            block_on_failure=False,
+            sql_schema_ddl="CREATE TABLE users (id INT, name TEXT)",
         )
         
         chain = LLMChain(
@@ -242,6 +263,8 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
         verify_sql: bool = True,
         block_on_failure: bool = False,
         log_results: bool = True,
+        sql_schema_ddl: str = "",
+        sql_dialect: str = "sqlite",
     ):
         self._client = QWEDClient(
             api_key=api_key or "",
@@ -252,6 +275,8 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
         self.verify_sql = verify_sql
         self.block_on_failure = block_on_failure
         self.log_results = log_results
+        self.sql_schema_ddl = sql_schema_ddl or ""
+        self.sql_dialect = sql_dialect or "sqlite"
         
         # Track verifications
         self.verification_results: List[Dict[str, Any]] = []
@@ -292,9 +317,10 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
                     "verified": result.is_verified,
                     "status": result.status
                 })
-            except Exception:
-                # Optional auto-verification should not interrupt LangChain execution.
-                pass
+            except Exception as exc:
+                # Optional auto-verification should not interrupt LangChain
+                # execution, but a check that could not run is not verified.
+                results["verifications"].append(_check_not_run("math", exc))
         
         # Detect and verify code blocks
         if self.verify_code and self._contains_code(text):
@@ -302,28 +328,36 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
                 code = self._extract_code(text)
                 if code:
                     result = self._client.verify_code(code)
+                    # /verify/code lists them as "issues" (#608).
+                    issues = (result.result or {}).get("issues")
                     results["verifications"].append({
                         "type": "code",
                         "verified": result.is_verified,
-                        "vulnerabilities": len(result.result.get("vulnerabilities", []))
+                        "vulnerabilities": len(issues) if isinstance(issues, list) else 0
                     })
-            except Exception:
-                # Optional auto-verification should not interrupt LangChain execution.
-                pass
+            except Exception as exc:
+                # Optional auto-verification should not interrupt LangChain
+                # execution, but a check that could not run is not verified.
+                results["verifications"].append(_check_not_run("code", exc))
         
         # Detect and verify SQL
         if self.verify_sql and self._contains_sql(text):
             try:
                 sql = self._extract_sql(text)
-                if sql:
-                    result = self._client.verify_sql(sql, "")
+                if sql and not self.sql_schema_ddl.strip():
+                    # /verify/sql refuses a query without its schema (#608).
+                    results["verifications"].append(_unverified_check("sql", NO_SQL_SCHEMA))
+                elif sql:
+                    result = self._client.verify_sql(sql, self.sql_schema_ddl, self.sql_dialect)
                     results["verifications"].append({
                         "type": "sql",
-                        "verified": result.is_verified
+                        "verified": result.is_verified,
+                        "status": result.status
                     })
-            except Exception:
-                # Optional auto-verification should not interrupt LangChain execution.
-                pass
+            except Exception as exc:
+                # Optional auto-verification should not interrupt LangChain
+                # execution, but a check that could not run is not verified.
+                results["verifications"].append(_check_not_run("sql", exc))
         
         self.verification_results.append(results)
         

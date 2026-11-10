@@ -171,16 +171,17 @@ def test_an_output_the_server_admits_is_verified(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("tool_class", "method"),
+    ("tool_class", "method", "kwargs"),
     [
-        (crewai.QWEDVerificationTool, "verify"),
-        (crewai.QWEDMathTool, "verify_math"),
-        (crewai.QWEDCodeTool, "verify_code"),
-        (crewai.QWEDSQLTool, "verify_sql"),
+        (crewai.QWEDVerificationTool, "verify", {}),
+        (crewai.QWEDMathTool, "verify_math", {}),
+        (crewai.QWEDCodeTool, "verify_code", {}),
+        # The SQL tool checks a query against its schema (#608).
+        (crewai.QWEDSQLTool, "verify_sql", {"schema_ddl": "CREATE TABLE t (a INT)"}),
     ],
 )
-def test_the_crewai_tools_read_is_verified(monkeypatch, tool_class, method):
-    tool = tool_class(api_key="x")
+def test_the_crewai_tools_read_is_verified(monkeypatch, tool_class, method, kwargs):
+    tool = tool_class(api_key="x", **kwargs)
     monkeypatch.setattr(tool._client, method, lambda *args, **kwargs: ADMITTED)
 
     assert "ERROR" not in tool._run("x")
