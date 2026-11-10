@@ -133,14 +133,52 @@ class QWEDLogicTool(QWEDTool):
     
     def _run(self, query: str) -> str:
         try:
-            result = self._client.verify_logic(query)
-            if result.is_verified:
-                model = result.result.get('model', {})
-                return f"✅ SAT: Satisfying assignment: {model}"
-            else:
-                return f"❌ UNSAT: No valid assignment exists"
+            return _logic_answer(self._client.verify_logic(query))
         except Exception as e:
             return f"⚠️ ERROR: {str(e)}"
+
+
+# An LLM writes the constraints from the query, and nothing verifies that they
+# mean what was asked yet (#585), so /verify/logic admits no result.
+_LOGIC_TRANSLATION_NOT_VERIFIED = (
+    "the constraints were translated from your query by an LLM, "
+    "and that translation is not verified"
+)
+
+
+def _logic_answer(result) -> str:
+    """What QWEDLogicTool tells the agent about a /verify/logic result (#600).
+
+    ``is_verified`` is the server's admission, and a logic result is not
+    admitted while its translation is unverified. Read as SAT or UNSAT, it
+    told the agent that no assignment existed for every satisfiable query.
+    The answer follows the status instead, and says why a satisfiable result
+    is not admitted.
+    """
+    data = result.result or {}
+    message = data.get("agent_message") or data.get("error") or ""
+    if result.status == "VERIFIED":
+        model = data.get("model")
+        if result.is_verified:
+            return f"✅ SAT: Satisfying assignment: {model}"
+        reason = (
+            _LOGIC_TRANSLATION_NOT_VERIFIED
+            if data.get("query_semantics_verified") is not True
+            else "the server did not admit it"
+        )
+        return (
+            f"⚠️ SAT, NOT ADMITTED: the translated constraints are satisfiable, "
+            f"with the assignment {model}, but {reason}."
+        )
+    engine = data.get("developer_fields")
+    if result.status == "UNVERIFIABLE" and isinstance(engine, dict) and engine.get("status") == "UNSAT":
+        return (
+            "❌ UNSAT: no assignment satisfies the translated constraints. "
+            f"Not admitted: {_LOGIC_TRANSLATION_NOT_VERIFIED}."
+        )
+    if result.status == "UNVERIFIABLE":
+        return f"⚠️ UNVERIFIABLE: {message or 'the constraints could not be decided'}"
+    return f"⛔ {result.status}: {message or 'logic verification failed'}"
 
 
 class QWEDCodeTool(QWEDTool):
