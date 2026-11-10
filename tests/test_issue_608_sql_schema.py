@@ -124,20 +124,80 @@ def test_the_callback_counts_the_code_issues_the_route_sends(client, monkeypatch
     assert check["vulnerabilities"] > 0
 
 
-def test_a_check_that_cannot_run_is_not_counted_as_verified(monkeypatch):
-    callback = langchain.QWEDVerificationCallback(api_key="x", verify_code=False, verify_sql=False, log_results=False)
+def _refused(*args, **kwargs):
+    raise httpx.ConnectError("connection refused")
 
-    def refuse(*args, **kwargs):
-        raise httpx.ConnectError("connection refused")
 
-    monkeypatch.setattr(callback._client, "_request", refuse)
+def _server_error(*args, **kwargs):
+    request = httpx.Request("POST", "http://qwed.test/verify")
+    raise httpx.HTTPStatusError("500 Internal Server Error", request=request, response=httpx.Response(500, request=request))
 
-    record = callback._verify_output("2 + 2 = 4")
+
+@pytest.mark.parametrize("output, kind, options, failure, error", [
+    ("2 + 2 = 4", "math", {"verify_code": False, "verify_sql": False}, _refused, "ConnectError"),
+    ("```python\nx = 1\n```", "code", {"verify_math": False, "verify_sql": False}, _server_error, "HTTPStatusError"),
+    ("SELECT a FROM t;", "sql", {"verify_math": False, "verify_code": False, "sql_schema_ddl": SCHEMA},
+     _server_error, "HTTPStatusError"),
+])
+def test_a_check_that_cannot_run_is_not_counted_as_verified(monkeypatch, output, kind, options, failure, error):
+    callback = langchain.QWEDVerificationCallback(api_key="x", log_results=False, **options)
+    monkeypatch.setattr(callback._client, "_request", failure)
+
+    record = callback._verify_output(output)
 
     assert record["verifications"] == [{
-        "type": "math",
+        "type": kind,
         "verified": False,
         "status": "UNVERIFIABLE",
-        "reason": "the check could not be run (ConnectError)",
+        "reason": f"the check could not be run ({error})",
     }]
     assert callback.get_summary()["verified"] == 0
+
+
+@pytest.mark.parametrize("output", [
+    "Please select an option and send an update on the project.",
+    "We will delete the old notes and create a table of the results.",
+])
+def test_prose_with_sql_words_is_not_sql(client, monkeypatch, output):  # noqa: F811
+    # The callback matched the words anywhere, so it sent prose to /verify/sql
+    # and recorded a failed SQL check.
+    callback, sent = _callback(client, monkeypatch, sql_schema_ddl=SCHEMA)
+
+    assert callback._verify_output(output)["verifications"] == []
+    assert sent == []
+
+
+@pytest.mark.parametrize("output, statement", [
+    ("Run select a from t; to see it.", "select a from t;"),
+    ("Then UPDATE t SET a = 1 WHERE id = 2;", "UPDATE t SET a = 1 WHERE id = 2;"),
+    ("INSERT INTO t (id, a) VALUES (1, 2)", "INSERT INTO t (id, a) VALUES (1, 2)"),
+])
+def test_a_sql_statement_is_found_by_its_shape(client, monkeypatch, output, statement):  # noqa: F811
+    callback, sent = _callback(client, monkeypatch, sql_schema_ddl=SCHEMA)
+
+    callback._verify_output(output)
+
+    assert [body["query"] for body in sent] == [statement]
+
+
+# ---------------------------------------------------------------- CrewAI agent
+
+class _Agent:
+    """Stands in for crewai.Agent, keeping the tools it is given."""
+
+    def __init__(self, **kwargs):
+        self.tools = kwargs["tools"]
+
+
+def test_the_agents_sql_tool_checks_against_the_configured_schema(client, monkeypatch):  # noqa: F811
+    # QWEDVerifiedAgent built its SQL tool without a schema.
+    monkeypatch.setattr(crewai, "CREWAI_AVAILABLE", True)
+    monkeypatch.setattr(crewai, "Agent", _Agent)
+    config = crewai.VerificationConfig(sql_schema_ddl=SCHEMA, sql_dialect="sqlite")
+    agent = crewai.QWEDVerifiedAgent(role="Analyst", goal="Query data", api_key="x", verification_config=config)
+
+    (tool,) = [tool for tool in agent.agent.tools if isinstance(tool, crewai.QWEDSQLTool)]
+    sent = _through_the_route(client, monkeypatch, tool)
+
+    assert tool._run("SELECT a FROM t").startswith("✅ SAFE")
+    assert sent == [{"query": "SELECT a FROM t", "schema_ddl": SCHEMA, "dialect": "sqlite"}]

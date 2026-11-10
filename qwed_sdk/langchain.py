@@ -14,6 +14,7 @@ Usage:
     chain = LLMChain(llm=llm, callbacks=[QWEDVerificationCallback()])
 """
 
+import re
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
@@ -215,6 +216,15 @@ class QWEDCodeTool(QWEDTool):
 # LangChain Callback Handler
 # ============================================================================
 
+# A SQL statement found by its shape, not by a keyword anywhere in the text
+# (#608): "select an option" or "an update on the project" is not SQL. It runs
+# to its first ";" or to the end of the text.
+_SQL_STATEMENT = re.compile(
+    r"\b(?:SELECT\s[^;]+?\sFROM|INSERT\s+INTO|UPDATE\s+\S+\s+SET|DELETE\s+FROM|CREATE\s+TABLE)\s.*?(?:;|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 def _unverified_check(kind: str, reason: str) -> Dict[str, Any]:
     """The record of a check the callback could not make (#608). It is not
     verified, so get_summary does not count the output as verified."""
@@ -383,9 +393,8 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
         return any(marker in text for marker in code_markers)
     
     def _contains_sql(self, text: str) -> bool:
-        """Check if text contains SQL."""
-        sql_keywords = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE TABLE']
-        return any(kw in text.upper() for kw in sql_keywords)
+        """Check if text contains a SQL statement."""
+        return _SQL_STATEMENT.search(text) is not None
     
     def _extract_code(self, text: str) -> Optional[str]:
         """Extract code block from text."""
@@ -396,10 +405,8 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
         return None
     
     def _extract_sql(self, text: str) -> Optional[str]:
-        """Extract SQL from text."""
-        import re
-        match = re.search(r'(SELECT|INSERT|UPDATE|DELETE|CREATE)\s+.*?(?:;|$)', 
-                          text, re.IGNORECASE | re.DOTALL)
+        """Extract the first SQL statement from text."""
+        match = _SQL_STATEMENT.search(text)
         if match:
             return match.group(0).strip()
         return None

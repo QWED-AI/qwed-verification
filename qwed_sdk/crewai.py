@@ -207,6 +207,10 @@ class VerificationConfig:
     auto_correct: bool = False
     block_on_failure: bool = False
     log_results: bool = True
+    # The schema and dialect the agent's SQL tool checks queries against
+    # (#608). Without a schema, its SQL checks are UNVERIFIABLE.
+    sql_schema_ddl: str = ""
+    sql_dialect: str = "sqlite"
 
 
 class QWEDVerifiedAgent:
@@ -272,7 +276,12 @@ class QWEDVerifiedAgent:
             if self.config.verify_code:
                 qwed_tools.append(QWEDCodeTool(api_key=api_key, base_url=base_url))
             if self.config.verify_sql:
-                qwed_tools.append(QWEDSQLTool(api_key=api_key, base_url=base_url))
+                qwed_tools.append(QWEDSQLTool(
+                    api_key=api_key,
+                    base_url=base_url,
+                    schema_ddl=self.config.sql_schema_ddl,
+                    dialect=self.config.sql_dialect,
+                ))
         
         all_tools = (tools or []) + qwed_tools
         
