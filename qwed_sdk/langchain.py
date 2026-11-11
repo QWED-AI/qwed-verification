@@ -217,10 +217,15 @@ class QWEDCodeTool(QWEDTool):
 # LangChain Callback Handler
 # ============================================================================
 
-# A fenced block: its language tag, then its body.
-_CODE_FENCE = re.compile(r"```(\w*)[ \t]*\n(.*?)```", re.DOTALL)
+# A fenced block: its info string, then its body. The info string runs to the
+# end of its line and starts with the language, so a tag such as c++, one with
+# attributes ("python title=x") and a \r\n line end all open a block (#608).
+_CODE_FENCE = re.compile(r"```([^`\n]*)\n(.*?)```", re.DOTALL)
+# Tags of a SQL block. Each is checked in the dialect the callback is given,
+# as that is how the user's database reads it.
+_SQL_TAGS = frozenset({"sql", "postgresql", "postgres", "pgsql", "mysql", "sqlite", "tsql", "plsql"})
 
-# SQL outside a ```sql block (#608). QWED cannot tell where such SQL starts
+# SQL outside a fenced block (#608). QWED cannot tell where such SQL starts
 # and ends: a blank line can sit inside a statement, and a ";" in a string or
 # a comment, so a part could pass where the whole statement would not. So it
 # is found, not extracted, and recorded as UNVERIFIABLE. The text outside
@@ -241,12 +246,22 @@ _logger = logging.getLogger(__name__)
 
 
 def _fences(text: str) -> Iterator[Tuple[bool, str]]:
-    """Each fenced block with a body: whether it is a ```sql block, and the
+    """Each fenced block with a body: whether it is a SQL block, and the
     body."""
     for fence in _CODE_FENCE.finditer(text):
         body = fence.group(2).strip()
         if body:
-            yield fence.group(1).lower() == "sql", body
+            yield _is_sql_block(fence.group(1), body), body
+
+
+def _is_sql_block(info: str, body: str) -> bool:
+    """Whether a block is SQL: its tag names SQL, or it has no tag and holds
+    a SQL statement (#608). A block taken for the wrong language does not
+    parse in the other check, so it fails closed."""
+    words = info.split()
+    if words:
+        return words[0].lower() in _SQL_TAGS
+    return any(_holds_a_statement(piece) for piece in _sql_pieces(body))
 
 
 def _sql_pieces(text: str) -> Iterator[str]:
@@ -310,10 +325,11 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
     LangChain Callback that automatically verifies all LLM outputs.
 
     Attaches verification results to each generation. Every fenced block is
-    checked: a ```sql block as SQL, against ``sql_schema_ddl``, the tables it
-    runs on, and any other block as code (#608). SQL outside a ```sql block
-    is recorded as UNVERIFIABLE, as QWED cannot tell where it starts and
-    ends, and so is SQL without a schema. A check that cannot run is
+    checked: a SQL block (tagged ``sql`` or a SQL dialect, or untagged and
+    holding a SQL statement) as SQL, against ``sql_schema_ddl``, the tables
+    it runs on, and any other block as code (#608). SQL outside a fenced
+    block is recorded as UNVERIFIABLE, as QWED cannot tell where it starts
+    and ends, and so is SQL without a schema. A check that cannot run is
     recorded as UNVERIFIABLE too, never left out.
     
     Example:
@@ -384,7 +400,7 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
     
     def _verify_output(self, text: str) -> Dict[str, Any]:
         """Verify an output and record the result. Every fenced block is
-        checked: a ```sql block as SQL, any other block as code (#608)."""
+        checked, a SQL block as SQL and any other block as code (#608)."""
         checks: List[Dict[str, Any]] = []
         results = {
             "text": text[:100] + "..." if len(text) > 100 else text,
@@ -438,14 +454,14 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
         }
 
     def _sql_check(self, sql: str) -> Dict[str, Any]:
-        """Check a ```sql block against the schema (#608). It is sent whole,
+        """Check a SQL block against the schema (#608). It is sent whole,
         and /verify/sql does not admit more than one statement."""
         result = self._client.verify_sql(sql, self.sql_schema_ddl, self.sql_dialect)
         return {"type": "sql", "verified": result.is_verified, "status": result.status}
 
     def _sql_checks(self, text: str, blocks: List[str]) -> List[Dict[str, Any]]:
-        """A check for each ```sql block, and an UNVERIFIABLE record for SQL
-        outside them (#608)."""
+        """A check for each SQL block, and an UNVERIFIABLE record for SQL
+        outside the blocks (#608)."""
         outside = _sql_outside_blocks(text)
         if not blocks and not outside:
             return []

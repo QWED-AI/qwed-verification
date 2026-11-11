@@ -57,10 +57,6 @@ def _callback(client, monkeypatch, **kwargs):  # noqa: F811
     return callback, _through_the_route(client, monkeypatch, callback)
 
 
-def _sql_block(sql):
-    return f"```sql\n{sql}\n```"
-
-
 # ---------------------------------------------------------------- CrewAI SQL tool
 
 def test_the_sql_tool_sends_its_schema_and_dialect(client, monkeypatch):  # noqa: F811
@@ -99,20 +95,21 @@ def test_the_sql_tool_without_a_schema_is_unverifiable_and_sends_nothing(client,
 
 # ---------------------------------------------------------------- LangChain callback
 
-@pytest.mark.parametrize("sql, verified", [
-    ("SELECT a FROM t", True),
-    ("SELECT * FROM t WHERE id = 1 OR 1=1", False),
+@pytest.mark.parametrize("output, sql, verified", [
+    ("Run this:\n```sql\nSELECT a FROM t\n```\nIt reads the table.", "SELECT a FROM t", True),
+    ("Run this:\n```sql\nSELECT * FROM t WHERE id = 1 OR 1=1\n```\nIt reads the table.",
+     "SELECT * FROM t WHERE id = 1 OR 1=1", False),
 ])
-def test_the_callback_checks_a_sql_block_against_its_schema(client, monkeypatch, sql, verified):  # noqa: F811
+def test_the_callback_checks_a_sql_block_against_its_schema(client, monkeypatch, output, sql, verified):  # noqa: F811
     callback, sent = _callback(client, monkeypatch, sql_schema_ddl=SCHEMA)
 
-    record = callback._verify_output(f"Run this:\n{_sql_block(sql)}\nIt reads the table.")
+    record = callback._verify_output(output)
 
     assert sent == [{"query": sql, "schema_ddl": SCHEMA, "dialect": "sqlite"}]
     assert record["verifications"] == [{"type": "sql", "verified": verified, "status": "VERIFIED"}]
 
 
-@pytest.mark.parametrize("output", ["SELECT a FROM t;", _sql_block("SELECT a FROM t")])
+@pytest.mark.parametrize("output", ["SELECT a FROM t;", "```sql\nSELECT a FROM t\n```"])
 def test_the_callback_without_a_schema_records_sql_as_unverifiable(client, monkeypatch, output):  # noqa: F811
     # The 400 was swallowed and nothing recorded, so get_summary counted the
     # output as verified.
@@ -140,36 +137,55 @@ def test_the_callback_counts_the_code_issues_the_route_sends(client, monkeypatch
 
 def test_the_callback_records_the_math_checks_status(monkeypatch):
     callback = langchain.QWEDVerificationCallback(api_key="x", log_results=False, verify_code=False, verify_sql=False)
-    monkeypatch.setattr(callback._client, "verify", lambda text: SimpleNamespace(is_verified=True, status="VERIFIED"))
+    seen = []
+
+    def verify(text):
+        seen.append(text)
+        return SimpleNamespace(is_verified=True, status="VERIFIED")
+
+    monkeypatch.setattr(callback._client, "verify", verify)
 
     record = callback._verify_output("2 + 2 = 4")
 
+    assert seen == ["2 + 2 = 4"]
     assert record["verifications"] == [{"type": "math", "verified": True, "status": "VERIFIED"}]
     assert callback.get_summary()["verified"] == 1
 
 
-def _refused(*args, **kwargs):
-    raise httpx.ConnectError("connection refused")
+def _refused():
+    return httpx.ConnectError("connection refused")
 
 
-def _server_error(*args, **kwargs):
+def _server_error():
     request = httpx.Request("POST", "http://qwed.test/verify")
-    raise httpx.HTTPStatusError("500 Internal Server Error", request=request, response=httpx.Response(500, request=request))
+    return httpx.HTTPStatusError("500 Internal Server Error", request=request, response=httpx.Response(500, request=request))
 
 
-@pytest.mark.parametrize("output, kind, options, failure, error", [
-    ("2 + 2 = 4", "math", {"verify_code": False, "verify_sql": False}, _refused, "ConnectError"),
-    ("```python\nx = 1\n```", "code", {"verify_math": False, "verify_sql": False}, _server_error, "HTTPStatusError"),
-    (_sql_block("SELECT a FROM t"), "sql", {"verify_math": False, "verify_code": False, "sql_schema_ddl": SCHEMA},
-     _server_error, "HTTPStatusError"),
+@pytest.mark.parametrize("output, kind, options, failure, error, sent_to", [
+    ("2 + 2 = 4", "math", {"verify_code": False, "verify_sql": False}, _refused, "ConnectError",
+     ("/verify/natural_language", {"query": "2 + 2 = 4", "provider": None})),
+    ("```python\nx = 1\n```", "code", {"verify_math": False, "verify_sql": False}, _server_error, "HTTPStatusError",
+     ("/verify/code", {"code": "x = 1", "language": "python"})),
+    ("```sql\nSELECT a FROM t\n```", "sql", {"verify_math": False, "verify_code": False, "sql_schema_ddl": SCHEMA},
+     _server_error, "HTTPStatusError",
+     ("/verify/sql", {"query": "SELECT a FROM t", "schema_ddl": SCHEMA, "dialect": "sqlite"})),
 ])
-def test_a_check_that_cannot_run_is_not_counted_as_verified(monkeypatch, caplog, output, kind, options, failure, error):
+def test_a_check_that_cannot_run_is_not_counted_as_verified(
+    monkeypatch, caplog, output, kind, options, failure, error, sent_to,
+):
     callback = langchain.QWEDVerificationCallback(api_key="x", log_results=False, **options)
-    monkeypatch.setattr(callback._client, "_request", failure)
+    requests = []
+
+    def fail(method, endpoint, **kwargs):
+        requests.append((method, endpoint, kwargs.get("json")))
+        raise failure()
+
+    monkeypatch.setattr(callback._client, "_request", fail)
 
     with caplog.at_level(logging.WARNING, logger="qwed_sdk.langchain"):
         record = callback._verify_output(output)
 
+    assert requests == [("POST", *sent_to)]
     assert record["verifications"] == [{
         "type": kind,
         "verified": False,
@@ -240,9 +256,7 @@ def test_each_sql_block_is_checked(client, monkeypatch):  # noqa: F811
     # and the output counted as verified.
     callback, sent = _callback(client, monkeypatch, sql_schema_ddl=SCHEMA)
 
-    record = callback._verify_output(
-        f"First:\n{_sql_block('SELECT a FROM t')}\nThen:\n{_sql_block('DELETE FROM t')}"
-    )
+    record = callback._verify_output("First:\n```sql\nSELECT a FROM t\n```\nThen:\n```sql\nDELETE FROM t\n```")
 
     assert [body["query"] for body in sent] == ["SELECT a FROM t", "DELETE FROM t"]
     assert [check["verified"] for check in record["verifications"]] == [True, False]
@@ -252,7 +266,7 @@ def test_each_sql_block_is_checked(client, monkeypatch):  # noqa: F811
 def test_a_sql_block_is_sent_whole_and_more_than_one_statement_is_not_verified(client, monkeypatch):  # noqa: F811
     callback, sent = _callback(client, monkeypatch, sql_schema_ddl=SCHEMA)
 
-    record = callback._verify_output(_sql_block("SELECT a FROM t;\nDELETE FROM t;"))
+    record = callback._verify_output("```sql\nSELECT a FROM t;\nDELETE FROM t;\n```")
 
     assert [body["query"] for body in sent] == ["SELECT a FROM t;\nDELETE FROM t;"]
     assert record["verifications"] == [{"type": "sql", "verified": False, "status": "VERIFIED"}]
@@ -263,9 +277,7 @@ def test_sql_outside_a_block_is_recorded_beside_a_sql_block(client, monkeypatch)
     # output counted as verified.
     callback, sent = _callback(client, monkeypatch, sql_schema_ddl=SCHEMA)
 
-    record = callback._verify_output(
-        f"SELECT * FROM t WHERE id = 1 OR 1=1;\n{_sql_block('SELECT a FROM t')}"
-    )
+    record = callback._verify_output("SELECT * FROM t WHERE id = 1 OR 1=1;\n```sql\nSELECT a FROM t\n```")
 
     assert [body["query"] for body in sent] == ["SELECT a FROM t"]
     assert record["verifications"] == [
@@ -294,6 +306,49 @@ def test_each_code_block_is_checked(client, monkeypatch):  # noqa: F811
 
     assert [body["code"] for body in sent] == ["x = 1", "import os\nos.system(input())"]
     assert [check["verified"] for check in record["verifications"]] == [True, False]
+    assert callback.get_summary()["verified"] == 0
+
+
+@pytest.mark.parametrize("output", [
+    "```postgresql\nSELECT a FROM t\n```",
+    "```MySQL\nSELECT a FROM t\n```",
+    "```sqlite title=query.sql\nSELECT a FROM t\n```",
+    "```sql\r\nSELECT a FROM t\r\n```",
+])
+def test_a_block_tagged_with_a_sql_dialect_is_checked_as_sql(client, monkeypatch, output):  # noqa: F811
+    # Only a block tagged exactly "sql" was SQL, so these went to the code
+    # check as Python, which cannot say anything about SQL.
+    callback, sent = _callback(client, monkeypatch, verify_code=True, sql_schema_ddl=SCHEMA)
+
+    record = callback._verify_output(output)
+
+    assert sent == [{"query": "SELECT a FROM t", "schema_ddl": SCHEMA, "dialect": "sqlite"}]
+    assert record["verifications"] == [{"type": "sql", "verified": True, "status": "VERIFIED"}]
+
+
+@pytest.mark.parametrize("verify_code", [True, False])
+def test_an_untagged_block_with_a_sql_statement_is_checked_as_sql(client, monkeypatch, verify_code):  # noqa: F811
+    # It went to the code check as Python, or with no code check, to none.
+    callback, sent = _callback(client, monkeypatch, verify_code=verify_code, sql_schema_ddl=SCHEMA)
+
+    record = callback._verify_output("Run:\n```\nDELETE FROM t\n```")
+
+    assert [body["query"] for body in sent] == ["DELETE FROM t"]
+    assert record["verifications"] == [{"type": "sql", "verified": False, "status": "VERIFIED"}]
+
+
+def test_a_block_whose_tag_has_more_than_a_word_is_found(client, monkeypatch):  # noqa: F811
+    # The fence took a tag of word characters only, so "c++" did not open a
+    # block, its closing fence opened one, and the blocks after it were read
+    # out of line.
+    callback, sent = _callback(client, monkeypatch, verify_code=True, verify_sql=False)
+
+    record = callback._verify_output(
+        "```c++\nint x = 1;\n```\nThen:\n```python title=run.py\nimport os\nos.system(input())\n```"
+    )
+
+    assert [body["code"] for body in sent] == ["int x = 1;", "import os\nos.system(input())"]
+    assert [check["type"] for check in record["verifications"]] == ["code", "code"]
     assert callback.get_summary()["verified"] == 0
 
 
