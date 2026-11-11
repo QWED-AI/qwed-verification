@@ -327,14 +327,89 @@ def test_a_block_tagged_with_a_sql_dialect_is_checked_as_sql(client, monkeypatch
 
 
 @pytest.mark.parametrize("verify_code", [True, False])
-def test_an_untagged_block_with_a_sql_statement_is_checked_as_sql(client, monkeypatch, verify_code):  # noqa: F811
+@pytest.mark.parametrize("output, query", [
+    ("Run:\n```\nDELETE FROM t\n```", "DELETE FROM t"),
+    ("```\n-- clear the table\ndelete from t\n```", "-- clear the table\ndelete from t"),
+])
+def test_an_untagged_block_that_starts_with_a_sql_statement_is_checked_as_sql(
+    client, monkeypatch, verify_code, output, query,  # noqa: F811
+):
     # It went to the code check as Python, or with no code check, to none.
     callback, sent = _callback(client, monkeypatch, verify_code=verify_code, sql_schema_ddl=SCHEMA)
 
-    record = callback._verify_output("Run:\n```\nDELETE FROM t\n```")
+    record = callback._verify_output(output)
 
-    assert [body["query"] for body in sent] == ["DELETE FROM t"]
+    assert [body["query"] for body in sent] == [query]
     assert record["verifications"] == [{"type": "sql", "verified": False, "status": "VERIFIED"}]
+
+
+@pytest.mark.parametrize("verify_sql", [True, False])
+def test_an_untagged_block_that_runs_a_query_is_checked_as_code(client, monkeypatch, verify_sql):  # noqa: F811
+    # The query string made it SQL, so the Python was sent to /verify/sql, and
+    # with the SQL check off, it got no check at all.
+    callback, sent = _callback(client, monkeypatch, verify_code=True, verify_sql=verify_sql, sql_schema_ddl=SCHEMA)
+
+    record = callback._verify_output('```\nquery = "SELECT a FROM t"\nrows = cur.execute(query)\n```')
+
+    assert sent == [{"code": 'query = "SELECT a FROM t"\nrows = cur.execute(query)', "language": "python"}]
+    assert [check["type"] for check in record["verifications"]] == ["code"]
+
+
+@pytest.mark.parametrize("output, code, language", [
+    ("```javascript\nconst x = 1;\n```", "const x = 1;", "javascript"),
+    ("```\nx = 1\n```", "x = 1", "python"),
+])
+def test_a_code_block_is_checked_in_the_language_of_its_tag(client, monkeypatch, output, code, language):  # noqa: F811
+    # Every block was checked as Python.
+    callback, sent = _callback(client, monkeypatch, verify_code=True, verify_sql=False)
+
+    callback._verify_output(output)
+
+    assert sent == [{"code": code, "language": language}]
+
+
+@pytest.mark.parametrize("output, code", [
+    # A tilde fence.
+    ("~~~python\nimport os\nos.system(input())\n~~~", "import os\nos.system(input())"),
+    # A longer fence holds a shorter one.
+    ("````python\nx = '''\n```\n'''\nimport os\nos.system(input())\n````",
+     "x = '''\n```\n'''\nimport os\nos.system(input())"),
+    # A fence with text after it does not close the block.
+    ("```python\nimport os\n``` not a fence\nos.system(input())\n```", "import os\n``` not a fence\nos.system(input())"),
+    # A block with no closing fence runs to the end of the output.
+    ("```python\nimport os\nos.system(input())", "import os\nos.system(input())"),
+    # A fence in a list item is indented, and so is its body.
+    ("1. Run this:\n   ```python\n   import os\n   os.system(input())\n   ```", "import os\nos.system(input())"),
+    # Three backticks inside a line are inline code, not a fence.
+    ("Use ```print(1)``` inline, then:\n```python\nimport os\nos.system(input())\n```", "import os\nos.system(input())"),
+])
+def test_a_fenced_block_is_read_as_markdown_reads_it(client, monkeypatch, output, code):  # noqa: F811
+    # A tilde block was missed, a block closed at the first three backticks
+    # anywhere, and one with no closing fence was missed.
+    callback, sent = _callback(client, monkeypatch, verify_code=True, verify_sql=False)
+
+    record = callback._verify_output(output)
+
+    assert [body["code"] for body in sent] == [code]
+    assert [check["verified"] for check in record["verifications"]] == [False]
+
+
+@pytest.mark.parametrize("output", [
+    "```sql\nSELECT a FROM t\n```\nThen DROP TABLE t;",
+    "```sql\nSELECT a FROM t\n```\nthen drop table t;",
+    "```sql\nSELECT a FROM t\n```\nThen TRUNCATE t;",
+    "```sql\nSELECT a FROM t\n```\nThen GRANT ALL ON t TO PUBLIC;",
+])
+def test_a_statement_that_changes_a_table_outside_a_block_is_unverifiable(client, monkeypatch, output):  # noqa: F811
+    # Only SELECT, WITH, INSERT, UPDATE, DELETE and CREATE TABLE were found,
+    # so the verified block made the output count as verified.
+    callback, sent = _callback(client, monkeypatch, sql_schema_ddl=SCHEMA)
+
+    record = callback._verify_output(output)
+
+    assert [body["query"] for body in sent] == ["SELECT a FROM t"]
+    assert record["verifications"] == [{"type": "sql", "verified": True, "status": "VERIFIED"}, OUTSIDE_A_BLOCK]
+    assert callback.get_summary()["verified"] == 0
 
 
 def test_a_block_whose_tag_has_more_than_a_word_is_found(client, monkeypatch):  # noqa: F811
@@ -347,7 +422,10 @@ def test_a_block_whose_tag_has_more_than_a_word_is_found(client, monkeypatch):  
         "```c++\nint x = 1;\n```\nThen:\n```python title=run.py\nimport os\nos.system(input())\n```"
     )
 
-    assert [body["code"] for body in sent] == ["int x = 1;", "import os\nos.system(input())"]
+    assert [(body["code"], body["language"]) for body in sent] == [
+        ("int x = 1;", "c++"),
+        ("import os\nos.system(input())", "python"),
+    ]
     assert [check["type"] for check in record["verifications"]] == ["code", "code"]
     assert callback.get_summary()["verified"] == 0
 
