@@ -10,9 +10,10 @@ on:
 permissions:
   contents: read
 
-# A new push to a pull request cancels the run it replaces.
+# A new push to a pull request cancels the run it replaces. A pull request's
+# ref (refs/pull/<number>/merge) names it; each push to main gets its own group.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -169,7 +170,11 @@ jobs:
     name: SonarCloud
     needs: test
     runs-on: ubuntu-latest
-    if: github.actor != 'dependabot[bot]'
+    # Dependabot and fork pull requests get no SONAR_TOKEN, so the scan could
+    # only fail there.
+    if: >-
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     permissions:
       contents: read
       pull-requests: read
