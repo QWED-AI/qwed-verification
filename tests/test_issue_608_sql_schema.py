@@ -228,6 +228,10 @@ def test_sql_in_a_long_output_is_found_in_linear_time_with_no_length_limit(clien
     "Select a plan. Data from the report is ready.",
     "Sent WITH THANKS to the team.",
     "Next, create table of contents for the report.",
+    "You can alter table settings in the panel.",
+    "Drop table rows you don't need.",
+    "Create table headers for each column.",
+    "Should we drop table? Not yet.",
 ])
 def test_prose_with_sql_words_is_not_sql(client, monkeypatch, output):  # noqa: F811
     # The callback matched the words anywhere, so it sent prose to /verify/sql
@@ -382,6 +386,10 @@ def test_sql_in_a_code_block_is_unverifiable_when_the_code_check_is_off(client, 
     'query = "SELECT a FROM t"\nrows = cur.execute(query)',
     # A select() call, as in SQLAlchemy, is Python, not a SELECT statement.
     "select(User).where(User.id == 1)",
+    # A space before the call, an assignment, and Selenium's Select.
+    "select (User).where(User.id == 1)",
+    "select = 1\nimport os\nos.system(input())",
+    "select = Select(driver)\nselect.select_by_value(x)",
 ])
 def test_an_untagged_block_that_runs_a_query_is_checked_as_code(client, monkeypatch, verify_sql, code):  # noqa: F811
     # The query string made it SQL, so the Python was sent to /verify/sql, and
@@ -443,6 +451,11 @@ def test_a_fenced_block_is_read_as_markdown_reads_it(client, monkeypatch, output
     "```sql\nSELECT a FROM t\n```\nthen drop table t;",
     # A table change in lower case with no ";" after it.
     "```sql\nSELECT a FROM t\n```\nthen drop table t",
+    # A table named "of", and a table change followed by a clause or "(".
+    "```sql\nSELECT a FROM t\n```\nthen drop table of;",
+    "```sql\nSELECT a FROM t\n```\nthen alter table t add column b int",
+    "```sql\nSELECT a FROM t\n```\nthen create table u (id int)",
+    "```sql\nSELECT a FROM t\n```\nthen drop table if exists t",
     "```sql\nSELECT a FROM t\n```\nThen TRUNCATE t;",
     "```sql\nSELECT a FROM t\n```\nThen GRANT ALL ON t TO PUBLIC;",
 ])

@@ -237,16 +237,26 @@ _SQL_TAGS = frozenset({"sql", "postgresql", "postgres", "pgsql", "mysql", "sqlit
 # UPDATE ... SET, DELETE FROM, MERGE INTO, REPLACE INTO, TRUNCATE, GRANT,
 # REVOKE, or CREATE, DROP or ALTER of a table, view, index, schema or
 # database. "Select a few items from your list" is prose. A statement that
-# creates, drops, alters or truncates a table is found in any case, as prose
-# does not say "drop table", except for a "table of contents". Each piece is
-# read a fixed number of times, so a long output costs linear time, with no
-# limit on length.
+# creates, drops, alters or truncates a table is found in any case when it
+# reads as one: its piece ends with ";", or the table name is followed by the
+# end of the line, "(" or a clause such as ADD or AS. So "drop table t" is
+# SQL, and "create table of contents" and "alter table settings in the panel"
+# are prose. Each piece is read a fixed number of times, so a long output
+# costs linear time, with no limit on length.
 _SQL_BREAK = re.compile(r";|```|\n[ \t]*\n")
 _SQL_START = re.compile(
     r"\b(?:SELECT|WITH|INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO|REPLACE\s+INTO|TRUNCATE|GRANT|REVOKE"
     r"|(?:CREATE|DROP|ALTER)\s+(?:TABLE|VIEW|INDEX|SCHEMA|DATABASE))\b"
 )
-_SQL_TABLE_CHANGE = re.compile(r"\b(?:CREATE|DROP|ALTER|TRUNCATE)\s+TABLE\b(?!\s+OF\b)", re.IGNORECASE)
+_SQL_TABLE_CHANGE = re.compile(r"\b(?:CREATE|DROP|ALTER|TRUNCATE)\s+TABLE\b", re.IGNORECASE)
+# After TABLE: the table name, then the next token on its line.
+_SQL_TABLE_NAME = re.compile(
+    r"[ \t]+(?:IF[ \t]+(?:NOT[ \t]+)?EXISTS[ \t]+)?[\w\"`\[\]]+(?:\.[\w\"`\[\]]+)*[ \t]*(\S*)", re.IGNORECASE
+)
+_SQL_TABLE_CLAUSES = frozenset({"ADD", "DROP", "RENAME", "ALTER", "MODIFY", "AS", "CASCADE", "RESTRICT"})
+# A SELECT with no FROM in a block: a value after it on its line, such as
+# SELECT 1. Python such as select = x, select.f() or select (x) has none.
+_SQL_SELECT_VALUE = re.compile(r"SELECT[ \t]+[\w*'\"`@-]")
 _SQL_FROM = re.compile(r"\bFROM\b")
 _SQL_AS = re.compile(r"\bAS\s*\(")
 _SQL_UPDATE = re.compile(r"UPDATE\s+\S+\s+SET\b")
@@ -331,9 +341,8 @@ def _is_sql_block(language: str, body: str) -> bool:
     start = _SQL_START.match(text)
     if start is None:
         return False
-    if start.group() == "SELECT" and text[start.end():start.end() + 1].isspace():
-        # A block may hold a SELECT with no FROM, such as SELECT 1. A call
-        # such as select(User) in Python has no space after the word.
+    if start.group() == "SELECT" and _SQL_SELECT_VALUE.match(text):
+        # A block may hold a SELECT with no FROM, such as SELECT 1.
         return True
     return _starts_a_statement(start, text, _last_start(_SQL_FROM, text), _last_start(_SQL_AS, text))
 
@@ -385,10 +394,27 @@ def _starts_a_statement(start: "re.Match[str]", piece: str, last_from: int, last
 
 def _holds_a_statement(piece: str) -> bool:
     """Whether a SQL statement starts in *piece*."""
-    if _SQL_TABLE_CHANGE.search(piece):
+    if _changes_a_table(piece):
         return True
     last_from, last_as = _last_start(_SQL_FROM, piece), _last_start(_SQL_AS, piece)
     return any(_starts_a_statement(start, piece, last_from, last_as) for start in _SQL_START.finditer(piece))
+
+
+def _changes_a_table(piece: str) -> bool:
+    """Whether *piece* holds a statement, in any case, that creates, drops,
+    alters or truncates a table: the piece ends with ";", or the table name is
+    followed by the end of its line, "(", ";" or a clause such as ADD."""
+    if piece.rstrip().endswith(";"):
+        return _SQL_TABLE_CHANGE.search(piece) is not None
+    for change in _SQL_TABLE_CHANGE.finditer(piece):
+        name = _SQL_TABLE_NAME.match(piece, change.end())
+        if name is None:
+            continue
+        after = name.group(1)
+        word = re.match(r"[A-Za-z]*", after).group().upper()
+        if not after or after[0] in "(;" or word in _SQL_TABLE_CLAUSES:
+            return True
+    return False
 
 
 def _sql_in(text: str) -> bool:
