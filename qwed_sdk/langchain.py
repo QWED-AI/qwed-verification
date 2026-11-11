@@ -16,7 +16,7 @@ Usage:
 
 import logging
 import re
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 from dataclasses import dataclass
 
 from ._tool_answers import (
@@ -220,30 +220,33 @@ class QWEDCodeTool(QWEDTool):
 # A fenced block: its language tag, then its body.
 _CODE_FENCE = re.compile(r"```(\w*)[ \t]*\n(.*?)```", re.DOTALL)
 
-# SQL outside a ```sql block (#608). A statement ends at its first ";", a
-# code fence or a blank line, so the text is cut into pieces there. In a piece
-# it starts at a keyword in capitals, as SQL is written in text, and has the
-# shape of a statement: SELECT ... FROM, WITH ... AS (, INSERT INTO,
+# SQL outside a ```sql block (#608). QWED cannot tell where such SQL starts
+# and ends: a blank line can sit inside a statement, and a ";" in a string or
+# a comment, so a part could pass where the whole statement would not. So it
+# is found, not extracted, and recorded as UNVERIFIABLE. The text outside
+# fenced blocks is cut into pieces at each ";" and blank line. A piece holds a
+# statement when a keyword in capitals, as SQL is written in text, starts one
+# with the shape of a statement: SELECT ... FROM, WITH ... AS (, INSERT INTO,
 # UPDATE ... SET, DELETE FROM or CREATE TABLE. "Select a few items from your
-# list" is prose. Each piece is read a fixed number of times, so a long output
-# with many SELECTs and no FROM costs linear time, with no limit on length.
+# list" is prose. Each piece is read a fixed number of times, so a long
+# output costs linear time, with no limit on length.
 _SQL_BREAK = re.compile(r";|```|\n[ \t]*\n")
 _SQL_START = re.compile(r"\b(?:SELECT|WITH|INSERT\s+INTO|UPDATE|DELETE\s+FROM|CREATE\s+TABLE)\b")
 _SQL_FROM = re.compile(r"\bFROM\b")
 _SQL_AS = re.compile(r"\bAS\s*\(")
 _SQL_UPDATE = re.compile(r"UPDATE\s+\S+\s+SET\b")
+_SQL_OUTSIDE_A_BLOCK = "the SQL is not in a ```sql block, so QWED cannot tell where it starts and ends"
 
 _logger = logging.getLogger(__name__)
 
 
-def _fenced(text: str, sql: bool) -> Optional[str]:
-    """The body of the first non-empty fenced block that is SQL (``sql``)
-    or is not."""
+def _fences(text: str) -> Iterator[Tuple[bool, str]]:
+    """Each fenced block with a body: whether it is a ```sql block, and the
+    body."""
     for fence in _CODE_FENCE.finditer(text):
         body = fence.group(2).strip()
-        if body and (fence.group(1).lower() == "sql") == sql:
-            return body
-    return None
+        if body:
+            yield fence.group(1).lower() == "sql", body
 
 
 def _sql_pieces(text: str) -> Iterator[str]:
@@ -261,23 +264,31 @@ def _last_start(pattern: "re.Pattern[str]", piece: str) -> int:
     return max((match.start() for match in pattern.finditer(piece)), default=-1)
 
 
-def _sql_statement(text: str) -> Optional[str]:
-    """The first SQL statement in *text* outside a ```sql block, or None."""
-    for piece in _sql_pieces(text):
-        starts = list(_SQL_START.finditer(piece))
-        if not starts:
-            continue
-        last_from, last_as = _last_start(_SQL_FROM, piece), _last_start(_SQL_AS, piece)
-        for start in starts:
-            keyword = start.group()
-            if keyword == "SELECT" and last_from < start.end():
-                continue
-            if keyword == "WITH" and last_as < start.end():
-                continue
-            if keyword == "UPDATE" and not _SQL_UPDATE.match(piece, start.start()):
-                continue
-            return piece[start.start():].strip()
-    return None
+def _starts_a_statement(start: "re.Match[str]", piece: str, last_from: int, last_as: int) -> bool:
+    """Whether the keyword at *start* begins a statement in *piece*, given
+    where FROM and AS ( last start in it."""
+    keyword = start.group()
+    if keyword == "SELECT":
+        return last_from >= start.end()
+    if keyword == "WITH":
+        return last_as >= start.end()
+    if keyword == "UPDATE":
+        return _SQL_UPDATE.match(piece, start.start()) is not None
+    return True
+
+
+def _holds_a_statement(piece: str) -> bool:
+    """Whether a SQL statement starts in *piece*."""
+    last_from, last_as = _last_start(_SQL_FROM, piece), _last_start(_SQL_AS, piece)
+    return any(_starts_a_statement(start, piece, last_from, last_as) for start in _SQL_START.finditer(piece))
+
+
+def _sql_outside_blocks(text: str) -> bool:
+    """Whether *text* has a SQL statement outside its fenced blocks. SQL in
+    another block, such as a query in Python, is part of that code, which the
+    code check reads."""
+    outside = _CODE_FENCE.sub("\n\n", text)
+    return any(_holds_a_statement(piece) for piece in _sql_pieces(outside))
 
 
 def _unverified_check(kind: str, reason: str) -> Dict[str, Any]:
@@ -298,10 +309,12 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
     """
     LangChain Callback that automatically verifies all LLM outputs.
 
-    Attaches verification results to each generation. SQL is checked against
-    ``sql_schema_ddl``, the tables it runs on (#608); without it, SQL is
-    recorded as UNVERIFIABLE. A check that cannot run is recorded as
-    UNVERIFIABLE too, never left out.
+    Attaches verification results to each generation. Every fenced block is
+    checked: a ```sql block as SQL, against ``sql_schema_ddl``, the tables it
+    runs on, and any other block as code (#608). SQL outside a ```sql block
+    is recorded as UNVERIFIABLE, as QWED cannot tell where it starts and
+    ends, and so is SQL without a schema. A check that cannot run is
+    recorded as UNVERIFIABLE too, never left out.
     
     Example:
         from langchain.llms import OpenAI
@@ -370,70 +383,80 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
                 self._verify_output(output)
     
     def _verify_output(self, text: str) -> Dict[str, Any]:
-        """Verify an output and record the result."""
+        """Verify an output and record the result. Every fenced block is
+        checked: a ```sql block as SQL, any other block as code (#608)."""
+        checks: List[Dict[str, Any]] = []
         results = {
             "text": text[:100] + "..." if len(text) > 100 else text,
-            "verifications": []
+            "verifications": checks
         }
-        
+        blocks = list(_fences(text))
+
         # Auto-detect and verify mathematical content
         if self.verify_math and self._contains_math(text):
-            try:
-                result = self._client.verify(text)
-                results["verifications"].append({
-                    "type": "math",
-                    "verified": result.is_verified,
-                    "status": result.status
-                })
-            except Exception as exc:
-                # Optional auto-verification should not interrupt LangChain
-                # execution, but a check that could not run is not verified.
-                results["verifications"].append(_check_not_run("math", exc))
-        
-        # Detect and verify code blocks
+            checks.append(self._check("math", self._math_check, text))
+
+        # Verify each code block
         if self.verify_code and self._contains_code(text):
-            try:
-                code = self._extract_code(text)
-                if code:
-                    result = self._client.verify_code(code)
-                    # /verify/code lists them as "issues" (#608).
-                    issues = (result.result or {}).get("issues")
-                    results["verifications"].append({
-                        "type": "code",
-                        "verified": result.is_verified,
-                        "vulnerabilities": len(issues) if isinstance(issues, list) else 0
-                    })
-            except Exception as exc:
-                # Optional auto-verification should not interrupt LangChain
-                # execution, but a check that could not run is not verified.
-                results["verifications"].append(_check_not_run("code", exc))
-        
-        # Detect and verify SQL
-        if self.verify_sql and self._contains_sql(text):
-            try:
-                sql = self._extract_sql(text)
-                if sql and not self.sql_schema_ddl.strip():
-                    # /verify/sql refuses a query without its schema (#608).
-                    results["verifications"].append(_unverified_check("sql", NO_SQL_SCHEMA))
-                elif sql:
-                    result = self._client.verify_sql(sql, self.sql_schema_ddl, self.sql_dialect)
-                    results["verifications"].append({
-                        "type": "sql",
-                        "verified": result.is_verified,
-                        "status": result.status
-                    })
-            except Exception as exc:
-                # Optional auto-verification should not interrupt LangChain
-                # execution, but a check that could not run is not verified.
-                results["verifications"].append(_check_not_run("sql", exc))
-        
+            checks.extend(self._check("code", self._code_check, body) for is_sql, body in blocks if not is_sql)
+
+        # Verify each SQL block, and record SQL outside them
+        if self.verify_sql:
+            checks.extend(self._sql_checks(text, [body for is_sql, body in blocks if is_sql]))
+
         self.verification_results.append(results)
-        
-        if self.log_results and results["verifications"]:
+
+        if self.log_results and checks:
             self._log_results(results)
-        
+
         return results
-    
+
+    @staticmethod
+    def _check(kind: str, run: Callable[[str], Dict[str, Any]], content: str) -> Dict[str, Any]:
+        """The record of *run* on *content*. Optional auto-verification should
+        not interrupt LangChain execution, but a check that could not run is
+        not verified (#608)."""
+        try:
+            return run(content)
+        except Exception as exc:
+            return _check_not_run(kind, exc)
+
+    def _math_check(self, text: str) -> Dict[str, Any]:
+        """Check the math in an output."""
+        result = self._client.verify(text)
+        return {"type": "math", "verified": result.is_verified, "status": result.status}
+
+    def _code_check(self, code: str) -> Dict[str, Any]:
+        """Check a code block."""
+        result = self._client.verify_code(code)
+        # /verify/code lists them as "issues" (#608).
+        issues = (result.result or {}).get("issues")
+        return {
+            "type": "code",
+            "verified": result.is_verified,
+            "vulnerabilities": len(issues) if isinstance(issues, list) else 0
+        }
+
+    def _sql_check(self, sql: str) -> Dict[str, Any]:
+        """Check a ```sql block against the schema (#608). It is sent whole,
+        and /verify/sql does not admit more than one statement."""
+        result = self._client.verify_sql(sql, self.sql_schema_ddl, self.sql_dialect)
+        return {"type": "sql", "verified": result.is_verified, "status": result.status}
+
+    def _sql_checks(self, text: str, blocks: List[str]) -> List[Dict[str, Any]]:
+        """A check for each ```sql block, and an UNVERIFIABLE record for SQL
+        outside them (#608)."""
+        outside = _sql_outside_blocks(text)
+        if not blocks and not outside:
+            return []
+        if not self.sql_schema_ddl.strip():
+            # /verify/sql refuses a query without its schema.
+            return [_unverified_check("sql", NO_SQL_SCHEMA)]
+        checks = [self._check("sql", self._sql_check, sql) for sql in blocks]
+        if outside:
+            checks.append(_unverified_check("sql", _SQL_OUTSIDE_A_BLOCK))
+        return checks
+
     def _contains_math(self, text: str) -> bool:
         """Check if text contains mathematical content."""
         import re
@@ -449,23 +472,6 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
         """Check if text contains code."""
         code_markers = ['```', 'def ', 'class ', 'import ', 'function ']
         return any(marker in text for marker in code_markers)
-    
-    def _contains_sql(self, text: str) -> bool:
-        """Check if text contains a SQL block or statement."""
-        return self._extract_sql(text) is not None
-    
-    def _extract_code(self, text: str) -> Optional[str]:
-        """Extract the first code block from text that is not SQL, which is
-        checked as SQL (#608)."""
-        return _fenced(text, sql=False)
-
-    def _extract_sql(self, text: str) -> Optional[str]:
-        """Extract the SQL from text: a ```sql block, else the first
-        statement (#608)."""
-        fenced = _fenced(text, sql=True)
-        if fenced is not None:
-            return fenced
-        return _sql_statement(text)
     
     def _log_results(self, results: Dict[str, Any]) -> None:
         """Log verification results."""
