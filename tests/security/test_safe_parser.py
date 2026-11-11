@@ -354,3 +354,28 @@ class TestExtraSymbolsHardening:
         unicode_key = {"\uFF58": Symbol("x")}
         with pytest.raises(SafeParserError, match="plain ASCII identifier"):
             safe_parse_expr("x + 1", extra_symbols=unicode_key)
+
+
+class TestMemoryError:
+
+    @pytest.mark.parametrize("unevaluated_only", [True, False])
+    def test_running_out_of_memory_is_a_parser_error_with_the_memory_error_behind_it(
+        self, monkeypatch, unevaluated_only
+    ):
+        # Callers keep the SafeParserError they handle; the math worker reads
+        # the MemoryError behind it. The cost gate's unevaluated parse of
+        # input that is not Python (2x) used to swallow it and let the main
+        # parse try again.
+        from qwed_new.core import safe_parser
+
+        real_parse = safe_parser.parse_expr
+
+        def exhausted(*args, **kwargs):
+            if unevaluated_only and kwargs.get("evaluate") is not False:
+                return real_parse(*args, **kwargs)
+            raise MemoryError()
+
+        monkeypatch.setattr(safe_parser, "parse_expr", exhausted)
+        with pytest.raises(SafeParserError) as raised:
+            safe_parse_expr("2x")
+        assert isinstance(raised.value.__cause__, MemoryError)

@@ -247,6 +247,29 @@ def test_running_out_of_memory_while_parsing_is_reported_and_ends_the_worker(mon
     assert len(pipe.messages) == 1  # the next job was not taken
 
 
+def test_running_out_of_memory_in_the_cost_gate_parse_ends_the_worker(monkeypatch):
+    # Input that is not Python (2x) is parsed once unevaluated by the cost
+    # gate before the main parse; a MemoryError there was swallowed, the
+    # main parse ran, and the worker took the next job.
+    from qwed_new.core import safe_parser
+
+    real_parse = safe_parser.parse_expr
+
+    def exhausted_unevaluated(*args, **kwargs):
+        if kwargs.get("evaluate") is False:
+            raise MemoryError()
+        return real_parse(*args, **kwargs)
+
+    monkeypatch.setattr(mw, "_limit_memory", lambda memory_mb: None)
+    monkeypatch.setattr(safe_parser, "parse_expr", exhausted_unevaluated)
+    pipe = _Pipe(("request", ("2x", {})), ("request", ("1+1", {})))
+    mw._worker_main(pipe, 0)
+
+    ready, result = pipe.sent
+    assert result.developer_fields["constraint_id"] == mw.MATH_OUT_OF_MEMORY
+    assert len(pipe.messages) == 1  # the next job was not taken
+
+
 def test_input_the_parser_refuses_is_still_a_parse_error(monkeypatch):
     from qwed_new.core.math_identity import MATH_PARSE_ERROR
 
