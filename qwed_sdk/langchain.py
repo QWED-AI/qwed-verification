@@ -14,8 +14,9 @@ Usage:
     chain = LLMChain(llm=llm, callbacks=[QWEDVerificationCallback()])
 """
 
+import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 from dataclasses import dataclass
 
 from ._tool_answers import (
@@ -216,13 +217,67 @@ class QWEDCodeTool(QWEDTool):
 # LangChain Callback Handler
 # ============================================================================
 
-# A SQL statement found by its shape, not by a keyword anywhere in the text
-# (#608): "select an option" or "an update on the project" is not SQL. It runs
-# to its first ";" or to the end of the text.
-_SQL_STATEMENT = re.compile(
-    r"\b(?:SELECT\s[^;]+?\sFROM|INSERT\s+INTO|UPDATE\s+\S+\s+SET|DELETE\s+FROM|CREATE\s+TABLE)\s.*?(?:;|$)",
-    re.IGNORECASE | re.DOTALL,
-)
+# A fenced block: its language tag, then its body.
+_CODE_FENCE = re.compile(r"```(\w*)[ \t]*\n(.*?)```", re.DOTALL)
+
+# SQL outside a ```sql block (#608). A statement ends at its first ";", a
+# code fence or a blank line, so the text is cut into pieces there. In a piece
+# it starts at a keyword in capitals, as SQL is written in text, and has the
+# shape of a statement: SELECT ... FROM, WITH ... AS (, INSERT INTO,
+# UPDATE ... SET, DELETE FROM or CREATE TABLE. "Select a few items from your
+# list" is prose. Each piece is read a fixed number of times, so a long output
+# with many SELECTs and no FROM costs linear time, with no limit on length.
+_SQL_BREAK = re.compile(r";|```|\n[ \t]*\n")
+_SQL_START = re.compile(r"\b(?:SELECT|WITH|INSERT\s+INTO|UPDATE|DELETE\s+FROM|CREATE\s+TABLE)\b")
+_SQL_FROM = re.compile(r"\bFROM\b")
+_SQL_AS = re.compile(r"\bAS\s*\(")
+_SQL_UPDATE = re.compile(r"UPDATE\s+\S+\s+SET\b")
+
+_logger = logging.getLogger(__name__)
+
+
+def _fenced(text: str, sql: bool) -> Optional[str]:
+    """The body of the first non-empty fenced block that is SQL (``sql``)
+    or is not."""
+    for fence in _CODE_FENCE.finditer(text):
+        body = fence.group(2).strip()
+        if body and (fence.group(1).lower() == "sql") == sql:
+            return body
+    return None
+
+
+def _sql_pieces(text: str) -> Iterator[str]:
+    """*text* cut at each ";" (kept with the piece before it), code fence
+    and blank line."""
+    start = 0
+    for cut in _SQL_BREAK.finditer(text):
+        yield text[start:cut.end() if cut.group() == ";" else cut.start()]
+        start = cut.end()
+    yield text[start:]
+
+
+def _last_start(pattern: "re.Pattern[str]", piece: str) -> int:
+    """Where *pattern* last starts in *piece*, or -1."""
+    return max((match.start() for match in pattern.finditer(piece)), default=-1)
+
+
+def _sql_statement(text: str) -> Optional[str]:
+    """The first SQL statement in *text* outside a ```sql block, or None."""
+    for piece in _sql_pieces(text):
+        starts = list(_SQL_START.finditer(piece))
+        if not starts:
+            continue
+        last_from, last_as = _last_start(_SQL_FROM, piece), _last_start(_SQL_AS, piece)
+        for start in starts:
+            keyword = start.group()
+            if keyword == "SELECT" and last_from < start.end():
+                continue
+            if keyword == "WITH" and last_as < start.end():
+                continue
+            if keyword == "UPDATE" and not _SQL_UPDATE.match(piece, start.start()):
+                continue
+            return piece[start.start():].strip()
+    return None
 
 
 def _unverified_check(kind: str, reason: str) -> Dict[str, Any]:
@@ -232,7 +287,10 @@ def _unverified_check(kind: str, reason: str) -> Dict[str, Any]:
 
 
 def _check_not_run(kind: str, exc: Exception) -> Dict[str, Any]:
-    """The record of a check that raised: not verified (#608)."""
+    """The record of a check that raised: not verified (#608). The exception
+    is logged, so a bug in the check stays visible without interrupting the
+    LangChain run."""
+    _logger.warning("QWED %s check could not be run", kind, exc_info=exc)
     return _unverified_check(kind, f"the check could not be run ({type(exc).__name__})")
 
 
@@ -393,23 +451,21 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
         return any(marker in text for marker in code_markers)
     
     def _contains_sql(self, text: str) -> bool:
-        """Check if text contains a SQL statement."""
-        return _SQL_STATEMENT.search(text) is not None
+        """Check if text contains a SQL block or statement."""
+        return self._extract_sql(text) is not None
     
     def _extract_code(self, text: str) -> Optional[str]:
-        """Extract code block from text."""
-        import re
-        match = re.search(r'```(?:\w+)?\n(.*?)```', text, re.DOTALL)
-        if match:
-            return match.group(1).strip()
-        return None
-    
+        """Extract the first code block from text that is not SQL, which is
+        checked as SQL (#608)."""
+        return _fenced(text, sql=False)
+
     def _extract_sql(self, text: str) -> Optional[str]:
-        """Extract the first SQL statement from text."""
-        match = _SQL_STATEMENT.search(text)
-        if match:
-            return match.group(0).strip()
-        return None
+        """Extract the SQL from text: a ```sql block, else the first
+        statement (#608)."""
+        fenced = _fenced(text, sql=True)
+        if fenced is not None:
+            return fenced
+        return _sql_statement(text)
     
     def _log_results(self, results: Dict[str, Any]) -> None:
         """Log verification results."""
@@ -418,11 +474,16 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
             print(f"[QWED] {status} {v['type'].upper()}: verified={v.get('verified')}")
     
     def get_summary(self) -> Dict[str, Any]:
-        """Get summary of all verifications."""
+        """Get summary of all verifications.
+
+        An output counts as verified only when it had a check and every check
+        verified it (#608). One with no check, such as SQL the callback did
+        not recognise, is not: ``all()`` of no checks is true, and counted it.
+        """
         total = len(self.verification_results)
         verified = sum(
-            1 for r in self.verification_results 
-            if all(v.get("verified", False) for v in r.get("verifications", []))
+            1 for r in self.verification_results
+            if r.get("verifications") and all(v.get("verified", False) for v in r["verifications"])
         )
         return {
             "total_outputs": total,
