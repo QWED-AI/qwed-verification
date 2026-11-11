@@ -3,6 +3,8 @@
 the single-worker API (OpenVuln run-3, issue #445)."""
 import time
 
+import pytest
+
 from qwed_new.core.code_verifier import CodeVerifier
 
 
@@ -55,6 +57,7 @@ def test_detector_scales_near_linearly():
     )
 
 
+@pytest.mark.serial
 def test_non_matching_subprocess_input_stays_fast():
     verifier = CodeVerifier()
     # Integration coverage: the public path handles the worst-case fragment
@@ -68,6 +71,7 @@ def test_non_matching_subprocess_input_stays_fast():
     assert result.developer_fields["critical_count"] >= 1
 
 
+@pytest.mark.serial
 def test_unparseable_worst_case_fragment_is_blocked_fast():
     verifier = CodeVerifier()
     code = "subprocess.run(curl a|" * 4000
@@ -78,6 +82,7 @@ def test_unparseable_worst_case_fragment_is_blocked_fast():
     assert result.developer_fields["constraint_id"] == "code_verifier.parse_error"
 
 
+@pytest.mark.serial
 def test_growing_literal_reshape_is_not_worked_out():
     # The #534 string check works out what a literal reshape leaves, but not
     # a translate or a replace that grows the text: worked out, these build
@@ -93,6 +98,7 @@ def test_growing_literal_reshape_is_not_worked_out():
         assert time.perf_counter() - start < 0.5
 
 
+@pytest.mark.serial
 def test_unclosed_format_keys_stay_fast():
     # A regex for %-conversions backtracked quadratically on "%(" with no
     # closing parenthesis, and on a long run of zeros (flag or width) with no
@@ -158,6 +164,7 @@ def test_named_format_is_read_once():
     _assert_linear(lambda n: 's = "' + "." * (20 * n) + '"\n' + "x = s % ()\n" * n, 5000)
 
 
+@pytest.mark.serial
 def test_repeated_format_key_is_not_worked_out():
     # A mapping key can be used by every conversion: worked out, each of
     # these 200 formats builds 3 MB. Not worked out, they take milliseconds.
@@ -165,6 +172,7 @@ def test_repeated_format_key_is_not_worked_out():
     assert _verify_time(code) < 1.0
 
 
+@pytest.mark.serial
 def test_padded_format_is_not_worked_out():
     # Worked out, a width or a precision this size builds a gigabyte.
     for code in ('x = "%999999999s" % ""\n', 'x = "%.999999999d" % 1\n'):

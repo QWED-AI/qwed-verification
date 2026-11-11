@@ -140,4 +140,9 @@ pythonpath = [
     ".",
 ]
 
+[tool.coverage.run]
+# coverage.xml names files relative to the checkout, so the SonarCloud job in
+# ci.yml can read a report the test job wrote on another runner.
+relative_files = true
+
 

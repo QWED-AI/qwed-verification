@@ -68,6 +68,7 @@ def test_the_killed_worker_is_gone_and_a_new_one_serves_the_next_request(pool):
     assert result.developer_fields["value"] == 12.0
 
 
+@pytest.mark.serial
 def test_a_full_pool_refuses_at_once(pool):
     results = []
 

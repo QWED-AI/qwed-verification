@@ -420,6 +420,7 @@ class TestAsyncTimeoutBreaker:
         ]
         assert set(recorded) == {"H1", "H2"}
 
+    @pytest.mark.serial
     def test_async_aggregate_deadline_bounds_all_engines(self):
         """CodeRabbit on PR #352: sequential per-engine waits would stack
         (N hung engines x 30s). One aggregate deadline bounds the whole

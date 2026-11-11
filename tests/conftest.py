@@ -26,6 +26,14 @@ os.environ["QWED_API_KEY_LOOKUP_SECRET"] = TEST_LOOKUP_MATERIAL
 # Required by the audit chain every verify endpoint appends to (fail closed)
 os.environ["QWED_AUDIT_SECRET_KEY"] = TEST_AUDIT_MATERIAL
 
+
+def pytest_configure(config):
+    # CI runs most tests with pytest-xdist, then the tests marked serial on
+    # their own: they assert wall-clock bounds that other workers' load can
+    # break.
+    config.addinivalue_line("markers", "serial: asserts a wall-clock bound; CI runs it outside pytest-xdist")
+
+
 @pytest.fixture(autouse=True)
 def setup_test_env():
     """Ensure environment is deterministic for all tests."""

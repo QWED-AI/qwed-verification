@@ -3,13 +3,25 @@ name: QWED CI / CD
 on:
   pull_request:
     branches: [ main ]
+  # SonarCloud analyses main too, from the coverage the test job writes.
+  push:
+    branches: [ main ]
 
 permissions:
   contents: read
 
+# A new push to a pull request cancels the run it replaces.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Depot runner with 4 CPUs for the pytest-xdist run. More CPUs gain
+    # little while one test takes about 60 s on its own. The short jobs
+    # stay on GitHub-hosted runners.
+    runs-on: depot-ubuntu-24.04-4
+    timeout-minutes: 20
     
     services:
       postgres:
@@ -45,6 +57,8 @@ jobs:
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
       with:
         python-version: "3.11"
+        cache: pip
+        cache-dependency-path: pyproject.toml
 
     - name: Boundary Check (QWED Rules)
       run: python scripts/check_boundary.py
@@ -123,7 +137,13 @@ jobs:
         QWED_JWT_SECRET_KEY: ${{ env.QWED_JWT_SECRET_KEY }}
         QWED_API_KEY_LOOKUP_SECRET: ${{ env.DUMMY_LOOKUP }}
       run: |
-        pytest tests/ -v --cov=qwed_sdk --cov=src/qwed_new --cov-report=xml --cov-report=term
+        # Most tests run in parallel. Tests marked serial assert wall-clock
+        # bounds, so they run after, with the runner to themselves, and add
+        # their coverage to the same report.
+        status=0
+        pytest tests/ -v -n logical -m "not serial" --cov=qwed_sdk --cov=src/qwed_new --cov-report= || status=$?
+        pytest tests/ -v -m serial --cov=qwed_sdk --cov=src/qwed_new --cov-append --cov-report=xml --cov-report=term || status=$?
+        exit "${status}"
 
     - name: Upload Coverage to Codecov
       uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v5
@@ -134,6 +154,43 @@ jobs:
         name: codecov-umbrella
         fail_ci_if_error: false
 
+    - name: Keep coverage.xml for the SonarCloud job
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: coverage-xml
+        path: coverage.xml
+        if-no-files-found: error
+        retention-days: 1
+
+  sonarcloud:
+    # Reads the coverage the test job wrote instead of running the suite a
+    # second time. Paths in coverage.xml are relative to the checkout
+    # ([tool.coverage.run] in pyproject.toml), so another runner can read it.
+    name: SonarCloud
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.actor != 'dependabot[bot]'
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+        fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+
+    - name: Download coverage.xml from the test job
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      with:
+        name: coverage-xml
+
+    - name: SonarCloud Scan
+      uses: SonarSource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304 # v8.4.0
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: https://sonarcloud.io
+
   test-image-python:
     # The server image runs the Python its Dockerfile names, which `test`
     # (3.11) does not: Python 3.14 removed ast.Num and ast.Str, and the
@@ -141,7 +198,8 @@ jobs:
     # workflow stayed green. The version is read from the Dockerfile, so a
     # base-image bump is tested on the Python it moves to.
     name: Tests on the server image's Python
-    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 30
 
     steps:
@@ -163,6 +221,8 @@ jobs:
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
       with:
         python-version: ${{ steps.image-python.outputs.version }}
+        cache: pip
+        cache-dependency-path: pyproject.toml
 
     - name: Install dependencies
       run: |
@@ -173,4 +233,8 @@ jobs:
     - name: Run tests
       env:
         ACTIVE_PROVIDER: mock
-      run: pytest tests/ -q
+      run: |
+        status=0
+        pytest tests/ -q -n logical -m "not serial" || status=$?
+        pytest tests/ -q -m serial || status=$?
+        exit "${status}"
