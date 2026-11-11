@@ -5,6 +5,7 @@ Updated for Issue #187: get/set now require a CacheContext argument.
 """
 
 import sys
+import tempfile
 sys.path.insert(0, ".")
 
 from qwed_sdk.cache import CacheContext, VerificationCache
@@ -17,7 +18,11 @@ ctx = CacheContext(provider="openai", model="gpt-4o", policy_version="v1")
 
 # Test 1: Cache Basic Functionality
 print("\n1️⃣ Testing Cache...")
-cache = VerificationCache()
+# A cache directory of its own: every pytest-xdist worker imports this module,
+# and in a shared ~/.qwed/cache one worker's clear() landed between another's
+# set() and get().
+_cache_dir = tempfile.TemporaryDirectory(prefix="qwed-cache-smoke-", ignore_cleanup_errors=True)
+cache = VerificationCache(cache_dir=_cache_dir.name)
 cache.clear()
 print("  ✅ Cache cleared (starting fresh)")
 
@@ -59,6 +64,7 @@ print("\n📊 Cache Stats:")
 cache.print_stats()
 
 cache.clear()
+_cache_dir.cleanup()
 print("✅ Cache cleared")
 
 print("\n" + "=" * 60)
