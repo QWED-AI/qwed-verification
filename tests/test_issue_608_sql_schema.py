@@ -227,7 +227,7 @@ def test_sql_in_a_long_output_is_found_in_linear_time_with_no_length_limit(clien
     "I'll select a few items from your list.",
     "Select a plan. Data from the report is ready.",
     "Sent WITH THANKS to the team.",
-    "Next, create table of contents and alter table settings.",
+    "Next, create table of contents for the report.",
 ])
 def test_prose_with_sql_words_is_not_sql(client, monkeypatch, output):  # noqa: F811
     # The callback matched the words anywhere, so it sent prose to /verify/sql
@@ -343,6 +343,8 @@ def test_a_block_tagged_with_a_sql_dialect_is_checked_as_sql(client, monkeypatch
     ("```\n/* clear rows */\nDELETE FROM t;\n```", "/* clear rows */\nDELETE FROM t;", False),
     # A ";" in a string does not hide the FROM after it.
     ("```\nSELECT ';' FROM t WHERE id = 1 OR 1=1\n```", "SELECT ';' FROM t WHERE id = 1 OR 1=1", False),
+    # A SELECT with no FROM.
+    ("```\nSELECT 1\n```", "SELECT 1", True),
 ])
 def test_an_untagged_block_that_starts_with_a_sql_statement_is_checked_as_sql(
     client, monkeypatch, verify_code, output, query, verified,  # noqa: F811
@@ -376,14 +378,19 @@ def test_sql_in_a_code_block_is_unverifiable_when_the_code_check_is_off(client, 
 
 
 @pytest.mark.parametrize("verify_sql", [True, False])
-def test_an_untagged_block_that_runs_a_query_is_checked_as_code(client, monkeypatch, verify_sql):  # noqa: F811
+@pytest.mark.parametrize("code", [
+    'query = "SELECT a FROM t"\nrows = cur.execute(query)',
+    # A select() call, as in SQLAlchemy, is Python, not a SELECT statement.
+    "select(User).where(User.id == 1)",
+])
+def test_an_untagged_block_that_runs_a_query_is_checked_as_code(client, monkeypatch, verify_sql, code):  # noqa: F811
     # The query string made it SQL, so the Python was sent to /verify/sql, and
     # with the SQL check off, it got no check at all.
     callback, sent = _callback(client, monkeypatch, verify_code=True, verify_sql=verify_sql, sql_schema_ddl=SCHEMA)
 
-    record = callback._verify_output('```\nquery = "SELECT a FROM t"\nrows = cur.execute(query)\n```')
+    record = callback._verify_output("```\n" + code + "\n```")
 
-    assert sent == [{"code": 'query = "SELECT a FROM t"\nrows = cur.execute(query)', "language": "python"}]
+    assert sent == [{"code": code, "language": "python"}]
     assert [check["type"] for check in record["verifications"]] == ["code"]
 
 
@@ -434,6 +441,8 @@ def test_a_fenced_block_is_read_as_markdown_reads_it(client, monkeypatch, output
 @pytest.mark.parametrize("output", [
     "```sql\nSELECT a FROM t\n```\nThen DROP TABLE t;",
     "```sql\nSELECT a FROM t\n```\nthen drop table t;",
+    # A table change in lower case with no ";" after it.
+    "```sql\nSELECT a FROM t\n```\nthen drop table t",
     "```sql\nSELECT a FROM t\n```\nThen TRUNCATE t;",
     "```sql\nSELECT a FROM t\n```\nThen GRANT ALL ON t TO PUBLIC;",
 ])

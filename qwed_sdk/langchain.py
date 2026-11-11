@@ -237,16 +237,16 @@ _SQL_TAGS = frozenset({"sql", "postgresql", "postgres", "pgsql", "mysql", "sqlit
 # UPDATE ... SET, DELETE FROM, MERGE INTO, REPLACE INTO, TRUNCATE, GRANT,
 # REVOKE, or CREATE, DROP or ALTER of a table, view, index, schema or
 # database. "Select a few items from your list" is prose. A statement that
-# creates, drops, alters or truncates a table is found in any case when its
-# piece ends with ";", as prose does not say "drop table t;" (but does say
-# "create table of contents"). Each piece is read a fixed number of times, so
-# a long output costs linear time, with no limit on length.
+# creates, drops, alters or truncates a table is found in any case, as prose
+# does not say "drop table", except for a "table of contents". Each piece is
+# read a fixed number of times, so a long output costs linear time, with no
+# limit on length.
 _SQL_BREAK = re.compile(r";|```|\n[ \t]*\n")
 _SQL_START = re.compile(
     r"\b(?:SELECT|WITH|INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO|REPLACE\s+INTO|TRUNCATE|GRANT|REVOKE"
     r"|(?:CREATE|DROP|ALTER)\s+(?:TABLE|VIEW|INDEX|SCHEMA|DATABASE))\b"
 )
-_SQL_TABLE_CHANGE = re.compile(r"\b(?:CREATE|DROP|ALTER|TRUNCATE)\s+TABLE\b", re.IGNORECASE)
+_SQL_TABLE_CHANGE = re.compile(r"\b(?:CREATE|DROP|ALTER|TRUNCATE)\s+TABLE\b(?!\s+OF\b)", re.IGNORECASE)
 _SQL_FROM = re.compile(r"\bFROM\b")
 _SQL_AS = re.compile(r"\bAS\s*\(")
 _SQL_UPDATE = re.compile(r"UPDATE\s+\S+\s+SET\b")
@@ -329,9 +329,13 @@ def _is_sql_block(language: str, body: str) -> bool:
         return language in _SQL_TAGS
     text = _after_leading_comments(body).upper()
     start = _SQL_START.match(text)
-    return start is not None and _starts_a_statement(
-        start, text, _last_start(_SQL_FROM, text), _last_start(_SQL_AS, text)
-    )
+    if start is None:
+        return False
+    if start.group() == "SELECT" and text[start.end():start.end() + 1].isspace():
+        # A block may hold a SELECT with no FROM, such as SELECT 1. A call
+        # such as select(User) in Python has no space after the word.
+        return True
+    return _starts_a_statement(start, text, _last_start(_SQL_FROM, text), _last_start(_SQL_AS, text))
 
 
 def _after_leading_comments(body: str) -> str:
@@ -381,7 +385,7 @@ def _starts_a_statement(start: "re.Match[str]", piece: str, last_from: int, last
 
 def _holds_a_statement(piece: str) -> bool:
     """Whether a SQL statement starts in *piece*."""
-    if piece.rstrip().endswith(";") and _SQL_TABLE_CHANGE.search(piece):
+    if _SQL_TABLE_CHANGE.search(piece):
         return True
     last_from, last_as = _last_start(_SQL_FROM, piece), _last_start(_SQL_AS, piece)
     return any(_starts_a_statement(start, piece, last_from, last_as) for start in _SQL_START.finditer(piece))
