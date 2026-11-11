@@ -223,6 +223,43 @@ def test_a_job_out_of_memory_is_reported_and_ends_the_worker(monkeypatch):
     assert len(pipe.messages) == 1  # the next job was not taken
 
 
+@pytest.mark.parametrize(
+    "job",
+    [("request", ("2+2", {})), ("request", ("1+1 = 2", {})), ("batch", ("2+2",)), ("batch", ("1+1 = 2",))],
+)
+def test_running_out_of_memory_while_parsing_is_reported_and_ends_the_worker(monkeypatch, job):
+    # The parser reports every failure as SafeParserError; MemoryError under
+    # the worker's limit came back as math.parse_error, and the worker took
+    # the next job.
+    from qwed_new.core import safe_parser
+
+    def exhausted(*args, **kwargs):
+        raise MemoryError()
+
+    monkeypatch.setattr(mw, "_limit_memory", lambda memory_mb: None)
+    monkeypatch.setattr(safe_parser, "parse_expr", exhausted)
+    pipe = _Pipe(job, ("request", ("1+1", {})))
+    mw._worker_main(pipe, 0)
+
+    ready, result = pipe.sent
+    assert result.developer_fields["constraint_id"] == mw.MATH_OUT_OF_MEMORY
+    assert admission_decision(result).value == "BLOCKED"
+    assert len(pipe.messages) == 1  # the next job was not taken
+
+
+def test_input_the_parser_refuses_is_still_a_parse_error(monkeypatch):
+    from qwed_new.core.math_identity import MATH_PARSE_ERROR
+
+    monkeypatch.setattr(mw, "_limit_memory", lambda memory_mb: None)
+    pipe = _Pipe(("request", ("2 +* 2", {})), ("request", ("1+1", {})))
+    mw._worker_main(pipe, 0)
+
+    ready, refused, value = pipe.sent
+    assert refused.developer_fields["constraint_id"] == MATH_PARSE_ERROR
+    assert admission_decision(refused).value == "BLOCKED"
+    assert value.status.value == "UNVERIFIABLE"  # the worker took the next job
+
+
 # ----------------------------------------------------------------- pool paths
 
 

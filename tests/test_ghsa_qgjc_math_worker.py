@@ -181,15 +181,41 @@ def test_a_full_pool_and_a_timeout_never_admit(pool):
         assert result.developer_fields["is_valid"] is False
 
 
+def _address_space_peak_mb(pool):
+    """The most address space the pool's one idle worker has mapped."""
+    (worker,) = pool._idle
+    with open(f"/proc/{worker.process.pid}/status", encoding="ascii") as status:
+        for line in status:
+            if line.startswith("VmPeak:"):
+                return int(line.split()[1]) // 1024 + 1
+    raise AssertionError("no VmPeak line for the worker")
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="RLIMIT_AS is Linux only")
-def test_a_job_past_the_memory_limit_fails_closed():
-    pool = mw.MathWorkerPool(workers=1, max_waiting=0, memory_mb=600)
+def test_a_job_past_the_memory_limit_is_out_of_memory_and_its_worker_ends():
+    # The limit sits 64 MB above what a warm worker has mapped, so this job
+    # passes it within seconds. A fixed 600 MB limit let the job run into its
+    # 60 s time limit first, and the result did not say which limit ended it.
+    unlimited = mw.MathWorkerPool(workers=1, max_waiting=0, memory_mb=0)
+    try:
+        assert unlimited.run("request", ("1+1 = 2", {}), time_limit=120).status.value == "VERIFIED"
+        limit_mb = _address_space_peak_mb(unlimited) + 64
+    finally:
+        unlimited.close()
+
+    pool = mw.MathWorkerPool(workers=1, max_waiting=0, memory_mb=limit_mb)
     try:
         assert pool.run("request", ("1+1 = 2", {}), time_limit=120).status.value == "VERIFIED"
-        # Builds an integer of about 95 million digits once x/x cancels.
-        result = pool.run("request", (CANCELLING[2], {}), time_limit=60)
-        assert admission_decision(result).value == "BLOCKED"
+        (before,) = pool._idle
+        # 2**(2**30), a 128 MB integer, once 2*x/x cancels.
+        result = pool.run("request", ("2**((2*x/x)**30)", {}), time_limit=60)
+        assert result.developer_fields["constraint_id"] == mw.MATH_OUT_OF_MEMORY
         assert result.developer_fields["is_valid"] is False
+        assert admission_decision(result).value == "BLOCKED"
+
+        before.process.join(timeout=10)
+        assert not before.process.is_alive()
+        assert pool.run("request", ("1+1 = 2", {}), time_limit=120).status.value == "VERIFIED"
     finally:
         pool.close()
 
