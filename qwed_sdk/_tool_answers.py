@@ -28,6 +28,11 @@ TRANSLATION_NOT_VERIFIED = (
     "it was translated from your query by an LLM, and that translation is not verified"
 )
 
+# /verify/sql checks a query against the schema it runs on, and refuses a
+# request without one (HTTP 400), so the SQL checks send none without it
+# (#608).
+NO_SQL_SCHEMA = "no schema was given, so QWED cannot verify the query"
+
 
 def server_message(result: Any) -> str:
     """The server's own message for *result*, or an empty string. For a

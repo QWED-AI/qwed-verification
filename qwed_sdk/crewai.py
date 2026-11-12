@@ -18,7 +18,13 @@ Usage:
 from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass, field
 
-from ._tool_answers import code_issue_lines, natural_language_answer, server_message, undecided_answer
+from ._tool_answers import (
+    NO_SQL_SCHEMA,
+    code_issue_lines,
+    natural_language_answer,
+    server_message,
+    undecided_answer,
+)
 
 # Import QWED client
 try:
@@ -143,17 +149,41 @@ class QWEDCodeTool(QWEDVerificationTool):
 
 
 class QWEDSQLTool(QWEDVerificationTool):
-    """Specialized tool for SQL validation."""
-    
+    """Specialized tool for SQL validation against a schema.
+
+    /verify/sql checks a query against the tables it runs on, so the tool
+    takes their schema when it is built (#608). Without one it answers
+    UNVERIFIABLE and sends nothing.
+
+    Example:
+        tool = QWEDSQLTool(schema_ddl="CREATE TABLE users (id INT, name TEXT)")
+    """
+
     name: str = "QWED SQL Validator"
     description: str = (
         "Validate SQL queries for security and correctness. "
         "Detects SQL injection patterns and dangerous operations."
     )
-    
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        schema_ddl: str = "",
+        dialect: str = "sqlite",
+    ):
+        super().__init__(api_key=api_key, base_url=base_url)
+        self._schema_ddl = schema_ddl or ""
+        self._dialect = dialect or "sqlite"
+
     def _run(self, query: str) -> str:
+        if not self._schema_ddl.strip():
+            return (
+                f"⚠️ UNVERIFIABLE: {NO_SQL_SCHEMA}. Build the tool with schema_ddl, "
+                "the CREATE TABLE statements the query runs against."
+            )
         try:
-            result = self._client.verify_sql(query, "")
+            result = self._client.verify_sql(query, self._schema_ddl, self._dialect)
             if result.is_verified:
                 return "✅ SAFE: SQL query is valid and secure."
             # Unsafe only when proven unsafe: SQL that does not parse is
@@ -177,6 +207,10 @@ class VerificationConfig:
     auto_correct: bool = False
     block_on_failure: bool = False
     log_results: bool = True
+    # The schema and dialect the agent's SQL tool checks queries against
+    # (#608). Without a schema, its SQL checks are UNVERIFIABLE.
+    sql_schema_ddl: str = ""
+    sql_dialect: str = "sqlite"
 
 
 class QWEDVerifiedAgent:
@@ -242,7 +276,12 @@ class QWEDVerifiedAgent:
             if self.config.verify_code:
                 qwed_tools.append(QWEDCodeTool(api_key=api_key, base_url=base_url))
             if self.config.verify_sql:
-                qwed_tools.append(QWEDSQLTool(api_key=api_key, base_url=base_url))
+                qwed_tools.append(QWEDSQLTool(
+                    api_key=api_key,
+                    base_url=base_url,
+                    schema_ddl=self.config.sql_schema_ddl,
+                    dialect=self.config.sql_dialect,
+                ))
         
         all_tools = (tools or []) + qwed_tools
         
