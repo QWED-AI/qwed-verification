@@ -102,3 +102,28 @@ def test_the_blocked_result_says_why():
     assert diagnostic.status.value == "BLOCKED"
     assert diagnostic.constraint_id == "consensus.no_independent_verification"
     assert "one engine is not a consensus" in diagnostic.agent_message
+
+
+_BLOCKED_ENGINE = EngineResult("Z3", "method", None, 0.0, 1.0, False, error="x", status="BLOCKED")
+
+
+@pytest.mark.parametrize("agreement, chain, status, message", [
+    ("majority", [], cv.DiagnosticStatus.UNVERIFIABLE, "majority agreement"),
+    ("split", [], cv.DiagnosticStatus.UNVERIFIABLE, "no agreement"),
+    ("no_results", [], cv.DiagnosticStatus.UNVERIFIABLE, "no engine results available"),
+    ("all_failed", [], cv.DiagnosticStatus.UNVERIFIABLE, "all engines failed"),
+    ("unanimous", [_BLOCKED_ENGINE], cv.DiagnosticStatus.UNVERIFIABLE, "some engines blocked"),
+    ("unanimous", [], cv.DiagnosticStatus.UNVERIFIABLE, "advisory engines cannot verify claims"),
+    ("unanimous", [], None, "no agreement"),
+])
+def test_a_consensus_that_is_not_verified_says_why(agreement, chain, status, message):
+    # The messages moved into _unverifiable_message; each is still chosen.
+    result = cv.ConsensusResult(
+        final_answer=None, confidence=0.0, engines_used=len(chain),
+        agreement_status=agreement, verification_chain=chain, total_latency_ms=1.0, status=status,
+    )
+
+    diagnostic = result.to_diagnostic_result()
+
+    assert diagnostic.status.value == "UNVERIFIABLE"
+    assert message in diagnostic.agent_message
