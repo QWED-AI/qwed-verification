@@ -40,22 +40,25 @@ _CONSTRAINT_IMAGE_EMPTY_BATCH = "image_verifier.empty_batch"
 # Anything else is inconclusive: a negation ("not 800x600", "not HD"), a
 # comparison, or a claim that says more than the dimensions ("this 800x600
 # image shows ..."), which the dimensions cannot decide. "HD" is a convention,
-# not a measurement, so it is not checked.
+# not a measurement, so it is not checked. A unit ("pixels", "px") is dropped
+# before the claim is read, so "800 pixels" is 800.
+_UNIT = re.compile(r" ?(?:px|pixels?)\b")
 _NUM = r"(\d{1,10})"
-_UNIT = r"(?: ?(?:px|pixels?))?"
 _THE = r"(?:(?:the|this) )?"
-_IMAGE = _THE + r"(?:image|picture|photo)"
-_BY = _NUM + r" ?x ?" + _NUM + _UNIT
+_SUBJECT = r"(?:image|picture|photo)"
+_IMAGE = _THE + _SUBJECT
+_OF_IMAGE = _THE + r"(?:" + _SUBJECT + r"(?:'s)? )?"
+_BY = _NUM + r" ?x ?" + _NUM
 _SIZE_CLAIMS = (
     re.compile(_BY),
     re.compile(_IMAGE + r" (?:is|measures) " + _BY),
-    re.compile(_THE + r"(?:image(?:'s)? )?(?:dimensions|size|resolution) (?:is|are) " + _BY),
+    re.compile(_OF_IMAGE + r"(?:dimensions|size|resolution) (?:is|are) " + _BY),
 )
 _SIDE_CLAIMS = (
-    re.compile(_THE + r"(?:image(?:'s)? )?(width|height)(?: is|:| of| =) ?" + _NUM + _UNIT),
-    re.compile(_IMAGE + r" has a (width|height) of " + _NUM + _UNIT),
-    re.compile(_IMAGE + r" is " + _NUM + _UNIT + r" (wide|tall|high)"),
-    re.compile(_NUM + _UNIT + r" (wide|tall|high)"),
+    re.compile(_OF_IMAGE + r"(width|height)(?: is|:| of| =) ?" + _NUM),
+    re.compile(_IMAGE + r" has a (width|height) of " + _NUM),
+    re.compile(_IMAGE + r" is " + _NUM + r" (wide|tall|high)"),
+    re.compile(_NUM + r" (wide|tall|high)"),
 )
 _SIDES = {"width": "width", "wide": "width", "height": "height", "tall": "height", "high": "height"}
 
@@ -63,7 +66,7 @@ _SIDES = {"width": "width", "wide": "width", "height": "height", "tall": "height
 def _claimed_size(claim: str) -> Optional[Dict[str, int]]:
     """The width and height a claim states, by side, when the whole claim is a
     plain statement of them (#320), or None."""
-    text = " ".join(claim.lower().replace("\u00d7", "x").split()).removesuffix(".")
+    text = _UNIT.sub("", " ".join(claim.lower().replace("\u00d7", "x").split()).removesuffix("."))
     for pattern in _SIZE_CLAIMS:
         match = pattern.fullmatch(text)
         if match:
@@ -181,6 +184,11 @@ class ImageVerifier:
             >>> result = verifier.verify_image(img_data, "The image is 800x600")
             >>> print(result.status)
         """
+        return self._verify_claim(image_bytes, claim, None)
+
+    def _verify_claim(self, image_bytes: bytes, claim: str, image_sha256: Optional[str]) -> DiagnosticResult:
+        """verify_image, given the image's SHA-256 when the caller has it, as
+        verify_batch does for all its claims on one image (#320)."""
         if not image_bytes or not claim:
             return DiagnosticResult.unverifiable(
                 _INCONCLUSIVE_MSG,
@@ -211,7 +219,7 @@ class ImageVerifier:
                 "metadata": analysis["metadata"],
                 "reasoning": result.reasoning,
                 "claim": claim,
-                "image_sha256": hashlib.sha256(image_bytes).hexdigest(),
+                "image_sha256": image_sha256 or hashlib.sha256(image_bytes).hexdigest(),
             }
             return DiagnosticResult.verified(
                 "Image claim verified",
@@ -376,9 +384,13 @@ class ImageVerifier:
         
         Priority: size > color > numeric > text > semantic
         """
+        # A plain statement of the size, such as "800X600" or "the image is
+        # 800 wide and 600 tall", is decided by _verify_size_claim (#320).
+        if _claimed_size(claim) is not None:
+            return "size"
+
         claim_lower = claim.lower()
-        
-        # Size claims - check dimension pattern first (e.g., "1x1", "800x600")
+
         # Size claims - check dimension pattern first (e.g., "1x1", "800x600")
         # FIX: Bounded regex to prevent ReDoS
         if re.search(r'\d{1,10}\s{0,5}[×x]\s{0,5}\d{1,10}', claim):
@@ -579,9 +591,11 @@ class ImageVerifier:
             >>> result = verifier.verify_batch(img_data, ["Claim 1", "Claim 2"])
             >>> print(result.developer_fields["summary"]["verified"])
         """
+        # The image is hashed once, for the proof of each claim and the batch's.
+        image_sha256 = hashlib.sha256(image_bytes).hexdigest() if image_bytes else None
         items: List[Dict[str, Any]] = []
         for claim in claims:
-            result = self.verify_image(image_bytes, claim)
+            result = self._verify_claim(image_bytes, claim, image_sha256)
             serialized = result.to_dict()
             serialized["claim"] = claim
             items.append(serialized)
@@ -590,8 +604,8 @@ class ImageVerifier:
         # re-derived from the evidence (same claims against a different image must
         # not share a proof).
         extra_evidence: Dict[str, Any] = {}
-        if image_bytes:
-            extra_evidence["image_sha256"] = hashlib.sha256(image_bytes).hexdigest()
+        if image_sha256:
+            extra_evidence["image_sha256"] = image_sha256
 
         return aggregate_batch_diagnostic(
             items,

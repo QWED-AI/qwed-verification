@@ -14,8 +14,11 @@ the same claim on different images, shared one proof_ref.
 These tests send each claim to the route.
 """
 
+import hashlib
+
 import pytest
 
+from qwed_new.core import image_verifier
 from tests.test_issue_320_logic_route_admission import client  # noqa: F401  (fixture)
 
 
@@ -42,6 +45,9 @@ def _verify(client, image, claim):  # noqa: F811
     # A comparison or a hedge.
     "The image is at least 1920x1080 pixels",
     "The image is about 1920 pixels wide",
+    # More than two statements, or one side twice.
+    "the width is 1920 and the height is 1080 and the width is 1920",
+    "the width is 1920 and the width is 1920",
 ])
 def test_a_claim_the_dimensions_do_not_decide_is_unverifiable(client, claim):  # noqa: F811
     body = _verify(client, _png(1920, 1080), claim)
@@ -68,6 +74,13 @@ def test_every_dimension_a_claim_names_is_checked(client, claim, status):  # noq
     ("The image is 800x600 pixels.", "VERIFIED"),
     ("The image is 800 × 600", "VERIFIED"),
     ("the image has a height of 600 pixels", "VERIFIED"),
+    # A capital X, or no unit, was taken for a number and never compared.
+    ("800X600", "VERIFIED"),
+    ("the image is 800 wide and 600 tall", "VERIFIED"),
+    ("800X601", "BLOCKED"),
+    # A photo or a picture has dimensions too.
+    ("the photo's dimensions are 800x600", "VERIFIED"),
+    ("the picture's width is 800", "VERIFIED"),
     ("1024 x 768", "BLOCKED"),
     ("width: 801", "BLOCKED"),
 ])
@@ -91,6 +104,30 @@ def test_the_proof_binds_the_claim_and_the_image(client):  # noqa: F811
 
     assert [body["status"] for body in proofs] == ["VERIFIED"] * 3
     assert len({body["proof_ref"] for body in proofs}) == 3
+
+
+def test_a_batch_hashes_the_image_once(monkeypatch):
+    # Each claim the batch proved hashed the whole image again.
+    image = _png(800, 600, filler=b"A" * 100_000)
+    claims = ["800x600", "the width is 800", "the height is 600"]
+    verifier = image_verifier.ImageVerifier(use_vlm_fallback=False)
+    sha256 = hashlib.sha256
+    hashed = []
+
+    def counting(data=b"", *args, **kwargs):
+        if len(data) == len(image):
+            hashed.append(data)
+        return sha256(data, *args, **kwargs)
+
+    monkeypatch.setattr(image_verifier.hashlib, "sha256", counting)
+    result = verifier.verify_batch(image, claims)
+    monkeypatch.undo()
+
+    assert result.status.value == "VERIFIED"
+    assert len(hashed) == 1
+    # Each claim's proof still binds the image, as it does alone.
+    proofs = [item["proof_ref"] for item in result.developer_fields["results"]]
+    assert proofs == [verifier.verify_image(image, claim).proof_ref for claim in claims]
 
 
 def test_an_image_whose_dimensions_cannot_be_read_is_unverifiable(client):  # noqa: F811
