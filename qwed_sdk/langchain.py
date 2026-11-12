@@ -238,30 +238,33 @@ _SQL_TAGS = frozenset({"sql", "postgresql", "postgres", "pgsql", "mysql", "sqlit
 # REVOKE, or CREATE, DROP or ALTER of a table, view, index, schema or
 # database. "Select a few items from your list" is prose. A statement that
 # creates, drops, alters or truncates a table is found in any case when it
-# reads as one: its piece ends with ";", or the table name is followed by the
-# end of the line, "(" or a clause such as ADD or AS. So "drop table t" is
-# SQL, and "create table of contents" and "alter table settings in the panel"
-# are prose. Each piece is read a fixed number of times, so a long output
-# costs linear time, with no limit on length.
+# reads as one: its piece ends with ";", or the table name, which may be
+# quoted and hold spaces, is followed by the end of its line, "(", a comment
+# or a clause such as ADD or AS. So "drop table t" is SQL, and "create table
+# of contents" and "alter table settings in the panel" are prose. Each piece
+# is read a fixed number of times, so a long output costs linear time, with
+# no limit on length.
 _SQL_BREAK = re.compile(r";|```|\n[ \t]*\n")
 _SQL_START = re.compile(
     r"\b(?:SELECT|WITH|INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO|REPLACE\s+INTO|TRUNCATE|GRANT|REVOKE"
     r"|(?:CREATE|DROP|ALTER)\s+(?:TABLE|VIEW|INDEX|SCHEMA|DATABASE))\b"
 )
 _SQL_TABLE_CHANGE = re.compile(r"\b(?:CREATE|DROP|ALTER|TRUNCATE)\s+TABLE\b", re.IGNORECASE)
-# After TABLE: the table name, then the next token on its line.
-_SQL_TABLE_NAME = re.compile(
-    r"[ \t]+(?:IF[ \t]+(?:NOT[ \t]+)?EXISTS[ \t]+)?[\w\"`\[\]]+(?:\.[\w\"`\[\]]+)*[ \t]*(\S*)", re.IGNORECASE
-)
+# After TABLE: IF EXISTS or IF NOT EXISTS, then the table name, in parts
+# joined by ".", each a word or a quoted name.
+_SQL_IF_EXISTS = re.compile(r"IF\s+(?:NOT\s+)?EXISTS\b", re.IGNORECASE)
+_SQL_QUOTES = {'"': '"', "`": "`", "[": "]"}
+_SQL_WORD = re.compile(r"\w+")
 _SQL_TABLE_CLAUSES = frozenset({"ADD", "DROP", "RENAME", "ALTER", "MODIFY", "AS", "CASCADE", "RESTRICT"})
-# A SELECT with no FROM in a block: a value after it on its line, such as
-# SELECT 1. Python such as select = x, select.f() or select (x) has none.
-_SQL_SELECT_VALUE = re.compile(r"SELECT[ \t]+[\w*'\"`@-]")
+# What only Python puts after the word select: an assignment, an attribute
+# or a comma, as in select = Select(driver) or select.select(...).
+_SQL_SELECT_PYTHON = re.compile(r"SELECT[ \t]*(?:=(?!=)|\.[A-Z_]|,)")
 _SQL_FROM = re.compile(r"\bFROM\b")
 _SQL_AS = re.compile(r"\bAS\s*\(")
 _SQL_UPDATE = re.compile(r"UPDATE\s+\S+\s+SET\b")
 _SQL_OUTSIDE_A_BLOCK = "the SQL is not in a ```sql block, so QWED cannot tell where it starts and ends"
 _SPACE = re.compile(r"\s*")
+_BLANK = re.compile(r"[ \t]*")
 # Fence tags /verify/code does not map to a language it supports.
 _LANGUAGES = {"python3": "python", "py3": "python"}
 
@@ -270,11 +273,13 @@ _logger = logging.getLogger(__name__)
 
 class _Block(NamedTuple):
     """A fenced block (#608): its language in lower case ("" without a tag),
-    its body, and whether it is SQL."""
+    its body, and whether it may be SQL and may be code. An untagged block
+    that starts with a SQL statement may be either."""
 
     language: str
     body: str
-    is_sql: bool
+    may_be_sql: bool
+    may_be_code: bool
 
 
 def _opening(line: str) -> Optional[Tuple[str, str]]:
@@ -322,28 +327,27 @@ def _parse(text: str) -> Tuple[List[_Block], str]:
             end += 1
         body = _dedent(lines[i + 1:end], len(lines[i]) - len(lines[i].lstrip(" \t"))).strip()
         if body:
-            blocks.append(_Block(language, body, _is_sql_block(language, body)))
+            blocks.append(_Block(language, body, _may_be_sql(language, body), language not in _SQL_TAGS))
         outside.append("")
         i = end + 1
     return blocks, "\n".join(outside)
 
 
-def _is_sql_block(language: str, body: str) -> bool:
-    """Whether a block is SQL: its tag names SQL, or it has no tag and starts
-    with a SQL statement, in any case, after any comments and blank lines
-    (#608). The rest of the block is read whole, so a ";" in a string does
-    not hide its FROM. SQL words later in a block, as in Python that runs a
-    query, do not make it SQL. A block taken for the wrong language does not
-    parse in the other check, so it fails closed."""
+def _may_be_sql(language: str, body: str) -> bool:
+    """Whether a block may be SQL: its tag names SQL, or it has no tag and
+    starts with a SQL statement, in any case, after any comments and blank
+    lines (#608). The rest of the block is read whole, so a ";" in a string
+    does not hide its FROM. SQL words later in a block, as in Python that runs
+    a query, do not make it SQL. A SELECT needs no FROM, as in SELECT 1, so
+    one counts unless what follows the word can only be Python."""
     if language:
         return language in _SQL_TAGS
     text = _after_leading_comments(body).upper()
     start = _SQL_START.match(text)
     if start is None:
         return False
-    if start.group() == "SELECT" and _SQL_SELECT_VALUE.match(text):
-        # A block may hold a SELECT with no FROM, such as SELECT 1.
-        return True
+    if start.group() == "SELECT":
+        return _SQL_SELECT_PYTHON.match(text) is None
     return _starts_a_statement(start, text, _last_start(_SQL_FROM, text), _last_start(_SQL_AS, text))
 
 
@@ -403,18 +407,57 @@ def _holds_a_statement(piece: str) -> bool:
 def _changes_a_table(piece: str) -> bool:
     """Whether *piece* holds a statement, in any case, that creates, drops,
     alters or truncates a table: the piece ends with ";", or the table name is
-    followed by the end of its line, "(", ";" or a clause such as ADD."""
+    followed by the end of its line, "(", a comment or a clause such as ADD."""
     if piece.rstrip().endswith(";"):
         return _SQL_TABLE_CHANGE.search(piece) is not None
+    name_end = 0
     for change in _SQL_TABLE_CHANGE.finditer(piece):
-        name = _SQL_TABLE_NAME.match(piece, change.end())
-        if name is None:
+        if change.start() < name_end:
+            # Inside the table name of the table change before it.
             continue
-        after = name.group(1)
-        word = re.match(r"[A-Za-z]*", after).group().upper()
-        if not after or after[0] in "(;" or word in _SQL_TABLE_CLAUSES:
+        name_end = _table_name_end(piece, change.end())
+        if name_end >= 0 and _ends_a_statement(piece, name_end):
             return True
     return False
+
+
+def _table_name_end(piece: str, at: int) -> int:
+    """Where the table name after TABLE, at *at*, ends, or -1 if no name
+    follows. A quote that does not close runs to the end of the piece."""
+    start = _SPACE.match(piece, at).end()
+    if start == at:
+        return -1
+    exists = _SQL_IF_EXISTS.match(piece, start)
+    if exists:
+        start = _SPACE.match(piece, exists.end()).end()
+    end = _name_part_end(piece, start)
+    while end >= 0 and piece.startswith(".", end):
+        part = _name_part_end(piece, end + 1)
+        if part < 0:
+            break
+        end = part
+    return end
+
+
+def _name_part_end(piece: str, at: int) -> int:
+    """Where the part of a name at *at*, a word or a quoted name, ends, or -1."""
+    close = _SQL_QUOTES.get(piece[at:at + 1])
+    if close:
+        end = piece.find(close, at + 1)
+        return len(piece) if end < 0 else end + 1
+    word = _SQL_WORD.match(piece, at)
+    return word.end() if word else -1
+
+
+def _ends_a_statement(piece: str, at: int) -> bool:
+    """Whether what follows a table name, at *at*, reads as the rest of a
+    statement: the end of its line, "(", a comment or a clause such as ADD."""
+    at = _BLANK.match(piece, at).end()
+    rest = piece[at:at + 2]
+    if not rest or rest[0] in "\r\n(" or rest in ("--", "/*"):
+        return True
+    word = _SQL_WORD.match(piece, at)
+    return word is not None and word.group().upper() in _SQL_TABLE_CLAUSES
 
 
 def _sql_in(text: str) -> bool:
@@ -443,12 +486,14 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
     LangChain Callback that automatically verifies all LLM outputs.
 
     Attaches verification results to each generation. Every fenced block is
-    checked: a SQL block (tagged ``sql`` or a SQL dialect, or untagged and
-    holding a SQL statement) as SQL, against ``sql_schema_ddl``, the tables
-    it runs on, and any other block as code (#608). SQL outside a fenced
-    block is recorded as UNVERIFIABLE, as QWED cannot tell where it starts
-    and ends, and so is SQL without a schema. A check that cannot run is
-    recorded as UNVERIFIABLE too, never left out.
+    checked: a block tagged ``sql`` or a SQL dialect as SQL, against
+    ``sql_schema_ddl``, the tables it runs on, and a block with another tag
+    as code (#608). An untagged block that starts with a SQL statement may be
+    either, so it gets both checks, and a check that cannot parse it does not
+    count; any other untagged block is code. SQL outside a fenced block is
+    recorded as UNVERIFIABLE, as QWED cannot tell where it starts and ends,
+    and so is SQL without a schema. A check that cannot run is recorded as
+    UNVERIFIABLE too, never left out.
     
     Example:
         from langchain.llms import OpenAI
@@ -518,7 +563,7 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
     
     def _verify_output(self, text: str) -> Dict[str, Any]:
         """Verify an output and record the result. Every fenced block is
-        checked, a SQL block as SQL and any other block as code (#608)."""
+        checked, as SQL, as code or as both (#608)."""
         checks: List[Dict[str, Any]] = []
         results = {
             "text": text[:100] + "..." if len(text) > 100 else text,
@@ -530,13 +575,12 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
         if self.verify_math and self._contains_math(text):
             checks.append(self._check("math", self._math_check, text))
 
-        # Verify each code block, in its language
-        if self.verify_code:
-            checks.extend(self._check("code", self._code_check, block) for block in blocks if not block.is_sql)
-
-        # Verify each SQL block, and record SQL outside them
-        if self.verify_sql:
-            checks.extend(self._sql_checks(outside, blocks))
+        # Verify each block, and record SQL that no check reads
+        unread: List[str] = []
+        for block in blocks:
+            checks.extend(self._block_checks(block, unread))
+        if self.verify_sql and any(_sql_in(part) for part in [outside, *unread]):
+            checks.append(_unverified_check("sql", _SQL_OUTSIDE_A_BLOCK))
 
         self.verification_results.append(results)
 
@@ -571,6 +615,7 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
         return {
             "type": "code",
             "verified": result.is_verified,
+            "status": result.status,
             "vulnerabilities": len(issues) if isinstance(issues, list) else 0
         }
 
@@ -580,20 +625,33 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
         result = self._client.verify_sql(sql, self.sql_schema_ddl, self.sql_dialect)
         return {"type": "sql", "verified": result.is_verified, "status": result.status}
 
-    def _sql_checks(self, outside: str, blocks: List[_Block]) -> List[Dict[str, Any]]:
-        """A check for each SQL block, and an UNVERIFIABLE record for SQL that
-        no check reads (#608): in *outside*, the text outside the blocks, or,
-        when the code check is off, in a code block, read in any case."""
-        sql_blocks = [block.body for block in blocks if block.is_sql]
-        if self.sql_schema_ddl.strip():
-            checks = [self._check("sql", self._sql_check, sql) for sql in sql_blocks]
-        else:
-            # /verify/sql refuses a query without its schema.
-            checks = [_unverified_check("sql", NO_SQL_SCHEMA) for _ in sql_blocks]
-        unread = [block.body.upper() for block in blocks if not block.is_sql and not self.verify_code]
-        if any(_sql_in(text) for text in [outside, *unread]):
-            checks.append(_unverified_check("sql", _SQL_OUTSIDE_A_BLOCK))
+    def _block_checks(self, block: _Block, unread: List[str]) -> List[Dict[str, Any]]:
+        """The checks of a fenced block (#608): as SQL if it may be SQL, and
+        as code if it may be code. An untagged block that starts with a SQL
+        statement may be either, as select(x) is a call in both, and each
+        check alone has passed what the other refuses. A check that cannot
+        parse the block (BLOCKED) is dropped while the block may be in the
+        other language, and kept when it may not. A block that may be code,
+        and that no check reads, goes to *unread*, to be searched for SQL."""
+        checks = []
+        if block.may_be_sql and self.verify_sql:
+            checks.append(self._sql_block_check(block.body))
+        if block.may_be_code and self.verify_code:
+            checks.append(self._check("code", self._code_check, block))
+        parsed = [check for check in checks if check.get("status") != "BLOCKED"]
+        unchecked = (block.may_be_sql and not self.verify_sql) or (block.may_be_code and not self.verify_code)
+        if parsed or unchecked:
+            checks = parsed
+        if block.may_be_code and not self.verify_code and not checks:
+            unread.append(block.body.upper())
         return checks
+
+    def _sql_block_check(self, sql: str) -> Dict[str, Any]:
+        """The SQL check of a block. /verify/sql refuses a query without its
+        schema, so without one the record is UNVERIFIABLE."""
+        if not self.sql_schema_ddl.strip():
+            return _unverified_check("sql", NO_SQL_SCHEMA)
+        return self._check("sql", self._sql_check, sql)
 
     def _contains_math(self, text: str) -> bool:
         """Check if text contains mathematical content."""

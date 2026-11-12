@@ -214,7 +214,12 @@ def test_sql_in_a_long_output_is_found_in_linear_time_with_no_length_limit(clien
     long_statement = "SELECT a" + ", a" * 200_000 + " FROM t;"
 
     began = time.perf_counter()
-    for no_statement in ("SELECT " * 200_000, "WITH " * 200_000, "```\n" * 200_000):
+    # A quoted table name is read once, and a table change inside it is not
+    # read again.
+    for no_statement in (
+        "SELECT " * 200_000, "WITH " * 200_000, "```\n" * 200_000,
+        "drop table " * 200_000, "drop table [" * 100_000 + "] rows",
+    ):
         assert callback._verify_output(no_statement)["verifications"] == []
     assert callback._verify_output(f"Run: {long_statement} Done.")["verifications"] == [OUTSIDE_A_BLOCK]
     assert time.perf_counter() - began < 10
@@ -232,6 +237,10 @@ def test_sql_in_a_long_output_is_found_in_linear_time_with_no_length_limit(clien
     "Drop table rows you don't need.",
     "Create table headers for each column.",
     "Should we drop table? Not yet.",
+    # A word that is not a clause after the name, on the next line or quoted.
+    "Create table\nheaders for each column.",
+    'Create table "Orders" with two columns.',
+    "Drop table rows.",
 ])
 def test_prose_with_sql_words_is_not_sql(client, monkeypatch, output):  # noqa: F811
     # The callback matched the words anywhere, so it sent prose to /verify/sql
@@ -347,7 +356,7 @@ def test_a_block_tagged_with_a_sql_dialect_is_checked_as_sql(client, monkeypatch
     ("```\n/* clear rows */\nDELETE FROM t;\n```", "/* clear rows */\nDELETE FROM t;", False),
     # A ";" in a string does not hide the FROM after it.
     ("```\nSELECT ';' FROM t WHERE id = 1 OR 1=1\n```", "SELECT ';' FROM t WHERE id = 1 OR 1=1", False),
-    # A SELECT with no FROM.
+    # A SELECT with no FROM that only SQL parses.
     ("```\nSELECT 1\n```", "SELECT 1", True),
 ])
 def test_an_untagged_block_that_starts_with_a_sql_statement_is_checked_as_sql(
@@ -358,7 +367,11 @@ def test_an_untagged_block_that_starts_with_a_sql_statement_is_checked_as_sql(
 
     record = callback._verify_output(output)
 
-    assert [body["query"] for body in sent] == [query]
+    # It may be Python too, so it also gets the code check, which cannot
+    # parse it, and does not count.
+    assert sent == [{"query": query, "schema_ddl": SCHEMA, "dialect": "sqlite"}] + (
+        [{"code": query, "language": "python"}] if verify_code else []
+    )
     assert record["verifications"] == [{"type": "sql", "verified": verified, "status": "VERIFIED"}]
 
 
@@ -384,12 +397,11 @@ def test_sql_in_a_code_block_is_unverifiable_when_the_code_check_is_off(client, 
 @pytest.mark.parametrize("verify_sql", [True, False])
 @pytest.mark.parametrize("code", [
     'query = "SELECT a FROM t"\nrows = cur.execute(query)',
-    # A select() call, as in SQLAlchemy, is Python, not a SELECT statement.
-    "select(User).where(User.id == 1)",
-    # A space before the call, an assignment, and Selenium's Select.
-    "select (User).where(User.id == 1)",
+    # An assignment or an attribute after select can only be Python, as in
+    # Selenium's Select.
     "select = 1\nimport os\nos.system(input())",
     "select = Select(driver)\nselect.select_by_value(x)",
+    "select.select([sock], [], [])",
 ])
 def test_an_untagged_block_that_runs_a_query_is_checked_as_code(client, monkeypatch, verify_sql, code):  # noqa: F811
     # The query string made it SQL, so the Python was sent to /verify/sql, and
@@ -400,6 +412,59 @@ def test_an_untagged_block_that_runs_a_query_is_checked_as_code(client, monkeypa
 
     assert sent == [{"code": code, "language": "python"}]
     assert [check["type"] for check in record["verifications"]] == ["code"]
+
+
+@pytest.mark.parametrize("code, verified", [
+    # A SELECT with no FROM that Python parses too, and a select() call, as
+    # in SQLAlchemy: each check admits it.
+    ("SELECT\n1", [True, True]),
+    ("SELECT +1", [True, True]),
+    ("select(User).where(User.id == 1)", [True, True]),
+    ("select (User).where(User.id == 1)", [True, True]),
+    # Each check alone passed what the other refuses: SQL that reads a file,
+    # and Python that runs a command.
+    ("SELECT (pg_read_file('data.txt'))", [False, True]),
+    ("select(os.system('x'))", [True, False]),
+])
+def test_an_untagged_block_that_may_be_sql_or_python_gets_both_checks(
+    client, monkeypatch, code, verified,  # noqa: F811
+):
+    # It got one check, as SQL or as Python, so the output counted as
+    # verified when that check passed, even if the other refused it.
+    callback, sent = _callback(client, monkeypatch, verify_code=True, sql_schema_ddl=SCHEMA)
+
+    record = callback._verify_output("```\n" + code + "\n```")
+
+    assert sent == [{"query": code, "schema_ddl": SCHEMA, "dialect": "sqlite"}, {"code": code, "language": "python"}]
+    checks = record["verifications"]
+    assert [(check["type"], check["verified"]) for check in checks] == list(zip(["sql", "code"], verified))
+    assert callback.get_summary()["verified"] == int(all(verified))
+
+
+@pytest.mark.parametrize("options, code, records", [
+    # Python that the SQL check cannot parse: the code check decides.
+    ({}, "truncate = True\nprint(truncate)", [("code", True, "VERIFIED")]),
+    # Neither check can parse it, so both count, and it is not verified.
+    ({}, "select ) garbage (", [("sql", False, "BLOCKED"), ("code", False, "BLOCKED")]),
+    # With the code check off, it is code that no check reads, searched for
+    # SQL in any case, as such code is.
+    ({"verify_code": False}, "truncate = True\nprint(truncate)", [("sql", False, "UNVERIFIABLE")]),
+    ({"verify_code": False}, "select == x", []),
+    # With the SQL check off, it is SQL that no check reads.
+    ({"verify_sql": False}, "SELECT 1", []),
+    # Without a schema the SQL check cannot run, so it is not verified.
+    ({"sql_schema_ddl": ""}, "select(User).where(User.id == 1)",
+     [("sql", False, "UNVERIFIABLE"), ("code", True, "VERIFIED")]),
+    ({"sql_schema_ddl": ""}, "SELECT 1", [("sql", False, "UNVERIFIABLE")]),
+])
+def test_a_check_that_cannot_parse_a_block_that_may_be_sql_or_python_does_not_count(
+    client, monkeypatch, options, code, records,  # noqa: F811
+):
+    callback, _ = _callback(client, monkeypatch, **{"verify_code": True, "sql_schema_ddl": SCHEMA, **options})
+
+    record = callback._verify_output("```\n" + code + "\n```")
+
+    assert [(check["type"], check["verified"], check["status"]) for check in record["verifications"]] == records
 
 
 @pytest.mark.parametrize("output, code, language", [
@@ -456,6 +521,16 @@ def test_a_fenced_block_is_read_as_markdown_reads_it(client, monkeypatch, output
     "```sql\nSELECT a FROM t\n```\nthen alter table t add column b int",
     "```sql\nSELECT a FROM t\n```\nthen create table u (id int)",
     "```sql\nSELECT a FROM t\n```\nthen drop table if exists t",
+    # A comment after the name, a quoted name with a space in it, which may
+    # not close, and a name on the next line.
+    "```sql\nSELECT a FROM t\n```\nthen drop table t -- cleanup",
+    "```sql\nSELECT a FROM t\n```\nthen drop table t /* old */",
+    '```sql\nSELECT a FROM t\n```\nthen drop table "old records"',
+    "```sql\nSELECT a FROM t\n```\nthen drop table `old records`",
+    "```sql\nSELECT a FROM t\n```\nthen drop table [old records]",
+    '```sql\nSELECT a FROM t\n```\nthen drop table if exists s."old records"',
+    '```sql\nSELECT a FROM t\n```\nthen drop table "old records',
+    "```sql\nSELECT a FROM t\n```\nthen drop table\nt",
     "```sql\nSELECT a FROM t\n```\nThen TRUNCATE t;",
     "```sql\nSELECT a FROM t\n```\nThen GRANT ALL ON t TO PUBLIC;",
 ])
