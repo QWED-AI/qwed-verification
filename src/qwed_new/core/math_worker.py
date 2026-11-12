@@ -149,9 +149,19 @@ def verify_math_request(expression: str, context: Dict[str, Any]) -> DiagnosticR
             return math_identity_result(expression)
         return _no_claim_result(expression, context or {})
     except SafeParserError as e:
+        _raise_if_out_of_memory(e)
         # Input the parser refused is the caller's to fix, not an internal
         # error (#522); SQL and schema use the same shape.
         return math_parse_error_result(e)
+
+
+def _raise_if_out_of_memory(error: Exception) -> None:
+    """safe_parse_expr reports every failure as SafeParserError, running out
+    of memory under the worker's limit included. That one is not the
+    caller's input to fix: it is raised again, so _worker_main reports
+    math.out_of_memory and ends the process."""
+    if isinstance(error.__cause__, MemoryError):
+        raise error.__cause__
 
 
 def _no_claim_result(expression: str, context: Dict[str, Any]) -> DiagnosticResult:
@@ -267,6 +277,7 @@ def verify_batch_math(expression: str) -> DiagnosticResult:
         })
         return dr
     except SafeParserError as exc:
+        _raise_if_out_of_memory(exc)
         # As /verify/math (#522): refused input is BLOCKED with
         # math.parse_error, not a failed item carrying the parser's text.
         dr = math_parse_error_result(exc)

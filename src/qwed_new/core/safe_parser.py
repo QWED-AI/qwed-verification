@@ -563,6 +563,11 @@ def _check_unevaluated_sympy_cost(expression: str) -> None:
         )
     except SafeParserError:
         raise
+    except MemoryError as exc:
+        # Not a parse failure for the main parse to retry. Raised as the main
+        # parse raises it, so callers see SafeParserError and the math worker
+        # finds the MemoryError behind it (math.out_of_memory).
+        raise SafeParserError("Expression ran out of memory while parsing") from exc
     except Exception:
         # Not parseable even by sympy — let the main parse path raise.
         return
