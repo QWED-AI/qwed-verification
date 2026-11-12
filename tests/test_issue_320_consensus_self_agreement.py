@@ -51,6 +51,10 @@ def test_one_engine_agreeing_with_the_model_is_blocked(client, min_confidence): 
     [_engine("SymPy", 4)],
     # The same engine twice is still one engine.
     [_engine("SymPy", 4), _engine("SymPy", 4)],
+    # Beside an advisory engine, as Python is in high mode, or a blocked one,
+    # as Z3 is in maximum mode, it was UNVERIFIABLE without saying why.
+    [_engine("SymPy", 4), _engine("Python", 4, status="UNVERIFIABLE")],
+    [_engine("SymPy", 4), EngineResult("Z3", "method", None, 0.0, 1.0, False, error="x", status="BLOCKED")],
 ])
 def test_an_answer_one_engine_verified_is_not_a_consensus(results):
     consensus = ConsensusVerifier(enable_circuit_breaker=False)._calculate_consensus(results)

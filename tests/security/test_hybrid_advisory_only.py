@@ -202,9 +202,10 @@ class TestConsensusVerifierAdvisoryOnly:
             ),
         ]
         consensus = self.verifier._calculate_consensus(results)
-        # Python is the only active engine → unanimous, but blocked engine prevents VERIFIED
-        assert consensus["diagnostic_status"] == "UNVERIFIABLE"
-        assert consensus["status"] == "unanimous"
+        # Python is the only engine that verified, and one engine is not a
+        # consensus (#320), so the result is BLOCKED, not VERIFIED.
+        assert consensus["diagnostic_status"] == "BLOCKED"
+        assert consensus["status"] == "no_independent_verification"
 
     def test_all_blocked_propagates(self):
         """All BLOCKED → consensus BLOCKED."""
@@ -326,8 +327,9 @@ class TestConsensusVerifierAdvisoryOnly:
             ),
         ]
         consensus = self.verifier._calculate_consensus(results)
-        assert consensus["diagnostic_status"] == "UNVERIFIABLE"
-        assert consensus["status"] == "unanimous"
+        # Only SymPy verified, and one engine is not a consensus (#320).
+        assert consensus["diagnostic_status"] == "BLOCKED"
+        assert consensus["status"] == "no_independent_verification"
 
     def test_verified_evidence_answer_none_stays_null_and_type_differs(self):
         """Verified consensus evidence: answer None→null, repr carries type info (#266)."""

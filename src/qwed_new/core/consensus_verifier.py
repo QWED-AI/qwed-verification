@@ -117,25 +117,27 @@ class ConsensusResult:
                 developer_fields=developer_fields,
             )
         else:
-            blocked_count = sum(1 for r in self.verification_chain if r.status in ("BLOCKED", DiagnosticStatus.BLOCKED.value))
-            if self.agreement_status == "majority":
-                msg = "Consensus verification: majority agreement"
-            elif self.agreement_status == "split":
-                msg = "Consensus verification: no agreement"
-            elif self.agreement_status == "no_results":
-                msg = "Consensus verification: no engine results available"
-            elif self.agreement_status == "all_failed":
-                msg = "Consensus verification: all engines failed"
-            elif status_val == DiagnosticStatus.UNVERIFIABLE.value and blocked_count > 0:
-                msg = "Consensus verification: incomplete — some engines blocked"
-            elif status_val == DiagnosticStatus.UNVERIFIABLE.value:
-                msg = "Consensus verification: support conditions unmet — advisory engines cannot verify claims"
-            else:
-                msg = "Consensus verification: no agreement"
             return DiagnosticResult.unverifiable(
-                msg,
+                self._unverifiable_message(status_val),
                 developer_fields=developer_fields,
             )
+
+    def _unverifiable_message(self, status_val: str) -> str:
+        """The message of a consensus that is not VERIFIED or BLOCKED."""
+        blocked_count = sum(1 for r in self.verification_chain if r.status in ("BLOCKED", DiagnosticStatus.BLOCKED.value))
+        if self.agreement_status == "majority":
+            return "Consensus verification: majority agreement"
+        if self.agreement_status == "split":
+            return "Consensus verification: no agreement"
+        if self.agreement_status == "no_results":
+            return "Consensus verification: no engine results available"
+        if self.agreement_status == "all_failed":
+            return "Consensus verification: all engines failed"
+        if status_val == DiagnosticStatus.UNVERIFIABLE.value and blocked_count > 0:
+            return "Consensus verification: incomplete — some engines blocked"
+        if status_val == DiagnosticStatus.UNVERIFIABLE.value:
+            return "Consensus verification: support conditions unmet — advisory engines cannot verify claims"
+        return "Consensus verification: no agreement"
 
 
 @dataclass
@@ -949,8 +951,8 @@ class ConsensusVerifier:
         - Any BLOCKED → maximum outcome is UNVERIFIABLE (fail-closed)
         - All UNVERIFIABLE → consensus UNVERIFIABLE
         - No BLOCKED, unanimous, and verified by two engines or more → VERIFIED
-        - Verified by one engine alone → BLOCKED: one engine is not a
-          consensus (#320)
+        - Verified by one engine alone, whatever the others did → BLOCKED:
+          one engine is not a consensus (#320)
         """
         if not results:
             return {"answer": None, "confidence": 0.0, "status": "no_results", "diagnostic_status": DiagnosticStatus.UNVERIFIABLE}
@@ -975,6 +977,22 @@ class ConsensusVerifier:
 
         if not successful:
             return {"answer": None, "confidence": 0.0, "status": "all_failed", "diagnostic_status": DiagnosticStatus.UNVERIFIABLE}
+
+        # One engine is not a consensus (#320). An answer one engine verified
+        # has not been verified by any other, whether the others were advisory
+        # (Python in high mode), blocked (Z3 in maximum mode) or absent. In
+        # single mode the one engine, SymPy, compares the expression the model
+        # translated with the answer the same model gave, so the agreement is
+        # the model's with itself. Without a second engine that verified the
+        # answer, the result is BLOCKED, never VERIFIED.
+        verified = self._verified_results(successful)
+        if len({r.engine_name for r in verified}) == 1:
+            return {
+                "answer": verified[0].result,
+                "confidence": 0.0,
+                "status": NO_INDEPENDENT_VERIFICATION,
+                "diagnostic_status": DiagnosticStatus.BLOCKED,
+            }
 
         # Weight answers by engine reliability
         weighted_answers: Dict[str, float] = {}
@@ -1005,21 +1023,6 @@ class ConsensusVerifier:
         # advisory-only results (e.g. Stats computation) cannot contribute
         # to a VERIFIED consensus (#270).
         all_verified = all(r.status == "VERIFIED" for r in successful)
-
-        # One engine is not a consensus (#320). An answer one engine verified
-        # has not been checked by any other. In single mode the one engine,
-        # SymPy, compares the expression the model translated with the answer
-        # the same model gave, so the agreement is the model's with itself.
-        # Without a second engine that verified the same answer, the result is
-        # BLOCKED, never VERIFIED.
-        verifying_engines = {r.engine_name for r in successful if r.status == "VERIFIED"}
-        if status == "unanimous" and not blocked and all_verified and len(verifying_engines) < 2:
-            return {
-                "answer": answer_values[best_answer],
-                "confidence": confidence,
-                "status": NO_INDEPENDENT_VERIFICATION,
-                "diagnostic_status": DiagnosticStatus.BLOCKED,
-            }
         diagnostic_status = DiagnosticStatus.VERIFIED if (status == "unanimous" and not blocked and all_verified) else DiagnosticStatus.UNVERIFIABLE
 
         # Bind proof_ref to the VERIFIED consensus: evidence includes the
@@ -1052,6 +1055,11 @@ class ConsensusVerifier:
             "proof_ref": proof_ref,
             "verified_evidence": evidence if diagnostic_status is DiagnosticStatus.VERIFIED else None,
         }
+
+    @staticmethod
+    def _verified_results(results: List[EngineResult]) -> List[EngineResult]:
+        """The results whose engine verified its answer."""
+        return [r for r in results if r.status == "VERIFIED"]
 
     @staticmethod
     def _bound_to_query(consensus: Dict[str, Any], query: str) -> Dict[str, Any]:
