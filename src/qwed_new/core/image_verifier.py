@@ -33,6 +33,62 @@ _CONSTRAINT_IMAGE_BATCH_UNVERIFIABLE = "image_verifier.batch_unverifiable"
 _CONSTRAINT_IMAGE_BATCH_BLOCKED = "image_verifier.batch_blocked"
 _CONSTRAINT_IMAGE_EMPTY_BATCH = "image_verifier.empty_batch"
 
+# Size claims (#320). A size claim is decided only when the whole claim is a
+# plain statement of the image's width, height or both, such as "800x600",
+# "the image is 800x600 pixels", "the width is 800" or "the image is 800
+# pixels wide and 600 pixels tall", and every dimension it names is checked.
+# Anything else is inconclusive: a negation ("not 800x600", "not HD"), a
+# comparison, or a claim that says more than the dimensions ("this 800x600
+# image shows ..."), which the dimensions cannot decide. "HD" is a convention,
+# not a measurement, so it is not checked.
+_NUM = r"(\d{1,10})"
+_UNIT = r"(?: ?(?:px|pixels?))?"
+_THE = r"(?:(?:the|this) )?"
+_IMAGE = _THE + r"(?:image|picture|photo)"
+_BY = _NUM + r" ?x ?" + _NUM + _UNIT
+_SIZE_CLAIMS = (
+    re.compile(_BY),
+    re.compile(_IMAGE + r" (?:is|measures) " + _BY),
+    re.compile(_THE + r"(?:image(?:'s)? )?(?:dimensions|size|resolution) (?:is|are) " + _BY),
+)
+_SIDE_CLAIMS = (
+    re.compile(_THE + r"(?:image(?:'s)? )?(width|height)(?: is|:| of| =) ?" + _NUM + _UNIT),
+    re.compile(_IMAGE + r" has a (width|height) of " + _NUM + _UNIT),
+    re.compile(_IMAGE + r" is " + _NUM + _UNIT + r" (wide|tall|high)"),
+    re.compile(_NUM + _UNIT + r" (wide|tall|high)"),
+)
+_SIDES = {"width": "width", "wide": "width", "height": "height", "tall": "height", "high": "height"}
+
+
+def _claimed_size(claim: str) -> Optional[Dict[str, int]]:
+    """The width and height a claim states, by side, when the whole claim is a
+    plain statement of them (#320), or None."""
+    text = " ".join(claim.lower().replace("\u00d7", "x").split()).removesuffix(".")
+    for pattern in _SIZE_CLAIMS:
+        match = pattern.fullmatch(text)
+        if match:
+            return {"width": int(match.group(1)), "height": int(match.group(2))}
+    parts = text.split(" and ")
+    if len(parts) > 2:
+        return None
+    sides: Dict[str, int] = {}
+    for part in parts:
+        side = _claimed_side(part)
+        if side is None or side[0] in sides:
+            return None
+        sides[side[0]] = side[1]
+    return sides
+
+
+def _claimed_side(text: str) -> Optional[Tuple[str, int]]:
+    """The side and length one clause states, such as "the width is 800"."""
+    for pattern in _SIDE_CLAIMS:
+        match = pattern.fullmatch(text)
+        if match:
+            word, number = sorted(match.groups(), key=str.isdigit)
+            return _SIDES[word], int(number)
+    return None
+
 
 @dataclass
 class ImageAnalysisResult:
@@ -149,7 +205,14 @@ class ImageVerifier:
             return self._build_vlm_result(image_bytes, claim, methods_used, analysis)
 
         if result.verdict == "SUPPORTED":
-            evidence = {"metadata": analysis["metadata"], "reasoning": result.reasoning}
+            # The claim and the image are bound into the proof, so the proof of
+            # one claim or image cannot stand for another (#320).
+            evidence = {
+                "metadata": analysis["metadata"],
+                "reasoning": result.reasoning,
+                "claim": claim,
+                "image_sha256": hashlib.sha256(image_bytes).hexdigest(),
+            }
             return DiagnosticResult.verified(
                 "Image claim verified",
                 {"constraint_id": "image_verifier.deterministic", "methods_used": methods_used, "analysis": analysis},
@@ -415,86 +478,43 @@ class ImageVerifier:
         metadata: ImageAnalysisResult
     ) -> ImageVerificationResult:
         """
-        Verify size/dimension claims using extracted metadata.
+        Verify size/dimension claims using extracted metadata (#320).
+
+        Only a claim that is wholly a plain statement of the width, height or
+        both is decided, and every dimension it names is checked (see
+        _claimed_size). Anything else is inconclusive, as is a claim about an
+        image whose dimensions could not be read.
         """
-        claim_lower = claim.lower()
-        
-        # Extract dimension numbers from claim (various formats)
-        # Matches: "1x1", "100×200", "is 1x1 pixels", "800 x 600", etc.
-        # FIX: Replaced \d+ with \d{1,10} to fully bound the regex complexity
-        dimension_match = re.search(r'(\d{1,10})\s{0,5}[×x]\s{0,5}(\d{1,10})', claim)
-        if dimension_match:
-            claimed_width = int(dimension_match.group(1))
-            claimed_height = int(dimension_match.group(2))
-            
-            if metadata.width > 0 and metadata.height > 0:
-                width_match = claimed_width == metadata.width
-                height_match = claimed_height == metadata.height
-                
-                if width_match and height_match:
-                    return ImageVerificationResult(
-                        verdict="SUPPORTED",
-                        confidence=1.0,
-                        reasoning=f"Dimensions match: {metadata.width}x{metadata.height}"
-                    )
-                else:
-                    return ImageVerificationResult(
-                        verdict="REFUTED",
-                        confidence=1.0,
-                        reasoning=f"Claimed {claimed_width}x{claimed_height}, actual {metadata.width}x{metadata.height}"
-                    )
-        
-        # Check for single dimension - more flexible patterns
-        # Matches: "width is 1", "The width is 500", "width of 100", "width: 100"
-        # FIX: Replaced \d+ with \d{1,10}
-        width_match = re.search(r'width\s{0,5}(?:is|of|:)?\s{0,5}(\d{1,10})', claim_lower)
-        height_match = re.search(r'height\s{0,5}(?:is|of|:)?\s{0,5}(\d{1,10})', claim_lower)
-        
-        if width_match and metadata.width > 0:
-            claimed = int(width_match.group(1))
-            if claimed == metadata.width:
-                return ImageVerificationResult(
-                    verdict="SUPPORTED",
-                    confidence=1.0,
-                    reasoning=f"Width matches: {metadata.width}px"
-                )
-            else:
-                return ImageVerificationResult(
-                    verdict="REFUTED",
-                    confidence=1.0,
-                    reasoning=f"Claimed width {claimed}, actual {metadata.width}"
-                )
-        
-        if height_match and metadata.height > 0:
-            claimed = int(height_match.group(1))
-            if claimed == metadata.height:
-                return ImageVerificationResult(
-                    verdict="SUPPORTED",
-                    confidence=1.0,
-                    reasoning=f"Height matches: {metadata.height}px"
-                )
-            else:
-                return ImageVerificationResult(
-                    verdict="REFUTED",
-                    confidence=1.0,
-                    reasoning=f"Claimed height {claimed}, actual {metadata.height}"
-                )
-        
-        # Check for resolution claims
-        if 'hd' in claim_lower or '1080' in claim or '720' in claim:
-            is_hd = metadata.width >= 1280 and metadata.height >= 720
-            if ('hd' in claim_lower or '720' in claim) and is_hd:
-                return ImageVerificationResult(
-                    verdict="SUPPORTED",
-                    confidence=0.9,
-                    reasoning=f"Image is HD resolution: {metadata.width}x{metadata.height}"
-                )
-        
-        return ImageVerificationResult(
-            verdict="INCONCLUSIVE",
-            confidence=0.5,
-            reasoning="Size claim format not recognized"
-        )
+        claimed = _claimed_size(claim)
+        if not claimed:
+            return ImageVerificationResult(
+                verdict="INCONCLUSIVE",
+                confidence=0.5,
+                reasoning=(
+                    "Size claim format not recognized: only a plain statement of the width, "
+                    "height or both, such as \"the image is 800x600 pixels\", is checked"
+                ),
+            )
+        if metadata.width <= 0 or metadata.height <= 0:
+            return ImageVerificationResult(
+                verdict="INCONCLUSIVE",
+                confidence=0.5,
+                reasoning="The image's dimensions could not be read",
+            )
+        actual = {"width": metadata.width, "height": metadata.height}
+        wrong = [f"{side} {value}, actual {actual[side]}" for side, value in claimed.items() if value != actual[side]]
+        if wrong:
+            return ImageVerificationResult(
+                verdict="REFUTED",
+                confidence=1.0,
+                reasoning="Claimed " + "; ".join(wrong),
+            )
+        if len(claimed) == 2:
+            reasoning = f"Dimensions match: {metadata.width}x{metadata.height}"
+        else:
+            ((side, value),) = claimed.items()
+            reasoning = f"{side.capitalize()} matches: {value}px"
+        return ImageVerificationResult(verdict="SUPPORTED", confidence=1.0, reasoning=reasoning)
     
     def _verify_text_claim(
         self, 
