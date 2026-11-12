@@ -26,7 +26,7 @@ _ENGINE_TIMEOUT_SECONDS = 30
 _CIRCUIT_OPEN_ERROR = "Engine excluded by open circuit breaker"
 import threading
 
-from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
+from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus, compute_proof_ref
 
 from .verification_context import VerificationContextDocument
 
@@ -34,6 +34,9 @@ from .verification_context import VerificationContextDocument
 logger = logging.getLogger(__name__)
 SECURE_EXECUTION_REQUIRED = "SECURE_EXECUTION_REQUIRED"
 _NONE_CONSENSUS_KEY = object()
+# The agreement status of a result only one engine verified (#320): one engine
+# is not a consensus, so the result is BLOCKED.
+NO_INDEPENDENT_VERIFICATION = "no_independent_verification"
 
 
 class VerificationMode(str, Enum):
@@ -103,30 +106,38 @@ class ConsensusResult:
                 evidence=self.verified_evidence,
             )
         elif status_val == DiagnosticStatus.BLOCKED.value:
+            if self.agreement_status == NO_INDEPENDENT_VERIFICATION:
+                return DiagnosticResult.blocked(
+                    "Consensus verification: blocked, as one engine is not a consensus "
+                    "and no other engine verified the answer",
+                    developer_fields={**developer_fields, "constraint_id": "consensus.no_independent_verification"},
+                )
             return DiagnosticResult.blocked(
                 "Consensus verification: blocked",
                 developer_fields=developer_fields,
             )
         else:
-            blocked_count = sum(1 for r in self.verification_chain if r.status in ("BLOCKED", DiagnosticStatus.BLOCKED.value))
-            if self.agreement_status == "majority":
-                msg = "Consensus verification: majority agreement"
-            elif self.agreement_status == "split":
-                msg = "Consensus verification: no agreement"
-            elif self.agreement_status == "no_results":
-                msg = "Consensus verification: no engine results available"
-            elif self.agreement_status == "all_failed":
-                msg = "Consensus verification: all engines failed"
-            elif status_val == DiagnosticStatus.UNVERIFIABLE.value and blocked_count > 0:
-                msg = "Consensus verification: incomplete — some engines blocked"
-            elif status_val == DiagnosticStatus.UNVERIFIABLE.value:
-                msg = "Consensus verification: support conditions unmet — advisory engines cannot verify claims"
-            else:
-                msg = "Consensus verification: no agreement"
             return DiagnosticResult.unverifiable(
-                msg,
+                self._unverifiable_message(status_val),
                 developer_fields=developer_fields,
             )
+
+    def _unverifiable_message(self, status_val: str) -> str:
+        """The message of a consensus that is not VERIFIED or BLOCKED."""
+        blocked_count = sum(1 for r in self.verification_chain if r.status in ("BLOCKED", DiagnosticStatus.BLOCKED.value))
+        if self.agreement_status == "majority":
+            return "Consensus verification: majority agreement"
+        if self.agreement_status == "split":
+            return "Consensus verification: no agreement"
+        if self.agreement_status == "no_results":
+            return "Consensus verification: no engine results available"
+        if self.agreement_status == "all_failed":
+            return "Consensus verification: all engines failed"
+        if status_val == DiagnosticStatus.UNVERIFIABLE.value and blocked_count > 0:
+            return "Consensus verification: incomplete — some engines blocked"
+        if status_val == DiagnosticStatus.UNVERIFIABLE.value:
+            return "Consensus verification: support conditions unmet — advisory engines cannot verify claims"
+        return "Consensus verification: no agreement"
 
 
 @dataclass
@@ -440,7 +451,7 @@ class ConsensusVerifier:
             results = self._execute_sequential(query, engine_methods)
         
         # Calculate consensus
-        consensus = self._calculate_consensus(results)
+        consensus = self._bound_to_query(self._calculate_consensus(results), query)
         total_latency = (time.time() - start_time) * 1000
         
         return ConsensusResult(
@@ -533,7 +544,7 @@ class ConsensusVerifier:
             # finish naturally but can never affect later requests
             pool.shutdown(wait=False, cancel_futures=True)
 
-        consensus = self._calculate_consensus(results)
+        consensus = self._bound_to_query(self._calculate_consensus(results), query)
         total_latency = (time.time() - start_time) * 1000
 
         return ConsensusResult(
@@ -939,7 +950,9 @@ class ConsensusVerifier:
         - All BLOCKED → consensus BLOCKED
         - Any BLOCKED → maximum outcome is UNVERIFIABLE (fail-closed)
         - All UNVERIFIABLE → consensus UNVERIFIABLE
-        - No BLOCKED, unanimous → VERIFIED
+        - No BLOCKED, unanimous, and verified by two engines or more → VERIFIED
+        - Verified by one engine alone, whatever the others did → BLOCKED:
+          one engine is not a consensus (#320)
         """
         if not results:
             return {"answer": None, "confidence": 0.0, "status": "no_results", "diagnostic_status": DiagnosticStatus.UNVERIFIABLE}
@@ -964,6 +977,22 @@ class ConsensusVerifier:
 
         if not successful:
             return {"answer": None, "confidence": 0.0, "status": "all_failed", "diagnostic_status": DiagnosticStatus.UNVERIFIABLE}
+
+        # One engine is not a consensus (#320). An answer one engine verified
+        # has not been verified by any other, whether the others were advisory
+        # (Python in high mode), blocked (Z3 in maximum mode) or absent. In
+        # single mode the one engine, SymPy, compares the expression the model
+        # translated with the answer the same model gave, so the agreement is
+        # the model's with itself. Without a second engine that verified the
+        # answer, the result is BLOCKED, never VERIFIED.
+        verified = self._verified_results(successful)
+        if len({r.engine_name for r in verified}) == 1:
+            return {
+                "answer": verified[0].result,
+                "confidence": 0.0,
+                "status": NO_INDEPENDENT_VERIFICATION,
+                "diagnostic_status": DiagnosticStatus.BLOCKED,
+            }
 
         # Weight answers by engine reliability
         weighted_answers: Dict[str, float] = {}
@@ -1026,6 +1055,21 @@ class ConsensusVerifier:
             "proof_ref": proof_ref,
             "verified_evidence": evidence if diagnostic_status is DiagnosticStatus.VERIFIED else None,
         }
+
+    @staticmethod
+    def _verified_results(results: List[EngineResult]) -> List[EngineResult]:
+        """The results whose engine verified its answer."""
+        return [r for r in results if r.status == "VERIFIED"]
+
+    @staticmethod
+    def _bound_to_query(consensus: Dict[str, Any], query: str) -> Dict[str, Any]:
+        """*consensus* with its VERIFIED evidence, and so its proof_ref, bound to
+        the query (#320), so the proof names the statement it is about."""
+        evidence = consensus.get("verified_evidence")
+        if evidence is None:
+            return consensus
+        evidence = {**evidence, "query": query}
+        return {**consensus, "verified_evidence": evidence, "proof_ref": compute_proof_ref(evidence)}
 
     @staticmethod
     def _consensus_answer_key(result: Any) -> str:

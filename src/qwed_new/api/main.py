@@ -1913,7 +1913,7 @@ async def agent_tool_call(
 # ENHANCED VERIFICATION ENDPOINTS (Phase 2B)
 # ============================================================
 
-from qwed_new.core.consensus_verifier import consensus_verifier, VerificationMode
+from qwed_new.core.consensus_verifier import NO_INDEPENDENT_VERIFICATION, consensus_verifier, VerificationMode
 
 class ConsensusVerifyRequest(BaseModel):
     query: str
@@ -1937,7 +1937,8 @@ async def verify_with_consensus(
     Multi-engine consensus verification.
     
     Verification modes:
-    - "single": Fast, single engine (default)
+    - "single": Fast, single engine (default). One engine is not a
+      consensus, so an answer it verifies alone is BLOCKED (#320).
     - "high": 2 engines for higher confidence
     - "maximum": 3+ engines for critical domains (medical, financial)
     
@@ -2000,7 +2001,9 @@ async def verify_with_consensus(
         _safe_commit_log(log)
         return _merge_response(dr)
 
-    if result.confidence < request.min_confidence:
+    # An answer one engine verified alone is BLOCKED, whatever the
+    # confidence (#320).
+    if result.confidence < request.min_confidence and result.agreement_status != NO_INDEPENDENT_VERIFICATION:
         dr = DiagnosticResult.unverifiable(
             f"Confidence ({result.confidence:.1%}) below required minimum ({request.min_confidence:.1%})",
             developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used, "min_confidence": request.min_confidence},
