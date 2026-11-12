@@ -189,6 +189,19 @@ jobs:
       with:
         name: coverage-xml
 
+    - name: Cache the Sonar scanner
+      # When the scanner is in the tool cache, the scan action skips its
+      # download and the signing-key fetch from keyserver.ubuntu.com (6 s on
+      # one run, over 2 min on another). The signature was checked when the
+      # scanner was first cached. The key follows ci.yml, which pins the action
+      # and so the scanner version. ~/.sonar/cache (JRE and analyzers) is not
+      # kept: SonarCloud updates the analyzers itself, and with it the cache
+      # was 470 MB, slower to restore than the downloads it saved.
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: /opt/hostedtoolcache/sonar-scanner-cli
+        key: sonar-scanner-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
+
     - name: SonarCloud Scan
       uses: SonarSource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304 # v8.4.0
       env:
