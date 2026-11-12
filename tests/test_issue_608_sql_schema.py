@@ -222,6 +222,11 @@ def test_sql_in_a_long_output_is_found_in_linear_time_with_no_length_limit(clien
     ):
         assert callback._verify_output(no_statement)["verifications"] == []
     assert callback._verify_output(f"Run: {long_statement} Done.")["verifications"] == [OUTSIDE_A_BLOCK]
+    # Code that no check reads is read whole.
+    unread, _ = _callback(client, monkeypatch, sql_schema_ddl=SCHEMA)
+    code = "q('SELECT a'); " * 100_000
+    assert unread._verify_output("```python\n" + code + "\n```")["verifications"] == []
+    assert unread._verify_output("```python\n" + code + "q('FROM t')\n```")["verifications"] == [OUTSIDE_A_BLOCK]
     assert time.perf_counter() - began < 10
     assert sent == []
 
@@ -381,6 +386,10 @@ def test_an_untagged_block_that_starts_with_a_sql_statement_is_checked_as_sql(
     '```\nquery = "SELECT a FROM t"\n```',
     # A comment that does not close leaves no statement to start the block.
     "```\n/* not closed\nSELECT a FROM t\n```",
+    # The code is read whole, so a ";" in a string, or a blank line, does not
+    # cut the statement.
+    '```python\nquery = "SELECT \';\' FROM t"\n```',
+    '```python\nquery = """\nSELECT a\n\nFROM t\n"""\n```',
 ])
 def test_sql_in_a_code_block_is_unverifiable_when_the_code_check_is_off(client, monkeypatch, output):  # noqa: F811
     # No check read the block, so the output could count as verified with
@@ -446,18 +455,17 @@ def test_an_untagged_block_that_may_be_sql_or_python_gets_both_checks(
     ({}, "truncate = True\nprint(truncate)", [("code", True, "VERIFIED")]),
     # Neither check can parse it, so both count, and it is not verified.
     ({}, "select ) garbage (", [("sql", False, "BLOCKED"), ("code", False, "BLOCKED")]),
-    # With the code check off, it is code that no check reads, searched for
-    # SQL in any case, as such code is.
-    ({"verify_code": False}, "truncate = True\nprint(truncate)", [("sql", False, "UNVERIFIABLE")]),
-    ({"verify_code": False}, "select == x", []),
-    # With the SQL check off, it is SQL that no check reads.
-    ({"verify_sql": False}, "SELECT 1", []),
-    # Without a schema the SQL check cannot run, so it is not verified.
+    # A block for another reason counts: here the schema does not parse.
+    ({"sql_schema_ddl": "CREATE TABLE ((("}, "SELECT +1", [("sql", False, "BLOCKED"), ("code", True, "VERIFIED")]),
+    # With the other check off, or without a schema, nothing parsed the
+    # block, so a check that cannot parse it counts.
+    ({"verify_code": False}, "truncate = True\nprint(truncate)", [("sql", False, "BLOCKED")]),
+    ({"verify_sql": False}, "SELECT 1", [("code", False, "BLOCKED")]),
+    ({"sql_schema_ddl": ""}, "SELECT 1", [("sql", False, "UNVERIFIABLE"), ("code", False, "BLOCKED")]),
     ({"sql_schema_ddl": ""}, "select(User).where(User.id == 1)",
      [("sql", False, "UNVERIFIABLE"), ("code", True, "VERIFIED")]),
-    ({"sql_schema_ddl": ""}, "SELECT 1", [("sql", False, "UNVERIFIABLE")]),
 ])
-def test_a_check_that_cannot_parse_a_block_that_may_be_sql_or_python_does_not_count(
+def test_a_check_that_cannot_parse_the_block_counts_unless_the_other_parses_it(
     client, monkeypatch, options, code, records,  # noqa: F811
 ):
     callback, _ = _callback(client, monkeypatch, **{"verify_code": True, "sql_schema_ddl": SCHEMA, **options})
@@ -521,8 +529,8 @@ def test_a_fenced_block_is_read_as_markdown_reads_it(client, monkeypatch, output
     "```sql\nSELECT a FROM t\n```\nthen alter table t add column b int",
     "```sql\nSELECT a FROM t\n```\nthen create table u (id int)",
     "```sql\nSELECT a FROM t\n```\nthen drop table if exists t",
-    # A comment after the name, a quoted name with a space in it, which may
-    # not close, and a name on the next line.
+    # A comment after the name, a quoted name with a space or a doubled quote
+    # in it, or one that does not close, and a name on the next line.
     "```sql\nSELECT a FROM t\n```\nthen drop table t -- cleanup",
     "```sql\nSELECT a FROM t\n```\nthen drop table t /* old */",
     '```sql\nSELECT a FROM t\n```\nthen drop table "old records"',
@@ -530,6 +538,7 @@ def test_a_fenced_block_is_read_as_markdown_reads_it(client, monkeypatch, output
     "```sql\nSELECT a FROM t\n```\nthen drop table [old records]",
     '```sql\nSELECT a FROM t\n```\nthen drop table if exists s."old records"',
     '```sql\nSELECT a FROM t\n```\nthen drop table "old records',
+    '```sql\nSELECT a FROM t\n```\nthen drop table "old""records"',
     "```sql\nSELECT a FROM t\n```\nthen drop table\nt",
     "```sql\nSELECT a FROM t\n```\nThen TRUNCATE t;",
     "```sql\nSELECT a FROM t\n```\nThen GRANT ALL ON t TO PUBLIC;",

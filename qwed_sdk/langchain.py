@@ -263,6 +263,9 @@ _SQL_FROM = re.compile(r"\bFROM\b")
 _SQL_AS = re.compile(r"\bAS\s*\(")
 _SQL_UPDATE = re.compile(r"UPDATE\s+\S+\s+SET\b")
 _SQL_OUTSIDE_A_BLOCK = "the SQL is not in a ```sql block, so QWED cannot tell where it starts and ends"
+# What /verify/sql and /verify/code answer when they cannot parse their input.
+# Each also blocks for other reasons, such as a schema it cannot read.
+_PARSE_ERRORS = frozenset({"sql_verifier.parse_error", "code_verifier.parse_error"})
 _SPACE = re.compile(r"\s*")
 _BLANK = re.compile(r"[ \t]*")
 # Fence tags /verify/code does not map to a language it supports.
@@ -444,6 +447,9 @@ def _name_part_end(piece: str, at: int) -> int:
     close = _SQL_QUOTES.get(piece[at:at + 1])
     if close:
         end = piece.find(close, at + 1)
+        while end >= 0 and piece.startswith(close, end + 1):
+            # A doubled closing quote is part of the name, as in "a""b".
+            end = piece.find(close, end + 2)
         return len(piece) if end < 0 else end + 1
     word = _SQL_WORD.match(piece, at)
     return word.end() if word else -1
@@ -465,6 +471,12 @@ def _sql_in(text: str) -> bool:
     statement. SQL in a block, such as a query in Python, is part of that
     block, which its own check reads."""
     return any(_holds_a_statement(piece) for piece in _sql_pieces(text))
+
+
+def _unparsed(result: Any) -> bool:
+    """Whether a route answered that it could not parse its input (#608)."""
+    data = result.result if isinstance(result.result, dict) else {}
+    return result.status == "BLOCKED" and data.get("constraint_id") in _PARSE_ERRORS
 
 
 def _unverified_check(kind: str, reason: str) -> Dict[str, Any]:
@@ -490,10 +502,10 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
     ``sql_schema_ddl``, the tables it runs on, and a block with another tag
     as code (#608). An untagged block that starts with a SQL statement may be
     either, so it gets both checks, and a check that cannot parse it does not
-    count; any other untagged block is code. SQL outside a fenced block is
-    recorded as UNVERIFIABLE, as QWED cannot tell where it starts and ends,
-    and so is SQL without a schema. A check that cannot run is recorded as
-    UNVERIFIABLE too, never left out.
+    count when the other can; any other untagged block is code. SQL outside a
+    fenced block is recorded as UNVERIFIABLE, as QWED cannot tell where it
+    starts and ends, and so is SQL without a schema. A check that cannot run
+    is recorded as UNVERIFIABLE too, never left out.
     
     Example:
         from langchain.llms import OpenAI
@@ -575,11 +587,13 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
         if self.verify_math and self._contains_math(text):
             checks.append(self._check("math", self._math_check, text))
 
-        # Verify each block, and record SQL that no check reads
+        # Verify each block, and record SQL that no check reads: outside the
+        # blocks, or in code that no check reads, read whole, as a ";" in a
+        # string does not end a statement there.
         unread: List[str] = []
         for block in blocks:
             checks.extend(self._block_checks(block, unread))
-        if self.verify_sql and any(_sql_in(part) for part in [outside, *unread]):
+        if self.verify_sql and (_sql_in(outside) or any(_holds_a_statement(code) for code in unread)):
             checks.append(_unverified_check("sql", _SQL_OUTSIDE_A_BLOCK))
 
         self.verification_results.append(results)
@@ -604,10 +618,10 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
         result = self._client.verify(text)
         return {"type": "math", "verified": result.is_verified, "status": result.status}
 
-    def _code_check(self, block: _Block) -> Dict[str, Any]:
+    def _code_check(self, block: _Block) -> Tuple[Dict[str, Any], bool]:
         """Check a code block in the language of its tag; an untagged block
         is checked as Python (#608). /verify/code refuses a language it does
-        not support."""
+        not support. Also whether the route could not parse the block."""
         language = _LANGUAGES.get(block.language, block.language) or "python"
         result = self._client.verify_code(block.body, language=language)
         # /verify/code lists them as "issues" (#608).
@@ -617,41 +631,50 @@ class QWEDVerificationCallback(BaseCallbackHandler if LANGCHAIN_AVAILABLE else o
             "verified": result.is_verified,
             "status": result.status,
             "vulnerabilities": len(issues) if isinstance(issues, list) else 0
-        }
+        }, _unparsed(result)
 
-    def _sql_check(self, sql: str) -> Dict[str, Any]:
+    def _sql_check(self, sql: str) -> Tuple[Dict[str, Any], Optional[bool]]:
         """Check a SQL block against the schema (#608). It is sent whole,
-        and /verify/sql does not admit more than one statement."""
+        and /verify/sql does not admit more than one statement. Also whether
+        the route could not parse the block: None without a schema, as
+        /verify/sql refuses a query without one, so the record is
+        UNVERIFIABLE and nothing is sent."""
+        if not self.sql_schema_ddl.strip():
+            return _unverified_check("sql", NO_SQL_SCHEMA), None
         result = self._client.verify_sql(sql, self.sql_schema_ddl, self.sql_dialect)
-        return {"type": "sql", "verified": result.is_verified, "status": result.status}
+        return {"type": "sql", "verified": result.is_verified, "status": result.status}, _unparsed(result)
 
     def _block_checks(self, block: _Block, unread: List[str]) -> List[Dict[str, Any]]:
         """The checks of a fenced block (#608): as SQL if it may be SQL, and
         as code if it may be code. An untagged block that starts with a SQL
         statement may be either, as select(x) is a call in both, and each
-        check alone has passed what the other refuses. A check that cannot
-        parse the block (BLOCKED) is dropped while the block may be in the
-        other language, and kept when it may not. A block that may be code,
-        and that no check reads, goes to *unread*, to be searched for SQL."""
-        checks = []
+        check alone has passed what the other refuses. A check whose route
+        could not parse the block does not count when the other route parsed
+        it, as the block is in the other language. Every other result counts,
+        BLOCKED included, as a route also blocks for a schema it cannot read
+        or a limit. A block that may be code, and that no check reads, goes
+        to *unread*, to be searched for SQL."""
+        readings: List[Tuple[Dict[str, Any], Optional[bool]]] = []
         if block.may_be_sql and self.verify_sql:
-            checks.append(self._sql_block_check(block.body))
+            readings.append(self._reading("sql", self._sql_check, block.body))
         if block.may_be_code and self.verify_code:
-            checks.append(self._check("code", self._code_check, block))
-        parsed = [check for check in checks if check.get("status") != "BLOCKED"]
-        unchecked = (block.may_be_sql and not self.verify_sql) or (block.may_be_code and not self.verify_code)
-        if parsed or unchecked:
-            checks = parsed
-        if block.may_be_code and not self.verify_code and not checks:
+            readings.append(self._reading("code", self._code_check, block))
+        if block.may_be_code and not self.verify_code and not readings:
             unread.append(block.body.upper())
-        return checks
+        parsed = any(unparsed is False for _, unparsed in readings)
+        return [check for check, unparsed in readings if not (unparsed and parsed)]
 
-    def _sql_block_check(self, sql: str) -> Dict[str, Any]:
-        """The SQL check of a block. /verify/sql refuses a query without its
-        schema, so without one the record is UNVERIFIABLE."""
-        if not self.sql_schema_ddl.strip():
-            return _unverified_check("sql", NO_SQL_SCHEMA)
-        return self._check("sql", self._sql_check, sql)
+    @staticmethod
+    def _reading(
+        kind: str, run: Callable[[Any], Tuple[Dict[str, Any], Optional[bool]]], content: Any,
+    ) -> Tuple[Dict[str, Any], Optional[bool]]:
+        """*run* on a block: its record, and whether the route could not
+        parse the block (None when no route answered). A check that could
+        not run is not verified, as in _check."""
+        try:
+            return run(content)
+        except Exception as exc:
+            return _check_not_run(kind, exc), None
 
     def _contains_math(self, text: str) -> bool:
         """Check if text contains mathematical content."""
