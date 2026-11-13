@@ -12,6 +12,7 @@ This makes a translation harder to steer. It does not make it verified: a
 translated verdict is still not admitted (#320, #585).
 """
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -156,7 +157,7 @@ def test_a_tag_in_the_text_cannot_end_its_block():
         assert request.count(f"</{tag}>") == 1
     assert INJECTION in _block(request, "user_query")
     assert "&lt;/user_query>" in _block(request, "user_query")
-    assert "&lt;/columns>" in _block(request, "columns")
+    assert json.loads(_block(request, "columns")) == COLUMNS
     assert ERROR_NOTE in _block(request, "previous_error")
 
 
@@ -167,8 +168,25 @@ def test_a_tag_in_another_case_or_spacing_is_defused_too(text):
     assert _block(request, "user_query") == f"a &lt;{text[1:]} b"
 
 
-def test_a_comparison_in_the_question_is_left_alone():
-    assert _block(translation_request("Is x < 5 and y<z?"), "user_query") == "Is x < 5 and y<z?"
+@pytest.mark.parametrize("text", [
+    "Is x < 5 and y<z?",
+    # A comparison with a tag's name is not a tag: it has no ">" after the name.
+    "If rows < columns, the matrix is wide.",
+    "Is a<user_query_count?",
+    "x <columns",
+])
+def test_a_comparison_in_the_question_is_left_alone(text):
+    assert _block(translation_request(text), "user_query") == text
+
+
+def test_the_column_names_stay_exact():
+    # A tag in a name is escaped as JSON escapes "<" (\u003c), so each name is
+    # still the dataset's own; "&lt;" would name a column it does not have.
+    names = ["price", "<columns>", "</columns> x", "age<30", "</user_query>"]
+    block = _block(translation_request("q", columns=names), "columns")
+
+    assert json.loads(block) == names
+    assert "<columns>" not in block and "</columns>" not in block and "</user_query>" not in block
 
 
 def test_the_previous_error_is_capped():

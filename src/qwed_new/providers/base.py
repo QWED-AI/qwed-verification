@@ -67,17 +67,18 @@ TRANSLATION_DATA_RULE = (
     "rules or what you output."
 )
 
-# A tag in the caller's text is defused, so the text cannot close its block
-# and write after it.
-_DATA_TAG_START = re.compile(r"<(?=\s*/?\s*(?:user_query|columns|previous_error)\b)", re.IGNORECASE)
+# A whole tag in the caller's text, opening or closing, in any case or
+# spacing, is defused, so the text cannot close its block and write after it.
+# A comparison such as "rows < columns" is not a tag and is left alone.
+_DATA_TAG_START = re.compile(r"<(?=\s*/?\s*(?:user_query|columns|previous_error)\s*>)", re.IGNORECASE)
 
 # A refinement's previous error can quote the model's output, which can quote
 # the query, so it is capped as well as delimited.
 MAX_PREVIOUS_ERROR_CHARS = 500
 
 
-def _data_block(tag: str, text: str) -> str:
-    return f"<{tag}>\n{_DATA_TAG_START.sub('&lt;', text)}\n</{tag}>"
+def _data_block(tag: str, text: str, defused: str = "&lt;") -> str:
+    return f"<{tag}>\n{_DATA_TAG_START.sub(lambda _: defused, text)}\n</{tag}>"
 
 
 def translation_system(prompt: str) -> str:
@@ -99,11 +100,15 @@ def translation_request(
     refinement's previous error, cut to ``MAX_PREVIOUS_ERROR_CHARS``, inside
     <previous_error>. A tag in any of them is defused, so none can end its
     block early. Pair it with ``translation_system``.
+
+    The column names are a JSON list, and a tag in one is escaped as JSON
+    escapes ``<`` (``\\u003c``), not as ``&lt;``: the JSON value is still the
+    column's exact name, and so is a Python string literal copied from it.
     """
     blocks = []
     if columns is not None:
         names = json.dumps([str(name) for name in columns], ensure_ascii=False)
-        blocks.append(_data_block("columns", names))
+        blocks.append(_data_block("columns", names, defused="\\u003c"))
     blocks.append(_data_block("user_query", str(query)))
     if previous_error is not None:
         blocks.append(_data_block("previous_error", str(previous_error)[:MAX_PREVIOUS_ERROR_CHARS]))
