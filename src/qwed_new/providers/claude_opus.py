@@ -6,7 +6,13 @@ import logging
 import os
 from anthropic import AnthropicFoundry
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider, configured_model, sanitized_provider_error
+from qwed_new.providers.base import (
+    LLMProvider,
+    configured_model,
+    sanitized_provider_error,
+    translation_request,
+    translation_system,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +64,8 @@ You MUST use the submit_math_expression tool."""
             response = self.client.messages.create(
                 model=self.deployment,
                 max_tokens=1024,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_query}],
+                system=translation_system(system_prompt),
+                messages=[{"role": "user", "content": translation_request(user_query)}],
                 tools=[self.tool_schema],
                 tool_choice={"type": "tool", "name": "submit_math_expression"},
             )
@@ -121,8 +127,8 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             response = self.client.messages.create(
                 model=self.deployment,
                 max_tokens=1024,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_query}],
+                system=translation_system(system_prompt),
+                messages=[{"role": "user", "content": translation_request(user_query)}],
                 tools=[tool_schema],
                 tool_choice={"type": "tool", "name": "submit_z3_problem_v2"},
             )
@@ -170,10 +176,9 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             }
         }
 
-        system_prompt = f"""You are a Logic Translator for the Z3 Theorem Prover.
-You previously made a mistake. Please fix it based on the error message.
-
-Error: "{previous_error}"
+        system_prompt = """You are a Logic Translator for the Z3 Theorem Prover.
+Your previous translation of this question failed with the error in the
+<previous_error> tags. Fix the translation.
 
 CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
 1. "vars_map": A dictionary mapping names to types.
@@ -185,12 +190,13 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
 3. "goal": "SATISFIABILITY".
 """
 
+        request = translation_request(user_query, previous_error=previous_error)
         try:
             response = self.client.messages.create(
                 model=self.deployment,
                 max_tokens=1024,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_query}],
+                system=translation_system(system_prompt),
+                messages=[{"role": "user", "content": request}],
                 tools=[tool_schema],
                 tool_choice={"type": "tool", "name": "submit_z3_problem_v2"},
             )
@@ -226,20 +232,15 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
         Output ONLY the Python code. No markdown, no explanations.
         """
         
-        user_prompt = f"""
-        Columns: {columns}
-        Query: {query}
-        
-        Write the Python code.
-        """
+        user_prompt = translation_request(query, columns=columns)
         
         try:
             response = self.client.messages.create(
                 model=self.deployment,
                 max_tokens=1024,
-                system=system_prompt,
+                system=translation_system(system_prompt),
                 messages=[
-                    {"role": "user", "content": f"<user_query>{user_prompt}</user_query>"}
+                    {"role": "user", "content": user_prompt}
                 ],
             )
             

@@ -8,7 +8,13 @@ import json
 from typing import Dict, Any
 from openai import AzureOpenAI
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider, configured_model, sanitized_provider_error
+from qwed_new.providers.base import (
+    LLMProvider,
+    configured_model,
+    sanitized_provider_error,
+    translation_request,
+    translation_system,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +83,8 @@ You MUST call the submit_math_expression function."""
             response = self.client.chat.completions.create(
                 model=self.deployment,
                 messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_query}
+                    {"role": "system", "content": translation_system(system_prompt)},
+                    {"role": "user", "content": translation_request(user_query)}
                 ],
                 tools=[self.function_schema],
                 tool_choice={"type": "function", "function": {"name": "submit_math_expression"}},
@@ -181,8 +187,8 @@ BEGIN TRANSLATION.
             response = self.client.chat.completions.create(
                 model=self.deployment,
                 messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_query}
+                    {"role": "system", "content": translation_system(system_prompt)},
+                    {"role": "user", "content": translation_request(user_query)}
                 ],
                 tools=[dsl_function_schema],
                 tool_choice={"type": "function", "function": {"name": "submit_qwed_logic"}},
@@ -257,8 +263,8 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             response = self.client.chat.completions.create(
                 model=self.deployment,
                 messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_query}
+                    {"role": "system", "content": translation_system(system_prompt)},
+                    {"role": "user", "content": translation_request(user_query)}
                 ],
                 tools=[logic_function_schema],
                 tool_choice={"type": "function", "function": {"name": "submit_z3_problem_v2"}},
@@ -317,10 +323,9 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
             }
         }
 
-        system_prompt = f"""You are a Logic Translator for the Z3 Theorem Prover.
-You previously made a mistake. Please fix it based on the error message.
-
-Error: "{previous_error}"
+        system_prompt = """You are a Logic Translator for the Z3 Theorem Prover.
+Your previous translation of this question failed with the error in the
+<previous_error> tags. Fix the translation.
 
 CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
 1. "vars_map": A dictionary mapping names to types.
@@ -332,12 +337,13 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
 3. "goal": "SATISFIABILITY".
 """
 
+        request = translation_request(user_query, previous_error=previous_error)
         try:
             response = self.client.chat.completions.create(
                 model=self.deployment,
                 messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_query}
+                    {"role": "system", "content": translation_system(system_prompt)},
+                    {"role": "user", "content": request}
                 ],
                 tools=[logic_function_schema],
                 tool_choice={"type": "function", "function": {"name": "submit_z3_problem_v2"}},
@@ -379,19 +385,14 @@ CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
         Output ONLY the Python code. No markdown, no explanations.
         """
         
-        user_prompt = f"""
-        Columns: {columns}
-        Query: {query}
-        
-        Write the Python code.
-        """
+        user_prompt = translation_request(query, columns=columns)
         
         try:
             response = self.client.chat.completions.create(
                 model=self.deployment,
                 messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"<user_query>{user_prompt}</user_query>"}
+                    {"role": "system", "content": translation_system(system_prompt)},
+                    {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.0
             )

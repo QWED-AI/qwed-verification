@@ -12,7 +12,7 @@ from typing import Dict, Any, List, Optional
 
 from openai import OpenAI
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider, configured_model
+from qwed_new.providers.base import LLMProvider, configured_model, translation_request, translation_system
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,9 @@ Rules:
 You MUST use the submit_math_expression tool."""
 
         try:
-            result = self._call_with_tool(system, user_query, self.math_tool, "submit_math_expression")
+            result = self._call_with_tool(
+                translation_system(system), translation_request(user_query), self.math_tool, "submit_math_expression"
+            )
             return MathVerificationTask(**result)
         except Exception as e:
             logger.debug("OpenAI translation error: %s", type(e).__name__)
@@ -136,7 +138,9 @@ Convert natural language logic puzzles into variables and constraints.
 Use And(...), Or(...), Not(...) for logic. DO NOT use &, |, ~."""
 
         try:
-            result = self._call_with_tool(system, user_query, tool, "submit_z3_problem")
+            result = self._call_with_tool(
+                translation_system(system), translation_request(user_query), tool, "submit_z3_problem"
+            )
             return LogicVerificationTask(**result)
         except Exception as e:
             logger.debug("OpenAI logic translation error: %s", type(e).__name__)
@@ -167,12 +171,13 @@ Use And(...), Or(...), Not(...) for logic. DO NOT use &, |, ~."""
                 },
             },
         }
-        system = f"""You are a Logic Translator. You previously made a mistake.
-Fix based on this error: "{previous_error}"
+        system = """You are a Logic Translator. Your previous translation of this question
+failed with the error in the <previous_error> tags. Fix the translation.
 Use And(...), Or(...), Not(...) for logic."""
 
+        request = translation_request(user_query, previous_error=previous_error)
         try:
-            result = self._call_with_tool(system, user_query, tool, "submit_z3_problem")
+            result = self._call_with_tool(translation_system(system), request, tool, "submit_z3_problem")
             return LogicVerificationTask(**result)
         except Exception as e:
             logger.debug("OpenAI logic refinement error: %s", type(e).__name__)
@@ -185,7 +190,7 @@ The dataset is loaded into `df`. Assign final result to `result`.
 Output ONLY Python code. No markdown."""
 
         try:
-            return self._call_text(system, f"Columns: {columns}\nQuery: {query}")
+            return self._call_text(translation_system(system), translation_request(query, columns=columns))
         except Exception as e:
             logger.debug("OpenAI stats translation error: %s", type(e).__name__)
             raise ValueError("OpenAI stats translation failed.") from None

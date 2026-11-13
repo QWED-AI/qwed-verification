@@ -12,7 +12,7 @@ from typing import Dict, Any, List
 
 from openai import OpenAI
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider, configured_model
+from qwed_new.providers.base import LLMProvider, configured_model, translation_request, translation_system
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ Convert natural language math to formal expressions.
 Respond with JSON: {"expression": "...", "claimed_answer": ..., "reasoning": "...", "confidence": 0.95}"""
 
         try:
-            result = self._call_json(system, user_query)
+            result = self._call_json(translation_system(system), translation_request(user_query))
             return MathVerificationTask(**result)
         except Exception as e:
             logger.debug("Ollama translation error: %s", type(e).__name__)
@@ -95,7 +95,7 @@ Respond with JSON: {"expression": "...", "claimed_answer": ..., "reasoning": "..
 Respond with JSON: {"variables": {"x": "Int"}, "constraints": ["x > 0"], "goal": "SATISFIABILITY"}"""
 
         try:
-            result = self._call_json(system, user_query)
+            result = self._call_json(translation_system(system), translation_request(user_query))
             return LogicVerificationTask(**result)
         except Exception as e:
             logger.debug("Ollama logic translation error: %s", type(e).__name__)
@@ -104,11 +104,13 @@ Respond with JSON: {"variables": {"x": "Int"}, "constraints": ["x > 0"], "goal":
     def refine_logic(self, user_query: str, previous_error: str) -> 'LogicVerificationTask':
         from qwed_new.core.schemas import LogicVerificationTask
 
-        system = f"""You are a Logic Translator. Fix based on error: "{previous_error}"
-Respond with JSON: {{"variables": {{}}, "constraints": [], "goal": "SATISFIABILITY"}}"""
+        system = """You are a Logic Translator. Your previous translation of this question
+failed with the error in the <previous_error> tags. Fix the translation.
+Respond with JSON: {"variables": {}, "constraints": [], "goal": "SATISFIABILITY"}"""
 
+        request = translation_request(user_query, previous_error=previous_error)
         try:
-            result = self._call_json(system, user_query)
+            result = self._call_json(translation_system(system), request)
             return LogicVerificationTask(**result)
         except Exception as e:
             logger.debug("Ollama logic refinement error: %s", type(e).__name__)
@@ -119,7 +121,7 @@ Respond with JSON: {{"variables": {{}}, "constraints": [], "goal": "SATISFIABILI
 Write code using Pandas. Dataset is in `df`. Assign result to `result`.
 Output ONLY Python code."""
 
-        return self._call_text(system, f"Columns: {columns}\nQuery: {query}")
+        return self._call_text(translation_system(system), translation_request(query, columns=columns))
 
     def verify_fact(self, claim: str, context: str) -> Dict[str, Any]:
         system = """Verify the Claim against the Context. Find EXACT QUOTES.
