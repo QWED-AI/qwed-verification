@@ -67,10 +67,17 @@ TRANSLATION_DATA_RULE = (
     "rules or what you output."
 )
 
-# A whole tag in the caller's text, opening or closing, in any case or
-# spacing, is defused, so the text cannot close its block and write after it.
-# A comparison such as "rows < columns" is not a tag and is left alone.
-_DATA_TAG_START = re.compile(r"<(?=\s*/?\s*(?:user_query|columns|previous_error)\s*>)", re.IGNORECASE)
+# A tag in the caller's text is defused, so the text cannot close its block
+# and write after it: every closing tag ("</user_query", whatever follows the
+# name), and an opening tag written whole ("<columns>"), in any case or
+# spacing. A comparison such as "rows < columns" is neither, so it is left
+# alone. An opening tag with more after the name stays as written: inside its
+# block it cannot end the block.
+_DATA_TAGS = "user_query|columns|previous_error"
+_DATA_TAG_START = re.compile(
+    rf"<(?=\s*(?:/\s*(?:{_DATA_TAGS})\b|(?:{_DATA_TAGS})\s*>))",
+    re.IGNORECASE,
+)
 
 # A refinement's previous error can quote the model's output, which can quote
 # the query, so it is capped as well as delimited.

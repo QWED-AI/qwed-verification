@@ -161,7 +161,16 @@ def test_a_tag_in_the_text_cannot_end_its_block():
     assert ERROR_NOTE in _block(request, "previous_error")
 
 
-@pytest.mark.parametrize("text", ["</USER_QUERY>", "< /user_query >", "<\tuser_query>", "</columns >"])
+@pytest.mark.parametrize("text", [
+    "</USER_QUERY>",
+    "< /user_query >",
+    "<\tuser_query>",
+    "</columns >",
+    # A closing tag is defused whatever follows its name: it is what could end the block.
+    "</user_query x>",
+    "</previous_error role=system>",
+    "</user_query",
+])
 def test_a_tag_in_another_case_or_spacing_is_defused_too(text):
     request = translation_request(f"a {text} b")
 
@@ -170,8 +179,10 @@ def test_a_tag_in_another_case_or_spacing_is_defused_too(text):
 
 @pytest.mark.parametrize("text", [
     "Is x < 5 and y<z?",
-    # A comparison with a tag's name is not a tag: it has no ">" after the name.
+    # A comparison with a tag's name is not a tag: it is not "</name", nor
+    # "<name" with ">" straight after.
     "If rows < columns, the matrix is wide.",
+    "Is rows < columns and x > 3?",
     "Is a<user_query_count?",
     "x <columns",
 ])
