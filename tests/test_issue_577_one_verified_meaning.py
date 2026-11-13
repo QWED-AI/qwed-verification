@@ -12,11 +12,14 @@
 true.
 """
 
+from unittest.mock import patch
+
 import pytest
 
 from qwed_new.api import main as api_main
 from qwed_new.core.attestation import get_attestation_service
-from qwed_new.core.diagnostics import DiagnosticResult, aggregate_batch_diagnostic, claim_verified
+from qwed_new.core.consensus_verifier import ConsensusResult, EngineResult
+from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus, aggregate_batch_diagnostic, claim_verified
 from qwed_new.core.trust import attest_and_enforce
 from tests.test_issue_320_logic_route_admission import client  # noqa: F401  (fixture)
 
@@ -93,6 +96,30 @@ def test_a_size_claim_proven_true_is_still_verified(client, monkeypatch):  # noq
     assert body["status"] == "VERIFIED"
     assert _signed_verified(body["attestation"]) is True
     assert [row.is_verified for row in rows] == [True]
+
+
+def test_a_verified_consensus_is_not_verified_anywhere(client, monkeypatch):  # noqa: F811
+    # Two engines agreed on an answer to the model's translation of the query
+    # (#585). The response said meets_requirement true, the token verified:
+    # true and the audit row verified, though nothing verified the claim.
+    rows = _audit_rows(monkeypatch)
+    chain = [EngineResult(name, "method", 4, 1.0, 1.0, True, status="VERIFIED") for name in ("SymPy", "Z3")]
+    consensus = ConsensusResult(
+        final_answer=4, confidence=0.999, engines_used=2, agreement_status="unanimous",
+        verification_chain=chain, total_latency_ms=1.0, status=DiagnosticStatus.VERIFIED,
+        verified_evidence={"agreement_status": "unanimous", "answer": "4", "query": "What is 2 + 2?"},
+    )
+
+    async def verify_async(**kwargs):
+        return consensus
+
+    with patch.object(api_main.consensus_verifier, "verify_async", verify_async):
+        body = client.post("/verify/consensus", json={"query": "What is 2 + 2?"}).json()
+
+    assert body["status"] == "VERIFIED"
+    assert body["meets_requirement"] is False
+    assert _signed_verified(body["attestation"]) is False
+    assert [row.is_verified for row in rows] == [False]
 
 
 def _item(status, is_valid):

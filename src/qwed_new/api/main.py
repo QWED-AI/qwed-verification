@@ -2051,9 +2051,13 @@ async def verify_with_consensus(
             for r in result.verification_chain
         ],
         "total_latency_ms": round(result.total_latency_ms, 2),
-        # TRUE only when consensus is both VERIFIED at the trust boundary AND
-        # confidence meets the threshold — never confidence alone (#269).
-        "meets_requirement": dr.is_verified and result.confidence >= request.min_confidence,
+        # TRUE only when the consensus is verified as claim_verified decides
+        # it AND the confidence meets the threshold, never confidence alone
+        # (#269). The SDK reads this as the result's is_verified, so it agrees
+        # with the attestation and the audit row (#577): a consensus is reached
+        # on the model's translation of the query (#585), and has no is_valid,
+        # so it does not meet the requirement.
+        "meets_requirement": claim_verified(dr) and result.confidence >= request.min_confidence,
     }
     return _merge_response(dr) | response
 # --- Enterprise Security Endpoints (Week 2) ---
