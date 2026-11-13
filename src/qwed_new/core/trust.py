@@ -27,6 +27,7 @@ from qwed_new.core.diagnostics import (
     AdmissionDecision,
     DiagnosticResult,
     DiagnosticStatus,
+    claim_verified,
     enforce_trust_decision,
 )
 
@@ -90,9 +91,11 @@ def attest_and_enforce(
 
     attestation = create_verification_attestation(
         status=dr.status.value,
-        # The "verified" claim follows is_valid where the engine reports one:
-        # code proven unsafe is VERIFIED but not valid.
-        verified=dr.developer_fields.get("is_valid") is not False,
+        # The "verified" claim is claim_verified (#577): is_valid must be
+        # true. Code proven unsafe is VERIFIED but not valid, a result with
+        # no is_valid says nothing about its claim, and a natural-language
+        # verdict proves the model's translation, not the question.
+        verified=claim_verified(dr),
         engine=engine,
         query=statement,
         confidence=_confidence(dr),

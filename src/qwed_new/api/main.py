@@ -24,6 +24,7 @@ from qwed_new.core.diagnostics import (
     AdvisoryCheck,
     DiagnosticResult,
     admission_decision,
+    claim_verified,
     merge_diagnostic_result,
 )
 from qwed_new.core.math_identity import math_parse_error_result
@@ -852,17 +853,15 @@ async def verify_stats(
         dr = _enforce_trust(dr, query=query, engine="stats")
 
         # Fail-closed audit semantics (P1 #297): never log a BLOCKED / non-
-        # authoritative result as verified. is_authoritative is False for every
-        # fail-closed status (BLOCKED/UNVERIFIABLE proof_ref=None), so a result
-        # cannot be persisted as verified unless it is a proven claim AND its
-        # claim-validity signal is true. developer_fields.is_valid alone is
-        # mutable engine metadata and must not drive the audit bit.
+        # authoritative result as verified. claim_verified (#577) needs a
+        # VERIFIED status, so a proven claim, AND a true claim-validity
+        # signal; developer_fields.is_valid alone is mutable engine metadata
+        # and must not drive the audit bit.
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=query,
             result=_cap_log_result(dr.to_dict()),
-            is_verified=dr.is_authoritative
-            and dr.developer_fields.get("is_valid") is True,
+            is_verified=claim_verified(dr),
             domain="STATS"
         )
         _safe_commit_log(log)
@@ -952,7 +951,7 @@ async def verify_fact(
             organization_id=tenant.organization_id,
             query=claim,
             result=_cap_log_result(dr.to_dict()),
-            is_verified=dr.is_authoritative,
+            is_verified=claim_verified(dr),
             domain="FACT"
         )
         _safe_commit_log(log)
@@ -1023,7 +1022,7 @@ async def verify_code(
             organization_id=tenant.organization_id,
             query=code[:200],
             result=_cap_log_result(dr.to_dict()),
-            is_verified=dr.developer_fields.get("is_valid") is True,
+            is_verified=claim_verified(dr),
             domain="CODE",
             admission=admission.value,  # #307: as returned
         )
@@ -1091,7 +1090,7 @@ async def verify_math(
             organization_id=tenant.organization_id,
             query=expression,
             result=_cap_log_result(dr.to_dict()),
-            is_verified=dr.developer_fields.get("is_valid") is True,
+            is_verified=claim_verified(dr),
             domain="MATH",
             admission=admission.value,  # #307: as returned
         )
@@ -1167,7 +1166,7 @@ async def verify_sql(
             organization_id=tenant.organization_id,
             query=query,
             result=_cap_log_result(dr.to_dict()),
-            is_verified=dr.is_authoritative,
+            is_verified=claim_verified(dr),
             domain="SQL",
             admission=admission.value,  # #307: as returned
         )
@@ -1245,7 +1244,7 @@ async def verify_image(
             organization_id=tenant.organization_id,
             query=f"Image claim: {claim}",
             result=_cap_log_result(dr.to_dict()),
-            is_verified=dr.is_authoritative,
+            is_verified=claim_verified(dr),
             domain="IMAGE"
         )
         _safe_commit_log(log)
@@ -1360,7 +1359,7 @@ async def verify_rag(
             organization_id=tenant.organization_id,
             query=f"RAG Document Verify: {request.target_document_id}",
             result=_cap_log_result(dr.to_dict()),
-            is_verified=dr.is_authoritative,
+            is_verified=claim_verified(dr),
             domain="RAG"
         )
         _safe_commit_log(log)
@@ -1441,7 +1440,7 @@ async def verify_process(
             organization_id=tenant.organization_id,
             query=f"Process Verification ({request.mode})",
             result=_cap_log_result(dr.to_dict()),
-            is_verified=dr.is_authoritative,
+            is_verified=claim_verified(dr),
             domain="PROCESS"
         )
         _safe_commit_log(log)
@@ -1978,7 +1977,7 @@ async def verify_with_consensus(
             organization_id=tenant.organization_id,
             query=request.query,
             result=_cap_log_result(dr.to_dict()),
-            is_verified=dr.is_authoritative,
+            is_verified=claim_verified(dr),
             domain="CONSENSUS"
         )
         _safe_commit_log(log)
@@ -1995,7 +1994,7 @@ async def verify_with_consensus(
             organization_id=tenant.organization_id,
             query=request.query,
             result=_cap_log_result(dr.to_dict()),
-            is_verified=dr.is_authoritative,
+            is_verified=claim_verified(dr),
             domain="CONSENSUS"
         )
         _safe_commit_log(log)
@@ -2013,7 +2012,7 @@ async def verify_with_consensus(
             organization_id=tenant.organization_id,
             query=request.query,
             result=_cap_log_result(dr.to_dict()),
-            is_verified=dr.is_authoritative,
+            is_verified=claim_verified(dr),
             domain="CONSENSUS"
         )
         _safe_commit_log(log)
@@ -2028,7 +2027,7 @@ async def verify_with_consensus(
         organization_id=tenant.organization_id,
         query=request.query,
         result=_cap_log_result(dr.to_dict()),
-        is_verified=dr.is_authoritative,
+        is_verified=claim_verified(dr),
         domain="CONSENSUS"
     )
     _safe_commit_log(log)
@@ -2052,9 +2051,13 @@ async def verify_with_consensus(
             for r in result.verification_chain
         ],
         "total_latency_ms": round(result.total_latency_ms, 2),
-        # TRUE only when consensus is both VERIFIED at the trust boundary AND
-        # confidence meets the threshold — never confidence alone (#269).
-        "meets_requirement": dr.is_verified and result.confidence >= request.min_confidence,
+        # TRUE only when the consensus is verified as claim_verified decides
+        # it AND the confidence meets the threshold, never confidence alone
+        # (#269). The SDK reads this as the result's is_verified, so it agrees
+        # with the attestation and the audit row (#577): a consensus is reached
+        # on the model's translation of the query (#585), and has no is_valid,
+        # so it does not meet the requirement.
+        "meets_requirement": claim_verified(dr) and result.confidence >= request.min_confidence,
     }
     return _merge_response(dr) | response
 # --- Enterprise Security Endpoints (Week 2) ---

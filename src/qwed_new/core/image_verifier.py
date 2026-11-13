@@ -223,7 +223,13 @@ class ImageVerifier:
             }
             return DiagnosticResult.verified(
                 "Image claim verified",
-                {"constraint_id": "image_verifier.deterministic", "methods_used": methods_used, "analysis": analysis},
+                # The size claim was proven to hold (#577).
+                {
+                    "constraint_id": "image_verifier.deterministic",
+                    "is_valid": True,
+                    "methods_used": methods_used,
+                    "analysis": analysis,
+                },
                 evidence,
             )
 
