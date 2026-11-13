@@ -92,8 +92,9 @@ def attest_and_enforce(
     attestation = create_verification_attestation(
         status=dr.status.value,
         # The "verified" claim is claim_verified (#577): is_valid must be
-        # true. Code proven unsafe is VERIFIED but not valid, and a result
-        # with no is_valid says nothing about its claim.
+        # true. Code proven unsafe is VERIFIED but not valid, a result with
+        # no is_valid says nothing about its claim, and a natural-language
+        # verdict proves the model's translation, not the question.
         verified=claim_verified(dr),
         engine=engine,
         query=statement,

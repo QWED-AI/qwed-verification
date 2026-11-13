@@ -26,6 +26,7 @@ from qwed_new.core.diagnostics import (
     AdmissionDecision,
     DiagnosticResult,
     admission_decision,
+    claim_verified,
     enforce_trust_decision,
 )
 from qwed_new.core.attestation import create_verification_attestation, AttestationStatus
@@ -194,7 +195,10 @@ class ControlPlane:
         # engine actually verified, not the user's prose.
         att_result = create_verification_attestation(
             status="VERIFIED",
-            verified=dr.developer_fields.get("is_valid") is True,
+            # claim_verified (#577): false here even when the expression
+            # holds, as the expression is the model's translation of the
+            # question. The route's own token says the same.
+            verified=claim_verified(dr),
             engine="math",
             query=expression,
             confidence=1.0,

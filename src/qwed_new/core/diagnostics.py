@@ -1249,16 +1249,40 @@ def admission_decision(result: DiagnosticResult) -> AdmissionDecision:
     return AdmissionDecision.BLOCKED
 
 
+def _verified_fields(status: Any, fields: Any) -> bool:
+    """``claim_verified``'s rule, on a status and its developer fields."""
+    return (
+        status == DiagnosticStatus.VERIFIED
+        and isinstance(fields, dict)
+        and fields.get("is_valid") is True
+        # Absent where the route checked the user's own input; where present,
+        # only true counts.
+        and fields.get("query_semantics_verified", True) is True
+    )
+
+
 def claim_verified(result: DiagnosticResult) -> bool:
     """Whether *result* proved that its claim holds (#577): ``VERIFIED``, with
-    ``developer_fields.is_valid`` true.
+    ``developer_fields.is_valid`` true, and not reached on a model's
+    translation of the question.
 
     This is the one meaning of "verified" that the attestation, the audit row
     and the batch summary use. A ``VERIFIED`` result can also prove a claim
     false, as it does for SQL proven unsafe, and a result with no ``is_valid``
     says nothing about its claim, so neither is verified.
+
+    A natural-language or logic verdict records ``query_semantics_verified``
+    false: the engine decided the expression or constraints a model wrote
+    from the question, and nothing checks that they mean what was asked. It
+    proves the translation, not the claim, so it is not verified either, on
+    the same ground on which ``natural_language_admission`` does not admit it.
     """
-    return result.status is DiagnosticStatus.VERIFIED and result.developer_fields.get("is_valid") is True
+    return _verified_fields(result.status, result.developer_fields)
+
+
+def claim_verified_item(item: Dict[str, Any]) -> bool:
+    """``claim_verified`` for a serialized result, such as a batch item."""
+    return _verified_fields(item.get("status"), item.get("developer_fields"))
 
 
 def _item_validity(item: Dict[str, Any]) -> Any:
@@ -1341,8 +1365,9 @@ def aggregate_batch_diagnostic(
 
     # Verified as claim_verified decides it (#577). A VERIFIED item whose
     # claim was proven false is refuted, so it counts with the blocked ones; a
-    # VERIFIED item with no is_valid says nothing, so it is unverifiable.
-    verified = sum(1 for item in items if item["status"] == "VERIFIED" and _item_validity(item) is True)
+    # VERIFIED item with no is_valid, or one reached on a model's translation
+    # of the question, says nothing about the claim, so it is unverifiable.
+    verified = sum(1 for item in items if claim_verified_item(item))
     blocked = sum(
         1 for item in items
         if item["status"] == "BLOCKED" or (item["status"] == "VERIFIED" and _item_validity(item) is False)
