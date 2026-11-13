@@ -33,11 +33,10 @@ def batch_item_is_verified(item: BatchItem) -> bool:
 
     Each item's result is the DiagnosticResult (merged) its route returns
     (#494), so the routes' own rules apply:
-    - fact and sql: VERIFIED with a proof_ref (is_authoritative, as on
-      their routes; a proven-malicious query is VERIFIED);
-    - math and code: VERIFIED with is_valid True (/verify/math and
-      /verify/code record is_valid; code proven unsafe is VERIFIED but not
-      valid);
+    - fact, sql, math and code: VERIFIED, with its proof_ref, and with
+      is_valid True, as claim_verified decides it on their routes (#577); a
+      proven-malicious query, or code proven unsafe, is VERIFIED but not
+      valid;
     - natural language and logic: admitted, as /verify/natural_language and
       /verify/logic record it (#320).
     A failed item, or a type not listed, is never verified.
@@ -47,10 +46,14 @@ def batch_item_is_verified(item: BatchItem) -> bool:
     result = item.result
     kind = item.verification_type.value
     fields = result.get("developer_fields") or {}
-    if kind in ("fact", "sql"):
-        return result.get("status") == "VERIFIED" and bool(result.get("proof_ref"))
-    if kind in ("math", "code"):
-        return result.get("status") == "VERIFIED" and fields.get("is_valid") is True
+    if kind in ("fact", "sql", "math", "code"):
+        # The stored result is a dict, so its proof_ref is checked too: only a
+        # DiagnosticResult guarantees that VERIFIED carries one.
+        return (
+            result.get("status") == "VERIFIED"
+            and bool(result.get("proof_ref"))
+            and fields.get("is_valid") is True
+        )
     if kind in ("natural_language", "logic"):
         return result.get("admission") == AdmissionDecision.ADMIT.value
     return False

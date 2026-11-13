@@ -1249,6 +1249,24 @@ def admission_decision(result: DiagnosticResult) -> AdmissionDecision:
     return AdmissionDecision.BLOCKED
 
 
+def claim_verified(result: DiagnosticResult) -> bool:
+    """Whether *result* proved that its claim holds (#577): ``VERIFIED``, with
+    ``developer_fields.is_valid`` true.
+
+    This is the one meaning of "verified" that the attestation, the audit row
+    and the batch summary use. A ``VERIFIED`` result can also prove a claim
+    false, as it does for SQL proven unsafe, and a result with no ``is_valid``
+    says nothing about its claim, so neither is verified.
+    """
+    return result.status is DiagnosticStatus.VERIFIED and result.developer_fields.get("is_valid") is True
+
+
+def _item_validity(item: Dict[str, Any]) -> Any:
+    """The ``is_valid`` of a serialized batch item, or None."""
+    fields = item.get("developer_fields")
+    return fields.get("is_valid") if isinstance(fields, dict) else None
+
+
 def merge_diagnostic_result(dr: DiagnosticResult) -> Dict[str, Any]:
     """Merge DiagnosticResult with developer fields, ensuring diagnostic keys win.
 
@@ -1321,8 +1339,14 @@ def aggregate_batch_diagnostic(
             },
         )
 
-    verified = sum(1 for item in items if item["status"] == "VERIFIED")
-    blocked = sum(1 for item in items if item["status"] == "BLOCKED")
+    # Verified as claim_verified decides it (#577). A VERIFIED item whose
+    # claim was proven false is refuted, so it counts with the blocked ones; a
+    # VERIFIED item with no is_valid says nothing, so it is unverifiable.
+    verified = sum(1 for item in items if item["status"] == "VERIFIED" and _item_validity(item) is True)
+    blocked = sum(
+        1 for item in items
+        if item["status"] == "BLOCKED" or (item["status"] == "VERIFIED" and _item_validity(item) is False)
+    )
     unverifiable = total - verified - blocked
     is_verified_all = verified == total
 

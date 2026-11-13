@@ -180,10 +180,14 @@ def _nl(semantics_verified):
     ("logic", "completed", {"status": "VERIFIED", "proof_ref": PROOF, "admission": "ADMIT"}, True),
     ("logic", "completed", {"status": "UNVERIFIABLE", "proof_ref": None}, False),
     ("logic", "completed", {"status": "SAT"}, False),  # the raw control-plane shape is no longer trusted
-    # fact and sql: is_authoritative; a proven-malicious query is VERIFIED.
-    ("sql", "completed", {"status": "VERIFIED", "proof_ref": PROOF, "developer_fields": {"is_valid": False}}, True),
+    # fact and sql: VERIFIED with is_valid True too (#577). A proven-malicious
+    # query is VERIFIED but not valid, and was recorded as verified.
+    ("sql", "completed", {"status": "VERIFIED", "proof_ref": PROOF, "developer_fields": {"is_valid": True}}, True),
+    ("sql", "completed", {"status": "VERIFIED", "proof_ref": PROOF, "developer_fields": {"is_valid": False}}, False),
     ("sql", "completed", {"status": "VERIFIED", "proof_ref": None}, False),
-    ("fact", "completed", {"status": "VERIFIED", "proof_ref": PROOF}, True),
+    # A stored VERIFIED dict without its proof_ref is not verified.
+    ("code", "completed", {"status": "VERIFIED", "proof_ref": None, "developer_fields": {"is_valid": True}}, False),
+    ("fact", "completed", {"status": "VERIFIED", "proof_ref": PROOF}, False),
     ("fact", "completed", {"status": "UNVERIFIABLE", "proof_ref": None}, False),
     # natural language: the /verify/natural_language admission rule.
     ("natural_language", "completed", _nl(True), True),
