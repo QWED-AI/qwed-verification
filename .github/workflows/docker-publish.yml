@@ -13,12 +13,12 @@ on:
       - '.github/workflows/docker-publish.yml'
   release:
     types: [published]
+  # A manual run builds and pushes the branch it runs on, tagged as on a
+  # push. The Docker Hub credentials are in the `dockerhub` environment,
+  # whose deployment rule allows `main` and `v*` tags only, so another
+  # branch cannot push an image, and no run can choose a tag such as a
+  # released version.
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Docker image tag (leave empty for latest)'
-        required: false
-        default: ''
 
 permissions:
   contents: read
@@ -30,6 +30,7 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    environment: dockerhub
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -56,8 +57,6 @@ jobs:
             # version tag on release (e.g., v3.0.1 -> 3.0.1)
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            # manual tag from workflow_dispatch
-            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event.inputs.tag != '' }}
             # SHA for traceability
             type=sha,prefix=sha-
 
