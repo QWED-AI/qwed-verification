@@ -13,11 +13,11 @@ on:
       - '.github/workflows/docker-publish.yml'
   release:
     types: [published]
-  # A manual run builds and pushes the branch it runs on, tagged as on a
-  # push. The Docker Hub credentials are in the `dockerhub` environment,
-  # whose deployment rule allows `main` and `v*` tags only, so another
-  # branch cannot push an image, and no run can choose a tag such as a
-  # released version.
+  # A manual run builds and pushes the ref it runs on. The Docker Hub
+  # credentials are in the `dockerhub` environment, whose deployment rule
+  # allows `main` and `v*` tags only, so another branch cannot push an
+  # image. Version tags (and the `latest` they bring) are made only for a
+  # release, so a manual run on a `v*` tag pushes only its `sha-` tag.
   workflow_dispatch:
 
 permissions:
@@ -54,9 +54,11 @@ jobs:
           tags: |
             # latest on main push
             type=raw,value=latest,enable={{is_default_branch}}
-            # version tag on release (e.g., v3.0.1 -> 3.0.1)
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            # version tags on a release only (e.g., v3.0.1 -> 3.0.1 and 3.0).
+            # type=semver reads the ref, not the event, so without the
+            # condition a manual run on a v* tag would push them, and latest.
+            type=semver,pattern={{version}},enable=${{ github.event_name == 'release' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'release' }}
             # SHA for traceability
             type=sha,prefix=sha-
 

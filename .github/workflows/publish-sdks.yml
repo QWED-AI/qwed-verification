@@ -3,7 +3,7 @@ name: Publish SDKs
 on:
   release:
     types: [published]
-  # A manual run reads the versions and verifies the Go module; it publishes
+  # A manual run only reads the versions; it builds, publishes and tags
   # nothing. npm and crates.io are published only from a published release,
   # through the protected `npm` and `crates` environments (deployment rule:
   # `v*` tags; the maintainer approves), by trusted publishing: each registry
@@ -51,10 +51,45 @@ jobs:
   # ============================================
   # TypeScript SDK → npm
   # ============================================
+  # Built and published in separate jobs. npm ci runs the dependencies'
+  # install scripts, so the job that runs it has no id-token permission and
+  # cannot ask for the publishing identity. The publish job runs neither npm
+  # ci nor any lifecycle script.
+  build-typescript:
+    name: Build TypeScript SDK
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: |
+          cd sdk-ts
+          npm ci
+
+      - name: Build
+        run: |
+          cd sdk-ts
+          npm run build
+
+      - name: Upload the built package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: sdk-ts-dist
+          path: sdk-ts/dist/
+          if-no-files-found: error
+
   publish-typescript:
     name: Publish TypeScript SDK
     runs-on: ubuntu-latest
-    needs: versions
+    needs: [versions, build-typescript]
     if: github.event_name == 'release'
     environment: npm
     permissions:
@@ -66,7 +101,7 @@ jobs:
       queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      
+
         with:
           persist-credentials: false
       - name: Set up Node.js
@@ -74,17 +109,13 @@ jobs:
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-      
-      - name: Install dependencies
-        run: |
-          cd sdk-ts
-          npm ci
-      
-      - name: Build
-        run: |
-          cd sdk-ts
-          npm run build
-      
+
+      - name: Download the built package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: sdk-ts-dist
+          path: sdk-ts/dist/
+
       - name: Check npm supports trusted publishing
         # Trusted publishing needs npm 11.5.1 or later. An older npm would look
         # for a token, and there is none, so stop here with the reason.
@@ -97,7 +128,8 @@ jobs:
 
       - name: Publish to npm
         # Trusted publishing: npm takes the job's OIDC token, and publishes
-        # provenance for the package. No NODE_AUTH_TOKEN is set.
+        # provenance for the package. No NODE_AUTH_TOKEN is set, and
+        # --ignore-scripts runs no lifecycle script in this job.
         env:
           VERSION: ${{ needs.versions.outputs.npm }}
         # A version already on npm is skipped; any other failure fails the job.
@@ -116,15 +148,36 @@ jobs:
             echo "::error::Could not check npm for @qwed-ai/sdk@$VERSION."
             exit 1
           fi
-          npm publish --access public
+          npm publish --access public --ignore-scripts
 
   # ============================================
   # Rust SDK → crates.io
   # ============================================
+  # Verified and published in separate jobs. cargo verifies a package by
+  # building it, which runs the dependencies' build scripts, so that job has
+  # no id-token permission. The publish job uploads the same sources with
+  # --no-verify, so it builds and runs nothing from the dependencies.
+  verify-rust:
+    name: Verify Rust SDK package
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Package and build the crate
+        run: |
+          cd sdk-rust
+          cargo package --allow-dirty
+
   publish-rust:
     name: Publish Rust SDK
     runs-on: ubuntu-latest
-    needs: versions
+    needs: [versions, verify-rust]
     if: github.event_name == 'release'
     environment: crates
     permissions:
@@ -136,12 +189,12 @@ jobs:
       queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      
+
         with:
           persist-credentials: false
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-      
+
       - name: Get a temporary crates.io token
         # Trusted publishing: crates.io exchanges the job's OIDC token for a
         # short-lived token, which the action revokes when the job ends.
@@ -169,7 +222,7 @@ jobs:
               exit 1
               ;;
           esac
-          cargo publish --allow-dirty
+          cargo publish --no-verify --allow-dirty
 
   # ============================================
   # Go SDK → Just needs tag (no publish step)
@@ -177,6 +230,7 @@ jobs:
   tag-go:
     name: Tag Go SDK
     runs-on: ubuntu-latest
+    if: github.event_name == 'release'
     # Scoped to this job only (the global default stays contents: read): the Go
     # module lives in sdk-go/ with path .../sdk-go/v10, so the proxy resolves it
     # from a tag named sdk-go/vX.Y.Z — which this job has to push (#443).
