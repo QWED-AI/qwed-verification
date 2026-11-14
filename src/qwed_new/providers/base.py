@@ -28,10 +28,14 @@ class ProviderConfigError(ValueError):
 # a name QWED does not know is, but the message says what to set.
 RETIRED_PROVIDERS = {
     # The Anthropic provider under one model's name. The Anthropic provider
-    # runs any model set in ANTHROPIC_MODEL.
+    # runs any model set in ANTHROPIC_MODEL, but ANTHROPIC_DEPLOYMENT, if
+    # set, wins over it, so the message says to unset it.
     "claude_opus": (
         "anthropic",
-        "ANTHROPIC_ENDPOINT, ANTHROPIC_API_KEY and ANTHROPIC_MODEL in place of the CLAUDE_OPUS_ settings",
+        (
+            "ANTHROPIC_ENDPOINT, ANTHROPIC_API_KEY and ANTHROPIC_MODEL in place of the CLAUDE_OPUS_ settings, "
+            "and ANTHROPIC_DEPLOYMENT unset, since it wins over ANTHROPIC_MODEL"
+        ),
     ),
 }
 
