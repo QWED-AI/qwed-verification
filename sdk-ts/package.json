@@ -46,7 +46,7 @@
         "README.md"
     ],
     "overrides": {
-        "minimatch": "9.0.9",
+        "minimatch": "^11.0.1",
         "esbuild": ">=0.28.1 <0.29.0",
         "source-map-js": "^1.2.2"
     }
