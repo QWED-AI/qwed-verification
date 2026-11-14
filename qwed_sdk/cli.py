@@ -1562,14 +1562,6 @@ def _provider_connection_profile(active_provider: str) -> dict:
             "base_url_env": None,
             "default_base_url": None,
         },
-        "claude_opus": {
-            "label": ANTHROPIC_CLAUDE_LABEL,
-            "connection_slug": "anthropic",
-            "key_env": "ANTHROPIC_API_KEY",
-            "model_env": "ANTHROPIC_MODEL",
-            "base_url_env": None,
-            "default_base_url": None,
-        },
         "gemini": {
             "label": "Google Gemini",
             "connection_slug": "gemini",

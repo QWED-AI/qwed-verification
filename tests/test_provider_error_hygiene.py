@@ -15,7 +15,6 @@ import pytest
 from qwed_new.providers.anthropic import AnthropicProvider
 from qwed_new.providers.azure_openai import AzureOpenAIProvider
 from qwed_new.providers.base import sanitized_provider_error
-from qwed_new.providers.claude_opus import ClaudeOpusProvider
 
 # Synthetic internal detail an SDK error might carry. Not a real secret — it
 # stands in for the endpoint/deployment/request-id topology that must not leak.
@@ -58,7 +57,7 @@ def _base(cls):
     p = cls.__new__(cls)
     p.deployment = "test-deployment"
     p.function_schema = MagicMock()  # azure reads this when building the request
-    p.tool_schema = MagicMock()      # anthropic / claude read this
+    p.tool_schema = MagicMock()      # anthropic reads this
     p.client = MagicMock()
     return p
 
@@ -71,12 +70,6 @@ def _azure():
 
 def _anthropic():
     p = _base(AnthropicProvider)
-    p.client.messages.create.side_effect = RuntimeError(_DETAIL)
-    return p
-
-
-def _claude():
-    p = _base(ClaudeOpusProvider)
     p.client.messages.create.side_effect = RuntimeError(_DETAIL)
     return p
 
@@ -94,18 +87,12 @@ _RAISING = [
     ("anthropic.refine_logic", _anthropic, lambda p: p.refine_logic("q", "err"), "Anthropic logic refinement failed."),
     ("anthropic.translate_stats", _anthropic, lambda p: p.translate_stats("q", ["a", "b"]), "Anthropic stats translation failed."),
     ("anthropic.verify_fact", _anthropic, lambda p: p.verify_fact("claim", "ctx"), "Anthropic fact verification failed."),
-    ("claude.translate", _claude, lambda p: p.translate("q"), "Claude Opus translation failed."),
-    ("claude.translate_logic", _claude, lambda p: p.translate_logic("q"), "Claude Opus logic translation failed."),
-    ("claude.refine_logic", _claude, lambda p: p.refine_logic("q", "err"), "Claude Opus logic refinement failed."),
-    ("claude.translate_stats", _claude, lambda p: p.translate_stats("q", ["a", "b"]), "Claude Opus stats translation failed."),
-    ("claude.verify_fact", _claude, lambda p: p.verify_fact("claim", "ctx"), "Claude Opus fact verification failed."),
 ]
 
 _RETURNING = [
     ("azure.verify_fact", _azure, lambda p: p.verify_fact("claim", "ctx")),
     ("azure.verify_image", _azure, lambda p: p.verify_image(b"x", "claim")),
     ("anthropic.verify_image", _anthropic, lambda p: p.verify_image(b"x", "claim")),
-    ("claude.verify_image", _claude, lambda p: p.verify_image(b"x", "claim")),
 ]
 
 

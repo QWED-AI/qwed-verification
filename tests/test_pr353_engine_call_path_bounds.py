@@ -31,7 +31,6 @@ from qwed_new.core.safe_parser import SafeParserError, safe_parse_expr
 from qwed_new.core.verifier import VerificationEngine
 from qwed_new.providers.anthropic import AnthropicProvider
 from qwed_new.providers.azure_openai import AzureOpenAIProvider
-from qwed_new.providers.claude_opus import ClaudeOpusProvider
 from qwed_new.providers.ollama_provider import OllamaProvider
 from qwed_new.providers.openai_compat import OpenAICompatProvider
 from qwed_new.providers.openai_direct import OpenAIDirectProvider
@@ -216,10 +215,6 @@ class TestProviderClientBounds:
          {"ANTHROPIC_ENDPOINT": "http://localhost:1",
           "ANTHROPIC_API_KEY": "test-sentinel",
           "ANTHROPIC_DEPLOYMENT": "claude-sonnet-4-5"}),
-        (ClaudeOpusProvider,
-         {"CLAUDE_OPUS_ENDPOINT": "http://localhost:1",
-          "CLAUDE_OPUS_API_KEY": "test-sentinel",
-          "CLAUDE_OPUS_DEPLOYMENT": "claude-opus-4-5"}),
     ])
     def test_client_carries_explicit_timeout_and_retries(self, monkeypatch, provider_cls, env):
         for key, value in env.items():

@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 import time
 
 from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck
-from qwed_new.providers.base import ProviderConfigError
+from qwed_new.providers.base import RETIRED_PROVIDERS, ProviderConfigError
 
 from .verification_context import VerificationContextDocument
 
@@ -36,7 +36,6 @@ logger = logging.getLogger(__name__)
 # plus "azure", the name it took before.
 _PROVIDER_NAMES = (
     "anthropic",
-    "claude_opus",
     "azure",
     "azure_openai",
     "openai",
@@ -174,8 +173,6 @@ class ReasoningVerifier:
         try:
             if name == "anthropic":
                 from qwed_new.providers.anthropic import AnthropicProvider as provider_cls
-            elif name == "claude_opus":
-                from qwed_new.providers.claude_opus import ClaudeOpusProvider as provider_cls
             elif name in ("azure", "azure_openai"):
                 from qwed_new.providers.azure_openai import AzureOpenAIProvider as provider_cls
             elif name in ("openai", "openai_direct"):
@@ -208,10 +205,18 @@ class ReasoningVerifier:
                 # A name QWED does not know: the setting to fix. The name is
                 # not repeated, since a caller can pass it.
                 names = ", ".join(sorted(_PROVIDER_NAMES))
-                self._record_config_error(ProviderConfigError(
-                    "The reasoning verifier was given a provider QWED does not know. "
-                    f"Set ACTIVE_PROVIDER, or pass providers, to one of: {names}."
-                ))
+                if name in RETIRED_PROVIDERS:
+                    replacement, settings_to_set = RETIRED_PROVIDERS[name]
+                    message = (
+                        "The reasoning verifier was given a provider QWED no longer has. "
+                        f"Set ACTIVE_PROVIDER, or pass providers, to {replacement}, with {settings_to_set}."
+                    )
+                else:
+                    message = (
+                        "The reasoning verifier was given a provider QWED does not know. "
+                        f"Set ACTIVE_PROVIDER, or pass providers, to one of: {names}."
+                    )
+                self._record_config_error(ProviderConfigError(message))
                 self._providers[name] = None
             else:
                 try:

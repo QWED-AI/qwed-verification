@@ -18,7 +18,6 @@ import pytest
 from anthropic.resources.messages import Messages
 
 from qwed_new.providers.anthropic import AnthropicProvider
-from qwed_new.providers.claude_opus import ClaudeOpusProvider
 
 SAMPLING_PARAMETERS = {"temperature", "top_p", "top_k"}
 CREATE_SIGNATURE = inspect.signature(Messages.create)
@@ -30,14 +29,6 @@ PROVIDERS = {
             "ANTHROPIC_ENDPOINT": "http://localhost:1",
             "ANTHROPIC_API_KEY": "test-sentinel",
             "ANTHROPIC_DEPLOYMENT": "claude-sonnet-4-5",
-        },
-    ),
-    "claude_opus": (
-        ClaudeOpusProvider,
-        {
-            "CLAUDE_OPUS_ENDPOINT": "http://localhost:1",
-            "CLAUDE_OPUS_API_KEY": "test-sentinel",
-            "CLAUDE_OPUS_DEPLOYMENT": "claude-opus-4-5",
         },
     ),
 }
@@ -62,7 +53,7 @@ def _logic():
 CALLS = [
     (
         "translate",
-        ("anthropic", "claude_opus"),
+        ("anthropic",),
         lambda p: p.translate("What is 2 + 2?"),
         lambda: _tool_use({"expression": "2 + 2", "claimed_answer": 4.0, "reasoning": "r", "confidence": 1.0}),
         lambda r: r.expression == "2 + 2",
@@ -76,35 +67,35 @@ CALLS = [
     ),
     (
         "translate_logic",
-        ("anthropic", "claude_opus"),
+        ("anthropic",),
         lambda p: p.translate_logic("x is greater than 1"),
         _logic,
         lambda r: r.variables == {"x": "Int"} and r.constraints == ["x > 1"],
     ),
     (
         "refine_logic",
-        ("anthropic", "claude_opus"),
+        ("anthropic",),
         lambda p: p.refine_logic("x is greater than 1", "previous error"),
         _logic,
         lambda r: r.variables == {"x": "Int"} and r.constraints == ["x > 1"],
     ),
     (
         "translate_stats",
-        ("anthropic", "claude_opus"),
+        ("anthropic",),
         lambda p: p.translate_stats("mean of a", ["a"]),
         lambda: _text("result = df['a'].mean()"),
         lambda r: r == "result = df['a'].mean()",
     ),
     (
         "verify_fact",
-        ("anthropic", "claude_opus"),
+        ("anthropic",),
         lambda p: p.verify_fact("The sky is blue.", "The sky is blue."),
         lambda: _tool_use({"verdict": "SUPPORTED", "reasoning": "r", "citations": ["The sky is blue."]}),
         lambda r: r["verdict"] == "SUPPORTED",
     ),
     (
         "verify_image",
-        ("anthropic", "claude_opus"),
+        ("anthropic",),
         lambda p: p.verify_image(b"\xff\xd8\xff", "The chart shows growth."),
         lambda: _tool_use({"verdict": "SUPPORTED", "reasoning": "r", "confidence": 0.9}),
         lambda r: r["verdict"] == "SUPPORTED",

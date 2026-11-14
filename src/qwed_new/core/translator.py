@@ -10,10 +10,9 @@ import ast
 from qwed_new.config import settings, ProviderType
 from qwed_new.core.router import UNKNOWN_PROVIDER
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider, ProviderConfigError
+from qwed_new.providers.base import RETIRED_PROVIDERS, LLMProvider, ProviderConfigError
 from qwed_new.providers.azure_openai import AzureOpenAIProvider
 from qwed_new.providers.anthropic import AnthropicProvider
-from qwed_new.providers.claude_opus import ClaudeOpusProvider
 from qwed_new.providers.auto_shift import AutoShiftProvider
 from qwed_new.providers.openai_direct import OpenAIDirectProvider
 from qwed_new.providers.gemini_provider import GeminiProvider
@@ -43,7 +42,6 @@ class TranslationLayer:
             ProviderType.OPENAI_COMPAT.value: OpenAICompatProvider,
             ProviderType.AZURE_OPENAI.value: AzureOpenAIProvider,
             ProviderType.ANTHROPIC.value: AnthropicProvider,
-            ProviderType.CLAUDE_OPUS.value: ClaudeOpusProvider,
             ProviderType.AUTO.value: AutoShiftProvider,
             ProviderType.GEMINI.value: GeminiProvider,
             ProviderType.OLLAMA.value: OllamaProvider,
@@ -80,6 +78,13 @@ class TranslationLayer:
             # A label, never the caller's text: it reaches responses and metrics.
             self.last_resolved_provider = UNKNOWN_PROVIDER
             names = ", ".join(sorted(self._provider_classes))
+            if key == self.default_provider and key in RETIRED_PROVIDERS:
+                # A retired name, not a typo: say what replaced it.
+                replacement, settings_to_set = RETIRED_PROVIDERS[key]
+                raise ProviderConfigError(
+                    f"ACTIVE_PROVIDER is set to '{key}', a provider QWED no longer has. "
+                    f"Set it to {replacement}, with {settings_to_set}."
+                )
             if key == self.default_provider:
                 raise ProviderConfigError(
                     f"ACTIVE_PROVIDER is set to '{key}', which is not a provider QWED knows. "

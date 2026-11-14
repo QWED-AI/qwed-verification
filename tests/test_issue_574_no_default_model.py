@@ -34,7 +34,6 @@ from qwed_new.providers.anthropic import AnthropicProvider
 from qwed_new.providers.auto_shift import AutoShiftProvider
 from qwed_new.providers.azure_openai import AzureOpenAIProvider
 from qwed_new.providers.base import ProviderConfigError
-from qwed_new.providers.claude_opus import ClaudeOpusProvider
 from qwed_new.providers.gemini_provider import GeminiProvider
 from qwed_new.providers.ollama_provider import OllamaProvider
 from qwed_new.providers.openai_compat import OpenAICompatProvider
@@ -73,10 +72,6 @@ PROVIDERS = {
         "ANTHROPIC_MODEL",
         {"ANTHROPIC_ENDPOINT": "http://localhost:1", "ANTHROPIC_API_KEY": FAKE_KEY},
     ),
-    ClaudeOpusProvider: (
-        "CLAUDE_OPUS_DEPLOYMENT",
-        {"CLAUDE_OPUS_ENDPOINT": "http://localhost:1", "CLAUDE_OPUS_API_KEY": FAKE_KEY},
-    ),
     OllamaProvider: ("OLLAMA_MODEL", {}),
     OpenAICompatProvider: ("CUSTOM_MODEL", {"CUSTOM_BASE_URL": "http://localhost:1/v1"}),
     GeminiProvider: ("GEMINI_MODEL", {"GOOGLE_API_KEY": FAKE_KEY}),
@@ -96,7 +91,6 @@ MODEL_OF = {
     OpenAIDirectProvider: lambda provider: provider.model,
     AzureOpenAIProvider: lambda provider: provider.deployment,
     AnthropicProvider: lambda provider: provider.deployment,
-    ClaudeOpusProvider: lambda provider: provider.deployment,
     OllamaProvider: lambda provider: provider.model,
     OpenAICompatProvider: lambda provider: provider.model,
     GeminiProvider: lambda provider: provider.model_name,
@@ -187,7 +181,7 @@ def test_any_model_id_reaches_the_provider_api_unchanged(monkeypatch, fake_genai
     provider = provider_cls()
     # Gemini records its model as it is built; the others as they call the API.
     sent = fake_genai
-    if provider_cls in (AnthropicProvider, ClaudeOpusProvider):
+    if provider_cls is AnthropicProvider:
         monkeypatch.setattr(provider.client.messages, "create", _recorder(sent, _text_response))
     elif provider_cls is not GeminiProvider:
         monkeypatch.setattr(provider.client.chat.completions, "create", _recorder(sent, _chat_response))
@@ -242,7 +236,6 @@ def test_reasoning_verifier_reads_an_unset_provider_as_the_server_does():
 
 LOADED = {
     "anthropic": AnthropicProvider,
-    "claude_opus": ClaudeOpusProvider,
     "azure": AzureOpenAIProvider,
     "azure_openai": AzureOpenAIProvider,
     "openai": OpenAIDirectProvider,
