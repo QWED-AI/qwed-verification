@@ -8,7 +8,8 @@ on:
   # through the protected `npm` and `crates` environments (deployment rule:
   # `v*` tags; the maintainer approves), by trusted publishing: each registry
   # accepts this workflow's OIDC token for that environment, so no registry
-  # token is stored. PyPI is published by publish.yml.
+  # token is stored. npm stages the version, and it goes live only when a
+  # maintainer approves it on npm with 2FA. PyPI is published by publish.yml.
   workflow_dispatch:
 
 permissions:
@@ -116,20 +117,24 @@ jobs:
           name: sdk-ts-dist
           path: sdk-ts/dist/
 
-      - name: Check npm supports trusted publishing
-        # Trusted publishing needs npm 11.5.1 or later. An older npm would look
-        # for a token, and there is none, so stop here with the reason.
+      - name: Check npm supports staged trusted publishing
+        # Staged publishing needs npm 11.15.0 or later (trusted publishing,
+        # 11.5.1). An older npm would fail or look for a token, and there is
+        # none, so stop here with the reason.
         run: |
           NPM_VERSION=$(npm --version)
-          if ! printf '%s\n%s\n' 11.5.1 "$NPM_VERSION" | sort -V -C; then
-            echo "::error::npm $NPM_VERSION is older than 11.5.1, which trusted publishing needs."
+          if ! printf '%s\n%s\n' 11.15.0 "$NPM_VERSION" | sort -V -C; then
+            echo "::error::npm $NPM_VERSION is older than 11.15.0, which staged publishing needs."
             exit 1
           fi
 
-      - name: Publish to npm
-        # Trusted publishing: npm takes the job's OIDC token, and publishes
-        # provenance for the package. No NODE_AUTH_TOKEN is set, and
-        # --ignore-scripts runs no lifecycle script in this job.
+      - name: Stage on npm
+        # Trusted publishing: npm takes the job's OIDC token; no NODE_AUTH_TOKEN
+        # is set, and --ignore-scripts runs no lifecycle script in this job.
+        # `npm stage publish` puts the version in npm's staging area with its
+        # provenance. It goes live only when a maintainer approves it on
+        # npmjs.com (Staged Packages) or with `npm stage approve`, with 2FA, so
+        # a release cannot reach npm on the GitHub side alone.
         env:
           VERSION: ${{ needs.versions.outputs.npm }}
         # A version already on npm is skipped; any other failure fails the job.
@@ -148,7 +153,8 @@ jobs:
             echo "::error::Could not check npm for @qwed-ai/sdk@$VERSION."
             exit 1
           fi
-          npm publish --access public --ignore-scripts
+          npm stage publish --access public --provenance --ignore-scripts
+          echo "::notice::@qwed-ai/sdk@$VERSION is staged on npm. Approve it on npmjs.com (Staged Packages) to publish it."
 
   # ============================================
   # Rust SDK → crates.io
@@ -304,4 +310,5 @@ jobs:
           echo "Rust (crates.io): ${{ needs.publish-rust.result }}"
           echo "Go (tagged):      ${{ needs.tag-go.result }}"
           echo ""
-          echo "Note: PyPI is published by publish.yml."
+          echo "Note: PyPI is published by publish.yml. An npm version is staged; it is"
+          echo "published when a maintainer approves it on npmjs.com (Staged Packages)."
