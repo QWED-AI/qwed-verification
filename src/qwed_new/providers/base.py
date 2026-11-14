@@ -23,6 +23,23 @@ class ProviderConfigError(ValueError):
     """
 
 
+# Providers QWED no longer has (#617): each name, with the provider to use
+# instead and the settings that replace its own. A retired name is refused, as
+# a name QWED does not know is, but the message says what to set.
+RETIRED_PROVIDERS = {
+    # The Anthropic provider under one model's name. The Anthropic provider
+    # runs any model set in ANTHROPIC_MODEL, but ANTHROPIC_DEPLOYMENT, if
+    # set, wins over it, so the message says to unset it.
+    "claude_opus": (
+        "anthropic",
+        (
+            "ANTHROPIC_ENDPOINT, ANTHROPIC_API_KEY and ANTHROPIC_MODEL in place of the CLAUDE_OPUS_ settings, "
+            "and ANTHROPIC_DEPLOYMENT unset, since it wins over ANTHROPIC_MODEL"
+        ),
+    ),
+}
+
+
 def configured_model(model: Optional[str], env_var: str, provider: str) -> str:
     """Return the model the caller passed, else the one set in ``env_var``.
 

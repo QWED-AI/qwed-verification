@@ -23,10 +23,11 @@ import re
 import hashlib
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
+from enum import Enum
 import time
 
 from qwed_new.core.diagnostics import DiagnosticResult, AdvisoryCheck
-from qwed_new.providers.base import ProviderConfigError
+from qwed_new.providers.base import RETIRED_PROVIDERS, ProviderConfigError
 
 from .verification_context import VerificationContextDocument
 
@@ -36,7 +37,6 @@ logger = logging.getLogger(__name__)
 # plus "azure", the name it took before.
 _PROVIDER_NAMES = (
     "anthropic",
-    "claude_opus",
     "azure",
     "azure_openai",
     "openai",
@@ -174,8 +174,6 @@ class ReasoningVerifier:
         try:
             if name == "anthropic":
                 from qwed_new.providers.anthropic import AnthropicProvider as provider_cls
-            elif name == "claude_opus":
-                from qwed_new.providers.claude_opus import ClaudeOpusProvider as provider_cls
             elif name in ("azure", "azure_openai"):
                 from qwed_new.providers.azure_openai import AzureOpenAIProvider as provider_cls
             elif name in ("openai", "openai_direct"):
@@ -197,21 +195,34 @@ class ReasoningVerifier:
             logger.warning("Reasoning provider %r is unavailable: %s", name, exc)
             return None
 
+    @staticmethod
+    def _provider_key(name: Any) -> str:
+        """The loader key for a provider name, as ACTIVE_PROVIDER takes it."""
+        key = str(name.value if isinstance(name, Enum) else name)
+        key = key.strip().lower().replace("-", "_")
+        return "openai_compat" if key == "openai_compatible" else key
+
     def _get_provider(self, name: str):
         """Get or load a provider by name."""
-        name = str(getattr(name, "value", name)).strip().lower().replace("-", "_")
-        if name == "openai_compatible":
-            name = "openai_compat"
+        name = self._provider_key(name)
         if name not in self._providers:
             loader = self._provider_loaders.get(name)
             if loader is None:
                 # A name QWED does not know: the setting to fix. The name is
                 # not repeated, since a caller can pass it.
                 names = ", ".join(sorted(_PROVIDER_NAMES))
-                self._record_config_error(ProviderConfigError(
-                    "The reasoning verifier was given a provider QWED does not know. "
-                    f"Set ACTIVE_PROVIDER, or pass providers, to one of: {names}."
-                ))
+                if name in RETIRED_PROVIDERS:
+                    replacement, settings_to_set = RETIRED_PROVIDERS[name]
+                    message = (
+                        "The reasoning verifier was given a provider QWED no longer has. "
+                        f"Set ACTIVE_PROVIDER, or pass providers, to {replacement}, with {settings_to_set}."
+                    )
+                else:
+                    message = (
+                        "The reasoning verifier was given a provider QWED does not know. "
+                        f"Set ACTIVE_PROVIDER, or pass providers, to one of: {names}."
+                    )
+                self._record_config_error(ProviderConfigError(message))
                 self._providers[name] = None
             else:
                 try:
@@ -226,10 +237,26 @@ class ReasoningVerifier:
         logger.warning("Reasoning provider unavailable: %s", exc)
         if self._provider_config_error is None:
             self._provider_config_error = exc
+
+    def _refuses_a_configured_name(self) -> bool:
+        """Whether a configured name is one the verifier cannot load by name:
+        retired, or not one QWED knows.
+
+        Such a name refuses the whole configuration, even when another
+        configured provider could run, so no provider runs in its place.
+        _get_provider records it as the setting to fix.
+        """
+        for name in self.provider_names:
+            if self._provider_key(name) not in self._provider_loaders:
+                self._get_provider(name)
+                return True
+        return False
     
     @property
     def primary_llm(self):
         """Get primary LLM provider."""
+        if self._refuses_a_configured_name():
+            return None
         for name in self.provider_names:
             provider = self._get_provider(name)
             if provider:
@@ -239,6 +266,8 @@ class ReasoningVerifier:
     @property
     def secondary_llm(self):
         """Get secondary LLM provider (different from primary)."""
+        if self._refuses_a_configured_name():
+            return None
         primary = self.primary_llm
         for name in self.provider_names:
             provider = self._get_provider(name)

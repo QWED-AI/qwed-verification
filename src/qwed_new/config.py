@@ -31,7 +31,6 @@ class ProviderType(str, Enum):
     OPENAI_DIRECT = "openai_direct"
     AZURE_OPENAI = "azure_openai"
     ANTHROPIC = "anthropic"
-    CLAUDE_OPUS = "claude_opus"
     GEMINI = "gemini"
     OLLAMA = "ollama"
     OPENAI_COMPAT = "openai_compat"
@@ -70,11 +69,6 @@ class Settings:
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
     ANTHROPIC_DEPLOYMENT = os.getenv("ANTHROPIC_DEPLOYMENT")
     ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL")
-    
-    # Claude Opus 4.5 Config
-    CLAUDE_OPUS_ENDPOINT = os.getenv("CLAUDE_OPUS_ENDPOINT")
-    CLAUDE_OPUS_API_KEY = os.getenv("CLAUDE_OPUS_API_KEY")
-    CLAUDE_OPUS_DEPLOYMENT = os.getenv("CLAUDE_OPUS_DEPLOYMENT")
     
     # Google Gemini Config
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
