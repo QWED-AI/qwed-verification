@@ -5,6 +5,247 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ## [Unreleased]
 
+## [10.0.0] - 2026-11-14
+
+A major release. It removes the `claude_opus` provider, a copy of the
+Anthropic provider under one model's name: `ACTIVE_PROVIDER=claude_opus` is
+now refused, with what to set instead. Routes that are not proof engines
+stop reporting `VERIFIED`, or admitting a result, on evidence that is not a
+proof (#320): RAG, process and the GitHub Action's `verify-process` mode are
+`UNVERIFIABLE`, a consensus needs two distinct engines, an image is verified
+only on a plain statement of its size, and a logic verdict is not admitted.
+`/verify/math` without `=` is `UNVERIFIABLE`, and "verified" has one meaning
+in the attestation, the audit log and the batch summary. Translation
+prompts delimit the caller's text, taint analysis follows taint inside
+expressions, and the LangChain and CrewAI tools report what QWED decided.
+The server lock moves past three dependency advisories, and the Go module
+path ends in `/v10`. Read "Upgrading to 10.0.0" below before upgrading. The
+soundness eval has 156 known-answer claims, 0 accepted wrongly.
+
+### Security fixes (dependencies)
+
+No QWED advisory is fixed in this release. Three advisories in dependencies
+are, by moving the pinned version:
+
+- **opentelemetry 1.45.2 in the server lock**
+  ([GHSA-mf5v-w3w3-f6cg](https://github.com/advisories/GHSA-mf5v-w3w3-f6cg),
+  moderate, #619). `opentelemetry-api` 1.45.1 parsed a crafted `traceparent`
+  in quadratic time. QWED calls no propagator itself. The other
+  opentelemetry packages move with it (1.45.2 and 0.66b2).
+- **dnspython 2.9.2 in the server lock**
+  ([GHSA-vvf4-9x63-8xvv](https://github.com/advisories/GHSA-vvf4-9x63-8xvv),
+  high, #621). dnspython 2.9.0 did not bound a WKS record's service number
+  when parsing zone file text. QWED uses dnspython only through
+  `email-validator`, which parses no zone files.
+- **minimatch 11 in the TypeScript SDK's dev dependencies**
+  ([GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249),
+  moderate, #620). An override pinned it to 9.0.9. Nothing changes in the
+  published SDK, which has no runtime dependencies.
+
+### Upgrading to 10.0.0
+
+These changes can break existing callers. Each is described in full in its
+entry below.
+
+- **The `claude_opus` provider is gone.** `ACTIVE_PROVIDER=claude_opus` is
+  refused, and the error says what to set: `ACTIVE_PROVIDER=anthropic`, with
+  `CLAUDE_OPUS_ENDPOINT`, `CLAUDE_OPUS_API_KEY` and `CLAUDE_OPUS_DEPLOYMENT`
+  moved to `ANTHROPIC_ENDPOINT`, `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL`.
+  Unset `ANTHROPIC_DEPLOYMENT`, which wins over `ANTHROPIC_MODEL`. A request
+  that names `claude_opus` is refused as an unknown provider. Requests and
+  responses do not change.
+- **Verdicts.** Results that 9.1.0 reported as `VERIFIED`, or admitted, and
+  10.0.0 does not. A client that acted on `status == "VERIFIED"` from these
+  routes now sees `UNVERIFIABLE` or `BLOCKED`:
+  - `/verify/rag` and `/verify/process` are `UNVERIFIABLE`. The guard's
+    result moves from the top level of the response to
+    `advisory_checks[0].details`.
+  - The GitHub Action's `verify-process` mode is `UNVERIFIABLE · DENY`, with
+    `verified` false and no `proof_ref`. Missing steps still fail the step
+    with `fail_on_findings`.
+  - `/verify/logic` responses and batch logic items carry `admission`, and
+    it is `BLOCKED`. A proof from premises that cannot all hold is
+    `UNVERIFIABLE` (`logic_verifier.vacuous_premises`), and a logic check
+    with no constraint, or with one that is not a Boolean formula, is
+    `BLOCKED`.
+  - `/verify/consensus` is `BLOCKED` (`no_independent_verification`) when
+    fewer than two distinct engines verify an answer, and that is every
+    answer today. `meets_requirement` is no longer true for a consensus.
+  - `/verify/image` decides a size claim only when the whole claim states
+    the width, the height or both. "HD", a negation and a claim that says
+    more are `UNVERIFIABLE`.
+  - `/verify/math`, and a batch maths item, without `=` are `UNVERIFIABLE`
+    (`math.no_claim`). Send `expression = value` to have it checked.
+  - The attestation, the audit log and the batch summary call a result
+    verified only when it is `VERIFIED`, its claim holds (`is_valid` true)
+    and it was not reached on a model's translation of the question. A
+    natural-language verdict is signed `verified: false`.
+- **Python SDK integrations.**
+  - The LangChain and CrewAI tools word their answers differently. An
+    undecided result is reported with its status and the server's message,
+    not as "INCORRECT", "unsafe" or "FAILED", and `QWEDLogicTool` reports a
+    satisfiable query as `SAT, NOT ADMITTED`.
+  - The CrewAI `QWEDSQLTool` takes `schema_ddl` and `dialect`, and the
+    LangChain callback and the agent's `VerificationConfig` take
+    `sql_schema_ddl` and `sql_dialect`. Without a schema, SQL is
+    `UNVERIFIABLE` and nothing is sent.
+  - The callback's `get_summary` counts an output as verified only when a
+    check ran and verified it.
+- **Reasoning verifier.** A `ReasoningVerifier` provider list with a name
+  it cannot load is `BLOCKED`, where before the other providers ran.
+- **Taint analysis.** Findings can change: taint inside expressions is now
+  reported, sanitisers count only for their own sink class, and an
+  arbitrary `obj.get()` such as `dict.get` is no longer a source.
+- **Go module path.** The module is
+  `github.com/QWED-AI/qwed-verification/sdk-go/v10`. Update imports and run
+  `go get github.com/QWED-AI/qwed-verification/sdk-go/v10@v10.0.0`. The Go,
+  TypeScript and Rust SDKs have no API changes in this release.
+
+### Other changes since 9.1.0
+
+#### Changed
+
+- **Translation prompts delimit the caller's text** (#582). The question,
+  a stats translation's column names and a refinement's previous error go
+  in the user turn, each inside its own tag, with any tag in them defused.
+  The previous error is no longer in the system prompt, and it is cut to
+  500 characters.
+- **Taint analysis follows taint inside expressions, with sanitisers per
+  sink** (#535, #586). Contributed by Ataraxiainc2. `TaintAnalyzer` matched
+  only bare names at a sink, so taint inside an f-string, a concatenation or
+  a nested call reached it unseen. One shared list of sanitisers, matched by
+  substring, let `html.escape` clear a shell sink and took
+  `print_and_return` for `int`.
+  - Taint now flows through expressions, and through tuple and starred
+    unpacking, augmented assignment and branches.
+  - Sanitisers are per sink class (shell, HTML, path, template, universal)
+    and matched by exact name. A sanitiser whose result is changed
+    afterwards, such as `shlex.quote(x).strip("'")` or a slice of it, no
+    longer cleans.
+  - `mark_safe` and `render_template_string` are sinks. `os.environ` is a
+    source, and so are request reads by subscript (`request.form[...]`) or
+    by a `get` method (`request.get_json()`). `request.method` is not.
+  - SQL bound parameters (`execute(query, params)`) are not reported; taint
+    in the query still is.
+
+#### Fixed
+
+- **Logic inputs that state nothing are no longer `VERIFIED`** (#579).
+  `prove_theorem` and `check_implication` proved any conclusion from
+  premises that cannot all hold. They now return `UNVERIFIABLE` with
+  `logic_verifier.vacuous_premises` and the premises that conflict, or with
+  `logic_verifier.premises_undecided`. A DSL program of declarations only is
+  `BLOCKED` (`dsl_logic_verifier.no_constraint`), and so are `verify_logic`,
+  `verify_bitvector`, `verify_array` and `verify_with_quantifiers` when they
+  assert no constraint (`logic_verifier.no_constraint`). A constraint that
+  is not a Boolean formula (`"None"`, `"[]"`, a tuple, a number) makes any
+  logic check `BLOCKED`.
+- **`/verify/logic` decides an admission, and it is `BLOCKED`** (#320). The
+  verdict covers the constraints an LLM translated the question into, and
+  nothing checks that they mean the question, so it is admitted as a
+  natural-language verdict is: not until the translation is verified
+  (#585). The response and batch logic items carry `admission`, the verdict
+  names its scope, the attestation signs the admission and binds the
+  decided statement (the DSL with the sort of each variable), and audit rows
+  are verified only when admitted.
+- **`/verify/rag` and `/verify/process` no longer return `VERIFIED`**
+  (#320). Their guards compare data the request itself supplies (chunk
+  labels, a target label and a threshold) or match keywords, so they cannot
+  establish that the retrieval or the reasoning is right. Both routes return
+  `UNVERIFIABLE`. The guard's result moves from the response's top level to
+  `advisory_checks[0].details` (`constraint_id` `api.<route>.advisory_only`
+  or `api.<route>.guard_failed`), and audit rows are not stored as verified.
+- **The GitHub Action's `verify-process` mode is `UNVERIFIABLE · DENY`,
+  never `VERIFIED · ADMIT`** (#602). It looks for IRAC and milestone
+  keywords, which cannot show that the reasoning is right, but reported a
+  verified, admitted result with a `proof_ref` when it found them all. It
+  now reports `UNVERIFIABLE` and `DENY` with no `proof_ref`, and `verified`
+  is `false`, as `/verify/process` does. Missing steps or milestones are
+  still findings and still fail the step with `fail_on_findings`.
+- **`/verify/math` without `=` is `UNVERIFIABLE`, not `VERIFIED`** (#576).
+  An expression with no `=` states no claim. It returned `VERIFIED` and was
+  admitted; now it returns `UNVERIFIABLE` with `math.no_claim` and the
+  computed value as evidence, as batch maths items already did. A batch
+  maths item without `=` now gets the same verdict as the route, so division
+  by zero, undefined and ambiguous input is `BLOCKED` there too. A value
+  past the float range, such as `1e400`, no longer makes the response fail
+  with a 500 (the number stays in `exact_value`); `atan2(1, 1)` without `=`
+  no longer fails to parse; and a name ending in a digit before `(`, such as
+  `x2(3)`, is refused as an unknown function, as it already was with `=`.
+- **Running out of memory while parsing ends the maths worker** (#612).
+  Under the worker's memory limit (`QWED_MATH_WORKER_MEMORY_MB`, Linux), a
+  `MemoryError` inside the maths parser came back as `math.parse_error`, and
+  the worker took the next job. It is now `math.out_of_memory`, and the
+  worker ends, as it does when a job runs out of memory elsewhere. The
+  admission was `BLOCKED` either way.
+- **`/verify/image` verifies a size claim only when it states the
+  dimensions and nothing else** (#320). It took the first dimension it found
+  anywhere in a claim, so a negation ("not HD"), a claim naming a wrong
+  height after a right width, or a claim saying more than the dimensions was
+  `VERIFIED`. A size claim is now decided only when the whole claim is a
+  plain statement of the width, height or both, every dimension it names is
+  checked, and anything else is `UNVERIFIABLE`. "HD" is no longer checked.
+  The proof binds the claim and the image.
+- **`/verify/consensus` does not report one engine's answer as a
+  consensus** (#320). In single mode, the default, one engine compared the
+  model's translated expression with the model's own answer, and that was
+  `VERIFIED` with `meets_requirement: true`. An answer that fewer than two
+  distinct engines verified is now `BLOCKED` (`no_independent_verification`),
+  and a `VERIFIED` consensus binds the query in its proof.
+- **"Verified" has one meaning in the attestation, the audit log and the
+  batch summary** (#577): `VERIFIED` with `is_valid` true, and not reached
+  on a model's translation of the question, as `claim_verified` decides it.
+  The attestation signed `verified: true` for a result with no `is_valid`
+  and for a natural-language verdict, audit rows stored SQL proven unsafe as
+  verified, and the batch summary counted an item proven false as verified.
+- **LangChain `QWEDLogicTool` no longer reports UNSAT for every logic
+  result** (#600). It read the server's admission as SAT or UNSAT, and
+  `/verify/logic` admits no result while the translation is unverified, so a
+  satisfiable query was reported as having no assignment. It now reports
+  `SAT, NOT ADMITTED` with the model and the reason, `UNSAT` only for an
+  unsatisfiable solve, and the server's message for anything else.
+- **LangChain and CrewAI tools call a result wrong only when QWED decided
+  it** (#606). The maths, code, SQL and generic tools read the server's
+  admission as correct or incorrect, so an `UNVERIFIABLE` or `BLOCKED`
+  result (no claim, a timeout, input that does not parse) was "INCORRECT",
+  "unsafe" or "possible injection", and the generic tools said "FAILED" for
+  every natural-language claim, since that route admits nothing while the
+  translation is unverified. They now report the status and the server's
+  message for an undecided result (or that the server could not be
+  reached), list the code issues the server sends, and say what holds for
+  the translated expression.
+- **The CrewAI SQL tool and the LangChain callback send the schema
+  `/verify/sql` needs** (#608). Both sent an empty schema, so the route
+  answered 400: the tool said "ERROR" for every query, and the callback
+  recorded no SQL check and counted the output as verified.
+  - `QWEDSQLTool` now takes `schema_ddl` and `dialect`, and the callback and
+    the agent's `VerificationConfig` take `sql_schema_ddl` and
+    `sql_dialect`. Without a schema, SQL is `UNVERIFIABLE` and nothing is
+    sent.
+  - The callback checks every fenced block, read as Markdown reads it: a
+    block tagged with SQL or a SQL dialect as SQL, one with another tag as
+    code in that language, and an untagged block as code, and as SQL too
+    when it starts with a statement. A check that cannot parse a block does
+    not count when the other could.
+  - SQL that no check reads (outside a block, or in a code block when the
+    code check is off) is recorded as `UNVERIFIABLE`, the code `issues` the
+    route sends are counted, a check that could not run is recorded as
+    `UNVERIFIABLE` instead of being left out, and `get_summary` counts an
+    output as verified only when a check ran and verified it.
+
+#### Removed
+
+- **The `claude_opus` provider** (#617). It was the Anthropic provider
+  under one model's name: a copy of `AnthropicProvider` that read
+  `CLAUDE_OPUS_*` settings, and whose CLI connection check read the
+  `ANTHROPIC_*` settings instead. `ACTIVE_PROVIDER=claude_opus` is refused
+  with what to set instead: use `anthropic`, and move
+  `CLAUDE_OPUS_ENDPOINT`, `CLAUDE_OPUS_API_KEY` and `CLAUDE_OPUS_DEPLOYMENT`
+  to `ANTHROPIC_ENDPOINT`, `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL`, and
+  unset `ANTHROPIC_DEPLOYMENT`, which wins over `ANTHROPIC_MODEL`. A
+  `ReasoningVerifier` provider list with a name it cannot load is `BLOCKED`,
+  where before the other providers ran.
+
 ## [9.1.0] - 2026-11-08
 
 A minor release. It fixes one private advisory, reported from outside the

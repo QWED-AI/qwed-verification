@@ -4,8 +4,8 @@
 
 | Version | Supported |
 | ------- | --------- |
-| 9.1.x (latest release) | :white_check_mark: |
-| < 9.1   | :x: |
+| 10.0.x (latest release) | :white_check_mark: |
+| < 10.0  | :x: |
 
 Security fixes are released for the latest version only.
 

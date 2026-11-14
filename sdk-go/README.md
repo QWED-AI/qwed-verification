@@ -2,19 +2,19 @@
 
 Official Go SDK for the [QWED Verification Protocol](https://github.com/QWED-AI/qwed-verification).
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/QWED-AI/qwed-verification/sdk-go/v9.svg)](https://pkg.go.dev/github.com/QWED-AI/qwed-verification/sdk-go/v9)
-[![Go Report Card](https://goreportcard.com/badge/github.com/QWED-AI/qwed-verification/sdk-go/v9)](https://goreportcard.com/report/github.com/QWED-AI/qwed-verification/sdk-go/v9)
+[![Go Reference](https://pkg.go.dev/badge/github.com/QWED-AI/qwed-verification/sdk-go/v10.svg)](https://pkg.go.dev/github.com/QWED-AI/qwed-verification/sdk-go/v10)
+[![Go Report Card](https://goreportcard.com/badge/github.com/QWED-AI/qwed-verification/sdk-go/v10)](https://goreportcard.com/report/github.com/QWED-AI/qwed-verification/sdk-go/v10)
 [![CI](https://github.com/QWED-AI/qwed-verification/actions/workflows/ci.yml/badge.svg)](https://github.com/QWED-AI/qwed-verification/actions)
 
 ## Installation
 
 ```bash
-go get github.com/QWED-AI/qwed-verification/sdk-go/v9
+go get github.com/QWED-AI/qwed-verification/sdk-go/v10
 ```
 
 The module lives in the `sdk-go/` subdirectory and tracks the main QWED version
-line, so it carries the `/v9` major-version suffix and is released under
-`sdk-go/vX.Y.Z` tags, such as `go get github.com/QWED-AI/qwed-verification/sdk-go/v9@v9.1.0`.
+line, so it carries the `/v10` major-version suffix and is released under
+`sdk-go/vX.Y.Z` tags, such as `go get github.com/QWED-AI/qwed-verification/sdk-go/v10@v10.0.0`.
 
 ## Quick Start
 
@@ -26,7 +26,7 @@ import (
     "fmt"
     "log"
 
-    qwed "github.com/QWED-AI/qwed-verification/sdk-go/v9"
+    qwed "github.com/QWED-AI/qwed-verification/sdk-go/v10"
 )
 
 func main() {
