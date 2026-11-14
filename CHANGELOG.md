@@ -9,18 +9,20 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 A major release. It removes the `claude_opus` provider, a copy of the
 Anthropic provider under one model's name: `ACTIVE_PROVIDER=claude_opus` is
-now refused, with what to set instead. Routes that are not proof engines
-stop reporting `VERIFIED`, or admitting a result, on evidence that is not a
-proof (#320): RAG, process and the GitHub Action's `verify-process` mode are
-`UNVERIFIABLE`, a consensus needs two distinct engines, an image is verified
-only on a plain statement of its size, and a logic verdict is not admitted.
+now refused, with what to set instead. Routes stop reporting `VERIFIED`, or
+admitting a result, on evidence that does not prove the claim (#320): RAG,
+process and the GitHub Action's `verify-process` mode are `UNVERIFIABLE`, a
+consensus needs two distinct engines, an image is verified only on a plain
+statement of its size, and a logic verdict, which covers constraints a
+model translated, is not admitted.
 `/verify/math` without `=` is `UNVERIFIABLE`, and "verified" has one meaning
 in the attestation, the audit log and the batch summary. Translation
 prompts delimit the caller's text, taint analysis follows taint inside
 expressions, and the LangChain and CrewAI tools report what QWED decided.
-The server lock moves past three dependency advisories, and the Go module
-path ends in `/v10`. Read "Upgrading to 10.0.0" below before upgrading. The
-soundness eval has 156 known-answer claims, 0 accepted wrongly.
+Three dependency advisories are fixed, two in the server lock and one in the
+TypeScript SDK's dev dependencies, and the Go module path ends in `/v10`.
+Read "Upgrading to 10.0.0" below before upgrading. The soundness eval has
+156 known-answer claims, 0 accepted wrongly.
 
 ### Security fixes (dependencies)
 
@@ -69,13 +71,16 @@ entry below.
     with no constraint, or with one that is not a Boolean formula, is
     `BLOCKED`.
   - `/verify/consensus` is `BLOCKED` (`no_independent_verification`) when
-    fewer than two distinct engines verify an answer, and that is every
-    answer today. `meets_requirement` is no longer true for a consensus.
+    only one engine verifies the answer, as in single mode, the default. It
+    is `VERIFIED` only when two distinct engines verify the same answer,
+    which no two engines do today. `meets_requirement` is no longer true
+    for a consensus.
   - `/verify/image` decides a size claim only when the whole claim states
     the width, the height or both. "HD", a negation and a claim that says
     more are `UNVERIFIABLE`.
-  - `/verify/math`, and a batch maths item, without `=` are `UNVERIFIABLE`
-    (`math.no_claim`). Send `expression = value` to have it checked.
+  - `/verify/math` without `=` is `UNVERIFIABLE` (`math.no_claim`), as a
+    batch maths item already was. Send `expression = value` to have it
+    checked.
   - The attestation, the audit log and the batch summary call a result
     verified only when it is `VERIFIED`, its claim holds (`is_valid` true)
     and it was not reached on a model's translation of the question. A
@@ -189,9 +194,10 @@ entry below.
 - **`/verify/consensus` does not report one engine's answer as a
   consensus** (#320). In single mode, the default, one engine compared the
   model's translated expression with the model's own answer, and that was
-  `VERIFIED` with `meets_requirement: true`. An answer that fewer than two
-  distinct engines verified is now `BLOCKED` (`no_independent_verification`),
-  and a `VERIFIED` consensus binds the query in its proof.
+  `VERIFIED` with `meets_requirement: true`. An answer that only one engine
+  verified is now `BLOCKED` (`no_independent_verification`), a consensus is
+  `VERIFIED` only when two distinct engines verify the same answer, and a
+  `VERIFIED` consensus binds the query in its proof.
 - **"Verified" has one meaning in the attestation, the audit log and the
   batch summary** (#577): `VERIFIED` with `is_valid` true, and not reached
   on a model's translation of the question, as `claim_verified` decides it.
