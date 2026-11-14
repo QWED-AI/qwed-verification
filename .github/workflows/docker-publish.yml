@@ -13,12 +13,12 @@ on:
       - '.github/workflows/docker-publish.yml'
   release:
     types: [published]
+  # A manual run builds and pushes the ref it runs on. The Docker Hub
+  # credentials are in the `dockerhub` environment, whose deployment rule
+  # allows `main` and `v*` tags only, so another branch cannot push an
+  # image. Version tags (and the `latest` they bring) are made only for a
+  # release, so a manual run on a `v*` tag pushes only its `sha-` tag.
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Docker image tag (leave empty for latest)'
-        required: false
-        default: ''
 
 permissions:
   contents: read
@@ -30,6 +30,7 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    environment: dockerhub
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -53,11 +54,11 @@ jobs:
           tags: |
             # latest on main push
             type=raw,value=latest,enable={{is_default_branch}}
-            # version tag on release (e.g., v3.0.1 -> 3.0.1)
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            # manual tag from workflow_dispatch
-            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event.inputs.tag != '' }}
+            # version tags on a release only (e.g., v3.0.1 -> 3.0.1 and 3.0).
+            # type=semver reads the ref, not the event, so without the
+            # condition a manual run on a v* tag would push them, and latest.
+            type=semver,pattern={{version}},enable=${{ github.event_name == 'release' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'release' }}
             # SHA for traceability
             type=sha,prefix=sha-
 

@@ -3,7 +3,14 @@ name: Publish SDKs
 on:
   release:
     types: [published]
-  workflow_dispatch:  # Manual trigger for testing
+  # A manual run only reads the versions; it builds, publishes and tags
+  # nothing. npm and crates.io are published only from a published release,
+  # through the protected `npm` and `crates` environments (deployment rule:
+  # `v*` tags; the maintainer approves), by trusted publishing: each registry
+  # accepts this workflow's OIDC token for that environment, so no registry
+  # token is stored. npm stages the version, and it goes live only when a
+  # maintainer approves it on npm with 2FA. PyPI is published by publish.yml.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -43,53 +50,59 @@ jobs:
           echo "crate=$CRATE" >> "$GITHUB_OUTPUT"
 
   # ============================================
-  # Python SDK → PyPI
-  # ============================================
-  publish-python:
-    name: Publish Python SDK
-    runs-on: ubuntu-latest
-    # Only run if PYPI_API_TOKEN exists
-    if: ${{ vars.PYPI_ENABLED == 'true' || github.event_name == 'workflow_dispatch' }}
-    permissions:
-      id-token: write   # OIDC trusted publisher - no hardcoded credential needed
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      
-        with:
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        with:
-          python-version: '3.11'
-      
-      - name: Install build tools
-        run: pip install build twine
-      
-      - name: Build package
-        run: python -m build
-      
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3
-          # OIDC trusted publisher: no token/password field required.
-          # Configure at https://pypi.org/manage/project/qwed/settings/publishing/
-        with:
-          skip-existing: true
-
-  # ============================================
   # TypeScript SDK → npm
   # ============================================
+  # Built and published in separate jobs. npm ci runs the dependencies'
+  # install scripts, so the job that runs it has no id-token permission and
+  # cannot ask for the publishing identity. The publish job runs neither npm
+  # ci nor any lifecycle script.
+  build-typescript:
+    name: Build TypeScript SDK
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: |
+          cd sdk-ts
+          npm ci
+
+      - name: Build
+        run: |
+          cd sdk-ts
+          npm run build
+
+      - name: Upload the built package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: sdk-ts-dist
+          path: sdk-ts/dist/
+          if-no-files-found: error
+
   publish-typescript:
     name: Publish TypeScript SDK
     runs-on: ubuntu-latest
-    needs: versions
+    needs: [versions, build-typescript]
+    if: github.event_name == 'release'
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write   # trusted publishing: npm accepts this job's OIDC token
     concurrency:
       group: publish-sdks-npm-${{ needs.versions.outputs.npm }}
       cancel-in-progress: false
       queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      
+
         with:
           persist-credentials: false
       - name: Set up Node.js
@@ -97,20 +110,32 @@ jobs:
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-      
-      - name: Install dependencies
+
+      - name: Download the built package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: sdk-ts-dist
+          path: sdk-ts/dist/
+
+      - name: Check npm supports staged trusted publishing
+        # Staged publishing needs npm 11.15.0 or later (trusted publishing,
+        # 11.5.1). An older npm would fail or look for a token, and there is
+        # none, so stop here with the reason.
         run: |
-          cd sdk-ts
-          npm ci
-      
-      - name: Build
-        run: |
-          cd sdk-ts
-          npm run build
-      
-      - name: Publish to npm
+          NPM_VERSION=$(npm --version)
+          if ! printf '%s\n%s\n' 11.15.0 "$NPM_VERSION" | sort -V -C; then
+            echo "::error::npm $NPM_VERSION is older than 11.15.0, which staged publishing needs."
+            exit 1
+          fi
+
+      - name: Stage on npm
+        # Trusted publishing: npm takes the job's OIDC token; no NODE_AUTH_TOKEN
+        # is set, and --ignore-scripts runs no lifecycle script in this job.
+        # `npm stage publish` puts the version in npm's staging area with its
+        # provenance. It goes live only when a maintainer approves it on
+        # npmjs.com (Staged Packages) or with `npm stage approve`, with 2FA, so
+        # a release cannot reach npm on the GitHub side alone.
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ needs.versions.outputs.npm }}
         # A version already on npm is skipped; any other failure fails the job.
         # (continue-on-error hid failed npm publishes from 7.2.1 to 7.2.3.)
@@ -128,30 +153,63 @@ jobs:
             echo "::error::Could not check npm for @qwed-ai/sdk@$VERSION."
             exit 1
           fi
-          npm publish --access public
+          npm stage publish --access public --provenance --ignore-scripts
+          echo "::notice::@qwed-ai/sdk@$VERSION is staged on npm. Approve it on npmjs.com (Staged Packages) to publish it."
 
   # ============================================
   # Rust SDK → crates.io
   # ============================================
+  # Verified and published in separate jobs. cargo verifies a package by
+  # building it, which runs the dependencies' build scripts, so that job has
+  # no id-token permission. The publish job uploads the same sources with
+  # --no-verify, so it builds and runs nothing from the dependencies.
+  verify-rust:
+    name: Verify Rust SDK package
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Package and build the crate
+        run: |
+          cd sdk-rust
+          cargo package --allow-dirty
+
   publish-rust:
     name: Publish Rust SDK
     runs-on: ubuntu-latest
-    needs: versions
+    needs: [versions, verify-rust]
+    if: github.event_name == 'release'
+    environment: crates
+    permissions:
+      contents: read
+      id-token: write   # trusted publishing: crates.io accepts this job's OIDC token
     concurrency:
       group: publish-sdks-crates-${{ needs.versions.outputs.crate }}
       cancel-in-progress: false
       queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      
+
         with:
           persist-credentials: false
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-      
+
+      - name: Get a temporary crates.io token
+        # Trusted publishing: crates.io exchanges the job's OIDC token for a
+        # short-lived token, which the action revokes when the job ends.
+        id: crates-auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+
       - name: Publish to crates.io
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}
           VERSION: ${{ needs.versions.outputs.crate }}
         # A version already on crates.io is skipped; any other failure fails the job.
         # Only a 404 counts as "not published yet"; transient errors are retried,
@@ -170,7 +228,7 @@ jobs:
               exit 1
               ;;
           esac
-          cargo publish --allow-dirty
+          cargo publish --no-verify --allow-dirty
 
   # ============================================
   # Go SDK → Just needs tag (no publish step)
@@ -178,6 +236,7 @@ jobs:
   tag-go:
     name: Tag Go SDK
     runs-on: ubuntu-latest
+    if: github.event_name == 'release'
     # Scoped to this job only (the global default stays contents: read): the Go
     # module lives in sdk-go/ with path .../sdk-go/v10, so the proxy resolves it
     # from a tag named sdk-go/vX.Y.Z — which this job has to push (#443).
@@ -240,16 +299,16 @@ jobs:
   # ============================================
   summary:
     name: Publish Summary
-    needs: [publish-python, publish-typescript, publish-rust, tag-go]
+    needs: [publish-typescript, publish-rust, tag-go]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Summary
         run: |
           echo "=== SDK Publish Results ==="
-          echo "Python (PyPI):    ${{ needs.publish-python.result }}"
           echo "TypeScript (npm): ${{ needs.publish-typescript.result }}"
           echo "Rust (crates.io): ${{ needs.publish-rust.result }}"
           echo "Go (tagged):      ${{ needs.tag-go.result }}"
           echo ""
-          echo "Note: Python publish uses the repository root package metadata (pyproject.toml)."
+          echo "Note: PyPI is published by publish.yml. An npm version is staged; it is"
+          echo "published when a maintainer approves it on npmjs.com (Staged Packages)."
