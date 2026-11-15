@@ -190,7 +190,7 @@ For enterprise questions, contact support@qwedai.tech.
 QWED is licensed under the [Apache License 2.0](./LICENSE), and contributions are accepted under the same licence:
 
 - **Inbound = outbound.** Under section 5 of the licence, a contribution you submit for inclusion is licensed under the Apache License 2.0, with no additional terms, unless you explicitly state otherwise.
-- **You keep your copyright.** The licence lets everyone, the maintainer included, use, change and redistribute your contribution, and section 3 grants a licence to any of your patents that the contribution uses.
+- **You keep your copyright.** The licence lets everyone, the maintainer included, use, change and redistribute your contribution. Under section 3 you also grant a patent licence, limited to the patent claims you can license that your contribution necessarily infringes, alone or combined with QWED.
 - **Only submit what you have the right to submit:** your own work, or code under a licence that is compatible with Apache-2.0, with its notices kept. Code under the GPL, the AGPL or another licence that is not compatible cannot be accepted.
 - **The names are not licensed.** See [TRADEMARKS.md](./TRADEMARKS.md) for using "QWED" and its logo, and [NOTICE](./NOTICE) for the attribution that redistributions keep.
 
