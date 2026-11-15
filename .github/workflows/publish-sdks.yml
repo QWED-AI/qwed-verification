@@ -141,6 +141,12 @@ jobs:
         # (continue-on-error hid failed npm publishes from 7.2.1 to 7.2.3.)
         # Only a 404 from the registry counts as "not published yet"; if the
         # check itself fails, the job fails rather than guessing.
+        # A version that is staged but not approved yet cannot be staged
+        # again, so a rerun before approval fails at `npm stage publish`.
+        # The job cannot check for that first: npm accepts its OIDC token
+        # only to stage or publish, not for `npm stage list`, and npm does
+        # not document the error. So any refusal fails the job, with the
+        # next step for the maintainer.
         run: |
           cd sdk-ts
           if PUBLISHED=$(npm view "@qwed-ai/sdk@$VERSION" version 2>"$RUNNER_TEMP/npm-view.err"); then
@@ -153,7 +159,10 @@ jobs:
             echo "::error::Could not check npm for @qwed-ai/sdk@$VERSION."
             exit 1
           fi
-          npm stage publish --access public --provenance --ignore-scripts
+          if ! npm stage publish --access public --provenance --ignore-scripts; then
+            echo "::error::npm did not stage @qwed-ai/sdk@$VERSION (see the error above). If an earlier run already staged it, approve or reject that version on npmjs.com (Staged Packages) instead of running this again."
+            exit 1
+          fi
           echo "::notice::@qwed-ai/sdk@$VERSION is staged on npm. Approve it on npmjs.com (Staged Packages) to publish it."
 
   # ============================================
