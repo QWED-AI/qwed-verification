@@ -105,6 +105,9 @@ jobs:
           done
           exit 1
 
+      - name: The server image carries LICENSE and NOTICE
+        run: docker exec qwed-smoke test -s /app/LICENSE -a -s /app/NOTICE
+
       - name: The server runs as a non-root user
         run: test "$(docker exec qwed-smoke id -u)" = "1000"
 
@@ -152,6 +155,9 @@ jobs:
             qwed-action | tee action.log
           grep -q "QWED Code Scanner" action.log
           grep -q "No issues found in 1 file(s)" action.log
+
+      - name: The action image carries LICENSE and NOTICE
+        run: docker run --rm --entrypoint test qwed-action -s /app/LICENSE -a -s /app/NOTICE
 
   compose-stack:
     name: Full Compose stack comes up healthy

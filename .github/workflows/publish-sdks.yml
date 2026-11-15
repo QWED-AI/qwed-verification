@@ -117,6 +117,11 @@ jobs:
           name: sdk-ts-dist
           path: sdk-ts/dist/
 
+      - name: Add the licence files to the package
+        # Both live at the repository root. npm packs LICENSE from the package
+        # directory on its own, and NOTICE is listed in package.json "files".
+        run: cp LICENSE NOTICE sdk-ts/
+
       - name: Check npm supports staged trusted publishing
         # Staged publishing needs npm 11.15.0 or later (trusted publishing,
         # 11.5.1). An older npm would fail or look for a token, and there is
@@ -187,6 +192,9 @@ jobs:
       - name: Package and build the crate
         run: |
           cd sdk-rust
+          # The crate carries the repository's LICENSE and NOTICE; --allow-dirty
+          # lets cargo package the copies.
+          cp ../LICENSE ../NOTICE .
           cargo package --allow-dirty
 
   publish-rust:
@@ -237,6 +245,8 @@ jobs:
               exit 1
               ;;
           esac
+          # Same files as verify-rust packaged: the crate carries LICENSE and NOTICE.
+          cp ../LICENSE ../NOTICE .
           cargo publish --no-verify --allow-dirty
 
   # ============================================

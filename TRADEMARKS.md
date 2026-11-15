@@ -13,7 +13,7 @@ The code in this repository is licensed under the [Apache License 2.0](./LICENSE
 ## What needs written permission
 
 - Calling a fork, a modified version, a product or a hosted or managed service "QWED", or giving it a name that contains "QWED", in a way that suggests it is the official project or endorsed by it.
-- Using the QWED logo, except to link to this project.
+- Using the QWED logo, except as it appears in unmodified copies of this project, or to link to this project.
 - Registering a domain name, package name or account that contains "QWED" and could be mistaken for the official project.
 
 Forks are welcome under the Apache License. Give a fork its own name, and say that it is based on QWED.

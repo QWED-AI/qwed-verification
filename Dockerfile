@@ -34,6 +34,8 @@ RUN pip install --no-cache-dir --require-hashes -r /app/requirements-server.txt 
 # Code is owned by root and read-only to the server user.
 COPY src/qwed_new /app/qwed_new/
 COPY qwed_sdk /app/qwed_sdk/
+# The licence, and the attribution a redistribution of this image keeps.
+COPY LICENSE NOTICE /app/
 
 # The default SQLite database (sqlite:///./qwed.db) lives in the working
 # directory, the only place the server user can write. Set DATABASE_URL to
@@ -79,6 +81,8 @@ RUN pip install --no-cache-dir --require-hashes -r /app/requirements.txt
 COPY --chown=appuser:appuser qwed_sdk /app/qwed_sdk/
 COPY --chown=appuser:appuser src/qwed_new /app/qwed_new/
 COPY --chown=appuser:appuser action_entrypoint.py /action_entrypoint.py
+# The licence, and the attribution a redistribution of this image keeps.
+COPY LICENSE NOTICE /app/
 
 # Entrypoint Script (printf avoids CRLF issues without dos2unix)
 RUN printf '#!/bin/bash\n\
