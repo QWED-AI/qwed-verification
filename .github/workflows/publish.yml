@@ -3,16 +3,11 @@ name: Publish to PyPI
 on:
   release:
     types: [published]
+  # A manual run publishes to TestPyPI only. PyPI is published only from a
+  # published release, through the protected `pypi` environment (its
+  # deployment rule allows `v*` tags only, and it needs the maintainer's
+  # approval), so no branch can publish to PyPI.
   workflow_dispatch:
-    inputs:
-      publish_target:
-        description: 'Publish target'
-        required: true
-        default: 'testpypi'
-        type: choice
-        options:
-          - testpypi
-          - pypi
 
 permissions:
   contents: read
@@ -50,7 +45,7 @@ jobs:
   publish-testpypi:
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish_target == 'testpypi'
+    if: github.event_name == 'workflow_dispatch'
     environment: testpypi
     permissions:
       id-token: write
@@ -69,7 +64,7 @@ jobs:
   publish-pypi:
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_target == 'pypi')
+    if: github.event_name == 'release'
     environment: pypi
     permissions:
       id-token: write
