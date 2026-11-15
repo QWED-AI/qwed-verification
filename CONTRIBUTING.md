@@ -89,7 +89,9 @@ Current priorities are in [ROADMAP.md](./ROADMAP.md) and the [open issues](https
 
 ### 1. Reporting Bugs
 
-Open an issue with:
+A security vulnerability is not a bug report: report it privately, as [SECURITY.md](./SECURITY.md) says, and not in an issue, a pull request or a discussion.
+
+For other bugs, open an issue with:
 - QWED version (`pip show qwed`)
 - Python version
 - Input that caused the bug
@@ -107,7 +109,7 @@ Before coding, open an issue to discuss:
 
 Before you open a pull request:
 
-- **Open an issue first** for changes to the verification engines (`src/qwed_new/core/`) or to `scripts/check_boundary.py`, so the approach is agreed before the code is written. A pull request that changes them without one may be closed and pointed to an issue.
+- **Open an issue first** for changes to the verification engines (`src/qwed_new/core/`) or to `scripts/check_boundary.py`, so the approach is agreed before the code is written. A pull request that changes them without one may be closed and pointed to an issue. A security fix is the exception: report the problem privately, as [SECURITY.md](./SECURITY.md) says, and do not open a public issue or pull request for it.
 - **You are responsible for every line you submit,** whichever tools helped you write it. Be ready to explain each change, and add tests that show it works and that the failure paths still block.
 
 ```bash
@@ -177,7 +179,7 @@ qwed-verification/
 
 ## ⚠️ What NOT to Contribute
 
-Some enterprise features (such as SSO) are developed in a separate, private repository. This repository does include basic authentication, tenant isolation, audit logging and RBAC: bug fixes and security fixes for them are welcome here. Please open an issue before proposing new enterprise-scope features.
+Some enterprise features (such as SSO) are developed in a separate, private repository. This repository does include basic authentication, tenant isolation, audit logging and RBAC: bug fixes for them are welcome here, and security problems in them are reported privately (see [SECURITY.md](./SECURITY.md)). Please open an issue before proposing new enterprise-scope features.
 
 For enterprise questions, contact support@qwedai.tech.
 
