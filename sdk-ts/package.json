@@ -43,7 +43,9 @@
     },
     "files": [
         "dist",
-        "README.md"
+        "README.md",
+        "LICENSE",
+        "NOTICE"
     ],
     "overrides": {
         "minimatch": "^11.0.1",
