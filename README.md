@@ -273,4 +273,4 @@ The QWED protocol technical note is [10.5281/zenodo.18075234](https://doi.org/10
 
 ## License
 
-[Apache License 2.0](LICENSE). Apache-2.0 comes with no warranty; see sections 7 and 8 of the license.
+[Apache License 2.0](LICENSE). Apache-2.0 comes with no warranty; see sections 7 and 8 of the license. Redistributions keep the attribution in [NOTICE](NOTICE), and [TRADEMARKS.md](TRADEMARKS.md) says how the QWED name and logo may be used.

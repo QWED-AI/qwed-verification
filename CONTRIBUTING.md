@@ -89,7 +89,9 @@ Current priorities are in [ROADMAP.md](./ROADMAP.md) and the [open issues](https
 
 ### 1. Reporting Bugs
 
-Open an issue with:
+A security vulnerability is not a bug report: report it privately, as [SECURITY.md](./SECURITY.md) says, and not in an issue, a pull request or a discussion.
+
+For other bugs, open an issue with:
 - QWED version (`pip show qwed`)
 - Python version
 - Input that caused the bug
@@ -104,6 +106,11 @@ Before coding, open an issue to discuss:
 - Which engine does it affect?
 
 ### 3. Submitting Pull Requests
+
+Before you open a pull request:
+
+- **Open an issue first** for changes to the verification engines (`src/qwed_new/core/`) or to `scripts/check_boundary.py`, so the approach is agreed before the code is written. A pull request that changes them without one may be closed and pointed to an issue. A security fix is the exception: report the problem privately, as [SECURITY.md](./SECURITY.md) says, and do not open a public issue or pull request for it.
+- **You are responsible for every line you submit,** whichever tools helped you write it. Be ready to explain each change, and add tests that show it works and that the failure paths still block.
 
 ```bash
 # 1. Fork and clone
@@ -172,7 +179,7 @@ qwed-verification/
 
 ## ⚠️ What NOT to Contribute
 
-Some enterprise features (such as SSO) are developed in a separate, private repository. This repository does include basic authentication, tenant isolation, audit logging and RBAC: bug fixes and security fixes for them are welcome here. Please open an issue before proposing new enterprise-scope features.
+Some enterprise features (such as SSO) are developed in a separate, private repository. This repository does include basic authentication, tenant isolation, audit logging and RBAC: bug fixes for them are welcome here, and security problems in them are reported privately (see [SECURITY.md](./SECURITY.md)). Please open an issue before proposing new enterprise-scope features.
 
 For enterprise questions, contact support@qwedai.tech.
 
@@ -180,7 +187,12 @@ For enterprise questions, contact support@qwedai.tech.
 
 ## 📜 License
 
-By contributing, you agree that your contributions will be licensed under the [Apache 2.0 License](./LICENSE).
+QWED is licensed under the [Apache License 2.0](./LICENSE), and contributions are accepted under the same licence:
+
+- **Inbound = outbound.** Under section 5 of the licence, a contribution you submit for inclusion is licensed under the Apache License 2.0, with no additional terms, unless you explicitly state otherwise.
+- **You keep your copyright.** The licence lets everyone, the maintainer included, use, change and redistribute your contribution. Under section 3 you also grant a patent licence, limited to the patent claims you can license that your contribution necessarily infringes, alone or combined with QWED.
+- **Only submit what you have the right to submit:** your own work, or code under a licence that is compatible with Apache-2.0, with its notices kept. Code under the GPL, the AGPL or another licence that is not compatible cannot be accepted.
+- **The names are not licensed.** See [TRADEMARKS.md](./TRADEMARKS.md) for using "QWED" and its logo, and [NOTICE](./NOTICE) for the attribution that redistributions keep.
 
 ---
 
