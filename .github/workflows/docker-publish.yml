@@ -6,6 +6,8 @@ on:
     paths:
       - 'Dockerfile'
       - '.dockerignore'
+      - 'LICENSE'
+      - 'NOTICE'
       - 'requirements-server.txt'
       - 'pyproject.toml'
       - 'src/**'

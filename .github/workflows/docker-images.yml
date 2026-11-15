@@ -8,6 +8,8 @@ on:
     paths:
       - 'Dockerfile'
       - '.dockerignore'
+      - 'LICENSE'
+      - 'NOTICE'
       - 'requirements.txt'
       - 'requirements.in'
       - 'requirements-server.txt'
