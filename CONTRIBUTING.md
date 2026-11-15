@@ -105,6 +105,11 @@ Before coding, open an issue to discuss:
 
 ### 3. Submitting Pull Requests
 
+Before you open a pull request:
+
+- **Open an issue first** for changes to the verification engines (`src/qwed_new/core/`) or to `scripts/check_boundary.py`, so the approach is agreed before the code is written. A pull request that changes them without one may be closed and pointed to an issue.
+- **You are responsible for every line you submit,** whichever tools helped you write it. Be ready to explain each change, and add tests that show it works and that the failure paths still block.
+
 ```bash
 # 1. Fork and clone
 git clone https://github.com/YOUR_USERNAME/qwed-verification.git
@@ -180,7 +185,12 @@ For enterprise questions, contact support@qwedai.tech.
 
 ## 📜 License
 
-By contributing, you agree that your contributions will be licensed under the [Apache 2.0 License](./LICENSE).
+QWED is licensed under the [Apache License 2.0](./LICENSE), and contributions are accepted under the same licence:
+
+- **Inbound = outbound.** Under section 5 of the licence, a contribution you submit for inclusion is licensed under the Apache License 2.0, with no additional terms, unless you explicitly state otherwise.
+- **You keep your copyright.** The licence lets everyone, the maintainer included, use, change and redistribute your contribution, and section 3 grants a licence to any of your patents that the contribution uses.
+- **Only submit what you have the right to submit:** your own work, or code under a licence that is compatible with Apache-2.0, with its notices kept. Code under the GPL, the AGPL or another licence that is not compatible cannot be accepted.
+- **The names are not licensed.** See [TRADEMARKS.md](./TRADEMARKS.md) for using "QWED" and its logo, and [NOTICE](./NOTICE) for the attribution that redistributions keep.
 
 ---
 
