@@ -19,7 +19,7 @@ import hashlib
 import logging
 from collections import Counter
 
-from qwed_new.providers.base import ProviderConfigError
+from qwed_new.providers.base import ProviderConfigError, TranslationRefused
 
 from qwed_new.core.diagnostics import (
     AdvisoryCheck,
@@ -200,6 +200,7 @@ class FactVerifier:
         # Step 8: LLM fallback is advisory-only (fixes #133), confidence-gated
         llm_advisory = None
         provider_config_error: Optional[ProviderConfigError] = None
+        translation_refused: Optional[TranslationRefused] = None
         if confidence < min_confidence and self.use_llm_fallback and provider:
             methods_used.append({"name": "llm_fallback", "advisory_only": True})
             try:
@@ -209,6 +210,12 @@ class FactVerifier:
                 # or no model): the setting to fix, not a provider failure.
                 logger.warning("Fact advisory stopped: %s", e)
                 provider_config_error = e
+                llm_result = None
+            except TranslationRefused as e:
+                # The claim or context was refused before the model saw it
+                # (#632): refused, not answered without the advisory asked for.
+                logger.warning("Fact advisory refused: %s", e)
+                translation_refused = e
                 llm_result = None
             if llm_result:
                 llm_advisory = AdvisoryCheck(
@@ -244,6 +251,9 @@ class FactVerifier:
             # what the deterministic pass computed is kept.
             developer_fields["constraint_id"] = "fact_verifier.provider_config_error"
             return DiagnosticResult.blocked(str(provider_config_error), developer_fields)
+        if translation_refused is not None:
+            developer_fields["constraint_id"] = "fact_verifier.translation_refused"
+            return DiagnosticResult.blocked(str(translation_refused), developer_fields)
         if advisory_checks:
             developer_fields["advisory_checks"] = advisory_checks
 
@@ -623,8 +633,9 @@ class FactVerifier:
         """
         Use LLM as last resort when deterministic methods are insufficient.
 
-        A provider failure gives no advisory (None). ProviderConfigError is
-        raised: the provider cannot run as selected, which the caller must see.
+        A provider failure gives no advisory (None). ProviderConfigError and
+        TranslationRefused are raised: the provider cannot run as selected, or
+        the claim or context was refused (#632), which the caller must see.
         """
         try:
             if self._translator is None:
@@ -632,7 +643,7 @@ class FactVerifier:
                 self._translator = TranslationLayer()
             
             return self._translator.verify_fact(claim, context, provider=provider)
-        except ProviderConfigError:
+        except (ProviderConfigError, TranslationRefused):
             raise
         except Exception:
             return None

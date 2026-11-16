@@ -11,7 +11,7 @@ from qwed_new.config import settings, ProviderType
 from qwed_new.core.router import UNKNOWN_PROVIDER
 from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.core.security import EnhancedSecurityGateway
-from qwed_new.providers.base import RETIRED_PROVIDERS, LLMProvider, ProviderConfigError
+from qwed_new.providers.base import RETIRED_PROVIDERS, LLMProvider, ProviderConfigError, TranslationRefused
 from qwed_new.providers.azure_openai import AzureOpenAIProvider
 from qwed_new.providers.anthropic import AnthropicProvider
 from qwed_new.providers.auto_shift import AutoShiftProvider
@@ -26,10 +26,6 @@ class SecurityError(ValueError):
 
 
 SAFETY_VALIDATOR_REJECTION = "Expression rejected by safety validator"
-
-
-class TranslationRefused(SecurityError):
-    """The caller's text was refused before any model saw it (#632)."""
 
 
 class TranslationLayer:
@@ -179,7 +175,7 @@ class TranslationLayer:
         """Stats or fact text, once the policy engine's phrase check passes;
         otherwise ``TranslationRefused``. Its length bound also keeps the
         phrase patterns' cost bounded on a long context."""
-        is_safe, reason = self._screen.basic_gateway.detect_injection(str(text))
+        is_safe, reason = self._screen.basic_gateway.detect_injection(str(text), whole_words=True)
         if not is_safe:
             raise TranslationRefused(f"Security Policy Violation: {reason}")
         return text
@@ -209,6 +205,7 @@ class TranslationLayer:
         Refine logic query based on feedback.
         """
         text = self._screened(user_query)
+        self._screened_data(previous_error)
         return self._get_provider(provider).refine_logic(text, previous_error)
 
     def translate_stats(self, query: str, columns: list[str], provider: str | None = None) -> str:

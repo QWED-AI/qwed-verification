@@ -17,8 +17,8 @@ before any provider is resolved or called:
   ordinary words such as "mode" or "system", or a context over 2,000
   characters.
 
-A refused text raises ``TranslationRefused``, and each caller already fails
-closed on it.
+A refused text raises ``TranslationRefused``: consensus and stats return
+BLOCKED, and fact refuses a request whose advisory text is refused.
 """
 
 from types import SimpleNamespace
@@ -141,9 +141,30 @@ def test_an_injection_in_a_column_name_is_refused(provider):
     _refused(provider, lambda: TranslationLayer().translate_stats("What is the mean of a?", ["a", INJECTION]))
 
 
-def test_a_refusal_is_a_security_error_every_caller_already_fails_closed_on():
-    # ValueError: the consensus engines and the DSL bridge catch it as a
-    # translation failure; stats and fact catch any exception.
+@pytest.mark.parametrize("name", ["Impact assessment", "Contact assigned", "Extract assets"])
+def test_a_column_name_that_only_contains_a_phrase_reaches_the_provider(provider, name):
+    # "act as" inside a word is not the phrase (Sentry).
+    columns = ["a", name]
+    with pytest.raises(AssertionError, match="the provider was called"):
+        TranslationLayer().translate_stats("What is the mean of a?", columns)
+    assert provider.calls == [("translate_stats", ("What is the mean of a?", columns), {})]
+
+
+def test_a_context_that_only_contains_a_phrase_reaches_the_provider(provider):
+    context = "Sodium and water react as expected."
+    with pytest.raises(AssertionError, match="the provider was called"):
+        TranslationLayer().verify_fact("Sodium reacts with water.", context)
+    assert provider.calls == [("verify_fact", ("Sodium reacts with water.", context), {})]
+
+
+def test_an_injection_in_the_previous_error_is_refused(provider):
+    # A safe question does not let an injected error through (CodeRabbit).
+    _refused(provider, lambda: TranslationLayer().refine_logic("Is x greater than 3?", INJECTION))
+
+
+def test_a_refusal_is_a_value_error_every_caller_already_fails_closed_on():
+    # The consensus engines and the DSL bridge catch a ValueError as a failed
+    # translation; stats catches any exception; fact refuses the request.
     assert issubclass(TranslationRefused, ValueError)
 
 
@@ -164,7 +185,13 @@ def test_stats_no_longer_reaches_the_model_with_a_refused_question(provider):
     assert "could not be translated" in result.agent_message
 
 
-def test_fact_gives_no_model_advisory_for_a_refused_claim(provider):
-    assert FactVerifier()._llm_fallback(INJECTION, CONTEXT, provider=None) is None
+@pytest.mark.parametrize(("claim", "context"), [(INJECTION, CONTEXT), ("The sky is green.", f"{CONTEXT} {INJECTION}")])
+def test_fact_refuses_a_request_whose_advisory_text_is_refused(provider, claim, context):
+    # Refused, as for a provider that cannot run, not answered as if no
+    # advisory had been asked for (CodeRabbit).
+    result = FactVerifier().verify_fact(claim, context, provider="anthropic", min_confidence=1.0)
 
     assert provider.calls == []
+    assert result.status.value == "BLOCKED"
+    assert result.developer_fields["constraint_id"] == "fact_verifier.translation_refused"
+    assert "Security Policy Violation" in result.agent_message
