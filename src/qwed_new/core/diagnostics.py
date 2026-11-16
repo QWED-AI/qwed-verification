@@ -477,11 +477,14 @@ class DiagnosticResult:
         3. proof_ref        — Layer 3 (cryptographic proof artifact hash)
 
     Authority contract:
-        proof_ref is not None  → authoritative, admissible for control flow
+        proof_ref is not None  → authoritative: decided, evidence committed
         proof_ref is None      → non-authoritative, NOT admissible for control flow
 
     This is the mechanical rule downstream gates use (per #190 Keesan
-    discussion): no separate `authoritative` boolean needed.
+    discussion): no separate `authoritative` boolean needed. Authority is
+    necessary, not sufficient: a claim proven false, or a verdict on a
+    model's translation, is authoritative too, so gate control flow on
+    ``admission_decision`` (#630).
 
     Constraints enforced in __post_init__:
         - status == VERIFIED  requires proof_ref is not None
