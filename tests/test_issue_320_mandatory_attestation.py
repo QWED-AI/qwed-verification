@@ -242,11 +242,12 @@ def client(isolated_audit_chain):
         api_main.app.dependency_overrides.clear()
 
 
-def _logic_sat():
-    async def sat(query, organization_id=None, preferred_provider=None):
-        return {"status": "SAT", "model": {"x": "6"}, "dsl_code": "(GT x 5)"}
+def _logic_proven():
+    # A claim that follows from its constraints is the VERIFIED logic result (#631).
+    async def proven(query, organization_id=None, preferred_provider=None):
+        return {"status": "VALID", "dsl_code": "(IMPLIES (GT x 5) (GT x 3))"}
 
-    return patch.object(api_main.control_plane, "process_logic_query", sat)
+    return patch.object(api_main.control_plane, "process_logic_query", proven)
 
 
 def _image_proven():
@@ -281,7 +282,7 @@ def _consensus_proven():
 
 def _post(client, route):
     if route == "logic":
-        with _logic_sat():
+        with _logic_proven():
             return client.post("/verify/logic", json={"query": "(GT x 5)"}).json()
     if route == "math":
         return client.post("/verify/math", json={"expression": "2+2=4"}).json()
@@ -302,7 +303,7 @@ ROUTES = ["logic", "math", "image", "consensus"]
 # the test fails if the route stops reaching it: the image stand-in echoes
 # the claim the route passed it.
 ENGINE_OUTPUT = {
-    "logic": {"model": {"x": "6"}, "dsl_code": "(GT x 5)"},
+    "logic": {"dsl_code": "(IMPLIES (GT x 5) (GT x 3))"},
     "math": {"left_side": "4", "right_side": "4"},
     "image": {"verdict": "SUPPORTED", "claim": "800x600"},
     "consensus": {"agreement_status": "unanimous", "final_answer": "4", "confidence": 0.97},

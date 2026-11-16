@@ -30,10 +30,14 @@ from qwed_new.core.models import VerificationLog
 from qwed_new.core.tenant_context import TenantContext
 
 QUESTION = "Prove that x > 5 implies x > 10"
-MISTRANSLATION = "(AND (GT x 5) (GT x 10))"
-# What Z3 decided: the DSL with the sort of each variable (an undeclared
-# name is an Int).
-DECIDED = "(VAR x Int) " + MISTRANSLATION
+# Since #631 the route proves a claim from the constraints. A translation
+# with the wrong claim (x > 3 for x > 10) is still proven, for the
+# translation only.
+MISTRANSLATION = "(GT x 5)"
+MISTRANSLATED_CLAIM = "(GT x 3)"
+# What Z3 decided: the statement with the sort of each variable (an
+# undeclared name is an Int).
+DECIDED = f"(VAR x Int) (IMPLIES {MISTRANSLATION} {MISTRANSLATED_CLAIM})"
 
 
 @pytest.fixture
@@ -54,10 +58,10 @@ def client(isolated_audit_chain):
         api_main.app.dependency_overrides.clear()
 
 
-def _translated_to(dsl, variables=None):
+def _translated_to(dsl, variables=None, claim=None):
     """The translator of both the route's and the batch's control plane
-    returns ``dsl``; Z3 then decides it for real."""
-    translated = (dsl, variables, "mock", None)
+    returns ``dsl`` and ``claim``; Z3 then decides them for real."""
+    translated = (dsl, variables, "mock", None, claim)
     return (
         patch.object(api_main.control_plane.logic_verifier, "translate_to_dsl", return_value=translated),
         patch.object(api_main.batch_service.control_plane.logic_verifier, "translate_to_dsl", return_value=translated),
@@ -76,11 +80,11 @@ def _claims(token):
 
 
 def test_a_mistranslated_question_is_verified_for_its_constraints_only(client, isolated_audit_chain):
-    route_patch, _ = _translated_to(MISTRANSLATION)
+    route_patch, _ = _translated_to(MISTRANSLATION, claim=MISTRANSLATED_CLAIM)
     with route_patch:
         body = client.post("/verify/logic", json={"query": QUESTION}).json()
 
-    # Z3's answer about the constraints stands: they are satisfiable.
+    # Z3's answer about the translated claim stands: it follows.
     assert body["status"] == "VERIFIED"
     assert body["proof_ref"]
     # It is not an answer to the question, so it is not admitted for it.
@@ -97,7 +101,7 @@ def test_a_mistranslated_question_is_verified_for_its_constraints_only(client, i
 
 
 def test_the_attestation_signs_the_admission_and_binds_the_constraints(client):
-    route_patch, _ = _translated_to(MISTRANSLATION)
+    route_patch, _ = _translated_to(MISTRANSLATION, claim=MISTRANSLATED_CLAIM)
     with route_patch:
         body = client.post("/verify/logic", json={"query": QUESTION}).json()
 
@@ -108,14 +112,15 @@ def test_the_attestation_signs_the_admission_and_binds_the_constraints(client):
 
 @pytest.mark.parametrize("sort, status", [("Real", "VERIFIED"), ("Int", "UNVERIFIABLE")])
 def test_the_signed_statement_carries_the_sorts_z3_decided(client, sort, status):
-    # Satisfiable for a Real x and not for an Int one: the DSL alone would
+    # Satisfiable for a Real x and not for an Int one, so the claim follows
+    # for a Real x and only vacuously for an Int one: the DSL alone would
     # name either claim.
     dsl = "(AND (GT x 0) (LT x 1))"
-    route_patch, _ = _translated_to(dsl, [{"name": "x", "type": sort}])
+    route_patch, _ = _translated_to(dsl, [{"name": "x", "type": sort}], claim="(GT x 0)")
     with route_patch:
-        body = client.post("/verify/logic", json={"query": "Is there an x between 0 and 1?"}).json()
+        body = client.post("/verify/logic", json={"query": "If x is between 0 and 1, is x positive?"}).json()
 
-    statement = f"(VAR x {sort}) {dsl}"
+    statement = f"(VAR x {sort}) (IMPLIES {dsl} (GT x 0))"
     assert body["status"] == status
     assert body["developer_fields"]["translated_expression"] == statement
     if status == "VERIFIED":
@@ -161,7 +166,7 @@ def test_a_pipeline_error_is_blocked_and_not_admitted(client, isolated_audit_cha
 
 
 def test_a_batch_logic_item_is_admitted_by_the_same_rule(client, isolated_audit_chain):
-    _, batch_patch = _translated_to(MISTRANSLATION)
+    _, batch_patch = _translated_to(MISTRANSLATION, claim=MISTRANSLATED_CLAIM)
     with batch_patch:
         body = client.post("/verify/batch", json={"items": [{"query": QUESTION, "type": "logic"}]}).json()
 

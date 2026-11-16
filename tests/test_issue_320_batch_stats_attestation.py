@@ -43,13 +43,17 @@ def _proven(**fields):
     )
 
 
+LOGIC_STATEMENT = "(IMPLIES (GT x 5) (GT x 3))"
+
+
 class _ControlPlane:
     async def process_natural_language(self, query, organization_id=None):
         dr = _proven(translated_expression="2+2=4", verification_scope="translated_expression_only")
         return {"diagnostic": dr.to_dict()}
 
     async def process_logic_query(self, query, organization_id=None):
-        return {"status": "SAT", "model": {"x": "6"}, "dsl_code": "(GT x 5)"}
+        # A claim that follows from its constraints is the VERIFIED logic result (#631).
+        return {"status": "VALID", "dsl_code": LOGIC_STATEMENT}
 
 
 @pytest.fixture
@@ -136,8 +140,9 @@ def test_a_batch_item_is_signed_as_its_route_signs_it(stand_ins, monkeypatch, ki
     _verify(kind)
 
     assert seen[0]["engine"] == engine
-    # A natural-language verdict covers the translated expression (#320).
-    expected = "2+2=4" if kind is VerificationType.NATURAL_LANGUAGE else ITEMS[kind]
+    # A natural-language or logic verdict covers the translated statement (#320).
+    translated = {VerificationType.NATURAL_LANGUAGE: "2+2=4", VerificationType.LOGIC: LOGIC_STATEMENT}
+    expected = translated.get(kind, ITEMS[kind])
     assert seen[0]["query"] == expected
 
 

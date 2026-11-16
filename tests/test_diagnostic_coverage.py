@@ -106,9 +106,9 @@ def test_verify_natural_language_internal_error(client):
 def test_verify_logic_sat_path(client):
     """Cover SAT path with DiagnosticResult.verified, _enforce_trust, logging."""
     mock_result = {
-        "status": "SAT",
-        "model": {"x": 6},
-        "dsl_code": "(GT x 5)",
+        "status": "VALID",
+        "model": None,
+        "dsl_code": "(IMPLIES (GT x 5) (GT x 3))",
         "error": None,
         "provider_used": None,
     }
@@ -123,7 +123,7 @@ def test_verify_logic_sat_path(client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "VERIFIED"
-    assert data["agent_message"] == "Logic constraints are satisfiable"
+    assert data["agent_message"] == "The claim follows from the logic constraints"
     assert data["proof_ref"]
     # The verdict covers the translated constraints, not the query (#320).
     assert data["admission"] == "BLOCKED"

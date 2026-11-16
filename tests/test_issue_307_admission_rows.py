@@ -127,7 +127,8 @@ def test_the_logic_route_stores_the_admission_it_returned(client, isolated_audit
     """/verify/logic decides an admission since #320: its verdict covers the
     constraints an LLM translated the question into, so it is BLOCKED."""
     async def logic(query, organization_id=None, preferred_provider=None):
-        return {"status": "SAT", "model": {"x": "6"}, "dsl_code": "(GT x 5)"}
+        # A claim that follows from its constraints is VERIFIED (#631).
+        return {"status": "VALID", "dsl_code": "(IMPLIES (GT x 5) (GT x 3))"}
 
     with patch.object(api_main.control_plane, "process_logic_query", logic):
         response = client.post("/verify/logic", json={"query": "is there an x above 5"})

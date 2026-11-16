@@ -354,6 +354,14 @@ class ControlPlane:
                 "latency_ms": (time.time() - start_time) * 1000
             }
 
+    def _logic_solve(self, dsl_code: str, variables: Any, claim_dsl: Optional[str]) -> tuple:
+        """The z3 call for a logic translation (#631), as (function, args):
+        prove the claim from the constraints, or, with no claim, check the
+        constraints alone, which proves nothing however satisfiable."""
+        if claim_dsl is None:
+            return self.logic_verifier.verify_from_dsl, (dsl_code, variables)
+        return self.logic_verifier.prove_from_dsl, (dsl_code, claim_dsl, variables)
+
     async def process_logic_query(
         self,
         query: str,
@@ -398,13 +406,14 @@ class ControlPlane:
             # Provider translation runs off the loop and concurrently; the z3
             # solve runs on the single z3 thread. So the loop is never blocked,
             # logic requests translate in parallel, and z3 stays thread-safe.
-            dsl_code, variables, resolved_provider, error = await _run_provider_call(
+            dsl_code, variables, resolved_provider, error, claim_dsl = await _run_provider_call(
                 self.logic_verifier.translate_to_dsl, query, provider
             )
             if error is not None:
                 result = error
             else:
-                result = await _run_z3_call(self.logic_verifier.verify_from_dsl, dsl_code, variables)
+                solve, args = self._logic_solve(dsl_code, variables, claim_dsl)
+                result = await _run_z3_call(solve, *args)
                 result.provider_used = resolved_provider
                 if not result.dsl_code:
                     result.dsl_code = dsl_code

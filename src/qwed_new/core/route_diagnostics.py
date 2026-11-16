@@ -85,20 +85,51 @@ def _typed_statement(dsl_code: str, declarations: Any) -> str:
     return " ".join([*parts, dsl_code])
 
 
+def _logic_evidence(result: dict) -> dict:
+    evidence = {"model": str(result.get("model")), "dsl_code": result.get("dsl_code", "")}
+    if isinstance(result.get("declarations"), dict) and result["declarations"]:
+        evidence["declarations"] = result["declarations"]
+    return evidence
+
+
 def logic_diagnostic(result: dict) -> DiagnosticResult:
-    """``/verify/logic``'s mapping: SAT is VERIFIED with the model as evidence,
-    UNSAT is UNVERIFIABLE, anything else (an error) is BLOCKED. The verdict
-    covers the translated constraints only (see ``_logic_scope``)."""
+    """``/verify/logic``'s mapping (#631). A claim is decided for every value
+    of the variables:
+
+    - VALID (the claim follows from the constraints) is VERIFIED. It carries
+      no ``is_valid``: it proves the model's translation, not the question,
+      as the natural-language maths verdict does (#630).
+    - INVALID is proven false, with the counterexample as evidence.
+    - VACUOUS (constraints that cannot hold together), SAT (constraints with
+      no claim: one satisfying assignment proves nothing) and UNSAT are
+      UNVERIFIABLE.
+    - Anything else (an error) is BLOCKED.
+
+    The verdict covers the translated constraints only (see ``_logic_scope``).
+    """
     fields = {**result, **_logic_scope(result)}
     status = result.get("status", "ERROR")
-    if status == "SAT":
-        evidence = {"model": str(result.get("model")), "dsl_code": result.get("dsl_code", "")}
-        if isinstance(result.get("declarations"), dict) and result["declarations"]:
-            evidence["declarations"] = result["declarations"]
+    if status == "VALID":
         return DiagnosticResult.verified(
-            "Logic constraints are satisfiable",
+            "The claim follows from the logic constraints",
             developer_fields=fields,
-            evidence=evidence,
+            evidence=_logic_evidence(result),
+        )
+    if status == "INVALID":
+        return DiagnosticResult.disproven(
+            "The claim does not follow from the logic constraints: the model is a counterexample",
+            developer_fields=fields,
+            evidence=_logic_evidence(result),
+        )
+    if status == "VACUOUS":
+        return DiagnosticResult.unverifiable(
+            "The logic constraints contradict each other, so the claim follows only vacuously",
+            developer_fields=fields,
+        )
+    if status == "SAT":
+        return DiagnosticResult.unverifiable(
+            "Logic constraints are satisfiable, but no claim was proven",
+            developer_fields={**fields, "constraint_id": "logic.satisfiable_not_proven"},
         )
     if status == "UNSAT":
         return DiagnosticResult.unverifiable(

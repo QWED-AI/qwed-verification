@@ -132,8 +132,9 @@ class QWEDLogicTool(QWEDTool):
     
     name: str = "qwed_logic"
     description: str = (
-        "Verify logical constraints and find satisfying assignments. "
-        "Input should be in QWED-Logic DSL format: (AND (GT x 5) (LT y 10))"
+        "Check whether a claim follows from the conditions a question states, "
+        "for every value of the variables. Input: the question, with its "
+        "conditions and the claim, e.g. 'x is greater than 5. Is x greater than 3?'"
     )
     
     def _run(self, query: str) -> str:
@@ -151,35 +152,55 @@ _LOGIC_TRANSLATION_NOT_VERIFIED = (
 )
 
 
+def _decided_logic_answer(result, data) -> str:
+    """``_logic_answer`` for a ``VERIFIED`` result: the claim follows, or,
+    with ``is_valid`` false, the model is a counterexample (#631)."""
+    if data.get("is_valid") is False:
+        return (
+            f"❌ DOES NOT FOLLOW: the translated claim fails for {data.get('model')}. "
+            f"Not admitted: {_LOGIC_TRANSLATION_NOT_VERIFIED}."
+        )
+    if result.is_verified:
+        return "✅ VALID: the claim follows from the constraints."
+    reason = (
+        _LOGIC_TRANSLATION_NOT_VERIFIED
+        if data.get("query_semantics_verified") is not True
+        else "the server did not admit it"
+    )
+    return (
+        "⚠️ HOLDS, NOT ADMITTED: the translated claim follows from the "
+        f"translated constraints, but {reason}."
+    )
+
+
 def _logic_answer(result) -> str:
     """What QWEDLogicTool tells the agent about a /verify/logic result (#600).
 
     ``is_verified`` is the server's admission, and a logic result is not
     admitted while its translation is unverified. Read as SAT or UNSAT, it
     told the agent that no assignment existed for every satisfiable query.
-    The answer follows the status instead, and says why a satisfiable result
-    is not admitted.
+    The answer follows the status instead, and says why a result is not
+    admitted. Since #631 the route decides a claim: ``VERIFIED`` means the
+    claim follows from the constraints (or, with ``is_valid`` false, that the
+    model is a counterexample), and constraints with no claim are
+    ``UNVERIFIABLE``, however satisfiable.
     """
     data = result.result or {}
     message = data.get("agent_message") or data.get("error") or ""
+    model = data.get("model")
     if result.status == "VERIFIED":
-        model = data.get("model")
-        if result.is_verified:
-            return f"✅ SAT: Satisfying assignment: {model}"
-        reason = (
-            _LOGIC_TRANSLATION_NOT_VERIFIED
-            if data.get("query_semantics_verified") is not True
-            else "the server did not admit it"
-        )
-        return (
-            f"⚠️ SAT, NOT ADMITTED: the translated constraints are satisfiable, "
-            f"with the assignment {model}, but {reason}."
-        )
+        return _decided_logic_answer(result, data)
     engine = data.get("developer_fields")
-    if result.status == "UNVERIFIABLE" and isinstance(engine, dict) and engine.get("status") == "UNSAT":
+    engine_status = engine.get("status") if isinstance(engine, dict) else None
+    if result.status == "UNVERIFIABLE" and engine_status == "UNSAT":
         return (
             "❌ UNSAT: no assignment satisfies the translated constraints. "
             f"Not admitted: {_LOGIC_TRANSLATION_NOT_VERIFIED}."
+        )
+    if result.status == "UNVERIFIABLE" and engine_status == "SAT":
+        return (
+            f"⚠️ SATISFIABLE, NOT PROVEN: the translated constraints hold for {model}, "
+            "but the translation states no claim, so nothing was proven."
         )
     if result.status == "UNVERIFIABLE":
         return f"⚠️ UNVERIFIABLE: {message or 'the constraints could not be decided'}"

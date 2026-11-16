@@ -85,13 +85,19 @@ print(result.is_verified)  # False
 
 ### `verify_logic(query)`
 
-Verify a QWED-Logic DSL expression using Z3.
+Check whether a claim follows from the conditions a question states. The configured model translates the question into constraints and a claim, and Z3 decides the claim for every value of the variables.
 
 ```python
-result = client.verify_logic("(AND (GT x 5) (LT y 10))")
-print(result.status)  # "SAT"
-print(result.result)  # {"model": {"x": 6, "y": 9}}
+result = client.verify_logic("x is greater than 5. Is x greater than 3?")
+print(result.status)       # "VERIFIED": the claim follows from the constraints
+print(result.is_verified)  # False: the translation is not verified, so it is not admitted
+
+result = client.verify_logic("x is greater than 5. Is x greater than 10?")
+print(result.status, result.result["is_valid"])  # "VERIFIED" False: proven false
+print(result.result["model"])                    # the counterexample, such as {"x": "6"}
 ```
+
+Constraints with no claim are `UNVERIFIABLE`: one satisfying assignment proves nothing.
 
 ### `verify_code(code, language="python")`
 

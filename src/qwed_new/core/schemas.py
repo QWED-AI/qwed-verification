@@ -149,12 +149,21 @@ class LogicVerificationTask(BaseModel):
     )
     
     constraints: List[str] = Field(
-        description="List of constraints in Python/Z3 syntax. Example: ['A > 0', 'B > A', 'A + B == 10']",
+        description="What the question takes as given, in Python/Z3 syntax. Example: ['A > 0', 'B > A', 'A + B == 10']",
         examples=[["A > 0", "B > A", "A + B == 10"]]
     )
-    
+
+    claim: Optional[str] = Field(
+        description=(
+            "The statement the question asks to prove or check, in the same syntax; "
+            "it is decided for every value of the variables that meets the constraints (#631). "
+            "Without a claim, satisfiable constraints prove nothing."
+        ),
+        default=None,
+    )
+
     goal: str = Field(
-        description="What to solve for? 'SATISFIABILITY' or a specific variable to maximize/minimize.",
+        description="'VALIDITY' when there is a claim to prove; 'SATISFIABILITY' when there is none.",
         default="SATISFIABILITY"
     )
 
