@@ -88,6 +88,30 @@ def test_a_claim_needs_no_constraints():
     assert DSLLogicVerifier()._logic_task_to_dsl(task) == ("", X, "(EQ x x)")
 
 
+@pytest.mark.parametrize("text", ["And(x > 3, **{'c': x > 10})", "Or(x > 3, **{})"])
+def test_a_helper_call_with_keyword_arguments_is_refused(text):
+    # The keyword part was dropped, deciding less than was written (CodeRabbit).
+    with pytest.raises(ValueError, match="does not accept keyword arguments"):
+        DSLLogicVerifier()._constraint_to_dsl(text)
+
+
+def test_a_claim_with_keyword_arguments_is_not_decided(client):  # noqa: F811
+    task = LogicVerificationTask(
+        variables={"x": "Int"}, constraints=["x > 5"], claim="And(x > 3, **{'c': x > 10})", goal="VALIDITY"
+    )
+    body = _logic(client, task)
+
+    assert (body["status"], body["admission"]) == ("BLOCKED", "BLOCKED")
+
+
+def test_a_claim_without_a_goal_is_not_decided():
+    # Fail closed: a claim with no stated goal is not proven or refuted.
+    # The tool schemas require the goal, and the prompt states it.
+    task = LogicVerificationTask(variables={"x": "Int"}, constraints=["x > 5"], claim="x > 3")
+
+    assert DSLLogicVerifier()._logic_task_to_dsl(task) == ("(AND (GT x 5) (GT x 3))", X, None)
+
+
 def test_an_unknown_goal_is_refused():
     task = LogicVerificationTask(variables={"x": "Int"}, constraints=["x > 5"], goal="MAXIMIZE")
 
@@ -174,5 +198,6 @@ def test_every_logic_translation_asks_for_the_claim(name, monkeypatch):
     for tool in tools:
         schema = tool.get("input_schema") or tool["function"]["parameters"]
         assert "claim" in schema["properties"]
+        assert "goal" in schema["required"]
         assert schema["properties"]["goal"]["enum"] == ["VALIDITY", "SATISFIABILITY"]
 

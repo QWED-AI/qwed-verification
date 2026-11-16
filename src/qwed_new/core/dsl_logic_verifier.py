@@ -433,6 +433,11 @@ class DSLLogicVerifier:
             raise ValueError(f"Unsupported constraint node: {type(node).__name__}")
 
         func = node.func.id
+        if node.keywords:
+            # Only positional arguments are converted: a keyword argument
+            # (And(a, **{"k": b})) would be dropped, deciding less than was
+            # written (#631).
+            raise ValueError(f"{func}(...) does not accept keyword arguments")
         if func in {"And", "Or"}:
             op = "AND" if func == "And" else "OR"
             args = [self._ast_to_dsl(arg) for arg in node.args]

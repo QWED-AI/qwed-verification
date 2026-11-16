@@ -244,7 +244,7 @@ BEGIN TRANSLATION.
                             "enum": ["VALIDITY", "SATISFIABILITY"]
                         }
                     },
-                    "required": ["vars_map", "constraints"]
+                    "required": ["vars_map", "constraints", "goal"]
                 }
             }
         }

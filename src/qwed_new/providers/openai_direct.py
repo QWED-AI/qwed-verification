@@ -139,7 +139,7 @@ You MUST use the submit_math_expression tool."""
                         },
                         "goal": {"type": "string", "enum": ["VALIDITY", "SATISFIABILITY"]},
                     },
-                    "required": ["variables", "constraints"],
+                    "required": ["variables", "constraints", "goal"],
                 },
             },
         }
