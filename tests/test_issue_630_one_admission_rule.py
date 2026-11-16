@@ -66,6 +66,13 @@ def _translated(**extra):
         ({"is_valid": True, "query_semantics_verified": "true"}, AdmissionDecision.BLOCKED),
         ({"is_valid": True, "query_semantics_verified": 1}, AdmissionDecision.BLOCKED),
         ({"is_valid": True, "query_semantics_verified": None}, AdmissionDecision.BLOCKED),
+        # A result that says it covers a translation must say its meaning was
+        # checked: the missing field is not read as true (CodeRabbit).
+        ({"is_valid": True, "verification_scope": "translated_expression_only"}, AdmissionDecision.BLOCKED),
+        (
+            {"is_valid": True, "verification_scope": "translated_expression_only", "query_semantics_verified": True},
+            AdmissionDecision.ADMIT,
+        ),
         # The meaning was checked: admitted.
         ({"is_valid": True, "query_semantics_verified": True}, AdmissionDecision.ADMIT),
         # A direct engine on the caller's own input: unchanged.
@@ -114,6 +121,12 @@ def test_the_verification_context_bridge_does_not_admit_a_translated_verdict():
         ({"status": "VERIFIED", "is_valid": True, "query_semantics_verified": False}, False),
         ({"status": "VERIFIED", "is_valid": True, "query_semantics_verified": "true"}, False),
         ({"status": "VERIFIED", "is_valid": True, "query_semantics_verified": True}, True),
+        ({"status": "VERIFIED", "is_valid": True, "verification_scope": "translated_expression_only"}, False),
+        (
+            {"status": "VERIFIED", "is_valid": True, "verification_scope": "translated_expression_only",
+             "query_semantics_verified": True},
+            True,
+        ),
         ({"status": "VERIFIED", "is_valid": True}, True),
         # The route's own admission still decides when it is present.
         ({"status": "VERIFIED", "is_valid": True, "query_semantics_verified": False, "admission": "BLOCKED"}, False),

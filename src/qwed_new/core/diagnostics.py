@@ -1240,10 +1240,11 @@ def admission_decision(result: DiagnosticResult) -> AdmissionDecision:
     - anything else (non-authoritative)                  -> BLOCKED
 
     ``claim_verified`` needs ``is_valid`` true, and refuses a verdict reached
-    on a model's translation of the question (``query_semantics_verified``
-    present and not true), so every caller of this rule, a route, batch, the
-    Verification Context bridge or a library user, gets the same answer for
-    the same result (#630).
+    on a model's translation of the question: ``query_semantics_verified``
+    present and not true, or absent from a result whose
+    ``verification_scope`` is ``translated_expression_only``. So every caller
+    of this rule, a route, batch, the Verification Context bridge or a
+    library user, gets the same answer for the same result (#630).
 
     Returning ``BLOCKED`` for a VERIFIED-but-unsafe result is a policy decision
     at the boundary (QWED #7), not a reinterpretation of the verdict (QWED #15):
@@ -1265,8 +1266,12 @@ def _verified_fields(status: Any, fields: Any) -> bool:
         and isinstance(fields, dict)
         and fields.get("is_valid") is True
         # Absent where the route checked the user's own input; where present,
-        # only true counts.
-        and fields.get("query_semantics_verified", True) is True
+        # only true counts. A result that says it covers a model's translation
+        # must say its meaning was verified (#630).
+        and fields.get(
+            "query_semantics_verified",
+            fields.get("verification_scope") != "translated_expression_only",
+        ) is True
     )
 
 
