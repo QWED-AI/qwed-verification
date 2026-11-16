@@ -72,7 +72,9 @@ class SecurityGateway:
         Returns (is_safe, reason).
 
         With ``whole_words`` a pattern matches only between word boundaries,
-        so "act as" is not found inside "Impact assessment" (#632).
+        so "act as" is not found inside "Impact assessment" (#632). Its last
+        word may still take an English ending ("prompts", "prompted",
+        "modes"), so inflecting a phrase does not get it past the check.
         """
         # 1. Length Check (Prevent buffer overflow / context exhaustion)
         if len(prompt) > 10000:
@@ -84,7 +86,7 @@ class SecurityGateway:
 
         # 3. Heuristic Check — runs for ALL inputs (no whitelist bypass)
         for pattern in self.injection_patterns:
-            search = rf"\b(?:{pattern})\b" if whole_words else pattern
+            search = rf"\b(?:{pattern})(?:s|es|ed|ing)?\b" if whole_words else pattern
             if re.search(search, normalized, re.IGNORECASE):
                 return False, f"Potential Prompt Injection detected: '{pattern}'"
 
