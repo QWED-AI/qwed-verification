@@ -129,7 +129,10 @@ class ControlPlane:
         result, with the evidence string its attestation must bind to.
 
         A proven-false claim (#437) is VERIFIED with is_valid False, so
-        admission is DENY; it is never reported as UNVERIFIABLE.
+        admission is DENY; it is never reported as UNVERIFIABLE. An
+        expression that holds gets no is_valid: it proves the model's
+        translation, not the user's claim, so nothing in the result may read
+        as a valid claim (#630), as for a satisfiable logic result.
         """
         legacy_status = verification_result["status"]
         evidence = {
@@ -143,7 +146,7 @@ class ControlPlane:
         if legacy_status == "VERIFIED":
             dr = DiagnosticResult.verified(
                 "Expression verified successfully",
-                developer_fields={**verification_result, "is_valid": True},
+                developer_fields=verification_result,
                 evidence=evidence,
                 proof_data=str(evidence),
             )

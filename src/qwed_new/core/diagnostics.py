@@ -477,11 +477,14 @@ class DiagnosticResult:
         3. proof_ref        — Layer 3 (cryptographic proof artifact hash)
 
     Authority contract:
-        proof_ref is not None  → authoritative, admissible for control flow
+        proof_ref is not None  → authoritative: decided, evidence committed
         proof_ref is None      → non-authoritative, NOT admissible for control flow
 
     This is the mechanical rule downstream gates use (per #190 Keesan
-    discussion): no separate `authoritative` boolean needed.
+    discussion): no separate `authoritative` boolean needed. Authority is
+    necessary, not sufficient: a claim proven false, or a verdict on a
+    model's translation, is authoritative too, so gate control flow on
+    ``admission_decision`` (#630).
 
     Constraints enforced in __post_init__:
         - status == VERIFIED  requires proof_ref is not None
@@ -550,13 +553,13 @@ class DiagnosticResult:
 
     @property
     def is_authoritative(self) -> bool:
-        """Authority bit — True when proof_ref is present (admissible for control flow).
+        """Authority bit: True when proof_ref is present.
 
         This is Keesan's `authoritative=true` from #190, expressed as
-        proof_ref presence rather than a separate boolean. Downstream gates:
-
-            if not result.is_authoritative:
-                block_decision()  # non-authoritative — reject for control flow
+        proof_ref presence rather than a separate boolean. It says the verdict
+        was decided and its evidence committed, not that the claim holds: a
+        claim proven false, or a verdict on a model's translation, is
+        authoritative too. Gate control flow on ``admission_decision`` (#630).
         """
         return self.proof_ref is not None
 
@@ -1232,9 +1235,16 @@ def admission_decision(result: DiagnosticResult) -> AdmissionDecision:
     deterministic gate turns it into a fail-closed admission outcome:
 
     - fail-closed status (BLOCKED/UNVERIFIABLE)         -> BLOCKED
-    - ``developer_fields.is_valid is not True``          -> BLOCKED (missing/malformed)
-    - authoritative (VERIFIED) and valid                 -> ADMIT
+    - not ``claim_verified``                             -> BLOCKED
+    - authoritative (VERIFIED) and verified              -> ADMIT
     - anything else (non-authoritative)                  -> BLOCKED
+
+    ``claim_verified`` needs ``is_valid`` true, and refuses a verdict reached
+    on a model's translation of the question: ``query_semantics_verified``
+    present and not true, or absent from a result whose
+    ``verification_scope`` is ``translated_expression_only``. So every caller
+    of this rule, a route, batch, the Verification Context bridge or a
+    library user, gets the same answer for the same result (#630).
 
     Returning ``BLOCKED`` for a VERIFIED-but-unsafe result is a policy decision
     at the boundary (QWED #7), not a reinterpretation of the verdict (QWED #15):
@@ -1242,7 +1252,7 @@ def admission_decision(result: DiagnosticResult) -> AdmissionDecision:
     """
     if result.is_fail_closed:
         return AdmissionDecision.BLOCKED
-    if result.developer_fields.get("is_valid") is not True:
+    if not claim_verified(result):
         return AdmissionDecision.BLOCKED
     if result.is_authoritative:
         return AdmissionDecision.ADMIT
@@ -1256,8 +1266,12 @@ def _verified_fields(status: Any, fields: Any) -> bool:
         and isinstance(fields, dict)
         and fields.get("is_valid") is True
         # Absent where the route checked the user's own input; where present,
-        # only true counts.
-        and fields.get("query_semantics_verified", True) is True
+        # only true counts. A result that says it covers a model's translation
+        # must say its meaning was verified (#630).
+        and fields.get(
+            "query_semantics_verified",
+            fields.get("verification_scope") != "translated_expression_only",
+        ) is True
     )
 
 

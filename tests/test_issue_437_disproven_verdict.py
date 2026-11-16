@@ -516,7 +516,10 @@ async def test_control_plane_verdict_carries_translated_scope(monkeypatch, claim
 
     fields = result["diagnostic"]["developer_fields"]
     assert result["diagnostic"]["status"] == "VERIFIED"
-    assert fields["is_valid"] is holds
+    assert fields["is_correct"] is holds
+    # A translated expression that holds carries no is_valid (#630); one
+    # proven false keeps is_valid false (#437).
+    assert fields.get("is_valid") is (None if holds else False)
     # Even a translated claim that holds is not admitted for the question.
     assert result["admission"] == "BLOCKED"
     assert fields["translated_expression"] == "0.15 * 200"
