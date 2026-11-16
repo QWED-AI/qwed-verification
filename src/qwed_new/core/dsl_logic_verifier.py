@@ -542,13 +542,19 @@ class DSLLogicVerifier:
         """Convert LogicVerificationTask to DSL: the constraints (what the
         question takes as given, "" when there are none), the variable
         declarations, and the claim to prove from them, or None when the
-        translation states no claim (#631)."""
+        translation states no claim to prove (#631)."""
         goal = str(getattr(logic_task, "goal", "SATISFIABILITY")).strip().upper()
         if goal not in ("SATISFIABILITY", "VALIDITY"):
             raise ValueError(f"Unsupported logic goal: {goal}")
 
         constraints = [str(c).strip() for c in getattr(logic_task, "constraints", []) if str(c).strip()]
         claim = str(getattr(logic_task, "claim", None) or "").strip()
+        if claim and goal == "SATISFIABILITY":
+            # A claim beside a satisfiability goal is one more condition to
+            # meet, as in "is there an x > 5": never proven or refuted for
+            # every value (#631).
+            constraints.append(claim)
+            claim = ""
         if not constraints and not claim:
             return "", [], None
 
@@ -576,10 +582,22 @@ class DSLLogicVerifier:
           follows from them and none is proven.
 
         A step the solver does not decide (UNKNOWN, ERROR, BLOCKED) comes back
-        as ``verify_from_dsl`` returned it. ``dsl_code`` is the statement
-        decided: the claim, or ``(IMPLIES premises claim)``.
+        as ``verify_from_dsl`` returned it. ``dsl_code`` is always the
+        statement decided: the claim, or ``(IMPLIES premises claim)``.
+
+        The refutation runs first: a counterexample meets the premises, so
+        they can hold, and only a claim with none needs the premises checked.
         """
         statement = f"(IMPLIES {premises_dsl} {claim_dsl})" if premises_dsl else claim_dsl
+        refutation = f"(AND {premises_dsl} (NOT {claim_dsl}))" if premises_dsl else f"(NOT {claim_dsl})"
+        refuted = self.verify_from_dsl(refutation, variables)
+        if refuted.status == "SAT":
+            return DSLVerificationResult(
+                status="INVALID", model=refuted.model, dsl_code=statement, declarations=refuted.declarations
+            )
+        if refuted.status != "UNSAT":
+            refuted.dsl_code = statement
+            return refuted
         if premises_dsl:
             premises = self.verify_from_dsl(premises_dsl, variables)
             if premises.status == "UNSAT":
@@ -591,19 +609,9 @@ class DSLLogicVerifier:
                     constraint_id="dsl_logic_verifier.vacuous_premises",
                 )
             if premises.status != "SAT":
+                premises.dsl_code = statement
                 return premises
-            refutation = f"(AND {premises_dsl} (NOT {claim_dsl}))"
-        else:
-            refutation = f"(NOT {claim_dsl})"
-
-        refuted = self.verify_from_dsl(refutation, variables)
-        if refuted.status == "SAT":
-            return DSLVerificationResult(
-                status="INVALID", model=refuted.model, dsl_code=statement, declarations=refuted.declarations
-            )
-        if refuted.status == "UNSAT":
-            return DSLVerificationResult(status="VALID", dsl_code=statement, declarations=refuted.declarations)
-        return refuted
+        return DSLVerificationResult(status="VALID", dsl_code=statement, declarations=refuted.declarations)
     
     def verify_from_natural_language(
         self,

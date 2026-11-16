@@ -151,6 +151,27 @@ _LOGIC_TRANSLATION_NOT_VERIFIED = (
 )
 
 
+def _decided_logic_answer(result, data) -> str:
+    """``_logic_answer`` for a ``VERIFIED`` result: the claim follows, or,
+    with ``is_valid`` false, the model is a counterexample (#631)."""
+    if data.get("is_valid") is False:
+        return (
+            f"❌ DOES NOT FOLLOW: the translated claim fails for {data.get('model')}. "
+            f"Not admitted: {_LOGIC_TRANSLATION_NOT_VERIFIED}."
+        )
+    if result.is_verified:
+        return "✅ VALID: the claim follows from the constraints."
+    reason = (
+        _LOGIC_TRANSLATION_NOT_VERIFIED
+        if data.get("query_semantics_verified") is not True
+        else "the server did not admit it"
+    )
+    return (
+        "⚠️ HOLDS, NOT ADMITTED: the translated claim follows from the "
+        f"translated constraints, but {reason}."
+    )
+
+
 def _logic_answer(result) -> str:
     """What QWEDLogicTool tells the agent about a /verify/logic result (#600).
 
@@ -167,22 +188,7 @@ def _logic_answer(result) -> str:
     message = data.get("agent_message") or data.get("error") or ""
     model = data.get("model")
     if result.status == "VERIFIED":
-        if data.get("is_valid") is False:
-            return (
-                f"❌ DOES NOT FOLLOW: the translated claim fails for {model}. "
-                f"Not admitted: {_LOGIC_TRANSLATION_NOT_VERIFIED}."
-            )
-        if result.is_verified:
-            return "✅ VALID: the claim follows from the constraints."
-        reason = (
-            _LOGIC_TRANSLATION_NOT_VERIFIED
-            if data.get("query_semantics_verified") is not True
-            else "the server did not admit it"
-        )
-        return (
-            "⚠️ HOLDS, NOT ADMITTED: the translated claim follows from the "
-            f"translated constraints, but {reason}."
-        )
+        return _decided_logic_answer(result, data)
     engine = data.get("developer_fields")
     engine_status = engine.get("status") if isinstance(engine, dict) else None
     if result.status == "UNVERIFIABLE" and engine_status == "UNSAT":

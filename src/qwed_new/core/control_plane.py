@@ -351,6 +351,14 @@ class ControlPlane:
                 "latency_ms": (time.time() - start_time) * 1000
             }
 
+    def _logic_solve(self, dsl_code: str, variables: Any, claim_dsl: Optional[str]) -> tuple:
+        """The z3 call for a logic translation (#631): prove the claim from
+        the constraints, or, with no claim, check the constraints alone,
+        which proves nothing however satisfiable."""
+        if claim_dsl is None:
+            return (self.logic_verifier.verify_from_dsl, dsl_code, variables)
+        return (self.logic_verifier.prove_from_dsl, dsl_code, claim_dsl, variables)
+
     async def process_logic_query(
         self,
         query: str,
@@ -401,11 +409,7 @@ class ControlPlane:
             if error is not None:
                 result = error
             else:
-                if claim_dsl is None:
-                    # No claim: satisfiable constraints prove nothing (#631).
-                    result = await _run_z3_call(self.logic_verifier.verify_from_dsl, dsl_code, variables)
-                else:
-                    result = await _run_z3_call(self.logic_verifier.prove_from_dsl, dsl_code, claim_dsl, variables)
+                result = await _run_z3_call(*self._logic_solve(dsl_code, variables, claim_dsl))
                 result.provider_used = resolved_provider
                 if not result.dsl_code:
                     result.dsl_code = dsl_code

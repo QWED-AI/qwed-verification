@@ -22,7 +22,7 @@ from unittest.mock import patch
 
 import pytest
 
-from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
+from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier, DSLVerificationResult
 from qwed_new.core.schemas import LogicVerificationTask
 from qwed_new.providers.base import LOGIC_CLAIM_RULE, translation_request
 from tests.test_issue_320_logic_route_admission import client  # noqa: F401  (fixture)
@@ -49,10 +49,31 @@ def test_a_claim_is_decided_for_every_value(premises, claim, status, counterexam
         assert counterexample(int(result.model["x"]))
 
 
-def test_a_step_the_solver_does_not_decide_is_returned_as_is():
-    result = DSLLogicVerifier().prove_from_dsl("(AND)", "(GT x 3)", X)
+@pytest.mark.parametrize("premises, claim", [("(AND)", "(GT x 3)"), ("(GT x 5)", "(AND)"), ("", "(AND)")])
+def test_a_step_the_solver_does_not_decide_reports_the_statement(premises, claim):
+    # Not the internal refutation query (CodeAnt).
+    result = DSLLogicVerifier().prove_from_dsl(premises, claim, X)
 
     assert result.status == "BLOCKED"
+    assert result.dsl_code == (f"(IMPLIES {premises} {claim})" if premises else claim)
+
+
+def test_undecided_premises_after_no_counterexample_are_returned(monkeypatch):
+    # Z3 finds no counterexample, then cannot decide the premises alone.
+    verifier = DSLLogicVerifier()
+    answers = iter([DSLVerificationResult(status="UNSAT"), DSLVerificationResult(status="UNKNOWN", error="timeout")])
+    monkeypatch.setattr(verifier, "verify_from_dsl", lambda dsl_code, variables=None: next(answers))
+
+    result = verifier.prove_from_dsl("(GT x 5)", "(GT x 3)", X)
+
+    assert (result.status, result.dsl_code) == ("UNKNOWN", "(IMPLIES (GT x 5) (GT x 3))")
+
+
+def test_a_claim_beside_a_satisfiability_goal_is_one_more_condition():
+    # "Is there an x > 5?": a witness, never a claim refuted for every value (CodeAnt).
+    task = LogicVerificationTask(variables={"x": "Int"}, constraints=["x > 0"], claim="x > 5", goal="SATISFIABILITY")
+
+    assert DSLLogicVerifier()._logic_task_to_dsl(task) == ("(AND (GT x 0) (GT x 5))", X, None)
 
 
 def test_the_translation_keeps_the_claim_apart_from_the_constraints():
@@ -77,7 +98,7 @@ def test_an_unknown_goal_is_refused():
 def _translates_to(task):
     """The model's translation is ``task``; the bridge and Z3 run for real."""
     translator = SimpleNamespace(translate_logic=lambda query, provider=None: task, last_resolved_provider="mock")
-    return patch("qwed_new.core.dsl_logic_verifier.TranslationLayer", lambda: translator)
+    return patch("qwed_new.core.dsl_logic_verifier.TranslationLayer", return_value=translator)
 
 
 def _logic(client, task, route="/verify/logic"):  # noqa: F811
@@ -118,6 +139,15 @@ def test_satisfiable_constraints_with_no_claim_prove_nothing(client, route):  # 
     assert (body["status"], body["admission"]) == ("UNVERIFIABLE", "BLOCKED")
     assert body["developer_fields"]["constraint_id"] == "logic.satisfiable_not_proven"
     assert body.get("proof_ref") is None
+
+
+def test_an_existential_claim_is_not_proven_false(client):  # noqa: F811
+    task = LogicVerificationTask(variables={"x": "Int"}, constraints=[], claim="x > 5", goal="SATISFIABILITY")
+    body = _logic(client, task)
+
+    assert (body["status"], body["admission"]) == ("UNVERIFIABLE", "BLOCKED")
+    assert body["developer_fields"]["constraint_id"] == "logic.satisfiable_not_proven"
+    assert body.get("is_valid") is not False
 
 
 def test_contradictory_constraints_prove_no_claim(client):  # noqa: F811
