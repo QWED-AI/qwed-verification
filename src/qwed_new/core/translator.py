@@ -10,6 +10,7 @@ import ast
 from qwed_new.config import settings, ProviderType
 from qwed_new.core.router import UNKNOWN_PROVIDER
 from qwed_new.core.schemas import MathVerificationTask
+from qwed_new.core.security import EnhancedSecurityGateway
 from qwed_new.providers.base import RETIRED_PROVIDERS, LLMProvider, ProviderConfigError
 from qwed_new.providers.azure_openai import AzureOpenAIProvider
 from qwed_new.providers.anthropic import AnthropicProvider
@@ -27,13 +28,23 @@ class SecurityError(ValueError):
 SAFETY_VALIDATOR_REJECTION = "Expression rejected by safety validator"
 
 
+class TranslationRefused(SecurityError):
+    """The caller's text was refused before any model saw it (#632)."""
+
+
 class TranslationLayer:
     """
     The main entry point for translation.
     Delegates to the configured LLM provider.
+
+    Every translation method screens the caller's text with the control
+    plane's prompt-injection check before any provider sees it, so a route
+    that calls the model directly (consensus, stats, fact) applies it too
+    (#632). A refused text raises ``TranslationRefused``.
     """
-    
+
     def __init__(self):
+        self._screen = EnhancedSecurityGateway()
         # Lazy loading: providers are instantiated on first use
         self._providers = {}
         self._provider_classes = {
@@ -147,12 +158,21 @@ class TranslationLayer:
         if not (0.0 <= task.confidence <= 1.0):
             raise SecurityError("Invalid confidence value")
 
+    def _screened(self, text: str) -> str:
+        """*text*, once the prompt-injection check passes; otherwise
+        ``TranslationRefused``, with the reason the control plane gives."""
+        is_safe, reason = self._screen.detect_advanced_injection(str(text))
+        if not is_safe:
+            raise TranslationRefused(f"Security Policy Violation: {reason}")
+        return text
+
     def translate(self, user_query: str, provider: str | None = None) -> MathVerificationTask:
         """
         Translate query using the specified provider.
         Includes output verification for security.
         """
-        task = self._get_provider(provider).translate(user_query)
+        text = self._screened(user_query)
+        task = self._get_provider(provider).translate(text)
         
         # ADD: Output verification (OWASP LLM05:2025)
         self._validate_math_output(task)
@@ -163,22 +183,26 @@ class TranslationLayer:
         """
         Translate logic query using the specified provider.
         """
-        return self._get_provider(provider).translate_logic(user_query)
+        text = self._screened(user_query)
+        return self._get_provider(provider).translate_logic(text)
 
     def refine_logic(self, user_query: str, previous_error: str, provider: str | None = None):
         """
         Refine logic query based on feedback.
         """
-        return self._get_provider(provider).refine_logic(user_query, previous_error)
+        text = self._screened(user_query)
+        return self._get_provider(provider).refine_logic(text, previous_error)
 
     def translate_stats(self, query: str, columns: list[str], provider: str | None = None) -> str:
         """
         Generate Python code for statistical verification.
         """
-        return self._get_provider(provider).translate_stats(query, columns)
+        text = self._screened(query)
+        return self._get_provider(provider).translate_stats(text, columns)
 
     def verify_fact(self, claim: str, context: str, provider: str | None = None) -> dict:
         """
         Verify a claim against a context.
         """
-        return self._get_provider(provider).verify_fact(claim, context)
+        text = self._screened(claim)
+        return self._get_provider(provider).verify_fact(text, context)
