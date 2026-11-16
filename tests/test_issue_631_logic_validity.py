@@ -95,6 +95,29 @@ def test_a_helper_call_with_keyword_arguments_is_refused(text):
         DSLLogicVerifier()._constraint_to_dsl(text)
 
 
+@pytest.mark.parametrize("text", ["x / 2 == 1", "x % -2 == 1", "x % y == 1", "x % 0 == 1"])
+def test_division_and_remainder_outside_python_semantics_are_refused(text):
+    # DSL DIV and MOD are Z3's integer division and Euclidean remainder: with
+    # x = 3, x / 2 == 1 held, and with x = -7, x % -2 == 1 (CodeRabbit).
+    with pytest.raises(ValueError, match="Unsupported arithmetic operator: Div|only with a positive"):
+        DSLLogicVerifier()._constraint_to_dsl(text)
+
+
+def test_a_remainder_by_a_positive_whole_number_matches_python():
+    verifier = DSLLogicVerifier()
+    claim = verifier._constraint_to_dsl("x % 2 == 1")
+
+    assert claim == "(EQ (MOD x 2) 1)"
+    assert verifier.prove_from_dsl("(EQ x -7)", claim, X).status == "VALID"  # -7 % 2 == 1 in Python
+
+
+def test_a_division_claim_is_not_decided(client):  # noqa: F811
+    task = LogicVerificationTask(variables={"x": "Int"}, constraints=["x == 3"], claim="x / 2 == 1", goal="VALIDITY")
+    body = _logic(client, task)
+
+    assert (body["status"], body["admission"]) == ("BLOCKED", "BLOCKED")
+
+
 def test_a_claim_with_keyword_arguments_is_not_decided(client):  # noqa: F811
     task = LogicVerificationTask(
         variables={"x": "Int"}, constraints=["x > 5"], claim="And(x > 3, **{'c': x > 10})", goal="VALIDITY"

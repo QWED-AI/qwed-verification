@@ -50,7 +50,6 @@ _EVERY_BRIDGE_OPERATOR = [
     "x + 1 == 2",
     "x - 1 == 2",
     "x * 2 == 4",
-    "x / 2 == 3",
     "x % 3 == 1",
     "x ** 2 == 9",
     "-x == 3",
@@ -118,8 +117,6 @@ def test_bridge_maps_cover_every_python_operator_it_translates():
         (["-x > 0"], "(GT (MINUS 0 x) 0)", "SAT"),
         (["-x > 0", "x >= 0"], "(AND (GT (MINUS 0 x) 0) (GTE x 0))", "UNSAT"),
         (["x == -3"], "(EQ x -3)", "SAT"),
-        (["x / 2 == 3"], "(EQ (DIV x 2) 3)", "SAT"),
-        (["x / 2 == 3", "x > 7"], "(AND (EQ (DIV x 2) 3) (GT x 7))", "UNSAT"),
         (["x % 3 == 1"], "(EQ (MOD x 3) 1)", "SAT"),
         (["x % 2 == 1", "x % 4 == 0"], "(AND (EQ (MOD x 2) 1) (EQ (MOD x 4) 0))", "UNSAT"),
         (["x ** 2 == 9"], "(EQ (POW x 2) 9)", "SAT"),
@@ -146,10 +143,7 @@ def test_bridge_operator_runs_through_z3(monkeypatch, constraints, dsl, status):
     if status == "SAT":
         model = {name: int(value) for name, value in result.model.items()}
         for constraint in constraints:
-            # Python's / is true division and ** on the model is exact; check the
-            # witness against Z3's integer semantics only where they agree.
-            if "/" not in constraint:
-                assert _holds(constraint, model), (constraint, model)
+            assert _holds(constraint, model), (constraint, model)
     else:
         assert result.model is None
 
@@ -259,7 +253,12 @@ def test_keyword_normalization_leaves_names_alone(monkeypatch):
     assert result.status == "SAT"
 
 
-@pytest.mark.parametrize("constraint", ["x // 2 == 1", "x << 1 == 2", "x & 1 == 1", "x in (1, 2)", "x is 1", "~x == 1"])
+# / and a % by anything but a positive whole number would be decided in Z3's
+# integer arithmetic, not Python's (#537, #631).
+@pytest.mark.parametrize("constraint", [
+    "x // 2 == 1", "x << 1 == 2", "x & 1 == 1", "x in (1, 2)", "x is 1", "~x == 1",
+    "x / 2 == 3", "x % -2 == 1", "x % y == 1",
+])
 def test_unsupported_python_operator_still_fails_closed(monkeypatch, constraint):
     result = _verify_nl(monkeypatch, [constraint])
     assert result.status == "ERROR"

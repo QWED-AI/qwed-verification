@@ -109,7 +109,8 @@ LOGIC_CLAIM_RULE = (
     'statement it asks to prove or check in "claim", as a Python boolean expression over the '
     'same variables, with "goal": "VALIDITY". Never put the claim in "constraints". If the '
     'question only asks for values that meet its conditions, leave "claim" out and set "goal" '
-    'to "SATISFIABILITY". Example: "x is greater than 5. Is x greater than 3?" is '
+    'to "SATISFIABILITY". Do not use "/", and use "%" only with a positive whole-number '
+    'divisor: other division is refused. Example: "x is greater than 5. Is x greater than 3?" is '
     '{"variables": {"x": "Int"}, "constraints": ["x > 5"], "claim": "x > 3", "goal": "VALIDITY"}.'
 )
 

@@ -78,11 +78,12 @@ class DSLLogicVerifier:
     # parser's whitelist names (QWEDLogicDSL().operators): a name the parser
     # does not know comes back BLOCKED, so a drift here silently rejects valid
     # constraints. tests/test_dsl_bridge_operator_names.py pins the two together.
+    # Python's / is not here: it is true division, but DSL DIV divides Int
+    # terms as integers (#537), so x / 2 == 1 would hold for x = 3 (#631).
     _BINOP_DSL = {
         ast.Add: "PLUS",
         ast.Sub: "MINUS",
         ast.Mult: "MULT",
-        ast.Div: "DIV",
         ast.Mod: "MOD",
         ast.Pow: "POW",
     }
@@ -410,7 +411,21 @@ class DSLLogicVerifier:
         op = self._BINOP_DSL.get(type(node.op))
         if not op:
             raise ValueError(f"Unsupported arithmetic operator: {type(node.op).__name__}")
+        # DSL MOD is Z3's Euclidean remainder (#537), which matches Python's %
+        # only for a positive whole divisor: x % -2 == 1 would hold for
+        # x = -7 (#631). Any other divisor fails closed.
+        if isinstance(node.op, ast.Mod) and not self._positive_int_literal(node.right):
+            raise ValueError("% is supported in a logic translation only with a positive whole-number divisor")
         return f"({op} {self._ast_to_dsl(node.left)} {self._ast_to_dsl(node.right)})"
+
+    @staticmethod
+    def _positive_int_literal(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, int)
+            and not isinstance(node.value, bool)
+            and node.value > 0
+        )
 
     def _compare_to_dsl(self, node: ast.Compare) -> str:
         """Convert comparison expressions (including chains) to DSL."""
