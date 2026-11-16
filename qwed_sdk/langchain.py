@@ -132,8 +132,9 @@ class QWEDLogicTool(QWEDTool):
     
     name: str = "qwed_logic"
     description: str = (
-        "Verify logical constraints and find satisfying assignments. "
-        "Input should be in QWED-Logic DSL format: (AND (GT x 5) (LT y 10))"
+        "Check whether a claim follows from the conditions a question states, "
+        "for every value of the variables. Input: the question, with its "
+        "conditions and the claim, e.g. 'x is greater than 5. Is x greater than 3?'"
     )
     
     def _run(self, query: str) -> str:
