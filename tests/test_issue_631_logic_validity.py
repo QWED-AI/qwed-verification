@@ -157,6 +157,16 @@ def _logic(client, task, route="/verify/logic"):  # noqa: F811
         return client.post(route, json={"query": question}).json()
 
 
+def test_the_library_pipeline_proves_a_claim_as_the_route_does():
+    # verify_from_natural_language, the synchronous wrapper, takes the same claim path.
+    task = LogicVerificationTask(variables={"x": "Int"}, constraints=["x > 5"], claim="x > 10", goal="VALIDITY")
+    with _translates_to(task):
+        result = DSLLogicVerifier().verify_from_natural_language("x is greater than 5. Is x greater than 10?")
+
+    assert (result.status, result.dsl_code, result.provider_used) == ("INVALID", "(IMPLIES (GT x 5) (GT x 10))", "mock")
+    assert 5 < int(result.model["x"]) <= 10
+
+
 @pytest.mark.parametrize("route", ["/verify/logic", "/verify/batch"])
 def test_a_claim_with_a_counterexample_is_proven_false(client, route):  # noqa: F811
     body = _logic(client, LogicVerificationTask(variables={"x": "Int"}, constraints=["x > 5"], claim="x > 10", goal="VALIDITY"), route)
