@@ -12,7 +12,13 @@ from typing import Dict, Any, List, Optional
 
 from openai import OpenAI
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider, configured_model, translation_request, translation_system
+from qwed_new.providers.base import (
+    LLMProvider,
+    configured_model,
+    logic_translation_system,
+    translation_request,
+    translation_system,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +133,11 @@ You MUST use the submit_math_expression tool."""
                             "items": {"type": "string"},
                             "description": "List of constraints in Python syntax",
                         },
-                        "goal": {"type": "string", "default": "SATISFIABILITY"},
+                        "claim": {
+                            "type": "string",
+                            "description": "The statement the question asks to prove or check, in Python syntax",
+                        },
+                        "goal": {"type": "string", "enum": ["VALIDITY", "SATISFIABILITY"]},
                     },
                     "required": ["variables", "constraints"],
                 },
@@ -139,7 +149,7 @@ Use And(...), Or(...), Not(...) for logic. DO NOT use &, |, ~."""
 
         try:
             result = self._call_with_tool(
-                translation_system(system), translation_request(user_query), tool, "submit_z3_problem"
+                logic_translation_system(system), translation_request(user_query), tool, "submit_z3_problem"
             )
             return LogicVerificationTask(**result)
         except Exception as e:

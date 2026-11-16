@@ -16,6 +16,7 @@ from qwed_new.core.schemas import MathVerificationTask, LogicVerificationTask
 from qwed_new.providers.base import (
     LLMProvider,
     configured_model,
+    logic_translation_system,
     sanitized_provider_error,
     translation_request,
     translation_system,
@@ -107,9 +108,9 @@ Rules:
   - "approval is required" -> "approval == 1"
   - "approval is not required" -> "approval == 0"
 - Avoid natural-language constraints.
-Respond with JSON: {"variables": {"x": "Int"}, "constraints": ["x > 0"], "goal": "SATISFIABILITY"}"""
+Respond with JSON: {"variables": {"x": "Int"}, "constraints": ["x > 5"], "claim": "x > 3", "goal": "VALIDITY"}"""
         try:
-            result = self._call_json(translation_system(system), translation_request(user_query))
+            result = self._call_json(logic_translation_system(system), translation_request(user_query))
             return LogicVerificationTask(**result)
         except Exception:
             raise ValueError("Gemini logic translation failed.") from None

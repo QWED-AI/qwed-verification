@@ -11,6 +11,7 @@ from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.providers.base import (
     LLMProvider,
     configured_model,
+    logic_translation_system,
     sanitized_provider_error,
     translation_request,
     translation_system,
@@ -234,10 +235,13 @@ BEGIN TRANSLATION.
                             "items": {"type": "string"},
                             "description": "List of constraints in Python syntax"
                         },
+                        "claim": {
+                            "type": "string",
+                            "description": "The statement the question asks to prove or check, in Python syntax"
+                        },
                         "goal": {
                             "type": "string",
-                            "description": "Goal of the problem",
-                            "default": "SATISFIABILITY"
+                            "enum": ["VALIDITY", "SATISFIABILITY"]
                         }
                     },
                     "required": ["vars_map", "constraints"]
@@ -249,21 +253,21 @@ BEGIN TRANSLATION.
         system_prompt = """You are a Logic Translator for the Z3 Theorem Prover.
 Convert natural language logic puzzles into variables and constraints.
 
-CRITICAL: You MUST return a JSON object with EXACTLY these 3 fields:
+CRITICAL: You MUST return a JSON object with these fields:
 1. "vars_map": A dictionary mapping names to types (e.g., {"x": "Int", "y": "Int", "P": "Bool"}). THIS IS REQUIRED.
 2. "constraints": A list of Python boolean expressions. NO ASSIGNMENTS ('='). Use '==' for equality.
    - DO NOT use lists or arrays (e.g., "Houses = [1,2,3]" is INVALID). Use individual variables.
    - Use 'Bool' type for boolean logic puzzles.
    - Map categorical values to Integers (e.g., Red=1, Blue=2). DO NOT compare variables to strings.
    - USE `And(...)`, `Or(...)`, `Not(...)` for logic. DO NOT use `&`, `|`, `~`.
-3. "goal": "SATISFIABILITY".
+3. "claim" and "goal", as the rule below says.
 """
 
         try:
             response = self.client.chat.completions.create(
                 model=self.deployment,
                 messages=[
-                    {"role": "system", "content": translation_system(system_prompt)},
+                    {"role": "system", "content": logic_translation_system(system_prompt)},
                     {"role": "user", "content": translation_request(user_query)}
                 ],
                 tools=[logic_function_schema],

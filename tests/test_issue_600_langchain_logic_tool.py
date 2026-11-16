@@ -29,21 +29,41 @@ def _answer(monkeypatch, response):
     return tool._run("query")
 
 
-def _route(client, dsl):  # noqa: F811
-    route_patch, _ = _translated_to(dsl)
+def _route(client, dsl, claim=None):  # noqa: F811
+    route_patch, _ = _translated_to(dsl, claim=claim)
     with route_patch:
         return client.post("/verify/logic", json={"query": "Is there such an x?"}).json()
 
 
-def test_a_satisfiable_query_is_reported_with_its_model_and_why_it_is_not_admitted(client, monkeypatch):  # noqa: F811
+def test_satisfiable_constraints_without_a_claim_are_not_proven(client, monkeypatch):  # noqa: F811
+    # Since #631 one satisfying assignment proves nothing.
     response = _route(client, "(GT x 5)")
+    assert (response["status"], response["admission"]) == ("UNVERIFIABLE", "BLOCKED")
+
+    answer = _answer(monkeypatch, response)
+
+    assert answer.startswith("⚠️ SATISFIABLE, NOT PROVEN")
+    assert "UNSAT" not in answer
+    assert "{'x': '6'}" in answer
+
+
+def test_a_claim_that_follows_is_reported_with_why_it_is_not_admitted(client, monkeypatch):  # noqa: F811
+    response = _route(client, "(GT x 5)", claim="(GT x 3)")
     assert (response["status"], response["admission"]) == ("VERIFIED", "BLOCKED")
 
     answer = _answer(monkeypatch, response)
 
-    assert answer.startswith("⚠️ SAT, NOT ADMITTED")
-    assert "UNSAT" not in answer
-    assert "{'x': '6'}" in answer
+    assert answer.startswith("⚠️ HOLDS, NOT ADMITTED")
+    assert "translation is not verified" in answer
+
+
+def test_a_claim_with_a_counterexample_does_not_follow(client, monkeypatch):  # noqa: F811
+    response = _route(client, "(GT x 5)", claim="(GT x 10)")
+    assert (response["status"], response["is_valid"], response["admission"]) == ("VERIFIED", False, "BLOCKED")
+
+    answer = _answer(monkeypatch, response)
+
+    assert answer.startswith("❌ DOES NOT FOLLOW")
     assert "translation is not verified" in answer
 
 
@@ -78,11 +98,11 @@ def test_a_failed_translation_is_blocked_not_unsat(client, monkeypatch):  # noqa
     assert _answer(monkeypatch, response) == "⛔ BLOCKED: LLM translation failed"
 
 
-def test_an_admitted_satisfiable_result_is_sat(monkeypatch):
+def test_an_admitted_result_is_valid(monkeypatch):
     # Once #585 verifies the translation, the server may admit one.
-    response = {"status": "VERIFIED", "admission": "ADMIT", "model": {"x": "6"}, "query_semantics_verified": True}
+    response = {"status": "VERIFIED", "admission": "ADMIT", "query_semantics_verified": True}
 
-    assert _answer(monkeypatch, response) == "✅ SAT: Satisfying assignment: {'x': '6'}"
+    assert _answer(monkeypatch, response) == "✅ VALID: the claim follows from the constraints."
 
 
 @pytest.mark.parametrize("response, expected", [

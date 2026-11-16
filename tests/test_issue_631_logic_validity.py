@@ -1,0 +1,148 @@
+"""#631: /verify/logic decided satisfiability, never validity.
+
+Every question was translated into constraints with the goal
+``SATISFIABILITY``, and a satisfiable set was VERIFIED: "Prove x > 5 implies
+x > 10" came back VERIFIED with x = 11, though the claim fails for x = 6.
+
+The translation now separates what the question takes as given (the
+constraints) from what it asks to prove (the claim), and the route decides
+the claim for every value of the variables:
+
+- VALID (the claim follows) is VERIFIED;
+- INVALID is proven false, with the counterexample;
+- VACUOUS (constraints that cannot hold together) and constraints with no
+  claim are UNVERIFIABLE: one satisfying assignment proves nothing.
+
+Admission is unchanged: a logic verdict is reached on a model's translation,
+so it is not admitted (#320, #585).
+"""
+
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+
+from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
+from qwed_new.core.schemas import LogicVerificationTask
+from qwed_new.providers.base import LOGIC_CLAIM_RULE, translation_request
+from tests.test_issue_320_logic_route_admission import client  # noqa: F401  (fixture)
+from tests.test_issue_582_translation_prompts import PROVIDERS, _provider, _system_and_user
+
+X = [{"name": "x", "type": "Int"}]
+
+
+@pytest.mark.parametrize("premises, claim, status, counterexample", [
+    # The issue's case: x = 6 meets the premise and fails the claim.
+    ("(GT x 5)", "(GT x 10)", "INVALID", lambda x: 5 < x <= 10),
+    ("(GT x 5)", "(GT x 3)", "VALID", None),
+    ("", "(EQ x x)", "VALID", None),
+    ("", "(GT x 5)", "INVALID", lambda x: x <= 5),
+    # Premises that cannot hold prove every claim, so they prove none.
+    ("(AND (GT x 5) (LT x 3))", "(EQ x 100)", "VACUOUS", None),
+])
+def test_a_claim_is_decided_for_every_value(premises, claim, status, counterexample):
+    result = DSLLogicVerifier().prove_from_dsl(premises, claim, X)
+
+    assert result.status == status
+    assert result.dsl_code == (f"(IMPLIES {premises} {claim})" if premises else claim)
+    if counterexample is not None:
+        assert counterexample(int(result.model["x"]))
+
+
+def test_a_step_the_solver_does_not_decide_is_returned_as_is():
+    result = DSLLogicVerifier().prove_from_dsl("(AND)", "(GT x 3)", X)
+
+    assert result.status == "BLOCKED"
+
+
+def test_the_translation_keeps_the_claim_apart_from_the_constraints():
+    task = LogicVerificationTask(variables={"x": "Int"}, constraints=["x > 5"], claim="x > 10", goal="VALIDITY")
+
+    assert DSLLogicVerifier()._logic_task_to_dsl(task) == ("(GT x 5)", X, "(GT x 10)")
+
+
+def test_a_claim_needs_no_constraints():
+    task = LogicVerificationTask(variables={"x": "Int"}, constraints=[], claim="x == x", goal="VALIDITY")
+
+    assert DSLLogicVerifier()._logic_task_to_dsl(task) == ("", X, "(EQ x x)")
+
+
+def test_an_unknown_goal_is_refused():
+    task = LogicVerificationTask(variables={"x": "Int"}, constraints=["x > 5"], goal="MAXIMIZE")
+
+    with pytest.raises(ValueError, match="Unsupported logic goal: MAXIMIZE"):
+        DSLLogicVerifier()._logic_task_to_dsl(task)
+
+
+def _translates_to(task):
+    """The model's translation is ``task``; the bridge and Z3 run for real."""
+    translator = SimpleNamespace(translate_logic=lambda query, provider=None: task, last_resolved_provider="mock")
+    return patch("qwed_new.core.dsl_logic_verifier.TranslationLayer", lambda: translator)
+
+
+def _logic(client, task, route="/verify/logic"):  # noqa: F811
+    question = "x is greater than 5. Is x greater than 10?"
+    with _translates_to(task):
+        if route == "/verify/batch":
+            body = client.post(route, json={"items": [{"query": question, "type": "logic"}]}).json()
+            return body["items"][0]["result"]
+        return client.post(route, json={"query": question}).json()
+
+
+@pytest.mark.parametrize("route", ["/verify/logic", "/verify/batch"])
+def test_a_claim_with_a_counterexample_is_proven_false(client, route):  # noqa: F811
+    body = _logic(client, LogicVerificationTask(variables={"x": "Int"}, constraints=["x > 5"], claim="x > 10", goal="VALIDITY"), route)
+
+    assert (body["status"], body["is_valid"], body["admission"]) == ("VERIFIED", False, "BLOCKED")
+    assert 5 < int(body["model"]["x"]) <= 10
+    assert body["developer_fields"]["translated_expression"] == "(VAR x Int) (IMPLIES (GT x 5) (GT x 10))"
+
+
+@pytest.mark.parametrize("route", ["/verify/logic", "/verify/batch"])
+def test_a_claim_that_follows_is_verified_for_the_translation_only(client, route):  # noqa: F811
+    body = _logic(client, LogicVerificationTask(variables={"x": "Int"}, constraints=["x > 5"], claim="x > 3", goal="VALIDITY"), route)
+
+    assert (body["status"], body["admission"]) == ("VERIFIED", "BLOCKED")
+    # It proves the model's translation, not the question (#630).
+    assert "is_valid" not in body
+    assert body["developer_fields"]["query_semantics_verified"] is False
+    assert body["developer_fields"]["translated_expression"] == "(VAR x Int) (IMPLIES (GT x 5) (GT x 3))"
+
+
+@pytest.mark.parametrize("route", ["/verify/logic", "/verify/batch"])
+def test_satisfiable_constraints_with_no_claim_prove_nothing(client, route):  # noqa: F811
+    # What main returned VERIFIED for: the question translated into
+    # constraints alone.
+    body = _logic(client, LogicVerificationTask(variables={"x": "Int"}, constraints=["x > 5", "x > 10"]), route)
+
+    assert (body["status"], body["admission"]) == ("UNVERIFIABLE", "BLOCKED")
+    assert body["developer_fields"]["constraint_id"] == "logic.satisfiable_not_proven"
+    assert body.get("proof_ref") is None
+
+
+def test_contradictory_constraints_prove_no_claim(client):  # noqa: F811
+    task = LogicVerificationTask(variables={"x": "Int"}, constraints=["x > 5", "x < 3"], claim="x == 100", goal="VALIDITY")
+    body = _logic(client, task)
+
+    assert (body["status"], body["admission"]) == ("UNVERIFIABLE", "BLOCKED")
+    assert body["developer_fields"]["constraint_id"] == "dsl_logic_verifier.vacuous_premises"
+
+
+@pytest.mark.parametrize("name", list(PROVIDERS))
+def test_every_logic_translation_asks_for_the_claim(name, monkeypatch):
+    provider, client_ = _provider(name, monkeypatch)
+    question = "x is greater than 5. Is x greater than 10?"
+
+    with pytest.raises(Exception):
+        provider.translate_logic(question)
+
+    (request,) = client_.requests
+    system, _ = _system_and_user(request, translation_request(question))
+    assert LOGIC_CLAIM_RULE in system
+    assert '"goal": "SATISFIABILITY".' not in system
+    tools = request.get("tools") or []
+    for tool in tools:
+        schema = tool.get("input_schema") or tool["function"]["parameters"]
+        assert "claim" in schema["properties"]
+        assert schema["properties"]["goal"]["enum"] == ["VALIDITY", "SATISFIABILITY"]
+

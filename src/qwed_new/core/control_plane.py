@@ -395,13 +395,17 @@ class ControlPlane:
             # Provider translation runs off the loop and concurrently; the z3
             # solve runs on the single z3 thread. So the loop is never blocked,
             # logic requests translate in parallel, and z3 stays thread-safe.
-            dsl_code, variables, resolved_provider, error = await _run_provider_call(
+            dsl_code, variables, resolved_provider, error, claim_dsl = await _run_provider_call(
                 self.logic_verifier.translate_to_dsl, query, provider
             )
             if error is not None:
                 result = error
             else:
-                result = await _run_z3_call(self.logic_verifier.verify_from_dsl, dsl_code, variables)
+                if claim_dsl is None:
+                    # No claim: satisfiable constraints prove nothing (#631).
+                    result = await _run_z3_call(self.logic_verifier.verify_from_dsl, dsl_code, variables)
+                else:
+                    result = await _run_z3_call(self.logic_verifier.prove_from_dsl, dsl_code, claim_dsl, variables)
                 result.provider_used = resolved_provider
                 if not result.dsl_code:
                     result.dsl_code = dsl_code

@@ -27,6 +27,10 @@ from qwed_new.core.tenant_context import TenantContext
 ORG_ID = 1
 
 LOGIC_OUTPUTS = {
+    # Since #631 a claim that follows is VERIFIED, one with a counterexample
+    # is proven false, and constraints with no claim are UNVERIFIABLE.
+    "valid": {"status": "VALID", "dsl_code": "(IMPLIES (GT x 5) (GT x 3))"},
+    "invalid": {"status": "INVALID", "model": {"x": "6"}, "dsl_code": "(IMPLIES (GT x 5) (GT x 10))"},
     "sat": {"status": "SAT", "model": {"x": "6"}, "dsl_code": "(GT x 5)"},
     "unsat": {"status": "UNSAT", "dsl_code": "(AND (GT x 5) (LT x 3))"},
     "error": {"status": "ERROR", "error": "Logic verification failed"},
@@ -127,7 +131,7 @@ def test_a_proven_translation_stays_verified_and_is_not_admitted(client):
 def test_the_verdict_survives_a_truncated_batch_row(client, isolated_audit_chain):
     # Many fields: past the cap's overall budget the whole result becomes a
     # truncated preview, and its status with it.
-    huge = dict(LOGIC_OUTPUTS["sat"], model={f"v{i}": "7" * 120 for i in range(3000)})
+    huge = dict(LOGIC_OUTPUTS["invalid"], model={f"v{i}": "7" * 120 for i in range(3000)})
     batch_patch = _same_control_plane(huge, "process_logic_query")[1]
     with batch_patch:
         client.post("/verify/batch", json={"items": [{"query": "(GT x 5)", "type": "logic"}]})
@@ -138,8 +142,8 @@ def test_the_verdict_survives_a_truncated_batch_row(client, isolated_audit_chain
     assert stored_verdict(row.result) == "VERIFIED"  # the verdict is kept beside the ids
 
 
-def test_a_satisfiable_batch_logic_item_is_verified_not_sat(client):
-    _, item = _route_and_batch(client, "logic", LOGIC_OUTPUTS["sat"])
+def test_a_proven_batch_logic_claim_is_verified_not_valid(client):
+    _, item = _route_and_batch(client, "logic", LOGIC_OUTPUTS["valid"])
 
     assert item["result"]["status"] == "VERIFIED"
     assert item["result"]["proof_ref"]
@@ -153,7 +157,7 @@ def _batch_rows(engine):
 
 
 def test_batch_rows_now_carry_a_verdict_and_the_natural_language_admission(client, isolated_audit_chain):
-    logic_patch = _same_control_plane(LOGIC_OUTPUTS["sat"], "process_logic_query")[1]
+    logic_patch = _same_control_plane(LOGIC_OUTPUTS["valid"], "process_logic_query")[1]
     nl_patch = _same_control_plane(NL_OUTPUTS["diagnostic"], "process_natural_language")[1]
     with logic_patch, nl_patch:
         client.post("/verify/batch", json={"items": [

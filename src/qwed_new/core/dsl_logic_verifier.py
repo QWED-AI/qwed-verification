@@ -26,7 +26,9 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DSLVerificationResult:
     """Result of DSL-based logic verification."""
-    status: str  # "SAT", "UNSAT", "ERROR", "BLOCKED"
+    # "SAT", "UNSAT", "UNKNOWN", "ERROR", "BLOCKED"; and from prove_from_dsl
+    # "VALID", "INVALID" (model is the counterexample) and "VACUOUS" (#631).
+    status: str
     model: Optional[Dict[str, str]] = None
     dsl_code: Optional[str] = None
     parsed_ast: Optional[Any] = None
@@ -536,21 +538,72 @@ class DSLLogicVerifier:
         parsed = ast.parse(text, mode="eval")
         return self._ast_to_dsl(parsed.body)
 
-    def _logic_task_to_dsl(self, logic_task: Any) -> tuple[str, List[Dict[str, str]]]:
-        """Convert LogicVerificationTask to DSL code and variable declarations."""
+    def _logic_task_to_dsl(self, logic_task: Any) -> tuple[str, List[Dict[str, str]], Optional[str]]:
+        """Convert LogicVerificationTask to DSL: the constraints (what the
+        question takes as given, "" when there are none), the variable
+        declarations, and the claim to prove from them, or None when the
+        translation states no claim (#631)."""
         goal = str(getattr(logic_task, "goal", "SATISFIABILITY")).strip().upper()
-        if goal != "SATISFIABILITY":
+        if goal not in ("SATISFIABILITY", "VALIDITY"):
             raise ValueError(f"Unsupported logic goal: {goal}")
 
         constraints = [str(c).strip() for c in getattr(logic_task, "constraints", []) if str(c).strip()]
-        if not constraints:
-            return "", []
+        claim = str(getattr(logic_task, "claim", None) or "").strip()
+        if not constraints and not claim:
+            return "", [], None
 
         variables_dict = getattr(logic_task, "variables", {}) or {}
         dsl_parts = [self._constraint_to_dsl(c, variables_dict) for c in constraints]
         dsl_code = dsl_parts[0] if len(dsl_parts) == 1 else f"(AND {' '.join(dsl_parts)})"
+        if not dsl_parts:
+            dsl_code = ""
+        claim_dsl = self._constraint_to_dsl(claim, variables_dict) if claim else None
         variables = [{"name": str(name), "type": str(vtype)} for name, vtype in variables_dict.items()]
-        return dsl_code, variables
+        return dsl_code, variables, claim_dsl
+
+    def prove_from_dsl(
+        self,
+        premises_dsl: str,
+        claim_dsl: str,
+        variables: Optional[List[Dict[str, str]]] = None,
+    ) -> DSLVerificationResult:
+        """Decide whether *claim_dsl* follows from *premises_dsl* (#631).
+
+        - ``VALID``: the premises can hold, and no assignment satisfies them
+          with the claim false.
+        - ``INVALID``: one does; ``model`` is that counterexample.
+        - ``VACUOUS``: the premises cannot hold together, so every claim
+          follows from them and none is proven.
+
+        A step the solver does not decide (UNKNOWN, ERROR, BLOCKED) comes back
+        as ``verify_from_dsl`` returned it. ``dsl_code`` is the statement
+        decided: the claim, or ``(IMPLIES premises claim)``.
+        """
+        statement = f"(IMPLIES {premises_dsl} {claim_dsl})" if premises_dsl else claim_dsl
+        if premises_dsl:
+            premises = self.verify_from_dsl(premises_dsl, variables)
+            if premises.status == "UNSAT":
+                return DSLVerificationResult(
+                    status="VACUOUS",
+                    dsl_code=statement,
+                    rejection_reason=premises.rejection_reason,
+                    declarations=premises.declarations,
+                    constraint_id="dsl_logic_verifier.vacuous_premises",
+                )
+            if premises.status != "SAT":
+                return premises
+            refutation = f"(AND {premises_dsl} (NOT {claim_dsl}))"
+        else:
+            refutation = f"(NOT {claim_dsl})"
+
+        refuted = self.verify_from_dsl(refutation, variables)
+        if refuted.status == "SAT":
+            return DSLVerificationResult(
+                status="INVALID", model=refuted.model, dsl_code=statement, declarations=refuted.declarations
+            )
+        if refuted.status == "UNSAT":
+            return DSLVerificationResult(status="VALID", dsl_code=statement, declarations=refuted.declarations)
+        return refuted
     
     def verify_from_natural_language(
         self,
@@ -574,10 +627,13 @@ class DSLLogicVerifier:
         # one thread (z3py's default context is not thread safe). See
         # control_plane.process_logic_query. This wrapper keeps the original
         # synchronous behaviour for direct callers.
-        dsl_code, variables, resolved_provider, error = self.translate_to_dsl(query, provider)
+        dsl_code, variables, resolved_provider, error, claim_dsl = self.translate_to_dsl(query, provider)
         if error is not None:
             return error
-        verification_result = self.verify_from_dsl(dsl_code, variables)
+        if claim_dsl is None:
+            verification_result = self.verify_from_dsl(dsl_code, variables)
+        else:
+            verification_result = self.prove_from_dsl(dsl_code, claim_dsl, variables)
         verification_result.provider_used = resolved_provider
         if not verification_result.dsl_code:
             verification_result.dsl_code = dsl_code
@@ -585,8 +641,10 @@ class DSLLogicVerifier:
 
     def translate_to_dsl(self, query: str, provider: Optional[str] = None):
         """Provider translation step (no z3). Returns
-        (dsl_code, variables, resolved_provider, error_result); error_result is a
-        DSLVerificationResult on failure and None on success. Safe to run in a
+        (dsl_code, variables, resolved_provider, error_result, claim_dsl);
+        error_result is a DSLVerificationResult on failure and None on success,
+        and claim_dsl is the claim to prove from dsl_code, or None when the
+        translation states none (#631). Safe to run in a
         worker thread concurrently — it performs no z3 work. A provider of None
         uses the configured one (ACTIVE_PROVIDER)."""
         # None leaves the choice to the translator, which uses the configured
@@ -599,14 +657,14 @@ class DSLLogicVerifier:
             resolved_provider = self._provider_label(
                 getattr(translator, "last_resolved_provider", None) or provider_label
             )
-            dsl_code, variables = self._logic_task_to_dsl(logic_result)
-            if not dsl_code:
+            dsl_code, variables, claim_dsl = self._logic_task_to_dsl(logic_result)
+            if not dsl_code and claim_dsl is None:
                 return None, None, resolved_provider, DSLVerificationResult(
                     status="ERROR",
                     error="No constraints generated from natural language query",
                     provider_used=resolved_provider,
-                )
-            return dsl_code, variables, resolved_provider, None
+                ), None
+            return dsl_code, variables, resolved_provider, None, claim_dsl
         except ProviderConfigError as e:
             # The setting to fix (no model, or an unknown ACTIVE_PROVIDER), not
             # a provider failure: it reaches the operator and the caller, as on
@@ -619,7 +677,7 @@ class DSLLogicVerifier:
                 status="ERROR",
                 error=str(e),
                 provider_used=resolved_provider,
-            )
+            ), None
         except ValueError as e:
             resolved_provider = self._provider_label(
                 getattr(translator, "last_resolved_provider", None) or resolved_provider
@@ -628,7 +686,7 @@ class DSLLogicVerifier:
                 status="ERROR",
                 error=str(e) if str(e).startswith("Unsupported logic goal:") else "LLM translation failed",
                 provider_used=resolved_provider,
-            )
+            ), None
         except Exception:
             logger.debug(
                 "Translation failed with unexpected error (last_resolved_provider=%s, resolved_provider=%s)",
@@ -643,7 +701,7 @@ class DSLLogicVerifier:
                 status="ERROR",
                 error="LLM translation failed",
                 provider_used=resolved_provider,
-            )
+            ), None
 
     def to_verification_context(self, result: "DiagnosticResult", query: str, attestation_token: Optional[str] = None) -> "VerificationContextDocument":
         """Map a DiagnosticResult to a Verification Context v1.0 document."""

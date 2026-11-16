@@ -100,6 +100,19 @@ _DATA_TAG_START = re.compile(
 # the query, so it is capped as well as delimited.
 MAX_PREVIOUS_ERROR_CHARS = 500
 
+# What a logic translation must separate (#631): what the question takes as
+# given, and the claim it asks to prove. The route decides whether the claim
+# follows from the constraints for every value of the variables; constraints
+# alone prove nothing, however satisfiable.
+LOGIC_CLAIM_RULE = (
+    'Put what the question takes as given in "constraints" (it may be empty), and the one '
+    'statement it asks to prove or check in "claim", as a Python boolean expression over the '
+    'same variables, with "goal": "VALIDITY". Never put the claim in "constraints". If the '
+    'question only asks for values that meet its conditions, leave "claim" out and set "goal" '
+    'to "SATISFIABILITY". Example: "x is greater than 5. Is x greater than 3?" is '
+    '{"variables": {"x": "Int"}, "constraints": ["x > 5"], "claim": "x > 3", "goal": "VALIDITY"}.'
+)
+
 
 def _data_block(tag: str, text: str, defused: str = "&lt;") -> str:
     return f"<{tag}>\n{_DATA_TAG_START.sub(lambda _: defused, text)}\n</{tag}>"
@@ -109,6 +122,12 @@ def translation_system(prompt: str) -> str:
     """*prompt*, a translation system prompt, with the rule for reading its
     data tags (#582). Pair it with ``translation_request``."""
     return f"{prompt.rstrip()}\n\n{TRANSLATION_DATA_RULE}"
+
+
+def logic_translation_system(prompt: str) -> str:
+    """``translation_system`` for a logic translation: *prompt* with the rule
+    that separates the claim from the constraints (#631)."""
+    return translation_system(f"{prompt.rstrip()}\n\n{LOGIC_CLAIM_RULE}")
 
 
 def translation_request(

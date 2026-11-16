@@ -17,7 +17,13 @@ from typing import Dict, Any, List
 
 from openai import OpenAI
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import LLMProvider, configured_model, translation_request, translation_system
+from qwed_new.providers.base import (
+    LLMProvider,
+    configured_model,
+    logic_translation_system,
+    translation_request,
+    translation_system,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -127,10 +133,10 @@ Rules:
   - "approval is required" -> "approval == 1"
   - "approval is not required" -> "approval == 0"
 - Avoid natural-language constraints.
-Respond with JSON: {"variables": {"x": "Int"}, "constraints": ["x > 0"], "goal": "SATISFIABILITY"}"""
+Respond with JSON: {"variables": {"x": "Int"}, "constraints": ["x > 5"], "claim": "x > 3", "goal": "VALIDITY"}"""
 
         try:
-            result = self._call_json(translation_system(system), translation_request(user_query))
+            result = self._call_json(logic_translation_system(system), translation_request(user_query))
             return LogicVerificationTask(**result)
         except Exception as e:
             logger.debug("OpenAI-Compatible logic translation error: %s", type(e).__name__)
