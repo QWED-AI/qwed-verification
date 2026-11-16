@@ -132,7 +132,9 @@ def test_a_natural_language_verdict_is_not_signed_as_verified(env, agent, monkey
         body = env.client.post(route, json={"query": "what is 2+2"}, headers={"x-api-key": env.key}).json()
 
     assert body["status"] == "VERIFIED"
-    assert body["is_valid"] is True  # the expression holds
+    # The expression holds, but it is the model's translation, not the claim,
+    # so nothing in the body reads as a valid claim (#630).
+    assert "is_valid" not in body
     assert body["admission"] == "BLOCKED"
     assert _signed_verified(body["attestation"]) is False
     assert [row.is_verified for row in _rows(env)] == [False]

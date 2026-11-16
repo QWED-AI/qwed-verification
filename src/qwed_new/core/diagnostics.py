@@ -550,13 +550,13 @@ class DiagnosticResult:
 
     @property
     def is_authoritative(self) -> bool:
-        """Authority bit — True when proof_ref is present (admissible for control flow).
+        """Authority bit: True when proof_ref is present.
 
         This is Keesan's `authoritative=true` from #190, expressed as
-        proof_ref presence rather than a separate boolean. Downstream gates:
-
-            if not result.is_authoritative:
-                block_decision()  # non-authoritative — reject for control flow
+        proof_ref presence rather than a separate boolean. It says the verdict
+        was decided and its evidence committed, not that the claim holds: a
+        claim proven false, or a verdict on a model's translation, is
+        authoritative too. Gate control flow on ``admission_decision`` (#630).
         """
         return self.proof_ref is not None
 
@@ -1232,9 +1232,15 @@ def admission_decision(result: DiagnosticResult) -> AdmissionDecision:
     deterministic gate turns it into a fail-closed admission outcome:
 
     - fail-closed status (BLOCKED/UNVERIFIABLE)         -> BLOCKED
-    - ``developer_fields.is_valid is not True``          -> BLOCKED (missing/malformed)
-    - authoritative (VERIFIED) and valid                 -> ADMIT
+    - not ``claim_verified``                             -> BLOCKED
+    - authoritative (VERIFIED) and verified              -> ADMIT
     - anything else (non-authoritative)                  -> BLOCKED
+
+    ``claim_verified`` needs ``is_valid`` true, and refuses a verdict reached
+    on a model's translation of the question (``query_semantics_verified``
+    present and not true), so every caller of this rule, a route, batch, the
+    Verification Context bridge or a library user, gets the same answer for
+    the same result (#630).
 
     Returning ``BLOCKED`` for a VERIFIED-but-unsafe result is a policy decision
     at the boundary (QWED #7), not a reinterpretation of the verdict (QWED #15):
@@ -1242,7 +1248,7 @@ def admission_decision(result: DiagnosticResult) -> AdmissionDecision:
     """
     if result.is_fail_closed:
         return AdmissionDecision.BLOCKED
-    if result.developer_fields.get("is_valid") is not True:
+    if not claim_verified(result):
         return AdmissionDecision.BLOCKED
     if result.is_authoritative:
         return AdmissionDecision.ADMIT

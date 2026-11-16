@@ -268,7 +268,9 @@ def _consensus_proven():
         final_answer="4",
         verification_chain=[],
         total_latency_ms=1.0,
-        to_diagnostic_result=lambda: _verified(confidence=0.97),
+        # A consensus verdict counts only when its meaning was checked (#630);
+        # this one says so, so the tests here see only the signing step.
+        to_diagnostic_result=lambda: _verified(confidence=0.97, query_semantics_verified=True),
     )
 
     async def verify_async(**kwargs):

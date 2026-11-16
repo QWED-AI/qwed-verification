@@ -21,6 +21,7 @@ BLOCKED as well as its verdict.
 import logging
 import math
 from collections.abc import Callable
+from dataclasses import replace
 
 from qwed_new.core.attestation import AttestationStatus, create_verification_attestation
 from qwed_new.core.diagnostics import (
@@ -34,6 +35,11 @@ from qwed_new.core.diagnostics import (
 # How a route decides its admission from the verdict: admission_decision, or
 # natural_language_admission for a verdict reached through a translation.
 AdmissionRule = Callable[[DiagnosticResult], AdmissionDecision]
+
+# Engines whose verdict is reached on a model's translation of the question.
+# Nothing checks that the translation means what was asked, so a verdict from
+# one of them that does not say so is read as unchecked (#630).
+_TRANSLATION_ENGINES = frozenset({"natural_language", "logic", "consensus"})
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +88,17 @@ def attest_and_enforce(
     given, the token also signs ``admission(dr)`` (``qwed.admission``,
     #321): the route returns the same rule applied to the returned result,
     which is ``dr`` itself whenever a token is attached, so the two agree.
+
+    A VERIFIED result from a translation engine that does not record
+    ``query_semantics_verified`` gets it as false before anything reads it,
+    so a route that forgets its scope is neither verified nor admitted (#630).
     """
     statement = _attested_statement(dr, query)
     if dr.status is not DiagnosticStatus.VERIFIED:
         return enforce_trust_decision(dr, require_attestation=True, query=statement)
+
+    if engine in _TRANSLATION_ENGINES and "query_semantics_verified" not in dr.developer_fields:
+        dr = replace(dr, developer_fields={**dr.developer_fields, "query_semantics_verified": False})
 
     decision = admission(dr).value if admission is not None else None
 

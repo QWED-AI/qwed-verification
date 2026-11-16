@@ -65,7 +65,9 @@ def is_admitted(data: Dict[str, Any]) -> bool:
 
     A route that decides an admission returns it, and only ``ADMIT``
     admits. A route that decides none is admitted by the server's own rule
-    (``admission_decision``): a ``VERIFIED`` status with ``is_valid`` true.
+    (``admission_decision``): a ``VERIFIED`` status with ``is_valid`` true,
+    not reached on a model's translation of the question
+    (``query_semantics_verified``, where present, must be true; #630).
     A bare ``is_valid`` or ``is_verified`` never admits on its own: the
     server flattens the engine's fields into the response, so a result a
     gate blocked can still carry the engine's ``is_valid: true``.
@@ -73,7 +75,11 @@ def is_admitted(data: Dict[str, Any]) -> bool:
     admission = data.get("admission")
     if admission is not None:
         return admission == "ADMIT"
-    return data.get("status") == "VERIFIED" and data.get("is_valid") is True
+    return (
+        data.get("status") == "VERIFIED"
+        and data.get("is_valid") is True
+        and data.get("query_semantics_verified", True) is True
+    )
 
 
 def token_fields(data: Dict[str, Any]) -> Dict[str, Optional[str]]:
