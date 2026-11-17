@@ -29,6 +29,11 @@ class OllamaProvider(LLMProvider):
     Uses OpenAI-compatible API at localhost:11434/v1.
     """
 
+    @property
+    def model_id(self) -> str:
+        """The configured model this provider calls (#585)."""
+        return self.model
+
     def __init__(
         self,
         base_url: str = None,

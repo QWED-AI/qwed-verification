@@ -116,6 +116,20 @@ class TranslationLayer:
         
         return self._providers[key]
     
+    def translation_model(self, provider_key: str | None = None) -> str | None:
+        """The model behind the provider ``provider_key`` selects, as its
+        user configured it, read from the instance that translated (#585).
+        Under auto-shift it is the side that answered this thread's last
+        call, so read it on the thread that translated. None when no
+        provider QWED knows has run here for that key, or it names no
+        model: reading it never fails a translation that succeeded."""
+        key = self._normalize_provider_key(provider_key) or self.default_provider
+        provider = self._providers.get(key)
+        if not isinstance(provider, LLMProvider):
+            return None
+        model = provider.model_id
+        return model if isinstance(model, str) and model else None
+
     def _validate_math_output(self, task: MathVerificationTask) -> None:
         """
         Validate LLM output before using it.

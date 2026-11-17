@@ -38,6 +38,11 @@ class AzureOpenAIProvider(LLMProvider):
     Uses function calling to force structured output.
     """
     
+    @property
+    def model_id(self) -> str:
+        """The configured model this provider calls (#585)."""
+        return self.deployment
+
     def __init__(self):
         self.endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
         self.api_key = os.getenv("AZURE_OPENAI_API_KEY")

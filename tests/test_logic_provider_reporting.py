@@ -50,7 +50,7 @@ async def test_control_plane_logic_metrics_use_resolved_provider(monkeypatch):
     monkeypatch.setattr(
         cp.logic_verifier,
         "translate_to_dsl",
-        lambda query, provider: ("(GT x 5)", [{"name": "x", "type": "Int"}], "openai_compat", None, None),
+        lambda query, provider: ("(GT x 5)", [{"name": "x", "type": "Int"}], "openai_compat", None, None, None),
     )
     monkeypatch.setattr(
         cp.logic_verifier,

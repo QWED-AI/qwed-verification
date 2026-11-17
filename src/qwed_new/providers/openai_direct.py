@@ -29,6 +29,11 @@ class OpenAIDirectProvider(LLMProvider):
     Uses function calling (tools) for structured output.
     """
 
+    @property
+    def model_id(self) -> str:
+        """The configured model this provider calls (#585)."""
+        return self.model
+
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
 

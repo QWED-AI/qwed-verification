@@ -12,7 +12,7 @@ import hashlib
 import os
 import time
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from qwed_new.core.router import Router
 from qwed_new.core.policy import PolicyEngine
 from qwed_new.core.translator import TranslationLayer
@@ -99,6 +99,7 @@ class ControlPlane:
     def _build_math_trust_boundary(
         provider: str,
         verification_result: Dict[str, Any],
+        translation_model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Describe exactly what the math pipeline did and did not prove."""
         expression_status = verification_result.get("status")
@@ -111,6 +112,8 @@ class ControlPlane:
             "formal_proof": False,
             "translation_claim_self_consistent": verification_result.get("is_correct"),
             "provider_used": provider,
+            # The configured model that translated, never trusted (#585).
+            "translation_model": translation_model,
         }
 
     @staticmethod
@@ -176,8 +179,17 @@ class ControlPlane:
         a consumer reading only the diagnostic cannot mistake it for proof of
         the question itself.
         """
+        # The provider and model that translated travel with the verdict,
+        # so the route's response and audit row name them (#585). They
+        # admit nothing.
+        provenance = {
+            key: trust_boundary[key]
+            for key in ("provider_used", "translation_model")
+            if key in trust_boundary
+        }
         verification_result = {
             **verification_result,
+            **provenance,
             "translated_expression": expression,
             "verification_scope": "translated_expression_only",
             "query_semantics_verified": False,
@@ -225,6 +237,15 @@ class ControlPlane:
             query=expression,  # #279 — must match qwed.query_hash in the attestation
         )
 
+    def _translate_math(
+        self, query: str, provider: Optional[str]
+    ) -> Tuple[MathVerificationTask, Optional[str]]:
+        """Translate, then name the model, on one worker thread: under
+        auto-shift the model is the side that answered this thread's call
+        (#585)."""
+        task = self.translator.translate(query, provider=provider)
+        return task, self.translator.translation_model(provider)
+
     async def process_natural_language(
         self, 
         query: str, 
@@ -262,8 +283,8 @@ class ControlPlane:
             # 3. Translation (LLM Call)
             # Note: We currently assume it's a math query for the main endpoint.
             # Future: Router should also classify intent (Math vs Logic vs Fact).
-            task: MathVerificationTask = await _run_provider_call(
-                self.translator.translate, query, provider=provider
+            task, translation_model = await _run_provider_call(
+                self._translate_math, query, provider
             )
             
             # 3.5. Query Classification - Detect trivial/non-math expressions
@@ -290,7 +311,9 @@ class ControlPlane:
                 expression=task.expression,
                 expected_value=task.claimed_answer
             )
-            trust_boundary = self._build_math_trust_boundary(provider, verification_result)
+            trust_boundary = self._build_math_trust_boundary(
+                provider, verification_result, translation_model
+            )
 
             # 4.5 Trust Boundary Enforcement (Issue #191 / #265)
             enforced = self._enforce_math_verdict(task.expression, verification_result, trust_boundary)
@@ -310,6 +333,7 @@ class ControlPlane:
                 "verification": verification_result,
                 "trust_boundary": trust_boundary,
                 "provider_used": provider,
+                "translation_model": translation_model,
                 "latency_ms": (time.time() - start_time) * 1000
             }
             
@@ -398,6 +422,7 @@ class ControlPlane:
         # 2. Routing
         provider = self.router.route(query, preferred_provider)
         last_known_provider = provider
+        last_known_model = None
 
         # 3. DSL Logic Pipeline
         try:
@@ -406,9 +431,10 @@ class ControlPlane:
             # Provider translation runs off the loop and concurrently; the z3
             # solve runs on the single z3 thread. So the loop is never blocked,
             # logic requests translate in parallel, and z3 stays thread-safe.
-            dsl_code, variables, resolved_provider, error, claim_dsl = await _run_provider_call(
-                self.logic_verifier.translate_to_dsl, query, provider
-            )
+            (
+                dsl_code, variables, resolved_provider, error, claim_dsl, translation_model,
+            ) = await _run_provider_call(self.logic_verifier.translate_to_dsl, query, provider)
+            last_known_model = translation_model
             if error is not None:
                 result = error
             else:
@@ -426,6 +452,7 @@ class ControlPlane:
                 "dsl_code": result.dsl_code, # Expose DSL for transparency
                 "error": result.error,
                 "provider_used": resolved_provider,
+                "translation_model": translation_model,
                 "latency_ms": (time.time() - start_time) * 1000
             }
             constraint_id = getattr(result, "constraint_id", None)
@@ -464,6 +491,7 @@ class ControlPlane:
                 "status": "ERROR",
                 "error": "Internal pipeline error",
                 "provider_used": last_known_provider,
+                "translation_model": last_known_model,
                 "latency_ms": (time.time() - start_time) * 1000
             }
 

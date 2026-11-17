@@ -317,7 +317,7 @@ def client(isolated_audit_chain):
 
 
 def test_verify_logic_blocks_a_translation_that_states_no_constraint(client):
-    translated = ("(VAR x Int)", None, "mock", None, None)
+    translated = ("(VAR x Int)", None, "mock", None, None, None)
     with patch.object(api_main.control_plane.logic_verifier, "translate_to_dsl", return_value=translated):
         body = client.post("/verify/logic", json={"query": "Is there an integer x?"}).json()
 

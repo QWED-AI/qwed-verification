@@ -40,6 +40,11 @@ class OpenAICompatProvider(LLMProvider):
         )
     """
 
+    @property
+    def model_id(self) -> str:
+        """The configured model this provider calls (#585)."""
+        return self.model
+
     def __init__(
         self,
         base_url: str = None,

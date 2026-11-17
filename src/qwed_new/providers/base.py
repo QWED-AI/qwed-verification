@@ -171,6 +171,14 @@ class LLMProvider(ABC):
     Abstract base class for all LLM providers.
     """
     
+    @property
+    def model_id(self) -> Optional[str]:
+        """The model this provider runs, as its user configured it,
+        unchanged. Results record it beside the provider (#585). It comes
+        from the configuration, never from a model's own answer, and it
+        admits nothing."""
+        return None
+
     @abstractmethod
     def translate(self, user_query: str) -> MathVerificationTask:
         """Translate natural language to MathVerificationTask."""

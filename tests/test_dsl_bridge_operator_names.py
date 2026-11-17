@@ -33,6 +33,9 @@ class _StubTranslator:
         self.last_resolved_provider = provider
         return self.task
 
+    def translation_model(self, provider_key=None):
+        return None
+
 
 def _verify_nl(monkeypatch, constraints, variables=None):
     variables = {"x": "Int"} if variables is None else variables

@@ -6,7 +6,8 @@ fails over to the secondary provider if the primary one fails.
 """
 
 import logging
-from typing import Dict, Any, List
+import threading
+from typing import Dict, Any, List, Optional
 from qwed_new.core.schemas import MathVerificationTask, LogicVerificationTask
 from qwed_new.providers.base import LLMProvider, ProviderConfigError
 from qwed_new.providers.azure_openai import AzureOpenAIProvider
@@ -14,6 +15,21 @@ from qwed_new.providers.anthropic import AnthropicProvider
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+
+class _Answered(threading.local):
+    """The model of the side that answered, kept per thread: requests
+    run on worker threads at once, and one must never see another's
+    model (#585)."""
+
+    model: Optional[str] = None
+
+
+def _model_of(side) -> Optional[str]:
+    """The configured model of the side that answered. Only a provider
+    QWED knows names one, and it is read after the call, so naming it
+    can never fail the call or send it to the other side (#585)."""
+    return side.model_id if isinstance(side, LLMProvider) else None
 
 class AutoShiftProvider(LLMProvider):
     """
@@ -26,6 +42,7 @@ class AutoShiftProvider(LLMProvider):
     """
     
     def __init__(self):
+        self._answered = _Answered()
         errors = []
         try:
             self.primary = AzureOpenAIProvider()
@@ -59,26 +76,40 @@ class AutoShiftProvider(LLMProvider):
         Generic wrapper to execute a method on the primary provider, 
         falling back to secondary on failure.
         """
+        # No side has answered this call yet, so a failure names no model.
+        self._answered.model = None
         # Try Primary
         if self.primary:
             try:
                 method = getattr(self.primary, method_name)
-                return method(*args, **kwargs)
+                result = method(*args, **kwargs)
             except Exception as e:
                 logger.warning(f"Primary Provider ({method_name}) failed: {e}. Attempting Auto-Shift...")
+            else:
+                self._answered.model = _model_of(self.primary)
+                return result
         
         # Try Secondary
         if self.secondary:
             try:
                 logger.info(f"Auto-Shift: Switching to Secondary Provider for {method_name}")
                 method = getattr(self.secondary, method_name)
-                return method(*args, **kwargs)
+                result = method(*args, **kwargs)
             except Exception as e:
                 logger.error(f"Secondary Provider ({method_name}) also failed: {e}")
                 raise e
+            self._answered.model = _model_of(self.secondary)
+            return result
         
         # If we get here, it means primary failed (or is None) and secondary is None
         raise RuntimeError("No available providers to execute request.")
+
+    @property
+    def model_id(self) -> Optional[str]:
+        """The model of the side that answered this thread's last call,
+        or None if neither has (#585). Each side runs only its configured
+        model."""
+        return self._answered.model
 
     def translate(self, user_query: str) -> MathVerificationTask:
         return self._execute_with_fallback('translate', user_query)

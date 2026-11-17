@@ -19,6 +19,9 @@ class _StubTranslator:
             self.last_resolved_provider = provider
         return self.task
 
+    def translation_model(self, provider_key=None):
+        return None
+
 
 def test_verify_from_natural_language_uses_requested_provider(monkeypatch):
     task = LogicVerificationTask(
@@ -170,6 +173,9 @@ def test_verify_from_natural_language_sanitizes_translation_error(monkeypatch):
 
         def translate_logic(self, user_query: str, provider: Optional[str] = None):
             raise RuntimeError("sensitive upstream details")
+
+        def translation_model(self, provider_key=None):
+            return None
 
     monkeypatch.setattr("qwed_new.core.dsl_logic_verifier.TranslationLayer", lambda: _FailingTranslator())
 
