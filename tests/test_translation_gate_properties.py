@@ -18,7 +18,16 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from qwed_new.core.security import _IGNORABLE, SecurityGateway
+from qwed_new.core.security import (
+    _ENDING,
+    _IGNORABLE,
+    _SEEN_LETTER_OR_DIGIT,
+    SecurityGateway,
+    _parts_in_copies,
+    _phrase_copies,
+    _phrase_parts,
+    _read_through_ignorables,
+)
 from qwed_new.core.translator import TranslationLayer, TranslationRefused
 
 # Fixed seed and no example database: the same examples on every run and in CI.
@@ -79,6 +88,26 @@ def test_a_run_of_invisible_characters_does_not_make_the_check_backtrack(whole_w
     started = time.perf_counter()
     SecurityGateway().detect_injection(text, whole_words=whole_words)
     assert time.perf_counter() - started < 1.0
+
+
+@pytest.mark.parametrize("whole_words", [False, True])
+def test_a_dot_star_phrase_that_never_completes_costs_what_plain_text_costs(whole_words):
+    # "disregard" a thousand times and no "instructions". One ".*" search
+    # retried from every "disregard" and cost 20 to 70 times plain text of
+    # the same length, about 0.1 s, all of it holding the GIL, so a thread
+    # would not have freed the event loop (#645). Part by part it costs
+    # about the same as plain text. Runs alternate and the best of each
+    # counts, so load on the machine affects both alike.
+    gateway = SecurityGateway()
+    crafted = "disregard " * 1000
+    plain = "dismissal " * 1000
+    best = {crafted: float("inf"), plain: float("inf")}
+    for _ in range(5):
+        for text in (crafted, plain):
+            started = time.perf_counter()
+            assert gateway.detect_injection(text, whole_words=whole_words) == (True, None)
+            best[text] = min(best[text], time.perf_counter() - started)
+    assert best[crafted] < 5 * best[plain]
 
 
 def test_every_pattern_is_letters_spaces_and_dot_star():
@@ -152,6 +181,45 @@ def lookalike(draw):
     places = [index for index, char in enumerate(phrase) if char == "o"]
     at = draw(st.sampled_from(places))
     return phrase[:at] + CYRILLIC_O + phrase[at + 1:]
+
+
+# Words, pieces of words and joins around a phrase, or in place of one.
+PIECES = [
+    "disregard", "instructions", "prompt", "ignore", "previous", "all", "forget",
+    "everything", "act", "as", "you", "are", "now", "system", "override", "the",
+    "dis", "regard", "instruct", "ions", "x", "7", "_", "-", ".",
+] + SPACES + ENDINGS[1:] + INVISIBLE
+
+
+@st.composite
+def phrase_text(draw):
+    """Text that may hold a phrase, rewritten or disguised, or only parts of
+    one, among other words."""
+    middle = draw(st.one_of(rewritten(), disguised(), separated(), lookalike(), st.just("")))
+    before = draw(st.lists(st.sampled_from(PIECES), max_size=6))
+    after = draw(st.lists(st.sampled_from(PIECES), max_size=6))
+    return "".join(before) + middle + "".join(after)
+
+
+def _one_search(pattern, whole_words, copies):
+    """The phrase check before #645: one search with ".*" inside it."""
+    readable = _read_through_ignorables(pattern)
+    if whole_words:
+        edge = _SEEN_LETTER_OR_DIGIT
+        readable = rf"(?<!{edge})(?:{readable}){_ENDING}(?!{edge})"
+    return any(re.search(readable, copy, re.IGNORECASE) for copy in copies)
+
+
+@GATE
+@given(phrase_text())
+def test_the_part_search_finds_what_one_search_finds(text):
+    # #645 searches each part of a ".*" pattern in turn. Every verdict must
+    # be the one the single search gave, in both modes.
+    copies = _phrase_copies(text)
+    for pattern in SecurityGateway().injection_patterns:
+        for whole_words in (False, True):
+            found = _parts_in_copies(_phrase_parts(pattern, whole_words), copies)
+            assert found is _one_search(pattern, whole_words, copies), (pattern, whole_words)
 
 
 def _refused_by_every_check(text):
