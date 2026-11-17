@@ -7,6 +7,7 @@ OWASP LLM01:2025 - Prompt Injection Defense (Multi-Layer)
 import re
 import base64
 import logging
+import unicodedata
 from typing import Tuple, Optional
 from difflib import SequenceMatcher
 
@@ -76,14 +77,21 @@ class SecurityGateway:
         (#632). An underscore separates, as a space does, and the last word
         may still take an English ending ("prompts", "prompted", "modes"),
         so neither gets a phrase past the check.
+
+        The check reads its own copy: Unicode NFKC, then format characters
+        (category Cf) removed, then whitespace collapsed. The text the
+        caller sent is left as it was. The length bound is that original
+        text, checked before the copy is built.
         """
         # 1. Length Check (Prevent buffer overflow / context exhaustion)
         if len(prompt) > 10000:
             return False, "Input too long (max 10000 chars)"
 
-        # 2. Normalize whitespace — collapse tabs, newlines, repeated spaces
-        # into single spaces so whitespace-obfuscated injections match patterns.
-        normalized = re.sub(r'\s+', ' ', prompt).strip()
+        # 2. The copy the check reads. Compatibility form, then format
+        # characters removed, then whitespace collapsed. Caller text stays.
+        folded = unicodedata.normalize("NFKC", prompt)
+        without_format = "".join(ch for ch in folded if unicodedata.category(ch) != "Cf")
+        normalized = re.sub(r'\s+', ' ', without_format).strip()
 
         # 3. Heuristic Check — runs for ALL inputs (no whitelist bypass)
         for pattern in self.injection_patterns:
