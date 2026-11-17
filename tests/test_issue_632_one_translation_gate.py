@@ -21,11 +21,18 @@ A refused text raises ``TranslationRefused``: consensus and stats return
 BLOCKED, and fact refuses a request whose advisory text is refused.
 """
 
+import asyncio
 from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
+from qwed_new.core.consensus_verifier import (
+    ConsensusVerifier,
+    EngineState,
+    VerificationMode,
+)
+from qwed_new.core.diagnostics import DiagnosticStatus
 from qwed_new.core.fact_verifier import FactVerifier
 from qwed_new.core.stats_verifier import StatsVerifier
 from qwed_new.core.translator import TranslationLayer, TranslationRefused
@@ -198,6 +205,29 @@ def test_consensus_no_longer_reaches_the_model_with_a_refused_question(client, p
     assert provider.calls == []
     assert body["status"] == "BLOCKED"
     assert body.get("final_answer") is None
+
+
+CONSENSUS_CALLS = {
+    "parallel": lambda v: v.verify_with_consensus(INJECTION, mode=VerificationMode.MAXIMUM, parallel=True),
+    "sequential": lambda v: v.verify_with_consensus(INJECTION, mode=VerificationMode.MAXIMUM, parallel=False),
+    "async": lambda v: asyncio.run(v.verify_async(INJECTION, mode=VerificationMode.MAXIMUM)),
+}
+
+
+@pytest.mark.parametrize("path", list(CONSENSUS_CALLS))
+def test_refused_questions_do_not_open_the_circuit_breaker(provider, path):
+    # The breaker is shared by every tenant. A refused question says nothing
+    # about an engine's health, so refusals alone must not open it (Sentry).
+    verifier = ConsensusVerifier()
+    for _ in range(verifier.circuit_breaker.failure_threshold + 1):
+        result = CONSENSUS_CALLS[path](verifier)
+        assert result.status == DiagnosticStatus.BLOCKED
+
+    assert provider.calls == []
+    for engine in ("SymPy", "Python", "Z3"):
+        health = verifier.circuit_breaker.get_health(engine)
+        assert health.consecutive_failures == 0
+        assert health.state == EngineState.HEALTHY
 
 
 def test_stats_no_longer_reaches_the_model_with_a_refused_question(provider):

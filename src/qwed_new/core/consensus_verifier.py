@@ -27,6 +27,7 @@ _CIRCUIT_OPEN_ERROR = "Engine excluded by open circuit breaker"
 import threading
 
 from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus, compute_proof_ref
+from qwed_new.providers.base import TranslationRefused
 
 from .verification_context import VerificationContextDocument
 
@@ -64,6 +65,9 @@ class EngineResult:
     success: bool
     error: Optional[str] = None
     status: Optional[str] = None  # DiagnosticStatus value — preserves status through consensus
+    # The translation gate refused the question (#632): a fact about the
+    # caller's text, not about the engine, so the breaker does not record it.
+    refused: bool = False
 
 
 @dataclass
@@ -656,8 +660,10 @@ class ConsensusVerifier:
         return None, exc, False
 
     def _record_engine_result(self, engine_name: str, result: EngineResult):
-        """Record result with circuit breaker."""
-        if self.circuit_breaker:
+        """Record result with circuit breaker. A refused question is not
+        recorded (#632): otherwise refused questions alone would open an
+        engine's breaker for every tenant."""
+        if self.circuit_breaker and not result.refused:
             if result.success:
                 self.circuit_breaker.record_success(engine_name, result.latency_ms)
             else:
@@ -806,6 +812,7 @@ class ConsensusVerifier:
                 success=False,
                 error=str(e),
                 status="BLOCKED",
+                refused=isinstance(e, TranslationRefused),
             )
         except Exception as e:
             return EngineResult(
@@ -862,6 +869,7 @@ class ConsensusVerifier:
                 result=None, confidence=0.0,
                 latency_ms=(time.time() - start) * 1000, success=False,
                 error=str(e), status="BLOCKED",
+                refused=isinstance(e, TranslationRefused),
             )
     
     def _verify_with_logic(self, query: str) -> EngineResult:
@@ -885,6 +893,7 @@ class ConsensusVerifier:
                 result=None, confidence=0.0,
                 latency_ms=(time.time() - start) * 1000, success=False,
                 error=str(e), status="BLOCKED",
+                refused=isinstance(e, TranslationRefused),
             )
     
     def _verify_with_stats(self, query: str) -> EngineResult:
@@ -1092,6 +1101,8 @@ class ConsensusVerifier:
             from qwed_new.core.translator import TranslationLayer
             translator = TranslationLayer()
             task = translator.translate(query)
+        except TranslationRefused:
+            raise
         except Exception as exc:
             raise ValueError(f"Query translation failed: {exc}") from exc
 
@@ -1102,6 +1113,8 @@ class ConsensusVerifier:
         try:
             task = self.translator.translate(query)
             return f"result = {task.expression}"
+        except TranslationRefused:
+            raise
         except Exception as e:
             raise ValueError(f"Verification code generation failed: {e}") from e
     
@@ -1111,6 +1124,8 @@ class ConsensusVerifier:
             from qwed_new.core.translator import TranslationLayer
             translator = TranslationLayer()
             return translator.translate_logic(query)
+        except TranslationRefused:
+            raise
         except Exception as e:
             raise ValueError(f"Logic translation failed: {e}") from e
     
