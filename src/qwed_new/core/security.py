@@ -13,6 +13,59 @@ from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
 
+# Unicode Default_Ignorable_Code_Point: these draw nothing, so a reader skips them.
+_IGNORABLE_RANGES = (
+    "\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f"
+    "\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f"
+    "\ufeff\uffa0\ufff0-\ufff8"
+    "\U0001bca0-\U0001bca3\U0001d173-\U0001d17a\U000e0000-\U000e0fff"
+)
+_IGNORABLE = f"[{_IGNORABLE_RANGES}]"
+# A letter or digit that a reader sees: a word character other than "_" and
+# other than the default-ignorables, some of which (U+3164) count as letters.
+_SEEN_LETTER_OR_DIGIT = rf"[^\W_{_IGNORABLE_RANGES}]"
+_TOO_LONG = "Input too long (max 10000 chars)"
+
+
+def _collapse_ws(text: str) -> str:
+    """Tabs, newlines and repeated spaces become a single space."""
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def _phrase_copies(prompt: str) -> Optional[Tuple[str, ...]]:
+    """The copies the phrase check reads: the original and its NFKC form,
+    whitespace collapsed. ``None`` when NFKC grows the text past the length
+    bound. A form the same as the original is not read twice."""
+    collapsed = _collapse_ws(prompt)
+    folded = unicodedata.normalize("NFKC", prompt)
+    if len(folded) > 10000:
+        return None
+    folded = _collapse_ws(folded)
+    return (collapsed,) if folded == collapsed else (collapsed, folded)
+
+
+def _read_through_ignorables(pattern: str) -> str:
+    """``pattern`` as a model reads it: a default-ignorable character may
+    follow any of its letters, and may stand in for, or sit beside, the
+    space between its words. The patterns are letters, spaces and ``.*``."""
+    parts = []
+    for token in re.split(r"(\.\*| )", pattern):
+        if token == ".*":
+            parts.append(token)
+        elif token == " ":
+            parts.append(rf"(?:\s|{_IGNORABLE})+")
+        else:
+            parts.extend(re.escape(char) + _IGNORABLE + "*" for char in token)
+    return "".join(parts)
+
+
+def _pattern_in_copies(pattern: str, copies: Tuple[str, ...]) -> bool:
+    for text in copies:
+        if re.search(pattern, text, re.IGNORECASE):
+            return True
+    return False
+
+
 # Module-level PII Constants
 PII_PATTERNS = {
     "EMAIL": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
@@ -78,26 +131,30 @@ class SecurityGateway:
         may still take an English ending ("prompts", "prompted", "modes"),
         so neither gets a phrase past the check.
 
-        The check reads its own copy: Unicode NFKC, then format characters
-        (category Cf) removed, then whitespace collapsed. The text the
-        caller sent is left as it was. The length bound is that original
-        text, checked before the copy is built.
+        The check reads the caller's text the way a model does, and folding
+        can only add refusals. It reads the whitespace-collapsed original
+        and its NFKC form, held to the same 10,000-character bound, and each
+        pattern lets default-ignorable characters follow any of its letters
+        and stand between its words. An invisible character inside a word,
+        as a separator, or both, hides nothing. The text the caller sent is
+        left as it was.
         """
         # 1. Length Check (Prevent buffer overflow / context exhaustion)
         if len(prompt) > 10000:
-            return False, "Input too long (max 10000 chars)"
+            return False, _TOO_LONG
 
-        # 2. The copy the check reads. Compatibility form, then format
-        # characters removed, then whitespace collapsed. Caller text stays.
-        folded = unicodedata.normalize("NFKC", prompt)
-        without_format = "".join(ch for ch in folded if unicodedata.category(ch) != "Cf")
-        normalized = re.sub(r'\s+', ' ', without_format).strip()
+        # 2. Copies only. The caller's text is not changed. A fold past
+        # the length bound is refused before any pattern runs.
+        copies = _phrase_copies(prompt)
+        if copies is None:
+            return False, _TOO_LONG
 
-        # 3. Heuristic Check — runs for ALL inputs (no whitelist bypass)
+        # 3. Heuristic Check. Runs for all inputs, with no whitelist bypass.
         for pattern in self.injection_patterns:
-            # [^\W_] is a letter or digit: a word character other than "_".
-            search = rf"(?<![^\W_])(?:{pattern})(?:s|es|ed|ing)?(?![^\W_])" if whole_words else pattern
-            if re.search(search, normalized, re.IGNORECASE):
+            readable = _read_through_ignorables(pattern)
+            edge = _SEEN_LETTER_OR_DIGIT
+            search = rf"(?<!{edge})(?:{readable})(?:s|es|ed|ing)?(?!{edge})" if whole_words else readable
+            if _pattern_in_copies(search, copies):
                 return False, f"Potential Prompt Injection detected: '{pattern}'"
 
         return True, None
