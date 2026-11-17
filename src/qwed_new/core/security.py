@@ -45,18 +45,33 @@ def _phrase_copies(prompt: str) -> Optional[Tuple[str, ...]]:
 
 
 def _read_through_ignorables(pattern: str) -> str:
-    """``pattern`` as a model reads it: a default-ignorable character may
-    follow any of its letters, and may stand in for, or sit beside, the
-    space between its words. The patterns are letters, spaces and ``.*``."""
+    """``pattern`` as a model reads it: default-ignorable characters may sit
+    between any two letters of a word, and may stand in for, or sit beside,
+    the space between words. The patterns are letters, spaces and ``.*``.
+
+    No two parts can match the same characters: ignorables are not allowed
+    after a word's last letter, where the separator or ``.*`` takes them,
+    and no ignorable is whitespace. Parts that could share characters would
+    backtrack polynomially on a run of ignorables."""
     parts = []
     for token in re.split(r"(\.\*| )", pattern):
         if token == ".*":
             parts.append(token)
         elif token == " ":
             parts.append(rf"(?:\s|{_IGNORABLE})+")
-        else:
-            parts.extend(re.escape(char) + _IGNORABLE + "*" for char in token)
+        elif token:
+            parts.append(_read_through_word(token))
     return "".join(parts)
+
+
+def _read_through_word(word: str) -> str:
+    """``word`` with default-ignorables allowed between its letters only."""
+    return (_IGNORABLE + "*").join(re.escape(char) for char in word)
+
+
+# The endings the last word of a phrase may take in whole-word mode, read
+# through ignorables the same way ("prompte<U+200B>d" is "prompted").
+_ENDING = "(?:" + "|".join(_read_through_word(e) for e in ("s", "es", "ed", "ing")) + ")?"
 
 
 def _pattern_in_copies(pattern: str, copies: Tuple[str, ...]) -> bool:
@@ -153,7 +168,7 @@ class SecurityGateway:
         for pattern in self.injection_patterns:
             readable = _read_through_ignorables(pattern)
             edge = _SEEN_LETTER_OR_DIGIT
-            search = rf"(?<!{edge})(?:{readable})(?:s|es|ed|ing)?(?!{edge})" if whole_words else readable
+            search = rf"(?<!{edge})(?:{readable}){_ENDING}(?!{edge})" if whole_words else readable
             if _pattern_in_copies(search, copies):
                 return False, f"Potential Prompt Injection detected: '{pattern}'"
 
