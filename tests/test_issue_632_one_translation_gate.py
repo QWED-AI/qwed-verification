@@ -276,7 +276,8 @@ def test_the_async_path_screens_off_the_event_loop(provider):
     loop_thread, result = asyncio.run(run())
 
     assert result.status == DiagnosticStatus.BLOCKED
-    assert screened_on and screened_on[0] != loop_thread
+    assert screened_on
+    assert screened_on[0] != loop_thread
 
 
 def test_stats_no_longer_reaches_the_model_with_a_refused_question(provider):
