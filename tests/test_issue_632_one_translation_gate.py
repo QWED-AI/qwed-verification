@@ -230,6 +230,24 @@ def test_refused_questions_do_not_open_the_circuit_breaker(provider, path):
         assert health.state == EngineState.HEALTHY
 
 
+STATS_QUESTION = f"{INJECTION} What is the average of 2, 4 and 6?"
+
+
+@pytest.mark.parametrize("call", [
+    lambda v: v.verify_with_consensus(STATS_QUESTION, mode=VerificationMode.MAXIMUM),
+    lambda v: asyncio.run(v.verify_async(STATS_QUESTION, mode=VerificationMode.MAXIMUM)),
+], ids=["sync", "async"])
+def test_a_refused_question_gets_no_answer_from_an_engine_that_needs_no_model(provider, call):
+    # Stats computes from the question itself, with no model: the request is
+    # still refused, not answered with its statistic (Sentry).
+    result = call(ConsensusVerifier())
+
+    assert provider.calls == []
+    assert "Stats" in {r.engine_name for r in result.verification_chain}
+    assert result.status == DiagnosticStatus.BLOCKED
+    assert result.final_answer is None
+
+
 def test_stats_no_longer_reaches_the_model_with_a_refused_question(provider):
     result = StatsVerifier().verify_stats(INJECTION, pd.DataFrame({"a": [1, 2], "b": [3, 4]}))
 

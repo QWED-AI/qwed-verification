@@ -951,6 +951,26 @@ class ConsensusVerifier:
     # Consensus Calculation
     # =========================================================================
     
+    @staticmethod
+    def _stopped_outcome(results: List[EngineResult]) -> Optional[Dict[str, Any]]:
+        """The outcome when no engine's answer may stand, else None: secure
+        execution was required and is unavailable, or the gate refused the
+        question (#632), whatever an engine that needs no model (Stats)
+        computed from it."""
+        if any(r.error == SECURE_EXECUTION_REQUIRED for r in results):
+            return {"answer": None, "confidence": 0.0, "status": "blocked_secure_execution", "diagnostic_status": DiagnosticStatus.BLOCKED}
+
+        refusals = [r.error for r in results if r.refused]
+        if refusals:
+            return {
+                "answer": None,
+                "confidence": 0.0,
+                "status": "blocked",
+                "diagnostic_status": DiagnosticStatus.BLOCKED,
+                "errors": refusals,
+            }
+        return None
+
     def _calculate_consensus(self, results: List[EngineResult]) -> Dict[str, Any]:
         """Calculate weighted consensus from engine results.
 
@@ -962,12 +982,14 @@ class ConsensusVerifier:
         - No BLOCKED, unanimous, and verified by two engines or more → VERIFIED
         - Verified by one engine alone, whatever the others did → BLOCKED:
           one engine is not a consensus (#320)
+        - The gate refused the question → BLOCKED (#632)
         """
         if not results:
             return {"answer": None, "confidence": 0.0, "status": "no_results", "diagnostic_status": DiagnosticStatus.UNVERIFIABLE}
 
-        if any(r.error == SECURE_EXECUTION_REQUIRED for r in results):
-            return {"answer": None, "confidence": 0.0, "status": "blocked_secure_execution", "diagnostic_status": DiagnosticStatus.BLOCKED}
+        stopped = self._stopped_outcome(results)
+        if stopped:
+            return stopped
 
         blocked = [r for r in results if r.status == "BLOCKED"]
         active = [r for r in results if r.status != "BLOCKED"]
