@@ -42,13 +42,20 @@ def wrong_claims(monkeypatch):
     monkeypatch.setattr(TranslationLayer, "translate", lambda self, query, provider=None: WRONG)
 
 
+def _stub(query):
+    return EngineResult("Stub", "stub", None, 0.0, 1.0, success=False, status="UNVERIFIABLE")
+
+
 @pytest.mark.parametrize("path", list(CALLS))
 def test_wrong_claims_do_not_open_the_breaker(wrong_claims, path):
     verifier = ConsensusVerifier()
+    # Two engines, so the parallel case runs _execute_parallel (CodeRabbit).
+    verifier._select_engines = lambda query, mode: [("SymPy", verifier._verify_with_math), ("Stub", _stub)]
     for _ in range(verifier.circuit_breaker.failure_threshold + 1):
-        sympy = CALLS[path](verifier).verification_chain[0]
+        chain = CALLS[path](verifier).verification_chain
+        sympy = next(r for r in chain if r.engine_name == "SymPy")
         # SymPy ran and decided the claim is wrong; it was never skipped.
-        assert (sympy.engine_name, sympy.success, sympy.status) == ("SymPy", False, "UNVERIFIABLE")
+        assert (sympy.success, sympy.status) == (False, "UNVERIFIABLE")
 
     health = verifier.circuit_breaker.get_health("SymPy")
     assert health.state == EngineState.HEALTHY
