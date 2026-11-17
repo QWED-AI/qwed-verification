@@ -110,11 +110,15 @@ class TranslationLayer:
 
         self.last_resolved_provider = key
 
-        # Lazy instantiation: only create provider when first requested
-        if key not in self._providers:
-            self._providers[key] = self._provider_classes[key]()
+        # Lazy instantiation: only create provider when first requested.
+        # Two threads asking first at once may each build one; setdefault
+        # keeps the first stored, so every caller uses, and
+        # translation_model reads, the same instance (#585).
+        provider = self._providers.get(key)
+        if provider is None:
+            provider = self._providers.setdefault(key, self._provider_classes[key]())
         
-        return self._providers[key]
+        return provider
     
     def translation_model(self, provider_key: str | None = None) -> str | None:
         """The model behind the provider ``provider_key`` selects, as its

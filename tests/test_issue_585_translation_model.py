@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from qwed_new.api import main as api_main
+from qwed_new.config import settings
 from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
 from qwed_new.core.schemas import LogicVerificationTask, MathVerificationTask
 from qwed_new.core.translator import TranslationLayer
@@ -64,14 +65,7 @@ def test_a_configured_provider_names_its_configured_model():
 
 
 class _Provider(LLMProvider):
-    """A provider QWED knows, with a configured model and no network."""
-
-    def __init__(self, model):
-        self._model = model
-
-    @property
-    def model_id(self):
-        return self._model
+    """A provider QWED knows, with no network. It names no model of its own."""
 
     def translate(self, user_query):
         raise NotImplementedError
@@ -92,7 +86,22 @@ class _Provider(LLMProvider):
         raise NotImplementedError
 
 
-class _Side(_Provider):
+class _Configured(_Provider):
+    """A provider QWED knows, with a configured model."""
+
+    def __init__(self, model):
+        self._model = model
+
+    @property
+    def model_id(self):
+        return self._model
+
+
+def test_a_provider_that_overrides_nothing_names_no_model():
+    assert _Provider().model_id is None
+
+
+class _Side(_Configured):
     """One side of auto-shift: answers, or fails, with its configured model."""
 
     def __init__(self, model):
@@ -205,13 +214,13 @@ def test_the_translation_layer_names_no_model_for_an_unknown_provider_object():
 
 def test_the_translation_layer_names_no_model_that_is_not_text():
     layer = TranslationLayer()
-    layer._providers["openai"] = _Provider(MagicMock())
+    layer._providers["openai"] = _Configured(MagicMock())
     assert layer.translation_model("openai") is None
-    layer._providers["openai"] = _Provider("")
+    layer._providers["openai"] = _Configured("")
     assert layer.translation_model("openai") is None
 
 
-class _MathProvider(_Provider):
+class _MathProvider(_Configured):
     """A provider with a configured model that translates the question."""
 
     def translate(self, user_query):
@@ -282,38 +291,89 @@ def test_the_logic_route_names_the_provider_and_model(client, isolated_audit_cha
     assert json.loads(row.result)["developer_fields"]["translation_model"] == LOGIC_MODEL
 
 
-class _LogicTranslator:
-    """The bridge's translator: answers, or fails, and names its model."""
+class _LogicProvider(_Configured):
+    """The configured provider: answers, or fails, with its configured model."""
 
-    last_resolved_provider = "openai"
     fails = False
 
-    def translate_logic(self, user_query, provider=None):
+    def __init__(self):
+        super().__init__(LOGIC_MODEL)
+
+    def translate_logic(self, user_query):
         if self.fails:
             raise RuntimeError("provider down")
         return LogicVerificationTask(
             variables={"x": "Int"}, constraints=["x > 5"], claim="x > 3", goal="VALIDITY"
         )
 
-    def translation_model(self, provider_key=None):
-        return LOGIC_MODEL
+
+def _configure(monkeypatch, provider_class):
+    # The real TranslationLayer and DSL bridge run; only the provider stands in.
+    monkeypatch.setattr(settings, "ACTIVE_PROVIDER", "ollama")
+    monkeypatch.setattr("qwed_new.core.translator.OllamaProvider", provider_class)
 
 
 def test_the_dsl_bridge_returns_the_model_with_the_translation(monkeypatch):
-    monkeypatch.setattr("qwed_new.core.dsl_logic_verifier.TranslationLayer", _LogicTranslator)
+    _configure(monkeypatch, _LogicProvider)
     dsl_code, _, provider, error, claim, model = DSLLogicVerifier().translate_to_dsl(QUESTION)
 
-    assert (dsl_code, provider, error, claim) == ("(GT x 5)", "openai", None, "(GT x 3)")
+    assert dsl_code == "(GT x 5)"
+    assert claim == "(GT x 3)"
+    assert error is None
+    assert provider == "ollama"
     assert model == LOGIC_MODEL
 
 
 def test_the_dsl_bridge_names_the_model_asked_when_translation_fails(monkeypatch):
-    class _Failing(_LogicTranslator):
+    class _Failing(_LogicProvider):
         fails = True
 
-    monkeypatch.setattr("qwed_new.core.dsl_logic_verifier.TranslationLayer", _Failing)
-    _, _, provider, error, _, model = DSLLogicVerifier().translate_to_dsl(QUESTION)
+    _configure(monkeypatch, _Failing)
+    dsl_code, _, provider, error, _, model = DSLLogicVerifier().translate_to_dsl(QUESTION)
 
-    assert error is not None and error.status == "ERROR"
-    assert provider == "openai"
+    assert dsl_code is None
+    assert error.status == "ERROR"
+    assert error.error == "LLM translation failed"
+    assert error.provider_used == "ollama"
+    assert provider == "ollama"
     assert model == LOGIC_MODEL
+
+
+def test_two_first_requests_at_once_use_one_provider(monkeypatch):
+    # The second thread's provider is built and stored while the first
+    # thread's is still being built (CodeAnt). Both threads must then use
+    # the stored one, the instance translation_model reads (#585).
+    first_building = threading.Event()
+    second_stored = threading.Event()
+    built = []
+
+    class _Slow(_Configured):
+        def __init__(self):
+            super().__init__(f"model-{len(built) + 1}")
+            built.append(self)
+            if len(built) == 1:
+                first_building.set()
+                second_stored.wait(5)
+
+    _configure(monkeypatch, _Slow)
+    layer = TranslationLayer()
+    got = {}
+
+    def first():
+        got["first"] = layer._get_provider("ollama")
+
+    def second():
+        first_building.wait(5)
+        got["second"] = layer._get_provider("ollama")
+        second_stored.set()
+
+    threads = [threading.Thread(target=first), threading.Thread(target=second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+
+    assert len(built) == 2
+    assert got["first"] is got["second"]
+    assert got["first"] is layer._providers["ollama"]
+    assert layer.translation_model("ollama") == got["first"].model_id
