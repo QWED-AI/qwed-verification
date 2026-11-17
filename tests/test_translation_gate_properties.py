@@ -101,12 +101,19 @@ def test_a_dot_star_phrase_that_never_completes_costs_what_plain_text_costs(whol
     gateway = SecurityGateway()
     crafted = "disregard " * 1000
     plain = "dismissal " * 1000
-    best = {crafted: float("inf"), plain: float("inf")}
-    for _ in range(5):
+
+    def elapsed_ns(text):
+        # Integer nanoseconds. perf_counter_ns, not monotonic_ns: on Windows
+        # time.monotonic is GetTickCount64, 15.6 ms a tick, too coarse for a
+        # check that takes about 2 ms.
+        started = time.perf_counter_ns()
+        assert gateway.detect_injection(text, whole_words=whole_words) == (True, None)
+        return time.perf_counter_ns() - started
+
+    best = {crafted: elapsed_ns(crafted), plain: elapsed_ns(plain)}
+    for _ in range(4):
         for text in (crafted, plain):
-            started = time.perf_counter()
-            assert gateway.detect_injection(text, whole_words=whole_words) == (True, None)
-            best[text] = min(best[text], time.perf_counter() - started)
+            best[text] = min(best[text], elapsed_ns(text))
     assert best[crafted] < 5 * best[plain]
 
 
