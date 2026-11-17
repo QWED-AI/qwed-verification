@@ -233,17 +233,25 @@ def test_refused_questions_do_not_open_the_circuit_breaker(provider, path):
 STATS_QUESTION = f"{INJECTION} What is the average of 2, 4 and 6?"
 
 
+@pytest.mark.parametrize("open_breakers", [(), ("SymPy", "Python", "Z3")],
+                         ids=["breakers-closed", "translation-breakers-open"])
 @pytest.mark.parametrize("call", [
     lambda v: v.verify_with_consensus(STATS_QUESTION, mode=VerificationMode.MAXIMUM),
     lambda v: asyncio.run(v.verify_async(STATS_QUESTION, mode=VerificationMode.MAXIMUM)),
 ], ids=["sync", "async"])
-def test_a_refused_question_gets_no_answer_from_an_engine_that_needs_no_model(provider, call):
-    # Stats computes from the question itself, with no model: the request is
-    # still refused, not answered with its statistic (Sentry).
-    result = call(ConsensusVerifier())
+def test_a_refused_question_is_refused_before_any_engine_runs(provider, call, open_breakers):
+    # Stats computes from the question itself, with no model (Sentry), and
+    # with the translation engines' breakers open it was the only engine left
+    # to run (CodeRabbit). The question is refused before any engine runs.
+    verifier = ConsensusVerifier()
+    for engine in open_breakers:
+        for _ in range(verifier.circuit_breaker.failure_threshold):
+            verifier.circuit_breaker.record_failure(engine)
+
+    result = call(verifier)
 
     assert provider.calls == []
-    assert "Stats" in {r.engine_name for r in result.verification_chain}
+    assert result.verification_chain == []
     assert result.status == DiagnosticStatus.BLOCKED
     assert result.final_answer is None
 

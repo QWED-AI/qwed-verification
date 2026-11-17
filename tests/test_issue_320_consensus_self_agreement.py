@@ -23,6 +23,10 @@ from tests.test_issue_320_logic_route_admission import client  # noqa: F401  (fi
 class _Translator:
     """Stands in for the model: the expression and the answer it claims."""
 
+    def screen_question(self, text):
+        # The question passes the gate consensus runs first (#632).
+        return text
+
     def translate(self, query):
         return SimpleNamespace(expression="2+2", claimed_answer=4)
 

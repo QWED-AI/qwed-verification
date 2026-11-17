@@ -171,6 +171,12 @@ class TranslationLayer:
             raise TranslationRefused(f"Security Policy Violation: {reason}")
         return text
 
+    def screen_question(self, text: str) -> str:
+        """The check ``translate`` and ``translate_logic`` run, for a caller
+        that refuses a question before dispatching it to anything (consensus,
+        #632); ``TranslationRefused`` when it is refused."""
+        return self._screened(text)
+
     def _screened_data(self, text: str) -> str:
         """Stats or fact text, once the policy engine's phrase check passes;
         otherwise ``TranslationRefused``. Its length bound also keeps the

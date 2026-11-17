@@ -65,9 +65,6 @@ class EngineResult:
     success: bool
     error: Optional[str] = None
     status: Optional[str] = None  # DiagnosticStatus value — preserves status through consensus
-    # The translation gate refused the question (#632): a fact about the
-    # caller's text, not about the engine, so the breaker does not record it.
-    refused: bool = False
 
 
 @dataclass
@@ -444,6 +441,9 @@ class ConsensusVerifier:
             >>> print(result.final_answer)
         """
         start_time = time.time()
+        refused = self._refused(query, start_time)
+        if refused:
+            return refused
         
         # Determine engines to use
         engine_methods = self._select_engines(query, mode)
@@ -496,6 +496,9 @@ class ConsensusVerifier:
             >>> result = await verifier.verify_async("2+2")
         """
         start_time = time.time()
+        refused = self._refused(query, start_time)
+        if refused:
+            return refused
         engine_methods = self._select_engines(query, mode)
 
         results = []
@@ -563,6 +566,30 @@ class ConsensusVerifier:
             proof_ref=consensus.get("proof_ref"),
             verified_evidence=consensus.get("verified_evidence"),
         )
+
+    def _refused(self, query: str, start_time: float) -> Optional[ConsensusResult]:
+        """BLOCKED, with no answer, for a question the translation gate
+        refuses (#632), else None.
+
+        It is checked once, before any engine is dispatched, so the refusal
+        does not depend on which engines run or on their breakers: no engine
+        answers a refused question (Stats needs no model and would), and none
+        records it as a failure.
+        """
+        from qwed_new.core.translator import TranslationLayer
+        try:
+            TranslationLayer().screen_question(query)
+        except TranslationRefused:
+            return ConsensusResult(
+                final_answer=None,
+                confidence=0.0,
+                engines_used=0,
+                agreement_status="blocked",
+                verification_chain=[],
+                total_latency_ms=(time.time() - start_time) * 1000,
+                status=DiagnosticStatus.BLOCKED,
+            )
+        return None
 
     def _select_engines(self, query: str, mode: VerificationMode) -> List[Tuple[str, Callable]]:
         """Select engines based on mode and query type."""
@@ -660,10 +687,8 @@ class ConsensusVerifier:
         return None, exc, False
 
     def _record_engine_result(self, engine_name: str, result: EngineResult):
-        """Record result with circuit breaker. A refused question is not
-        recorded (#632): otherwise refused questions alone would open an
-        engine's breaker for every tenant."""
-        if self.circuit_breaker and not result.refused:
+        """Record result with circuit breaker."""
+        if self.circuit_breaker:
             if result.success:
                 self.circuit_breaker.record_success(engine_name, result.latency_ms)
             else:
@@ -812,7 +837,6 @@ class ConsensusVerifier:
                 success=False,
                 error=str(e),
                 status="BLOCKED",
-                refused=isinstance(e, TranslationRefused),
             )
         except Exception as e:
             return EngineResult(
@@ -869,7 +893,6 @@ class ConsensusVerifier:
                 result=None, confidence=0.0,
                 latency_ms=(time.time() - start) * 1000, success=False,
                 error=str(e), status="BLOCKED",
-                refused=isinstance(e, TranslationRefused),
             )
     
     def _verify_with_logic(self, query: str) -> EngineResult:
@@ -893,7 +916,6 @@ class ConsensusVerifier:
                 result=None, confidence=0.0,
                 latency_ms=(time.time() - start) * 1000, success=False,
                 error=str(e), status="BLOCKED",
-                refused=isinstance(e, TranslationRefused),
             )
     
     def _verify_with_stats(self, query: str) -> EngineResult:
@@ -951,26 +973,6 @@ class ConsensusVerifier:
     # Consensus Calculation
     # =========================================================================
     
-    @staticmethod
-    def _stopped_outcome(results: List[EngineResult]) -> Optional[Dict[str, Any]]:
-        """The outcome when no engine's answer may stand, else None: secure
-        execution was required and is unavailable, or the gate refused the
-        question (#632), whatever an engine that needs no model (Stats)
-        computed from it."""
-        if any(r.error == SECURE_EXECUTION_REQUIRED for r in results):
-            return {"answer": None, "confidence": 0.0, "status": "blocked_secure_execution", "diagnostic_status": DiagnosticStatus.BLOCKED}
-
-        refusals = [r.error for r in results if r.refused]
-        if refusals:
-            return {
-                "answer": None,
-                "confidence": 0.0,
-                "status": "blocked",
-                "diagnostic_status": DiagnosticStatus.BLOCKED,
-                "errors": refusals,
-            }
-        return None
-
     def _calculate_consensus(self, results: List[EngineResult]) -> Dict[str, Any]:
         """Calculate weighted consensus from engine results.
 
@@ -982,14 +984,12 @@ class ConsensusVerifier:
         - No BLOCKED, unanimous, and verified by two engines or more → VERIFIED
         - Verified by one engine alone, whatever the others did → BLOCKED:
           one engine is not a consensus (#320)
-        - The gate refused the question → BLOCKED (#632)
         """
         if not results:
             return {"answer": None, "confidence": 0.0, "status": "no_results", "diagnostic_status": DiagnosticStatus.UNVERIFIABLE}
 
-        stopped = self._stopped_outcome(results)
-        if stopped:
-            return stopped
+        if any(r.error == SECURE_EXECUTION_REQUIRED for r in results):
+            return {"answer": None, "confidence": 0.0, "status": "blocked_secure_execution", "diagnostic_status": DiagnosticStatus.BLOCKED}
 
         blocked = [r for r in results if r.status == "BLOCKED"]
         active = [r for r in results if r.status != "BLOCKED"]
@@ -1123,8 +1123,6 @@ class ConsensusVerifier:
             from qwed_new.core.translator import TranslationLayer
             translator = TranslationLayer()
             task = translator.translate(query)
-        except TranslationRefused:
-            raise
         except Exception as exc:
             raise ValueError(f"Query translation failed: {exc}") from exc
 
@@ -1135,8 +1133,6 @@ class ConsensusVerifier:
         try:
             task = self.translator.translate(query)
             return f"result = {task.expression}"
-        except TranslationRefused:
-            raise
         except Exception as e:
             raise ValueError(f"Verification code generation failed: {e}") from e
     
@@ -1146,8 +1142,6 @@ class ConsensusVerifier:
             from qwed_new.core.translator import TranslationLayer
             translator = TranslationLayer()
             return translator.translate_logic(query)
-        except TranslationRefused:
-            raise
         except Exception as e:
             raise ValueError(f"Logic translation failed: {e}") from e
     
