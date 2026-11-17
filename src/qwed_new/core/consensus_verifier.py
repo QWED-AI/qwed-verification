@@ -496,7 +496,9 @@ class ConsensusVerifier:
             >>> result = await verifier.verify_async("2+2")
         """
         start_time = time.time()
-        refused = self._refused(query, start_time)
+        # Off the event loop: on a long question the check takes tens of
+        # milliseconds, which would stall every request on this worker (#340).
+        refused = await asyncio.to_thread(self._refused, query, start_time)
         if refused:
             return refused
         engine_methods = self._select_engines(query, mode)

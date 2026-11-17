@@ -22,6 +22,7 @@ BLOCKED, and fact refuses a request whose advisory text is refused.
 """
 
 import asyncio
+import threading
 from types import SimpleNamespace
 
 import pandas as pd
@@ -254,6 +255,28 @@ def test_a_refused_question_is_refused_before_any_engine_runs(provider, call, op
     assert result.verification_chain == []
     assert result.status == DiagnosticStatus.BLOCKED
     assert result.final_answer is None
+
+
+def test_the_async_path_screens_off_the_event_loop(provider):
+    # On a long question the check takes tens of milliseconds; on the event
+    # loop it would stall every request on the worker (#340).
+    verifier = ConsensusVerifier()
+    screened_on = []
+    screen = verifier._refused
+
+    def recording(query, start_time):
+        screened_on.append(threading.get_ident())
+        return screen(query, start_time)
+
+    verifier._refused = recording
+
+    async def run():
+        return threading.get_ident(), await verifier.verify_async(INJECTION)
+
+    loop_thread, result = asyncio.run(run())
+
+    assert result.status == DiagnosticStatus.BLOCKED
+    assert screened_on and screened_on[0] != loop_thread
 
 
 def test_stats_no_longer_reaches_the_model_with_a_refused_question(provider):
