@@ -23,6 +23,13 @@ class ProviderConfigError(ValueError):
     """
 
 
+class TranslationRefused(ValueError):
+    """The caller's text was refused before any model saw it (#632).
+
+    It is a ValueError, which the consensus engines and the logic bridge
+    already treat as a failed translation (BLOCKED)."""
+
+
 # Providers QWED no longer has (#617): each name, with the provider to use
 # instead and the settings that replace its own. A retired name is refused, as
 # a name QWED does not know is, but the message says what to set.

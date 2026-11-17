@@ -66,10 +66,16 @@ class SecurityGateway:
         self.pii_patterns = PII_PATTERNS
 
 
-    def detect_injection(self, prompt: str) -> Tuple[bool, Optional[str]]:
+    def detect_injection(self, prompt: str, whole_words: bool = False) -> Tuple[bool, Optional[str]]:
         """
         Checks for potential prompt injection attempts.
         Returns (is_safe, reason).
+
+        With ``whole_words`` a pattern matches only where no letter or digit
+        touches it, so "act as" is not found inside "Impact assessment"
+        (#632). An underscore separates, as a space does, and the last word
+        may still take an English ending ("prompts", "prompted", "modes"),
+        so neither gets a phrase past the check.
         """
         # 1. Length Check (Prevent buffer overflow / context exhaustion)
         if len(prompt) > 10000:
@@ -81,7 +87,9 @@ class SecurityGateway:
 
         # 3. Heuristic Check — runs for ALL inputs (no whitelist bypass)
         for pattern in self.injection_patterns:
-            if re.search(pattern, normalized, re.IGNORECASE):
+            # [^\W_] is a letter or digit: a word character other than "_".
+            search = rf"(?<![^\W_])(?:{pattern})(?:s|es|ed|ing)?(?![^\W_])" if whole_words else pattern
+            if re.search(search, normalized, re.IGNORECASE):
                 return False, f"Potential Prompt Injection detected: '{pattern}'"
 
         return True, None

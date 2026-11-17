@@ -58,7 +58,9 @@ def test_cache_print_stats_uses_plain_fallback_when_qwed_local_import_fails(monk
 
 def test_consensus_helper_fallbacks_and_failures(monkeypatch):
     _block_import(monkeypatch, ["qwed_new.core.translator"])
-    sys.modules.pop("qwed_new.core.translator", None)
+    # Restored after the test: a later import would otherwise make a second
+    # translator module, which tests that patch it by name never reach.
+    monkeypatch.delitem(sys.modules, "qwed_new.core.translator", raising=False)
 
     verifier = ConsensusVerifier()
 

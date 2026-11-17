@@ -19,7 +19,7 @@ import hashlib
 import logging
 from collections import Counter
 
-from qwed_new.providers.base import ProviderConfigError
+from qwed_new.providers.base import ProviderConfigError, TranslationRefused
 
 from qwed_new.core.diagnostics import (
     AdvisoryCheck,
@@ -198,29 +198,11 @@ class FactVerifier:
             )
 
         # Step 8: LLM fallback is advisory-only (fixes #133), confidence-gated
-        llm_advisory = None
-        provider_config_error: Optional[ProviderConfigError] = None
+        refusal = None
         if confidence < min_confidence and self.use_llm_fallback and provider:
             methods_used.append({"name": "llm_fallback", "advisory_only": True})
-            try:
-                llm_result = self._llm_fallback(claim, context, provider)
-            except ProviderConfigError as e:
-                # The provider the request names cannot run (an unknown name,
-                # or no model): the setting to fix, not a provider failure.
-                logger.warning("Fact advisory stopped: %s", e)
-                provider_config_error = e
-                llm_result = None
-            if llm_result:
-                llm_advisory = AdvisoryCheck(
-                    name="llm_fallback",
-                    constraint_id="fact_verifier.llm_advisory_only",
-                    details={
-                        "llm_verdict": llm_result.get("verdict"),
-                        "llm_confidence": llm_result.get("confidence"),
-                        "llm_reasoning": llm_result.get("reasoning"),
-                        "advisory_only": True,
-                    }
-                )
+            llm_advisory, refusal = self._llm_advisory(claim, context, provider)
+            if llm_advisory:
                 advisory_checks.append(llm_advisory)
 
         developer_fields: Dict[str, Any] = {
@@ -238,12 +220,13 @@ class FactVerifier:
             ],
             "scores": {k: round(v, 3) for k, v in scores.items()},
         }
-        if provider_config_error is not None:
+        if refusal is not None:
             # The request is refused rather than answered without the advisory
             # it asked for. Its message carries nothing from a provider, and
             # what the deterministic pass computed is kept.
-            developer_fields["constraint_id"] = "fact_verifier.provider_config_error"
-            return DiagnosticResult.blocked(str(provider_config_error), developer_fields)
+            constraint_id, refused = refusal
+            developer_fields["constraint_id"] = constraint_id
+            return DiagnosticResult.blocked(str(refused), developer_fields)
         if advisory_checks:
             developer_fields["advisory_checks"] = advisory_checks
 
@@ -623,8 +606,9 @@ class FactVerifier:
         """
         Use LLM as last resort when deterministic methods are insufficient.
 
-        A provider failure gives no advisory (None). ProviderConfigError is
-        raised: the provider cannot run as selected, which the caller must see.
+        A provider failure gives no advisory (None). ProviderConfigError and
+        TranslationRefused are raised: the provider cannot run as selected, or
+        the claim or context was refused (#632), which the caller must see.
         """
         try:
             if self._translator is None:
@@ -632,11 +616,44 @@ class FactVerifier:
                 self._translator = TranslationLayer()
             
             return self._translator.verify_fact(claim, context, provider=provider)
-        except ProviderConfigError:
+        except (ProviderConfigError, TranslationRefused):
             raise
         except Exception:
             return None
-    
+
+    def _llm_advisory(
+        self, claim: str, context: str, provider: str
+    ) -> Tuple[Optional[AdvisoryCheck], Optional[Tuple[str, ValueError]]]:
+        """The model advisory, or why the request is refused instead.
+
+        Returns ``(advisory, None)``, the advisory None when the provider
+        failed; or ``(None, (constraint_id, refused))`` when the request is
+        refused rather than answered without the advisory it asked for.
+        """
+        try:
+            llm_result = self._llm_fallback(claim, context, provider)
+        except ProviderConfigError as e:
+            # The provider the request names cannot run (an unknown name,
+            # or no model): the setting to fix, not a provider failure.
+            logger.warning("Fact advisory stopped: %s", e)
+            return None, ("fact_verifier.provider_config_error", e)
+        except TranslationRefused as e:
+            # The claim or context was refused before the model saw it (#632).
+            logger.warning("Fact advisory refused: %s", e)
+            return None, ("fact_verifier.translation_refused", e)
+        if not llm_result:
+            return None, None
+        return AdvisoryCheck(
+            name="llm_fallback",
+            constraint_id="fact_verifier.llm_advisory_only",
+            details={
+                "llm_verdict": llm_result.get("verdict"),
+                "llm_confidence": llm_result.get("confidence"),
+                "llm_reasoning": llm_result.get("reasoning"),
+                "advisory_only": True,
+            }
+        ), None
+
     # =========================================================================
     # Utilities
     # =========================================================================

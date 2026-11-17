@@ -27,6 +27,7 @@ _CIRCUIT_OPEN_ERROR = "Engine excluded by open circuit breaker"
 import threading
 
 from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus, compute_proof_ref
+from qwed_new.providers.base import TranslationRefused
 
 from .verification_context import VerificationContextDocument
 
@@ -440,6 +441,9 @@ class ConsensusVerifier:
             >>> print(result.final_answer)
         """
         start_time = time.time()
+        refused = self._refused(query, start_time)
+        if refused:
+            return refused
         
         # Determine engines to use
         engine_methods = self._select_engines(query, mode)
@@ -492,6 +496,11 @@ class ConsensusVerifier:
             >>> result = await verifier.verify_async("2+2")
         """
         start_time = time.time()
+        # Off the event loop: on a long question the check takes tens of
+        # milliseconds, which would stall every request on this worker (#340).
+        refused = await asyncio.to_thread(self._refused, query, start_time)
+        if refused:
+            return refused
         engine_methods = self._select_engines(query, mode)
 
         results = []
@@ -559,6 +568,30 @@ class ConsensusVerifier:
             proof_ref=consensus.get("proof_ref"),
             verified_evidence=consensus.get("verified_evidence"),
         )
+
+    def _refused(self, query: str, start_time: float) -> Optional[ConsensusResult]:
+        """BLOCKED, with no answer, for a question the translation gate
+        refuses (#632), else None.
+
+        It is checked once, before any engine is dispatched, so the refusal
+        does not depend on which engines run or on their breakers: no engine
+        answers a refused question (Stats needs no model and would), and none
+        records it as a failure.
+        """
+        from qwed_new.core.translator import TranslationLayer
+        try:
+            TranslationLayer().screen_question(query)
+        except TranslationRefused:
+            return ConsensusResult(
+                final_answer=None,
+                confidence=0.0,
+                engines_used=0,
+                agreement_status="blocked",
+                verification_chain=[],
+                total_latency_ms=(time.time() - start_time) * 1000,
+                status=DiagnosticStatus.BLOCKED,
+            )
+        return None
 
     def _select_engines(self, query: str, mode: VerificationMode) -> List[Tuple[str, Callable]]:
         """Select engines based on mode and query type."""

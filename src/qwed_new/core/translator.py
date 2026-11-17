@@ -10,7 +10,8 @@ import ast
 from qwed_new.config import settings, ProviderType
 from qwed_new.core.router import UNKNOWN_PROVIDER
 from qwed_new.core.schemas import MathVerificationTask
-from qwed_new.providers.base import RETIRED_PROVIDERS, LLMProvider, ProviderConfigError
+from qwed_new.core.security import EnhancedSecurityGateway
+from qwed_new.providers.base import RETIRED_PROVIDERS, LLMProvider, ProviderConfigError, TranslationRefused
 from qwed_new.providers.azure_openai import AzureOpenAIProvider
 from qwed_new.providers.anthropic import AnthropicProvider
 from qwed_new.providers.auto_shift import AutoShiftProvider
@@ -31,9 +32,24 @@ class TranslationLayer:
     """
     The main entry point for translation.
     Delegates to the configured LLM provider.
+
+    Every translation method screens each caller-controlled text before any
+    provider sees it, so a route that calls the model directly (consensus,
+    stats, fact) is screened too (#632). A refused text raises
+    ``TranslationRefused``.
+
+    - A maths or logic question gets the check the control plane runs on
+      ``/verify/natural_language`` and ``/verify/logic``, so consensus
+      refuses what those routes refuse.
+    - Stats and fact text (the question, each column name, the claim and the
+      context) gets the phrase check the policy engine runs, with its
+      10,000-character bound. The maths check also refuses ordinary words
+      such as "mode" or "system" and anything over 2,000 characters, which
+      a statistics question or a fact's context often is.
     """
-    
+
     def __init__(self):
+        self._screen = EnhancedSecurityGateway()
         # Lazy loading: providers are instantiated on first use
         self._providers = {}
         self._provider_classes = {
@@ -147,12 +163,36 @@ class TranslationLayer:
         if not (0.0 <= task.confidence <= 1.0):
             raise SecurityError("Invalid confidence value")
 
+    def _screened(self, text: str) -> str:
+        """A maths or logic question, once the control plane's check passes;
+        otherwise ``TranslationRefused``, with the reason it gives."""
+        is_safe, reason = self._screen.detect_advanced_injection(str(text))
+        if not is_safe:
+            raise TranslationRefused(f"Security Policy Violation: {reason}")
+        return text
+
+    def screen_question(self, text: str) -> str:
+        """The check ``translate`` and ``translate_logic`` run, for a caller
+        that refuses a question before dispatching it to anything (consensus,
+        #632); ``TranslationRefused`` when it is refused."""
+        return self._screened(text)
+
+    def _screened_data(self, text: str) -> str:
+        """Stats or fact text, once the policy engine's phrase check passes;
+        otherwise ``TranslationRefused``. Its length bound also keeps the
+        phrase patterns' cost bounded on a long context."""
+        is_safe, reason = self._screen.basic_gateway.detect_injection(str(text), whole_words=True)
+        if not is_safe:
+            raise TranslationRefused(f"Security Policy Violation: {reason}")
+        return text
+
     def translate(self, user_query: str, provider: str | None = None) -> MathVerificationTask:
         """
         Translate query using the specified provider.
         Includes output verification for security.
         """
-        task = self._get_provider(provider).translate(user_query)
+        text = self._screened(user_query)
+        task = self._get_provider(provider).translate(text)
         
         # ADD: Output verification (OWASP LLM05:2025)
         self._validate_math_output(task)
@@ -163,22 +203,31 @@ class TranslationLayer:
         """
         Translate logic query using the specified provider.
         """
-        return self._get_provider(provider).translate_logic(user_query)
+        text = self._screened(user_query)
+        return self._get_provider(provider).translate_logic(text)
 
     def refine_logic(self, user_query: str, previous_error: str, provider: str | None = None):
         """
         Refine logic query based on feedback.
         """
-        return self._get_provider(provider).refine_logic(user_query, previous_error)
+        text = self._screened(user_query)
+        self._screened_data(previous_error)
+        return self._get_provider(provider).refine_logic(text, previous_error)
 
     def translate_stats(self, query: str, columns: list[str], provider: str | None = None) -> str:
         """
         Generate Python code for statistical verification.
         """
-        return self._get_provider(provider).translate_stats(query, columns)
+        text = self._screened_data(query)
+        # The column names are the uploaded CSV's header: caller text too.
+        for name in columns:
+            self._screened_data(name)
+        return self._get_provider(provider).translate_stats(text, columns)
 
     def verify_fact(self, claim: str, context: str, provider: str | None = None) -> dict:
         """
         Verify a claim against a context.
         """
-        return self._get_provider(provider).verify_fact(claim, context)
+        text = self._screened_data(claim)
+        self._screened_data(context)
+        return self._get_provider(provider).verify_fact(text, context)
