@@ -655,10 +655,18 @@ class ConsensusVerifier:
             return task.result(), None, False
         return None, exc, False
 
-    def _record_engine_result(self, engine_name: str, result: EngineResult):
-        """Record result with circuit breaker."""
+    def _record_engine_result(self, engine_name: str, result: EngineResult, answered: bool = True):
+        """Record result with circuit breaker.
+
+        The breaker measures engine health, not verdicts (#642), and every
+        tenant shares it. An engine that answered within its time budget is
+        healthy, whatever the answer: a wrong claim, an unsatisfiable model
+        or a question it cannot use is about the question. Only an engine
+        that did not answer, a timeout or an exception it did not handle
+        (``answered=False``, from _blocked_engine_result), is a failure.
+        """
         if self.circuit_breaker:
-            if result.success:
+            if answered:
                 self.circuit_breaker.record_success(engine_name, result.latency_ms)
             else:
                 self.circuit_breaker.record_failure(engine_name)
@@ -685,7 +693,7 @@ class ConsensusVerifier:
             status="BLOCKED",
         )
         if record:
-            self._record_engine_result(engine_name, blocked)
+            self._record_engine_result(engine_name, blocked, answered=False)
         return blocked
 
     def _execute_parallel(self, query: str, engines: List[Tuple[str, Callable]]) -> List[EngineResult]:
