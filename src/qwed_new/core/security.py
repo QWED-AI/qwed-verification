@@ -74,9 +74,39 @@ def _read_through_word(word: str) -> str:
 _ENDING = "(?:" + "|".join(_read_through_word(e) for e in ("s", "es", "ed", "ing")) + ")?"
 
 
-def _pattern_in_copies(pattern: str, copies: Tuple[str, ...]) -> bool:
+def _phrase_parts(pattern: str, whole_words: bool) -> Tuple[str, ...]:
+    """``pattern`` as one search per part around its ``.*``, each read
+    through ignorables. In whole-word mode no letter or digit may touch the
+    start of the first part or the end of the last, which may take an
+    ending."""
+    parts = [_read_through_ignorables(part) for part in pattern.split(".*")]
+    if whole_words:
+        edge = _SEEN_LETTER_OR_DIGIT
+        parts[0] = rf"(?<!{edge})(?:{parts[0]})"
+        parts[-1] = rf"(?:{parts[-1]}){_ENDING}(?!{edge})"
+    return tuple(parts)
+
+
+def _parts_in_copies(parts: Tuple[str, ...], copies: Tuple[str, ...]) -> bool:
+    """Whether the parts match one of the copies in order, as ``.*``
+    between them would. The copies hold no newline, so ``.*`` spans all
+    of a copy.
+
+    One search for ``A.*B`` retries from every match of ``A`` and costs
+    their number times the length of the text, about 0.1 s for 10,000
+    characters, all of it holding the GIL (#645). Here each part is one
+    linear search, from where the part before it first ends. The first
+    match of a part ends earliest, so the next part is found whenever
+    ``.*`` would find it."""
+    searches = [re.compile(part, re.IGNORECASE) for part in parts]
     for text in copies:
-        if re.search(pattern, text, re.IGNORECASE):
+        position = 0
+        for search in searches:
+            found = search.search(text, position)
+            if found is None:
+                break
+            position = found.end()
+        else:
             return True
     return False
 
@@ -166,10 +196,7 @@ class SecurityGateway:
 
         # 3. Heuristic Check. Runs for all inputs, with no whitelist bypass.
         for pattern in self.injection_patterns:
-            readable = _read_through_ignorables(pattern)
-            edge = _SEEN_LETTER_OR_DIGIT
-            search = rf"(?<!{edge})(?:{readable}){_ENDING}(?!{edge})" if whole_words else readable
-            if _pattern_in_copies(search, copies):
+            if _parts_in_copies(_phrase_parts(pattern, whole_words), copies):
                 return False, f"Potential Prompt Injection detected: '{pattern}'"
 
         return True, None
@@ -251,9 +278,16 @@ class EnhancedSecurityGateway:
             logger.warning(f"Base64 injection detected: {reason}")
             return False, reason
         
-        # Layer 4: Semantic similarity to system prompt
-        similarity = SequenceMatcher(None, prompt.lower(), self.system_prompt.lower()).ratio()
-        if similarity > self.similarity_threshold:
+        # Layer 4: Semantic similarity to system prompt. ratio() costs about
+        # the product of the two lengths, so its upper bounds come first, as
+        # in difflib.get_close_matches. An input much longer than the system
+        # prompt cannot reach the threshold and skips ratio() (#645).
+        matcher = SequenceMatcher(None, prompt.lower(), self.system_prompt.lower())
+        threshold = self.similarity_threshold
+        similarity = 0.0
+        if matcher.real_quick_ratio() > threshold and matcher.quick_ratio() > threshold:
+            similarity = matcher.ratio()
+        if similarity > threshold:
             self.blocks_count += 1
             logger.warning(f"High similarity to system prompt: {similarity:.2%}")
             return False, (
