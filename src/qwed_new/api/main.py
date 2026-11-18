@@ -734,7 +734,11 @@ async def verify_logic(
         )
         dr = DiagnosticResult.blocked(
             INTERNAL_VERIFICATION_ERROR,
-            {"constraint_id": "api.logic.execution_error", "provider_used": provider_used},
+            {
+                "constraint_id": "api.logic.execution_error",
+                "provider_used": provider_used,
+                "translation_model": result.get("translation_model") if isinstance(result, dict) else None,
+            },
         )
         return _logic_route_response(dr, request.query, tenant.organization_id)
 

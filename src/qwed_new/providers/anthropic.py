@@ -24,6 +24,11 @@ class AnthropicProvider(LLMProvider):
     Uses "tool use" (function calling) to force structured output.
     """
     
+    @property
+    def model_id(self) -> str:
+        """The configured model this provider calls (#585)."""
+        return self.deployment
+
     def __init__(self):
         # Anthropic via Azure AI Foundry
         self.endpoint = os.getenv("ANTHROPIC_ENDPOINT")

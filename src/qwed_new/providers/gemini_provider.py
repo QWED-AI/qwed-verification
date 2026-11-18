@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 
 
 class GeminiProvider(LLMProvider):
+    @property
+    def model_id(self) -> str:
+        """The configured model this provider calls (#585)."""
+        return self.model_name
+
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         self.model_name = configured_model(model, "GEMINI_MODEL", "Gemini")

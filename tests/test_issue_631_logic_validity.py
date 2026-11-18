@@ -144,7 +144,11 @@ def test_an_unknown_goal_is_refused():
 
 def _translates_to(task):
     """The model's translation is ``task``; the bridge and Z3 run for real."""
-    translator = SimpleNamespace(translate_logic=lambda query, provider=None: task, last_resolved_provider="mock")
+    translator = SimpleNamespace(
+        translate_logic=lambda query, provider=None: task,
+        last_resolved_provider="mock",
+        translation_model=lambda provider_key=None: None,
+    )
     return patch("qwed_new.core.dsl_logic_verifier.TranslationLayer", return_value=translator)
 
 

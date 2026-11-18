@@ -110,12 +110,30 @@ class TranslationLayer:
 
         self.last_resolved_provider = key
 
-        # Lazy instantiation: only create provider when first requested
-        if key not in self._providers:
-            self._providers[key] = self._provider_classes[key]()
+        # Lazy instantiation: only create provider when first requested.
+        # Two threads asking first at once may each build one; setdefault
+        # keeps the first stored, so every caller uses, and
+        # translation_model reads, the same instance (#585).
+        provider = self._providers.get(key)
+        if provider is None:
+            provider = self._providers.setdefault(key, self._provider_classes[key]())
         
-        return self._providers[key]
+        return provider
     
+    def translation_model(self, provider_key: str | None = None) -> str | None:
+        """The model behind the provider ``provider_key`` selects, as its
+        user configured it, read from the instance that translated (#585).
+        Under auto-shift it is the side that answered this thread's last
+        call, so read it on the thread that translated. None when no
+        provider QWED knows has run here for that key, or it names no
+        model: reading it never fails a translation that succeeded."""
+        key = self._normalize_provider_key(provider_key) or self.default_provider
+        provider = self._providers.get(key)
+        if not isinstance(provider, LLMProvider):
+            return None
+        model = provider.model_id
+        return model if isinstance(model, str) and model else None
+
     def _validate_math_output(self, task: MathVerificationTask) -> None:
         """
         Validate LLM output before using it.
