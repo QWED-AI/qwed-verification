@@ -37,6 +37,7 @@ class DSLVerificationResult:
     provider_used: Optional[str] = None
     constraint_id: Optional[str] = None  # Names the rule that blocked the result, where one does
     declarations: Optional[Dict[str, str]] = None  # Declared variable -> the sort Z3 decided it as
+    translation_model: Optional[str] = None  # The model the provider asked runs, from its configuration (#585)
 
 
 # Text that ends an operand ("x", "3", ")" or "]"), unless that text is itself
@@ -655,14 +656,18 @@ class DSLLogicVerifier:
         # one thread (z3py's default context is not thread safe). See
         # control_plane.process_logic_query. This wrapper keeps the original
         # synchronous behaviour for direct callers.
-        dsl_code, variables, resolved_provider, error, claim_dsl, _ = self.translate_to_dsl(query, provider)
+        dsl_code, variables, resolved_provider, error, claim_dsl, translation_model = self.translate_to_dsl(
+            query, provider
+        )
         if error is not None:
+            error.translation_model = translation_model
             return error
         if claim_dsl is None:
             verification_result = self.verify_from_dsl(dsl_code, variables)
         else:
             verification_result = self.prove_from_dsl(dsl_code, claim_dsl, variables)
         verification_result.provider_used = resolved_provider
+        verification_result.translation_model = translation_model
         if not verification_result.dsl_code:
             verification_result.dsl_code = dsl_code
         return verification_result

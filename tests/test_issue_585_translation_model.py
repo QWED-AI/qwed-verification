@@ -339,6 +339,27 @@ def test_the_dsl_bridge_names_the_model_asked_when_translation_fails(monkeypatch
     assert model == LOGIC_MODEL
 
 
+def test_the_synchronous_wrapper_names_the_model_on_its_result(monkeypatch):
+    _configure(monkeypatch, _LogicProvider)
+    result = DSLLogicVerifier().verify_from_natural_language(QUESTION)
+
+    assert result.status == "VALID"
+    assert result.provider_used == "ollama"
+    assert result.translation_model == LOGIC_MODEL
+
+
+def test_the_synchronous_wrapper_names_the_model_asked_when_translation_fails(monkeypatch):
+    class _Failing(_LogicProvider):
+        fails = True
+
+    _configure(monkeypatch, _Failing)
+    result = DSLLogicVerifier().verify_from_natural_language(QUESTION)
+
+    assert result.status == "ERROR"
+    assert result.provider_used == "ollama"
+    assert result.translation_model == LOGIC_MODEL
+
+
 def test_two_first_requests_at_once_use_one_provider(monkeypatch):
     # The second thread's provider is built and stored while the first
     # thread's is still being built (CodeAnt). Both threads must then use
