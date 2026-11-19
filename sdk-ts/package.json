@@ -1,6 +1,6 @@
 {
     "name": "@qwed-ai/sdk",
-    "version": "10.0.0",
+    "version": "11.0.0",
     "description": "TypeScript SDK for QWED Verification Protocol",
     "main": "dist/index.js",
     "module": "dist/index.mjs",
