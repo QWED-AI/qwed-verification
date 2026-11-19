@@ -25,8 +25,8 @@ Example:
     )
     
     result = client.verify("What is 2+2?")
-    print(result.verified)  # True
-    print(result.value)  # 4
+    print(result.verified)  # False: the model's answer is not checked
+    print(result.value)  # 4, from the model's own expression
 """
 
 from typing import Optional, Dict, Any, List
@@ -553,6 +553,9 @@ CODE_CACHE_POLICY_VERSION = "code_verifier-v4"
 # verify_logic no longer reports verified (GHSA-8fwp); results cached under
 # the old policy said it did, so they are not read again.
 LOGIC_CACHE_POLICY_VERSION = "logic-v2"
+# verify_math no longer reports verified (GHSA-r9hc); results cached under
+# the old policy said it did, so they are not read again.
+MATH_CACHE_POLICY_VERSION = "math-v2"
 
 
 @dataclass
@@ -827,12 +830,12 @@ class QWEDLocal:
             query: Natural language query
         
         Returns:
-            VerificationResult with verified status
+            VerificationResult. It is never verified: see verify_math.
         
         Example:
             result = client.verify("What is 2+2?")
-            print(result.verified)  # True
-            print(result.value)  # 4
+            print(result.verified)  # False: the model's reading is unchecked
+            print(result.value)  # 4, what SymPy computed from it
         """
         # TODO: Auto-detect query type (math, logic, code, etc.)
         # For now, try math verification
@@ -840,10 +843,16 @@ class QWEDLocal:
     
     def verify_math(self, query: str) -> VerificationResult:
         """
-        Verify mathematical query.
-        
-        Uses SymPy for symbolic verification.
-        Checks cache first to save API costs!
+        Check a model's answer to a maths question against its own expression.
+
+        The model answers and writes the question as a SymPy expression,
+        and SymPy computes that expression. Both come from the model, so
+        their agreement shows only that the model is consistent with
+        itself, not that either means the question: the result is never
+        ``verified`` (GHSA-r9hc). When they disagree, the model contradicted
+        its own expression (``evidence["consistent"]`` is False). To verify
+        an equation you wrote yourself, send it to /verify/math.
+        Checks cache first to save API costs.
         """
         if not self.has_sympy:
             return VerificationResult(
@@ -856,7 +865,7 @@ class QWEDLocal:
             _math_ctx = self._cache_context_class(
                 provider=self.provider or "local",
                 model=self.model,
-                policy_version="v1",
+                policy_version=MATH_CACHE_POLICY_VERSION,
             )
             cached_result = self._cache.get(query, _math_ctx)
             if cached_result:
@@ -907,18 +916,27 @@ SymPy code:"""
                 
                 verified_value = _format_sympy_result(verified_result)
                 
-                # Compare LLM answer with verified result
+                # Compare LLM answer with the computed result. Agreement is
+                # not verification: the expression is the model's own
+                # reading of the query.
                 is_correct = _math_answers_match(llm_answer, verified_result)
                 
                 result = VerificationResult(
-                    verified=is_correct,
+                    verified=False,
                     value=verified_value,
-                    confidence=1.0 if is_correct else 0.0,
+                    confidence=0.0,
+                    error=(
+                        "Not verified: SymPy agrees with the model's answer on the model's own "
+                        "expression, and whether that expression means the question was not checked."
+                        if is_correct else "The model's answer does not match its own expression."
+                    ),
                     evidence={
                         "llm_answer": llm_answer,
                         "verified_value": verified_value,
                         "sympy_expr": llm_expr.strip(),
-                        "method": "sympy_eval_safe"
+                        "method": "sympy_eval_safe",
+                        "consistent": is_correct,
+                        "translation_verified": False,
                     }
                 )
                 
@@ -928,16 +946,19 @@ SymPy code:"""
                         "verified": result.verified,
                         "value": result.value,
                         "confidence": result.confidence,
-                        "evidence": result.evidence
+                        "evidence": result.evidence,
+                        "error": result.error,
                     }
                     self._cache.set(query, cache_data, _math_ctx)
                 
                 # Show result with branding
                 if HAS_COLOR and os.getenv("QWED_QUIET") != "1":
                     if is_correct:
-                        print(f"{QWED.SUCCESS}✅ VERIFIED{QWED.RESET} {QWED.VALUE}→ {verified_value}{QWED.RESET}")
-                        # Show GitHub star nudge on success!
-                        _show_github_nudge()
+                        print(
+                            f"{QWED.WARNING}\u26a0  NOT VERIFIED{QWED.RESET} {QWED.VALUE}→ {verified_value}{QWED.RESET} "
+                            "(the model's answer agrees with its own expression; whether that expression "
+                            "means the question was not checked)"
+                        )
                     else:
                         print(f"{QWED.ERROR}❌ MISMATCH{QWED.RESET}")
                         print(f"  LLM said: {llm_answer}")
@@ -1368,7 +1389,8 @@ def verify(query: str, **kwargs) -> VerificationResult:
     
     Example:
         result = verify("What is 2+2?", model="llama3")
-        print(result.value)  # 4
+        print(result.verified)  # False: the model's answer is not checked
+        print(result.value)  # 4, from the model's own expression
     """
     model = kwargs.get("model")
     if not model:

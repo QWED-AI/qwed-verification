@@ -152,7 +152,8 @@ class TestQWEDLocalExecution(unittest.TestCase):
     """Test the actual execution flow of QWEDLocal, including eval() safety."""
     
     def setUp(self):
-        self.client = QWEDLocal(base_url="http://mock-url", model="mock-model")
+        # No cache: a result an earlier run left would answer without the model.
+        self.client = QWEDLocal(base_url="http://mock-url", model="mock-model", cache=False)
         # Mock the LLM call to return safe expressions
         self.client._call_llm = MagicMock()
 
@@ -165,8 +166,10 @@ class TestQWEDLocalExecution(unittest.TestCase):
         # 2. Call verify_math
         result = self.client.verify_math("What is 2+2?")
         
-        # 3. Assertions
-        self.assertTrue(result.verified)
+        # 3. Assertions: SymPy evaluated the expression; the model's agreement
+        # with its own expression is not verification (GHSA-r9hc).
+        self.assertFalse(result.verified)
+        self.assertTrue(result.evidence["consistent"])
         self.assertEqual(result.value, "4")
         self.assertIn("2 + 2", result.evidence["sympy_expr"])
 

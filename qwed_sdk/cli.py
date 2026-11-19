@@ -2242,9 +2242,7 @@ def interactive(provider: Optional[str], model: Optional[str]):
     Example:
         qwed interactive
         > What is 2+2?
-        VERIFIED -> 4
-        > derivative of x^2
-        VERIFIED -> 2*x
+        NOT VERIFIED -> 4 (the model's own expression, not checked)
     """
     if HAS_COLOR:
         click.echo(f"\n{QWED.BRAND}QWED Interactive Mode{QWED.RESET}")

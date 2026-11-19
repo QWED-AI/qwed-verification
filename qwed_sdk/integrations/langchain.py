@@ -59,7 +59,8 @@ class QWEDTool(BaseTool):
     - Logical statements (SAT, propositional logic)
     - Code security (dangerous patterns, eval/exec detection)
     
-    Returns verified results with 100% confidence or verification failures.
+    A model's answer is never reported as verified: the model also writes
+    the expression that is checked, so agreeing with it proves nothing.
     
     Setup:
         Install QWED with LangChain support: 
@@ -70,16 +71,17 @@ class QWEDTool(BaseTool):
         >>> tool = QWEDTool(provider="openai", api_key="sk-...", model="gpt-4o-mini")
         >>> result = tool.run("What is the derivative of x^2?")
         >>> print(result)
-        ✅ VERIFIED: 2*x
-        Confidence: 100%
-        Method: symbolic
+        ❌ VERIFICATION FAILED
+        Reason: Not verified: ...
+        Confidence: 0%
     """
     
     name: str = "qwed_verify"
     description: str = (
         "Verify mathematical calculations, logical statements, or code "
         "using neurosymbolic AI (LLM + symbolic reasoning). "
-        "Returns deterministic proof (100% confidence) or failure. "
+        "A model's answer is reported as not verified: the model writes the "
+        "expression that is checked, so the result is not proof. "
         "Use for: math problems, logic puzzles, code security checks. "
         "Input should be a clear question or statement to verify."
     )
