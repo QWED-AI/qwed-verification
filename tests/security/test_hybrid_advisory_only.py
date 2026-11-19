@@ -5,6 +5,7 @@ engines must never return VERIFIED from heuristic/model fallback paths.
 from types import SimpleNamespace
 
 from qwed_new.core.image_verifier import ImageVerifier
+from tests.image_fixtures import png
 from qwed_new.core.graph_fact_verifier import GraphFactVerifier
 from qwed_new.core.reasoning_verifier import ReasoningVerifier
 from qwed_new.core.consensus_verifier import ConsensusVerifier, EngineResult, SECURE_EXECUTION_REQUIRED
@@ -56,10 +57,8 @@ class TestImageVerifierAdvisoryOnly:
 
     def test_deterministic_size_match_verified(self):
         """Deterministic dimension match → VERIFIED with proof_ref."""
-        png_header = b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\x00IHDR'
-        w, h = 100, 200
-        header = png_header + w.to_bytes(4, 'big') + h.to_bytes(4, 'big')
-        result = self.verifier.verify_image(header + b'A' * 100, "100x200")
+        header = png(100, 200)
+        result = self.verifier.verify_image(header, "100x200")
         assert result.is_verified
         assert result.proof_ref is not None
 
@@ -366,21 +365,17 @@ class TestImageVerifierEdgeCases:
 
     def test_deterministic_refutation_blocked(self):
         """Dimension mismatch → BLOCKED (not VERIFIED)."""
-        png_header = b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\x00IHDR'
-        w, h = 100, 200
-        header = png_header + w.to_bytes(4, 'big') + h.to_bytes(4, 'big')
+        header = png(100, 200)
         # Claim 800x600 but actual is 100x200
-        result = self.verifier.verify_image(header + b'A' * 100, "800x600")
+        result = self.verifier.verify_image(header, "800x600")
         assert not result.is_verified
         assert result.status.value == "BLOCKED"
         assert result.constraint_id == "image_verifier.deterministic_refuted"
 
     def test_image_width_refutation_blocked(self):
         """Width mismatch → BLOCKED."""
-        png_header = b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\x00IHDR'
-        w, h = 100, 200
-        header = png_header + w.to_bytes(4, 'big') + h.to_bytes(4, 'big')
-        result = self.verifier.verify_image(header + b'A' * 100, "width is 999")
+        header = png(100, 200)
+        result = self.verifier.verify_image(header, "width is 999")
         assert not result.is_verified
         assert result.status.value == "BLOCKED"
 
@@ -687,8 +682,7 @@ class TestImageBatchVerifierDiagnosticResult:
     def test_empty_batch_fails_closed(self):
         # Pass a valid image so the BLOCKED status is provably caused by the
         # empty claims list alone, not by an empty/invalid image.
-        png_header = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x00IHDR"
-        img = png_header + (100).to_bytes(4, "big") + (200).to_bytes(4, "big") + b"A" * 100
+        img = png(100, 200)
         result = self.verifier.verify_batch(img, [])
         assert result.status.value == "BLOCKED"
         assert result.constraint_id == "image_verifier.empty_batch"
@@ -697,8 +691,7 @@ class TestImageBatchVerifierDiagnosticResult:
 
     def test_all_deterministic_verified_batch_verified(self):
         """Deterministic size claims → batch VERIFIED with proof_ref."""
-        png_header = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x00IHDR"
-        img = png_header + (100).to_bytes(4, "big") + (200).to_bytes(4, "big") + b"A" * 100
+        img = png(100, 200)
         result = self.verifier.verify_batch(img, ["100x200"])
         assert result.status.value == "VERIFIED"
         assert result.proof_ref is not None
@@ -706,10 +699,8 @@ class TestImageBatchVerifierDiagnosticResult:
 
     def test_batch_proof_binds_image_and_claims(self):
         """The batch proof must change when the image bytes or claim text change."""
-        png_header = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x00IHDR"
-        dims = (100).to_bytes(4, "big") + (200).to_bytes(4, "big")
-        img_a = png_header + dims + b"A" * 100
-        img_b = png_header + dims + b"B" * 100
+        img_a = png(100, 200, text=b"A" * 100)
+        img_b = png(100, 200, text=b"B" * 100)
 
         proof_a = self.verifier.verify_batch(img_a, ["100x200"]).proof_ref
         proof_b = self.verifier.verify_batch(img_b, ["100x200"]).proof_ref
@@ -727,8 +718,7 @@ class TestImageBatchVerifierDiagnosticResult:
         assert result.developer_fields["summary"]["unverifiable"] == 1
 
     def test_result_items_carry_claim(self):
-        png_header = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x00IHDR"
-        img = png_header + (100).to_bytes(4, "big") + (200).to_bytes(4, "big") + b"A" * 100
+        img = png(100, 200)
         result = self.verifier.verify_batch(img, ["100x200"])
         items = result.developer_fields["results"]
         assert items[0]["claim"] == "100x200"

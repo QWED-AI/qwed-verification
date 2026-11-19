@@ -15,7 +15,6 @@ and VLM is only used for claims that require semantic understanding.
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 import re
-import struct
 import hashlib
 
 from qwed_new.core.diagnostics import (
@@ -24,6 +23,7 @@ from qwed_new.core.diagnostics import (
     aggregate_batch_diagnostic,
 )
 
+from .image_headers import gif_size, jpeg_size, png_size, webp_size
 from .verification_context import VerificationContextDocument
 
 _INCONCLUSIVE_MSG = "Image verification inconclusive"
@@ -186,9 +186,16 @@ class ImageVerifier:
         """
         return self._verify_claim(image_bytes, claim, None)
 
-    def _verify_claim(self, image_bytes: bytes, claim: str, image_sha256: Optional[str]) -> DiagnosticResult:
-        """verify_image, given the image's SHA-256 when the caller has it, as
-        verify_batch does for all its claims on one image (#320)."""
+    def _verify_claim(
+        self,
+        image_bytes: bytes,
+        claim: str,
+        image_sha256: Optional[str],
+        metadata: Optional[ImageAnalysisResult] = None,
+    ) -> DiagnosticResult:
+        """verify_image, given the image's SHA-256 and metadata when the caller
+        has them, as verify_batch does for all its claims on one image (#320):
+        the image is walked once per batch, not once per claim (GHSA-vch3)."""
         if not image_bytes or not claim:
             return DiagnosticResult.unverifiable(
                 _INCONCLUSIVE_MSG,
@@ -202,7 +209,8 @@ class ImageVerifier:
             )
 
         methods_used = ["metadata_extraction"]
-        metadata = self._extract_metadata(image_bytes)
+        if metadata is None:
+            metadata = self._extract_metadata(image_bytes)
         analysis = {
             "metadata": {"width": metadata.width, "height": metadata.height, "format": metadata.format},
             "claim_type": self._classify_claim(claim),
@@ -310,76 +318,36 @@ class ImageVerifier:
     
     def _extract_metadata(self, image_bytes: bytes) -> ImageAnalysisResult:
         """
-        Extract basic metadata from image bytes.
-        Supports PNG, JPEG, GIF headers.
+        Extract basic metadata from image bytes: the format its signature
+        names (PNG, JPEG, GIF, WebP) and, only when the whole container
+        parses, the width and height its header states (GHSA-vch3).
+        Otherwise the dimensions stay 0, so a size claim is not decided.
         """
         result = ImageAnalysisResult()
-        
+
         if len(image_bytes) < 8:
             return result
-        
-        # Check PNG
+
+        size = None
         if image_bytes[:8] == b'\x89PNG\r\n\x1a\n':
             result.format = "PNG"
-            # PNG IHDR chunk contains width and height
-            if len(image_bytes) > 24:
-                result.width = struct.unpack('>I', image_bytes[16:20])[0]
-                result.height = struct.unpack('>I', image_bytes[20:24])[0]
-        
-        # Check JPEG
+            size = png_size(image_bytes)
         elif image_bytes[:2] == b'\xff\xd8':
             result.format = "JPEG"
-            # Parse JPEG for dimensions
-            result.width, result.height = self._parse_jpeg_dimensions(image_bytes)
-        
-        # Check GIF
+            size = jpeg_size(image_bytes)
         elif image_bytes[:6] in (b'GIF87a', b'GIF89a'):
             result.format = "GIF"
-            if len(image_bytes) > 10:
-                result.width = struct.unpack('<H', image_bytes[6:8])[0]
-                result.height = struct.unpack('<H', image_bytes[8:10])[0]
-        
-        # Check WebP
+            size = gif_size(image_bytes)
         elif image_bytes[:4] == b'RIFF' and image_bytes[8:12] == b'WEBP':
             result.format = "WEBP"
-            # Basic WebP dimension parsing
-            if len(image_bytes) > 30:
-                result.width = struct.unpack('<H', image_bytes[26:28])[0] & 0x3FFF
-                result.height = struct.unpack('<H', image_bytes[28:30])[0] & 0x3FFF
-        
+            size = webp_size(image_bytes)
         else:
             result.format = "UNKNOWN"
-        
+
+        if size is not None:
+            result.width, result.height = size
         return result
-    
-    def _parse_jpeg_dimensions(self, data: bytes) -> Tuple[int, int]:
-        """Parse JPEG dimensions from binary data."""
-        i = 2  # Skip SOI marker
-        while i < len(data) - 1:
-            if data[i] != 0xFF:
-                break
-            marker = data[i + 1]
-            
-            # SOF0 or SOF2 (Start of Frame)
-            if marker in (0xC0, 0xC2):
-                if i + 9 < len(data):
-                    height = struct.unpack('>H', data[i + 5:i + 7])[0]
-                    width = struct.unpack('>H', data[i + 7:i + 9])[0]
-                    return width, height
-            
-            # Skip to next marker
-            if marker == 0xD8 or marker == 0xD9:  # SOI or EOI
-                i += 2
-            elif marker in (0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7):  # RST
-                i += 2
-            else:
-                if i + 4 > len(data):
-                    break
-                length = struct.unpack('>H', data[i + 2:i + 4])[0]
-                i += 2 + length
-        
-        return 0, 0
-    
+
     # =========================================================================
     # Claim Classification
     # =========================================================================
@@ -597,11 +565,13 @@ class ImageVerifier:
             >>> result = verifier.verify_batch(img_data, ["Claim 1", "Claim 2"])
             >>> print(result.developer_fields["summary"]["verified"])
         """
-        # The image is hashed once, for the proof of each claim and the batch's.
+        # The image is hashed once, for the proof of each claim and the batch's,
+        # and its structure walked once, for every claim.
         image_sha256 = hashlib.sha256(image_bytes).hexdigest() if image_bytes else None
+        metadata = self._extract_metadata(image_bytes) if image_bytes else None
         items: List[Dict[str, Any]] = []
         for claim in claims:
-            result = self._verify_claim(image_bytes, claim, image_sha256)
+            result = self._verify_claim(image_bytes, claim, image_sha256, metadata)
             serialized = result.to_dict()
             serialized["claim"] = claim
             items.append(serialized)

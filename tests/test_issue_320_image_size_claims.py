@@ -19,13 +19,14 @@ import hashlib
 import pytest
 
 from qwed_new.core import image_verifier
+from tests import image_fixtures
 from tests.test_issue_320_logic_route_admission import client  # noqa: F401  (fixture)
 
 
 def _png(width, height, filler=b"A" * 16):
-    """The start of a PNG: its signature, then an IHDR chunk with the size."""
-    size = width.to_bytes(4, "big") + height.to_bytes(4, "big")
-    return b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0dIHDR" + size + filler
+    """A whole PNG of that size, with *filler* in a text chunk (GHSA-vch3:
+    the size is read only from an image that parses)."""
+    return image_fixtures.png(width, height, text=filler)
 
 
 def _verify(client, image, claim):  # noqa: F811

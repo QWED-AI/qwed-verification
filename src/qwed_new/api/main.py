@@ -1239,7 +1239,9 @@ async def verify_image(
         
         # Verify claim against image
         verifier = ImageVerifier(use_vlm_fallback=False)
-        result = verifier.verify_image(image_bytes, claim)
+        # Walked off the event loop, as /verify/stats and /verify/code run
+        # their checks: a crafted image takes up to a second (GHSA-vch3).
+        result = await asyncio.to_thread(verifier.verify_image, image_bytes, claim)
 
         dr = result
         dr = _enforce_trust(dr, query=claim, engine="image")

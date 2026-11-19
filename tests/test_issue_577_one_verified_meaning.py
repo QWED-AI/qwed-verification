@@ -49,8 +49,10 @@ def _audit_rows(monkeypatch):
 
 
 def _png(width, height):
-    size = width.to_bytes(4, "big") + height.to_bytes(4, "big")
-    return b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0dIHDR" + size + b"A" * 16
+    # A whole image: the size is read only from one that parses (GHSA-vch3).
+    from tests.image_fixtures import png
+
+    return png(width, height, text=b"A" * 16)
 
 
 @pytest.mark.parametrize("status, is_valid, verified", [
