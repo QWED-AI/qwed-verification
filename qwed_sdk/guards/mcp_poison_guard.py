@@ -40,10 +40,19 @@ _DEFAULT_INJECTION_PATTERNS: List[str] = [
     r"(?i)DAN\s+mode",
 ]
 
-# URL pattern — catches http(s):// URLs; excludes trailing punctuation
-_URL_PATTERN = re.compile(r"https?://[^\s<>\"',;)\}\]]+", re.IGNORECASE)
+# URL pattern: catches http(s) URLs; excludes trailing punctuation. The
+# slashes after the colon may be missing or be backslashes: browsers and
+# other WHATWG parsers read ``https:\\host`` and ``https:host`` as
+# ``https://host``. Group 1 starts where the host part starts.
+_URL_PATTERN = re.compile(r"https?:[/\\]*([^\s<>\"',;)\}\]/\\][^\s<>\"',;)\}\]]*)", re.IGNORECASE)
 # Centralised trailing-punctuation strip used at both URL-cleaning sites
 _TRAILING_PUNCT = '.,;:!?)>\'"}]'
+# Where every client has ended the host part. The extractor stops earlier,
+# at a space or punctuation, but a client given the whole text reads past
+# them: ``https://api.github.com,x@evil.example/`` goes to evil.example. A
+# backslash is not an end: urllib reads ``host,x\@evil.example`` as
+# evil.example.
+_HOST_PART_END = re.compile(r"[/?#]")
 
 
 
@@ -102,13 +111,26 @@ class MCPPoisonGuard:
         ]
 
     def _is_allowed_url(self, url: str) -> bool:
-        """Return True if the URL's hostname is in the allow-list."""
+        """Return True if the URL's hostname is in the allow-list.
+
+        The hostname Python reads is the host an HTTP client connects to
+        only when the host part holds no userinfo, no backslash (requests,
+        urllib3 and browsers end the host there: ``evil.example\\@host``
+        goes to evil.example), no brackets, a port that is a number and only
+        ASCII; anything else is not allowed (GHSA-3qh3-x222-q2jj). The
+        extractor stops at ``]``, so it never takes a whole IPv6 address,
+        and a URL with brackets is not allowed.
+        """
         url_clean = url.strip().rstrip(_TRAILING_PUNCT)
         try:
             _parsed = urlparse(url_clean)
             host = _parsed.hostname or ""
             scheme = _parsed.scheme
+            _ = _parsed.port  # a port that is not a number raises ValueError
         except ValueError:
+            return False
+        netloc = _parsed.netloc
+        if not host.isascii() or any(c in netloc for c in "@\\[]"):
             return False
 
         # Protocol enforcement: schemeless domain allowlist only matches http/https
@@ -133,10 +155,23 @@ class MCPPoisonGuard:
                 snippet = match.group(0)[:120].replace("\n", " ")
                 flags.append(f"PROMPT_INJECTION: {snippet!r}")
 
-        # Check for unauthorized URLs (separate from injection patterns)
+        # Check for unauthorized URLs (separate from injection patterns).
+        # A URL is also refused when an @ comes before the end of its host
+        # part in the text: the host is then whatever follows the @. The
+        # next end and the next @ are found once and kept while they lie
+        # ahead, so the scan stays linear in the length of the text.
+        host_end = at_sign = -1
         for url_match in _URL_PATTERN.finditer(text):
             url = url_match.group(0).rstrip(_TRAILING_PUNCT)
-            if not self._is_allowed_url(url):
+            begin = url_match.start(1)
+            if host_end < begin:
+                found = _HOST_PART_END.search(text, begin)
+                host_end = found.start() if found else len(text)
+            if at_sign < begin:
+                at_sign = text.find("@", begin)
+                if at_sign < 0:
+                    at_sign = len(text)
+            if at_sign < host_end or not self._is_allowed_url(url):
                 flags.append(f"UNAUTHORIZED_URL: {url}")
 
         return flags

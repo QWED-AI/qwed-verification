@@ -21,6 +21,10 @@ AUDIT_RULE = "irac.rule"
 AUDIT_APP = "irac.application"
 AUDIT_CONCL = "irac.conclusion"
 
+# A host part that is a bracketed IPv6 address (with a zone, if any) and an
+# optional port, and nothing else (GHSA-3qh3-x222-q2jj).
+_BRACKETED_HOST = re.compile(r"\[[0-9A-Fa-f:.]+(?:%25[0-9A-Za-z._~-]+)?\](?::[0-9]*)?")
+
 
 # --- PII Detection Patterns ---
 
@@ -90,8 +94,10 @@ class ExfiltrationGuard:
     ):
         """
         Args:
-            allowed_endpoints: URL prefixes or hostnames that agents are
-                permitted to call. Pass an **explicit empty list** ``[]``
+            allowed_endpoints: Hosts that agents are permitted to call,
+                each a URL (``https://api.example.com``: its scheme and
+                host are compared, not its path or port) or a hostname
+                (http and https). Pass an **explicit empty list** ``[]``
                 to block all outbound calls. If ``None`` (default), a safe
                 set of well-known AI API endpoints is used.
             pii_checks: Subset of PII type names to enable. Defaults to all
@@ -121,56 +127,56 @@ class ExfiltrationGuard:
         self._pii_patterns = active_pii
 
     def _is_allowed_endpoint(self, url: str) -> bool:
-        """Check if URL matches any allowed endpoint prefix or hostname."""
+        """Whether *url* goes to a host on the allowlist.
+
+        Decided from the parsed URL only: its scheme and the host an HTTP
+        client connects to (GHSA-3qh3-x222-q2jj). The text of the URL is not
+        compared with an entry: ``https://api.openai.com:x@evil.example``
+        starts with an allowed entry, but ``api.openai.com:x`` is userinfo
+        and the host is ``evil.example``. So a URL with userinfo is refused,
+        and so is one whose host part holds a backslash (browsers end the
+        host there, Python does not), brackets around anything but an IPv6
+        address and port (older Python versions read ``http://[::1].evil.com``
+        as host ``::1``, CVE-2024-11168), a port that is not a number, or a
+        host that is not ASCII (clients map some letters, such as the German
+        sharp s, to different hosts; write such an entry in its xn-- form).
+        """
         url_clean = url.strip()
-        url_lower = url_clean.lower()
         try:
-            _parsed_url = urlparse(url_clean)
-            parsed_host = _parsed_url.hostname or ""
-            url_scheme = _parsed_url.scheme
+            parsed_url = urlparse(url_clean)
+            parsed_host = parsed_url.hostname or ""
+            url_scheme = parsed_url.scheme
+            _ = parsed_url.port  # a port that is not a number raises ValueError
         except ValueError:
             return False
+        netloc = parsed_url.netloc
+        if not parsed_host or not parsed_host.isascii() or "@" in netloc or "\\" in netloc:
+            return False
+        if ("[" in netloc or "]" in netloc) and not _BRACKETED_HOST.fullmatch(netloc):
+            return False
+        return any(
+            self._matches_allowed_entry(parsed_host, url_scheme, allowed)
+            for allowed in self.allowed_endpoints
+        )
 
-        for allowed in self.allowed_endpoints:
-            if self._matches_allowed_entry(url_lower, parsed_host, url_scheme, allowed):
-                return True
-        return False
-
-    def _matches_allowed_entry(
-        self, url_lower: str, parsed_host: str, url_scheme: str, allowed: str
-    ) -> bool:
-        """
-        Check if URL matches one specific allowlist entry.
-
-        Refactored to reduce complexity of _is_allowed_endpoint.
-        """
+    def _matches_allowed_entry(self, parsed_host: str, url_scheme: str, allowed: str) -> bool:
+        """Whether a URL's host and scheme match one allowlist entry: the
+        entry's host exactly (no subdomains), and its scheme when it names
+        one, else http or https. A path or port in the entry is not
+        compared, as before."""
         allowed_lower = allowed.lower()
-        # Prefix match — require path boundary to prevent
-        # 'https://api.openai.com.evil.com' bypassing the allowlist
-        if url_lower.startswith(allowed_lower):
-            rest = url_lower[len(allowed_lower) :]
-            if not rest or rest[0] in ("/", "?", "#", ":"):
-                return True
-
-        # Hostname-only / exact match
         try:
-            _allowed_parsed = urlparse(allowed)
-            allowed_host = _allowed_parsed.hostname or allowed_lower
-            allowed_scheme = _allowed_parsed.scheme
+            allowed_parsed = urlparse(allowed)
+            allowed_host = allowed_parsed.hostname or allowed_lower
+            allowed_scheme = allowed_parsed.scheme
         except ValueError:
             allowed_host = allowed_lower
             allowed_scheme = ""
-
-        # Exact match only — no implicit subdomain matching.
-        # Require scheme compatibility if the allowlist entry specifies one.
-        if parsed_host == allowed_host:
-            if allowed_scheme:
-                if url_scheme == allowed_scheme:
-                    return True
-            elif url_scheme in ("http", "https"):
-                # Schemeless allowlist entry: default to safe web protocols only
-                return True
-        return False
+        if parsed_host != allowed_host:
+            return False
+        if allowed_scheme:
+            return url_scheme == allowed_scheme
+        return url_scheme in ("http", "https")
 
     def verify_outbound_call(
         self,
