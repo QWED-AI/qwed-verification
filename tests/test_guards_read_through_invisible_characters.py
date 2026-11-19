@@ -13,6 +13,7 @@ once.
 """
 
 import json
+import random
 import time
 
 import pytest
@@ -58,6 +59,9 @@ _IDS = [f"U+{ord(c):04X}" for c in INVISIBLE]
 # Built, not written out, so no scanner reads it as a real key.
 OPENAI_KEY = "sk-" + "proj-" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0"
 AWS_KEY = "AKIA" + "ABCDEFGHIJKLMNOP"
+# Generated, so no scanner reads it as a real key: 40 base64 characters.
+_RNG = random.Random(20261119)
+AWS_SECRET = "".join(_RNG.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/") for _ in range(40))
 
 
 def _split(text, at, char):
@@ -89,6 +93,7 @@ CASES = {
     ),
     "config_key": (lambda s: ConfigGuard().verify_config_safety({"openai_key": s})["verified"], OPENAI_KEY, 10),
     "config_string": (lambda s: ConfigGuard().scan_string(s)["verified"], "token " + OPENAI_KEY, 16),
+    "config_aws_secret": (lambda s: ConfigGuard().scan_string(s)["verified"], "secret " + AWS_SECRET, 27),
     "pii_email": (lambda s: PIIGuard().scan(s)["verified"], "contact alice@example.com", 13),
     "pii_ssn_phone": (lambda s: PIIGuard().scan(s)["verified"], "call 555-123-4567", 8),
     "sovereignty_ssn": (lambda s: SovereigntyGuard().verify_routing(s, "openai")["verified"], "ssn 123-45-6789", 7),

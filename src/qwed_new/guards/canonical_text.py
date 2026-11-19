@@ -56,7 +56,7 @@ import functools
 import json
 import re
 import unicodedata
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Unicode Default_Ignorable_Code_Point, as SecurityGateway reads it (#644).
 IGNORABLE_RANGES = (
@@ -209,17 +209,36 @@ def _seen_readings(text: str, marked: Dict[int, str], shown: Dict[int, str]) -> 
     return as_marked.replace(MARK, ""), _MARK_RUN.sub(" ", as_marked), text.translate(shown)
 
 
-def decoded_json(text: str) -> Optional[str]:
-    """The strings and keys *text* holds, one per line, when it is JSON that
-    writes an escape; else None. A JSON string may write any character as an
-    escape (a zero-width space, a tag character, a plain digit), which the
-    text as sent does not show, so a guard given JSON reads these too."""
+_NOT_JSON = object()
+
+
+def _escaped_json(text: str) -> Any:
+    """*text* parsed, when it is JSON that writes an escape; else _NOT_JSON."""
     if not isinstance(text, str) or chr(92) not in text:
-        return None
+        return _NOT_JSON
     try:
-        value = json.loads(text)
+        return json.loads(text)
     except (ValueError, RecursionError):
-        return None
+        return _NOT_JSON
+
+
+def _dict_lines(item: Dict[str, Any], keyed: bool) -> Tuple[List[str], List[Any]]:
+    """The lines a JSON object adds, and the values left to read: its keys,
+    or with *keyed* each string value on its key's line."""
+    if not keyed:
+        return list(item), list(item.values())
+    lines: List[str] = []
+    rest: List[Any] = []
+    for key, entry in item.items():
+        if isinstance(entry, str):
+            lines.append(f"{key}: {entry}")
+        else:
+            lines.append(key)
+            rest.append(entry)
+    return lines, rest
+
+
+def _json_lines(value: Any, keyed: bool) -> str:
     found: List[str] = []
     pending = [value]
     while pending:
@@ -227,11 +246,32 @@ def decoded_json(text: str) -> Optional[str]:
         if isinstance(item, str):
             found.append(item)
         elif isinstance(item, dict):
-            found.extend(item)
-            pending.extend(item.values())
+            lines, rest = _dict_lines(item, keyed)
+            found.extend(lines)
+            pending.extend(rest)
         elif isinstance(item, list):
             pending.extend(item)
     return "\n".join(reversed(found))
+
+
+def decoded_json(text: str) -> Optional[str]:
+    """The strings and keys *text* holds, one per line, when it is JSON that
+    writes an escape; else None. A JSON string may write any character as an
+    escape (a zero-width space, a tag character, a plain digit), which the
+    text as sent does not show, so a guard given JSON reads these too."""
+    value = _escaped_json(text)
+    return None if value is _NOT_JSON else _json_lines(value, keyed=False)
+
+
+def json_readings(text: str) -> Optional[Tuple[str, str]]:
+    """``decoded_json`` of *text*, and the same with each string value on
+    its key's line, as ``key: value``, for a guard that reads a value by the
+    key it sits under; every key and string is in both. Parsed once; None
+    when *text* is not JSON that writes an escape, as for ``decoded_json``."""
+    value = _escaped_json(text)
+    if value is _NOT_JSON:
+        return None
+    return _json_lines(value, keyed=False), _json_lines(value, keyed=True)
 
 
 def read_through(pattern: str) -> str:

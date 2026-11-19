@@ -21,11 +21,14 @@ jobs:
         with:
           persist-credentials: false
       - name: Scan for API keys and tokens
-        uses: ./  # Use local action
+        # The Action as this commit has it, so the job also tests a change to
+        # the Action. The repository's own config has no finding, so any
+        # finding fails the job.
+        uses: ./
         with:
           action: scan-secrets
           paths: "**/*.env,**/*.json,**/*.yaml,**/*.yml"
-          fail_on_findings: "false"  # Don't fail demo workflow
+          fail_on_findings: "true"
 
   scan-code:
     name: 🛡️ Scan Code for Security Issues
