@@ -20,8 +20,18 @@ from qwed_new.core import string_steps
 from qwed_new.core.code_verifier import CodeVerifier
 
 
+# Names the snippets read as their caller would have bound them. Reading a
+# name the code never binds is refused (GHSA-7xrf, tests/test_code_names.py);
+# these tests are about the builtins' names.
+CALLER_NAMES = frozenset({
+    "C", "X", "Y", "args", "cache", "cur", "ds", "es", "form", "get", "job", "line", "log",
+    "make", "model", "n", "name", "params", "path", "q", "run", "s", "score", "suffix", "sys",
+    "text", "uid", "value", "x", "xs", "y",
+})
+
+
 def _verify(code):
-    fields = CodeVerifier().verify_code(code, "python").developer_fields
+    fields = CodeVerifier(bound_names=CALLER_NAMES).verify_code(code, "python").developer_fields
     return fields["is_valid"], [(issue["type"], issue["pattern"]) for issue in fields["issues"]]
 
 

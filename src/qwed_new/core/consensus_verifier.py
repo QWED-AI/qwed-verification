@@ -389,7 +389,9 @@ class ConsensusVerifier:
     def code_verifier(self):
         if self._code_verifier is None:
             from qwed_new.core.code_verifier import CodeVerifier
-            self._code_verifier = CodeVerifier()
+            from qwed_new.core.secure_code_executor import SANDBOX_BOUND_NAMES
+            # The code runs in the sandbox, with its names bound (GHSA-7xrf).
+            self._code_verifier = CodeVerifier(bound_names=SANDBOX_BOUND_NAMES)
         return self._code_verifier
 
     @property

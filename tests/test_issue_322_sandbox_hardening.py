@@ -489,7 +489,7 @@ def test_no_free_uid_is_unavailable(monkeypatch):
 def _prepared_execute(monkeypatch, executor):
     executor.client.ping.return_value = True
     safe = MagicMock(is_verified=True, developer_fields={"is_valid": True})
-    monkeypatch.setattr(executor, "_is_safe_code", lambda code: safe)
+    monkeypatch.setattr(executor, "_is_safe_code", lambda code, context=None: safe)
 
 
 def test_execute_hands_over_the_workspace_and_releases_it(monkeypatch):

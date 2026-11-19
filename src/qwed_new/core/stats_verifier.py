@@ -25,7 +25,7 @@ from qwed_new.providers.base import ProviderConfigError
 
 from .diagnostics import AdvisoryCheck, DiagnosticResult, DiagnosticStatus, enforce_trust_decision
 from .json_bounding import bound_json_value
-from .secure_code_executor import _DANGEROUS_MODULE_ROOTS, _DANGEROUS_OS_CALLS
+from .secure_code_executor import SANDBOX_BOUND_NAMES, _DANGEROUS_MODULE_ROOTS, _DANGEROUS_OS_CALLS
 from .verification_context import (
     Admission,
     Decision,
@@ -505,7 +505,8 @@ class StatsVerifier:
     def code_verifier(self):
         if self._code_verifier is None:
             from qwed_new.core.code_verifier import CodeVerifier
-            self._code_verifier = CodeVerifier()
+            # The sandbox runs the code with df bound (GHSA-7xrf).
+            self._code_verifier = CodeVerifier(bound_names=SANDBOX_BOUND_NAMES | {"df"})
         return self._code_verifier
     
     @property

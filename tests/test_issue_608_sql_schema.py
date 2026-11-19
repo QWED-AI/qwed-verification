@@ -425,14 +425,16 @@ def test_an_untagged_block_that_runs_a_query_is_checked_as_code(client, monkeypa
 
 @pytest.mark.parametrize("code, verified", [
     # A SELECT with no FROM that Python parses too, and a select() call, as
-    # in SQLAlchemy: each check admits it.
-    ("SELECT\n1", [True, True]),
-    ("SELECT +1", [True, True]),
-    ("select(User).where(User.id == 1)", [True, True]),
-    ("select (User).where(User.id == 1)", [True, True]),
+    # in SQLAlchemy: the SQL check admits it; as Python it reads names it
+    # never binds (SELECT, select, User), which is refused (GHSA-7xrf).
+    ("SELECT\n1", [True, False]),
+    ("SELECT +1", [True, False]),
+    ("select(User).where(User.id == 1)", [True, False]),
+    ("select (User).where(User.id == 1)", [True, False]),
     # Each check alone passed what the other refuses: SQL that reads a file,
-    # and Python that runs a command.
-    ("SELECT (pg_read_file('data.txt'))", [False, True]),
+    # and Python that runs a command. (As Python the SQL now reads names
+    # it never binds, which is refused too, GHSA-7xrf.)
+    ("SELECT (pg_read_file('data.txt'))", [False, False]),
     ("select(os.system('x'))", [True, False]),
 ])
 def test_an_untagged_block_that_may_be_sql_or_python_gets_both_checks(
@@ -456,14 +458,15 @@ def test_an_untagged_block_that_may_be_sql_or_python_gets_both_checks(
     # Neither check can parse it, so both count, and it is not verified.
     ({}, "select ) garbage (", [("sql", False, "BLOCKED"), ("code", False, "BLOCKED")]),
     # A block for another reason counts: here the schema does not parse.
-    ({"sql_schema_ddl": "CREATE TABLE ((("}, "SELECT +1", [("sql", False, "BLOCKED"), ("code", True, "VERIFIED")]),
+    # (As Python the block reads a name it never binds: refused, GHSA-7xrf.)
+    ({"sql_schema_ddl": "CREATE TABLE ((("}, "SELECT +1", [("sql", False, "BLOCKED"), ("code", False, "VERIFIED")]),
     # With the other check off, or without a schema, nothing parsed the
     # block, so a check that cannot parse it counts.
     ({"verify_code": False}, "truncate = True\nprint(truncate)", [("sql", False, "BLOCKED")]),
     ({"verify_sql": False}, "SELECT 1", [("code", False, "BLOCKED")]),
     ({"sql_schema_ddl": ""}, "SELECT 1", [("sql", False, "UNVERIFIABLE"), ("code", False, "BLOCKED")]),
     ({"sql_schema_ddl": ""}, "select(User).where(User.id == 1)",
-     [("sql", False, "UNVERIFIABLE"), ("code", True, "VERIFIED")]),
+     [("sql", False, "UNVERIFIABLE"), ("code", False, "VERIFIED")]),
 ])
 def test_a_check_that_cannot_parse_the_block_counts_unless_the_other_parses_it(
     client, monkeypatch, options, code, records,  # noqa: F811

@@ -444,7 +444,7 @@ def test_frame_and_traceback_reads_are_refused(code):
 ADMITTED = [
     "def add(a, b):\n    return a + b\n",
     "import math\nprint(math.sqrt(2) + math.pi)",
-    "from math import *\nprint(sqrt(16), floor(2.5))",
+    "from math import *\nprint(16 ** 0.5)",
     "import json\ndata = json.loads('{\"a\": 1}')\nprint(json.dumps(data, indent=2))",
     "import re\npattern = re.compile(r'[0-9]+')\nprint(pattern.findall('a1b22'), re.sub('a', 'b', 'aaa'))",
     "from datetime import datetime, timedelta, timezone\nprint((datetime.now(timezone.utc) + timedelta(days=1)).isoformat())",
@@ -489,7 +489,11 @@ def test_code_that_uses_listed_modules_and_names_is_admitted(code):
 
 
 def test_a_star_import_is_admitted_only_where_every_name_it_binds_is_listed():
-    _assert_admitted("from json import *\nprint(dumps(1))")
+    _assert_admitted("from json import *\nprint(1)")
+    # What a star import binds depends on the Python that runs it, so a name
+    # read from one counts as unbound (GHSA-7xrf); import it by name.
+    _, issues = _issues("from json import *\nprint(dumps(1))")
+    assert ("unbound_name", "dumps") in issues
     _, issues = _issues("from typing import *\nx = 1")
     assert ("attribute_not_admitted", "typing.*") in issues
     # On Linux, time's star import also binds clock_settime and tzset.

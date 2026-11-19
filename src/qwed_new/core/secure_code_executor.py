@@ -306,6 +306,11 @@ _DANGEROUS_BUILTINS = {"eval", "exec", "compile", "__import__", "open", "file", 
 # (GHSA-9r7q); for code this executor runs, the sandbox confines these, so
 # they are passed to it as trusted.
 SANDBOX_THIRD_PARTY_MODULES = frozenset({"numpy", "pandas", "scipy", "sklearn", "statsmodels", "patsy"})
+# The names the sandbox binds before executed code runs (its _sandbox
+# namespace, in _wrap_code); each call's context adds its own keys. Code
+# may read these without binding them; CodeVerifier refuses any other
+# name read before the code binds it (GHSA-7xrf).
+SANDBOX_BOUND_NAMES = frozenset({"np", "numpy", "pd", "pandas"})
 # OS primitives reachable through module indirection (#336): `system` /
 # `popen` via package-internal re-exports, `import_module` via importlib, the
 # full exec/spawn family (v and l variants) and fork via posix/nt. Matched on
@@ -583,7 +588,7 @@ class SecureCodeExecutor:
             return False, SECURE_RUNTIME_UNAVAILABLE, None
         
         # 1. Pre-execution validation using AST
-        safety = self._is_safe_code(code)
+        safety = self._is_safe_code(code, context)
         if not safety.is_verified or safety.developer_fields.get("is_valid") is not True:
             logger.warning("Code failed safety check: %s", safety.agent_message)
             return False, f"Code safety validation failed: {safety.agent_message}", None
@@ -1016,16 +1021,20 @@ class SecureCodeExecutor:
             if not self._remove_container(container, execution_id):
                 cleanup_status["leaked"] = True
 
-    def _is_safe_code(self, code: str) -> DiagnosticResult:
+    def _is_safe_code(self, code: str, context: Optional[Dict[str, Any]] = None) -> DiagnosticResult:
         """
         Use AST analysis to validate code safety.
-        Leverages existing CodeVerifier if available.
+        Leverages existing CodeVerifier if available. The code may read
+        the names the sandbox binds and the keys of ``context``.
         """
         try:
             # Try to use existing CodeVerifier
             from qwed_new.core.code_verifier import CodeVerifier
 
-            verifier = CodeVerifier(trusted_modules=SANDBOX_THIRD_PARTY_MODULES)
+            verifier = CodeVerifier(
+                trusted_modules=SANDBOX_THIRD_PARTY_MODULES,
+                bound_names=SANDBOX_BOUND_NAMES | frozenset(context or ()),
+            )
             result = verifier.verify_code(code, language="python")
 
         except ImportError:

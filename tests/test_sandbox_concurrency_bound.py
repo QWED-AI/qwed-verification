@@ -16,7 +16,9 @@ def _make_executor(monkeypatch):
     monkeypatch.setattr(executor, "is_available", lambda: True)
     monkeypatch.setattr(
         executor, "_is_safe_code",
-        lambda code: SimpleNamespace(is_verified=True, developer_fields={"is_valid": True}, agent_message=""),
+        lambda code, context=None: SimpleNamespace(
+            is_verified=True, developer_fields={"is_valid": True}, agent_message=""
+        ),
     )
     return executor
 

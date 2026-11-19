@@ -73,7 +73,7 @@ def test_a_code_verifier_error_is_unverifiable(local, monkeypatch):
 
 
 # Policy versions older checks cached results under.
-OLD_POLICY_VERSIONS = {"v1", "code_verifier-v2"}
+OLD_POLICY_VERSIONS = {"v1", "code_verifier-v2", "code_verifier-v3"}
 
 
 class _FakeCache:
@@ -113,6 +113,18 @@ def test_a_result_cached_before_the_module_lists_is_not_served(local):
     local._cache_context_class = lambda **kwargs: SimpleNamespace(**kwargs)
 
     result = local.verify_code("import io\nio.FileIO('/etc/passwd').read()")
+
+    assert (result.verified, result.value) == (False, "UNSAFE")
+
+
+def test_a_result_cached_before_names_were_checked_is_not_served(local):
+    # 10.0.0 admitted a read of a name the code never binds and cached SAFE
+    # under "code_verifier-v3" (GHSA-7xrf).
+    cache = _FakeCache()
+    local._cache = cache
+    local._cache_context_class = lambda **kwargs: SimpleNamespace(**kwargs)
+
+    result = local.verify_code("secret = os.environ.get('AWS_SECRET_ACCESS_KEY')")
 
     assert (result.verified, result.value) == (False, "UNSAFE")
 

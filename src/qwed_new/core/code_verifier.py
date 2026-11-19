@@ -16,7 +16,7 @@ import re
 import sys
 import tokenize
 
-from . import code_admission, string_steps
+from . import code_admission, code_languages, code_names, string_steps
 from .diagnostics import DiagnosticResult
 
 from .verification_context import VerificationContextDocument
@@ -533,7 +533,7 @@ class CodeVerifier:
         "secret", "token", "key"
     }
     
-    def __init__(self, trusted_modules: Iterable[str] = ()):
+    def __init__(self, trusted_modules: Iterable[str] = (), bound_names: Iterable[str] = ()):
         """
         Initialize the multi-language code verifier.
 
@@ -541,6 +541,9 @@ class CodeVerifier:
             trusted_modules: Top-level module names the caller's runtime
                 confines (the code-execution sandbox); Python code may use
                 them although code_admission does not list them.
+            bound_names: Names the caller's runtime binds before Python
+                code runs (the sandbox's np, pd and context); code may
+                read them without binding them (code_names).
 
         Example:
             >>> verifier = CodeVerifier()
@@ -548,6 +551,7 @@ class CodeVerifier:
         self.supported_languages = ["python", "javascript", "typescript", "java", "go", "sql"]
         self._taint_analyzer = None  # Lazy-loaded
         self._trusted_modules = frozenset(trusted_modules)
+        self._bound_names = frozenset(bound_names)
     
     @property
     def taint_analyzer(self):
@@ -570,6 +574,9 @@ class CodeVerifier:
           BLOCKED.
         - Safe code → VERIFIED with ``is_valid`` True and proof_ref from the
           analysis evidence.
+        - JavaScript, TypeScript, Java or Go with no finding → UNVERIFIABLE
+          (``code_verifier.language_unverifiable``); SQL that SQLVerifier
+          does not admit is not admitted either (GHSA-7xrf).
         - Unsupported language → BLOCKED (``code_verifier.unsupported_language``)
         - Python that does not parse → BLOCKED (``code_verifier.parse_error``)
         - Internal error   → BLOCKED (``code_verifier.execution_error``)
@@ -631,6 +638,7 @@ class CodeVerifier:
             )
 
         issues: List[SecurityIssue] = []
+        sql = None
         try:
             # Language-specific checks
             if language == "python":
@@ -643,6 +651,8 @@ class CodeVerifier:
                 issues.extend(self._check_go(code))
             elif language == "sql":
                 issues.extend(self._check_sql(code))
+                sql = code_languages.sql_verdict(code)
+                issues.extend(SecurityIssue(**f) for f in code_languages.sql_findings(sql))
 
             # Cross-language secret detection
             issues.extend(self._check_secrets(code))
@@ -679,6 +689,11 @@ class CodeVerifier:
             "info_count": info_count,
             "engine": "CodeVerifier-Pattern-Scanner",
         }
+
+        # Only Python and SQLVerifier's SQL can be shown safe (GHSA-7xrf).
+        refused = code_languages.unproven(language, developer_fields, sql) if is_safe else None
+        if refused is not None:
+            return refused
 
         evidence = self._build_evidence(code, language, is_safe, issues)
 
@@ -944,6 +959,8 @@ class CodeVerifier:
         issues.extend(self._check_python_typing_strings(nodes))
         # Only the modules and names code_admission lists (GHSA-9r7q).
         issues.extend(SecurityIssue(**f) for f in code_admission.findings(nodes, self._trusted_modules))
+        # Names read before the code binds them (GHSA-7xrf).
+        issues.extend(SecurityIssue(**f) for f in code_names.findings(nodes[0], self._bound_names))
 
         # Weak crypto in password context
         code_lower = code.lower()
