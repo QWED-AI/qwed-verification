@@ -5,6 +5,257 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ## [Unreleased]
 
+## [11.0.0] - 2026-11-19
+
+A major release that fixes ten advisories. The code, SQL, maths, image and
+guard checks now admit only what they can show safe, and `QWEDLocal` no
+longer calls a model's answer verified because the model's own formula or
+expression agrees with it: `QWEDLocal.verify`, `verify_math` and
+`verify_logic` never return `verified`, and `qwed verify` exits 1.
+`/verify/code` no longer admits JavaScript, TypeScript, Java or Go, and
+refuses Python that reads a name it never binds. `/verify/sql` and
+`SQLGuard` admit only reads of tables and known functions, and refuse
+column tautologies in OR, whole-row reads, `SELECT ... INTO` and text that
+sqlglot and a database can split into tokens differently. `/verify/logic`
+proves a claim instead of reporting satisfiability, every translation is
+screened for prompt injection in one place, and packages are published only
+from a release. The Go module path ends in `/v11`. Read "Upgrading to
+11.0.0" below before upgrading. The soundness eval has 163 known-answer
+claims, 0 accepted wrongly.
+
+### Security fixes (advisories)
+
+Ten advisories, published on the repository Security tab. They affect
+versions up to 10.0.0; upgrading is recommended. Each has regression tests
+in `tests/`. Of the ten, only the `/verify/code` fix also has cases in the
+soundness eval (`evals/`).
+
+- **`/verify/code` admits only code it can show safe**
+  ([GHSA-7xrf-75qr-2r5w](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-7xrf-75qr-2r5w),
+  high). JavaScript, TypeScript, Java and Go were judged by listed
+  substrings, so a command run through destructuring or a variable was
+  admitted; SQL on `/verify/code` had its own checks and admitted
+  `DROP TABLE`; and Python that read a name it never bound (`os` with no
+  import) was admitted. JavaScript, TypeScript, Java and Go are now
+  `UNVERIFIABLE` when no listed pattern is found, never `ADMIT`; SQL is also
+  decided by `SQLVerifier`; Python that reads a name before binding it is
+  refused (callers whose runtime binds names pass `bound_names`).
+- **`/verify/sql` and `SQLGuard` admit only reads of tables and known
+  functions**
+  ([GHSA-wgcp-398q-m296](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-wgcp-398q-m296),
+  high). Table functions other than row generators, files, URLs and stages
+  named as tables or summarised, script transforms, Spark and Hive `${...}`
+  substitution, sequences, `@@` server values, schema-qualified operators,
+  casts to types that are not built in and functions that read files or
+  secrets or call a model are refused. A function sqlglot does not know is
+  refused unless listed as computing only from its arguments
+  (`sql_verifier.unknown_function`), as is a call through a schema, package,
+  object or type.
+- **`QWEDLocal.verify_logic` no longer reports a model's answer as
+  verified**
+  ([GHSA-8fwp-93x2-9fhw](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-8fwp-93x2-9fhw),
+  high). The answer and the Z3 formula both come from the model, so their
+  agreement is not verification. The result is never `verified`;
+  `evidence["consistent"]` and `error` say whether the model agreed with its
+  own formula. Results cached as verified are not served.
+- **`QWEDLocal.verify_math`, `QWEDLocal.verify` and `qwed verify` no longer
+  report a model's answer as verified**
+  ([GHSA-r9hc-57m3-2r9f](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-r9hc-57m3-2r9f),
+  high). The answer and the SymPy expression both come from the model, so
+  their agreement is not verification. The result is never `verified`;
+  `evidence["consistent"]` and `error` say whether the model agreed with its
+  own expression. Results cached as verified are not served.
+- **`/verify/sql` refuses column tautologies in OR, whole-row reads and
+  ambiguous tokens**
+  ([GHSA-xpfc-qm4c-xf6q](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-xpfc-qm4c-xf6q),
+  medium). The operands of an OR, XOR or IN list in a filter (and lists
+  written as `ANY`, `UNNEST`, `VALUES` or a SELECT with no FROM) must
+  restrict one column (or, with a schema, one table's declared columns) to
+  values, and a negated AND is refused (`sql_verifier.unrestricted_or`). A
+  table or alias used as a column, a name after an alias that is not a
+  column, an alias column list, `COLUMNS()`, positional columns and Hive
+  pattern columns are refused where the schema gives the table a protected
+  column. A query that sqlglot and a database can tokenise differently is
+  `BLOCKED` (`sql_verifier.ambiguous_tokenization`), and `SQLGuard` refuses
+  it with `AMBIGUOUS_TOKENS`.
+- **Guards read text through invisible characters**
+  ([GHSA-v3m4-7qhm-rjpm](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-v3m4-7qhm-rjpm),
+  medium). `MCPPoisonGuard`, `ExfiltrationGuard`, `ConfigGuard`,
+  `PIIGuard`, `SovereigntyGuard` and `SecurityGateway.detect_injection`
+  also match the text in NFKC with invisible characters (default-ignorables,
+  controls, format characters, blanks, nonspacing marks) removed, read as
+  spaces, and as the text shows, with Unicode tag characters read as ASCII
+  and JSON strings decoded. `MCPPoisonGuard`'s phrases read through
+  invisible characters inside words and between them at once. Patterns that
+  were quadratic on long runs are searched in linear time.
+- **`/verify/math` no longer admits identities that hold only after folding
+  or rounding**
+  ([GHSA-q7m5-rmvq-v848](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-q7m5-rmvq-v848),
+  medium). Characters NFKC reads as other text (superscripts, subscripts,
+  Roman numerals, squared units, letters in another width or font), two
+  numbers with only space between them and numbers the parser splits in two
+  are refused. When a side holds a number SymPy reads as a Float, or calls
+  `Float`, a zero difference stands only if the claim holds with its
+  decimals read exactly; otherwise it is disproven or `UNVERIFIABLE`
+  (`math.inexact_decimal`). Values, derivatives, indefinite integrals and
+  limits are re-checked the same way, in `VerificationEngine` too.
+- **`ExfiltrationGuard` and `MCPPoisonGuard` decide a URL by the host it
+  goes to**
+  ([GHSA-3qh3-x222-q2jj](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-3qh3-x222-q2jj),
+  medium). `verify_outbound_call` compares the allowlist with the parsed
+  scheme and hostname, not with the start of the URL, so
+  `https://api.openai.com:x@evil.example/` is refused; URLs with userinfo, a
+  backslash in the host part or brackets around anything but an IPv6
+  address are refused, and so is a host that is not ASCII. `MCPPoisonGuard`
+  reads a URL in a tool description to the end of its host part, so
+  `https://api.github.com,x@evil.example/` is refused.
+- **`/verify/sql` refuses `SELECT ... INTO`**
+  ([GHSA-6m2h-98rq-4f53](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-6m2h-98rq-4f53),
+  medium). A query that creates a table and writes rows into it is a
+  destructive command, refused unless destructive statements are allowed,
+  as `CREATE TABLE ... AS SELECT` is.
+- **`/verify/image` decides a size only from a whole image**
+  ([GHSA-vch3-x5fq-m7r2](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-vch3-x5fq-m7r2),
+  low). PNG, JPEG, GIF and WebP containers are walked (chunks, CRCs and
+  inflated image data; blocks, frames and the length of LZW data; markers,
+  segments, quantisation and Huffman tables and scans; RIFF chunks and the
+  VP8X canvas, as libwebp reads them) and the dimensions are read only when
+  the structure holds together as one image of that size; otherwise a size
+  claim is `UNVERIFIABLE`. Animated WebP is not read. The check runs off the
+  event loop, and a batch walks its image once.
+
+### Other security changes
+
+- **Packages are published only from a published release** (#623). PyPI,
+  npm and crates.io are published only by the release workflows, through
+  protected GitHub environments that the maintainer approves; a manual run
+  publishes only to TestPyPI. npm and crates.io use trusted publishing, so
+  no registry token is stored for them, and an npm version goes live only
+  when the maintainer approves it on npm with 2FA. The Docker image is
+  pushed only from `main` and release tags, and its version tags only for a
+  release.
+- **Every translation is screened for prompt injection** (#632, #641).
+  Consensus, stats and the fact advisory sent the caller's text to the
+  model without the check the natural-language and logic routes run; the
+  check now runs in `TranslationLayer`, before any provider is called.
+- **The injection phrase check reads text the way a model does** (#632,
+  #644): invisible characters and fullwidth letters no longer hide a phrase
+  from it.
+- **A crafted question no longer stalls the server** (#645, #647). One
+  phrase pattern was searched in time that grew with the square of the
+  question, about 0.1 s for 10,000 characters while holding the interpreter
+  lock, so even routes that screen in a thread stalled. Phrases are now
+  searched in linear time, and the similarity check skips its costly ratio
+  when an upper bound rules it out. No verdict changes.
+
+### Upgrading to 11.0.0
+
+These changes can break existing callers. Each is described in full in its
+entry above or below.
+
+- **`QWEDLocal` never verifies.** `QWEDLocal.verify`, `verify_math` and
+  `verify_logic` return `verified` False for every claim, with the reason in
+  `error`, and `qwed verify` exits 1. The answer and the formula both come
+  from the model, so their agreement is not a check. To verify a maths
+  claim, write it as an equation and send it to `/verify/math`; for logic,
+  write the variables and constraints and use `LogicVerifier`.
+- **`/verify/code`.** `javascript`, `typescript`, `java` and `go` are never
+  `ADMIT`: they are `UNVERIFIABLE` (`code_verifier.language_unverifiable`)
+  when no listed pattern shows them unsafe. SQL on `/verify/code` is decided
+  by `SQLVerifier` without a schema: writes are refused, but tables and
+  columns are not checked; `/verify/sql` checks them against the schema.
+  Python that reads a name it does not bind (a notebook's `df`, a REPL's
+  `np`, a name from a star import) is refused: pass the names your runtime
+  binds with `CodeVerifier(bound_names=...)`. The executor, the stats gate
+  and the consensus gate pass the names their sandboxes bind.
+- **`/verify/logic` proves a claim** (#631, #640). The translation separates
+  what the question takes as given from the claim it asks to prove, and the
+  route decides the claim for every value: `VERIFIED` when it follows,
+  proven false with a counterexample when it does not, and `UNVERIFIABLE`
+  for constraints with no claim or constraints that cannot hold together. A
+  satisfiable set of constraints was reported `VERIFIED`.
+- **SQL**, on `/verify/sql`, batch SQL items, `SQLVerifier` and `SQLGuard`:
+  - `sql_verifier.unknown_function` is new: a function sqlglot does not know
+    and that is not listed (less common functions, user-defined functions,
+    schema-qualified built-ins such as `pg_catalog.upper`; ClickHouse is
+    hit most), a table function not known to generate rows, a cast to a
+    type that is not built in (enum and domain types included) unless the
+    value is NULL, any T-SQL `Type::member`, and any `@@` variable. In
+    Spark, Databricks and Hive a `${` anywhere is refused, and a qualified
+    name whose last part is a file extension (`sales.log`) is read as a
+    file.
+  - `sql_verifier.unrestricted_or` is new: ORs of ranges
+    (`price < 10 OR price > 100`), `<>`, `NOT IN`, a wildcard `LIKE`,
+    `IS NOT NULL`, a subquery or `EXISTS` in an OR, ORs across two tables
+    or, without a schema, two columns, and optional-parameter idioms
+    (`col = $1 OR $1 IS NULL`) are refused.
+  - `sql_verifier.ambiguous_tokenization` is new: any query with a
+    backslash, `--` without whitespace after it, a nested `/*` or a lone
+    carriage return, in a string literal too; in MySQL, Spark, Databricks
+    and Hive any string in double quotes, and MySQL's `||`. `SQLGuard`
+    answers with `AMBIGUOUS_TOKENS`, `EXTERNAL_READ_BLOCKED` or
+    `UNKNOWN_FUNCTION_BLOCKED`.
+  - `SELECT ... INTO`, MySQL's `INTO @var` included, is a destructive
+    command (`sql_verifier.malicious`).
+- **Maths.** Superscripts, subscripts, Roman numerals, letters in another
+  width or font, a number with a leading zero and two numbers separated only
+  by space are refused, with a message saying how to write them (`**` or
+  `^` for powers). A claim that calls `Float`, or whose decimals are too
+  large to read exactly, is `UNVERIFIABLE` (`math.inexact_decimal`) where
+  10.0.0 verified it (`Float(2) = 2`, `1e500 = 1e500`).
+- **Images.** A size claim is `UNVERIFIABLE` for animated WebP, for a file
+  whose structure does not hold together as one image (a bad CRC, an IDAT
+  split by another chunk, stray bytes between JPEG segments, a JPEG whose
+  height is set later, a simple WebP followed by another chunk), and for
+  PNGs that call for more than 136 MiB of image data or more than 16,384
+  chunks.
+- **Guards.** `ExfiltrationGuard.verify_outbound_call` refuses a URL with
+  userinfo, a backslash in its host part, a port outside 0 to 65535, or a
+  host that is not ASCII (write such an entry in its `xn--` form), and a URL
+  with no scheme against a hostname entry. In a tool description,
+  `MCPPoisonGuard` refuses an `@` after a URL and before the next `/`, `?`
+  or `#` (end a URL with no path with a slash), and URLs written
+  `https:\\host` or `https:host`. A guard also refuses text whose reading
+  without invisible characters makes a match (a nine-digit number with
+  invisible characters between its digits).
+- **Admission** (#630, #639). `admission_decision` refuses a verdict reached
+  on a model's translation of the question, as the routes' own admission
+  does; a translation verdict that does not state its scope is read as
+  unchecked; and a natural-language maths verdict no longer reports
+  `is_valid: true` for the model's translated expression.
+- **Translation screening** (#632, #641). A question the injection check
+  refuses is `BLOCKED` on consensus, with no answer, and on stats; a fact
+  request that asks for the model advisory is `BLOCKED`
+  (`fact_verifier.translation_refused`) when its claim or context is refused
+  or longer than 10,000 characters.
+- **Go.** The module path ends in `/v11`:
+  `go get github.com/QWED-AI/qwed-verification/sdk-go/v11`.
+
+### Other changes since 10.0.0
+
+#### Added
+
+- **Natural-language and logic results name the model that translated**
+  (#585, #648): `translation_model` beside `provider_used` in the response
+  and the audit row, read from the provider's configuration, never from the
+  model's answer, and never part of a verdict. The natural-language route
+  now records the provider too.
+- **NOTICE and a policy for the QWED name and logo** (#624). A NOTICE file
+  names the copyright holder, `TRADEMARKS.md` says how the name and logo may
+  be used, and CONTRIBUTING says how contributions are licensed and what to
+  do before a pull request.
+- **LICENSE and NOTICE in every package** (#625). The npm package, the
+  crate, the Go module and the Docker images now carry the licence and the
+  NOTICE attribution, as the Python wheel already did.
+
+#### Fixed
+
+- **A wrong claim no longer opens the consensus circuit breaker** (#642,
+  #643). The breaker counted an engine's verdict as an engine failure, and
+  every tenant shares it, so three wrong claims in a row blocked consensus
+  for everyone for 30 seconds. It now counts only an engine that did not
+  answer.
+
 ## [10.0.0] - 2026-11-14
 
 A major release. It removes the `claude_opus` provider, a copy of the

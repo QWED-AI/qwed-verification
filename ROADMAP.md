@@ -30,7 +30,8 @@ Release history is in [CHANGELOG.md](CHANGELOG.md) and on [GitHub Releases](http
 - QWED names no model: each provider runs the model you configure (v9.0.0)
 - CodeVerifier admits only listed modules, module names, builtins and special attributes in Python (v9.1.0)
 - Logic, consensus, RAG, process and image routes stop verifying or admitting claims they have not proved (v10.0.0)
-- Security and soundness fixes (v7.2.0 to v10.0.0)
+- Code, SQL, maths, image and guard checks admit only what they can show safe, and QWEDLocal stops calling a model's agreement with itself verified (v11.0.0)
+- Security and soundness fixes (v7.2.0 to v11.0.0)
 - OpenSSF Best Practices: Gold
 - SDKs for TypeScript, Go and Rust
 

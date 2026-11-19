@@ -727,57 +727,51 @@ Anything else is refused, and the finding names the module, builtin or attribute
 
    QWED parses the `python` tag before AST analysis.
 
-3. **Language-Specific AST Parsers**
+3. **How each language is checked**
 
-   Each language uses its own parser:
+   Only Python is parsed. The other languages are matched against pattern
+   lists, which can show code unsafe but never show it safe.
 
-   | Language | Parser |
-   |----------|--------|
-   | Python | Python AST module |
-   | JavaScript | Esprima / Acorn |
-   | TypeScript | TypeScript Compiler API |
-   | Java | ANTLR parser |
-   | Go | go/parser package |
-   | SQL | SQLGlot |
+   | Language | How it is checked | When nothing unsafe is found |
+   |----------|-------------------|------------------------------|
+   | Python | Python `ast` module: imports, names, calls and attributes against lists | `VERIFIED` (safe) |
+   | JavaScript, TypeScript | Pattern lists | `UNVERIFIABLE` (`code_verifier.language_unverifiable`) |
+   | Java | Pattern lists | `UNVERIFIABLE` |
+   | Go | Pattern lists | `UNVERIFIABLE` |
+   | SQL | `SQLVerifier` (SQLGlot), without a schema: tables and columns are not checked | `VERIFIED` (safe) when `SQLVerifier` admits it |
+
+   Code that a check shows unsafe is `VERIFIED` as unsafe (`is_valid` False).
+   To check SQL against its tables and columns, send it to `/verify/sql`
+   with the schema.
 
 4. **Error Handling**
 
-   If declared language doesn't match code syntax:
+   The declared language is not checked against the code's syntax, so
+   declaring another language never makes code pass:
 
    ```python
-   # Example: Python code declared as JavaScript
+   # Python code declared as JavaScript
    code = "def hello():\n    print('world')"
-   language = "javascript"
-   
-   result = verifier.verify_code(code, language)
-   # Returns:
-   # {
-   #     "verified": False,
-   #     "error": "SyntaxError: JavaScript parser cannot parse Python",
-   #     "status": "REJECTED"
-   # }
+   result = verifier.verify_code(code, language="javascript")
+   # The JavaScript patterns find nothing, so the result is UNVERIFIABLE,
+   # never verified safe.
    ```
+
+   Python that does not parse is `BLOCKED` (`code_verifier.parse_error`).
 
 **Supported Languages:**
 
 ```python
-SUPPORTED_LANGUAGES = [
-    "python",
-    "javascript",
-    "typescript",
-    "java",
-    "go",
-    "sql",
-    "rust",  # Experimental
-    "c",     # Experimental
-]
+supported_languages = ["python", "javascript", "typescript", "java", "go", "sql"]
 ```
+
+`py`, `js` and `ts` are read as Python, JavaScript and TypeScript. Any other
+language is `BLOCKED` (`code_verifier.unsupported_language`).
 
 **Code Reference:**
 
-- `src/qwed_new/core/code_verifier.py` - Language-specific pattern detection
-- `_get_parser_for_language()` - Parser selection (line 89-120)
-- `supported_languages` constant
+- `src/qwed_new/core/code_verifier.py` - `CodeVerifier.verify_code()` and the per-language checks
+- `supported_languages` in `CodeVerifier.__init__`
 
 ### 4.4 SQL Verification Engine
 

@@ -14,7 +14,7 @@ import (
 	"os"
 	"time"
 
-	qwed "github.com/QWED-AI/qwed-verification/sdk-go/v10"
+	qwed "github.com/QWED-AI/qwed-verification/sdk-go/v11"
 )
 
 func main() {
