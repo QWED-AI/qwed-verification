@@ -202,8 +202,9 @@ class TestQWEDLocalExecution(unittest.TestCase):
         # 2. Call verify_logic
         result = self.client.verify_logic("Is true true?")
         
-        # 3. Assertions
-        self.assertTrue(result.verified)
+        # 3. Assertions: Z3 evaluated the expression; the model's agreement
+        # with its own formula is not verification (GHSA-8fwp).
+        self.assertFalse(result.verified)
         self.assertEqual(result.value, "TRUE")
 
 

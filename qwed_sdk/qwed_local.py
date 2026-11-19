@@ -550,6 +550,9 @@ def _safe_eval_z3_expr(expr_str: str, z3_namespace: dict):
 # CodeVerifier admitted only listed modules, builtins and attributes
 # (GHSA-9r7q-mx75-hcj7). Bump it whenever CodeVerifier admits less.
 CODE_CACHE_POLICY_VERSION = "code_verifier-v4"
+# verify_logic no longer reports verified (GHSA-8fwp); results cached under
+# the old policy said it did, so they are not read again.
+LOGIC_CACHE_POLICY_VERSION = "logic-v2"
 
 
 @dataclass
@@ -966,10 +969,16 @@ SymPy code:"""
     
     def verify_logic(self, query: str) -> VerificationResult:
         """
-        Verify logical query.
-        
-        Uses Z3 for SAT solving and boolean logic verification.
-        Checks cache first to save API costs!
+        Check a model's answer to a logic question against its own formula.
+
+        The model answers TRUE or FALSE and writes the question as a Z3
+        expression, and Z3 decides that expression. Both come from the
+        model, so their agreement shows only that the model is consistent
+        with itself, not that either means the question: the result is
+        never ``verified`` (GHSA-8fwp). When they disagree, the model
+        contradicted its own formula (``evidence["consistent"]`` is False).
+        To verify a formula you wrote yourself, use ``LogicVerifier``.
+        Checks cache first to save API costs.
         """
         if not self.has_z3:
             return VerificationResult(
@@ -982,7 +991,7 @@ SymPy code:"""
             _logic_ctx = self._cache_context_class(
                 provider=self.provider or "local",
                 model=self.model,
-                policy_version="v1",
+                policy_version=LOGIC_CACHE_POLICY_VERSION,
             )
             cached_result = self._cache.get(query, _logic_ctx)
             if cached_result:
@@ -1024,6 +1033,7 @@ Z3 code:"""
             # Step 3: Verify with Z3
             try:
                 from z3 import Bool, And, Or, Not, Implies, Solver, sat
+                from z3 import unknown as z3_unknown
                 
                 # Safe eval with Z3 namespace
                 z3_namespace = {
@@ -1047,20 +1057,33 @@ Z3 code:"""
                 # Check satisfiability
                 result = solver.check()
                 is_satisfiable = (result == sat)
+                # Z3 may give up (unknown): then it decided nothing, and the
+                # model's answer neither agrees with it nor contradicts it.
+                undecided = result == z3_unknown
                 
-                # Compare with LLM answer
+                # Compare with LLM answer. Agreement is not verification:
+                # the expression is the model's own reading of the query.
                 llm_says_true = llm_answer == "TRUE"
-                is_correct = is_satisfiable == llm_says_true
+                is_correct = not undecided and is_satisfiable == llm_says_true
                 
                 verification_result = VerificationResult(
-                    verified=is_correct,
-                    value=str(is_satisfiable).upper(),
-                    confidence=1.0 if is_correct else 0.0,
+                    verified=False,
+                    value="UNKNOWN" if undecided else str(is_satisfiable).upper(),
+                    confidence=0.0,
+                    error=(
+                        "Not verified: Z3 could not decide the model's own formula."
+                        if undecided else
+                        "Not verified: Z3 agrees with the model's answer on the model's own "
+                        "formula, and whether that formula means the question was not checked."
+                        if is_correct else "The model's answer contradicts its own formula."
+                    ),
                     evidence={
                         "llm_answer": llm_answer,
-                        "z3_satisfiable": is_satisfiable,
+                        "z3_satisfiable": None if undecided else is_satisfiable,
                         "z3_expr": llm_expr.strip(),
-                        "method": "z3_sat"
+                        "method": "z3_sat",
+                        "consistent": None if undecided else is_correct,
+                        "translation_verified": False,
                     }
                 )
                 
@@ -1070,15 +1093,21 @@ Z3 code:"""
                         "verified": verification_result.verified,
                         "value": verification_result.value,
                         "confidence": verification_result.confidence,
-                        "evidence": verification_result.evidence
+                        "evidence": verification_result.evidence,
+                        "error": verification_result.error,
                     }
                     self._cache.set(query, cache_data, _logic_ctx)
                 
                 # Show result
                 if HAS_COLOR and os.getenv("QWED_QUIET") != "1":
-                    if is_correct:
-                        print(f"{QWED.SUCCESS}✅ VERIFIED{QWED.RESET} {QWED.VALUE}→ {is_satisfiable}{QWED.RESET}")
-                        _show_github_nudge()
+                    if undecided:
+                        print(f"{QWED.WARNING}\u26a0  NOT VERIFIED{QWED.RESET} (Z3 could not decide the model's formula)")
+                    elif is_correct:
+                        print(
+                            f"{QWED.WARNING}\u26a0  NOT VERIFIED{QWED.RESET} {QWED.VALUE}→ {is_satisfiable}{QWED.RESET} "
+                            "(the model's answer agrees with its own formula; whether that formula "
+                            "means the question was not checked)"
+                        )
                     else:
                         print(f"{QWED.ERROR}❌ MISMATCH{QWED.RESET}")
                         print(f"  LLM said: {llm_answer}")
