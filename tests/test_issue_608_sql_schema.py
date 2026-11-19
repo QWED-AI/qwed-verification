@@ -424,18 +424,20 @@ def test_an_untagged_block_that_runs_a_query_is_checked_as_code(client, monkeypa
 
 
 @pytest.mark.parametrize("code, verified", [
-    # A SELECT with no FROM that Python parses too, and a select() call, as
-    # in SQLAlchemy: the SQL check admits it; as Python it reads names it
-    # never binds (SELECT, select, User), which is refused (GHSA-7xrf).
+    # A SELECT with no FROM that Python parses too: the SQL check admits it;
+    # as Python it reads a name it never binds (SELECT), which is refused
+    # (GHSA-7xrf).
     ("SELECT\n1", [True, False]),
     ("SELECT +1", [True, False]),
-    ("select(User).where(User.id == 1)", [True, False]),
-    ("select (User).where(User.id == 1)", [True, False]),
+    # A select() call, as in SQLAlchemy: read as SQL it calls where(), a
+    # function the SQL check does not know; as Python it reads names it never
+    # binds (select, User). Each check refuses it.
+    ("select(User).where(User.id == 1)", [False, False]),
+    ("select (User).where(User.id == 1)", [False, False]),
     # Each check alone passed what the other refuses: SQL that reads a file,
-    # and Python that runs a command. (As Python the SQL now reads names
-    # it never binds, which is refused too, GHSA-7xrf.)
+    # and Python that runs a command (read as SQL, system() is not known).
     ("SELECT (pg_read_file('data.txt'))", [False, False]),
-    ("select(os.system('x'))", [True, False]),
+    ("select(os.system('x'))", [False, False]),
 ])
 def test_an_untagged_block_that_may_be_sql_or_python_gets_both_checks(
     client, monkeypatch, code, verified,  # noqa: F811

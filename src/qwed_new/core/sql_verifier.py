@@ -13,10 +13,12 @@ import hashlib
 import math
 import re
 from decimal import Decimal, localcontext
+from functools import lru_cache
 
 import sqlglot
 from sqlglot import exp, parse_one
-from typing import List, Dict, Any, Optional, Set
+from sqlglot.tokens import TokenType
+from typing import List, Dict, Any, Optional, Set, Tuple
 from dataclasses import dataclass
 
 from .diagnostics import DiagnosticResult
@@ -28,6 +30,7 @@ from .sql_filter_check import (
     _unrestricted_or_operand,
     setting_dependent_tokens,
 )
+from .sql_function_catalogue import REACHING_TYPED_FUNCTIONS, TYPED_FUNCTIONS
 
 from .verification_context import VerificationContextDocument
 
@@ -49,6 +52,11 @@ CONSTRAINT_UNRESTRICTED_OR = "sql_verifier.unrestricted_or"
 # (_AMBIGUOUS_TOKENIZATION), so what was analysed may not be what runs
 # (GHSA-xpfc).
 CONSTRAINT_AMBIGUOUS_TOKENIZATION = "sql_verifier.ambiguous_tokenization"
+# The query calls a function SQLVerifier does not know to compute only from
+# its arguments, so it may read files, the network or the environment
+# (GHSA-wgcp-398q-m296).
+CONSTRAINT_UNKNOWN_FUNCTION = "sql_verifier.unknown_function"
+UNKNOWN_FUNCTION = "unknown_function"
 # A filter predicate that reads no data but could not be worked out: it may
 # be always true, so the query is not admitted, though nothing proves malice.
 UNEVALUATED_PREDICATE = "unevaluated_constant_predicate"
@@ -214,6 +222,399 @@ def _available_expression_types(*names: str) -> Set[type]:
         if (expression := getattr(exp, name, None)) is not None
     }
 
+
+# What a query may read besides the tables it names (GHSA-wgcp-398q-m296).
+# A list of functions that must not be called cannot cover every engine:
+# each has table functions that read files, URLs or other servers (DuckDB
+# read_csv, ClickHouse file and url, Databricks read_files, BigQuery
+# EXTERNAL_QUERY), some read a file named as a table (DuckDB FROM '/path' and
+# data.csv, Spark csv.`/path`), some run a program (Hive TRANSFORM ... USING)
+# and some functions reach the environment, a model or a secret, or run SQL
+# held in a string (DuckDB getenv, Hive reflect, BigQuery AI.GENERATE,
+# Databricks secret, PostgreSQL query_to_xml). So a query is admitted only
+# when what it reads and calls is known to stay inside the database:
+# tables, subqueries, VALUES, UNNEST and the row generators below; functions
+# sqlglot parses into a kind listed in sql_function_catalogue; and functions
+# sqlglot does not know only when they are listed here as computing from
+# their arguments. A call through a schema, package, object or type
+# (dbo.format, name.ToString(), MyType::fn(x)), a name applied with
+# ClickHouse APPLY, and in Oracle a qualified name that names no table in the
+# query (UTL_INADDR.GET_HOST_NAME, a call without brackets) can be any
+# function, so none is known. A sequence (seq.NEXTVAL), a server setting
+# (@@datadir), DuckDB SUMMARIZE or DESCRIBE of a file, and a Spark or Hive
+# ${...}, which the engine replaces with a variable, a setting or the
+# environment before it parses the query, reach outside too.
+
+# Table functions that only generate rows from their arguments.
+VALUE_TABLE_FUNCTIONS = frozenset({
+    "generate_series", "generateseries", "explodinggenerateseries", "range", "numbers", "zeros",
+    "generator", "generate_subscripts", "regexp_split_to_table", "string_to_table", "string_split",
+    "json_array_elements", "jsonb_array_elements", "json_array_elements_text", "jsonb_array_elements_text",
+    "json_each", "jsonb_each", "json_each_text", "jsonb_each_text", "json_to_recordset", "jsonb_to_recordset",
+    "json_populate_recordset", "jsonb_populate_recordset", "openjson", "splittotable", "strtoksplittotable",
+    "flatten", "explode", "explodeouter", "posexplode", "posexplodeouter", "inline", "stack",
+    "generatedatearray", "generatetimestamparray", "jsontable", "xmltable", "unnest",
+})
+# Functions sqlglot does not know that compute only from their arguments.
+# Left out on purpose: anything that reads or changes state outside the row
+# (nextval, setval, last_insert_rowid, changes), reports on the server or
+# session (version, current_setting, currentDatabase), sleeps or loops
+# (sleep, benchmark), runs SQL held in a string (query_to_xml, crosstab), or
+# reaches files, the network or the environment.
+KNOWN_VALUE_FUNCTIONS = frozenset({
+    # PostgreSQL
+    "json_build_object", "jsonb_build_object", "json_build_array", "jsonb_build_array", "json_object",
+    "jsonb_object", "row_to_json", "to_json", "to_jsonb", "json_agg", "jsonb_agg", "json_object_agg",
+    "jsonb_object_agg", "json_array_length", "jsonb_array_length", "jsonb_set", "jsonb_insert", "jsonb_typeof",
+    "json_typeof", "jsonb_strip_nulls", "json_strip_nulls", "jsonb_pretty", "jsonb_extract_path",
+    "jsonb_extract_path_text", "json_extract_path", "json_extract_path_text", "array_to_json",
+    "jsonb_path_query", "jsonb_path_query_first", "jsonb_path_query_array", "jsonb_path_exists",
+    "jsonb_path_match", "json_populate_record", "jsonb_populate_record",
+    "age", "date_bin", "date_part", "make_date", "make_time", "make_timestamp", "make_timestamptz",
+    "make_interval", "justify_days", "justify_hours", "justify_interval", "clock_timestamp",
+    "statement_timestamp", "transaction_timestamp", "isfinite", "array_to_string", "string_to_array",
+    "array_position", "array_positions", "array_remove", "array_replace", "array_append", "array_prepend",
+    "array_cat", "cardinality", "array_dims", "array_upper", "array_lower", "array_ndims",
+    "regexp_split_to_array", "regexp_match", "regexp_matches", "btrim", "translate", "quote_ident",
+    "quote_literal", "quote_nullable", "format", "starts_with", "chr", "ascii", "overlay", "to_hex",
+    "encode", "decode", "sha224", "sha256", "sha384", "sha512", "width_bucket", "div", "gcd", "lcm",
+    "factorial", "sign", "trunc", "cbrt", "degrees", "radians", "pi", "num_nonnulls", "num_nulls",
+    "octet_length", "to_tsvector", "to_tsquery", "plainto_tsquery", "phraseto_tsquery",
+    "websearch_to_tsquery", "ts_rank", "ts_rank_cd", "ts_headline", "every", "pg_typeof",
+    # MySQL and MariaDB
+    "now", "sysdate", "curtime", "utc_timestamp", "utc_date", "utc_time", "unix_timestamp", "field",
+    "find_in_set", "truncate", "elt", "conv", "bin", "oct", "soundex", "space", "timestampadd",
+    "period_add", "period_diff", "makedate", "maketime", "sec_to_time", "time_to_sec", "to_days",
+    "from_days", "weekday", "dayname", "monthname", "quarter", "yearweek", "json_unquote", "json_contains",
+    "json_length", "json_keys", "json_array", "json_valid", "json_search", "json_set", "json_insert",
+    "json_replace", "json_remove", "json_merge_preserve", "json_merge_patch", "any_value", "bit_count",
+    "inet_aton", "inet_ntoa", "uuid",
+    # SQLite
+    "date", "time", "datetime", "julianday", "strftime", "printf", "total", "quote", "unixepoch",
+    "timediff", "likely", "unlikely", "likelihood", "zeroblob", "char", "unicode", "json_group_array",
+    "json_group_object",
+    # DuckDB
+    "histogram", "list_aggregate", "list_sort", "list_reverse_sort", "list_distinct", "list_transform",
+    "list_filter", "list_reduce", "list_slice", "list_extract", "list_contains", "list_position",
+    "string_split", "len", "epoch_ms", "approx_quantile", "bar",
+    # Oracle
+    "nvl2", "to_date", "to_number", "add_months", "months_between", "lengthb", "substrb", "listagg",
+    "regexp_substr", "regexp_instr", "regexp_count", "regexp_replace",
+    # SQL Server
+    "getdate", "getutcdate", "sysdatetime", "datename", "datepart", "eomonth", "charindex", "patindex",
+    "newid", "datefromparts", "choose", "quotename", "isjson",
+    # Snowflake
+    "hash", "ratio_to_report", "to_timestamp_ntz", "to_timestamp_ltz", "to_timestamp_tz", "try_to_number",
+    "try_to_date", "try_to_timestamp", "uniform", "seq1", "seq2", "seq4", "seq8",
+    # Hive and Spark
+    "date_format", "from_unixtime", "size", "collect_list", "collect_set", "get_json_object", "from_json",
+    "named_struct", "sort_array", "element_at", "array_contains", "posexplode", "explode", "pmod",
+    # ClickHouse
+    "tostring", "tofixedstring", "todate", "todatetime", "todatetime64", "tostartofmonth", "tostartofday",
+    "tostartofweek", "tostartofhour", "tostartofyear", "tostartofquarter", "tostartofminute",
+    "tostartoffiveminutes", "tostartofinterval", "toyear", "toquarter", "tomonth", "toweek", "toisoweek",
+    "toyearweek", "todayofmonth", "todayofweek", "todayofyear", "tohour", "tominute", "tosecond",
+    "toyyyymm", "toyyyymmdd", "tounixtimestamp", "formatdatetime", "parsedatetimebesteffort",
+    "parsedatetimebesteffortornull", "now64", "today", "yesterday", "adddays", "addhours", "addminutes",
+    "addseconds", "addweeks", "addmonths", "addyears", "subtractdays", "subtracthours", "subtractminutes",
+    "subtractseconds", "subtractweeks", "subtractmonths", "subtractyears", "uniq", "uniqexact",
+    "uniqcombined", "quantileexact", "topk", "grouparray", "groupuniqarray", "anylast", "anyheavy",
+    "multiif", "tofloat32", "tofloat64", "toint8", "toint16", "toint32", "toint64", "touint8", "touint16",
+    "touint32", "touint64", "todecimal32", "todecimal64", "todecimal128", "totypename", "intdiv",
+    "intdivorzero", "modulo", "hasany", "hasall", "has", "empty", "notempty", "replaceall", "replaceone",
+    "replaceregexpall", "replaceregexpone", "splitbychar", "splitbystring", "arraystringconcat",
+    "arrayjoin", "arrayelement", "arraymap", "arrayuniq", "arraysort", "arrayreversesort", "lengthutf8", "lowerutf8",
+    "upperutf8", "positioncaseinsensitive", "siphash64", "xxhash64", "murmurhash3_64",
+    "runningdifference", "jsonextractstring", "jsonextractint", "jsonextractfloat", "jsonextractbool",
+    "jsonextractraw", "jsonhas", "formatreadablesize", "formatreadablequantity", "generateuuidv4",
+    "countif", "sumif", "avgif",
+})
+# Characters a table's name does not hold and a path, URL or stage does.
+_PATH_CHARACTERS = frozenset("/\\:@~.{}?")
+# A table qualified by one of these is a file read through a data source or
+# storage plugin (Spark text.`/path`, Drill dfs.tmp.file).
+FILE_SOURCE_PREFIXES = frozenset({
+    "text", "csv", "tsv", "json", "parquet", "orc", "avro", "binaryfile", "delta", "iceberg", "hudi",
+    "jdbc", "xml", "image", "libsvm", "dfs", "cp", "s3", "hdfs", "file",
+})
+# A qualified name ending in one of these is read as a file by DuckDB
+# (FROM data.csv) or one of its extensions (spatial, Excel, Arrow) when no
+# such table exists.
+FILE_EXTENSIONS = frozenset({
+    "csv", "tsv", "psv", "tab", "tbl", "txt", "dat", "log", "json", "jsonl", "ndjson", "geojson", "parquet",
+    "parq", "pq", "orc", "avro", "arrow", "ipc", "feather", "lance", "xlsx", "xls", "ods", "xml", "html",
+    "yaml", "yml", "shp", "dbf", "gpkg", "kml", "gml", "fgb", "osm", "pbf", "tif", "tiff", "gz", "zst",
+    "bz2", "xz", "lz4", "zip", "tar", "db", "sqlite", "sqlite3", "duckdb", "mdb", "accdb", "sav", "dta",
+    "sas7bdat", "gpx", "dxf", "dgn", "kmz", "mif", "e00", "gdb", "vrt", "topojson", "geojsonl", "geojsons",
+    "mvt", "pmtiles", "mbtiles",
+})
+_TABLE_FROM_ROWS = tuple(_available_expression_types("TableFromRows"))
+_QUERY_TRANSFORMS = tuple(_available_expression_types("QueryTransform"))
+# DuckDB SUMMARIZE and DESCRIBE read what they are given: a file when it is
+# a string.
+_SUMMARIES = tuple(_available_expression_types("Summarize", "Describe"))
+_APPLIES = tuple(_available_expression_types("Apply"))
+_SCOPE_RESOLUTIONS = tuple(_available_expression_types("ScopeResolution"))
+_SESSION_PARAMETERS = tuple(_available_expression_types("SessionParameter"))
+_SEQUENCE_STEPS = frozenset({"nextval", "currval"})
+_PLAIN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
+# Reasons are reported by name and capped, so a refusal stays small.
+MAX_REASONS = 20
+
+
+def _label(node: exp.Expression) -> str:
+    """A short name for *node* in a reason."""
+    if isinstance(node, exp.Anonymous):
+        return str(node.name)[:60]
+    if isinstance(node, exp.Func):
+        return node.key[:60]
+    return node.sql()[:60]
+
+
+def _value_table_function(source: Optional[exp.Expression]) -> bool:
+    """Whether *source*, a function used as a table, only generates rows."""
+    if isinstance(source, exp.Anonymous):
+        return str(source.name).lower() in VALUE_TABLE_FUNCTIONS
+    return isinstance(source, exp.Func) and source.key in VALUE_TABLE_FUNCTIONS
+
+
+def _table_reads(table: exp.Table) -> Tuple[List[str], List[str]]:
+    """(reads outside the database, reads not known to stay inside) of one
+    table reference."""
+    source = table.this
+    qualifiers = [
+        part.name.lower() for part in (table.args.get("db"), table.args.get("catalog"))
+        if isinstance(part, exp.Identifier)
+    ]
+    if source is None:
+        # ROWS FROM (...): each item is a table of its own, read on its own.
+        return [], ([] if table.args.get("rows_from") else ["a table with no name"])
+    if not isinstance(source, exp.Identifier):
+        if qualifiers or not _value_table_function(source):
+            return [], [f"'{_label(source)}' used as a table"]
+        return [], []
+    name = source.name
+    reads: List[str] = []
+    unknown: List[str] = []
+    alias = table.args.get("alias")
+    # DuckDB reads (SHOW 'file') as SHOW of that file; sqlglot reads it as a
+    # table SHOW with the file as its alias.
+    alias_names = [] if alias is None else [alias.name, *(part.name for part in alias.args.get("columns") or [])]
+    if any(_PATH_CHARACTERS & set(part) for part in [name, *qualifiers]):
+        reads.append(f"'{name[:60]}' names a file, URL or stage, not a table")
+    elif any(_PATH_CHARACTERS & set(part) for part in alias_names):
+        reads.append(f"'{name[:60]}' is followed by a file, URL or stage")
+    elif set(qualifiers) & FILE_SOURCE_PREFIXES:
+        reads.append(f"'{name[:60]}' is read from files through '{qualifiers[0]}'")
+    elif qualifiers and name.lower() in FILE_EXTENSIONS:
+        reads.append(f"'{qualifiers[0][:60]}.{name[:60]}' names a file")
+    if alias is not None and alias.args.get("columns") and not alias.name:
+        unknown.append(f"'{name[:60]}(...)' is written as a call but read as a table")
+    return reads, unknown
+
+
+def _function_unknown(node: exp.Func) -> bool:
+    """Whether *node* is a call not known to compute only from its
+    arguments: a call through a schema, package, object or type, a name
+    sqlglot does not know and that is not listed, or a kind not in the
+    catalogue."""
+    if isinstance(node.parent, exp.Dot) and node.arg_key == "expression":
+        return True
+    if _SCOPE_RESOLUTIONS and isinstance(node.parent, _SCOPE_RESOLUTIONS) and node.arg_key == "expression":
+        return True
+    if isinstance(node, exp.Anonymous):
+        return str(node.name).lower() not in KNOWN_VALUE_FUNCTIONS | VALUE_TABLE_FUNCTIONS
+    return node.key not in TYPED_FUNCTIONS
+
+
+def _in_family(dialect: Optional[str], family: str) -> bool:
+    """Whether *dialect* is or extends Oracle (*family* "oracle") or Hive
+    ("hive", which Spark and Databricks extend). A dialect that does not
+    resolve counts, so the family's check still runs."""
+    try:
+        resolved = sqlglot.Dialect.get_or_raise(dialect)
+        if family == "oracle":
+            from sqlglot.dialects.oracle import Oracle as Family
+        else:
+            from sqlglot.dialects.hive import Hive as Family
+    except Exception:  # noqa: BLE001 - an unknown dialect gets the check
+        return True
+    return isinstance(resolved, Family)
+
+
+@lru_cache(maxsize=1024)
+def _applied_name_unknown(name: str, dialect: Optional[str]) -> bool:
+    """Whether *name*, applied to columns with ClickHouse APPLY, is not known
+    to compute only from its arguments: it is read as a call of that name.
+    Cached, so many APPLYs of one name parse it once."""
+    if not _PLAIN_NAME.fullmatch(name):
+        return True
+    if name.lower() in KNOWN_VALUE_FUNCTIONS:
+        return False
+    try:
+        call = sqlglot.parse_one(f"SELECT {name}(x)", read=dialect).find(exp.Func)
+    except Exception:  # noqa: BLE001 - not a call sqlglot reads
+        return True
+    return call is None or call.key in REACHING_TYPED_FUNCTIONS or _function_unknown(call)
+
+
+_DERIVED_ARGS = frozenset({"from", "from_", "joins"})
+
+
+def _sources_of(select: exp.Select) -> List[exp.Expression]:
+    """The sources in the FROM and JOINs of one query block."""
+    from_ = select.args.get("from_") or select.args.get("from")
+    sources = [] if from_ is None else [from_.this]
+    return sources + [join.this for join in select.args.get("joins") or []]
+
+
+def _visible_sources(node: exp.Expression) -> List[exp.Expression]:
+    """The sources a qualifier at *node* can name: those of its own query
+    block and of every block it is correlated with. A CTE body, and a
+    subquery in FROM or a join that is not LATERAL, see no block around
+    them."""
+    visible: List[exp.Expression] = []
+    inside_block = lateral = False
+    child, parent = node, node.parent
+    while parent is not None and not isinstance(parent, exp.CTE):
+        if isinstance(parent, exp.Lateral):
+            lateral = True
+        if isinstance(parent, exp.Select):
+            if inside_block and child.arg_key in _DERIVED_ARGS and not lateral:
+                break
+            visible += _sources_of(parent)
+            inside_block, lateral = True, False
+        child, parent = parent, parent.parent
+    return visible
+
+
+def _qualifier_unknown(column: exp.Column) -> bool:
+    """Whether the qualifier of *column* names no source it can see. Oracle
+    then reads it as a schema or package and calls a function of the
+    column's name with no arguments (``utl_inaddr.get_host_name``). A
+    schema in the qualifier must be that of a table written with it and no
+    alias."""
+    if column.args.get("catalog") is not None:
+        return True
+    table, schema = column.table.lower(), column.text("db").lower()
+    for source in _visible_sources(column):
+        if not schema and source.alias_or_name.lower() == table:
+            return False
+        if (
+            schema and isinstance(source, exp.Table) and not source.alias
+            and source.name.lower() == table and source.text("db").lower() == schema
+        ):
+            return False
+    return True
+
+
+def external_reads(parsed: exp.Expression, dialect: Optional[str] = None) -> Tuple[List[str], List[str]]:
+    """(what the query reads outside the database, what it reads or calls
+    that is not known to stay inside), each a short reason, each at most
+    ``MAX_REASONS``. Both empty when the query reads only tables and calls
+    only known functions."""
+    reads: List[str] = []
+    unknown: List[str] = []
+    for table in parsed.find_all(exp.Table):
+        table_reads, table_unknown = _table_reads(table)
+        reads += table_reads
+        unknown += table_unknown
+    if _TABLE_FROM_ROWS:
+        unknown += [
+            f"'{_label(node.this)}' used as a table" for node in parsed.find_all(*_TABLE_FROM_ROWS)
+            if not _value_table_function(node.this)
+        ]
+    if _QUERY_TRANSFORMS:
+        reads += ["a script TRANSFORM runs a program" for _ in parsed.find_all(*_QUERY_TRANSFORMS)]
+    if _SUMMARIES:
+        reads += [
+            f"{node.key.upper()} of something other than a table or query reads it from outside the database"
+            for node in parsed.find_all(*_SUMMARIES)
+            if not isinstance(node.this, (exp.Table, exp.Query, exp.Values))
+        ]
+    if _APPLIES:
+        for node in parsed.find_all(*_APPLIES):
+            applied = node.expression
+            if isinstance(applied, exp.Var):
+                if _applied_name_unknown(applied.name, dialect):
+                    unknown.append(f"'{applied.name[:60]}' applied with APPLY")
+            elif not isinstance(applied, (exp.Func, exp.Lambda)):
+                unknown.append("an APPLY of something other than a function")
+    if _SCOPE_RESOLUTIONS:
+        unknown += [f"'{_label(node)}' (a call through a type)" for node in parsed.find_all(*_SCOPE_RESOLUTIONS)]
+    if _SESSION_PARAMETERS:
+        unknown += [f"'@@{node.name[:60]}' (a server setting)" for node in parsed.find_all(*_SESSION_PARAMETERS)]
+    # @@name in T-SQL and BigQuery: a server or session value.
+    unknown += [
+        f"'@@{node.name[:60]}' (a server value)" for node in parsed.find_all(exp.Parameter)
+        if isinstance(node.this, exp.Parameter)
+    ]
+    # A schema-qualified PostgreSQL operator, OPERATOR(public.+), runs that
+    # schema's function (pg_catalog, written exactly so, is the built-in
+    # one); a cast to a type that is not built in may run the function its
+    # CREATE CAST names (or, in SQL Server, the type's own code). A cast of
+    # NULL (json_populate_record(NULL::users, ...)) runs none.
+    unknown += [
+        f"'{_label(node)}' (an operator named by schema)" for node in parsed.find_all(exp.Operator)
+        if str(node.args.get("operator") or "").rpartition(".")[0] not in ("", "pg_catalog")
+    ]
+    unknown += [
+        f"'{_label(node)}' (a cast to a type that is not built in)" for node in parsed.find_all(exp.DataType)
+        if node.this == exp.DataType.Type.USERDEFINED
+        and not (isinstance(node.parent, exp.Cast) and isinstance(node.parent.this, exp.Null))
+    ]
+    oracle = dialect is not None and _in_family(dialect, "oracle")
+    for column in parsed.find_all(exp.Column):
+        if column.name.lower() in _SEQUENCE_STEPS:
+            reads.append(f"'{_label(column)}' advances or reads a sequence")
+        elif oracle and column.table and _qualifier_unknown(column):
+            # Oracle calls a function with no arguments without brackets.
+            unknown.append(f"'{_label(column)}' (a call through a package or schema)")
+    for node in parsed.find_all(exp.Func):
+        if node.key in REACHING_TYPED_FUNCTIONS:
+            reads.append(f"'{node.key}' reaches outside the database")
+        elif _function_unknown(node):
+            unknown.append(f"'{_label(node)}'")
+    return list(dict.fromkeys(reads))[:MAX_REASONS], list(dict.fromkeys(unknown))[:MAX_REASONS]
+
+
+def quoted_calls(sql: str, dialect: str, parsed: Optional[exp.Expression] = None) -> List[str]:
+    """Quoted names written as a call (``"FORMAT"(x)``, ``[fn](x)``): a quoted
+    name is case-sensitive, so it can name a function other than the one
+    sqlglot reads it as. A quoted name that *parsed* (the tree of *sql*)
+    reads as the alias of a table, subquery or CTE with its columns is not
+    a call. Coming after AS is not enough: ``DEFINE a AS "upper"(name)`` in
+    MATCH_RECOGNIZE is a call."""
+    try:
+        tokens = sqlglot.Dialect.get_or_raise(dialect).tokenize(sql)
+    except Exception:  # noqa: BLE001 - the parse check reports it
+        return []
+    aliases = set()
+    if parsed is not None:
+        aliases = {
+            alias.this.meta.get("start")
+            for alias in parsed.find_all(exp.TableAlias)
+            if isinstance(alias.this, exp.Identifier) and alias.args.get("columns")
+        }
+        aliases.discard(None)
+    found: List[str] = []
+    for token, after in zip(tokens, [*tokens[1:], None]):
+        if (
+            token.token_type == TokenType.IDENTIFIER
+            and after is not None and after.token_type == TokenType.L_PAREN
+            and token.start not in aliases
+        ):
+            found.append(f"'{token.text[:60]}' (a quoted name written as a call)")
+    return list(dict.fromkeys(found))[:MAX_REASONS]
+
+
+def substituted_variables(sql: str, dialect: str) -> List[str]:
+    """A ``${...}`` in Spark, Databricks or Hive: the engine replaces it,
+    before it parses the query, with a variable, a setting or the
+    environment (``${env:HOME}``), so what runs is not what was read."""
+    if "${" in sql and _in_family(dialect, "hive"):
+        return ["'${...}' is replaced by the engine with a variable, a setting or the environment"]
+    return []
 
 class _NotConstant(Exception):
     """A node could not be folded to a column-free constant value."""
@@ -807,6 +1208,8 @@ class SQLVerifier:
             return CONSTRAINT_MALICIOUS
         if "schema_table_missing" in issue_types:
             return CONSTRAINT_SCHEMA_VIOLATION
+        if UNKNOWN_FUNCTION in issue_types:
+            return CONSTRAINT_UNKNOWN_FUNCTION
         if UNEVALUATED_PREDICATE in issue_types:
             return CONSTRAINT_UNEVALUATED_PREDICATE
         if UNRESTRICTED_OR in issue_types:
@@ -920,7 +1323,7 @@ class SQLVerifier:
             issues: List[SQLIssue] = []
 
             issues.extend(self._check_command_type(parsed_query))
-            issues.extend(self._check_dangerous_functions(parsed_query))
+            issues.extend(self._check_dangerous_functions(parsed_query, analysed, dialect))
             issues.extend(self._check_column_access(parsed_query))
             # The query as given: the stacked check expands executable
             # comments itself, and must also see what expansion hides.
@@ -1110,11 +1513,18 @@ class SQLVerifier:
 
         return issues
     
-    def _check_dangerous_functions(self, parsed_query: exp.Expression) -> List[SQLIssue]:
+    def _check_dangerous_functions(
+        self, parsed_query: exp.Expression, query: Optional[str] = None, dialect: str = "postgres"
+    ) -> List[SQLIssue]:
         """Block a call to a function that reads or writes files, loads code
         or reaches the OS or another server (GHSA-45jv-2j44-4c2q). Such a
-        call makes a SELECT unsafe, so it is blocked whatever the policy."""
-        return [
+        call makes a SELECT unsafe, so it is blocked whatever the policy.
+
+        A list of such functions cannot cover every engine, so the query is
+        also refused when it reads anything but tables (a table function, a
+        file, URL or stage named as a table) or calls a function not known
+        to compute only from its arguments (GHSA-wgcp-398q-m296)."""
+        issues = [
             SQLIssue(
                 severity="CRITICAL",
                 issue_type="dangerous_function",
@@ -1123,6 +1533,34 @@ class SQLVerifier:
             )
             for name in sorted(sql_function_names(parsed_query) & DANGEROUS_SQL_FUNCTIONS)
         ]
+        reads, unknown = external_reads(parsed_query, dialect)
+        if query is not None:
+            reads += substituted_variables(query, dialect)
+            unknown = list(dict.fromkeys(unknown + quoted_calls(query, dialect, parsed_query)))
+        issues += [
+            SQLIssue(
+                severity="CRITICAL",
+                issue_type="dangerous_function",
+                description=f"Blocked: {read}.",
+                recommendation="Read from the database's tables only.",
+            )
+            for read in reads
+        ]
+        issues += [
+            SQLIssue(
+                severity="CRITICAL",
+                issue_type=UNKNOWN_FUNCTION,
+                description=(
+                    f"Not known to stay inside the database: {reason}. It may read files, "
+                    "the network or the environment."
+                ),
+                recommendation="Use a standard SQL function, or verify the query without it.",
+            )
+            for reason in unknown
+        ]
+        # Named calls first, then reads, then unknown calls: a refusal stays
+        # small however many there are.
+        return issues[:MAX_REASONS]
 
     # =========================================================================
     # Column Access Control

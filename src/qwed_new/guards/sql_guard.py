@@ -4,10 +4,14 @@ from typing import Dict, Any
 
 from qwed_new.core.sql_verifier import (
     DANGEROUS_SQL_FUNCTIONS,
+    MAX_REASONS,
     SQLVerifier,
     expand_executable_comments,
+    external_reads,
     has_ambiguous_tokenization,
+    quoted_calls,
     sql_function_names,
+    substituted_variables,
 )
 
 
@@ -32,22 +36,24 @@ class SQLGuard:
         Validates SQL syntax and ensures it adheres to mutation policies.
         Source: QWED-MCP Tools Reference
         """
-        # A query sqlglot and the database may split into tokens differently
-        # is not read at all: MySQL reads "--1" as code, so "--1; DROP TABLE
-        # users" is two statements there and one comment to some sqlglot
-        # versions (GHSA-xpfc-qm4c-xf6q).
-        if has_ambiguous_tokenization(sql_query, dialect):
-            return {
-                "verified": False,
-                "risk": "AMBIGUOUS_TOKENS",
-                "message": "The query can be split into tokens in more than one way.",
-            }
         try:
+            # A query sqlglot and the database may split into tokens
+            # differently is not read at all: MySQL reads "--1" as code, so
+            # "--1; DROP TABLE users" is two statements there and one comment
+            # to some sqlglot versions (GHSA-xpfc-qm4c-xf6q). Inside the try,
+            # so a query that is not text is refused, not raised.
+            if has_ambiguous_tokenization(sql_query, dialect):
+                return {
+                    "verified": False,
+                    "risk": "AMBIGUOUS_TOKENS",
+                    "message": "The query can be split into tokens in more than one way.",
+                }
+            expanded = expand_executable_comments(sql_query)
             # Parse every statement: parse_one checked only the first, so
             # "SELECT 1; DROP TABLE users" passed as "SELECT 1".
             statements = [
                 statement
-                for statement in sqlglot.parse(expand_executable_comments(sql_query), read=dialect)
+                for statement in sqlglot.parse(expanded, read=dialect)
                 if statement is not None
             ]
         except Exception as e:
@@ -86,6 +92,27 @@ class SQLGuard:
                 "verified": False,
                 "risk": "DANGEROUS_FUNCTION_BLOCKED",
                 "message": f"Function(s) blocked: {', '.join(blocked)}.",
+            }
+
+        # Anything read but tables, or a function not known to compute only
+        # from its arguments, may reach files, the network or the
+        # environment (GHSA-wgcp-398q-m296).
+        # The text the tree was parsed from, executable comments expanded, as
+        # the verifier reads it.
+        reads, unknown = external_reads(parsed, dialect)
+        reads = list(dict.fromkeys(reads + substituted_variables(expanded, dialect)))[:MAX_REASONS]
+        unknown = list(dict.fromkeys(unknown + quoted_calls(expanded, dialect, parsed)))[:MAX_REASONS]
+        if reads:
+            return {
+                "verified": False,
+                "risk": "EXTERNAL_READ_BLOCKED",
+                "message": f"Blocked: {'; '.join(reads)}.",
+            }
+        if unknown:
+            return {
+                "verified": False,
+                "risk": "UNKNOWN_FUNCTION_BLOCKED",
+                "message": f"Not known to stay inside the database: {'; '.join(unknown)}.",
             }
 
         return {
