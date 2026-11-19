@@ -48,7 +48,9 @@ TAUTOLOGIES = [
 
 UNEVALUATED = [
     "id = 5 OR UPPER('a') = 'A'",
-    "id = 5 OR 'a%' LIKE 'a\\%'",
+    # An escape the fold does not work out. (A backslash escape is refused
+    # earlier: the database may read it differently, GHSA-xpfc.)
+    "id = 5 OR 'a%' LIKE 'a!%' ESCAPE '!'",
     "id = 5 OR 5/2 = 2",
     "id = 5 OR 1/0 IS NULL",
     "id = 5 OR 1 + 'a' = 1",
@@ -80,6 +82,12 @@ def test_a_constant_filter_that_cannot_be_worked_out_is_not_admitted(predicate):
     assert admission_decision(result).value == "BLOCKED"
 
 
+def test_a_backslash_escape_is_refused_before_it_is_worked_out():
+    result = _verify(WHERE + "id = 5 OR 'a%' LIKE 'a\\%'")
+    assert result.developer_fields["constraint_id"] == "sql_verifier.ambiguous_tokenization"
+    assert admission_decision(result).value == "BLOCKED"
+
+
 ADMITTED = [
     "SELECT id, name FROM users WHERE id = 1",
     "SELECT user_id, COUNT(*) FROM orders GROUP BY user_id HAVING COUNT(*) > 1",
@@ -95,8 +103,6 @@ ADMITTED = [
     WHERE + "id % 2 = 0",
     WHERE + "NOT (role = 'guest')",
     WHERE + "id = 5 OR 1 IN (2, 3)",
-    WHERE + "id = 5 OR 'a' LIKE 'b%'",
-    WHERE + "id = 5 OR 'a' NOT LIKE 'a%'",
     WHERE + "id = 5 OR 1 IS NULL",
     WHERE + "name IS NOT NULL",
 ]
@@ -107,6 +113,16 @@ def test_filters_that_read_data_are_still_admitted(query):
     result = _verify(query)
     assert result.developer_fields["is_valid"] is True, result.developer_fields
     assert admission_decision(result).value == "ADMIT"
+
+
+@pytest.mark.parametrize("operand", ["'a' LIKE 'b%'", "'a' NOT LIKE 'a%'", "CAST(2.0 AS INT) = 3"])
+def test_a_constant_or_operand_is_skipped_only_when_every_engine_reads_it_false(operand):
+    # An OR operand must restrict a column (GHSA-xpfc). A constant one is
+    # skipped only when it is FALSE, NULL or a comparison of small integers:
+    # the folder and an engine can read strings, decimals and casts apart.
+    result = _verify(WHERE + "id = 5 OR " + operand)
+    assert result.developer_fields["constraint_id"] == "sql_verifier.unrestricted_or"
+    assert admission_decision(result).value == "BLOCKED"
 
 
 @pytest.mark.parametrize(
@@ -220,7 +236,7 @@ def test_exact_decimal_arithmetic_and_safe_casts_still_fold():
     with pytest.raises(_NotConstant):
         _divide(one, 3)
     assert _modulo(Decimal("7.5"), 2) == Decimal("1.5")
-    assert _verify(WHERE + "id = 5 OR CAST(2.0 AS INT) = 3").developer_fields["is_valid"] is True
+    assert _fold("CAST(2.0 AS INT) = 3") is False
 
 
 def _fold(predicate, dialect="postgres"):

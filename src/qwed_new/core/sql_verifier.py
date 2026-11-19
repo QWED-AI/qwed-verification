@@ -20,6 +20,14 @@ from typing import List, Dict, Any, Optional, Set
 from dataclasses import dataclass
 
 from .diagnostics import DiagnosticResult
+from .sql_filter_check import (
+    _FilterContext,
+    _declared_schema,
+    _dialect_families,
+    _unparen,
+    _unrestricted_or_operand,
+    setting_dependent_tokens,
+)
 
 from .verification_context import VerificationContextDocument
 
@@ -34,9 +42,17 @@ CONSTRAINT_SCHEMA_PARSE_ERROR = "sql_verifier.schema_parse_error"
 CONSTRAINT_SCHEMA_VIOLATION = "sql_verifier.schema_violation"
 CONSTRAINT_EMPTY_BATCH = "sql_verifier.empty_batch"
 CONSTRAINT_UNEVALUATED_PREDICATE = "sql_verifier.unevaluated_predicate"
+# An OR in a filter has an operand that restricts no column to a value, so it
+# may be always true (GHSA-xpfc).
+CONSTRAINT_UNRESTRICTED_OR = "sql_verifier.unrestricted_or"
+# The query can be split into tokens differently by sqlglot and the database
+# (_AMBIGUOUS_TOKENIZATION), so what was analysed may not be what runs
+# (GHSA-xpfc).
+CONSTRAINT_AMBIGUOUS_TOKENIZATION = "sql_verifier.ambiguous_tokenization"
 # A filter predicate that reads no data but could not be worked out: it may
 # be always true, so the query is not admitted, though nothing proves malice.
 UNEVALUATED_PREDICATE = "unevaluated_constant_predicate"
+UNRESTRICTED_OR = "unrestricted_or_operand"
 
 # MySQL and MariaDB run the body of /*! ... */, /*!NNNNN ... */ and MariaDB's
 # /*M! ... */ comments; other engines, and SQLGlot, treat them as comments, so
@@ -67,6 +83,22 @@ _AMBIGUOUS_TOKENIZATION = re.compile(r"\\|--(?![ \t\n\r\f\v])|/\*(?:(?!\*/).)*?/
 _EMPTY_STATEMENT_TYPES = tuple(
     t for t in (getattr(exp, "Semicolon", None),) if t is not None
 )
+
+
+def has_ambiguous_tokenization(query: str, dialect: str) -> bool:
+    """Whether sqlglot and the database may split *query* into tokens
+    differently, so that no analysis of it describes what runs: a form
+    ``_AMBIGUOUS_TOKENIZATION`` lists, in the query as given or with MySQL
+    executable comments expanded, or a token whose meaning a server setting
+    changes (a string in double quotes in MySQL, Spark and Hive; MySQL's
+    ||) (GHSA-xpfc-qm4c-xf6q)."""
+    expanded = expand_executable_comments(query)
+    return bool(
+        _AMBIGUOUS_TOKENIZATION.search(query)
+        or _AMBIGUOUS_TOKENIZATION.search(expanded)
+        or setting_dependent_tokens(query, dialect)
+        or setting_dependent_tokens(expanded, dialect)
+    )
 
 
 def has_stacked_statements(query: str, dialect: str) -> bool:
@@ -582,6 +614,42 @@ def _enclosing_select(node: exp.Expression) -> Optional[exp.Expression]:
     return parent
 
 
+def _passes_columns_through(query: Optional[exp.Expression]) -> bool:
+    """Whether the subquery or bracketed join *query* gives its alias every
+    column of the tables in it: anything but a SELECT, or a set operation
+    of SELECTs, whose select list names its columns."""
+    query = _unparen(query)
+    if isinstance(query, exp.Subquery):
+        return _passes_columns_through(query.this)
+    if isinstance(query, exp.Select):
+        return any(
+            isinstance(item, exp.Star) or (isinstance(item, exp.Column) and isinstance(item.this, exp.Star))
+            for item in query.expressions
+        )
+    if isinstance(query, (exp.Union, exp.Except, exp.Intersect)):
+        return _passes_columns_through(query.this) or _passes_columns_through(query.expression)
+    return True
+
+
+def _aliases_to_tables(parsed: exp.Expression) -> Dict[str, Set[str]]:
+    """Each table name and alias in *parsed* with the tables of the database
+    it stands for (GHSA-xpfc). An alias used for several tables (one in a
+    subquery) stands for each, and the alias of a bracketed join, or of a
+    subquery that selects a star, for every table in it."""
+    mapping: Dict[str, Set[str]] = {}
+    for tbl in parsed.find_all(exp.Table):
+        real = tbl.name.lower()
+        mapping.setdefault(real, set()).add(real)
+        if tbl.alias:
+            mapping.setdefault(tbl.alias.lower(), set()).add(real)
+    for subquery in parsed.find_all(exp.Subquery):
+        if subquery.alias and _passes_columns_through(subquery.this):
+            mapping.setdefault(subquery.alias.lower(), set()).update(
+                tbl.name.lower() for tbl in subquery.find_all(exp.Table)
+            )
+    return mapping
+
+
 @dataclass
 class SQLIssue:
     """A detected SQL security issue."""
@@ -741,6 +809,8 @@ class SQLVerifier:
             return CONSTRAINT_SCHEMA_VIOLATION
         if UNEVALUATED_PREDICATE in issue_types:
             return CONSTRAINT_UNEVALUATED_PREDICATE
+        if UNRESTRICTED_OR in issue_types:
+            return CONSTRAINT_UNRESTRICTED_OR
         return CONSTRAINT_SQL_VALID if is_valid else CONSTRAINT_COMPLEXITY_LIMIT_EXCEEDED
 
     def verify_sql(
@@ -788,6 +858,23 @@ class SQLVerifier:
         # 1. Parse Query, with MySQL/MariaDB executable comments expanded.
         executable_comments = bool(_EXECUTABLE_COMMENT.search(query))
         analysed = expand_executable_comments(query) if executable_comments else query
+        # Where sqlglot and the database may split the query into tokens
+        # differently (MySQL reads "--1 OR 1=1" as code, sqlglot as a
+        # comment; with ANSI_QUOTES it reads "name" as a column, sqlglot as a
+        # string), no analysis of it describes what runs (GHSA-xpfc).
+        if has_ambiguous_tokenization(query, dialect):
+            return DiagnosticResult.blocked(
+                agent_message=(
+                    "SQL verification could not be completed because the query can be "
+                    "read in more than one way."
+                ),
+                developer_fields={
+                    "constraint_id": CONSTRAINT_AMBIGUOUS_TOKENIZATION,
+                    "is_valid": False,
+                    "issues": [{"severity": "CRITICAL", "description": "Ambiguous tokenisation"}],
+                    "engine": "SQLGlot-AST-Scanner",
+                },
+            )
         try:
             parsed_query = _parse_query(analysed, dialect)
         except Exception as exc:  # noqa: BLE001 — fail-closed by design
@@ -805,6 +892,29 @@ class SQLVerifier:
                 },
             )
 
+        # Some sqlglot versions read the TABLE statement (TABLE users, every
+        # column of every row) as a column named TABLE. TABLE is reserved in
+        # most dialects, so an unquoted one is taken to mean the parse is not
+        # the query; a ClickHouse column named table must then be quoted
+        # (GHSA-xpfc).
+        if any(
+            not identifier.quoted and identifier.name.upper() == "TABLE"
+            for identifier in parsed_query.find_all(exp.Identifier)
+        ):
+            return DiagnosticResult.blocked(
+                agent_message=(
+                    "SQL verification could not be completed because the query "
+                    "could not be parsed."
+                ),
+                developer_fields={
+                    "constraint_id": CONSTRAINT_PARSE_ERROR,
+                    "is_valid": False,
+                    "error_type": "MisreadStatement",
+                    "issues": [{"severity": "CRITICAL", "description": "TABLE statement misread"}],
+                    "engine": "SQLGlot-AST-Scanner",
+                },
+            )
+
         # 2..7 Analysis — unexpected failures fail closed as execution errors.
         try:
             issues: List[SQLIssue] = []
@@ -814,7 +924,7 @@ class SQLVerifier:
             issues.extend(self._check_column_access(parsed_query))
             # The query as given: the stacked check expands executable
             # comments itself, and must also see what expansion hides.
-            issues.extend(self._check_injection_patterns(parsed_query, query, dialect))
+            issues.extend(self._check_injection_patterns(parsed_query, query, dialect, schema_ddl))
 
             complexity = self._analyze_complexity(parsed_query)
 
@@ -1039,9 +1149,14 @@ class SQLVerifier:
     # =========================================================================
     
     def _check_injection_patterns(
-        self, parsed_query: exp.Expression, raw_query: str, dialect: str = "postgres"
+        self,
+        parsed_query: exp.Expression,
+        raw_query: str,
+        dialect: str = "postgres",
+        schema_ddl: Optional[str] = None,
     ) -> List[SQLIssue]:
-        """Detect SQL injection patterns."""
+        """Detect SQL injection patterns. ``schema_ddl``, when given, says
+        which names are columns of which tables for the OR check."""
         issues = []
         
         # Tautology detection by VALUE, not by matching a fixed set of AST
@@ -1078,6 +1193,25 @@ class SQLVerifier:
                     issue_type="injection_or_true",
                     description="Always-true OR operand detected. Likely injection attempt."
                 ))
+
+        # An OR operand that restricts no column to a value may be always
+        # true, so it is not admitted (GHSA-xpfc). Once is enough.
+        unrestricted = _unrestricted_or_operand(
+            parsed_query,
+            _FilterContext(
+                parsed_query, dialect, _declared_schema(schema_ddl, dialect), expand_executable_comments(raw_query)
+            ),
+        )
+        if unrestricted is not None:
+            issues.append(SQLIssue(
+                severity="CRITICAL",
+                issue_type=UNRESTRICTED_OR,
+                description=(
+                    f"An OR operand restricts no column to a value: {unrestricted.sql()}. "
+                    "It may be always true."
+                ),
+                recommendation="Restrict each OR operand to values, e.g. col = 'x' or col IN (1, 2)."
+            ))
 
         # A filter predicate that reads no data but could not be worked out
         # may be always true, so it is not admitted (GHSA-jvhg). Once is enough.
@@ -1353,6 +1487,85 @@ class SQLVerifier:
                 ))
 
         issues.extend(self._check_star_sensitive_columns(parsed_query, tables_in_schema))
+        issues.extend(self._check_whole_row_references(parsed_query, tables_in_schema, dialect))
+
+        return issues
+
+    def _check_whole_row_references(
+        self, parsed_query: exp.Expression, tables_in_schema: Dict[str, Set[str]], dialect: str = "postgres"
+    ) -> List[SQLIssue]:
+        """Reads of a table's sensitive columns that do not name them
+        (GHSA-xpfc):
+
+        - a table or its alias used as a column (``row_to_json(u)``, ``SELECT
+          u FROM users u``) is the whole row. Names are compared without
+          case, and a name that is also a column still counts: PostgreSQL
+          reads a quoted alias that differs from a column only in case as
+          the row;
+        - a name after a table or its alias that is not one of its columns:
+          in PostgreSQL ``u.row_to_json`` is ``row_to_json(u)``;
+        - a column list after a table's alias (``users AS t(a, b, c)``)
+          renames its columns;
+        - DuckDB's ``COLUMNS('pattern')``, and a column by position (DuckDB's
+          ``#3``, Snowflake's ``$3``).
+
+        - in Hive, Spark and Databricks, a quoted column name holding regular
+          expression characters, which a setting makes a pattern of column
+          names.
+
+        An alias used for several tables (one in a subquery) stands for each
+        of them, and the alias of a bracketed join, or of a subquery that
+        selects a star, for every table in it.
+        """
+        issues: List[SQLIssue] = []
+        alias_to_tables = _aliases_to_tables(parsed_query)
+
+        def exposes(t_names: Set[str], how: str) -> None:
+            for t_name in sorted(t_names):
+                for col in sorted(tables_in_schema.get(t_name, set()) & self.blocked_columns):
+                    issues.append(SQLIssue(
+                        severity="CRITICAL",
+                        issue_type="sensitive_column_access",
+                        description=f"{how} exposes sensitive column '{col}' of '{t_name}'.",
+                        recommendation="Select only the non-sensitive columns you need, by name."
+                    ))
+
+        for tbl in parsed_query.find_all(exp.Table):
+            alias = tbl.args.get("alias")
+            if alias is not None and alias.args.get("columns"):
+                exposes({tbl.name.lower()}, "A column list after the table's alias")
+
+        for column in parsed_query.find_all(exp.Column):
+            if isinstance(column.this, exp.Star):
+                continue
+            name = column.name.lower()
+            if column.table:
+                for t_name in sorted(alias_to_tables.get(column.table.lower(), set())):
+                    schema_cols = tables_in_schema.get(t_name)
+                    if schema_cols is not None and name not in schema_cols:
+                        exposes({t_name}, f"'{column.table}.{column.name}', which is not a column,")
+            elif name in alias_to_tables:
+                exposes(alias_to_tables[name], "A whole-row reference")
+
+        every_table = set().union(*alias_to_tables.values()) if alias_to_tables else set()
+        positional = tuple(_available_expression_types("Columns", "PositionalColumn"))
+        if positional and any(True for _ in parsed_query.find_all(*positional)):
+            exposes(every_table, "Selecting columns by pattern or position")
+        elif "Snowflake" in (_dialect_families(dialect) or set()) and any(
+            isinstance(_unparen(parameter.this), exp.Literal)
+            for parameter in parsed_query.find_all(exp.Parameter)
+        ):
+            exposes(every_table, "A column by position ($n)")
+        families = _dialect_families(dialect)
+        if families is None or "Hive" in families:
+            pattern_characters = set("*+?|()[]{}^$." + chr(92))
+            if any(
+                isinstance(column.this, exp.Identifier)
+                and column.this.quoted
+                and pattern_characters & set(column.name)
+                for column in parsed_query.find_all(exp.Column)
+            ):
+                exposes(every_table, "A quoted column name read as a pattern")
 
         return issues
 
@@ -1369,26 +1582,25 @@ class SQLVerifier:
         """
         issues: List[SQLIssue] = []
 
-        # alias (and bare name) -> real table name, for resolving qualified stars.
-        alias_to_table: Dict[str, str] = {}
-        for tbl in parsed_query.find_all(exp.Table):
-            real = tbl.name.lower()
-            alias_to_table[real] = real
-            if tbl.alias:
-                alias_to_table[tbl.alias.lower()] = real
+        # alias (and bare name) -> real table names, for resolving stars
+        # (GHSA-xpfc): see _aliases_to_tables.
+        alias_to_tables = _aliases_to_tables(parsed_query)
 
         for star in parsed_query.find_all(exp.Star):
             parent = star.parent
             if isinstance(parent, exp.Column) and parent.table:
-                covered = [alias_to_table.get(parent.table.lower())]
+                covered = sorted(alias_to_tables.get(parent.table.lower(), set()))
             else:
                 select = _enclosing_select(star)
                 scope = select if select is not None else parsed_query
-                covered = [
-                    alias_to_table.get((t.alias or t.name).lower(), t.name.lower())
+                # Each table of the SELECT, and every table its alias or name
+                # stands for anywhere in the query, as main read it.
+                covered = sorted({
+                    name
                     for t in scope.find_all(exp.Table)
                     if select is None or _enclosing_select(t) is select
-                ]
+                    for name in {t.name.lower()} | alias_to_tables.get((t.alias or t.name).lower(), set())
+                })
 
             for t_name in covered:
                 if not t_name:

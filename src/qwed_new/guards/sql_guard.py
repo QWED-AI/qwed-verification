@@ -6,6 +6,7 @@ from qwed_new.core.sql_verifier import (
     DANGEROUS_SQL_FUNCTIONS,
     SQLVerifier,
     expand_executable_comments,
+    has_ambiguous_tokenization,
     sql_function_names,
 )
 
@@ -31,6 +32,16 @@ class SQLGuard:
         Validates SQL syntax and ensures it adheres to mutation policies.
         Source: QWED-MCP Tools Reference
         """
+        # A query sqlglot and the database may split into tokens differently
+        # is not read at all: MySQL reads "--1" as code, so "--1; DROP TABLE
+        # users" is two statements there and one comment to some sqlglot
+        # versions (GHSA-xpfc-qm4c-xf6q).
+        if has_ambiguous_tokenization(sql_query, dialect):
+            return {
+                "verified": False,
+                "risk": "AMBIGUOUS_TOKENS",
+                "message": "The query can be split into tokens in more than one way.",
+            }
         try:
             # Parse every statement: parse_one checked only the first, so
             # "SELECT 1; DROP TABLE users" passed as "SELECT 1".
