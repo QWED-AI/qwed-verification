@@ -2,8 +2,8 @@
 ConfigGuard: Deterministic Secrets Scanner.
 Detects plaintext secrets in configuration data.
 """
-import bisect
 import re
+from itertools import pairwise
 from typing import Dict, Any, Iterator, List, Optional
 
 from qwed_new.guards.canonical_text import decoded_json, reading_copies
@@ -20,13 +20,14 @@ _RUN_SEARCHES = {
 
 # The AWS secret key pattern takes any 40 base64 characters, so it also
 # matched values that are public by their shape: the commit of a pinned
-# GitHub Action, a digest named by its algorithm, an npm integrity hash, a
-# line of "=" and an alphabet written out. A match is dropped only when the
-# whole run of base64 characters around it is one of these shapes, read
-# exactly; every other run keeps all the matches the pattern finds. A
-# 40-character hex value is kept anywhere else: some services issue tokens of
-# that shape.
-_BASE64_RUN = re.compile(r"[a-zA-Z0-9/+=]{40,}", re.IGNORECASE)
+# GitHub Action, a digest named by its algorithm, an integrity hash, a line
+# of "=" and an alphabet written out. A match is dropped only when the whole
+# run of base64 characters around it is one of these shapes, read exactly;
+# every other run keeps all the matches the pattern finds. A 40-character hex
+# value is kept anywhere else: some services issue tokens of that shape.
+# The same characters as the pattern, with its flags, so a run holds every
+# match the pattern finds.
+_BASE64_RUN = re.compile(r"[a-z0-9/+=]{40,}", re.IGNORECASE)
 _HEX = re.compile(r"[0-9a-fA-F]+")
 _HEX_DIGEST_LENGTHS = {"sha1:": 40, "sha256:": 64, "sha384:": 96, "sha512:": 128}
 # Base64 of a 32-, 48- or 64-byte digest, with the padding it has.
@@ -35,23 +36,35 @@ _SRI_DIGESTS = {
     "sha384-": re.compile(r"[A-Za-z0-9+/]{64}"),
     "sha512-": re.compile(r"[A-Za-z0-9+/]{86}=="),
 }
-# An integrity value: "integrity": "sha512-..." (npm) or integrity="sha384-..."
-# (HTML), the hash first in the value.
-_INTEGRITY_BEFORE = re.compile(r"integrity[\"']?[ \t]*[:=][ \t]*[\"']?\Z", re.IGNORECASE)
+# A character that continues a name, so a label or key after it is part of a
+# longer name (my_sha1:, notintegrity, data-integrity).
+_NAME_CHARACTER = re.compile(r"[A-Za-z0-9_-]")
+# An integrity value: "integrity": "sha512-..." (npm), integrity="sha384-..."
+# (HTML) or integrity: sha256-... (YAML, and a JSON key with its value), the
+# hash first in the value.
+_INTEGRITY_BEFORE = re.compile(r"(?<![A-Za-z0-9_-])integrity[\"']?[ \t]*[:=][ \t]*[\"']?\Z", re.IGNORECASE)
 # A step that pins an action or a reusable workflow to a commit, alone on its
-# line apart from quotes and a comment.
+# line apart from quotes and a comment, which YAML starts after whitespace.
 _PINNED_ACTION_LINE = re.compile(
     r"[ \t]*(?:-[ \t]*)?uses[ \t]*:[ \t]*(['\"]?)"
-    r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]*@([0-9a-fA-F]{40})\1[ \t]*(?:#[^\n]*)?\r?"
+    r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_./-]*)?@([0-9a-fA-F]{40})\1"
+    r"(?:[ \t]+#[^\n]*)?[ \t]*\r?"
 )
+# The keys whose name makes a value public by its shape. In a parsed tree a
+# value under one of them is read with its key, as in the file.
+_SHAPE_KEYS = ("uses", "integrity")
 
 
 def _labelled(text: str, start: int, labels) -> Optional[str]:
     """The label from *labels* that ends at *start* and does not continue a
-    word, or None."""
+    longer name, or None."""
     for label in labels:
         begin = start - len(label)
-        if begin >= 0 and text[begin:start].lower() == label and (begin == 0 or not text[begin - 1].isalnum()):
+        if (
+            begin >= 0
+            and text[begin:start].lower() == label
+            and (begin == 0 or not _NAME_CHARACTER.match(text, begin - 1))
+        ):
             return label
     return None
 
@@ -65,50 +78,49 @@ class _PublicShapes:
         self.pattern = pattern
 
     def finditer(self, text: str) -> Iterator["re.Match[str]"]:
+        # Runs come in order, so one cursor walks the line ends, and each
+        # line is read once however many candidates it holds.
         newlines: Optional[List[int]] = None
-        # The commit each line pins, by the line's start: each line is read
-        # once, however many candidates it holds.
-        pinned: Dict[int, int] = {}
+        cursor = 0
+        line_read = -1
+        commit_at = -1
         for run in _BASE64_RUN.finditer(text):
             start, end = run.span()
             value = run.group(0)
             if value.isascii() and len(value) == 40 and text[start - 1:start] == "@" and _HEX.fullmatch(value):
                 if newlines is None:
                     newlines = [found.start() for found in re.finditer("\n", text)]
-                if self._pinned_commit(text, start, newlines, pinned) == start:
+                while cursor < len(newlines) and newlines[cursor] < start:
+                    cursor += 1
+                line_start = newlines[cursor - 1] + 1 if cursor else 0
+                if line_start != line_read:
+                    line_end = newlines[cursor] if cursor < len(newlines) else len(text)
+                    line = _PINNED_ACTION_LINE.fullmatch(text, line_start, line_end)
+                    line_read, commit_at = line_start, (line.start(2) if line else -1)
+                if commit_at == start:
                     continue
             if self._public(text, start, value):
                 continue
             yield from self.pattern.finditer(text, start, end)
 
     @staticmethod
-    def _pinned_commit(text: str, start: int, newlines: List[int], pinned: Dict[int, int]) -> int:
-        """Where the commit starts on the line around *start*, if the line
-        pins an action to one; otherwise -1."""
-        at = bisect.bisect_left(newlines, start)
-        line_start = newlines[at - 1] + 1 if at else 0
-        if line_start not in pinned:
-            line_end = newlines[at] if at < len(newlines) else len(text)
-            line = _PINNED_ACTION_LINE.fullmatch(text, line_start, line_end)
-            pinned[line_start] = line.start(2) if line else -1
-        return pinned[line_start]
-
-    @staticmethod
     def _public(text: str, start: int, value: str) -> bool:
         if not value.isascii():
             return False
-        # Padding and rules: fewer than 40 characters that are not "=".
-        if len(value) - value.count("=") < 40:
+        # A rule: nothing but "=", which no key is made of.
+        if value.count("=") == len(value):
             return True
         # An alphabet or another listing in strictly ascending order.
-        if all(a < b for a, b in zip(value, value[1:])):
+        if all(a < b for a, b in pairwise(value)):
             return True
         label = _labelled(text, start, _HEX_DIGEST_LENGTHS)
         if label and len(value) == _HEX_DIGEST_LENGTHS[label] and _HEX.fullmatch(value):
             return True
         label = _labelled(text, start, _SRI_DIGESTS)
-        if label and _INTEGRITY_BEFORE.search(text[max(0, start - len(label) - 40):start - len(label)]):
-            return _SRI_DIGESTS[label].fullmatch(value) is not None
+        if label:
+            label_start = start - len(label)
+            if _INTEGRITY_BEFORE.search(text, max(0, label_start - 40), label_start):
+                return _SRI_DIGESTS[label].fullmatch(value) is not None
         return False
 
     def search(self, text: str) -> Optional["re.Match[str]"]:
@@ -170,7 +182,9 @@ class ConfigGuard:
         for name, (start, run) in _RUN_SEARCHES.items():
             if self.patterns.get(name) == self.DEFAULT_SECRET_PATTERNS[name]:
                 self.compiled_patterns[name] = RunSearch(self.compiled_patterns[name], start, run)
-        if self.patterns.get("AWS_SECRET_KEY") == self.DEFAULT_SECRET_PATTERNS["AWS_SECRET_KEY"]:
+        # A pattern the caller gives, even the default one, is searched as
+        # written.
+        if "AWS_SECRET_KEY" not in (custom_patterns or {}):
             self.compiled_patterns["AWS_SECRET_KEY"] = _PublicShapes(self.compiled_patterns["AWS_SECRET_KEY"])
     
     def verify_config_safety(
@@ -190,18 +204,21 @@ class ConfigGuard:
         """
         violations = []
         
-        def scan(data: Any, current_path: str):
+        def scan(data: Any, current_path: str, name: Any = None):
             if isinstance(data, dict):
                 for key, value in data.items():
                     new_path = f"{current_path}.{key}" if current_path else key
-                    scan(value, new_path)
+                    scan(value, new_path, key)
             elif isinstance(data, list):
                 for idx, item in enumerate(data):
                     scan(item, f"{current_path}[{idx}]")
             elif isinstance(data, str):
                 # Check the string, as written and as a reader sees it
-                # (GHSA-v3m4), against all patterns
-                copies = reading_copies(data)
+                # (GHSA-v3m4), against all patterns. A value under "uses" or
+                # "integrity" is read with its key, as "uses: value", so a
+                # pinned step or an integrity hash keeps the name that makes
+                # it public; no other key is read.
+                copies = reading_copies(f"{name}: {data}" if name in _SHAPE_KEYS else data)
                 for secret_type, pattern in self.compiled_patterns.items():
                     if any(pattern.search(copy) for copy in copies):
                         violations.append({
@@ -231,9 +248,10 @@ class ConfigGuard:
         """
         secrets_found = []
         # The text as written and as a reader sees it, and the strings of
-        # JSON, which may write characters as escapes (GHSA-v3m4).
+        # JSON, which may write characters as escapes (GHSA-v3m4), each
+        # string value with its key.
         copies = reading_copies(text)
-        decoded = decoded_json(text)
+        decoded = decoded_json(text, keyed=True)
         if decoded is not None:
             copies = tuple(dict.fromkeys(copies + reading_copies(decoded)))
         

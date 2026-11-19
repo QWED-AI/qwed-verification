@@ -209,11 +209,15 @@ def _seen_readings(text: str, marked: Dict[int, str], shown: Dict[int, str]) -> 
     return as_marked.replace(MARK, ""), _MARK_RUN.sub(" ", as_marked), text.translate(shown)
 
 
-def decoded_json(text: str) -> Optional[str]:
+def decoded_json(text: str, keyed: bool = False) -> Optional[str]:
     """The strings and keys *text* holds, one per line, when it is JSON that
     writes an escape; else None. A JSON string may write any character as an
     escape (a zero-width space, a tag character, a plain digit), which the
-    text as sent does not show, so a guard given JSON reads these too."""
+    text as sent does not show, so a guard given JSON reads these too.
+
+    With *keyed*, a string value is written on its key's line, as
+    ``key: value``, for a guard that reads a value by the key it sits under;
+    every key and string is still there."""
     if not isinstance(text, str) or chr(92) not in text:
         return None
     try:
@@ -226,6 +230,13 @@ def decoded_json(text: str) -> Optional[str]:
         item = pending.pop()
         if isinstance(item, str):
             found.append(item)
+        elif isinstance(item, dict) and keyed:
+            for key, entry in item.items():
+                if isinstance(entry, str):
+                    found.append(f"{key}: {entry}")
+                else:
+                    found.append(key)
+                    pending.append(entry)
         elif isinstance(item, dict):
             found.extend(item)
             pending.extend(item.values())

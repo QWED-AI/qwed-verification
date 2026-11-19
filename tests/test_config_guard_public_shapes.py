@@ -9,6 +9,7 @@ value that could be a key is reported as before.
 
 import base64
 import hashlib
+import json
 import random
 import re
 import time
@@ -20,20 +21,30 @@ from hypothesis import strategies as st
 from qwed_sdk.guards.config_guard import ConfigGuard
 
 B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-# Generated, not written out, so no scanner reads it as a real key.
+# Generated, not written out, so no scanner reads them as real keys or
+# commits.
 _RNG = random.Random(20261119)
 KEY = "".join(_RNG.choice(B64) for _ in range(40))
-SHA = hashlib.sha1(b"qwed").hexdigest()
+SHA = f"{_RNG.getrandbits(160):040x}"
+PADDED_28 = base64.b64encode(_RNG.randbytes(28)).decode()  # 38 characters and "=="
+PADDED_29 = base64.b64encode(_RNG.randbytes(29)).decode()  # 39 characters and "="
 SHA256 = hashlib.sha256(b"qwed").hexdigest()
 SHA384 = hashlib.sha384(b"qwed").hexdigest()
 SHA512 = hashlib.sha512(b"qwed").hexdigest()
 SRI = {name: base64.b64encode(hashlib.new(name, b"qwed").digest()).decode() for name in ("sha256", "sha384", "sha512")}
 ALPHABET62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+RAW = re.compile(ConfigGuard.DEFAULT_SECRET_PATTERNS["AWS_SECRET_KEY"], re.IGNORECASE)
 
 
-def test_the_key_has_the_shape_of_a_key():
-    assert len(KEY) == 40 and not re.fullmatch(r"[0-9a-fA-F]+", KEY)
+def test_the_values_have_the_shapes_the_tests_need():
+    assert len(KEY) == 40
+    assert not re.fullmatch(r"[0-9a-fA-F]+", KEY)
     assert not all(a < b for a, b in zip(KEY, KEY[1:]))
+    assert len(PADDED_28) == 40
+    assert PADDED_28.endswith("==")
+    assert len(PADDED_29) == 40
+    assert PADDED_29.endswith("=")
+    assert re.fullmatch(r"[0-9a-f]{40}", SHA)
 
 
 def _types(text):
@@ -60,7 +71,6 @@ PUBLIC = {
     "yaml integrity sha256": f"integrity: sha256-{SRI['sha256']}",
     "comment rule": "# " + "=" * 44 + "\n",
     "long rule": "=" * 200,
-    "padding after a short value": "abc" + "=" * 60,
     "base62 alphabet": f'"encoding": "Base62, alphabet {ALPHABET62}, zero-padded"',
 }
 
@@ -81,12 +91,49 @@ def test_a_workflow_of_pinned_steps_passes():
     assert ConfigGuard().scan_string(workflow)["verified"] is True
 
 
+def test_a_lock_file_with_an_escape_passes():
+    # Any backslash makes the guard read the JSON's strings too; each value is
+    # read on its key's line, so "integrity" stays with its hash.
+    lock = json.dumps({
+        "name": "demo\tpackage",
+        "packages": {"node_modules/a": {"integrity": f"sha512-{SRI['sha512']}"}},
+    })
+    assert "\\" in lock
+    assert ConfigGuard().scan_string(lock)["verified"] is True
+
+
+def test_a_key_in_a_lock_file_with_an_escape_is_reported():
+    lock = json.dumps({"name": "demo\tpackage", "secret": KEY,
+                       "packages": {"node_modules/a": {"integrity": f"sha512-{SRI['sha512']}"}}})
+    assert "AWS_SECRET_KEY" in _types(lock)
+
+
 def test_public_shapes_pass_in_a_config_tree():
-    config = {"steps": [{"uses": f"actions/checkout@{SHA}"}], "proof_ref": f"sha256:{SHA256}"}
-    # In a tree the value is checked alone: "actions/checkout@<commit>" has no
-    # "uses:" line around it, so only the digest is read out.
-    result = ConfigGuard().verify_config_safety(config)
-    assert [v["path"] for v in result.get("violations", [])] == ["steps[0].uses"]
+    # A value in a tree is read with its key, as in the file.
+    config = {
+        "steps": [{"uses": f"actions/checkout@{SHA}"}],
+        "proof_ref": f"sha256:{SHA256}",
+        "packages": {"node_modules/a": {"integrity": f"sha512-{SRI['sha512']}"}},
+    }
+    assert ConfigGuard().verify_config_safety(config)["verified"] is True
+
+
+def test_a_tree_reads_no_key_but_uses_and_integrity():
+    # Keys are not scanned, as on main: only a value under "uses" or
+    # "integrity" is read with its key.
+    assert ConfigGuard().verify_config_safety({"A" * 45: "short", "x" * 41: {"y": "z"}})["verified"] is True
+
+
+@pytest.mark.parametrize("config", [
+    {"steps": [{"uses": f"owner/repo@{KEY}"}]},
+    {"commit": SHA},
+    {"notintegrity": f"sha384-{SRI['sha384']}"},
+    {"secret": PADDED_28},
+    [f"actions/checkout@{SHA}"],
+], ids=["key in uses", "commit field", "notintegrity", "padded token", "commit in a list"])
+def test_a_tree_still_reports_what_is_not_public(config):
+    violations = ConfigGuard().verify_config_safety(config).get("violations", [])
+    assert "AWS_SECRET_KEY" in {v["type"] for v in violations}
 
 
 KEY_LIKE = {
@@ -99,6 +146,10 @@ KEY_LIKE = {
     "glued after": KEY + "x",
     "padded": KEY + "==",
     "after an equals sign": "=" + KEY,
+    "after a rule": "=" * 44 + KEY,
+    "28 bytes in base64, padded": f"api_secret: {PADDED_28}",
+    "29 bytes in base64, padded": f"api_secret: {PADDED_29}",
+    "an equals sign inside": KEY[:20] + "=" + KEY[20:39],
     "in a uses line": f"  - uses: owner/repo@{KEY}\n",
     "after a sha256 label": f"sha256:{KEY}",
     "after a sha1 label": f"sha1:{KEY}",
@@ -119,41 +170,49 @@ def test_an_invisible_character_inside_the_key_does_not_hide_it(char):
     assert "AWS_SECRET_KEY" in _types(KEY[:17] + char + KEY[17:])
 
 
-# 40-character hex outside the shapes above: some services issue tokens of
-# that shape, so these are reported, as before.
-HEX_STILL_REPORTED = {
+# Outside the shapes above a 40-character hex value is reported, as before:
+# some services issue tokens of that shape.
+NEAR_MISSES = {
     "commit field": f'"commit": "{SHA}"',
     "hex token": f"DD_APP_KEY={SHA}",
     "cargo rev": f'rev = "{SHA}"',
     "commented-out step": f"#  - uses: owner/repo@{SHA}\n",
     "uses with trailing text": f"  - uses: owner/repo@{SHA} extra\n",
+    "uses with a comment glued on": f"  - uses: owner/repo@{SHA}#v4\n",
     "usesx key": f"  - usesx: owner/repo@{SHA}\n",
     "uses with no owner": f"  - uses: repo@{SHA}\n",
+    "uses with an empty repository": f"  - uses: owner/@{SHA}\n",
+    "uses with an empty repository and a path": f"  - uses: owner//path@{SHA}\n",
     "commit glued to a letter": f"  - uses: owner/repo@{SHA}x\n",
     "41 hex after the at sign": f"  - uses: owner/repo@{SHA}0\n",
     "sha256 label, 63 hex": f"sha256:{SHA256[:63]}",
     "sha256 label, 65 hex": f"sha256:{SHA256}0",
     "sha1 label on a sha256": f"sha1:{SHA256}",
     "label continuing a word": f"xsha256:{SHA256}",
+    "label after an underscore": f"my_sha1:{SHA}",
+    "label after a hyphen": f"x-sha256:{SHA256}",
     "integrity of the wrong length": f'"integrity": "sha512-{SRI["sha256"]}"',
     "integrity without padding": f'"integrity": "sha512-{SRI["sha512"].rstrip("=")}"',
     "integrity hash with no integrity key": f"sha512-{SRI['sha512']}",
     "integrity hash under another key": f'"checksum": "sha512-{SRI["sha512"]}"',
+    "notintegrity": f'<script notintegrity="sha384-{SRI["sha384"]}">',
+    "_integrity": f'_integrity="sha384-{SRI["sha384"]}"',
+    "data-integrity": f'<script data-integrity="sha384-{SRI["sha384"]}">',
     "ascending but for one": ALPHABET62[:20] + ALPHABET62[21] + ALPHABET62[20] + ALPHABET62[22:],
     "one character repeated": "M" * 40,
+    "a short value padded out": "abc" + "=" * 60,
 }
 
 
-@pytest.mark.parametrize("name", list(HEX_STILL_REPORTED))
+@pytest.mark.parametrize("name", list(NEAR_MISSES))
 def test_near_misses_are_still_reported(name):
-    assert "AWS_SECRET_KEY" in _types(HEX_STILL_REPORTED[name])
+    assert "AWS_SECRET_KEY" in _types(NEAR_MISSES[name])
 
 
 def test_a_lookalike_letter_keeps_a_commit_reported():
     # U+212A KELVIN SIGN matches [a-z] without case and is not ASCII.
     text = f"  - uses: owner/repo@{SHA[:20]}K{SHA[21:]}\n"
-    raw = re.compile(ConfigGuard.DEFAULT_SECRET_PATTERNS["AWS_SECRET_KEY"], re.IGNORECASE)
-    assert raw.search(text) is not None
+    assert RAW.search(text) is not None
     assert ConfigGuard().compiled_patterns["AWS_SECRET_KEY"].search(text) is not None
 
 
@@ -165,14 +224,15 @@ def test_length_bounds_are_as_before(length, reported):
 
 def test_counts_are_the_patterns_own_where_nothing_is_public():
     text = f"a={KEY} b={KEY * 2} c={KEY[:30]}"
-    raw = re.compile(ConfigGuard.DEFAULT_SECRET_PATTERNS["AWS_SECRET_KEY"], re.IGNORECASE)
     wrapped = ConfigGuard().compiled_patterns["AWS_SECRET_KEY"]
-    assert wrapped.findall(text) == raw.findall(text)
-    assert [m.span() for m in wrapped.finditer(text)] == [m.span() for m in raw.finditer(text)]
+    assert wrapped.findall(text) == RAW.findall(text)
+    assert [m.span() for m in wrapped.finditer(text)] == [m.span() for m in RAW.finditer(text)]
 
 
-def test_a_custom_aws_pattern_is_searched_as_written():
-    guard = ConfigGuard(custom_patterns={"AWS_SECRET_KEY": r"[0-9a-f]{40}"})
+@pytest.mark.parametrize("pattern", [r"[0-9a-f]{40}", ConfigGuard.DEFAULT_SECRET_PATTERNS["AWS_SECRET_KEY"]],
+                         ids=["another pattern", "the default pattern, given"])
+def test_a_custom_aws_pattern_is_searched_as_written(pattern):
+    guard = ConfigGuard(custom_patterns={"AWS_SECRET_KEY": pattern})
     assert guard.scan_string(f"  - uses: owner/repo@{SHA}\n")["verified"] is False
 
 
@@ -196,7 +256,7 @@ def test_long_inputs_are_read_in_linear_time(text):
 
 
 PIECES = [
-    KEY, SHA, SHA256, SRI["sha512"], ALPHABET62, "=" * 44,
+    KEY, SHA, SHA256, SRI["sha512"], ALPHABET62, "=" * 44, PADDED_28,
     "uses: o/r@", "- ", "sha256:", "sha512-", "sha1:", "@", "=", "x", " ", "\n", "#", '"', ":",
 ]
 
@@ -205,11 +265,13 @@ PIECES = [
 @given(pieces=st.lists(st.sampled_from(PIECES), max_size=12))
 def test_only_whole_public_runs_are_dropped(pieces):
     text = "".join(pieces)
-    raw = re.compile(ConfigGuard.DEFAULT_SECRET_PATTERNS["AWS_SECRET_KEY"], re.IGNORECASE)
     wrapped = ConfigGuard().compiled_patterns["AWS_SECRET_KEY"]
     kept = [m.span() for m in wrapped.finditer(text)]
     # Never a match the pattern does not find.
-    assert set(kept) <= {m.span() for m in raw.finditer(text)}
-    # A run that holds the key is never read out.
-    if KEY in text:
-        assert kept, text
+    assert set(kept) <= {m.span() for m in RAW.finditer(text)}
+    # Every place a key or a padded token sits is still reported.
+    for value in (KEY, PADDED_28):
+        at = text.find(value)
+        while at != -1:
+            assert any(s < at + len(value) and e > at for s, e in kept), (value, text)
+            at = text.find(value, at + 1)
