@@ -27,8 +27,8 @@ claims, 0 accepted wrongly.
 
 Ten advisories, published on the repository Security tab. They affect
 versions up to 10.0.0; upgrading is recommended. Each has regression tests
-in `tests/`, and the code fix is also reproduced in the soundness eval
-(`evals/`).
+in `tests/`. Of the ten, only the `/verify/code` fix also has cases in the
+soundness eval (`evals/`).
 
 - **`/verify/code` admits only code it can show safe**
   ([GHSA-7xrf-75qr-2r5w](https://github.com/QWED-AI/qwed-verification/security/advisories/GHSA-7xrf-75qr-2r5w),
@@ -154,11 +154,11 @@ These changes can break existing callers. Each is described in full in its
 entry above or below.
 
 - **`QWEDLocal` never verifies.** `QWEDLocal.verify`, `verify_math` and
-  `verify_logic` return `verified` False for every claim, and `qwed verify`
-  exits 1 with the reason. The answer and the formula both come from the
-  model, so their agreement is not a check. To verify a maths claim, write
-  it as an equation and send it to `/verify/math`; for logic, write the
-  variables and constraints and use `LogicVerifier`.
+  `verify_logic` return `verified` False for every claim, with the reason in
+  `error`, and `qwed verify` exits 1. The answer and the formula both come
+  from the model, so their agreement is not a check. To verify a maths
+  claim, write it as an equation and send it to `/verify/math`; for logic,
+  write the variables and constraints and use `LogicVerifier`.
 - **`/verify/code`.** `javascript`, `typescript`, `java` and `go` are never
   `ADMIT`: they are `UNVERIFIABLE` (`code_verifier.language_unverifiable`)
   when no listed pattern shows them unsafe. SQL on `/verify/code` is refused
