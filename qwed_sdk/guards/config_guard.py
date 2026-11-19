@@ -305,7 +305,7 @@ class ConfigGuard:
         # for the built-in AWS secret key pattern.
         alone = keyed = reading_copies(text)
         decoded = json_readings(text)
-        if decoded:
+        if decoded is not None:
             alone = tuple(dict.fromkeys(alone + reading_copies(decoded[0])))
             keyed = tuple(dict.fromkeys(keyed + reading_copies(decoded[1])))
         

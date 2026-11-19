@@ -263,14 +263,14 @@ def decoded_json(text: str) -> Optional[str]:
     return None if value is _NOT_JSON else _json_lines(value, keyed=False)
 
 
-def json_readings(text: str) -> Tuple[str, ...]:
-    """``decoded_json`` of *text*, then the same with each string value on
+def json_readings(text: str) -> Optional[Tuple[str, str]]:
+    """``decoded_json`` of *text*, and the same with each string value on
     its key's line, as ``key: value``, for a guard that reads a value by the
-    key it sits under; every key and string is in both. Parsed once; () when
-    *text* is not JSON that writes an escape."""
+    key it sits under; every key and string is in both. Parsed once; None
+    when *text* is not JSON that writes an escape, as for ``decoded_json``."""
     value = _escaped_json(text)
     if value is _NOT_JSON:
-        return ()
+        return None
     return _json_lines(value, keyed=False), _json_lines(value, keyed=True)
 
 

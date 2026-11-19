@@ -113,12 +113,20 @@ def test_json_readings_keep_decoded_json_and_add_the_keyed_form():
     from qwed_new.guards.canonical_text import json_readings
 
     text = json.dumps({"a": "x\ty", "b": {"c": ["d", {"e": "f"}]}, "g": 1})
-    plain, keyed = json_readings(text)
+    readings = json_readings(text)
+    assert readings is not None
+    plain, keyed = readings
     assert plain == decoded_json(text)
     assert sorted(plain.split("\n")) == sorted(["a", "x\ty", "b", "c", "d", "e", "f", "g"])
     assert sorted(keyed.split("\n")) == sorted(["a: x\ty", "b", "c", "d", "e: f", "g"])
-    assert json_readings("no escape") == () and decoded_json("no escape") is None
-    assert json_readings("not json \\") == () and decoded_json("not json \\") is None
+
+
+@pytest.mark.parametrize("text", ["no escape", "not json \\"], ids=["no escape", "not json"])
+def test_json_readings_are_none_where_decoded_json_is(text):
+    from qwed_new.guards.canonical_text import json_readings
+
+    assert decoded_json(text) is None
+    assert json_readings(text) is None
 
 
 def test_public_shapes_pass_in_a_config_tree():
