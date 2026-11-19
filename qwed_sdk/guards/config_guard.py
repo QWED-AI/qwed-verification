@@ -5,6 +5,18 @@ Detects plaintext secrets in configuration data.
 import re
 from typing import Dict, Any, Optional
 
+from qwed_new.guards.canonical_text import decoded_json, reading_copies
+from qwed_new.guards.run_search import RunSearch
+
+# Default patterns re would retry at every position of a long run, in
+# quadratic time: searched without repeating a failed attempt along the run
+# (GHSA-v3m4). Each starts with a run character ([MN], eyJ) and needs a
+# "." after the run, which the run cannot hold.
+_RUN_SEARCHES = {
+    "DISCORD_TOKEN": (r"[MN]", r"[A-Za-z\d]*"),
+    "JWT_TOKEN": (r"eyJ", r"[a-zA-Z0-9_-]*"),
+}
+
 class ConfigGuard:
     """
     Deterministic guard for configuration security.
@@ -53,6 +65,9 @@ class ConfigGuard:
             name: re.compile(pattern, re.IGNORECASE)
             for name, pattern in self.patterns.items()
         }
+        for name, (start, run) in _RUN_SEARCHES.items():
+            if self.patterns.get(name) == self.DEFAULT_SECRET_PATTERNS[name]:
+                self.compiled_patterns[name] = RunSearch(self.compiled_patterns[name], start, run)
     
     def verify_config_safety(
         self, 
@@ -80,9 +95,11 @@ class ConfigGuard:
                 for idx, item in enumerate(data):
                     scan(item, f"{current_path}[{idx}]")
             elif isinstance(data, str):
-                # Check string against all patterns
+                # Check the string, as written and as a reader sees it
+                # (GHSA-v3m4), against all patterns
+                copies = reading_copies(data)
                 for secret_type, pattern in self.compiled_patterns.items():
-                    if pattern.search(data):
+                    if any(pattern.search(copy) for copy in copies):
                         violations.append({
                             "type": secret_type,
                             "path": current_path,
@@ -109,9 +126,17 @@ class ConfigGuard:
             {"verified": True/False, "secrets_found": [...]}
         """
         secrets_found = []
+        # The text as written and as a reader sees it, and the strings of
+        # JSON, which may write characters as escapes (GHSA-v3m4).
+        copies = reading_copies(text)
+        decoded = decoded_json(text)
+        if decoded is not None:
+            copies = tuple(dict.fromkeys(copies + reading_copies(decoded)))
         
         for secret_type, pattern in self.compiled_patterns.items():
-            matches = pattern.findall(text)
+            # The copy with the most matches: as written, or as a reader
+            # sees it (GHSA-v3m4).
+            matches = max((pattern.findall(copy) for copy in copies), key=len)
             if matches:
                 secrets_found.append({
                     "type": secret_type,

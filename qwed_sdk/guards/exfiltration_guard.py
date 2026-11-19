@@ -13,6 +13,9 @@ import re
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse
 
+from qwed_new.guards.canonical_text import decoded_json, reading_copies
+from qwed_new.guards.run_search import RunSearch
+
 logger = logging.getLogger(__name__)
 
 # --- Audit Constants ---
@@ -62,6 +65,15 @@ _PII_PATTERNS: Dict[str, re.Pattern] = {
     "JWT": re.compile(r"\beyJ[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]+\b", re.IGNORECASE),
     "BEARER_TOKEN": re.compile(r"Bearer\s+[a-z0-9_.-]{20,}", re.IGNORECASE),
 }
+
+# Patterns re would retry at every position of a long run, in quadratic
+# time: searched without repeating a failed attempt along the run
+# (GHSA-v3m4). An email's local part needs the "@" after it, a JWT's first
+# segment the ".", and neither run holds that character.
+_PII_PATTERNS["EMAIL"] = RunSearch(
+    _PII_PATTERNS["EMAIL"], r"\b(?=[A-Za-z0-9._%+\-])", r"[A-Za-z0-9._%+\-]*"
+)
+_PII_PATTERNS["JWT"] = RunSearch(_PII_PATTERNS["JWT"], r"\beyJ", r"[a-z0-9_-]*")
 
 _DEFAULT_PII_CHECKS = frozenset(k for k in _PII_PATTERNS if k != "PASSPORT")
 
@@ -275,13 +287,20 @@ class ExfiltrationGuard:
     def _scan_payload_for_pii(self, payload: str) -> List[Dict[str, Any]]:
         """Scan payload string for PII matches. Returns list of findings."""
         findings: List[Dict[str, Any]] = []
-        # Normalise: also scan a copy with spaces/hyphens removed to
-        # catch formatted card numbers like "4111 1111 1111 1111"
-        normalised = re.sub(r"[\s\-]", "", payload)
+        # The payload as written and as a reader sees it, with invisible
+        # characters read through (GHSA-v3m4). Card numbers are also read
+        # with spaces and hyphens removed, to catch "4111 1111 1111 1111".
+        copies = reading_copies(payload)
+        # A JSON payload may write characters as escapes (a zero-width
+        # space, a digit): its strings are read too.
+        decoded = decoded_json(payload)
+        if decoded is not None:
+            copies = tuple(dict.fromkeys(copies + reading_copies(decoded)))
+        card_copies = list(dict.fromkeys(re.sub(r"[\s\-]", "", copy) for copy in copies))
 
         for pii_type, pattern in self._pii_patterns.items():
-            text_to_scan = normalised if pii_type == "CREDIT_CARD" else payload
-            matches = pattern.findall(text_to_scan)
+            texts = card_copies if pii_type == "CREDIT_CARD" else copies
+            matches = max((pattern.findall(text) for text in texts), key=len)
             if matches:
                 findings.append({
                     "type": pii_type,

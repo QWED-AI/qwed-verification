@@ -34,14 +34,23 @@ def _collapse_ws(text: str) -> str:
 
 def _phrase_copies(prompt: str) -> Optional[Tuple[str, ...]]:
     """The copies the phrase check reads: the original and its NFKC form,
-    whitespace collapsed. ``None`` when NFKC grows the text past the length
-    bound. A form the same as the original is not read twice."""
+    whitespace collapsed, and the text as the guards read it (GHSA-v3m4),
+    with each character a reader does not see written as U+200B, which the
+    patterns read through: controls (U+001F and U+0085 too), format
+    characters such as U+FFF9 and U+13430, blanks such as U+2800, and
+    nonspacing marks. ``None`` when a copy grows the text past the length
+    bound. A copy the same as another is not read twice."""
+    from qwed_new.guards.canonical_text import marked_copies
+
     collapsed = _collapse_ws(prompt)
     folded = unicodedata.normalize("NFKC", prompt)
     if len(folded) > 10000:
         return None
     folded = _collapse_ws(folded)
-    return (collapsed,) if folded == collapsed else (collapsed, folded)
+    marked = [_collapse_ws(copy) for copy in marked_copies(prompt)]
+    if any(len(copy) > 10000 for copy in marked):
+        return None
+    return tuple(dict.fromkeys((collapsed, folded, *marked)))
 
 
 def _read_through_ignorables(pattern: str) -> str:

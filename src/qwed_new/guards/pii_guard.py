@@ -1,6 +1,9 @@
 import re
 from typing import Dict, Any
 
+from .canonical_text import reading_copies
+from .run_search import RunSearch
+
 class PIIGuard:
     """
     Local-first PII and Secret detection using regex heuristics.
@@ -25,6 +28,13 @@ class PIIGuard:
             "phone_number": re.compile(r"\b(?:\+\d{1,3}[-.]?)?\(?\d{3}\)?[-.]?\d{3}[-.]?\d{4}\b"),
         }
 
+        # re would retry the email pattern at every position of a long run
+        # of local-part characters, in quadratic time: searched without
+        # repeating a failed attempt along the run (GHSA-v3m4).
+        self.patterns["email"] = RunSearch(
+            self.patterns["email"], r"\b(?=[A-Za-z0-9._%+-])", r"[A-Za-z0-9._%+-]*"
+        )
+
     def scan(self, content: str) -> Dict[str, Any]:
         """
         Scans the provided content for secrets and PII.
@@ -32,9 +42,12 @@ class PIIGuard:
         """
         detected_types = []
         violations = []
+        # The text as written and as a reader sees it, with invisible
+        # characters read through (GHSA-v3m4).
+        copies = reading_copies(content)
         
         for name, pattern in self.patterns.items():
-            matches = pattern.findall(content)
+            matches = list(dict.fromkeys(m for copy in copies for m in pattern.findall(copy)))
             if matches:
                 # Special handling for password heuristic
                 if name == "password_assignment":

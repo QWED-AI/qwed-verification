@@ -14,6 +14,9 @@ import re
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse
 
+from qwed_new.guards.canonical_text import MARK, read_through, text_readings
+from qwed_new.guards.run_search import RunSearch
+
 logger = logging.getLogger(__name__)
 
 # --- Audit Constants ---
@@ -39,6 +42,15 @@ _DEFAULT_INJECTION_PATTERNS: List[str] = [
     r"(?i)jailbreak",
     r"(?i)DAN\s+mode",
 ]
+
+# Default patterns re would retry at every opening tag, each time reading
+# the rest of the text for the closing one, in quadratic time. When no
+# closing tag follows one opening tag, none follows a later one either, so
+# the search stops there (GHSA-v3m4).
+_RUN_SEARCHES = {
+    r"(?i)<important>.*?</important>": (r"<important>", r".*"),
+    r"(?i)<system>.*?</system>": (r"<system>", r".*"),
+}
 
 # URL pattern: catches http(s) URLs; excludes trailing punctuation. The
 # slashes after the colon may be missing or be backslashes: browsers and
@@ -109,6 +121,19 @@ class MCPPoisonGuard:
         self._compiled_patterns = [
             re.compile(p, re.DOTALL | re.IGNORECASE) for p in patterns
         ]
+        self._compiled_patterns = [
+            RunSearch(compiled, *_RUN_SEARCHES[p]) if p in _RUN_SEARCHES else compiled
+            for p, compiled in zip(patterns, self._compiled_patterns)
+        ]
+        # The default phrases as a model reads them: invisible characters
+        # inside a word, between words, or both, hide nothing (GHSA-v3m4).
+        # A pattern with no space in it is found in the copy with them
+        # removed; custom patterns are matched against the reading copies.
+        self._read_through_patterns = [
+            re.compile(read_through(p), re.DOTALL | re.IGNORECASE)
+            for p in _DEFAULT_INJECTION_PATTERNS
+            if "\\s" in p
+        ]
 
     def _is_allowed_url(self, url: str) -> bool:
         """Return True if the URL's hostname is in the allow-list.
@@ -145,36 +170,70 @@ class MCPPoisonGuard:
                 return True
         return False
 
+    @staticmethod
+    def _host(url: str) -> Optional[str]:
+        """The hostname Python reads in *url*, or None."""
+        try:
+            return urlparse(url.strip().rstrip(_TRAILING_PUNCT)).hostname
+        except ValueError:
+            return None
+
     def _scan_text(self, text: str) -> List[str]:
-        """Scan a single string and return a list of flag strings."""
+        """Scan a single string, as written and as a reader sees it with
+        invisible characters read through (GHSA-v3m4), and return a list of
+        flag strings, each once."""
         flags: List[str] = []
 
-        # Check injection patterns
-        for pattern in self._compiled_patterns:
-            for match in pattern.finditer(text):
-                snippet = match.group(0)[:120].replace("\n", " ")
-                flags.append(f"PROMPT_INJECTION: {snippet!r}")
+        # Every reading from one table of the text's characters; the first is
+        # the text as written.
+        readings, marked_readings = text_readings(text)
+        written_hosts = set()
+        for index, copy in enumerate(readings):
+            # Check injection patterns
+            for pattern in self._compiled_patterns:
+                for match in pattern.finditer(copy):
+                    snippet = match.group(0)[:120].replace("\n", " ")
+                    flags.append(f"PROMPT_INJECTION: {snippet!r}")
 
-        # Check for unauthorized URLs (separate from injection patterns).
-        # A URL is also refused when an @ comes before the end of its host
-        # part in the text: the host is then whatever follows the @. The
-        # next end and the next @ are found once and kept while they lie
-        # ahead, so the scan stays linear in the length of the text.
-        host_end = at_sign = -1
-        for url_match in _URL_PATTERN.finditer(text):
-            url = url_match.group(0).rstrip(_TRAILING_PUNCT)
-            begin = url_match.start(1)
-            if host_end < begin:
-                found = _HOST_PART_END.search(text, begin)
-                host_end = found.start() if found else len(text)
-            if at_sign < begin:
-                at_sign = text.find("@", begin)
-                if at_sign < 0:
-                    at_sign = len(text)
-            if at_sign < host_end or not self._is_allowed_url(url):
-                flags.append(f"UNAUTHORIZED_URL: {url}")
+            # Check for unauthorized URLs (separate from injection patterns).
+            # A host that shows only once characters are read through or
+            # folded is not the one a client connects to (a nonspacing mark
+            # or an unknown code point inside it changes it), so a URL in a
+            # reading is allowed only when a URL as written has its host.
+            # A URL is also refused when an @ comes before the end of its
+            # host part in the text: the host is then whatever follows the
+            # @. The next end and the next @ are found once per reading and
+            # kept while they lie ahead, so the scan stays linear in the
+            # length of the text.
+            host_end = at_sign = -1
+            for url_match in _URL_PATTERN.finditer(copy):
+                url = url_match.group(0).rstrip(_TRAILING_PUNCT)
+                host = self._host(url)
+                if index == 0:
+                    written_hosts.add(host)
+                begin = url_match.start(1)
+                if host_end < begin:
+                    found = _HOST_PART_END.search(copy, begin)
+                    host_end = found.start() if found else len(copy)
+                if at_sign < begin:
+                    at_sign = copy.find("@", begin)
+                    if at_sign < 0:
+                        at_sign = len(copy)
+                if (
+                    at_sign < host_end
+                    or not self._is_allowed_url(url)
+                    or host is None
+                    or host not in written_hosts
+                ):
+                    flags.append(f"UNAUTHORIZED_URL: {url}")
 
-        return flags
+        for marked in marked_readings:
+            for pattern in self._read_through_patterns:
+                for match in pattern.finditer(marked):
+                    snippet = match.group(0).replace(MARK, "")[:120].replace("\n", " ")
+                    flags.append(f"PROMPT_INJECTION: {snippet!r}")
+
+        return list(dict.fromkeys(flags))
 
     def _scan_parameter(self, param_name: str, param_def: Any) -> List[str]:
         """Scan a single parameter definition for injections."""

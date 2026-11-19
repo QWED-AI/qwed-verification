@@ -1,5 +1,8 @@
 import re
 
+from qwed_new.guards.canonical_text import reading_copies
+
+
 class SovereigntyGuard:
     """
     Enforces Data Residency and Sovereignty.
@@ -26,7 +29,9 @@ class SovereigntyGuard:
             raise ValueError("target_provider must be a non-empty string.")
 
         # ISSUE: Does this prompt contain sensitive data destined for an external provider?
-        is_sensitive = any(p.search(prompt) for p in self.sensitive_patterns)
+        # The prompt as written and as a reader sees it, with invisible
+        # characters read through (GHSA-v3m4).
+        is_sensitive = any(p.search(copy) for copy in reading_copies(prompt) for p in self.sensitive_patterns)
         
         # RULE: Sensitive data must never be routed to non-local infrastructure.
         # [Source: MSLR, data residency compliance]
