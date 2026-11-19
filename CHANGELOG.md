@@ -161,12 +161,13 @@ entry above or below.
   write the variables and constraints and use `LogicVerifier`.
 - **`/verify/code`.** `javascript`, `typescript`, `java` and `go` are never
   `ADMIT`: they are `UNVERIFIABLE` (`code_verifier.language_unverifiable`)
-  when no listed pattern shows them unsafe. SQL on `/verify/code` is refused
-  where `/verify/sql` refuses it, writes included. Python that reads a name
-  it does not bind (a notebook's `df`, a REPL's `np`, a name from a star
-  import) is refused: pass the names your runtime binds with
-  `CodeVerifier(bound_names=...)`. The executor, the stats gate and the
-  consensus gate pass the names their sandboxes bind.
+  when no listed pattern shows them unsafe. SQL on `/verify/code` is decided
+  by `SQLVerifier` without a schema: writes are refused, but tables and
+  columns are not checked; `/verify/sql` checks them against the schema.
+  Python that reads a name it does not bind (a notebook's `df`, a REPL's
+  `np`, a name from a star import) is refused: pass the names your runtime
+  binds with `CodeVerifier(bound_names=...)`. The executor, the stats gate
+  and the consensus gate pass the names their sandboxes bind.
 - **`/verify/logic` proves a claim** (#631, #640). The translation separates
   what the question takes as given from the claim it asks to prove, and the
   route decides the claim for every value: `VERIFIED` when it follows,

@@ -738,9 +738,11 @@ Anything else is refused, and the finding names the module, builtin or attribute
    | JavaScript, TypeScript | Pattern lists | `UNVERIFIABLE` (`code_verifier.language_unverifiable`) |
    | Java | Pattern lists | `UNVERIFIABLE` |
    | Go | Pattern lists | `UNVERIFIABLE` |
-   | SQL | The SQL verifier (SQLGlot) | As `/verify/sql` decides it |
+   | SQL | `SQLVerifier` (SQLGlot), without a schema: tables and columns are not checked | `VERIFIED` (safe) when `SQLVerifier` admits it |
 
    Code that a check shows unsafe is `VERIFIED` as unsafe (`is_valid` False).
+   To check SQL against its tables and columns, send it to `/verify/sql`
+   with the schema.
 
 4. **Error Handling**
 
