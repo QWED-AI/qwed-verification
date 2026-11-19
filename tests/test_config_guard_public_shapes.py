@@ -18,6 +18,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from qwed_new.guards.canonical_text import decoded_json
 from qwed_sdk.guards.config_guard import ConfigGuard
 
 B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -108,6 +109,18 @@ def test_a_key_in_a_lock_file_with_an_escape_is_reported():
     assert "AWS_SECRET_KEY" in _types(lock)
 
 
+def test_json_readings_keep_decoded_json_and_add_the_keyed_form():
+    from qwed_new.guards.canonical_text import json_readings
+
+    text = json.dumps({"a": "x\ty", "b": {"c": ["d", {"e": "f"}]}, "g": 1})
+    plain, keyed = json_readings(text)
+    assert plain == decoded_json(text)
+    assert sorted(plain.split("\n")) == sorted(["a", "x\ty", "b", "c", "d", "e", "f", "g"])
+    assert sorted(keyed.split("\n")) == sorted(["a: x\ty", "b", "c", "d", "e: f", "g"])
+    assert json_readings("no escape") == () and decoded_json("no escape") is None
+    assert json_readings("not json \\") == () and decoded_json("not json \\") is None
+
+
 def test_public_shapes_pass_in_a_config_tree():
     # A value in a tree is read with its key, as in the file.
     config = {
@@ -165,7 +178,7 @@ def test_a_value_shaped_like_a_key_is_still_reported(name):
     assert "AWS_SECRET_KEY" in _types(KEY_LIKE[name])
 
 
-@pytest.mark.parametrize("char", ["​", "­", "﻿", "⠀", chr(0xE0041)])
+@pytest.mark.parametrize("char", ["\u200b", "\u00ad", "\ufeff", "\u2800", chr(0xE0041)])
 def test_an_invisible_character_inside_the_key_does_not_hide_it(char):
     assert "AWS_SECRET_KEY" in _types(KEY[:17] + char + KEY[17:])
 
@@ -209,9 +222,45 @@ def test_near_misses_are_still_reported(name):
     assert "AWS_SECRET_KEY" in _types(NEAR_MISSES[name])
 
 
+# A label or key after, or written with, a character of another script is
+# not the ASCII label or key, so the hash after it is reported, as on main.
+OTHER_SCRIPTS = {
+    "label after a Latin letter with an accent": f"\u00e9sha1:{SHA}",
+    "label after a combining mark": f"e\u0301sha256:{SHA256}",
+    "label after a Cyrillic letter": f"\u0436sha256:{SHA256}",
+    "label after a Greek letter": f"\u03b1sha512:{SHA512}",
+    "label after a full-width digit": f"\uff11sha1:{SHA}",
+    "label after a zero-width space inside a name": f"x\u200bsha1:{SHA}",
+    "label with a Cyrillic a": f"sh\u0430256:{SHA256}",
+    "label with a Greek alpha": f"sh\u03b1256:{SHA256}",
+    "full-width label": "\uff53\uff48\uff41\uff11\uff1a" + SHA,
+    "integrity after a Latin letter with an accent": f'\u00e9integrity="sha384-{SRI["sha384"]}"',
+    "integrity after a Cyrillic letter": f"\u0436integrity: sha256-{SRI['sha256']}",
+    "integrity with a dotless i": f'"\u0131ntegrity": "sha512-{SRI["sha512"]}"',
+    "integrity with a dotted capital I": f'"\u0130NTEGRITY": "sha512-{SRI["sha512"]}"',
+    "integrity with a Cyrillic i": f'"integr\u0456ty": "sha512-{SRI["sha512"]}"',
+    "full-width integrity": f'"\uff49ntegrity": "sha512-{SRI["sha512"]}"',
+}
+
+
+@pytest.mark.parametrize("name", list(OTHER_SCRIPTS))
+def test_a_label_or_key_in_another_script_is_reported(name):
+    assert "AWS_SECRET_KEY" in _types(OTHER_SCRIPTS[name])
+
+
+@settings(max_examples=300, deadline=None)
+@given(char=st.characters(exclude_categories=("Cs",)))
+def test_a_label_or_key_counts_only_after_ascii_that_ends_a_name(char):
+    # Public only after a character that ends a name: ASCII, and not a
+    # letter, a digit, "_" or "-".
+    ends_a_name = char.isascii() and not char.isalnum() and char not in "_-"
+    for text in (f"{char}sha1:{SHA}", f"{char}integrity: sha256-{SRI['sha256']}"):
+        assert ConfigGuard().scan_string(text)["verified"] is ends_a_name, (char, text)
+
+
 def test_a_lookalike_letter_keeps_a_commit_reported():
     # U+212A KELVIN SIGN matches [a-z] without case and is not ASCII.
-    text = f"  - uses: owner/repo@{SHA[:20]}K{SHA[21:]}\n"
+    text = f"  - uses: owner/repo@{SHA[:20]}\u212a{SHA[21:]}\n"
     assert RAW.search(text) is not None
     assert ConfigGuard().compiled_patterns["AWS_SECRET_KEY"].search(text) is not None
 
@@ -236,6 +285,42 @@ def test_a_custom_aws_pattern_is_searched_as_written(pattern):
     assert guard.scan_string(f"  - uses: owner/repo@{SHA}\n")["verified"] is False
 
 
+# A caller's pattern reads a value alone, as on main; only the built-in AWS
+# secret key pattern reads it with its key.
+HEX_ALONE = r"(?m)^[0-9a-f]{40}$"
+PINNED_ALONE = r"(?m)^actions/checkout@[0-9a-f]{40}$"
+
+
+def _escaped(value):
+    return "".join(f"\\u{ord(char):04x}" for char in value)
+
+
+@pytest.mark.parametrize("config", [
+    {"uses": SHA},
+    {"integrity": SHA},
+    {"steps": [{"uses": SHA}]},
+], ids=["uses", "integrity", "a step"])
+def test_a_custom_pattern_reads_a_tree_value_alone(config):
+    violations = ConfigGuard(custom_patterns={"HEX": HEX_ALONE}).verify_config_safety(config)["violations"]
+    assert "HEX" in {v["type"] for v in violations}
+
+
+@pytest.mark.parametrize("key", ["uses", "integrity", "commit"])
+def test_a_custom_pattern_reads_an_escaped_json_value_alone(key):
+    text = json.dumps({key: "x"}).replace('"x"', f'"{_escaped(SHA)}"')
+    assert json.loads(text) == {key: SHA}
+    assert "HEX" in {f["type"] for f in ConfigGuard(custom_patterns={"HEX": HEX_ALONE}).scan_string(text)["secrets_found"]}
+
+
+def test_each_pattern_reads_a_pinned_step_its_own_way():
+    guard = ConfigGuard(custom_patterns={"PINNED": PINNED_ALONE})
+    step = f"actions/checkout@{SHA}"
+    tree = guard.verify_config_safety({"steps": [{"uses": step}]})["violations"]
+    assert {v["type"] for v in tree} == {"PINNED"}
+    text = json.dumps({"uses": "x"}).replace('"x"', f'"{_escaped(step)}"')
+    assert {f["type"] for f in guard.scan_string(text)["secrets_found"]} == {"PINNED"}
+
+
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "text",
@@ -258,6 +343,7 @@ def test_long_inputs_are_read_in_linear_time(text):
 PIECES = [
     KEY, SHA, SHA256, SRI["sha512"], ALPHABET62, "=" * 44, PADDED_28,
     "uses: o/r@", "- ", "sha256:", "sha512-", "sha1:", "@", "=", "x", " ", "\n", "#", '"', ":",
+    "integrity: ", "\u0131ntegrity: ", "\u00e9", "\u0436", "\u0301", "\u200b",
 ]
 
 
