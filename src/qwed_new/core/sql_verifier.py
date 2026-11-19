@@ -628,7 +628,10 @@ class SQLVerifier:
         allow_destructive (bool): Whether to allow destructive commands.
     """
     
-    # Destructive commands (Blocked by default)
+    # Destructive commands (Blocked by default). ``Into`` is SELECT ... INTO,
+    # which creates a table and writes the selected rows into it: sqlglot
+    # parses it as a Select, so it is found only by its Into node
+    # (GHSA-6m2h-98rq-4f53).
     DESTRUCTIVE_COMMANDS = _available_expression_types(
         "Drop",
         "Delete",
@@ -639,6 +642,7 @@ class SQLVerifier:
         "TruncateTable",
         "Create",
         "Merge",
+        "Into",
     )
 
     # Administrative / permission / side-effecting statement families. Blocked
