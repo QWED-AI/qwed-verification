@@ -40,13 +40,15 @@ and issues #329/#330 for the bypasses this structure closes.
 """
 
 import ast
+import io
 import math
 import operator
 import re
+import tokenize
 import unicodedata
 from decimal import Decimal
 from fractions import Fraction
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import sympy
 from sympy import (
@@ -188,6 +190,16 @@ _PARSER_TRANSFORMATIONS = standard_transformations + (
     implicit_application,
     function_exponentiation,
 )
+# What the exact literals of one expression may add up to: digits plus
+# exponent magnitudes. Beyond it, an exact reading is not attempted.
+_MAX_EXACT_DECIMAL_SIZE = 4_000
+_MAX_EXPONENT_DIGITS = 6
+# Compatibility folds that keep a character's meaning: the same letter,
+# digit or sign in another width, font or size, and a no-break space.
+_KEPT_FOLDS = frozenset({"<font>", "<wide>", "<narrow>", "<small>", "<noBreak>"})
+# Two numbers with only space between them: implicit multiplication would
+# read "1 000" as 1*000 (GHSA-q7m5).
+_ADJACENT_NUMBERS = re.compile(r"\d\s+\.?\d")
 
 
 _BINOP_EVALUATORS = {
@@ -996,12 +1008,18 @@ def safe_parse_expr(
         raise SafeParserError(
             f"Expression must be a string, got {type(expression).__name__}"
         )
+    _refuse_folding_characters(expression)
     # NFKC before every filter: PEP 3131 normalizes identifiers at compile
     # time, so the filters must operate on what the compiler will see
     # (issue #330 — fullwidth/bold codepoints bypassed the ASCII denylist).
     stripped = unicodedata.normalize("NFKC", expression.strip())
     if not stripped:
         raise SafeParserError("Expression is empty")
+    if _ADJACENT_NUMBERS.search(stripped):
+        raise SafeParserError(
+            "Expression contains two numbers with only space between them. Write the "
+            "operator, or the number without separators."
+        )
     if len(stripped) > MAX_EXPRESSION_LENGTH:
         raise SafeParserError(
             f"Expression exceeds maximum length of {MAX_EXPRESSION_LENGTH} characters"
@@ -1015,6 +1033,12 @@ def safe_parse_expr(
         raise SafeParserError(
             "Expression contains disallowed use of '.': it may only appear "
             "as a decimal point between digits (attribute access is not supported)."
+        )
+    if _split_number(stripped):
+        raise SafeParserError(
+            "Expression contains a number the parser splits in two (05, 0x1.5, 2.5.5, "
+            "1__0). Write numbers without leading zeros or a second point, and the "
+            "operator between them."
         )
     match = _DENYLIST_PATTERN.search(stripped)
     if match:
@@ -1045,11 +1069,176 @@ def safe_parse_expr(
         raise SafeParserError(f"Failed to parse expression: {exc}") from exc
 
 
+def _folding_character(text: str) -> Optional[str]:
+    """A character in ``text`` that NFKC would turn into other text that
+    changes what it says: a letter in another width or font (a fullwidth,
+    bold, script or black-letter I would read I, the imaginary unit, and a
+    fullwidth Float the Float the exact re-check looks for), and any
+    compatibility fold other than a width, font or size variant of a digit,
+    operator or sign, or a no-break space. So a superscript or subscript
+    (a superscript two after 2 would read 22), a circled or parenthesised
+    form, a Roman numeral, a ligature or a squared unit (one would read
+    log). Fullwidth and mathematical digits keep their meaning; a
+    character with a plain (canonical) decomposition, such as an em quad,
+    which is a space, is not a fold."""
+    for char in set(text):
+        if char.isascii():
+            continue
+        folded = unicodedata.normalize("NFKC", char)
+        if folded == char:
+            continue
+        if any(part.isascii() and part.isalpha() for part in folded):
+            return char
+        decomposition = unicodedata.decomposition(char)
+        tag = decomposition.split(" ", 1)[0] if decomposition.startswith("<") else ""
+        if tag and tag not in _KEPT_FOLDS:
+            return char
+    return None
+
+
+def _refuse_folding_characters(text: str) -> None:
+    """SafeParserError when ``text`` holds a character NFKC would read as
+    something else (GHSA-q7m5)."""
+    char = _folding_character(text)
+    if char is not None:
+        raise SafeParserError(
+            f"Expression contains {unicodedata.name(char, 'a character')}, a disallowed character "
+            f"that would be read as {unicodedata.normalize('NFKC', char)!r}. Write powers with ** "
+            "or ^, numbers with plain digits and names with plain letters."
+        )
+
+
+def _parser_tokens(text: str) -> Optional[List[tokenize.TokenInfo]]:
+    """The tokens SymPy's parser splits ``text`` into: it runs this Python's
+    tokenizer on the stripped text, so 3.10 and 3.11 split some literals
+    differently from 3.12. None when the tokenizer fails, as the parser
+    then does."""
+    try:
+        return list(tokenize.generate_tokens(io.StringIO(text.strip()).readline))
+    except (tokenize.TokenError, SyntaxError):
+        return None
+
+
+def _rounded_number(token: tokenize.TokenInfo) -> bool:
+    """Whether SymPy reads the NUMBER ``token`` as a Float it may round: a
+    point or an exponent (not a hexadecimal digit e), as its auto_number
+    decides."""
+    number = token.string[:-1] if token.string.endswith(("j", "J")) else token.string
+    return "." in number or (("e" in number or "E" in number) and not number.startswith(("0x", "0X")))
+
+
+def _split_number(text: str) -> bool:
+    """Whether the parser's tokens hold a number written straight after
+    another one (05 is 0 then 5 on Python 3.10 and 3.11, 0x1.5 is 0x1 then
+    .5, 2.5.5 is 2.5 then .5) or straight before a name that starts with an
+    underscore (1__0 is 1 then __0): implicit multiplication would join them
+    into a product the text does not say (GHSA-q7m5)."""
+    tokens = _parser_tokens(text)
+    if tokens is None:
+        return False
+    previous = None
+    for token in tokens:
+        if token.type in (tokenize.NL, tokenize.COMMENT):
+            continue
+        if previous is not None and previous.type == tokenize.NUMBER:
+            if token.type == tokenize.NUMBER:
+                return True
+            if token.type == tokenize.NAME and token.string.startswith("_") and token.start == previous.end:
+                return True
+        previous = token
+    return False
+
+
+def has_decimal_literal(*texts: str) -> bool:
+    """Whether any of ``texts`` holds a number SymPy reads as a Float it may
+    round, or calls Float, read from the parser's own tokens (GHSA-q7m5).
+    Text whose tokens cannot be read counts."""
+    for text in texts:
+        if not isinstance(text, str):
+            continue
+        tokens = _parser_tokens(unicodedata.normalize("NFKC", text))
+        if tokens is None:
+            return True
+        for token in tokens:
+            if token.type == tokenize.NUMBER and _rounded_number(token):
+                return True
+            if token.type == tokenize.NAME and token.string == "Float":
+                return True
+    return False
+
+
+def _exact_decimal_text(text: str) -> Optional[str]:
+    """``text`` (NFKC, stripped) with each number token SymPy would read as
+    a Float written as the exact ``Rational(n,d)`` it is. The tokens are the
+    parser's own, and a Rational call stands where the parser puts a Float
+    call, so the exact reading has the parser's structure. None when the
+    tokens cannot be read, or the literals add up to more than
+    ``_MAX_EXACT_DECIMAL_SIZE`` digits and exponent."""
+    tokens = _parser_tokens(text)
+    if tokens is None:
+        return None
+    line_starts = [0] + [index + 1 for index, char in enumerate(text) if char == "\n"]
+    parts: List[str] = []
+    size, position = 0, 0
+    for token in tokens:
+        if token.type != tokenize.NUMBER or not _rounded_number(token):
+            continue
+        imaginary = token.string.endswith(("j", "J"))
+        number = (token.string[:-1] if imaginary else token.string).replace("_", "")
+        mantissa, _, exponent = number.lower().partition("e")
+        exponent_digits = exponent.lstrip("+-")
+        if len(exponent_digits) > _MAX_EXPONENT_DIGITS:
+            return None
+        size += len(mantissa) + (int(exponent_digits) if exponent_digits else 0)
+        if size > _MAX_EXACT_DECIMAL_SIZE:
+            return None
+        try:
+            value = Fraction(Decimal(number))
+        except (ArithmeticError, ValueError):
+            return None
+        start = line_starts[token.start[0] - 1] + token.start[1]
+        end = line_starts[token.end[0] - 1] + token.end[1]
+        exact = f" Rational({value.numerator},{value.denominator})" + ("*I " if imaginary else " ")
+        parts.extend([text[position:start], exact])
+        position = end
+    parts.append(text[position:])
+    return "".join(parts)
+
+
+def safe_parse_exact_decimals(expression: str) -> Optional[Any]:
+    """``expression`` parsed as safe_parse_expr parses it, but with every
+    number the parser would read as a Float read as the exact number it
+    writes, so none is rounded while the expression is evaluated
+    (``1 + 1.0e-17`` stays above 1). Each is written as an integer
+    Rational first, so the parser's own cost checks see its real size.
+
+    None when that cannot be done faithfully and cheaply: a call of Float
+    (its precision is what it says), literals whose digits and exponents
+    add up to more than ``_MAX_EXACT_DECIMAL_SIZE``, an exact result the
+    parser's cost checks refuse, or one that still holds a Float.
+    """
+    if not isinstance(expression, str):
+        return None
+    text = unicodedata.normalize("NFKC", expression).strip()
+    tokens = _parser_tokens(text)
+    if tokens is None or any(token.type == tokenize.NAME and token.string == "Float" for token in tokens):
+        return None
+    exact_text = _exact_decimal_text(text)
+    if exact_text is None:
+        return None
+    try:
+        parsed = safe_parse_expr(exact_text)
+    except SafeParserError:
+        return None
+    return None if parsed.has(sympy.Float) else parsed
+
+
 def validate_variable_name(variable: str) -> str:
     if not isinstance(variable, str):
         raise SafeParserError(
             f"Variable name must be a string, got {type(variable).__name__}"
         )
+    _refuse_folding_characters(variable)
     stripped = unicodedata.normalize("NFKC", variable.strip())
     if not stripped:
         raise SafeParserError("Variable name is empty")

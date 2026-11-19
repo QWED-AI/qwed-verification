@@ -22,6 +22,8 @@ from sympy.core.assumptions import check_assumptions
 from qwed_new.core.safe_parser import (
     check_closed_expression_cost,
     get_safe_symbol,
+    has_decimal_literal,
+    safe_parse_exact_decimals,
     safe_parse_expr,
 )
 from sympy.parsing.sympy_parser import standard_transformations, implicit_multiplication_application
@@ -691,6 +693,48 @@ def identity_domains_match(lhs: str, rhs: str) -> bool:
     return lhs_factors is not None and lhs_factors == rhs_factors
 
 
+def exact_decimal_status(lhs: str, rhs: str) -> str:
+    """The status of ``lhs = rhs`` with every decimal literal read exactly.
+
+    Parsing rounds a Float (``1 + 1.0e-17`` is 1.0, ``1.0e20 + 1`` is
+    1.0e20), so a zero difference between sides that hold one proves
+    nothing (GHSA-q7m5). Callers re-check such a zero here: it stands only
+    if the exact sides agree. INCONCLUSIVE when they cannot be read
+    exactly."""
+    return exact_decimal_sides(lhs, rhs)[0]
+
+
+def exact_decimal_sides(lhs: str, rhs: str) -> tuple:
+    """``(status, exact left, exact right)`` for ``lhs = rhs`` with every
+    decimal read exactly, as ``exact_decimal_status`` decides it; the sides
+    are None when they cannot be read exactly (status INCONCLUSIVE)."""
+    exact_left, exact_right = safe_parse_exact_decimals(lhs), safe_parse_exact_decimals(rhs)
+    if exact_left is None or exact_right is None:
+        return INCONCLUSIVE_STATUS, None, None
+    return symbolic_difference_status(simplify(exact_left - exact_right)), exact_left, exact_right
+
+
+def rounding_may_decide(texts: tuple, operands: tuple) -> bool:
+    """Whether a verdict on ``texts`` may rest on SymPy's rounding: one of
+    them writes a decimal literal, or one of the parsed ``operands`` holds
+    a Float. Evaluation can turn a rounded Float into an exact number
+    (``1 + 1.0e-17 - 1`` is 0), so the text is what counts (GHSA-q7m5)."""
+    return has_decimal_literal(*texts) or any(operand.has(Float) for operand in operands)
+
+
+def exact_recheck(status: str, texts: tuple, operands: tuple, decide: Any) -> str:
+    """``status``, unless it is VERIFIED and rounding may have decided it:
+    then ``decide`` runs on ``texts`` parsed with exact decimals, and the
+    claim stays VERIFIED only if that verdict is VERIFIED too (else that
+    verdict, INCONCLUSIVE when the texts cannot be read exactly)."""
+    if status != "VERIFIED" or not rounding_may_decide(texts, operands):
+        return status
+    exact = [safe_parse_exact_decimals(text) for text in texts]
+    if any(part is None for part in exact):
+        return INCONCLUSIVE_STATUS
+    return decide(*exact)
+
+
 def symbolic_difference_status(difference: Any) -> str:
     """Status for a claim decided by ``simplify(actual - claimed)``.
 
@@ -711,6 +755,9 @@ def symbolic_difference_status(difference: Any) -> str:
 
     Skipping a witness only loses a possible disproof, so the result stays
     fail-closed.
+
+    A zero difference between sides that write a decimal can be SymPy's
+    rounding; callers re-check it with ``exact_recheck`` (GHSA-q7m5).
     """
     if difference == 0:
         return "VERIFIED"
@@ -1019,6 +1066,19 @@ class VerificationEngine:
         try:
             # 1. Parse the expression safely
             expr = safe_parse_expr(expression)
+            if rounding_may_decide((expression,), (expr,)):
+                # SymPy rounds a Float while it parses (1.0e20 + 1 is
+                # 1.0e20), so the value is computed from the decimals read
+                # exactly, or not at all (GHSA-q7m5).
+                exact = safe_parse_exact_decimals(expression)
+                if exact is None:
+                    return {
+                        "is_correct": False,
+                        "error": "The expression holds a decimal that could not be read exactly",
+                        "status": INCONCLUSIVE_STATUS,
+                        "reason": "inexact_decimal",
+                    }
+                expr = exact
 
             # 2. Evaluate deterministically
             if use_decimal:
@@ -1087,6 +1147,16 @@ class VerificationEngine:
             # Method 2: Try expanding both sides
             elif simplify(expand(left) - expand(right)) == 0:
                 method = "expansion"
+            if method is not None and rounding_may_decide((lhs, rhs), (left, right)):
+                # A zero between rounded Floats proves nothing (GHSA-q7m5).
+                exact_status = exact_decimal_status(lhs, rhs)
+                if exact_status != "VERIFIED":
+                    return {
+                        "is_equivalent": False,
+                        "status": "NOT_EQUIVALENT" if exact_status == DISPROVEN_STATUS else INCONCLUSIVE_STATUS,
+                        "method": method,
+                        "reason": "inexact_decimal",
+                    }
             if method is not None:
                 if not identity_domains_match(lhs, rhs):
                     # Equal only after cancelling a removable singularity
@@ -1177,6 +1247,10 @@ class VerificationEngine:
             # Compare
             difference = simplify(actual_derivative - expected_expr)
             status = symbolic_difference_status(difference)
+            status = exact_recheck(
+                status, (expression, expected), (expr, expected_expr),
+                lambda e, x: symbolic_difference_status(simplify(diff(e, var, order) - x)),
+            )
             is_correct = status == "VERIFIED"
             
             return {
@@ -1236,6 +1310,12 @@ class VerificationEngine:
                 deriv_actual = diff(actual_integral, var)
                 deriv_expected = diff(expected_expr, var)
                 status = symbolic_difference_status(simplify(deriv_actual - deriv_expected))
+                status = exact_recheck(
+                    status, (expression, expected), (expr, expected_expr),
+                    lambda e, x: symbolic_difference_status(
+                        simplify(diff(integrate(e, var), var) - diff(x, var))
+                    ),
+                )
                 is_correct = status == "VERIFIED"
             
             return {
@@ -1289,6 +1369,16 @@ class VerificationEngine:
             
             # Compare
             status = symbolic_difference_status(simplify(actual_limit - expected_expr))
+            if pt in (oo, -oo):
+                status = exact_recheck(
+                    status, (expression, expected), (expr, expected_expr),
+                    lambda e, x: symbolic_difference_status(simplify(limit(e, var, pt, dir=direction) - x)),
+                )
+            else:
+                status = exact_recheck(
+                    status, (expression, point, expected), (expr, pt, expected_expr),
+                    lambda e, p, x: symbolic_difference_status(simplify(limit(e, var, p, dir=direction) - x)),
+                )
             is_correct = status == "VERIFIED"
             
             return {

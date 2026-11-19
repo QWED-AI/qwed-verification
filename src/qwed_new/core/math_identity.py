@@ -19,6 +19,8 @@ from qwed_new.core.safe_parser import (
 from qwed_new.core.verifier import (
     DISPROVEN_STATUS,
     DOMAIN_RESTRICTED_IDENTITY,
+    exact_decimal_sides,
+    rounding_may_decide,
     has_undefined_part,
     identity_domains_match,
     symbolic_difference_status,
@@ -30,6 +32,9 @@ UNDEFINED_PART_IDENTITY = "math.undefined_part"
 # The parser refused the expression (#522): BLOCKED, as SQL and schema
 # parse errors are.
 MATH_PARSE_ERROR = "math.parse_error"
+# A side holds a decimal SymPy rounded while parsing, and it could not be
+# read exactly: the claim is neither proven nor disproven (GHSA-q7m5).
+INEXACT_DECIMAL_IDENTITY = "math.inexact_decimal"
 
 
 def math_parse_error_result(error: SafeParserError) -> DiagnosticResult:
@@ -59,6 +64,10 @@ def math_identity_result(expression: str) -> DiagnosticResult:
       (``log(0)**0 = 2``), so there is no defined value to disprove.
     - UNVERIFIABLE: anything undecided, including a non-zero difference that
       holds a Float, whose rounding residue proves nothing.
+    - A zero difference where a side writes a decimal (or holds a Float)
+      is checked again with the decimals read exactly, since SymPy rounds
+      a Float (``1 + 1.0e-17 - 1 = 0`` is false). If they cannot be read
+      exactly: UNVERIFIABLE with ``INEXACT_DECIMAL_IDENTITY`` (GHSA-q7m5).
 
     ``==`` reads as ``=`` (#522). The caller signs and enforces the result
     and decides admission. Parse errors propagate to the caller.
@@ -75,6 +84,29 @@ def math_identity_result(expression: str) -> DiagnosticResult:
         "right_side": str(right),
         "simplified_difference": str(difference),
     }
+    if identity_status == "VERIFIED" and rounding_may_decide((left_str, right_str), (left, right)):
+        # The zero may be the parser's rounding (GHSA-q7m5): it stands only
+        # if the sides agree with their decimals read exactly. The sides
+        # recorded are then the exact ones that decided it.
+        identity_status, exact_left, exact_right = exact_decimal_sides(left_str, right_str)
+        if identity_status in ("VERIFIED", DISPROVEN_STATUS):
+            fields.update({
+                "decimals": "exact",
+                "left_side": str(exact_left),
+                "right_side": str(exact_right),
+                "simplified_difference": str(simplify(exact_left - exact_right)),
+            })
+        else:
+            fields["decimals"] = "unreadable"
+            return DiagnosticResult.unverifiable(
+                "A side holds a decimal that could not be read exactly",
+                developer_fields={
+                    "is_valid": False,
+                    "result": None,
+                    "constraint_id": INEXACT_DECIMAL_IDENTITY,
+                    **fields,
+                },
+            )
     if identity_status == "VERIFIED" and not identity_domains_match(left_str, right_str):
         return DiagnosticResult.unverifiable(
             "Identity holds only where both sides are defined",
