@@ -24,7 +24,7 @@ from qwed_sdk.attestation import (
     verify_attestation,
     verify_document_attestation,
 )
-from qwed_sdk.models import VerificationResult, BatchResult, token_fields
+from qwed_sdk.models import VerificationResult, BatchResult, advisory_result
 
 # How long a fetched JWKS is reused, as the server's Cache-Control says.
 _JWKS_MAX_AGE_SECONDS = 300.0
@@ -540,8 +540,10 @@ class QWEDClient:
         Run multi-engine consensus on a query: advisory only (#633).
 
         The engines decide a model's translations of the query, so the
-        status is never VERIFIED and ``is_verified`` is always False. Read
-        the result as a signal for review.
+        result is never verified, whatever the server answers: the status
+        is UNVERIFIABLE or BLOCKED, ``is_verified`` is False, and it has no
+        attestation, proof_ref or admission. ``result`` holds the response
+        as sent. Read it as a signal for review.
 
         Args:
             query: The query to check
@@ -559,23 +561,10 @@ class QWEDClient:
             }
         )
         data["latency_ms"] = (time.time() - start) * 1000
-        # The API returns a structure that VerificationResult.from_dict can handle
-        # provided we treat the response as the "result" dictionary or map fields.
-        # The API returns: { "final_answer": ..., "confidence": ..., "verification_chain": ... }
-        # We wrap this in a VerificationResult.
+        # Advisory whatever the server answers (#633): not its status,
+        # meets_requirement or attestation.
+        return advisory_result(data, data["latency_ms"])
 
-        # The server's status, and meets_requirement, which it sets only for
-        # a VERIFIED result that meets the confidence (#269); a truthy value
-        # that is not exactly True admits nothing (GHSA-jppc-7r58-7pjh).
-        return VerificationResult(
-            status=data.get("status") or ("VERIFIED" if data.get("meets_requirement") is True else "UNVERIFIED"),
-            is_verified=data.get("meets_requirement") is True,
-            result=data,
-            latency_ms=data.get("latency_ms", 0.0) or (time.time() - start) * 1000,
-            # So verify_attestation works on a consensus answer too (#319).
-            **token_fields(data),
-        )
-    
     def verify_image(
         self,
         image_path: str,
@@ -968,7 +957,8 @@ class QWEDAsyncClient:
         min_confidence: float = 0.95
     ) -> VerificationResult:
         """Run multi-engine consensus on a query: advisory only (#633), so
-        the status is never VERIFIED and ``is_verified`` is always False."""
+        the result is never verified, whatever the server answers. See
+        ``QWEDClient.verify_consensus``."""
         start = time.time()
         data = await self._request(
             "POST",
@@ -980,17 +970,9 @@ class QWEDAsyncClient:
             }
         )
 
-        # The server's status, and meets_requirement, which it sets only for
-        # a VERIFIED result that meets the confidence (#269); a truthy value
-        # that is not exactly True admits nothing (GHSA-jppc-7r58-7pjh).
-        return VerificationResult(
-            status=data.get("status") or ("VERIFIED" if data.get("meets_requirement") is True else "UNVERIFIED"),
-            is_verified=data.get("meets_requirement") is True,
-            result=data,
-            latency_ms=data.get("latency_ms", 0.0) or (time.time() - start) * 1000,
-            # So verify_attestation works on a consensus answer too (#319).
-            **token_fields(data),
-        )
+        # Advisory whatever the server answers (#633): not its status,
+        # meets_requirement or attestation.
+        return advisory_result(data, data.get("latency_ms", 0.0) or (time.time() - start) * 1000)
 
     async def verify_image(
         self,

@@ -69,22 +69,24 @@ def test_a_verified_admitted_answer_is_still_verified():
 
 
 @pytest.mark.parametrize(
-    ("data", "status", "verified"),
+    ("data", "status"),
     [
-        ({"status": "VERIFIED", "meets_requirement": True}, "VERIFIED", True),
-        ({"status": "VERIFIED", "meets_requirement": False}, "VERIFIED", False),
-        ({"status": "BLOCKED", "meets_requirement": False}, "BLOCKED", False),
-        ({"meets_requirement": "yes"}, "UNVERIFIED", False),
-        ({"meets_requirement": 1}, "UNVERIFIED", False),
+        # Consensus is advisory (#633): a server that still answers VERIFIED
+        # and meets the requirement is not taken at its word.
+        ({"status": "VERIFIED", "meets_requirement": True}, "UNVERIFIABLE"),
+        ({"status": "VERIFIED", "meets_requirement": False}, "UNVERIFIABLE"),
+        ({"status": "BLOCKED", "meets_requirement": False}, "BLOCKED"),
+        ({"meets_requirement": "yes"}, "UNVERIFIABLE"),
+        ({"meets_requirement": 1}, "UNVERIFIABLE"),
     ],
 )
-def test_a_consensus_answer_takes_the_servers_status_and_an_exact_requirement(monkeypatch, data, status, verified):
+def test_a_consensus_answer_is_advisory_whatever_the_server_says(monkeypatch, data, status):
     client = client_module.QWEDClient(api_key="k", base_url="http://qwed.test")
     monkeypatch.setattr(client, "_request", lambda *args, **kwargs: dict(data))
 
     result = client.verify_consensus("2+2=4")
 
-    assert (result.status, result.is_verified) == (status, verified)
+    assert (result.status, result.is_verified) == (status, False)
 
 
 # ---------------------------------------------------------------- the Action

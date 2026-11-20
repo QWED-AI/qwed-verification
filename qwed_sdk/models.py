@@ -98,6 +98,31 @@ def token_fields(data: Dict[str, Any]) -> Dict[str, Optional[str]]:
     return fields
 
 
+# The statuses a consensus result keeps as sent; any other, VERIFIED above
+# all, reads as UNVERIFIABLE, as the server's advisory() does (#633).
+CONSENSUS_STATUSES = frozenset({"UNVERIFIABLE", "BLOCKED"})
+
+
+def advisory_result(data: Dict[str, Any], latency_ms: float) -> VerificationResult:
+    """A consensus response as an advisory result (#633), whatever it says.
+
+    The client does not take the server's word for it: a server from before
+    #633, or any other, can still answer ``VERIFIED`` with
+    ``meets_requirement`` true and a signed attestation. The status is the
+    server's only where it is exactly ``UNVERIFIABLE`` or ``BLOCKED``, and
+    ``UNVERIFIABLE`` otherwise; ``is_verified`` is False; and the result
+    carries no attestation, proof_ref or admission to act on. ``result`` is
+    the response as the server sent it.
+    """
+    status = data.get("status")
+    return VerificationResult(
+        status=status if isinstance(status, str) and status in CONSENSUS_STATUSES else "UNVERIFIABLE",
+        is_verified=False,
+        result=data,
+        latency_ms=latency_ms,
+    )
+
+
 @dataclass
 class BatchItem:
     """A single item in a batch result."""

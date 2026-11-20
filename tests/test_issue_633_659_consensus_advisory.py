@@ -5,7 +5,8 @@ branch built a proof, and the route returned any result that said VERIFIED as
 such. Every engine decides a model's translation of the question, so engines
 that agree have verified nothing. A consensus result is now UNVERIFIABLE or
 BLOCKED, never VERIFIED, in every mode; it carries ``advisory_only``, and the
-route holds any verifier to that.
+route holds any verifier to that. The SDK reads a consensus response the same
+way, whatever the server answers.
 
 #659: in ``maximum`` mode the Z3 engine unpacked the model's logic translation
 into two values, so it raised on every question and was BLOCKED. It now proves
@@ -14,6 +15,7 @@ does, on the one z3 thread. Z3 decides whether a claim holds, not a value, so
 it does not vote on the answer.
 """
 
+import asyncio
 import threading
 import time
 from types import SimpleNamespace
@@ -38,6 +40,8 @@ from qwed_new.core.consensus_verifier import (
 from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus, claim_verified
 from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier, DSLVerificationResult
 from qwed_new.core.schemas import LogicVerificationTask
+from qwed_sdk import QWEDAsyncClient, QWEDClient
+from qwed_sdk.models import CONSENSUS_STATUSES, advisory_result
 from tests.test_issue_320_logic_route_admission import _rows, client  # noqa: F401  (fixture)
 from tests.test_issue_578_raw_translation import MODEL, model  # noqa: F401  (fixture)
 
@@ -423,3 +427,91 @@ def test_an_open_z3_breaker_leaves_one_engine_that_verified(model, sandbox):  # 
 
     assert result.agreement_status == NO_INDEPENDENT_VERIFICATION
     assert result.status is DiagnosticStatus.BLOCKED
+
+
+# --------------------------------------------------------------------- SDK
+
+# A server from before #633, or any other, can answer VERIFIED with
+# meets_requirement true and a signed attestation; the SDK takes none of it.
+_SIGNED = {
+    "meets_requirement": True, "is_valid": True, "is_verified": True, "admission": "ADMIT",
+    "attestation": "t", "proof_ref": "sha256:" + "e" * 64,
+}
+_SERVER_STATUSES = [
+    "VERIFIED", "verified", "Verified", "VERIFIED ", " VERIFIED", "VERIFIED\t", "VERIFIED\n",
+    "VERIFIED_", "VERI-FIED", "VERIFIEDS",
+    "V" + chr(0x0415) + "RIFIED",  # a Cyrillic look-alike letter
+    "VERI" + ZERO_WIDTH_SPACE + "FIED",
+    "".join(chr(ord(c) + 0xFEE0) for c in "VERIFIED"),  # full width, VERIFIED under NFKC
+    "UNVERIFIED", "VALID", "SAT", "ADMIT", "",
+    "blocked", "BLOCKED ", "unverifiable", "UNVERIFIABLE\n",
+    None, True, 1, 0, 1.0, [], ["VERIFIED"], {"status": "VERIFIED"},
+]
+
+
+def _sdk_consensus(data, use_async):
+    """The SDK's verify_consensus on a server that answers ``data``."""
+    if use_async:
+        async def run():
+            sdk = QWEDAsyncClient(api_key="k", base_url="http://qwed.test")
+            sdk._request = AsyncMock(return_value=dict(data))
+            return await sdk.verify_consensus("2+2=4")
+
+        return asyncio.run(run())
+    sdk = QWEDClient(api_key="k", base_url="http://qwed.test")
+    sdk._request = lambda *args, **kwargs: dict(data)
+    return sdk.verify_consensus("2+2=4")
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("status", _SERVER_STATUSES, ids=repr)
+def test_the_sdk_reads_any_other_status_as_unverifiable(use_async, status):
+    result = _sdk_consensus({"status": status, **_SIGNED}, use_async)
+
+    assert result.status == "UNVERIFIABLE"
+    assert result.is_verified is False
+    assert (result.attestation, result.proof_ref, result.admission) == (None, None, None)
+    assert result.result["status"] == status  # the response, as sent
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("status", sorted(CONSENSUS_STATUSES))
+def test_the_sdk_keeps_an_advisory_status(use_async, status):
+    result = _sdk_consensus({"status": status, "advisory_only": True, **_SIGNED}, use_async)
+
+    assert (result.status, result.is_verified) == (status, False)
+    assert (result.attestation, result.proof_ref, result.admission) == (None, None, None)
+    assert result.result["advisory_only"] is True
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("meets", [True, "true", 1, False, None])
+def test_the_sdk_reads_a_response_with_no_status_as_unverifiable(use_async, meets):
+    result = _sdk_consensus({"meets_requirement": meets}, use_async)
+
+    assert (result.status, result.is_verified) == ("UNVERIFIABLE", False)
+
+
+_JSON = st.recursive(
+    st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False) | st.text(max_size=12),
+    lambda children: st.lists(children, max_size=3) | st.dictionaries(st.text(max_size=5), children, max_size=3),
+    max_leaves=6,
+)
+_RESPONSE = st.dictionaries(
+    st.sampled_from([
+        "status", "meets_requirement", "is_valid", "is_verified", "admission", "attestation", "proof_ref",
+        "query_semantics_verified", "advisory_only",
+    ]),
+    st.one_of(st.sampled_from(["VERIFIED", "ADMIT", "UNVERIFIABLE", "BLOCKED", "verified", "VERIFIED ", "t"]), _JSON),
+)
+
+
+@hypothesis_settings(max_examples=300, deadline=None)
+@given(data=_RESPONSE)
+def test_no_server_response_gives_a_verified_sdk_result(data):
+    result = advisory_result(data, 1.0)
+
+    assert result.status in CONSENSUS_STATUSES
+    assert result.is_verified is False
+    assert (result.attestation, result.proof_ref, result.admission) == (None, None, None)
+    assert result.result is data
