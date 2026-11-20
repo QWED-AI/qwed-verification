@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from qwed_new.guards.canonical_text import json_readings, reading_copies
@@ -187,8 +187,8 @@ STARS = {
     "three stars": "***",
     "eight stars": "*" * 8,
     "many stars": "*" * 100,
-    "full-width stars": "＊" * 3,
-    "small stars": "﹡" * 3,
+    "full-width stars": "\uff0a" * 3,
+    "small stars": "\ufe61" * 3,
 }
 
 
@@ -665,22 +665,25 @@ def _lost_on_purpose(text, found):
     return _placeholder(password) or any(_named_at(password, at) for at in range(len(password)))
 
 
-# Pieces around a URL of the three schemes named before #658, so each text
-# holds a match of that pattern.
+# Pieces for texts around a URL of the three schemes named before #658.
 NAMED_PIECES = [
     "postgres" + SEP, "mysql" + SEP, "MONGODB" + SEP, "mysql+py", "postgresql" + SEP, "redis" + SEP, "://",
     "u", "admin", "ab", ":", "@", "/", "//", "?", "#", " ", "\t", "\n", '"', "'", "`",
-    "5432", "${PG}", "<pw>", "***", "*", "sha256:" + SHA256, "​", "：",
+    "5432", "${PG}", "<pw>", "***", "*", "sha256:" + SHA256, "\u200b", "\uff1a",
 ]
 _NAMED_PARTS = st.lists(st.sampled_from(NAMED_PIECES), max_size=6)
+# A user with no ":" and a password with no "@", so the pattern before #658
+# matches the URL built from them, or a URL before it that runs to its "@".
+_OLD_USER = st.lists(st.sampled_from([piece for piece in NAMED_PIECES if ":" not in piece]), min_size=1, max_size=6)
+_OLD_PASSWORD = st.lists(st.sampled_from([piece for piece in NAMED_PIECES if "@" not in piece]), min_size=1, max_size=6)
 
 
 @settings(max_examples=600, deadline=None)
 @given(
     before=_NAMED_PARTS,
     scheme=st.sampled_from(["postgres", "mysql", "MONGODB", "mysql+pymysql"]),
-    user=_NAMED_PARTS,
-    password=st.lists(st.sampled_from(NAMED_PIECES), min_size=1, max_size=6),
+    user=_OLD_USER,
+    password=_OLD_PASSWORD,
     after=_NAMED_PARTS,
 )
 def test_nothing_reported_before_is_lost_but_on_purpose(before, scheme, user, password, after):
@@ -688,10 +691,14 @@ def test_nothing_reported_before_is_lost_but_on_purpose(before, scheme, user, pa
     # a match of the new pattern. The one-token reading can start such a URL
     # at an earlier "://", as a user may hold "@", but none is left out.
     text = "".join(before) + scheme + SEP + "".join(user) + ":" + "".join(password) + "@" + "".join(after)
+    old = list(OLD.finditer(text))
+    assert old
+    checked = [found for found in old if not _lost_on_purpose(text, found)]
+    # Each example checks a match; one read out on purpose is drawn again.
+    assume(checked)
     spans = [found.span() for found in COMPILED.finditer(text)]
-    for found in OLD.finditer(text):
-        if not _lost_on_purpose(text, found):
-            assert any(start < found.end() and found.start() < end for start, end in spans)
+    for found in checked:
+        assert any(start < found.end() and found.start() < end for start, end in spans)
 
 
 @settings(max_examples=300, deadline=None)
