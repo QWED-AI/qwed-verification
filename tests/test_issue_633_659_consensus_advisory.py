@@ -382,14 +382,28 @@ def _stand_in(agreement, status, confidence=0.999, chain=()):
         "says-verified-text"])
 def test_every_consensus_response_is_advisory(client, isolated_audit_chain, stand_in, status):  # noqa: F811
     with patch.object(api_main.consensus_verifier, "verify_async", AsyncMock(return_value=stand_in)):
-        body = client.post("/verify/consensus", json={"query": "What is 2 + 2?"}).json()
+        response = client.post("/verify/consensus", json={"query": "What is 2 + 2?"})
+    body = response.json()
 
+    assert response.status_code == 200  # an answer, not an error, below the minimum too
     assert body["status"] == status
     assert body["advisory_only"] is True
     assert body["proof_ref"] is None
     assert body.get("attestation") is None
     assert body["meets_requirement"] is False  # on the early responses too
     assert [row.is_verified for row in _rows(isolated_audit_chain)] == [False]
+
+
+def test_the_route_documents_only_the_errors_it_returns():
+    """Below the minimum confidence, or without a secure execution runtime,
+    the route answers 200 (above), so its OpenAPI does not list them as 422
+    or 503. 422 is FastAPI's request validation error, and the description
+    says the route is advisory."""
+    operation = api_main.app.openapi()["paths"]["/verify/consensus"]["post"]
+
+    assert operation["responses"]["422"]["description"] == "Validation Error"
+    assert "secure execution" not in operation["responses"]["503"]["description"].lower()
+    assert "advisory only" in operation["description"]
 
 
 @pytest.fixture

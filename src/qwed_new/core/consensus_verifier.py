@@ -1033,8 +1033,9 @@ class ConsensusVerifier:
             )
     
     # The Z3 engine's status for each verdict prove_from_dsl gives (#659),
-    # and why it is not VERIFIED. Only VALID is: the claim follows from the
-    # constraints, which can all hold. Any other verdict is BLOCKED.
+    # and why it is not VERIFIED. Only VALID is VERIFIED: the claim follows
+    # from the constraints, which can all hold. INVALID, VACUOUS and UNKNOWN
+    # are UNVERIFIABLE; a verdict not listed here (ERROR) is BLOCKED.
     _PROOF_VERDICTS = {
         "VALID": ("VERIFIED", None),
         "INVALID": ("UNVERIFIABLE", "The claim does not follow from the constraints: Z3 found a counterexample"),

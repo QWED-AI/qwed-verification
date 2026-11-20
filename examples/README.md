@@ -21,7 +21,7 @@ Ensure the QWED server is running (e.g., via `docker-compose up` or `uvicorn qwe
 | [sql_safety_example.py](sql_safety_example.py) | Verifying SQL queries against schema |
 | [fact_verification_example.py](fact_verification_example.py) | Checking factual claims against context |
 | [stats_example.py](stats_example.py) | Verifying statistical claims on CSV data |
-| [consensus_example.py](consensus_example.py) | Multi-engine consensus verification |
+| [consensus_example.py](consensus_example.py) | Multi-engine consensus, advisory only (never `VERIFIED`) |
 | [image_verification_example.py](image_verification_example.py) | Image analysis and claim verification |
 | [batch_verification_example.py](batch_verification_example.py) | Processing multiple requests efficiently |
 

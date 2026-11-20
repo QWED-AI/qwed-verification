@@ -1,5 +1,5 @@
 """
-QWED Consensus Verification Example.
+QWED Consensus Example (advisory only).
 
 Demonstrates:
 1. Running several engines on a query.
@@ -15,7 +15,7 @@ import os
 def main():
     client = QWEDClient(api_key=os.environ.get("QWED_API_KEY", "qwed_test_key"))
 
-    print("--- Consensus Verification ---")
+    print("--- Consensus (advisory only) ---")
     query = "Is the square root of 16 equal to 4?"
 
     # Mode can be 'single', 'high' (2 engines), or 'maximum' (3+ engines);

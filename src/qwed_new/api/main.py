@@ -1961,10 +1961,12 @@ class ConsensusVerifyRequest(BaseModel):
 
 @app.post(
     "/verify/consensus",
+    # A confidence below the minimum and an unavailable secure execution
+    # runtime are answered 200 (UNVERIFIABLE, BLOCKED), not 422 or 503;
+    # 422 is FastAPI's request validation error (#633).
     responses={
         400: {"description": "Invalid verification mode."},
-        422: {"description": "Consensus confidence below requested minimum."},
-        503: {"description": "Secure execution runtime unavailable for required consensus depth."},
+        503: {"description": "Server busy: too many requests in flight; retry shortly."},
     },
 )
 async def verify_with_consensus(
@@ -1987,6 +1989,9 @@ async def verify_with_consensus(
     - "high": SymPy and Python (Python's run is advisory).
     - "maximum": adds Z3, which proves the claim of a logic translation from
       its constraints (#659), and Stats for statistical questions.
+
+    A confidence below ``min_confidence`` is UNVERIFIABLE, and a secure
+    execution runtime that is unavailable is BLOCKED: answers, not errors.
 
     Returns the engine chain and a confidence score.
     """
