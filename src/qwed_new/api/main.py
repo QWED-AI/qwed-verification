@@ -39,7 +39,12 @@ INTERNAL_VERIFICATION_ERROR = "Internal verification error"
 INTERNAL_PROCESSING_ERROR = "Internal processing error"
 
 from qwed_new.core.control_plane import ControlPlane, natural_language_admission
-from qwed_new.core.route_diagnostics import guard_diagnostic, logic_diagnostic, natural_language_diagnostic
+from qwed_new.core.route_diagnostics import (
+    guard_diagnostic,
+    logic_diagnostic,
+    natural_language_diagnostic,
+    raw_llm_output_of,
+)
 from qwed_new.core.trust import AdmissionRule, attest_and_enforce
 from qwed_new.core.tenant_context import get_current_tenant, TenantContext
 from qwed_new.core.database import create_db_and_tables, get_session
@@ -646,6 +651,8 @@ async def verify_natural_language(
 
     if dr is None:
         dr = _natural_language_diagnostic(result)
+    # Read before the trust step, which may replace the verdict (#578).
+    raw_llm_output = dr.raw_llm_output
     dr = _enforce_trust(
         dr, query=request.query, engine="natural_language", admission=natural_language_admission
     )
@@ -665,6 +672,7 @@ async def verify_natural_language(
         is_verified=admission is AdmissionDecision.ADMIT,
         domain="NATURAL_LANGUAGE",  # #520: its own domain, not MATH
         admission=admission.value,  # #307: as returned
+        raw_llm_output=raw_llm_output,  # #578: the model's translation
     )
     _safe_commit_log(log)
 
@@ -684,6 +692,8 @@ def _logic_route_response(dr: DiagnosticResult, query: str, organization_id) -> 
     question, so it is admitted only once that translation is verified, as on
     /verify/natural_language (#320). The verdict stays as produced.
     """
+    # Read before the trust step, which may replace the verdict (#578).
+    raw_llm_output = dr.raw_llm_output
     dr = _enforce_trust(dr, query=query, engine="logic", admission=natural_language_admission)
     admission = natural_language_admission(dr)
     log = VerificationLog(
@@ -694,6 +704,7 @@ def _logic_route_response(dr: DiagnosticResult, query: str, organization_id) -> 
         is_verified=admission is AdmissionDecision.ADMIT,
         domain="LOGIC",
         admission=admission.value,
+        raw_llm_output=raw_llm_output,
     )
     _safe_commit_log(log)
     response = _merge_response(dr)
@@ -740,6 +751,9 @@ async def verify_logic(
                 "translation_model": result.get("translation_model") if isinstance(result, dict) else None,
             },
         )
+        # The model's translation, where it returned one, still goes to the
+        # audit row (#578).
+        dr = dr.with_audit_record(raw_llm_output_of(result))
         return _logic_route_response(dr, request.query, tenant.organization_id)
 
 # #353 (CodeAnt + CodeRabbit on PR #354): the byte cap bounds TRANSFER,
@@ -854,6 +868,8 @@ async def verify_stats(
         verifier = StatsVerifier()
 
         dr = await asyncio.to_thread(verifier.verify_stats, query, df, None)
+        # Read before the trust step, which may replace the verdict (#578).
+        raw_llm_output = dr.raw_llm_output
         dr = _enforce_trust(dr, query=query, engine="stats")
 
         # Fail-closed audit semantics (P1 #297): never log a BLOCKED / non-
@@ -866,7 +882,8 @@ async def verify_stats(
             query=query,
             result=_cap_log_result(dr.to_dict()),
             is_verified=claim_verified(dr),
-            domain="STATS"
+            domain="STATS",
+            raw_llm_output=raw_llm_output,
         )
         _safe_commit_log(log)
 
@@ -932,8 +949,11 @@ async def verify_fact(
         except asyncio.TimeoutError:
             raise HTTPException(status_code=503, detail="Fact verification timed out.") from None
 
+        raw_llm_output = None
         if isinstance(result, DiagnosticResult):
             dr = result
+            # The model's advisory, for the audit row (#578).
+            raw_llm_output = result.raw_llm_output
         elif hasattr(result, "to_dict") and hasattr(result, "is_verified"):
             verdict = result.verdict if hasattr(result, "verdict") else "UNKNOWN"
             dr = DiagnosticResult.verified(
@@ -956,7 +976,8 @@ async def verify_fact(
             query=claim,
             result=_cap_log_result(dr.to_dict()),
             is_verified=claim_verified(dr),
-            domain="FACT"
+            domain="FACT",
+            raw_llm_output=raw_llm_output,
         )
         _safe_commit_log(log)
 
@@ -1804,8 +1825,11 @@ async def agent_verify(
     # The same row /verify/natural_language writes, plus the agent id.
     # AgentActivity is neither chained nor signed, so it is not the audit
     # record (#477).
+    dr = _natural_language_diagnostic(result)
+    # Read before the trust step, which may replace the verdict (#578).
+    raw_llm_output = dr.raw_llm_output
     dr = _enforce_trust(
-        _natural_language_diagnostic(result),
+        dr,
         query=request.query,
         engine="natural_language",
         admission=natural_language_admission,
@@ -1819,6 +1843,7 @@ async def agent_verify(
         is_verified=admission is AdmissionDecision.ADMIT,
         domain="NATURAL_LANGUAGE",  # #520
         admission=admission.value,  # #307
+        raw_llm_output=raw_llm_output,  # #578
     ))
     # The enforced verdict with its admission, as /verify/natural_language
     # returns: not the control plane's raw dict, which a failed attestation
@@ -1918,7 +1943,13 @@ async def agent_tool_call(
 # ENHANCED VERIFICATION ENDPOINTS (Phase 2B)
 # ============================================================
 
-from qwed_new.core.consensus_verifier import NO_INDEPENDENT_VERIFICATION, consensus_verifier, VerificationMode
+from qwed_new.core.consensus_verifier import (
+    NO_INDEPENDENT_VERIFICATION,
+    EngineResult,
+    VerificationMode,
+    chain_record,
+    consensus_verifier,
+)
 
 class ConsensusVerifyRequest(BaseModel):
     query: str
@@ -1972,6 +2003,8 @@ async def verify_with_consensus(
         mode=mode,
         timeout_seconds=30.0,
     )
+    # Each engine's translation, for every audit row below (#578).
+    raw_llm_output = chain_record(result.verification_chain)
 
     if result.agreement_status == "blocked_secure_execution":
         dr = DiagnosticResult.blocked(
@@ -1984,7 +2017,8 @@ async def verify_with_consensus(
             query=request.query,
             result=_cap_log_result(dr.to_dict()),
             is_verified=claim_verified(dr),
-            domain="CONSENSUS"
+            domain="CONSENSUS",
+            raw_llm_output=raw_llm_output,
         )
         _safe_commit_log(log)
         return _merge_response(dr)
@@ -2001,7 +2035,8 @@ async def verify_with_consensus(
             query=request.query,
             result=_cap_log_result(dr.to_dict()),
             is_verified=claim_verified(dr),
-            domain="CONSENSUS"
+            domain="CONSENSUS",
+            raw_llm_output=raw_llm_output,
         )
         _safe_commit_log(log)
         return _merge_response(dr)
@@ -2019,7 +2054,8 @@ async def verify_with_consensus(
             query=request.query,
             result=_cap_log_result(dr.to_dict()),
             is_verified=claim_verified(dr),
-            domain="CONSENSUS"
+            domain="CONSENSUS",
+            raw_llm_output=raw_llm_output,
         )
         _safe_commit_log(log)
         return _merge_response(dr)
@@ -2034,7 +2070,8 @@ async def verify_with_consensus(
         query=request.query,
         result=_cap_log_result(dr.to_dict()),
         is_verified=claim_verified(dr),
-        domain="CONSENSUS"
+        domain="CONSENSUS",
+        raw_llm_output=raw_llm_output,
     )
     _safe_commit_log(log)
 
@@ -2053,6 +2090,9 @@ async def verify_with_consensus(
                 "latency_ms": round(r.latency_ms, 2),
                 "success": r.success,
                 "status": r.status,
+                # The provider and model whose translation this engine
+                # decided on, or none where it had none (#585).
+                **(r.provenance() if isinstance(r, EngineResult) else {}),
             }
             for r in result.verification_chain
         ],

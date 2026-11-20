@@ -277,7 +277,7 @@ async def test_the_control_plane_puts_the_model_in_the_trust_boundary():
 
 
 def test_the_logic_route_names_the_provider_and_model(client, isolated_audit_chain):  # noqa: F811
-    translated = (MISTRANSLATION, None, "openai", None, MISTRANSLATED_CLAIM, LOGIC_MODEL)
+    translated = (MISTRANSLATION, None, "openai", None, MISTRANSLATED_CLAIM, LOGIC_MODEL, None)
     with patch.object(api_main.control_plane.logic_verifier, "translate_to_dsl", return_value=translated):
         body = client.post("/verify/logic", json={"query": QUESTION}).json()
 
@@ -315,7 +315,7 @@ def _configure(monkeypatch, provider_class):
 
 def test_the_dsl_bridge_returns_the_model_with_the_translation(monkeypatch):
     _configure(monkeypatch, _LogicProvider)
-    dsl_code, _, provider, error, claim, model = DSLLogicVerifier().translate_to_dsl(QUESTION)
+    dsl_code, _, provider, error, claim, model, _ = DSLLogicVerifier().translate_to_dsl(QUESTION)
 
     assert dsl_code == "(GT x 5)"
     assert claim == "(GT x 3)"
@@ -329,7 +329,7 @@ def test_the_dsl_bridge_names_the_model_asked_when_translation_fails(monkeypatch
         fails = True
 
     _configure(monkeypatch, _Failing)
-    dsl_code, _, provider, error, _, model = DSLLogicVerifier().translate_to_dsl(QUESTION)
+    dsl_code, _, provider, error, _, model, translation = DSLLogicVerifier().translate_to_dsl(QUESTION)
 
     assert dsl_code is None
     assert error.status == "ERROR"
@@ -337,6 +337,8 @@ def test_the_dsl_bridge_names_the_model_asked_when_translation_fails(monkeypatch
     assert error.provider_used == "ollama"
     assert provider == "ollama"
     assert model == LOGIC_MODEL
+    # The model returned nothing, so there is no translation to keep (#578).
+    assert translation is None
 
 
 def test_the_synchronous_wrapper_names_the_model_on_its_result(monkeypatch):

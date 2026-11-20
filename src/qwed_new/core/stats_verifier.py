@@ -25,6 +25,7 @@ from qwed_new.providers.base import ProviderConfigError
 
 from .diagnostics import AdvisoryCheck, DiagnosticResult, DiagnosticStatus, enforce_trust_decision
 from .json_bounding import bound_json_value
+from .translation_record import Translation, translation_of, with_translations
 from .secure_code_executor import SANDBOX_BOUND_NAMES, _DANGEROUS_MODULE_ROOTS, _DANGEROUS_OS_CALLS
 from .verification_context import (
     Admission,
@@ -580,7 +581,23 @@ class StatsVerifier:
             >>> result = verifier.verify_stats("What is the mean of a?", df)
             >>> print(result.developer_fields.get("is_valid"))
             False
+
+        A result reached through the model's code names the provider and
+        model that wrote it (#585), and carries the code for the audit row
+        (#578).
         """
+        translations: List[Translation] = []
+        return with_translations(self._verify_stats(query, df, provider, translations), translations)
+
+    def _verify_stats(
+        self,
+        query: str,
+        df: pd.DataFrame,
+        provider: Optional[str],
+        translations: List[Translation],
+    ) -> DiagnosticResult:
+        """``verify_stats``'s verdict. The model's code is added to
+        ``translations`` once it is written."""
         start_time = time.time()
         columns = list(df.columns)
 
@@ -590,6 +607,7 @@ class StatsVerifier:
         # 1. Generate code from query
         try:
             code = self.translator.translate_stats(query, columns, provider=provider)
+            translations.append(translation_of(self.translator, "stats", code, provider))
         except ProviderConfigError as e:
             # The setting to fix (no model, or an unknown ACTIVE_PROVIDER), not
             # a provider failure: it reaches the operator and the caller, as on

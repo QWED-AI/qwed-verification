@@ -15,6 +15,15 @@ same way in both places.
 from typing import Any
 
 from qwed_new.core.diagnostics import AdvisoryCheck, DiagnosticResult
+from qwed_new.core.translation_record import RAW_LLM_OUTPUT_KEY
+
+_PROVENANCE_KEYS = ("provider_used", "translation_model")
+
+
+def raw_llm_output_of(result: Any) -> Any:
+    """The audit record a control-plane result carries (#578), or None."""
+    raw = result.get(RAW_LLM_OUTPUT_KEY) if isinstance(result, dict) else None
+    return raw if isinstance(raw, str) else None
 
 
 def guard_diagnostic(result: dict, *, route: str, passed: str, failed: str) -> DiagnosticResult:
@@ -106,7 +115,15 @@ def logic_diagnostic(result: dict) -> DiagnosticResult:
     - Anything else (an error) is BLOCKED.
 
     The verdict covers the translated constraints only (see ``_logic_scope``).
+    The model's translation goes on the result for the audit row only, never
+    into its fields (#578).
     """
+    fields = {key: value for key, value in result.items() if key != RAW_LLM_OUTPUT_KEY}
+    return _logic_verdict(fields).with_audit_record(raw_llm_output_of(result))
+
+
+def _logic_verdict(result: dict) -> DiagnosticResult:
+    """``logic_diagnostic``'s verdict, for a result without the audit record."""
     fields = {**result, **_logic_scope(result)}
     status = result.get("status", "ERROR")
     if status == "VALID":
@@ -148,8 +165,20 @@ def natural_language_diagnostic(result: Any) -> DiagnosticResult:
     The control plane attaches the DiagnosticResult it enforced (signed and
     attested for decided verdicts, #437), so it is used as produced. Results
     without one (security or policy blocks, non-math queries, errors) fall back
-    to the fail-closed legacy mapping, which can never yield VERIFIED.
+    to the fail-closed legacy mapping, which can never yield VERIFIED. A
+    non-math result was still decided by a translation, so it names the
+    provider and model, as a decided one does (#585). The model's translation
+    goes on the result for the audit row only (#578).
     """
+    dr = _natural_language_verdict(result)
+    fields = dr.developer_fields
+    if isinstance(result, dict) and "diagnostic" not in result:
+        fields = {**fields, **{key: result[key] for key in _PROVENANCE_KEYS if key in result}}
+    return dr.with_audit_record(raw_llm_output_of(result), developer_fields=fields)
+
+
+def _natural_language_verdict(result: Any) -> DiagnosticResult:
+    """``natural_language_diagnostic``'s verdict, before provenance."""
     if isinstance(result, dict) and "diagnostic" in result:
         try:
             return DiagnosticResult.from_dict(result["diagnostic"])

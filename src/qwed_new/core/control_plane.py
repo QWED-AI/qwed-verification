@@ -15,6 +15,13 @@ import logging
 from typing import Dict, Any, Optional, Tuple
 from qwed_new.core.router import Router
 from qwed_new.core.policy import PolicyEngine
+from qwed_new.core.translation_record import (
+    RAW_LLM_OUTPUT_KEY,
+    Translation,
+    audit_record,
+    translation_in,
+    translation_of,
+)
 from qwed_new.core.translator import TranslationLayer
 from qwed_new.core.verifier import VerificationEngine, DISPROVEN_STATUS
 from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
@@ -239,12 +246,12 @@ class ControlPlane:
 
     def _translate_math(
         self, query: str, provider: Optional[str]
-    ) -> Tuple[MathVerificationTask, Optional[str]]:
-        """Translate, then name the model, on one worker thread: under
-        auto-shift the model is the side that answered this thread's call
-        (#585)."""
+    ) -> Tuple[MathVerificationTask, Translation]:
+        """Translate, then record the translation and name the model, on one
+        worker thread: under auto-shift the model is the side that answered
+        this thread's call (#585, #578)."""
         task = self.translator.translate(query, provider=provider)
-        return task, self.translator.translation_model(provider)
+        return task, translation_of(self.translator, "math", task, provider)
 
     async def process_natural_language(
         self, 
@@ -278,20 +285,36 @@ class ControlPlane:
             
         # 2. Routing (Select Provider)
         provider = self.router.route(query, preferred_provider)
+        # The audit record, once the model has returned (#578): an error
+        # after that point keeps it.
+        raw_llm_output = None
         
         try:
             # 3. Translation (LLM Call)
             # Note: We currently assume it's a math query for the main endpoint.
             # Future: Router should also classify intent (Math vs Logic vs Fact).
-            task, translation_model = await _run_provider_call(
+            task, translation = await _run_provider_call(
                 self._translate_math, query, provider
             )
+            translation_model = translation.translation_model
+            # What the model returned, for the audit row only (#578). It is
+            # set on the response after sanitising, which escapes text, and
+            # no route returns this dict.
+            raw_llm_output = audit_record([translation])
+            # A query the model calls not maths was still decided by a
+            # translation, so the result names it (#585).
+            not_math = {
+                "status": "NOT_MATH_QUERY",
+                "provider_used": provider,
+                "translation_model": translation_model,
+                RAW_LLM_OUTPUT_KEY: raw_llm_output,
+            }
             
             # 3.5. Query Classification - Detect trivial/non-math expressions
             # If LLM returned a trivial expression (like "0" or "2+2"), it's likely not math
             if task.expression in ["0", "1", "2+2", "1+1"] or task.reasoning.lower().startswith("this is not a math"):
                 return {
-                    "status": "NOT_MATH_QUERY",
+                    **not_math,
                     "error": "This doesn't appear to be a mathematical question. Please ask a calculation or formula-based question.",
                     "suggestion": "Try queries like: 'What is 15% of 200?' or 'Calculate compound interest...'",
                     "latency_ms": (time.time() - start_time) * 1000
@@ -300,7 +323,7 @@ class ControlPlane:
             # 3.6. Confidence Check - Ensure this is actually a math query
             if task.confidence < 0.5:  # Low confidence = not a math query
                 return {
-                    "status": "NOT_MATH_QUERY",
+                    **not_math,
                     "error": "This doesn't appear to be a math question",
                     "confidence": task.confidence,
                     "latency_ms": (time.time() - start_time) * 1000
@@ -359,6 +382,7 @@ class ControlPlane:
                 organization_id=organization_id,
             )
             response["admission"] = natural_language_admission(enforced).value
+            response[RAW_LLM_OUTPUT_KEY] = raw_llm_output
             
             # 7. Track Metrics
             if organization_id:
@@ -372,9 +396,13 @@ class ControlPlane:
             return response
             
         except Exception as e:
+            if raw_llm_output is None:
+                # Output the safety check refused is kept too (#578).
+                raw_llm_output = audit_record([translation_in(e)])
             return {
                 "status": "ERROR",
                 "error": str(e),
+                RAW_LLM_OUTPUT_KEY: raw_llm_output,
                 "latency_ms": (time.time() - start_time) * 1000
             }
 
@@ -423,6 +451,9 @@ class ControlPlane:
         provider = self.router.route(query, preferred_provider)
         last_known_provider = provider
         last_known_model = None
+        # What the model returned, once it has (#578): an error after that
+        # point keeps it.
+        translation = None
 
         # 3. DSL Logic Pipeline
         try:
@@ -432,7 +463,7 @@ class ControlPlane:
             # solve runs on the single z3 thread. So the loop is never blocked,
             # logic requests translate in parallel, and z3 stays thread-safe.
             (
-                dsl_code, variables, resolved_provider, error, claim_dsl, translation_model,
+                dsl_code, variables, resolved_provider, error, claim_dsl, translation_model, translation,
             ) = await _run_provider_call(self.logic_verifier.translate_to_dsl, query, provider)
             last_known_model = translation_model
             if error is not None:
@@ -470,6 +501,9 @@ class ControlPlane:
                 output_type="logic",
                 organization_id=organization_id
             )
+            # What the model returned, unsanitised, for the audit row only
+            # (#578): logic_diagnostic keeps it out of the result.
+            response[RAW_LLM_OUTPUT_KEY] = audit_record([translation])
             
             if organization_id:
                 metrics_collector.track_request(
@@ -492,6 +526,7 @@ class ControlPlane:
                 "error": "Internal pipeline error",
                 "provider_used": last_known_provider,
                 "translation_model": last_known_model,
+                RAW_LLM_OUTPUT_KEY: audit_record([translation]),
                 "latency_ms": (time.time() - start_time) * 1000
             }
 

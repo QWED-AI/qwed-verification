@@ -6,11 +6,13 @@ It selects the active provider based on configuration.
 """
 
 import ast
+from typing import Any
 
 from qwed_new.config import settings, ProviderType
 from qwed_new.core.router import UNKNOWN_PROVIDER
 from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.core.security import EnhancedSecurityGateway
+from qwed_new.core.translation_record import Translation
 from qwed_new.providers.base import RETIRED_PROVIDERS, LLMProvider, ProviderConfigError, TranslationRefused
 from qwed_new.providers.azure_openai import AzureOpenAIProvider
 from qwed_new.providers.anthropic import AnthropicProvider
@@ -22,7 +24,14 @@ from qwed_new.providers.ollama_provider import OllamaProvider
 
 
 class SecurityError(ValueError):
-    """Raised when LLM output violates safety checks."""
+    """Raised when LLM output violates safety checks.
+
+    ``translation`` is the refused output, with the provider and model that
+    gave it, where a model returned one: the audit row keeps it (#578), and
+    the message is unchanged.
+    """
+
+    translation: Translation | None = None
 
 
 SAFETY_VALIDATOR_REJECTION = "Expression rejected by safety validator"
@@ -134,6 +143,32 @@ class TranslationLayer:
         model = provider.model_id
         return model if isinstance(model, str) and model else None
 
+    def translation(
+        self, kind: str, output: Any, provider_key: str | None = None, *, engine: str | None = None
+    ) -> Translation:
+        """``output``, what a translation call returned, with the provider
+        ``provider_key`` selects and the model that answered (#578).
+
+        Call it on the thread that made the call, right after it, as for
+        ``translation_model``. The provider is the key the call resolved,
+        computed from ``provider_key`` rather than read from
+        ``last_resolved_provider``, which another thread may have changed on
+        a shared instance. Under auto-shift it is "auto", as the result names
+        it, and ``answering_provider`` names the side that answered this
+        thread's call, as ``translation_model`` names its model.
+        """
+        key = self._normalize_provider_key(provider_key) or self.default_provider
+        provider = self._providers.get(key)
+        answering = provider.answered_provider if isinstance(provider, AutoShiftProvider) else None
+        return Translation(
+            kind=kind,
+            output=output,
+            provider_used=key,
+            translation_model=self.translation_model(provider_key),
+            engine=engine,
+            answering_provider=answering,
+        )
+
     def _validate_math_output(self, task: MathVerificationTask) -> None:
         """
         Validate LLM output before using it.
@@ -213,7 +248,12 @@ class TranslationLayer:
         task = self._get_provider(provider).translate(text)
         
         # ADD: Output verification (OWASP LLM05:2025)
-        self._validate_math_output(task)
+        try:
+            self._validate_math_output(task)
+        except SecurityError as refused:
+            # The refused output still goes to the audit row (#578).
+            refused.translation = self.translation("math", task, provider)
+            raise
         
         return task
 

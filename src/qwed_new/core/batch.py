@@ -68,6 +68,9 @@ class BatchItem:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     latency_ms: float = 0.0
+    # The model's translation behind the item's verdict, for its audit row
+    # only (#578): get_job_results does not return it.
+    raw_llm_output: Optional[str] = None
 
 
 @dataclass
@@ -220,6 +223,9 @@ class BatchVerificationService:
         async def process_item(item: BatchItem) -> None:
             async with semaphore:
                 start_time = time.time()
+                # A record left by an earlier run of this job is not this
+                # attempt's (#578).
+                item.raw_llm_output = None
                 try:
                     # Bound each item so a stalled verification cannot keep the
                     # job active forever; the timeout is caught below and the
@@ -241,6 +247,9 @@ class BatchVerificationService:
                     item.latency_ms = (time.time() - start_time) * 1000
                 if audit is not None:
                     await self._audit_item(job, item, audit)
+                # The record is for the audit row only; a retained job does
+                # not keep it.
+                item.raw_llm_output = None
         
         # Process all items concurrently. The tasks copy the job's math
         # deadline from this context (GHSA-qgjc).
@@ -305,8 +314,10 @@ class BatchVerificationService:
                 item.query,
                 organization_id=organization_id
             )
+            dr = natural_language_diagnostic(result)
+            item.raw_llm_output = dr.raw_llm_output
             dr = attest_and_enforce(
-                natural_language_diagnostic(result),
+                dr,
                 engine="natural_language",
                 query=item.query,
                 admission=natural_language_admission,
@@ -322,8 +333,10 @@ class BatchVerificationService:
                 item.query,
                 organization_id=organization_id
             )
+            dr = logic_diagnostic(result)
+            item.raw_llm_output = dr.raw_llm_output
             dr = attest_and_enforce(
-                logic_diagnostic(result),
+                dr,
                 engine="logic",
                 query=item.query,
                 admission=natural_language_admission,
@@ -368,6 +381,7 @@ class BatchVerificationService:
                     item.query,
                     item.params.get("context", "")
                 )
+                item.raw_llm_output = getattr(result, "raw_llm_output", None)
                 return attest_and_enforce(result, engine="fact", query=item.query).to_dict()
 
             return await asyncio.to_thread(_verify_fact)

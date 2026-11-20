@@ -27,6 +27,7 @@ from qwed_new.core.diagnostics import (
     aggregate_batch_diagnostic,
 )
 
+from .translation_record import Translation, translation_of, with_translations
 from .verification_context import VerificationContextDocument
 
 logger = logging.getLogger(__name__)
@@ -141,7 +142,29 @@ class FactVerifier:
         Returns:
             DiagnosticResult — VERIFIED for deterministic SUPPORTED/REFUTED,
             UNVERIFIABLE for NEUTRAL/INSUFFICIENT_EVIDENCE, BLOCKED on error.
+
+        The model's advisory names the provider and model that gave it
+        (#585), and the result carries it for the audit row (#578). The
+        verdict is the deterministic one, so the result's own fields name
+        no model.
         """
+        translations: List[Translation] = []
+        return with_translations(
+            self._verify_fact(claim, context, provider, min_confidence, translations),
+            translations,
+            provenance=False,
+        )
+
+    def _verify_fact(
+        self,
+        claim: str,
+        context: str,
+        provider: Optional[str],
+        min_confidence: float,
+        translations: List[Translation],
+    ) -> DiagnosticResult:
+        """``verify_fact``'s verdict. The model's advisory, where one is
+        asked for, is added to ``translations``."""
         if not claim or not context:
             return DiagnosticResult.unverifiable(
                 "Empty claim or context provided",
@@ -201,7 +224,7 @@ class FactVerifier:
         refusal = None
         if confidence < min_confidence and self.use_llm_fallback and provider:
             methods_used.append({"name": "llm_fallback", "advisory_only": True})
-            llm_advisory, refusal = self._llm_advisory(claim, context, provider)
+            llm_advisory, refusal = self._llm_advisory(claim, context, provider, translations)
             if llm_advisory:
                 advisory_checks.append(llm_advisory)
 
@@ -622,13 +645,15 @@ class FactVerifier:
             return None
 
     def _llm_advisory(
-        self, claim: str, context: str, provider: str
+        self, claim: str, context: str, provider: str, translations: List[Translation]
     ) -> Tuple[Optional[AdvisoryCheck], Optional[Tuple[str, ValueError]]]:
         """The model advisory, or why the request is refused instead.
 
         Returns ``(advisory, None)``, the advisory None when the provider
         failed; or ``(None, (constraint_id, refused))`` when the request is
-        refused rather than answered without the advisory it asked for.
+        refused rather than answered without the advisory it asked for. An
+        advisory names the provider and model that gave it (#585), and is
+        added to ``translations`` (#578).
         """
         try:
             llm_result = self._llm_fallback(claim, context, provider)
@@ -641,8 +666,15 @@ class FactVerifier:
             # The claim or context was refused before the model saw it (#632).
             logger.warning("Fact advisory refused: %s", e)
             return None, ("fact_verifier.translation_refused", e)
+        if llm_result is None:
+            return None, None
+        # Read on this thread, right after the call (#585). An empty answer
+        # is kept too: it is what the model returned (#578).
+        translation = translation_of(self._translator, "fact", llm_result, provider)
+        translations.append(translation)
         if not llm_result:
             return None, None
+        provenance = translation.provenance()
         return AdvisoryCheck(
             name="llm_fallback",
             constraint_id="fact_verifier.llm_advisory_only",
@@ -651,6 +683,7 @@ class FactVerifier:
                 "llm_confidence": llm_result.get("confidence"),
                 "llm_reasoning": llm_result.get("reasoning"),
                 "advisory_only": True,
+                **provenance,
             }
         ), None
 
