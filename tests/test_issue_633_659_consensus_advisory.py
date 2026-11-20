@@ -409,6 +409,9 @@ def test_the_route_documents_only_the_errors_it_returns():
     assert operation["responses"]["422"]["description"] == "Validation Error"
     assert "secure execution" not in operation["responses"]["503"]["description"].lower()
     assert "advisory only" in operation["description"]
+    # The errors it does return are named: rate limited, audit record not stored.
+    assert "429 when rate limited" in operation["description"]
+    assert "500 when the audit" in operation["description"]
 
 
 @pytest.fixture

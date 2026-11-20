@@ -1991,10 +1991,17 @@ async def verify_with_consensus(
     - "maximum": adds Z3, which proves the claim of a logic translation from
       its constraints (#659), and Stats for statistical questions.
 
-    Every outcome is an answer (200), not an error. A secure execution
-    runtime that is unavailable, engines that are all blocked, and an
-    answer one engine verified alone are BLOCKED, whatever the confidence;
-    otherwise a confidence below ``min_confidence`` is UNVERIFIABLE.
+    Every consensus outcome is an answer (200), not an error. A secure
+    execution runtime that is unavailable, engines that are all blocked,
+    and an answer one engine verified alone are BLOCKED, whatever the
+    confidence; otherwise a confidence below ``min_confidence`` is
+    UNVERIFIABLE.
+
+    The errors are the request's or the service's: 400 for an unknown mode,
+    401 or 403 for a missing or refused API key, 413 for a body over the
+    limit, 422 for a body that does not validate, 429 when rate limited
+    (with Retry-After), 503 when the server is busy, and 500 when the audit
+    record cannot be stored, as no result is returned without it.
 
     Returns the engine chain and a confidence score.
     """
