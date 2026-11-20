@@ -130,6 +130,9 @@ REPORTED = {
     "stars then text": _with("***x"),
     "text then stars": _with("x***"),
     "six digits before a slash": _with("123456/ab"),
+    "zeros and digits before a slash": _with("000443/ab"),
+    "password starting with a slash": _with("/ab+cd=="),
+    "password starting with a question mark": _with("?ab"),
     "digits right before the at sign": _url("postgresql", "db.example.com", "5432", "x"),
     "digits, a letter, then a slash": _with("5432a/b"),
     "long password": _with("a" * 10_000),
@@ -168,9 +171,6 @@ PLACEHOLDERS = {
     "angle-bracket placeholder": "<password>",
     "angle-bracket placeholder with a hyphen": "<db-password>",
     "angle-bracket placeholder in capitals": "<POSTGRES_PASSWORD>",
-    "three stars": "***",
-    "one star": "*",
-    "many stars": "*" * 100,
 }
 
 
@@ -178,6 +178,28 @@ PLACEHOLDERS = {
 @pytest.mark.parametrize("name", list(PLACEHOLDERS))
 def test_a_placeholder_password_is_read_out(name, scheme):
     assert not _reported(_with(PLACEHOLDERS[name], scheme))
+
+
+# A run of "*" stays reported: a masked password has that shape, but so can
+# a literal one, which the pattern before #658 reported too.
+STARS = {
+    "one star": "*",
+    "three stars": "***",
+    "eight stars": "*" * 8,
+    "many stars": "*" * 100,
+    "full-width stars": "＊" * 3,
+    "small stars": "﹡" * 3,
+}
+
+
+@pytest.mark.parametrize("scheme", ["postgresql", "postgres", "MySQL", "mongodb", "https"])
+@pytest.mark.parametrize("name", list(STARS))
+def test_a_password_of_only_stars_is_reported(name, scheme):
+    assert _reported(_with(STARS[name], scheme))
+
+
+def test_a_password_of_only_stars_was_reported_before():
+    assert "DATABASE_URL" in _found(_with("***", "postgres"), ConfigGuard(custom_patterns=OLD_GUARD_PATTERNS))
 
 
 def test_placeholders_everywhere_are_read_out():
@@ -203,6 +225,14 @@ def test_a_port_before_a_path_is_read_out(name):
 @pytest.mark.parametrize("digits, reported", [(1, False), (5, False), (6, True)], ids=["1", "5", "6"])
 def test_a_port_has_at_most_five_digits(digits, reported):
     assert _reported(_url("https", "example.com", "8" * digits + "/path", "x")) is reported
+
+
+# Kept as false positives: a port of six digits or more, or none, before a
+# path with an "@" reads the same as a password that starts with digits or
+# "/", which SQLAlchemy reads as the password (see REPORTED).
+@pytest.mark.parametrize("port", ["000443", "123456", ""], ids=["leading zeros", "six digits", "empty"])
+def test_a_longer_or_empty_port_stays_reported(port):
+    assert _reported(_url("https", "example.com", port + "/users/me", "v2"))
 
 
 SHA256 = "".join(_RNG.choice("0123456789abcdef") for _ in range(64))
@@ -546,7 +576,7 @@ def _placeholder(password):
     elif password.startswith("<") and password.endswith(">"):
         name, rest = password[1:-1], _NAME_START + string.digits + "-"
     else:
-        return set(password) == {"*"}
+        return False
     return bool(name) and name[0] in _NAME_START and all(char in rest for char in name)
 
 
@@ -635,12 +665,33 @@ def _lost_on_purpose(text, found):
     return _placeholder(password) or any(_named_at(password, at) for at in range(len(password)))
 
 
+# Pieces around a URL of the three schemes named before #658, so each text
+# holds a match of that pattern.
+NAMED_PIECES = [
+    "postgres" + SEP, "mysql" + SEP, "MONGODB" + SEP, "mysql+py", "postgresql" + SEP, "redis" + SEP, "://",
+    "u", "admin", "ab", ":", "@", "/", "//", "?", "#", " ", "\t", "\n", '"', "'", "`",
+    "5432", "${PG}", "<pw>", "***", "*", "sha256:" + SHA256, "​", "：",
+]
+_NAMED_PARTS = st.lists(st.sampled_from(NAMED_PIECES), max_size=6)
+
+
 @settings(max_examples=600, deadline=None)
-@given(pieces=st.lists(st.sampled_from(PIECES), max_size=14))
-def test_nothing_reported_before_is_lost_but_on_purpose(pieces):
-    text = "".join(pieces)
-    if any(not _lost_on_purpose(text, found) for found in OLD.finditer(text)):
-        assert COMPILED.search(text) is not None
+@given(
+    before=_NAMED_PARTS,
+    scheme=st.sampled_from(["postgres", "mysql", "MONGODB", "mysql+pymysql"]),
+    user=_NAMED_PARTS,
+    password=st.lists(st.sampled_from(NAMED_PIECES), min_size=1, max_size=6),
+    after=_NAMED_PARTS,
+)
+def test_nothing_reported_before_is_lost_but_on_purpose(before, scheme, user, password, after):
+    # Each match of the pattern before #658, not only one of them, overlaps
+    # a match of the new pattern. The one-token reading can start such a URL
+    # at an earlier "://", as a user may hold "@", but none is left out.
+    text = "".join(before) + scheme + SEP + "".join(user) + ":" + "".join(password) + "@" + "".join(after)
+    spans = [found.span() for found in COMPILED.finditer(text)]
+    for found in OLD.finditer(text):
+        if not _lost_on_purpose(text, found):
+            assert any(start < found.end() and found.start() < end for start, end in spans)
 
 
 @settings(max_examples=300, deadline=None)
