@@ -14,8 +14,11 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - It now proves a claim from a premise, as `/verify/logic` has since
     11.0.0 (#631): `x>5 => x>3` is `VERIFIED | ADMIT`, and `x>5 => x>10` is
     `VERIFIED (false) | DENY`, because the engine finds a counterexample.
-    Each line passes only on that exact answer: a satisfiable result, a
-    vacuous one or an engine error is `FAILED` or `ERROR`.
+    Each line passes only on that exact answer, mapped to a verdict the way
+    `/verify/logic` maps it, and only when that verdict carries a
+    `proof_ref`. A satisfiable result, a vacuous one or an engine error is
+    `FAILED`, with the engine's own words in `--verbose`; an engine that
+    raises, or cannot be built, is `ERROR`.
   - The second contradiction (`approval=1 AND approval=0`) is dropped, so
     Logic is the contradiction and the two proofs, and `qwed test` still
     runs twelve checks. The README sample is the new output, and a test

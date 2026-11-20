@@ -1,10 +1,12 @@
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import call, patch
 
 import pytest
 from click.testing import CliRunner
 
+from qwed_new.core.diagnostics import DiagnosticStatus
 from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier, DSLVerificationResult
 from qwed_sdk.cli import (
     LOGIC_CLAIM_INVALID_DSL,
@@ -13,6 +15,7 @@ from qwed_sdk.cli import (
     LOGIC_LABEL_UNSAT,
     LOGIC_LABEL_VALID,
     LOGIC_PREMISE_DSL,
+    _prove_logic_claim,
     _run_full_engine_tests,
     cli,
 )
@@ -256,7 +259,7 @@ def _lookalikes(status):
     """The status with its case, spacing, invisible characters and look-alike
     letters changed: none of them is the status."""
     fullwidth = "".join(chr(ord(char) + 0xFEE0) for char in status)
-    return [
+    variants = [
         status.lower(),
         status.title(),
         f" {status}",
@@ -269,6 +272,11 @@ def _lookalikes(status):
         status.replace("A", "А"),  # Cyrillic A
         status.replace("I", "Ι"),  # Greek capital iota
     ]
+    # A replacement that leaves the status unchanged would put the real status
+    # among the refused ones: every variant must differ from it and from the others.
+    assert status not in variants
+    assert len(set(variants)) == len(variants)
+    return variants
 
 
 OTHER_STATUSES = ["SAT", "UNSAT", "VACUOUS", "UNKNOWN", "ERROR", "BLOCKED", "", None]
@@ -445,13 +453,125 @@ def test_logic_engine_down_errors_only_its_case(_mock_logic_cls):
     assert sum(1 for item in results if item["passed"]) == 11
 
 
-def test_self_check_results_are_the_same_on_every_run():
-    """Nothing carries over between runs: no cache or earlier answer decides one."""
+def test_each_run_asks_the_engine_again(monkeypatch):
+    """No cache or earlier answer decides a run: when the engine's answer changes
+    between two runs, the second run shows the new answer."""
+    answers = {"valid": VALID_ANSWER}
+    asked = []
 
-    def summary():
-        return [(item["label"], item["passed"], item["result"]) for item in _run_full_engine_tests()]
+    def fake_prove(self, premises, claim, variables=None):
+        asked.append(claim)
+        return answers["valid"] if claim == LOGIC_CLAIM_VALID_DSL else INVALID_ANSWER
 
-    assert summary() == summary()
+    monkeypatch.setattr(DSLLogicVerifier, "prove_from_dsl", fake_prove)
+
+    def valid_line():
+        return next(item for item in _run_full_engine_tests() if item["label"] == LOGIC_LABEL_VALID)
+
+    first = valid_line()
+    answers["valid"] = DSLVerificationResult(status="SAT", model={"x": "4"})
+    second = valid_line()
+
+    assert (first["passed"], first["result"]) == (True, "VERIFIED | ADMIT")
+    assert (second["passed"], second["result"]) == (False, "FAILED")
+    # Both claims were put to the engine on both runs.
+    assert asked == [LOGIC_CLAIM_VALID_DSL, LOGIC_CLAIM_INVALID_DSL] * 2
+
+
+def _verdict(status, proof_ref, developer_fields=None):
+    return SimpleNamespace(status=status, proof_ref=proof_ref, developer_fields=developer_fields or {})
+
+
+@pytest.mark.parametrize("proof_ref", [None, "", 0], ids=repr)
+def test_a_proof_line_needs_a_proof_ref(monkeypatch, proof_ref):
+    """VERIFIED is printed only with a proof_ref bound to the evidence (QWED_RULES.md):
+    a verdict that is VERIFIED without one passes neither proof line."""
+    monkeypatch.setattr(
+        "qwed_new.core.route_diagnostics.logic_diagnostic",
+        lambda result: _verdict(DiagnosticStatus.VERIFIED, proof_ref, {"is_valid": False}),
+    )
+    cases = _logic_cases(monkeypatch, VALID_ANSWER, INVALID_ANSWER)
+
+    for label in (LOGIC_LABEL_VALID, LOGIC_LABEL_INVALID):
+        assert cases[label]["passed"] is False
+        assert cases[label]["result"] == "FAILED"
+
+
+@pytest.mark.parametrize("status", [DiagnosticStatus.UNVERIFIABLE, DiagnosticStatus.BLOCKED], ids=lambda s: s.value)
+def test_a_proof_line_needs_a_verified_verdict(monkeypatch, status):
+    """A proof_ref on a verdict that is not VERIFIED does not make the line VERIFIED."""
+    monkeypatch.setattr(
+        "qwed_new.core.route_diagnostics.logic_diagnostic",
+        lambda result: _verdict(status, "a" * 64, {"is_valid": False}),
+    )
+    cases = _logic_cases(monkeypatch, VALID_ANSWER, INVALID_ANSWER)
+
+    for label in (LOGIC_LABEL_VALID, LOGIC_LABEL_INVALID):
+        assert cases[label]["passed"] is False
+        assert cases[label]["result"] == "FAILED"
+
+
+def test_the_false_claim_needs_the_proven_false_verdict(monkeypatch):
+    """A VERIFIED verdict with a proof_ref but without is_valid False is the
+    verdict for a claim that holds, not for one with a counterexample."""
+    monkeypatch.setattr(
+        "qwed_new.core.route_diagnostics.logic_diagnostic",
+        lambda result: _verdict(DiagnosticStatus.VERIFIED, "a" * 64, {}),
+    )
+    cases = _logic_cases(monkeypatch, VALID_ANSWER, INVALID_ANSWER)
+
+    assert cases[LOGIC_LABEL_VALID]["passed"] is True
+    assert cases[LOGIC_LABEL_INVALID]["passed"] is False
+    assert cases[LOGIC_LABEL_INVALID]["result"] == "FAILED"
+
+
+@pytest.mark.parametrize("status", NOT_A_PROOF, ids=repr)
+def test_the_valid_line_reads_the_engines_status_beside_the_verdict(monkeypatch, status):
+    """A verdict that looks right does not make another engine status a proof."""
+    monkeypatch.setattr(
+        "qwed_new.core.route_diagnostics.logic_diagnostic",
+        lambda result: _verdict(DiagnosticStatus.VERIFIED, "a" * 64, {"is_valid": False}),
+    )
+    cases = _logic_cases(monkeypatch, DSLVerificationResult(status=status, model={"x": "4"}), INVALID_ANSWER)
+
+    assert cases[LOGIC_LABEL_VALID]["passed"] is False
+    assert cases[LOGIC_LABEL_VALID]["result"] == "FAILED"
+
+
+@pytest.mark.parametrize("status", NOT_A_REFUTATION, ids=repr)
+def test_the_false_line_reads_the_engines_status_beside_the_verdict(monkeypatch, status):
+    monkeypatch.setattr(
+        "qwed_new.core.route_diagnostics.logic_diagnostic",
+        lambda result: _verdict(DiagnosticStatus.VERIFIED, "a" * 64, {"is_valid": False}),
+    )
+    cases = _logic_cases(monkeypatch, VALID_ANSWER, DSLVerificationResult(status=status, model={"x": "7"}))
+
+    assert cases[LOGIC_LABEL_INVALID]["passed"] is False
+    assert cases[LOGIC_LABEL_INVALID]["result"] == "FAILED"
+
+
+def test_proof_lines_carry_a_proof_ref_with_the_real_engine():
+    engine = DSLLogicVerifier()
+    follows = _prove_logic_claim(engine, LOGIC_CLAIM_VALID_DSL)
+    refuted = _prove_logic_claim(engine, LOGIC_CLAIM_INVALID_DSL)
+
+    assert follows.verdict.status == DiagnosticStatus.VERIFIED
+    assert follows.verdict.proof_ref
+    assert refuted.verdict.status == DiagnosticStatus.VERIFIED
+    assert refuted.verdict.proof_ref
+    assert refuted.verdict.developer_fields["is_valid"] is False
+
+
+def test_a_failed_line_keeps_the_engines_own_words(monkeypatch):
+    """A returned ERROR is a failed check, not a verdict (#438); what the engine
+    said stays in the detail, so it can be told from a line that just did not match."""
+    error = DSLVerificationResult(status="ERROR", error="parse failed", constraint_id="dsl.test_rule")
+    cases = _logic_cases(monkeypatch, error, INVALID_ANSWER)
+
+    valid = cases[LOGIC_LABEL_VALID]
+    assert valid["passed"] is False
+    assert valid["result"] == "FAILED"
+    assert valid["detail"] == "status=ERROR, error=parse failed, constraint_id=dsl.test_rule"
 
 
 def test_readme_sample_matches_qwed_test_output():

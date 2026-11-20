@@ -1906,9 +1906,121 @@ def _code_verifier_is_verified_unsafe(payload) -> bool:
     )
 
 
-def _prove_logic_claim(engine, claim_dsl: str):
-    """Decide one claim from the premise x > 5, for every integer x (#660)."""
-    return engine.prove_from_dsl(LOGIC_PREMISE_DSL, claim_dsl, [{"name": "x", "type": "Int"}])
+@dataclass(frozen=True)
+class LogicProof:
+    """What the DSL engine answered for one claim, and the verdict `/verify/logic`
+    would return for that answer (#660)."""
+
+    result: Any
+    verdict: Any
+
+
+def _prove_logic_claim(engine, claim_dsl: str) -> LogicProof:
+    """Decide one claim from the premise x > 5, for every integer x (#660).
+
+    The engine's answer goes through the mapping `/verify/logic` uses, so a
+    line is VERIFIED only when that verdict is VERIFIED and carries a
+    proof_ref bound to its evidence (QWED_RULES.md). Fields the engine left
+    unset are not passed: the mapping reads a missing one as its default.
+    """
+    from qwed_new.core.route_diagnostics import logic_diagnostic
+
+    result = engine.prove_from_dsl(LOGIC_PREMISE_DSL, claim_dsl, [{"name": "x", "type": "Int"}])
+    fields = {
+        "status": result.status,
+        "model": result.model,
+        "dsl_code": result.dsl_code,
+        "error": result.error,
+        "constraint_id": result.constraint_id,
+        "declarations": result.declarations,
+    }
+    return LogicProof(result, logic_diagnostic({name: value for name, value in fields.items() if value is not None}))
+
+
+def _logic_verdict_has_proof(proof: LogicProof) -> bool:
+    from qwed_new.core.diagnostics import DiagnosticStatus
+
+    return proof.verdict.status == DiagnosticStatus.VERIFIED and bool(proof.verdict.proof_ref)
+
+
+def _logic_claim_follows(proof: LogicProof) -> bool:
+    # Only a proof counts: SAT, VACUOUS, UNKNOWN, ERROR and BLOCKED do not.
+    return proof.result.status == "VALID" and _logic_verdict_has_proof(proof)
+
+
+def _logic_claim_refuted(proof: LogicProof) -> bool:
+    # A counterexample is a value of x that holds the premise and breaks the claim,
+    # and the verdict is the proven-false one: VERIFIED with is_valid False.
+    value = (proof.result.model or {}).get("x")
+    return (
+        proof.result.status == "INVALID"
+        and isinstance(value, str)
+        and value in LOGIC_COUNTEREXAMPLES
+        and _logic_verdict_has_proof(proof)
+        and proof.verdict.developer_fields.get("is_valid") is False
+    )
+
+
+def _logic_proof_detail(proof: LogicProof) -> str:
+    """The engine's own words for a line, so a failure can be told from an error."""
+    result = proof.result
+    parts = [f"status={result.status}"]
+    if result.status == "INVALID":
+        parts.append(f"counterexample x={(result.model or {}).get('x')}")
+    for name in ("error", "constraint_id"):
+        value = getattr(result, name, None)
+        if value:
+            parts.append(f"{name}={value}")
+    return ", ".join(parts)
+
+
+def _run_logic_engine_cases(run_case, add_engine_error_cases) -> None:
+    """The Logic group: a contradiction, then two proofs (#660).
+
+    Each engine is built on its own, so one that cannot be built errors only
+    its own lines and the group still lists all three.
+    """
+    try:
+        from qwed_new.core.diagnostics import DiagnosticStatus
+        from qwed_new.core.logic_verifier import LogicVerifier
+
+        logic_engine = LogicVerifier()
+    except Exception as exc:
+        add_engine_error_cases("Logic", [LOGIC_LABEL_UNSAT], exc)
+    else:
+        run_case(
+            "Logic",
+            LOGIC_LABEL_UNSAT,
+            _verdict_label("UNVERIFIABLE", "DENY", "contradiction"),
+            lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"]),
+            lambda payload: payload.status == DiagnosticStatus.UNVERIFIABLE,
+            lambda payload: f"status={payload.status.value}",
+        )
+
+    try:
+        from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
+
+        dsl_logic_engine = DSLLogicVerifier()
+    except Exception as exc:
+        add_engine_error_cases("Logic", [LOGIC_LABEL_VALID, LOGIC_LABEL_INVALID], exc)
+        return
+
+    run_case(
+        "Logic",
+        LOGIC_LABEL_VALID,
+        _verdict_label("VERIFIED", "ADMIT"),
+        lambda: _prove_logic_claim(dsl_logic_engine, LOGIC_CLAIM_VALID_DSL),
+        _logic_claim_follows,
+        _logic_proof_detail,
+    )
+    run_case(
+        "Logic",
+        LOGIC_LABEL_INVALID,
+        _verdict_label("VERIFIED", "DENY", "false"),
+        lambda: _prove_logic_claim(dsl_logic_engine, LOGIC_CLAIM_INVALID_DSL),
+        _logic_claim_refuted,
+        _logic_proof_detail,
+    )
 
 
 def _run_full_engine_tests() -> List[dict]:
@@ -1980,64 +2092,7 @@ def _run_full_engine_tests() -> List[dict]:
             lambda payload: f"status={payload.get('status')}",
         )
 
-    try:
-        from qwed_new.core.logic_verifier import LogicVerifier
-
-        logic_engine = LogicVerifier()
-    except Exception as exc:
-        logic_engine = None
-        add_engine_error_cases("Logic", [LOGIC_LABEL_UNSAT], exc)
-
-    if logic_engine is not None:
-        from qwed_new.core.diagnostics import DiagnosticStatus
-
-        def _logic_is_unverifiable(p):
-            return p.status == DiagnosticStatus.UNVERIFIABLE
-
-        run_case(
-            "Logic",
-            LOGIC_LABEL_UNSAT,
-            _verdict_label("UNVERIFIABLE", "DENY", "contradiction"),
-            lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"]),
-            _logic_is_unverifiable,
-            lambda payload: f"status={payload.status.value}",
-        )
-
-    try:
-        from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
-
-        dsl_logic_engine = DSLLogicVerifier()
-    except Exception as exc:
-        dsl_logic_engine = None
-        add_engine_error_cases("Logic", [LOGIC_LABEL_VALID, LOGIC_LABEL_INVALID], exc)
-
-    if dsl_logic_engine is not None:
-
-        def _logic_claim_follows(p):
-            # Only a proof counts: SAT, VACUOUS, UNKNOWN, ERROR and BLOCKED do not.
-            return p.status == "VALID"
-
-        def _logic_claim_refuted(p):
-            # A counterexample is a value of x that holds the premise and breaks the claim.
-            value = (p.model or {}).get("x")
-            return p.status == "INVALID" and isinstance(value, str) and value in LOGIC_COUNTEREXAMPLES
-
-        run_case(
-            "Logic",
-            LOGIC_LABEL_VALID,
-            _verdict_label("VERIFIED", "ADMIT"),
-            lambda: _prove_logic_claim(dsl_logic_engine, LOGIC_CLAIM_VALID_DSL),
-            _logic_claim_follows,
-            lambda payload: f"status={payload.status}",
-        )
-        run_case(
-            "Logic",
-            LOGIC_LABEL_INVALID,
-            _verdict_label("VERIFIED", "DENY", "false"),
-            lambda: _prove_logic_claim(dsl_logic_engine, LOGIC_CLAIM_INVALID_DSL),
-            _logic_claim_refuted,
-            lambda payload: f"status={payload.status}, counterexample x={(payload.model or {}).get('x')}",
-        )
+    _run_logic_engine_cases(run_case, add_engine_error_cases)
 
     try:
         from qwed_new.core.sql_verifier import SQLVerifier
