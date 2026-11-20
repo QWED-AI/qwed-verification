@@ -16,6 +16,7 @@ it does not vote on the answer.
 """
 
 import asyncio
+import copy
 import threading
 import time
 from types import SimpleNamespace
@@ -40,8 +41,9 @@ from qwed_new.core.consensus_verifier import (
 from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus, claim_verified
 from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier, DSLVerificationResult
 from qwed_new.core.schemas import LogicVerificationTask
-from qwed_sdk import QWEDAsyncClient, QWEDClient
-from qwed_sdk.models import CONSENSUS_STATUSES, advisory_result
+from qwed_sdk import AttestationError, QWEDAsyncClient, QWEDClient, VerificationResult
+from qwed_sdk.client import _attestation_of
+from qwed_sdk.models import CONSENSUS_STATUSES, advisory_result, is_admitted
 from tests.test_issue_320_logic_route_admission import _rows, client  # noqa: F401  (fixture)
 from tests.test_issue_578_raw_translation import MODEL, model  # noqa: F401  (fixture)
 
@@ -189,6 +191,13 @@ def test_a_z3_thread_that_does_not_answer_is_an_engine_failure(model, monkeypatc
     assert result.status is DiagnosticStatus.BLOCKED
 
 
+def test_the_z3_latency_is_on_the_monotonic_clock():
+    # Not the wall clock, which a clock change can move backwards.
+    result = ConsensusVerifier._z3_result("VERIFIED", "VALID", None, [], time.monotonic_ns() - 7_000_000)
+
+    assert 7.0 <= result.latency_ms < 7_000.0
+
+
 def test_run_z3_call_blocking_runs_on_the_z3_thread_and_times_out(monkeypatch):
     assert z3_thread.run_z3_call_blocking(lambda: threading.current_thread().name).startswith("qwed-z3")
 
@@ -237,13 +246,33 @@ def test_a_consensus_with_no_engine_that_computed_an_answer():
     assert consensus["answer"] is None
 
 
+@pytest.mark.parametrize("chain, status", [
+    ([_engine("SymPy", 4, status="UNVERIFIABLE"), _engine("Python", 5, status="UNVERIFIABLE")], "split"),
+    ([_engine("SymPy", 4), _engine("Python", 5), _engine("Stats", 6, status="UNVERIFIABLE")], "split"),
+    ([_engine("SymPy", 4), _engine("Other", 5), _engine("Z3", "VALID")], "split"),
+    ([_engine("SymPy", 4), _engine("Python", 4)], "unanimous"),
+], ids=["two-advisory", "three", "with-z3", "one-answer"])
+def test_answers_with_no_weight_do_not_divide_by_zero(chain, status):
+    # Every answer has confidence 0, so there is no weight between them.
+    # Answers that differ divided by zero (on main too) instead of a split.
+    for result in chain:
+        result.confidence = 0.0
+
+    consensus = ConsensusVerifier(enable_circuit_breaker=False)._calculate_consensus(chain)
+
+    assert consensus["status"] == status
+    assert consensus["confidence"] == 0.0
+    assert consensus["diagnostic_status"] is DiagnosticStatus.UNVERIFIABLE
+
+
 _CHAIN = st.lists(
     st.builds(
         EngineResult,
         engine_name=st.sampled_from(["SymPy", "Python", "Z3", "Stats", "Other"]),
         method=st.just("method"),
         result=st.one_of(st.none(), st.integers(-3, 3), st.sampled_from(["VALID", "4"])),
-        confidence=st.floats(0.0, 1.0),
+        # 0.0 on its own too: answers with no weight between them.
+        confidence=st.one_of(st.just(0.0), st.floats(0.0, 1.0)),
         latency_ms=st.just(1.0),
         success=st.booleans(),
         error=st.sampled_from([None, "x", SECURE_EXECUTION_REQUIRED]),
@@ -359,7 +388,7 @@ def test_every_consensus_response_is_advisory(client, isolated_audit_chain, stan
     assert body["advisory_only"] is True
     assert body["proof_ref"] is None
     assert body.get("attestation") is None
-    assert body.get("meets_requirement", False) is False
+    assert body["meets_requirement"] is False  # on the early responses too
     assert [row.is_verified for row in _rows(isolated_audit_chain)] == [False]
 
 
@@ -404,7 +433,6 @@ def test_every_execution_path_agrees(model, sandbox, path):  # noqa: F811
     verifier._secure_executor = sandbox._secure_executor
     query = "What is 15% of 200?"
     if path == "async":
-        import asyncio
         result = asyncio.run(verifier.verify_async(query, mode=VerificationMode.MAXIMUM))
     else:
         result = verifier.verify_with_consensus(query, mode=VerificationMode.MAXIMUM, parallel=path == "parallel")
@@ -463,15 +491,27 @@ def _sdk_consensus(data, use_async):
     return sdk.verify_consensus("2+2=4")
 
 
+def _assert_advisory(result, status):
+    """The SDK's result, and the response copy it holds, read as advisory."""
+    assert (result.status, result.is_verified) == (status, False)
+    assert (result.attestation, result.proof_ref, result.admission) == (None, None, None)
+    response = result.result
+    assert not set(response) & {"attestation", "proof_ref", "admission"}
+    assert (response["status"], response["meets_requirement"], response["advisory_only"]) == (status, False, True)
+    # No SDK path takes the response copy as verified either.
+    assert is_admitted(response) is False
+    assert VerificationResult.from_dict(response).is_verified is False
+    with pytest.raises(AttestationError, match="^no "):
+        QWEDClient(api_key="k", base_url="http://qwed.test").verify_attestation(response)
+
+
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("status", _SERVER_STATUSES, ids=repr)
 def test_the_sdk_reads_any_other_status_as_unverifiable(use_async, status):
     result = _sdk_consensus({"status": status, **_SIGNED}, use_async)
 
-    assert result.status == "UNVERIFIABLE"
-    assert result.is_verified is False
-    assert (result.attestation, result.proof_ref, result.admission) == (None, None, None)
-    assert result.result["status"] == status  # the response, as sent
+    _assert_advisory(result, "UNVERIFIABLE")
+    assert result.result["is_valid"] is True  # the other fields, as sent
 
 
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
@@ -479,9 +519,7 @@ def test_the_sdk_reads_any_other_status_as_unverifiable(use_async, status):
 def test_the_sdk_keeps_an_advisory_status(use_async, status):
     result = _sdk_consensus({"status": status, "advisory_only": True, **_SIGNED}, use_async)
 
-    assert (result.status, result.is_verified) == (status, False)
-    assert (result.attestation, result.proof_ref, result.admission) == (None, None, None)
-    assert result.result["advisory_only"] is True
+    _assert_advisory(result, status)
 
 
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
@@ -489,7 +527,29 @@ def test_the_sdk_keeps_an_advisory_status(use_async, status):
 def test_the_sdk_reads_a_response_with_no_status_as_unverifiable(use_async, meets):
     result = _sdk_consensus({"meets_requirement": meets}, use_async)
 
-    assert (result.status, result.is_verified) == ("UNVERIFIABLE", False)
+    _assert_advisory(result, "UNVERIFIABLE")
+
+
+def test_the_sdk_leaves_the_servers_response_as_it_was():
+    data = {"status": "VERIFIED", **_SIGNED}
+    sent = dict(data)
+
+    result = advisory_result(data, 1.0)
+
+    assert data == sent
+    assert result.result is not data
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+def test_the_sdk_times_a_consensus_on_the_monotonic_clock(monkeypatch, use_async):
+    # 5 ms between the two readings around the request, whatever the wall
+    # clock does meanwhile.
+    readings = iter(range(0, 10**15, 5_000_000))
+    monkeypatch.setattr(time, "monotonic_ns", lambda: next(readings))
+
+    result = _sdk_consensus({"status": "UNVERIFIABLE"}, use_async)
+
+    assert result.latency_ms == pytest.approx(5.0)
 
 
 _JSON = st.recursive(
@@ -497,21 +557,40 @@ _JSON = st.recursive(
     lambda children: st.lists(children, max_size=3) | st.dictionaries(st.text(max_size=5), children, max_size=3),
     max_leaves=6,
 )
+_READ = {"status", "meets_requirement", "advisory_only", "attestation", "proof_ref", "admission"}
 _RESPONSE = st.dictionaries(
     st.sampled_from([
         "status", "meets_requirement", "is_valid", "is_verified", "admission", "attestation", "proof_ref",
-        "query_semantics_verified", "advisory_only",
+        "query_semantics_verified", "verification_scope", "advisory_only", "final_answer",
     ]),
-    st.one_of(st.sampled_from(["VERIFIED", "ADMIT", "UNVERIFIABLE", "BLOCKED", "verified", "VERIFIED ", "t"]), _JSON),
+    st.one_of(
+        st.sampled_from([
+            "VERIFIED", "ADMIT", "UNVERIFIABLE", "BLOCKED", "verified", "VERIFIED ", "t",
+            "translated_expression_only", "sha256:" + "e" * 64,
+        ]),
+        _JSON,
+    ),
 )
 
 
 @hypothesis_settings(max_examples=300, deadline=None)
 @given(data=_RESPONSE)
 def test_no_server_response_gives_a_verified_sdk_result(data):
+    sent = copy.deepcopy(data)
+
     result = advisory_result(data, 1.0)
+    response = result.result
 
     assert result.status in CONSENSUS_STATUSES
     assert result.is_verified is False
     assert (result.attestation, result.proof_ref, result.admission) == (None, None, None)
-    assert result.result is data
+    assert not set(response) & {"attestation", "proof_ref", "admission"}
+    assert (response["status"], response["meets_requirement"], response["advisory_only"]) == (
+        result.status, False, True,
+    )
+    assert is_admitted(response) is False
+    assert VerificationResult.from_dict(response).is_verified is False
+    with pytest.raises(AttestationError):
+        _attestation_of(response)
+    assert data == sent
+    assert all(response[key] == value for key, value in data.items() if key not in _READ)

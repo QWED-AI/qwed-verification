@@ -2031,7 +2031,7 @@ async def verify_with_consensus(
             raw_llm_output=raw_llm_output,
         )
         _safe_commit_log(log)
-        return _merge_response(dr)
+        return _merge_response(dr) | {"meets_requirement": False}
 
     # All engines blocked — preserve BLOCKED status (fail-closed)
     if result.agreement_status == "blocked":
@@ -2049,7 +2049,7 @@ async def verify_with_consensus(
             raw_llm_output=raw_llm_output,
         )
         _safe_commit_log(log)
-        return _merge_response(dr)
+        return _merge_response(dr) | {"meets_requirement": False}
 
     # An answer one engine verified alone is BLOCKED, whatever the
     # confidence (#320).
@@ -2068,7 +2068,7 @@ async def verify_with_consensus(
             raw_llm_output=raw_llm_output,
         )
         _safe_commit_log(log)
-        return _merge_response(dr)
+        return _merge_response(dr) | {"meets_requirement": False}
 
     # Convert consensus result via its own to_diagnostic_result() method,
     # which never returns VERIFIED; advisory() holds the route to that
@@ -2112,8 +2112,9 @@ async def verify_with_consensus(
         # it AND the confidence meets the threshold, never confidence alone
         # (#269). The SDK reads this as the result's is_verified, so it agrees
         # with the attestation and the audit row (#577). A consensus is
-        # advisory and never VERIFIED (#633), so this is always false; kept
-        # so clients that read it keep working.
+        # advisory and never VERIFIED (#633), so this is always false, as on
+        # the early responses above; kept so clients that read it keep
+        # working.
         "meets_requirement": claim_verified(dr) and result.confidence >= request.min_confidence,
     }
     return _merge_response(dr) | response

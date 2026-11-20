@@ -101,6 +101,9 @@ def token_fields(data: Dict[str, Any]) -> Dict[str, Optional[str]]:
 # The statuses a consensus result keeps as sent; any other, VERIFIED above
 # all, reads as UNVERIFIABLE, as the server's advisory() does (#633).
 CONSENSUS_STATUSES = frozenset({"UNVERIFIABLE", "BLOCKED"})
+# What would let a consensus answer be checked or admitted as verified: left
+# out of the result, and of the response it holds.
+_TOKEN_FIELDS = ("attestation", "proof_ref", "admission")
 
 
 def advisory_result(data: Dict[str, Any], latency_ms: float) -> VerificationResult:
@@ -111,16 +114,19 @@ def advisory_result(data: Dict[str, Any], latency_ms: float) -> VerificationResu
     ``meets_requirement`` true and a signed attestation. The status is the
     server's only where it is exactly ``UNVERIFIABLE`` or ``BLOCKED``, and
     ``UNVERIFIABLE`` otherwise; ``is_verified`` is False; and the result
-    carries no attestation, proof_ref or admission to act on. ``result`` is
-    the response as the server sent it.
+    carries no attestation, proof_ref or admission to act on.
+
+    ``result`` is a copy of the response read the same way: that status,
+    ``meets_requirement`` false, ``advisory_only`` true, and no attestation,
+    proof_ref or admission, so neither ``verify_attestation`` nor
+    ``is_admitted`` takes it as verified. ``data`` is not changed.
     """
     status = data.get("status")
-    return VerificationResult(
-        status=status if isinstance(status, str) and status in CONSENSUS_STATUSES else "UNVERIFIABLE",
-        is_verified=False,
-        result=data,
-        latency_ms=latency_ms,
-    )
+    if not (isinstance(status, str) and status in CONSENSUS_STATUSES):
+        status = "UNVERIFIABLE"
+    response = {key: value for key, value in data.items() if key not in _TOKEN_FIELDS}
+    response.update(status=status, meets_requirement=False, advisory_only=True)
+    return VerificationResult(status=status, is_verified=False, result=response, latency_ms=latency_ms)
 
 
 @dataclass

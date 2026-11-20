@@ -566,8 +566,8 @@ def test_the_client_takes_only_a_result_or_a_response_dict():
 
 def test_a_consensus_answer_carries_no_token():
     # Consensus is advisory (#633): a token from a server that still signs
-    # one is not carried, so the answer cannot be checked as attested. The
-    # response keeps it as sent.
+    # one is not carried, in the result or the response copy it holds, so
+    # the answer cannot be checked as attested.
     data = {"meets_requirement": True, "status": "VERIFIED", "attestation": "t", "proof_ref": PROOF}
     calls = []
 
@@ -581,9 +581,10 @@ def test_a_consensus_answer_carries_no_token():
     result = client.verify_consensus("2+2")
 
     assert (result.attestation, result.proof_ref, result.admission) == (None, None, None)
-    assert result.result["attestation"] == "t"
-    with pytest.raises(AttestationError, match="^no "):
-        client.verify_attestation(result)
+    assert "attestation" not in result.result and "proof_ref" not in result.result
+    for answer in (result, result.result):
+        with pytest.raises(AttestationError, match="^no "):
+            client.verify_attestation(answer)
     assert calls == ["/verify/consensus"]
 
 
@@ -761,11 +762,12 @@ def test_an_async_consensus_answer_carries_no_token():
 
     async def call(client):
         result = await client.verify_consensus("2+2")
-        with pytest.raises(AttestationError, match="^no "):
-            await client.verify_attestation(result)
+        for answer in (result, result.result):
+            with pytest.raises(AttestationError, match="^no "):
+                await client.verify_attestation(answer)
         return result
 
     result = _async_run(None, 0, lambda r: httpx.Response(200, json=data), call)
 
     assert (result.attestation, result.proof_ref, result.admission) == (None, None, None)
-    assert result.result["attestation"] == "t"
+    assert "attestation" not in result.result and "proof_ref" not in result.result

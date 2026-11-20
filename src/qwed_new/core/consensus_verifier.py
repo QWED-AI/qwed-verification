@@ -1054,7 +1054,7 @@ class ConsensusVerifier:
         run, is BLOCKED. A z3 thread that does not answer in time raises
         TimeoutError, which the caller records as the engine failing.
         """
-        start = time.time()
+        start_ns = time.monotonic_ns()
         translations = [] if translations is None else translations
         dsl_code, variables, _provider, refused, claim_dsl, _model, translation = (
             self.logic_verifier.translate_to_dsl(query)
@@ -1062,32 +1062,33 @@ class ConsensusVerifier:
         if translation is not None:
             translations.append(translation.for_engine("Z3"))
         if refused is not None:
-            return self._z3_result("BLOCKED", None, refused.error, translations, start)
+            return self._z3_result("BLOCKED", None, refused.error, translations, start_ns)
         if claim_dsl is None:
             return self._z3_result(
                 "UNVERIFIABLE", None,
                 "The translation states no claim to prove, and constraints that can hold prove nothing",
-                translations, start,
+                translations, start_ns,
             )
         proof = run_z3_call_blocking(self.logic_verifier.prove_from_dsl, dsl_code, claim_dsl, variables)
         status, reason = self._PROOF_VERDICTS.get(
             proof.status, ("BLOCKED", proof.error or "Z3 could not run the proof")
         )
-        return self._z3_result(status, proof.status, reason, translations, start)
+        return self._z3_result(status, proof.status, reason, translations, start_ns)
 
     @staticmethod
     def _z3_result(
         status: str, verdict: Optional[str], reason: Optional[str],
-        translations: List[Translation], start: float,
+        translations: List[Translation], start_ns: int,
     ) -> EngineResult:
         """The Z3 engine's result: ``verdict`` is prove_from_dsl's, or None
-        where no proof ran."""
+        where no proof ran. ``start_ns`` is a ``time.monotonic_ns()``
+        reading, so a wall-clock change cannot skew the latency."""
         return EngineResult(
             engine_name="Z3", method="claim_proof",
             translation=_first(translations),
             result=verdict,
             confidence=0.995 if status == "VERIFIED" else 0.0,
-            latency_ms=(time.time() - start) * 1000,
+            latency_ms=(time.monotonic_ns() - start_ns) / 1_000_000,
             success=status == "VERIFIED",
             error=reason,
             status=status,
@@ -1223,6 +1224,11 @@ class ConsensusVerifier:
         if len(weighted_answers) == 1:
             status = "unanimous"
             confidence = min(0.999, best_weight / len(voters))
+        elif total_weight <= 0:
+            # Engines that disagree, with no weight between them (each gave
+            # its answer confidence 0): a split, not a division by zero.
+            status = "split"
+            confidence = 0.0
         elif best_weight > total_weight / 2:
             status = "majority"
             confidence = min(0.95, best_weight / total_weight)

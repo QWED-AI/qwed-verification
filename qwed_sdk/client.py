@@ -542,15 +542,16 @@ class QWEDClient:
         The engines decide a model's translations of the query, so the
         result is never verified, whatever the server answers: the status
         is UNVERIFIABLE or BLOCKED, ``is_verified`` is False, and it has no
-        attestation, proof_ref or admission. ``result`` holds the response
-        as sent. Read it as a signal for review.
+        attestation, proof_ref or admission; nor has the response copy in
+        ``result`` (see ``qwed_sdk.models.advisory_result``). Read it as a
+        signal for review.
 
         Args:
             query: The query to check
             mode: How many engines run ("single", "high", "maximum")
             min_confidence: Minimum confidence threshold (0.0 to 1.0)
         """
-        start = time.time()
+        start_ns = time.monotonic_ns()
         data = self._request(
             "POST",
             "/verify/consensus",
@@ -560,7 +561,7 @@ class QWEDClient:
                 "min_confidence": min_confidence
             }
         )
-        data["latency_ms"] = (time.time() - start) * 1000
+        data["latency_ms"] = (time.monotonic_ns() - start_ns) / 1_000_000
         # Advisory whatever the server answers (#633): not its status,
         # meets_requirement or attestation.
         return advisory_result(data, data["latency_ms"])
@@ -959,7 +960,7 @@ class QWEDAsyncClient:
         """Run multi-engine consensus on a query: advisory only (#633), so
         the result is never verified, whatever the server answers. See
         ``QWEDClient.verify_consensus``."""
-        start = time.time()
+        start_ns = time.monotonic_ns()
         data = await self._request(
             "POST",
             "/verify/consensus",
@@ -972,7 +973,7 @@ class QWEDAsyncClient:
 
         # Advisory whatever the server answers (#633): not its status,
         # meets_requirement or attestation.
-        return advisory_result(data, data.get("latency_ms", 0.0) or (time.time() - start) * 1000)
+        return advisory_result(data, data.get("latency_ms", 0.0) or (time.monotonic_ns() - start_ns) / 1_000_000)
 
     async def verify_image(
         self,
