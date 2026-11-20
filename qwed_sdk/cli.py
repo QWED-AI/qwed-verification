@@ -75,6 +75,17 @@ MATH_LABEL_VALID = "2+2=4"
 MATH_LABEL_INVALID = "2+2=5"
 MATH_LABEL_LARGE = "997*998*999"
 LOGIC_LABEL_UNSAT = "x>5 AND x<3"
+# The two logic proofs share the premise x > 5 and decide one claim each (#660).
+# A satisfiable set of constraints is not a proof, so `qwed test` no longer
+# reports one as VERIFIED.
+LOGIC_LABEL_VALID = "x>5 => x>3"
+LOGIC_LABEL_INVALID = "x>5 => x>10"
+LOGIC_PREMISE_DSL = "(GT x 5)"
+LOGIC_CLAIM_VALID_DSL = "(GT x 3)"
+LOGIC_CLAIM_INVALID_DSL = "(GT x 10)"
+# x > 5 does not imply x > 10; the values of x that show it are 5 < x <= 10.
+# Z3 may return any of them, so the check accepts the set, not one value.
+LOGIC_COUNTEREXAMPLES = frozenset(str(value) for value in range(6, 11))
 # A failed self-check is not a verdict: never print BLOCKED for it (#438).
 CHECK_FAILED_LABEL = "FAILED"
 
@@ -1895,6 +1906,11 @@ def _code_verifier_is_verified_unsafe(payload) -> bool:
     )
 
 
+def _prove_logic_claim(engine, claim_dsl: str):
+    """Decide one claim from the premise x > 5, for every integer x (#660)."""
+    return engine.prove_from_dsl(LOGIC_PREMISE_DSL, claim_dsl, [{"name": "x", "type": "Int"}])
+
+
 def _run_full_engine_tests() -> List[dict]:
     results: List[dict] = []
 
@@ -1970,16 +1986,13 @@ def _run_full_engine_tests() -> List[dict]:
         logic_engine = LogicVerifier()
     except Exception as exc:
         logic_engine = None
-        add_engine_error_cases("Logic", [LOGIC_LABEL_UNSAT, "x>3 AND x<10", "approval=1 AND approval=0"], exc)
+        add_engine_error_cases("Logic", [LOGIC_LABEL_UNSAT], exc)
 
     if logic_engine is not None:
         from qwed_new.core.diagnostics import DiagnosticStatus
 
         def _logic_is_unverifiable(p):
             return p.status == DiagnosticStatus.UNVERIFIABLE
-
-        def _logic_is_proved(p):
-            return p.status == DiagnosticStatus.VERIFIED
 
         run_case(
             "Logic",
@@ -1989,21 +2002,41 @@ def _run_full_engine_tests() -> List[dict]:
             _logic_is_unverifiable,
             lambda payload: f"status={payload.status.value}",
         )
+
+    try:
+        from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
+
+        dsl_logic_engine = DSLLogicVerifier()
+    except Exception as exc:
+        dsl_logic_engine = None
+        add_engine_error_cases("Logic", [LOGIC_LABEL_VALID, LOGIC_LABEL_INVALID], exc)
+
+    if dsl_logic_engine is not None:
+
+        def _logic_claim_follows(p):
+            # Only a proof counts: SAT, VACUOUS, UNKNOWN, ERROR and BLOCKED do not.
+            return p.status == "VALID"
+
+        def _logic_claim_refuted(p):
+            # A counterexample is a value of x that holds the premise and breaks the claim.
+            value = (p.model or {}).get("x")
+            return p.status == "INVALID" and isinstance(value, str) and value in LOGIC_COUNTEREXAMPLES
+
         run_case(
             "Logic",
-            "x>3 AND x<10",
-            _verdict_label("VERIFIED", "ADMIT", "x=4"),
-            lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 3", "x < 10", "x == 4"]),
-            _logic_is_proved,
-            lambda payload: f"model={payload.developer_fields.get('model', payload)}",
+            LOGIC_LABEL_VALID,
+            _verdict_label("VERIFIED", "ADMIT"),
+            lambda: _prove_logic_claim(dsl_logic_engine, LOGIC_CLAIM_VALID_DSL),
+            _logic_claim_follows,
+            lambda payload: f"status={payload.status}",
         )
         run_case(
             "Logic",
-            "approval=1 AND approval=0",
-            _verdict_label("UNVERIFIABLE", "DENY", "contradiction"),
-            lambda: logic_engine.verify_logic({"approval": "Int"}, ["approval == 1", "approval == 0"]),
-            _logic_is_unverifiable,
-            lambda payload: f"status={payload.status.value}",
+            LOGIC_LABEL_INVALID,
+            _verdict_label("VERIFIED", "DENY", "false"),
+            lambda: _prove_logic_claim(dsl_logic_engine, LOGIC_CLAIM_INVALID_DSL),
+            _logic_claim_refuted,
+            lambda payload: f"status={payload.status}, counterexample x={(payload.model or {}).get('x')}",
         )
 
     try:
