@@ -6,8 +6,6 @@ Request -> Policy Check -> Routing -> Translation -> Verification -> Response
 """
 
 import asyncio
-import concurrent.futures
-import functools
 import hashlib
 import os
 import time
@@ -37,6 +35,10 @@ from qwed_new.core.diagnostics import (
     enforce_trust_decision,
 )
 from qwed_new.core.attestation import create_verification_attestation, AttestationStatus
+# Every z3 solve runs on the one z3 thread, which the consensus Z3 engine
+# shares (#659); the provider translation runs concurrently via
+# _run_provider_call.
+from qwed_new.core.z3_thread import run_z3_call as _run_z3_call
 
 logger = logging.getLogger(__name__)
 
@@ -51,25 +53,6 @@ async def _run_provider_call(func, *args, **kwargs):
     return await asyncio.wait_for(
         asyncio.to_thread(func, *args, **kwargs),
         timeout=_PROVIDER_CALL_TIMEOUT_SECONDS,
-    )
-
-
-# z3py's default context is not thread safe, and its objects must be created and
-# freed on the same thread. A single-worker executor keeps every z3 solve on one
-# dedicated thread: off the event loop, never concurrent with another solve, and
-# never finalising z3 objects on a foreign thread. Only the fast solve runs here
-# (the provider translation runs concurrently via _run_provider_call), so the
-# queue stays short.
-_Z3_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="qwed-z3")
-_Z3_CALL_TIMEOUT_SECONDS = float(os.environ.get("QWED_Z3_TIMEOUT", "15"))
-
-
-async def _run_z3_call(func, *args, **kwargs):
-    """Run a z3 solve on the single z3 thread, bounded by a timeout."""
-    loop = asyncio.get_running_loop()
-    return await asyncio.wait_for(
-        loop.run_in_executor(_Z3_EXECUTOR, functools.partial(func, *args, **kwargs)),
-        timeout=_Z3_CALL_TIMEOUT_SECONDS,
     )
 
 

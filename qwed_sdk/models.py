@@ -22,7 +22,7 @@ class VerificationType(Enum):
 
 
 class VerificationMode(str, Enum):
-    """Verification depth modes for consensus."""
+    """How many engines consensus runs. Every mode is advisory only (#633)."""
     SINGLE = "single"      # Fast, single engine
     HIGH = "high"          # 2 engines
     MAXIMUM = "maximum"    # 3+ engines

@@ -297,7 +297,8 @@ def _post(client, route):
     raise AssertionError(route)
 
 
-ROUTES = ["logic", "math", "image", "consensus"]
+# Consensus is advisory and never VERIFIED (#633): see the tests below.
+ROUTES = ["logic", "math", "image"]
 
 # What only each route's engine (or its stand-in) puts in the response, so
 # the test fails if the route stops reaching it: the image stand-in echoes
@@ -330,12 +331,27 @@ def test_a_route_blocks_verified_when_signing_fails(client, monkeypatch, route):
     assert body["proof_ref"] is None
 
 
-def test_a_blocked_consensus_does_not_meet_the_requirement(client, monkeypatch):
-    assert _post(client, "consensus")["meets_requirement"] is True
+def test_a_consensus_its_verifier_calls_verified_is_advisory(client):
+    # The stand-in verifier returns VERIFIED, with its meaning checked: the
+    # route returned it VERIFIED, signed, and meeting the requirement. It is
+    # advisory now, whatever the verifier says (#633).
+    body = _post(client, "consensus")
 
+    assert body["status"] == "UNVERIFIABLE"
+    assert body["advisory_only"] is True
+    assert body["proof_ref"] is None
+    assert body.get("attestation") is None
+    assert body["meets_requirement"] is False
+    assert {k: body.get(k) for k in ENGINE_OUTPUT["consensus"]} == ENGINE_OUTPUT["consensus"]
+
+
+def test_a_consensus_does_not_meet_the_requirement_when_signing_fails(client, monkeypatch):
     _signing_fails(monkeypatch)
 
-    assert _post(client, "consensus")["meets_requirement"] is False
+    body = _post(client, "consensus")
+
+    assert body["status"] == "UNVERIFIABLE"
+    assert body["meets_requirement"] is False
 
 
 def test_no_route_enforces_attestation_as_advisory():

@@ -573,9 +573,11 @@ def test_each_translating_consensus_engine_keeps_its_translation(model, monkeypa
 
     assert python.translation.engine == "Python"
     assert python.translation.translation_model == MODEL
-    # The Z3 engine fails on the translation (#659), and still keeps it.
-    assert z3.status == "BLOCKED"
+    # The Z3 engine proves the claim from the constraints (#659), and keeps
+    # the translation it proved it from.
+    assert z3.status == "VERIFIED"
     assert z3.translation.engine == "Z3"
+    assert z3.translation.translation_model == MODEL
     assert z3.translation.output.claim == "x > 3"
 
 

@@ -1,6 +1,11 @@
 """
 Enterprise Consensus Verifier: Multi-Engine Verification Orchestrator.
 
+Consensus is advisory only (#633): every engine decides a model's translation
+of the question, and the question states no claim of the caller's, so engines
+that agree have not verified anything. A consensus result is UNVERIFIABLE or
+BLOCKED, never VERIFIED, in every mode, and carries ``advisory_only``.
+
 Enhanced Features:
 1. Async parallel execution
 2. Circuit breaker for failing engines
@@ -26,8 +31,9 @@ _ENGINE_TIMEOUT_SECONDS = 30
 _CIRCUIT_OPEN_ERROR = "Engine excluded by open circuit breaker"
 import threading
 
-from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus, compute_proof_ref
+from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
 from qwed_new.core.translation_record import Translation, audit_record, translation_in, translation_of
+from qwed_new.core.z3_thread import run_z3_call_blocking
 from qwed_new.providers.base import TranslationRefused
 
 from .verification_context import VerificationContextDocument
@@ -39,6 +45,33 @@ _NONE_CONSENSUS_KEY = object()
 # The agreement status of a result only one engine verified (#320): one engine
 # is not a consensus, so the result is BLOCKED.
 NO_INDEPENDENT_VERIFICATION = "no_independent_verification"
+# The message of a consensus whose engines agree (#633).
+ADVISORY_MESSAGE = (
+    "Consensus verification is advisory only: engines that agree on the model's "
+    "translation of the question have not verified a claim"
+)
+# The statuses a consensus result may have (#633).
+_ADVISORY_STATUSES = (DiagnosticStatus.UNVERIFIABLE, DiagnosticStatus.BLOCKED)
+
+
+def advisory(result: DiagnosticResult) -> DiagnosticResult:
+    """``result`` as the consensus route returns it (#633): marked
+    ``advisory_only``, and UNVERIFIABLE unless it is UNVERIFIABLE or BLOCKED.
+
+    ``ConsensusResult.to_diagnostic_result`` never returns VERIFIED; this
+    holds the route to that whatever verifier produced the result, so no
+    status reaches the response, the attestation or the audit row as
+    VERIFIED. A result that is let through keeps its message and fields.
+    """
+    fields = {**result.developer_fields, "advisory_only": True}
+    if isinstance(result.status, DiagnosticStatus) and result.status in _ADVISORY_STATUSES:
+        return result.with_audit_record(result.raw_llm_output, developer_fields=fields)
+    # Whatever the result said of the question's meaning, nothing here
+    # checked it.
+    fields.pop("query_semantics_verified", None)
+    return DiagnosticResult.unverifiable(ADVISORY_MESSAGE, developer_fields=fields).with_audit_record(
+        result.raw_llm_output
+    )
 
 
 def _first(translations: List[Translation]) -> Optional[Translation]:
@@ -136,8 +169,10 @@ class ConsensusResult:
     total_latency_ms: float
     parallel_execution: bool = False
     status: Optional[DiagnosticStatus] = None  # from _calculate_consensus
-    proof_ref: Optional[str] = None  # Populated for VERIFIED consensus results
-    verified_evidence: Optional[Dict[str, Any]] = None  # evidence used for proof_ref, equals verification_chain at VERIFIED
+    # Always None: consensus is advisory and proves nothing (#633). Kept so
+    # code that reads them keeps working.
+    proof_ref: Optional[str] = None
+    verified_evidence: Optional[Dict[str, Any]] = None
 
     def raw_llm_output(self) -> Optional[str]:
         """Every engine's translation, as the audit record (#578), or None
@@ -149,27 +184,20 @@ class ConsensusResult:
 
         This is the canonical path for the /verify/consensus endpoint —
         the conversion logic lives here so the endpoint is a thin wrapper.
+        The result is UNVERIFIABLE or BLOCKED, never VERIFIED, and carries
+        ``advisory_only`` (#633): a status that says VERIFIED, from a
+        result built by hand, is read as UNVERIFIABLE.
         """
         developer_fields: Dict[str, Any] = {
             "agreement_status": self.agreement_status,
             "confidence": self.confidence,
             "engines_used": self.engines_used,
+            "advisory_only": True,
         }
         status_val = self.status.value if isinstance(self.status, DiagnosticStatus) else str(self.status)
         if status_val == DiagnosticStatus.VERIFIED.value:
-            if not self.verified_evidence:
-                # A VERIFIED status without its canonical evidence is a contract
-                # violation — fail closed rather than fabricating a weaker proof.
-                return DiagnosticResult.unverifiable(
-                    "Consensus verification: VERIFIED status missing canonical evidence",
-                    developer_fields=developer_fields,
-                )
-            return DiagnosticResult.verified(
-                "Consensus verification: unanimous",
-                developer_fields=developer_fields,
-                evidence=self.verified_evidence,
-            )
-        elif status_val == DiagnosticStatus.BLOCKED.value:
+            status_val = DiagnosticStatus.UNVERIFIABLE.value
+        if status_val == DiagnosticStatus.BLOCKED.value:
             if self.agreement_status == NO_INDEPENDENT_VERIFICATION:
                 return DiagnosticResult.blocked(
                     "Consensus verification: blocked, as one engine is not a consensus "
@@ -197,10 +225,12 @@ class ConsensusResult:
             return "Consensus verification: no engine results available"
         if self.agreement_status == "all_failed":
             return "Consensus verification: all engines failed"
+        if self.agreement_status == "no_answer":
+            return "Consensus verification: no engine computed an answer"
         if status_val == DiagnosticStatus.UNVERIFIABLE.value and blocked_count > 0:
             return "Consensus verification: incomplete — some engines blocked"
         if status_val == DiagnosticStatus.UNVERIFIABLE.value:
-            return "Consensus verification: support conditions unmet — advisory engines cannot verify claims"
+            return ADVISORY_MESSAGE
         return "Consensus verification: no agreement"
 
 
@@ -368,6 +398,9 @@ class ConsensusVerifier:
     """
     Enterprise Consensus Verification Orchestrator.
     
+    Advisory only (#633): its results are UNVERIFIABLE or BLOCKED, never
+    VERIFIED, however many engines agree.
+
     Features:
     - Parallel async execution of multiple engines
     - Circuit breaker for failing engines
@@ -398,6 +431,11 @@ class ConsensusVerifier:
         "Image": 0.80      # VLM-dependent
     }
     
+    # Engines that decide whether a claim holds rather than compute a value
+    # (#659). One that proves the claim counts as an engine that verified,
+    # but its verdict is not an answer, so it does not vote on the answer.
+    CLAIM_ENGINES = frozenset({"Z3"})
+
     def __init__(
         self,
         max_workers: int = 4,
@@ -443,9 +481,11 @@ class ConsensusVerifier:
     
     @property
     def logic_verifier(self):
+        """The DSL bridge the Z3 engine translates and proves with, as the
+        control plane's logic route does (#659)."""
         if self._logic_verifier is None:
-            from qwed_new.core.logic_verifier import LogicVerifier
-            self._logic_verifier = LogicVerifier()
+            from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
+            self._logic_verifier = DSLLogicVerifier()
         return self._logic_verifier
     
     @property
@@ -520,7 +560,7 @@ class ConsensusVerifier:
             results = self._execute_sequential(query, engine_methods)
         
         # Calculate consensus
-        consensus = self._bound_to_query(self._calculate_consensus(results), query)
+        consensus = self._calculate_consensus(results)
         total_latency = (time.time() - start_time) * 1000
         
         return ConsensusResult(
@@ -532,8 +572,6 @@ class ConsensusVerifier:
             total_latency_ms=total_latency,
             parallel_execution=parallel and len(engine_methods) > 1,
             status=consensus.get("diagnostic_status"),
-            proof_ref=consensus.get("proof_ref"),
-            verified_evidence=consensus.get("verified_evidence"),
         )
     
     # =========================================================================
@@ -618,7 +656,7 @@ class ConsensusVerifier:
             # finish naturally but can never affect later requests
             pool.shutdown(wait=False, cancel_futures=True)
 
-        consensus = self._bound_to_query(self._calculate_consensus(results), query)
+        consensus = self._calculate_consensus(results)
         total_latency = (time.time() - start_time) * 1000
 
         return ConsensusResult(
@@ -630,8 +668,6 @@ class ConsensusVerifier:
             total_latency_ms=total_latency,
             parallel_execution=True,
             status=consensus.get("diagnostic_status"),
-            proof_ref=consensus.get("proof_ref"),
-            verified_evidence=consensus.get("verified_evidence"),
         )
 
     def _refused(self, query: str, start_time: float) -> Optional[ConsensusResult]:
@@ -996,31 +1032,66 @@ class ConsensusVerifier:
                 error=str(e), status="BLOCKED",
             )
     
+    # The Z3 engine's status for each verdict prove_from_dsl gives (#659),
+    # and why it is not VERIFIED. Only VALID is: the claim follows from the
+    # constraints, which can all hold. Any other verdict is BLOCKED.
+    _PROOF_VERDICTS = {
+        "VALID": ("VERIFIED", None),
+        "INVALID": ("UNVERIFIABLE", "The claim does not follow from the constraints: Z3 found a counterexample"),
+        "VACUOUS": ("UNVERIFIABLE", "The constraints cannot all hold, so any claim would follow from them"),
+        "UNKNOWN": ("UNVERIFIABLE", "Z3 did not decide whether the claim follows"),
+    }
+
     def _verify_with_logic(self, query: str, translations: Optional[List[Translation]] = None) -> EngineResult:
-        """Verify using Z3 logic solver."""
+        """Prove the claim of the model's logic translation from its
+        constraints (#659), as /verify/logic does: the DSL bridge translates,
+        and ``prove_from_dsl`` decides on the one z3 thread.
+
+        VERIFIED only when the claim follows. A counterexample, constraints
+        that cannot all hold, an undecided proof, or a translation that
+        states no claim (constraints that can hold prove nothing, #631) is
+        UNVERIFIABLE. A translation the bridge refuses, or a proof it cannot
+        run, is BLOCKED. A z3 thread that does not answer in time raises
+        TimeoutError, which the caller records as the engine failing.
+        """
         start = time.time()
         translations = [] if translations is None else translations
-        try:
-            variables, constraints = self._model_as_logic(query, translations)
-            result = self.logic_verifier.verify_logic(variables, constraints)
-            is_sat = result.is_verified
+        dsl_code, variables, _provider, refused, claim_dsl, _model, translation = (
+            self.logic_verifier.translate_to_dsl(query)
+        )
+        if translation is not None:
+            translations.append(translation.for_engine("Z3"))
+        if refused is not None:
+            return self._z3_result("BLOCKED", None, refused.error, translations, start)
+        if claim_dsl is None:
+            return self._z3_result(
+                "UNVERIFIABLE", None,
+                "The translation states no claim to prove, and constraints that can hold prove nothing",
+                translations, start,
+            )
+        proof = run_z3_call_blocking(self.logic_verifier.prove_from_dsl, dsl_code, claim_dsl, variables)
+        status, reason = self._PROOF_VERDICTS.get(
+            proof.status, ("BLOCKED", proof.error or "Z3 could not run the proof")
+        )
+        return self._z3_result(status, proof.status, reason, translations, start)
 
-            return EngineResult(
-                engine_name="Z3", method="constraint_solving",
-                translation=_first(translations),
-                result=result.developer_fields.get("deterministic_verdict", result.status.value),
-                confidence=0.995 if is_sat else 0.0,
-                latency_ms=(time.time() - start) * 1000, success=is_sat,
-                status="VERIFIED" if is_sat else "UNVERIFIABLE",
-            )
-        except Exception as e:
-            return EngineResult(
-                engine_name="Z3", method="constraint_solving",
-                translation=_first(translations),
-                result=None, confidence=0.0,
-                latency_ms=(time.time() - start) * 1000, success=False,
-                error=str(e), status="BLOCKED",
-            )
+    @staticmethod
+    def _z3_result(
+        status: str, verdict: Optional[str], reason: Optional[str],
+        translations: List[Translation], start: float,
+    ) -> EngineResult:
+        """The Z3 engine's result: ``verdict`` is prove_from_dsl's, or None
+        where no proof ran."""
+        return EngineResult(
+            engine_name="Z3", method="claim_proof",
+            translation=_first(translations),
+            result=verdict,
+            confidence=0.995 if status == "VERIFIED" else 0.0,
+            latency_ms=(time.time() - start) * 1000,
+            success=status == "VERIFIED",
+            error=reason,
+            status=status,
+        )
     
     def _verify_with_stats(self, query: str) -> EngineResult:
         """Verify using Stats engine."""
@@ -1085,9 +1156,12 @@ class ConsensusVerifier:
         - All BLOCKED → consensus BLOCKED
         - Any BLOCKED → maximum outcome is UNVERIFIABLE (fail-closed)
         - All UNVERIFIABLE → consensus UNVERIFIABLE
-        - No BLOCKED, unanimous, and verified by two engines or more → VERIFIED
         - Verified by one engine alone, whatever the others did → BLOCKED:
           one engine is not a consensus (#320)
+        - Otherwise UNVERIFIABLE, unanimous or not: consensus is advisory,
+          never VERIFIED (#633)
+        - A claim engine (CLAIM_ENGINES) counts as an engine that verified,
+          but does not vote on the answer (#659)
         """
         if not results:
             return {"answer": None, "confidence": 0.0, "status": "no_results", "diagnostic_status": DiagnosticStatus.UNVERIFIABLE}
@@ -1115,24 +1189,28 @@ class ConsensusVerifier:
 
         # One engine is not a consensus (#320). An answer one engine verified
         # has not been verified by any other, whether the others were advisory
-        # (Python in high mode), blocked (Z3 in maximum mode) or absent. In
-        # single mode the one engine, SymPy, compares the expression the model
-        # translated with the answer the same model gave, so the agreement is
-        # the model's with itself. Without a second engine that verified the
-        # answer, the result is BLOCKED, never VERIFIED.
+        # (Python in high mode), blocked or absent. In single mode the one
+        # engine, SymPy, compares the expression the model translated with the
+        # answer the same model gave, so the agreement is the model's with
+        # itself. Without a second engine that verified, the result is BLOCKED.
         verified = self._verified_results(successful)
         if len({r.engine_name for r in verified}) == 1:
             return {
-                "answer": verified[0].result,
+                "answer": next((r.result for r in verified if r.engine_name not in self.CLAIM_ENGINES), None),
                 "confidence": 0.0,
                 "status": NO_INDEPENDENT_VERIFICATION,
                 "diagnostic_status": DiagnosticStatus.BLOCKED,
             }
 
+        # A claim engine's verdict (VALID) is not an answer to agree on (#659).
+        voters = [r for r in successful if r.engine_name not in self.CLAIM_ENGINES]
+        if not voters:
+            return {"answer": None, "confidence": 0.0, "status": "no_answer", "diagnostic_status": DiagnosticStatus.UNVERIFIABLE}
+
         # Weight answers by engine reliability
         weighted_answers: Dict[str, float] = {}
         answer_values: Dict[str, Any] = {}
-        for r in successful:
+        for r in voters:
             answer_key = self._consensus_answer_key(r.result)
             weight = self.ENGINE_WEIGHTS.get(r.engine_name, 0.5) * r.confidence
             weighted_answers[answer_key] = weighted_answers.get(answer_key, 0) + weight
@@ -1142,69 +1220,30 @@ class ConsensusVerifier:
         total_weight = sum(weighted_answers.values())
         best_weight = weighted_answers[best_answer]
 
-        if len({self._consensus_answer_key(r.result) for r in successful}) == 1:
+        if len(weighted_answers) == 1:
             status = "unanimous"
-            confidence = min(0.999, best_weight / len(successful))
+            confidence = min(0.999, best_weight / len(voters))
         elif best_weight > total_weight / 2:
             status = "majority"
             confidence = min(0.95, best_weight / total_weight)
         else:
             status = "split"
             confidence = min(0.7, best_weight / total_weight)
-        
-        # Fail closed: a BLOCKED engine means verification did not fully complete,
-        # so the outcome can never be VERIFIED even if survivors agree.
-        # Additionally, every successful result must have status="VERIFIED" —
-        # advisory-only results (e.g. Stats computation) cannot contribute
-        # to a VERIFIED consensus (#270).
-        all_verified = all(r.status == "VERIFIED" for r in successful)
-        diagnostic_status = DiagnosticStatus.VERIFIED if (status == "unanimous" and not blocked and all_verified) else DiagnosticStatus.UNVERIFIABLE
 
-        # Bind proof_ref to the VERIFIED consensus: evidence includes the
-        # engine chain details so the attestation can be audited downstream.
-        proof_ref = None
-        evidence = None
-        if diagnostic_status is DiagnosticStatus.VERIFIED:
-            evidence = {
-                "agreement_status": status,
-                "confidence": confidence,
-                "contributing_engines": len(successful),
-                # None stays as JSON null; repr carries type info for non-None (#266).
-                "answer": None if answer_values[best_answer] is None else repr(answer_values[best_answer]),
-                "chain": [
-                    {"engine": r.engine_name, "method": r.method, "confidence": r.confidence}
-                    for r in successful
-                ],
-            }
-            proof_ref = DiagnosticResult.verified(
-                "Consensus verification: unanimous",
-                developer_fields={"agreement_status": status, "confidence": confidence},
-                evidence=evidence,
-            ).proof_ref
-
+        # Advisory only (#633): every engine decided a model's translation of
+        # the question, so engines that agree, however many, have not
+        # verified a claim. The result is UNVERIFIABLE, never VERIFIED.
         return {
             "answer": answer_values[best_answer],
             "confidence": confidence,
             "status": status,
-            "diagnostic_status": diagnostic_status,
-            "proof_ref": proof_ref,
-            "verified_evidence": evidence if diagnostic_status is DiagnosticStatus.VERIFIED else None,
+            "diagnostic_status": DiagnosticStatus.UNVERIFIABLE,
         }
 
     @staticmethod
     def _verified_results(results: List[EngineResult]) -> List[EngineResult]:
         """The results whose engine verified its answer."""
         return [r for r in results if r.status == "VERIFIED"]
-
-    @staticmethod
-    def _bound_to_query(consensus: Dict[str, Any], query: str) -> Dict[str, Any]:
-        """*consensus* with its VERIFIED evidence, and so its proof_ref, bound to
-        the query (#320), so the proof names the statement it is about."""
-        evidence = consensus.get("verified_evidence")
-        if evidence is None:
-            return consensus
-        evidence = {**evidence, "query": query}
-        return {**consensus, "verified_evidence": evidence, "proof_ref": compute_proof_ref(evidence)}
 
     @staticmethod
     def _consensus_answer_key(result: Any) -> str:
@@ -1256,21 +1295,6 @@ class ConsensusVerifier:
         except Exception as e:
             _keep_refused(e, translations, "Python")
             raise ValueError(f"Verification code generation failed: {e}") from e
-    
-    def _model_as_logic(
-        self, query: str, translations: Optional[List[Translation]] = None
-    ) -> Tuple[Dict, List]:
-        """Model query as logic constraints. The translation is added to
-        ``translations``, where given (#578)."""
-        try:
-            from qwed_new.core.translator import TranslationLayer
-            translator = TranslationLayer()
-            task = translator.translate_logic(query)
-            if translations is not None:
-                translations.append(translation_of(translator, "logic", task, engine="Z3"))
-            return task
-        except Exception as e:
-            raise ValueError(f"Logic translation failed: {e}") from e
     
     # =========================================================================
     # Health Monitoring

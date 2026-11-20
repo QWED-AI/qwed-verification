@@ -57,7 +57,7 @@ print([issue["type"] for issue in result.developer_fields["issues"]])
 - **It does not cover every domain.** Claims outside a supported engine come back `UNVERIFIABLE`.
 - **It is only as sound as its engines.** Results depend on SymPy, Z3, SQLGlot, CrossHair and QWED's own rule sets. Past soundness bugs are listed in the [security advisories](https://github.com/QWED-AI/qwed-verification/security/advisories); each advisory in which an engine returned VERIFIED for a false claim is reproduced in the [soundness eval](evals/README.md), which runs at every release.
 - **Natural-language checks use an LLM to translate.** `/verify/natural_language` and `/verify/logic` ask the model you configure to turn text into a formal statement; that translation is not itself verified. Prompts go to that provider unless you run a local model (for example with Ollama).
-- **Advisory engines do not decide.** Fact, Graph, Image, Reasoning and Consensus produce signals for review. Graph, Image and Consensus can still return `VERIFIED` on a deterministic sub-path that carries a `proof_ref` (see [#320](https://github.com/QWED-AI/qwed-verification/issues/320)): treat that as evidence, not proof.
+- **Advisory engines do not decide.** Fact, Graph, Image, Reasoning and Consensus produce signals for review. Graph and Image can still return `VERIFIED` on a deterministic sub-path that carries a `proof_ref` (see [#320](https://github.com/QWED-AI/qwed-verification/issues/320)): treat that as evidence, not proof. Consensus never returns `VERIFIED` ([#633](https://github.com/QWED-AI/qwed-verification/issues/633)).
 
 ## Install
 
@@ -199,7 +199,7 @@ The Stats engine executes statistical code in a sandbox and returns `UNVERIFIABL
 
 **Policy guards** apply deterministic rules and return block or hold decisions, never `VERIFIED`: SystemGuard (shell commands, file paths), ConfigGuard (secrets in configuration), RAGGuard (retrieved context), MCPPoisonGuard (MCP tool definitions), ExfiltrationGuard (outbound data), SelfInitiatedCoTGuard (reasoning flow), SovereigntyGuard (data residency and routing), StartupHookGuard (startup hooks), ProcessVerifier (process milestones such as IRAC).
 
-**Advisory engines** add signals for review: Fact (TF-IDF and entity matching), Graph, Image, Reasoning and Consensus. Heuristic and model-based results are recorded as `advisory_checks`. Graph, Image and Consensus can return `VERIFIED` only on a deterministic sub-path that carries a `proof_ref`.
+**Advisory engines** add signals for review: Fact (TF-IDF and entity matching), Graph, Image, Reasoning and Consensus. Heuristic and model-based results are recorded as `advisory_checks`. Graph and Image can return `VERIFIED` only on a deterministic sub-path that carries a `proof_ref`. `/verify/consensus` is advisory only: its engines decide a model's translations of the question, so it returns `UNVERIFIABLE` or `BLOCKED` with `advisory_only: true`, never `VERIFIED`, in every mode.
 
 ## GitHub Action
 

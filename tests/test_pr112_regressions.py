@@ -70,9 +70,8 @@ def test_consensus_helper_fallbacks_and_failures(monkeypatch):
 
     with pytest.raises(ValueError, match="Verification code generation failed"):
         verifier._generate_verification_code("What is 2 plus 2?")
-
-    with pytest.raises(ValueError, match="Logic translation failed"):
-        verifier._model_as_logic("If A then B")
+    # The Z3 engine translates through the DSL bridge since #659; its
+    # failures are tested in tests/test_issue_633_659_consensus_advisory.py.
 
 
 def test_logic_verifier_unsat_explanation_falls_back_when_core_lookup_fails():

@@ -537,11 +537,15 @@ class QWEDClient:
         min_confidence: float = 0.95
     ) -> VerificationResult:
         """
-        Verify with multi-engine consensus.
+        Run multi-engine consensus on a query: advisory only (#633).
+
+        The engines decide a model's translations of the query, so the
+        status is never VERIFIED and ``is_verified`` is always False. Read
+        the result as a signal for review.
 
         Args:
-            query: The query to verify
-            mode: Verification mode ("single", "high", "maximum")
+            query: The query to check
+            mode: How many engines run ("single", "high", "maximum")
             min_confidence: Minimum confidence threshold (0.0 to 1.0)
         """
         start = time.time()
@@ -963,7 +967,8 @@ class QWEDAsyncClient:
         mode: str = "single",
         min_confidence: float = 0.95
     ) -> VerificationResult:
-        """Verify with multi-engine consensus."""
+        """Run multi-engine consensus on a query: advisory only (#633), so
+        the status is never VERIFIED and ``is_verified`` is always False."""
         start = time.time()
         data = await self._request(
             "POST",

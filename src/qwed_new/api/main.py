@@ -1947,13 +1947,16 @@ from qwed_new.core.consensus_verifier import (
     NO_INDEPENDENT_VERIFICATION,
     EngineResult,
     VerificationMode,
+    advisory,
     chain_record,
     consensus_verifier,
 )
 
 class ConsensusVerifyRequest(BaseModel):
     query: str
-    verification_mode: str = "single"  # "single", "high", "maximum"
+    # How many engines run: "single", "high", "maximum". Every mode is
+    # advisory only (#633).
+    verification_mode: str = "single"
     min_confidence: float = 0.95  # 0.0 to 1.0
 
 @app.post(
@@ -1970,15 +1973,22 @@ async def verify_with_consensus(
     session: Session = Depends(get_session)
 ):
     """
-    Multi-engine consensus verification.
-    
-    Verification modes:
-    - "single": Fast, single engine (default). One engine is not a
-      consensus, so an answer it verifies alone is BLOCKED (#320).
-    - "high": 2 engines for higher confidence
-    - "maximum": 3+ engines for critical domains (medical, financial)
-    
-    Returns detailed verification chain and confidence score.
+    Multi-engine consensus: advisory only (#633).
+
+    Every engine decides a model's translation of the question, so engines
+    that agree have not verified a claim. The result is UNVERIFIABLE or
+    BLOCKED, never VERIFIED, in every mode, carries ``advisory_only: true``,
+    and is never admitted. Use it as a signal for review, not as a
+    verification.
+
+    Modes (how many engines run):
+    - "single": SymPy alone (default). One engine is not a consensus, so an
+      answer it verifies alone is BLOCKED (#320).
+    - "high": SymPy and Python (Python's run is advisory).
+    - "maximum": adds Z3, which proves the claim of a logic translation from
+      its constraints (#659), and Stats for statistical questions.
+
+    Returns the engine chain and a confidence score.
     """
     check_rate_limit(tenant.api_key)
 
@@ -2011,7 +2021,7 @@ async def verify_with_consensus(
             "Consensus verification: blocked — secure execution",
             developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
         )
-        dr = _enforce_trust(dr, query=request.query, engine="consensus")
+        dr = _enforce_trust(advisory(dr), query=request.query, engine="consensus")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=request.query,
@@ -2029,7 +2039,7 @@ async def verify_with_consensus(
             "Consensus verification: all engines blocked",
             developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
         )
-        dr = _enforce_trust(dr, query=request.query, engine="consensus")
+        dr = _enforce_trust(advisory(dr), query=request.query, engine="consensus")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=request.query,
@@ -2048,7 +2058,7 @@ async def verify_with_consensus(
             f"Confidence ({result.confidence:.1%}) below required minimum ({request.min_confidence:.1%})",
             developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used, "min_confidence": request.min_confidence},
         )
-        dr = _enforce_trust(dr, query=request.query, engine="consensus")
+        dr = _enforce_trust(advisory(dr), query=request.query, engine="consensus")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=request.query,
@@ -2060,9 +2070,10 @@ async def verify_with_consensus(
         _safe_commit_log(log)
         return _merge_response(dr)
 
-    # Convert consensus result via its own to_diagnostic_result() method —
-    # it handles proof_ref, attestation evidence, and DiagnosticStatus mapping.
-    dr = result.to_diagnostic_result()
+    # Convert consensus result via its own to_diagnostic_result() method,
+    # which never returns VERIFIED; advisory() holds the route to that
+    # whatever verifier answered (#633).
+    dr = advisory(result.to_diagnostic_result())
     dr = _enforce_trust(dr, query=request.query, engine="consensus")
 
     log = VerificationLog(
@@ -2100,9 +2111,9 @@ async def verify_with_consensus(
         # TRUE only when the consensus is verified as claim_verified decides
         # it AND the confidence meets the threshold, never confidence alone
         # (#269). The SDK reads this as the result's is_verified, so it agrees
-        # with the attestation and the audit row (#577): a consensus is reached
-        # on the model's translation of the query (#585), and has no is_valid,
-        # so it does not meet the requirement.
+        # with the attestation and the audit row (#577). A consensus is
+        # advisory and never VERIFIED (#633), so this is always false; kept
+        # so clients that read it keep working.
         "meets_requirement": claim_verified(dr) and result.confidence >= request.min_confidence,
     }
     return _merge_response(dr) | response
