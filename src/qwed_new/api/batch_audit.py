@@ -119,6 +119,8 @@ def batch_audit_hook(
             result=text,
             is_verified=batch_item_is_verified(item),
             domain=BATCH_AUDIT_DOMAIN.get(item.verification_type.value, "BATCH"),
+            # The model's translation, as its route stores it (#578).
+            raw_llm_output=item.raw_llm_output,
         )
         await asyncio.to_thread(commit_log, log)
 

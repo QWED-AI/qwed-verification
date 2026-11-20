@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from z3 import Solver, sat, unsat
 
 from qwed_new.core.dsl import parse_and_validate, compile_to_z3
+from qwed_new.core.translation_record import audit_record, translation_of
 from qwed_new.core.translator import TranslationLayer
 from qwed_new.providers.base import ProviderConfigError
 
@@ -38,6 +39,7 @@ class DSLVerificationResult:
     constraint_id: Optional[str] = None  # Names the rule that blocked the result, where one does
     declarations: Optional[Dict[str, str]] = None  # Declared variable -> the sort Z3 decided it as
     translation_model: Optional[str] = None  # The model the provider asked runs, from its configuration (#585)
+    raw_llm_output: Optional[str] = None  # The model's translation, as the audit record (#578)
 
 
 # Text that ends an operand ("x", "3", ")" or "]"), unless that text is itself
@@ -656,11 +658,12 @@ class DSLLogicVerifier:
         # one thread (z3py's default context is not thread safe). See
         # control_plane.process_logic_query. This wrapper keeps the original
         # synchronous behaviour for direct callers.
-        dsl_code, variables, resolved_provider, error, claim_dsl, translation_model = self.translate_to_dsl(
-            query, provider
-        )
+        (
+            dsl_code, variables, resolved_provider, error, claim_dsl, translation_model, translation,
+        ) = self.translate_to_dsl(query, provider)
         if error is not None:
             error.translation_model = translation_model
+            error.raw_llm_output = audit_record([translation])
             return error
         if claim_dsl is None:
             verification_result = self.verify_from_dsl(dsl_code, variables)
@@ -668,18 +671,22 @@ class DSLLogicVerifier:
             verification_result = self.prove_from_dsl(dsl_code, claim_dsl, variables)
         verification_result.provider_used = resolved_provider
         verification_result.translation_model = translation_model
+        verification_result.raw_llm_output = audit_record([translation])
         if not verification_result.dsl_code:
             verification_result.dsl_code = dsl_code
         return verification_result
 
     def translate_to_dsl(self, query: str, provider: Optional[str] = None):
         """Provider translation step (no z3). Returns (dsl_code, variables,
-        resolved_provider, error_result, claim_dsl, translation_model);
-        error_result is a DSLVerificationResult on failure and None on success,
-        and claim_dsl is the claim to prove from dsl_code, or None when the
-        translation states none (#631). translation_model is the model the
-        provider asked runs, from its configuration, or None (#585), read
-        on this thread, which auto-shift needs. Safe to run in a
+        resolved_provider, error_result, claim_dsl, translation_model,
+        translation); error_result is a DSLVerificationResult on failure and
+        None on success, and claim_dsl is the claim to prove from dsl_code, or
+        None when the translation states none (#631). translation_model is the
+        model the provider asked runs, from its configuration, or None (#585),
+        read on this thread, which auto-shift needs. translation is what the
+        model returned, with that provider and model (#578), or None when the
+        model returned nothing; a translation the DSL step refuses is kept
+        too, since it decided the error. Safe to run in a
         worker thread concurrently — it performs no z3 work. A provider of None
         uses the configured one (ACTIVE_PROVIDER)."""
         # None leaves the choice to the translator, which uses the configured
@@ -687,8 +694,10 @@ class DSLLogicVerifier:
         provider_label = None if provider is None else self._provider_label(provider)
         resolved_provider = provider_label
         translator = TranslationLayer()
+        translation = None
         try:
             logic_result = translator.translate_logic(query, provider=provider_label)
+            translation = translation_of(translator, "logic", logic_result, provider_label)
             resolved_provider = self._provider_label(
                 getattr(translator, "last_resolved_provider", None) or provider_label
             )
@@ -698,8 +707,11 @@ class DSLLogicVerifier:
                     status="ERROR",
                     error="No constraints generated from natural language query",
                     provider_used=resolved_provider,
-                ), None, translator.translation_model(provider_label)
-            return dsl_code, variables, resolved_provider, None, claim_dsl, translator.translation_model(provider_label)
+                ), None, translator.translation_model(provider_label), translation
+            return (
+                dsl_code, variables, resolved_provider, None, claim_dsl,
+                translator.translation_model(provider_label), translation,
+            )
         except ProviderConfigError as e:
             # The setting to fix (no model, or an unknown ACTIVE_PROVIDER), not
             # a provider failure: it reaches the operator and the caller, as on
@@ -712,7 +724,7 @@ class DSLLogicVerifier:
                 status="ERROR",
                 error=str(e),
                 provider_used=resolved_provider,
-            ), None, translator.translation_model(provider_label)
+            ), None, translator.translation_model(provider_label), translation
         except ValueError as e:
             resolved_provider = self._provider_label(
                 getattr(translator, "last_resolved_provider", None) or resolved_provider
@@ -721,7 +733,7 @@ class DSLLogicVerifier:
                 status="ERROR",
                 error=str(e) if str(e).startswith("Unsupported logic goal:") else "LLM translation failed",
                 provider_used=resolved_provider,
-            ), None, translator.translation_model(provider_label)
+            ), None, translator.translation_model(provider_label), translation
         except Exception:
             logger.debug(
                 "Translation failed with unexpected error (last_resolved_provider=%s, resolved_provider=%s)",
@@ -736,7 +748,7 @@ class DSLLogicVerifier:
                 status="ERROR",
                 error="LLM translation failed",
                 provider_used=resolved_provider,
-            ), None, translator.translation_model(provider_label)
+            ), None, translator.translation_model(provider_label), translation
 
     def to_verification_context(self, result: "DiagnosticResult", query: str, attestation_token: Optional[str] = None) -> "VerificationContextDocument":
         """Map a DiagnosticResult to a Verification Context v1.0 document."""

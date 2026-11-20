@@ -61,7 +61,7 @@ def client(isolated_audit_chain):
 def _translated_to(dsl, variables=None, claim=None):
     """The translator of both the route's and the batch's control plane
     returns ``dsl`` and ``claim``; Z3 then decides them for real."""
-    translated = (dsl, variables, "mock", None, claim, None)
+    translated = (dsl, variables, "mock", None, claim, None, None)
     return (
         patch.object(api_main.control_plane.logic_verifier, "translate_to_dsl", return_value=translated),
         patch.object(api_main.batch_service.control_plane.logic_verifier, "translate_to_dsl", return_value=translated),

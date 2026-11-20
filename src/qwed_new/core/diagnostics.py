@@ -501,12 +501,19 @@ class DiagnosticResult:
     # response, so a consumer can check it against the server's JWKS (#319).
     # Never read from input: from_dict leaves it out.
     attestation: Optional[str] = None
+    # The model translations the verdict rests on, as the audit record
+    # core/translation_record.py writes (#578). For the audit row only:
+    # to_dict and from_dict leave it out, so it reaches no response.
+    raw_llm_output: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.agent_message or not self.agent_message.strip():
             raise ValueError(
                 "agent_message must be non-empty — Layer 1 diagnostics are mandatory"
             )
+
+        if self.raw_llm_output is not None and not isinstance(self.raw_llm_output, str):
+            raise ValueError("raw_llm_output is an audit record (text) or None")
 
         if self.attestation is not None and (
             self.status is not DiagnosticStatus.VERIFIED
@@ -544,6 +551,7 @@ class DiagnosticResult:
             developer_fields=self.developer_fields,
             proof_ref=self.proof_ref,
             attestation=token,
+            raw_llm_output=self.raw_llm_output,
         )
 
     @property

@@ -6,11 +6,13 @@ It selects the active provider based on configuration.
 """
 
 import ast
+from typing import Any
 
 from qwed_new.config import settings, ProviderType
 from qwed_new.core.router import UNKNOWN_PROVIDER
 from qwed_new.core.schemas import MathVerificationTask
 from qwed_new.core.security import EnhancedSecurityGateway
+from qwed_new.core.translation_record import Translation
 from qwed_new.providers.base import RETIRED_PROVIDERS, LLMProvider, ProviderConfigError, TranslationRefused
 from qwed_new.providers.azure_openai import AzureOpenAIProvider
 from qwed_new.providers.anthropic import AnthropicProvider
@@ -133,6 +135,26 @@ class TranslationLayer:
             return None
         model = provider.model_id
         return model if isinstance(model, str) and model else None
+
+    def translation(
+        self, kind: str, output: Any, provider_key: str | None = None, *, engine: str | None = None
+    ) -> Translation:
+        """``output``, what a translation call returned, with the provider
+        ``provider_key`` selects and the model that answered (#578).
+
+        Call it on the thread that made the call, right after it, as for
+        ``translation_model``. The provider is the key the call resolved,
+        computed from ``provider_key`` rather than read from
+        ``last_resolved_provider``, which another thread may have changed on
+        a shared instance.
+        """
+        return Translation(
+            kind=kind,
+            output=output,
+            provider_used=self._normalize_provider_key(provider_key) or self.default_provider,
+            translation_model=self.translation_model(provider_key),
+            engine=engine,
+        )
 
     def _validate_math_output(self, task: MathVerificationTask) -> None:
         """

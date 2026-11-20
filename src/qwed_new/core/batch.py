@@ -68,6 +68,9 @@ class BatchItem:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     latency_ms: float = 0.0
+    # The model's translation behind the item's verdict, for its audit row
+    # only (#578): get_job_results does not return it.
+    raw_llm_output: Optional[str] = None
 
 
 @dataclass
@@ -305,8 +308,10 @@ class BatchVerificationService:
                 item.query,
                 organization_id=organization_id
             )
+            dr = natural_language_diagnostic(result)
+            item.raw_llm_output = dr.raw_llm_output
             dr = attest_and_enforce(
-                natural_language_diagnostic(result),
+                dr,
                 engine="natural_language",
                 query=item.query,
                 admission=natural_language_admission,
@@ -322,8 +327,10 @@ class BatchVerificationService:
                 item.query,
                 organization_id=organization_id
             )
+            dr = logic_diagnostic(result)
+            item.raw_llm_output = dr.raw_llm_output
             dr = attest_and_enforce(
-                logic_diagnostic(result),
+                dr,
                 engine="logic",
                 query=item.query,
                 admission=natural_language_admission,
@@ -368,6 +375,7 @@ class BatchVerificationService:
                     item.query,
                     item.params.get("context", "")
                 )
+                item.raw_llm_output = getattr(result, "raw_llm_output", None)
                 return attest_and_enforce(result, engine="fact", query=item.query).to_dict()
 
             return await asyncio.to_thread(_verify_fact)

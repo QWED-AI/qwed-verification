@@ -27,6 +27,7 @@ _CIRCUIT_OPEN_ERROR = "Engine excluded by open circuit breaker"
 import threading
 
 from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus, compute_proof_ref
+from qwed_new.core.translation_record import Translation, audit_record, translation_of
 from qwed_new.providers.base import TranslationRefused
 
 from .verification_context import VerificationContextDocument
@@ -38,6 +39,22 @@ _NONE_CONSENSUS_KEY = object()
 # The agreement status of a result only one engine verified (#320): one engine
 # is not a consensus, so the result is BLOCKED.
 NO_INDEPENDENT_VERIFICATION = "no_independent_verification"
+
+
+def _first(translations: List[Translation]) -> Optional[Translation]:
+    """The translation an engine asked for, or None when it got none."""
+    return translations[0] if translations else None
+
+
+def chain_record(chain: Any) -> Optional[str]:
+    """The audit record (#578) of the translations in a verification chain,
+    or None when no engine had one. An entry that is not an EngineResult
+    carries none."""
+    return audit_record(
+        result.translation
+        for result in chain
+        if isinstance(result, EngineResult) and isinstance(result.translation, Translation)
+    )
 
 
 class VerificationMode(str, Enum):
@@ -65,6 +82,16 @@ class EngineResult:
     success: bool
     error: Optional[str] = None
     status: Optional[str] = None  # DiagnosticStatus value — preserves status through consensus
+    # What the model translated the query into for this engine, with the
+    # provider and model (#578, #585); None when the engine had no translation.
+    translation: Optional[Translation] = None
+
+    def provenance(self) -> Dict[str, Optional[str]]:
+        """The provider and model whose translation this engine decided on,
+        both None when it had none."""
+        if self.translation is None:
+            return {"provider_used": None, "translation_model": None}
+        return self.translation.provenance()
 
 
 @dataclass
@@ -80,6 +107,11 @@ class ConsensusResult:
     status: Optional[DiagnosticStatus] = None  # from _calculate_consensus
     proof_ref: Optional[str] = None  # Populated for VERIFIED consensus results
     verified_evidence: Optional[Dict[str, Any]] = None  # evidence used for proof_ref, equals verification_chain at VERIFIED
+
+    def raw_llm_output(self) -> Optional[str]:
+        """Every engine's translation, as the audit record (#578), or None
+        when no engine had one."""
+        return chain_record(self.verification_chain)
 
     def to_diagnostic_result(self) -> DiagnosticResult:
         """Convert this ConsensusResult to a DiagnosticResult.
@@ -823,14 +855,16 @@ class ConsensusVerifier:
     def _verify_with_math(self, query: str) -> EngineResult:
         """Verify using SymPy math engine."""
         start = time.time()
+        translations: List[Translation] = []
         try:
-            expression, expected = self._parse_math_query(query)
+            expression, expected = self._parse_math_query(query, translations)
             result = self.math_verifier.verify_math(expression, expected)
             latency = (time.time() - start) * 1000
             is_correct = result.get("is_correct", False)
 
             return EngineResult(
                 engine_name="SymPy",
+                translation=_first(translations),
                 method="symbolic_math",
                 result=result.get("calculated_value"),
                 confidence=1.0 if is_correct else 0.0,
@@ -842,6 +876,7 @@ class ConsensusVerifier:
             # Translation failure — blocked, not fabricated
             return EngineResult(
                 engine_name="SymPy",
+                translation=_first(translations),
                 method="symbolic_math",
                 result=None,
                 confidence=0.0,
@@ -853,6 +888,7 @@ class ConsensusVerifier:
         except Exception as e:
             return EngineResult(
                 engine_name="SymPy",
+                translation=_first(translations),
                 method="symbolic_math",
                 result=None,
                 confidence=0.0,
@@ -865,13 +901,15 @@ class ConsensusVerifier:
     def _verify_with_code(self, query: str) -> EngineResult:
         """Verify by executing Python code in the secure Docker sandbox."""
         start = time.time()
+        translations: List[Translation] = []
         try:
-            code = self._generate_verification_code(query)
+            code = self._generate_verification_code(query, translations)
 
             safety_result = self.code_verifier.verify_code(code)
             if not safety_result.is_verified or safety_result.developer_fields.get("is_valid") is not True:
                 return EngineResult(
                     engine_name="Python", method="code_execution",
+                    translation=_first(translations),
                     result=None, confidence=0.0,
                     latency_ms=(time.time() - start) * 1000, success=False,
                     error=safety_result.agent_message,
@@ -884,6 +922,7 @@ class ConsensusVerifier:
                     error = SECURE_EXECUTION_REQUIRED
                 return EngineResult(
                     engine_name="Python", method="code_execution",
+                    translation=_first(translations),
                     result=None, confidence=0.0,
                     latency_ms=(time.time() - start) * 1000, success=False,
                     error=error, status="BLOCKED",
@@ -895,6 +934,7 @@ class ConsensusVerifier:
             # Empirical runtime success disproves (by crashing); it cannot prove (#269).
             return EngineResult(
                 engine_name="Python", method="code_execution",
+                translation=_first(translations),
                 result=output, confidence=0.99,
                 latency_ms=(time.time() - start) * 1000, success=True,
                 status="UNVERIFIABLE",
@@ -902,6 +942,7 @@ class ConsensusVerifier:
         except Exception as e:
             return EngineResult(
                 engine_name="Python", method="code_execution",
+                translation=_first(translations),
                 result=None, confidence=0.0,
                 latency_ms=(time.time() - start) * 1000, success=False,
                 error=str(e), status="BLOCKED",
@@ -910,13 +951,15 @@ class ConsensusVerifier:
     def _verify_with_logic(self, query: str) -> EngineResult:
         """Verify using Z3 logic solver."""
         start = time.time()
+        translations: List[Translation] = []
         try:
-            variables, constraints = self._model_as_logic(query)
+            variables, constraints = self._model_as_logic(query, translations)
             result = self.logic_verifier.verify_logic(variables, constraints)
             is_sat = result.is_verified
 
             return EngineResult(
                 engine_name="Z3", method="constraint_solving",
+                translation=_first(translations),
                 result=result.developer_fields.get("deterministic_verdict", result.status.value),
                 confidence=0.995 if is_sat else 0.0,
                 latency_ms=(time.time() - start) * 1000, success=is_sat,
@@ -925,6 +968,7 @@ class ConsensusVerifier:
         except Exception as e:
             return EngineResult(
                 engine_name="Z3", method="constraint_solving",
+                translation=_first(translations),
                 result=None, confidence=0.0,
                 latency_ms=(time.time() - start) * 1000, success=False,
                 error=str(e), status="BLOCKED",
@@ -1125,11 +1169,14 @@ class ConsensusVerifier:
     # Helper Methods
     # =========================================================================
     
-    def _parse_math_query(self, query: str) -> Tuple[str, Decimal]:
+    def _parse_math_query(
+        self, query: str, translations: Optional[List[Translation]] = None
+    ) -> Tuple[str, Decimal]:
         """Parse query into expression and expected value.
         
         Raises ValueError on translation failure — no fabricated fallback.
         claimed_answer is guaranteed non-null by the Pydantic schema.
+        The translation is added to ``translations``, where given (#578).
         """
         try:
             from qwed_new.core.translator import TranslationLayer
@@ -1138,22 +1185,35 @@ class ConsensusVerifier:
         except Exception as exc:
             raise ValueError(f"Query translation failed: {exc}") from exc
 
+        if translations is not None:
+            translations.append(translation_of(translator, "math", task, engine="SymPy"))
         return task.expression, Decimal(str(task.claimed_answer))
     
-    def _generate_verification_code(self, query: str) -> str:
-        """Generate Python code for verification."""
+    def _generate_verification_code(
+        self, query: str, translations: Optional[List[Translation]] = None
+    ) -> str:
+        """Generate Python code for verification. The translation is added
+        to ``translations``, where given (#578)."""
         try:
             task = self.translator.translate(query)
+            if translations is not None:
+                translations.append(translation_of(self.translator, "math", task, engine="Python"))
             return f"result = {task.expression}"
         except Exception as e:
             raise ValueError(f"Verification code generation failed: {e}") from e
     
-    def _model_as_logic(self, query: str) -> Tuple[Dict, List]:
-        """Model query as logic constraints."""
+    def _model_as_logic(
+        self, query: str, translations: Optional[List[Translation]] = None
+    ) -> Tuple[Dict, List]:
+        """Model query as logic constraints. The translation is added to
+        ``translations``, where given (#578)."""
         try:
             from qwed_new.core.translator import TranslationLayer
             translator = TranslationLayer()
-            return translator.translate_logic(query)
+            task = translator.translate_logic(query)
+            if translations is not None:
+                translations.append(translation_of(translator, "logic", task, engine="Z3"))
+            return task
         except Exception as e:
             raise ValueError(f"Logic translation failed: {e}") from e
     
