@@ -77,8 +77,15 @@ jobs:
         python -c "import redis; r = redis.from_url('redis://localhost:6379'); print('Redis ping:', r.ping())"
 
     - name: Create .env file
+      env:
+        # The postgres service's container. Its password is read from there,
+        # so this file writes it once, on the service, and each URL below
+        # takes it from PG_PASSWORD (#658).
+        PG_CONTAINER: ${{ job.services.postgres.id }}
       run: |
-        echo "DATABASE_URL=postgresql://qwed:qwed_secret@localhost:5432/qwed_db" >> .env
+        PG_PASSWORD="$(docker exec "${PG_CONTAINER}" printenv POSTGRES_PASSWORD)"
+        echo "PG_PASSWORD=${PG_PASSWORD}" >> $GITHUB_ENV
+        echo "DATABASE_URL=postgresql://qwed:${PG_PASSWORD}@localhost:5432/qwed_db" >> .env
         echo "REDIS_URL=redis://localhost:6379/0" >> .env
         echo "ACTIVE_PROVIDER=azure_openai" >> .env
         echo "QWED_CORS_ORIGINS=http://localhost:3000" >> .env
@@ -130,7 +137,7 @@ jobs:
 
     - name: Run Tests with Coverage
       env:
-        DATABASE_URL: postgresql://qwed:qwed_secret@localhost:5432/qwed_db
+        DATABASE_URL: postgresql://qwed:${{ env.PG_PASSWORD }}@localhost:5432/qwed_db
         REDIS_URL: redis://localhost:6379/0
         ACTIVE_PROVIDER: mock
         QWED_CORS_ORIGINS: "http://localhost:3000"

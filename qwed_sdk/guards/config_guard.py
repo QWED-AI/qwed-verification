@@ -53,6 +53,54 @@ _PINNED_ACTION_LINE = re.compile(
 # key, as in the file.
 _SHAPE_KEYS = ("uses", "integrity")
 
+# A password in the userinfo of a URL, user, ":", password, "@" (#658),
+# whatever the scheme: postgresql+psycopg2, mongodb+srv, redis, amqp, https
+# and the rest, in any case, and a scheme in any script. Two readings, under
+# one type, so each URL is reported once.
+#
+# Any scheme: the URL is read as one token after "://", so whitespace and
+# the quote characters " ' and ` end it.
+# - The user stops at the first ":" and holds no "/", "?" or "#", which end
+#   the authority, nor "[" or "]", which only an IPv6 host holds; it may be
+#   empty (redis:// with only a password) and may hold "@" (Azure's
+#   user@server logins).
+# - The password stops at the first "@" and may hold a raw "/", "?" or "#",
+#   which SQLAlchemy reads as part of it. It never holds "://", where the
+#   next URL starts, so a search reads each part of the text for at most two
+#   URLs and takes time linear in its length.
+# - Read out: a port before a path, query or fragment (host:4873/@scope/pkg,
+#   where the "@" is in the path), and a digest of its algorithm's exact
+#   length after the "@", which no host and port can be (a Docker image
+#   pinned by digest, alpine:3.18@sha256:...).
+#
+# The three schemes the pattern named before #658, postgres, mysql and
+# mongodb, keep its reach, so nothing it reported is lost: the user runs to
+# the first ":", and the password to the first "@" across whitespace, quotes
+# and lines. The password stops where the next URL of these three schemes
+# starts, so this search is linear too; that is the one form it no longer
+# reports, a password that holds such a URL's scheme and "://".
+#
+# Both read out a placeholder of one exact shape as the whole password:
+# ${NAME} or <name>, in ASCII. Not ${NAME:-default}, whose default can be a
+# literal password, nor $NAME, as a literal password can start with "$", nor
+# a run of "*": a masked password has that shape, but so can a literal one.
+_URL_USER = r"[^\s\"'`:/?#\[\]]*"
+_NOT_A_PORT = r"(?![0-9]{1,5}[/?#])"
+_NOT_A_PLACEHOLDER = r"(?!(?a:\$\{[A-Za-z_][A-Za-z0-9_]*\}|<[A-Za-z_][A-Za-z0-9_-]*>)@)"
+# What follows the user's ":", up to the "@": the password.
+_URL_USERINFO_TAIL = r"(?:[^\s\"'`:@]|:(?!//))+"
+_NOT_A_DIGEST = (
+    "(?!(?a:"
+    + "|".join(f"{label}[0-9a-f]{{{length}}}" for label, length in _HEX_DIGEST_LENGTHS.items())
+    + r")(?:[\s\"'`]|\Z))"
+)
+_URL_CREDENTIALS = (
+    "://" + _URL_USER + ":" + _NOT_A_PORT + _NOT_A_PLACEHOLDER + _URL_USERINFO_TAIL + "@" + _NOT_A_DIGEST
+)
+_NAMED_BEFORE = r"(?:postgres|mysql|mongodb)://"
+_URL_AS_BEFORE = _NAMED_BEFORE + r"[^:]+:" + _NOT_A_PLACEHOLDER + r"(?:(?!" + _NAMED_BEFORE + r")[^@])+@"
+_DATABASE_URL = "(?:" + _URL_AS_BEFORE + ")|(?:" + _URL_CREDENTIALS + ")"
+
 
 def _continues_name(text: str, begin: int) -> bool:
     """Whether the character before *begin* continues a name, so a label or
@@ -193,7 +241,9 @@ class ConfigGuard:
         "STRIPE_RESTRICTED_KEY": r"rk_live_[a-zA-Z0-9]{24,}",
         "SLACK_TOKEN": r"xox[baprs]-[0-9a-zA-Z-]+",
         "DISCORD_TOKEN": r"[MN][A-Za-z\d]{23,}\.[\w-]{6}\.[\w-]{27}",
-        "DATABASE_URL": r"(postgres|mysql|mongodb)://[^:]+:[^@]+@",
+        # Any scheme's URL with a password (_DATABASE_URL), under one type,
+        # so each URL is reported once.
+        "DATABASE_URL": _DATABASE_URL,
         "BASIC_AUTH": r"Basic [A-Za-z0-9+/=]{10,}",
         "BEARER_TOKEN": r"Bearer [a-zA-Z0-9_.-]{20,}",
     }
