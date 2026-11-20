@@ -111,8 +111,8 @@ Math:
 
 Logic:
   [ok] x>5 AND x<3            -> UNVERIFIABLE (contradiction) | DENY
-  [ok] x>3 AND x<10           -> VERIFIED (x=4) | ADMIT
-  [ok] approval=1 AND approval=0 -> UNVERIFIABLE (contradiction) | DENY
+  [ok] x>5 => x>3             -> VERIFIED | ADMIT
+  [ok] x>5 => x>10            -> VERIFIED (false) | DENY
 
 SQL:
   [ok] Valid SELECT           -> VERIFIED (safe) | ADMIT
@@ -130,7 +130,10 @@ Code:
 Each line shows the verdict and the admission decision. `VERIFIED` means the
 engine decided the claim; it does not mean the claim is true or safe. A claim
 proven false or unsafe is `VERIFIED` with admission `DENY`. `[ok]` means the
-engine returned the expected result.
+engine returned the expected result. The two `=>` lines prove a claim from a
+premise for every `x`: `x>3` follows from `x>5`, `x>10` does not (the engine
+finds a counterexample). `qwed test` does not show a set of constraints that
+is only satisfiable as `VERIFIED`.
 
 ## Use it
 

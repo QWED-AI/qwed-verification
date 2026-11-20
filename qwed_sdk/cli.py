@@ -47,6 +47,17 @@ from qwed_sdk.cli_model import (
     require_provider_model as _require_provider_model,
     saved_provider as _saved_provider,
 )
+from qwed_sdk.cli_logic_proof import (
+    LOGIC_CLAIM_INVALID_DSL,
+    LOGIC_CLAIM_VALID_DSL,
+    LOGIC_LABEL_INVALID,
+    LOGIC_LABEL_UNSAT,
+    LOGIC_LABEL_VALID,
+    logic_claim_follows,
+    logic_claim_refuted,
+    logic_proof_detail,
+    prove_logic_claim,
+)
 from qwed_sdk.init_owner import resolve_owner, signup_failure
 
 logger = logging.getLogger(__name__)
@@ -74,7 +85,6 @@ REMOTE_SERVER_SCHEME = "https"
 MATH_LABEL_VALID = "2+2=4"
 MATH_LABEL_INVALID = "2+2=5"
 MATH_LABEL_LARGE = "997*998*999"
-LOGIC_LABEL_UNSAT = "x>5 AND x<3"
 # A failed self-check is not a verdict: never print BLOCKED for it (#438).
 CHECK_FAILED_LABEL = "FAILED"
 
@@ -1895,6 +1905,55 @@ def _code_verifier_is_verified_unsafe(payload) -> bool:
     )
 
 
+def _run_logic_engine_cases(run_case, add_engine_error_cases) -> None:
+    """The Logic group: a contradiction, then two proofs (#660).
+
+    Each engine is built on its own, so one that cannot be built errors only
+    its own lines and the group still lists all three.
+    """
+    try:
+        from qwed_new.core.diagnostics import DiagnosticStatus
+        from qwed_new.core.logic_verifier import LogicVerifier
+
+        logic_engine = LogicVerifier()
+    except Exception as exc:
+        add_engine_error_cases("Logic", [LOGIC_LABEL_UNSAT], exc)
+    else:
+        run_case(
+            "Logic",
+            LOGIC_LABEL_UNSAT,
+            _verdict_label("UNVERIFIABLE", "DENY", "contradiction"),
+            lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"]),
+            lambda payload: payload.status == DiagnosticStatus.UNVERIFIABLE,
+            lambda payload: f"status={payload.status.value}",
+        )
+
+    try:
+        from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
+
+        dsl_logic_engine = DSLLogicVerifier()
+    except Exception as exc:
+        add_engine_error_cases("Logic", [LOGIC_LABEL_VALID, LOGIC_LABEL_INVALID], exc)
+        return
+
+    run_case(
+        "Logic",
+        LOGIC_LABEL_VALID,
+        _verdict_label("VERIFIED", "ADMIT"),
+        lambda: prove_logic_claim(dsl_logic_engine, LOGIC_CLAIM_VALID_DSL),
+        logic_claim_follows,
+        logic_proof_detail,
+    )
+    run_case(
+        "Logic",
+        LOGIC_LABEL_INVALID,
+        _verdict_label("VERIFIED", "DENY", "false"),
+        lambda: prove_logic_claim(dsl_logic_engine, LOGIC_CLAIM_INVALID_DSL),
+        logic_claim_refuted,
+        logic_proof_detail,
+    )
+
+
 def _run_full_engine_tests() -> List[dict]:
     results: List[dict] = []
 
@@ -1964,47 +2023,7 @@ def _run_full_engine_tests() -> List[dict]:
             lambda payload: f"status={payload.get('status')}",
         )
 
-    try:
-        from qwed_new.core.logic_verifier import LogicVerifier
-
-        logic_engine = LogicVerifier()
-    except Exception as exc:
-        logic_engine = None
-        add_engine_error_cases("Logic", [LOGIC_LABEL_UNSAT, "x>3 AND x<10", "approval=1 AND approval=0"], exc)
-
-    if logic_engine is not None:
-        from qwed_new.core.diagnostics import DiagnosticStatus
-
-        def _logic_is_unverifiable(p):
-            return p.status == DiagnosticStatus.UNVERIFIABLE
-
-        def _logic_is_proved(p):
-            return p.status == DiagnosticStatus.VERIFIED
-
-        run_case(
-            "Logic",
-            LOGIC_LABEL_UNSAT,
-            _verdict_label("UNVERIFIABLE", "DENY", "contradiction"),
-            lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 5", "x < 3"]),
-            _logic_is_unverifiable,
-            lambda payload: f"status={payload.status.value}",
-        )
-        run_case(
-            "Logic",
-            "x>3 AND x<10",
-            _verdict_label("VERIFIED", "ADMIT", "x=4"),
-            lambda: logic_engine.verify_logic({"x": "Int"}, ["x > 3", "x < 10", "x == 4"]),
-            _logic_is_proved,
-            lambda payload: f"model={payload.developer_fields.get('model', payload)}",
-        )
-        run_case(
-            "Logic",
-            "approval=1 AND approval=0",
-            _verdict_label("UNVERIFIABLE", "DENY", "contradiction"),
-            lambda: logic_engine.verify_logic({"approval": "Int"}, ["approval == 1", "approval == 0"]),
-            _logic_is_unverifiable,
-            lambda payload: f"status={payload.status.value}",
-        )
+    _run_logic_engine_cases(run_case, add_engine_error_cases)
 
     try:
         from qwed_new.core.sql_verifier import SQLVerifier
