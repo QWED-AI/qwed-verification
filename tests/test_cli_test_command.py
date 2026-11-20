@@ -8,16 +8,15 @@ from click.testing import CliRunner
 
 from qwed_new.core.diagnostics import DiagnosticStatus
 from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier, DSLVerificationResult
-from qwed_sdk.cli import (
+from qwed_sdk.cli import _run_full_engine_tests, cli
+from qwed_sdk.cli_logic_proof import (
     LOGIC_CLAIM_INVALID_DSL,
     LOGIC_CLAIM_VALID_DSL,
     LOGIC_LABEL_INVALID,
     LOGIC_LABEL_UNSAT,
     LOGIC_LABEL_VALID,
     LOGIC_PREMISE_DSL,
-    _prove_logic_claim,
-    _run_full_engine_tests,
-    cli,
+    prove_logic_claim,
 )
 
 README = Path(__file__).resolve().parent.parent / "README.md"
@@ -552,8 +551,8 @@ def test_the_false_line_reads_the_engines_status_beside_the_verdict(monkeypatch,
 
 def test_proof_lines_carry_a_proof_ref_with_the_real_engine():
     engine = DSLLogicVerifier()
-    follows = _prove_logic_claim(engine, LOGIC_CLAIM_VALID_DSL)
-    refuted = _prove_logic_claim(engine, LOGIC_CLAIM_INVALID_DSL)
+    follows = prove_logic_claim(engine, LOGIC_CLAIM_VALID_DSL)
+    refuted = prove_logic_claim(engine, LOGIC_CLAIM_INVALID_DSL)
 
     assert follows.verdict.status == DiagnosticStatus.VERIFIED
     assert follows.verdict.proof_ref
