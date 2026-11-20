@@ -378,8 +378,13 @@ def _stand_in(agreement, status, confidence=0.999, chain=()):
     (_stand_in("unanimous", DiagnosticStatus.UNVERIFIABLE), "UNVERIFIABLE"),
     (_stand_in("unanimous", DiagnosticStatus.VERIFIED), "UNVERIFIABLE"),
     (_stand_in("unanimous", "VERIFIED"), "UNVERIFIABLE"),
+    # Below the minimum confidence too, these stay BLOCKED, not UNVERIFIABLE.
+    (_stand_in("blocked_secure_execution", DiagnosticStatus.BLOCKED, confidence=0.0), "BLOCKED"),
+    (_stand_in("blocked", DiagnosticStatus.BLOCKED, confidence=0.0), "BLOCKED"),
+    (_stand_in(NO_INDEPENDENT_VERIFICATION, DiagnosticStatus.BLOCKED, confidence=0.0), "BLOCKED"),
 ], ids=["secure-execution", "all-blocked", "below-minimum", "one-engine", "unanimous", "says-verified",
-        "says-verified-text"])
+        "says-verified-text", "secure-execution-below-minimum", "all-blocked-below-minimum",
+        "one-engine-below-minimum"])
 def test_every_consensus_response_is_advisory(client, isolated_audit_chain, stand_in, status):  # noqa: F811
     with patch.object(api_main.consensus_verifier, "verify_async", AsyncMock(return_value=stand_in)):
         response = client.post("/verify/consensus", json={"query": "What is 2 + 2?"})
