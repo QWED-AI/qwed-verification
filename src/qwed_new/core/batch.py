@@ -223,6 +223,9 @@ class BatchVerificationService:
         async def process_item(item: BatchItem) -> None:
             async with semaphore:
                 start_time = time.time()
+                # A record left by an earlier run of this job is not this
+                # attempt's (#578).
+                item.raw_llm_output = None
                 try:
                     # Bound each item so a stalled verification cannot keep the
                     # job active forever; the timeout is caught below and the
@@ -244,6 +247,9 @@ class BatchVerificationService:
                     item.latency_ms = (time.time() - start_time) * 1000
                 if audit is not None:
                     await self._audit_item(job, item, audit)
+                # The record is for the audit row only; a retained job does
+                # not keep it.
+                item.raw_llm_output = None
         
         # Process all items concurrently. The tasks copy the job's math
         # deadline from this context (GHSA-qgjc).

@@ -15,7 +15,13 @@ import logging
 from typing import Dict, Any, Optional, Tuple
 from qwed_new.core.router import Router
 from qwed_new.core.policy import PolicyEngine
-from qwed_new.core.translation_record import RAW_LLM_OUTPUT_KEY, Translation, audit_record, translation_of
+from qwed_new.core.translation_record import (
+    RAW_LLM_OUTPUT_KEY,
+    Translation,
+    audit_record,
+    translation_in,
+    translation_of,
+)
 from qwed_new.core.translator import TranslationLayer
 from qwed_new.core.verifier import VerificationEngine, DISPROVEN_STATUS
 from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
@@ -279,6 +285,9 @@ class ControlPlane:
             
         # 2. Routing (Select Provider)
         provider = self.router.route(query, preferred_provider)
+        # The audit record, once the model has returned (#578): an error
+        # after that point keeps it.
+        raw_llm_output = None
         
         try:
             # 3. Translation (LLM Call)
@@ -387,9 +396,13 @@ class ControlPlane:
             return response
             
         except Exception as e:
+            if raw_llm_output is None:
+                # Output the safety check refused is kept too (#578).
+                raw_llm_output = audit_record([translation_in(e)])
             return {
                 "status": "ERROR",
                 "error": str(e),
+                RAW_LLM_OUTPUT_KEY: raw_llm_output,
                 "latency_ms": (time.time() - start_time) * 1000
             }
 
@@ -438,6 +451,9 @@ class ControlPlane:
         provider = self.router.route(query, preferred_provider)
         last_known_provider = provider
         last_known_model = None
+        # What the model returned, once it has (#578): an error after that
+        # point keeps it.
+        translation = None
 
         # 3. DSL Logic Pipeline
         try:
@@ -510,6 +526,7 @@ class ControlPlane:
                 "error": "Internal pipeline error",
                 "provider_used": last_known_provider,
                 "translation_model": last_known_model,
+                RAW_LLM_OUTPUT_KEY: audit_record([translation]),
                 "latency_ms": (time.time() - start_time) * 1000
             }
 

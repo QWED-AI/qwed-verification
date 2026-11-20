@@ -12,7 +12,6 @@ same way in both places.
 ``/verify/rag`` and ``/verify/process`` build theirs with ``guard_diagnostic``.
 """
 
-from dataclasses import replace
 from typing import Any
 
 from qwed_new.core.diagnostics import AdvisoryCheck, DiagnosticResult
@@ -120,7 +119,7 @@ def logic_diagnostic(result: dict) -> DiagnosticResult:
     into its fields (#578).
     """
     fields = {key: value for key, value in result.items() if key != RAW_LLM_OUTPUT_KEY}
-    return replace(_logic_verdict(fields), raw_llm_output=raw_llm_output_of(result))
+    return _logic_verdict(fields).with_audit_record(raw_llm_output_of(result))
 
 
 def _logic_verdict(result: dict) -> DiagnosticResult:
@@ -172,11 +171,10 @@ def natural_language_diagnostic(result: Any) -> DiagnosticResult:
     goes on the result for the audit row only (#578).
     """
     dr = _natural_language_verdict(result)
+    fields = dr.developer_fields
     if isinstance(result, dict) and "diagnostic" not in result:
-        provenance = {key: result[key] for key in _PROVENANCE_KEYS if key in result}
-        if provenance:
-            dr = replace(dr, developer_fields={**dr.developer_fields, **provenance})
-    return replace(dr, raw_llm_output=raw_llm_output_of(result))
+        fields = {**fields, **{key: result[key] for key in _PROVENANCE_KEYS if key in result}}
+    return dr.with_audit_record(raw_llm_output_of(result), developer_fields=fields)
 
 
 def _natural_language_verdict(result: Any) -> DiagnosticResult:

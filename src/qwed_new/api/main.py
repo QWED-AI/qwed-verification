@@ -4,7 +4,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 from typing import Optional, Annotated
 from sqlmodel import Session, select
-from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
 import asyncio
 import hashlib
@@ -754,7 +753,7 @@ async def verify_logic(
         )
         # The model's translation, where it returned one, still goes to the
         # audit row (#578).
-        dr = dataclass_replace(dr, raw_llm_output=raw_llm_output_of(result))
+        dr = dr.with_audit_record(raw_llm_output_of(result))
         return _logic_route_response(dr, request.query, tenant.organization_id)
 
 # #353 (CodeAnt + CodeRabbit on PR #354): the byte cap bounds TRANSFER,

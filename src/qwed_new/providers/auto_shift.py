@@ -18,11 +18,17 @@ logger = logging.getLogger(__name__)
 
 
 class _Answered(threading.local):
-    """The model of the side that answered, kept per thread: requests
+    """The side that answered and its model, kept per thread: requests
     run on worker threads at once, and one must never see another's
-    model (#585)."""
+    (#585, #578)."""
 
     model: Optional[str] = None
+    provider: Optional[str] = None
+
+
+# The provider name of each side, as ACTIVE_PROVIDER would name it.
+_PRIMARY = "azure_openai"
+_SECONDARY = "anthropic"
 
 
 def _model_of(side) -> Optional[str]:
@@ -78,6 +84,7 @@ class AutoShiftProvider(LLMProvider):
         """
         # No side has answered this call yet, so a failure names no model.
         self._answered.model = None
+        self._answered.provider = None
         # Try Primary
         if self.primary:
             try:
@@ -87,6 +94,7 @@ class AutoShiftProvider(LLMProvider):
                 logger.warning(f"Primary Provider ({method_name}) failed: {e}. Attempting Auto-Shift...")
             else:
                 self._answered.model = _model_of(self.primary)
+                self._answered.provider = _PRIMARY
                 return result
         
         # Try Secondary
@@ -99,6 +107,7 @@ class AutoShiftProvider(LLMProvider):
                 logger.error(f"Secondary Provider ({method_name}) also failed: {e}")
                 raise e
             self._answered.model = _model_of(self.secondary)
+            self._answered.provider = _SECONDARY
             return result
         
         # If we get here, it means primary failed (or is None) and secondary is None
@@ -110,6 +119,13 @@ class AutoShiftProvider(LLMProvider):
         or None if neither has (#585). Each side runs only its configured
         model."""
         return self._answered.model
+
+    @property
+    def answered_provider(self) -> Optional[str]:
+        """The side that answered this thread's last call ("azure_openai"
+        or "anthropic"), or None if neither has. The audit record names it
+        beside "auto" (#578)."""
+        return self._answered.provider
 
     def translate(self, user_query: str) -> MathVerificationTask:
         return self._execute_with_fallback('translate', user_query)

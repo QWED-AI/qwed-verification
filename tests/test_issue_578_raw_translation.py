@@ -16,7 +16,7 @@ import json
 import threading
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 from hypothesis import given, settings as hypothesis_settings, strategies as st
@@ -24,13 +24,22 @@ from hypothesis import given, settings as hypothesis_settings, strategies as st
 from qwed_new.api import main as api_main
 from qwed_new.config import settings
 from qwed_new.core import audit_logger as audit_module
-from qwed_new.core.consensus_verifier import ConsensusResult, EngineResult, chain_record
+from qwed_new.core.consensus_verifier import (
+    ConsensusResult,
+    ConsensusVerifier,
+    EngineResult,
+    VerificationMode,
+    _EngineCall,
+    chain_record,
+)
+from qwed_new.core.batch import BatchItem, BatchJob, BatchVerificationService, VerificationType
 from qwed_new.core.diagnostics import DiagnosticResult
 from qwed_new.core.fact_verifier import FactVerifier
 from qwed_new.core.schemas import LogicVerificationTask, MathVerificationTask
 from qwed_new.core.stats_verifier import StatsVerifier
 from qwed_new.core.translation_record import (
     MAX_RECORD_CHARS,
+    PREVIEW_CHARS,
     RAW_LLM_OUTPUT_KEY,
     Translation,
     audit_record,
@@ -46,7 +55,7 @@ from tests.test_issue_477_audit_batch_agents import (  # noqa: F401  (fixtures)
     env,
 )
 from tests.test_issue_477_audit_batch_agents import _rows as _org_rows
-from tests.test_issue_585_translation_model import _Configured
+from tests.test_issue_585_translation_model import _Configured, _auto
 
 MODEL = "configured-model-578"
 # Text the output sanitiser escapes or strips; the audit row keeps it as the
@@ -166,7 +175,8 @@ def test_a_record_over_the_bound_is_its_length_hash_and_preview(output):
     assert stored["truncated"] is True
     assert stored["length"] == len(full)
     assert stored["sha256"] == hashlib.sha256(full.encode("ascii")).hexdigest()
-    assert full.startswith(stored["preview"])
+    assert len(stored["preview"]) == PREVIEW_CHARS
+    assert stored["preview"] == full[:PREVIEW_CHARS]
 
 
 def test_a_lone_surrogate_is_escaped_so_the_row_can_be_stored():
@@ -176,9 +186,30 @@ def test_a_lone_surrogate_is_escaped_so_the_row_can_be_stored():
     assert _entries(record)[0]["output"]["reasoning"] == "\ud800"
 
 
-def test_a_number_the_model_wrote_as_nan_is_kept():
-    record = audit_record([Translation("fact", {"confidence": float("nan")}, None, None)])
-    assert "NaN" in record
+def _strict(record):
+    def refuse(constant):
+        raise ValueError(f"not strict JSON: {constant}")
+
+    return json.loads(record, parse_constant=refuse)
+
+
+@pytest.mark.parametrize("number, text", [
+    (float("nan"), "NaN"), (float("inf"), "Infinity"), (float("-inf"), "-Infinity"),
+])
+def test_a_number_json_has_no_value_for_is_kept_as_text(number, text):
+    record = audit_record([Translation("fact", {"confidence": number}, None, None)])
+    # Any JSON parser reads it: no bare NaN or Infinity.
+    assert _strict(record)["translations"][0]["output"] == {"confidence": text}
+
+
+@pytest.mark.parametrize("output", [
+    {"tags": {"alpha", "beta", "gamma"}},  # a set's order can differ between runs
+    {"value": object()},
+    {"value": b"bytes"},
+], ids=["set", "object", "bytes"])
+def test_a_value_json_has_no_type_for_is_never_written_as_display_text(output):
+    record = audit_record([Translation("fact", output, None, None)])
+    assert _strict(record) == {"unserializable": True, "translations": 1}
 
 
 def _deep(levels):
@@ -199,7 +230,7 @@ def test_an_output_json_cannot_write_is_stored_as_that_fact(output):
 
 @hypothesis_settings(max_examples=150, deadline=None)
 @given(st.recursive(
-    st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False) | st.text(),
+    st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False, allow_infinity=False) | st.text(),
     lambda children: st.lists(children, max_size=4) | st.dictionaries(st.text(max_size=8), children, max_size=4),
     max_leaves=25,
 ))
@@ -246,7 +277,8 @@ def test_a_shared_translation_layer_names_each_threads_own_provider():
     for thread in threads:
         thread.join()
 
-    assert seen and all(key == provider for key, provider in seen)
+    assert len(seen) == 1600
+    assert all(key == provider for key, provider in seen)
 
 
 @pytest.mark.parametrize("translator", [
@@ -473,3 +505,245 @@ def test_an_edited_translation_fails_verification(client, isolated_audit_chain, 
 
     trail = audit_module.get_audit_logger().verify_audit_trail(organization_id=1)
     assert trail["valid"] is False
+
+
+# ---------------------------------------------------------------- review round 1
+
+
+UNSAFE = "__import__('os').system('id')"
+
+
+def test_the_audit_only_fields_are_left_out_of_repr():
+    dr = DiagnosticResult.unverifiable("not proven").with_audit_record('{"translations":[]}')
+    engine = EngineResult("SymPy", "m", None, 0.0, 1.0, False, translation=Translation("math", MARKUP, None, None))
+
+    assert "translations" not in repr(dr)
+    assert MARKUP not in repr(engine)
+
+
+def test_the_audit_record_method_keeps_the_verdict_and_proof():
+    dr = DiagnosticResult.verified("ok", developer_fields={"a": 1}, evidence={"x": 1}).with_attestation("token")
+    kept = dr.with_audit_record("{}", developer_fields={"a": 2})
+
+    assert (kept.status, kept.proof_ref, kept.attestation) == (dr.status, dr.proof_ref, dr.attestation)
+    assert kept.developer_fields == {"a": 2}
+    assert kept.raw_llm_output == "{}"
+
+
+def test_a_natural_language_error_after_translation_keeps_it(client, isolated_audit_chain, model):  # noqa: F811
+    with patch.object(api_main.control_plane.math_verifier, "verify_math", side_effect=RuntimeError("boom")):
+        body = client.post("/verify/natural_language", json={"query": "What is 15% of 200?"}).json()
+
+    assert body["status"] != "VERIFIED"
+    (row,) = _rows(isolated_audit_chain)
+    assert _entries(row.raw_llm_output)[0]["output"]["expression"] == "0.15 * 200"
+    assert not _contains_key(body, RAW_LLM_OUTPUT_KEY)
+
+
+def test_output_the_safety_check_refuses_is_kept(client, isolated_audit_chain, model, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(model, "translate", lambda query: MathVerificationTask(
+        expression=UNSAFE, claimed_answer=0.0, reasoning="x", confidence=0.9,
+    ))
+    body = client.post("/verify/natural_language", json={"query": "What is 15% of 200?"}).json()
+
+    assert body["status"] != "VERIFIED"
+    (row,) = _rows(isolated_audit_chain)
+    (entry,) = _entries(row.raw_llm_output)
+    assert entry["output"]["expression"] == UNSAFE
+    assert entry["translation_model"] == MODEL
+    assert UNSAFE not in json.dumps(body)
+
+
+def test_a_logic_solver_failure_keeps_the_translation(client, isolated_audit_chain, model):  # noqa: F811
+    with patch.object(api_main.control_plane.logic_verifier, "prove_from_dsl", side_effect=RuntimeError("z3")):
+        body = client.post("/verify/logic", json={"query": QUESTION}).json()
+
+    assert body["status"] == "BLOCKED"
+    (row,) = _rows(isolated_audit_chain)
+    assert _entries(row.raw_llm_output)[0]["output"]["claim"] == "x > 3"
+
+
+def test_each_translating_consensus_engine_keeps_its_translation(model, monkeypatch):
+    verifier = ConsensusVerifier(enable_circuit_breaker=False)
+    # No sandbox here: the engine stops after its translation.
+    verifier._secure_executor = SimpleNamespace(execute=lambda code, context: (False, "SECURE_RUNTIME_UNAVAILABLE", None))
+
+    python = verifier._verify_with_code("What is 15% of 200?")
+    z3 = verifier._verify_with_logic("x is over 5. Is x over 3?")
+
+    assert python.translation.engine == "Python"
+    assert python.translation.translation_model == MODEL
+    # The Z3 engine fails on the translation (#659), and still keeps it.
+    assert z3.status == "BLOCKED"
+    assert z3.translation.engine == "Z3"
+    assert z3.translation.output.claim == "x > 3"
+
+
+def test_a_consensus_engine_keeps_the_output_its_safety_check_refused(model, monkeypatch):
+    monkeypatch.setattr(model, "translate", lambda query: MathVerificationTask(
+        expression=UNSAFE, claimed_answer=0.0, reasoning="x", confidence=0.9,
+    ))
+    verifier = ConsensusVerifier(enable_circuit_breaker=False)
+
+    for result in (verifier._verify_with_math("q"), verifier._verify_with_code("q")):
+        assert result.status == "BLOCKED"
+        assert result.translation.output.expression == UNSAFE
+        assert result.translation.translation_model == MODEL
+
+
+def test_the_python_engine_names_the_model_of_the_instance_that_translated():
+    def layer(name):
+        return SimpleNamespace(
+            translate=lambda query: MathVerificationTask(
+                expression="1 + 1", claimed_answer=2.0, reasoning="r", confidence=1.0,
+            ),
+            translation=lambda kind, output, key=None, engine=None: Translation(kind, output, "ollama", name, engine),
+        )
+
+    verifier = ConsensusVerifier(enable_circuit_breaker=False)
+    translations = []
+    with patch.object(ConsensusVerifier, "translator", new_callable=PropertyMock, side_effect=[layer("first"), layer("second")]):
+        verifier._generate_verification_code("q", translations)
+
+    (translation,) = translations
+    assert translation.translation_model == "first"
+
+
+def _slow_engine(release):
+    def engine(query, translations):
+        translations.append(Translation("math", {"expression": "1"}, "ollama", MODEL, engine="Slow"))
+        release.wait(5)
+        translations.append(Translation("math", {"expression": "late"}, "ollama", MODEL, engine="Slow"))
+        return EngineResult("Slow", "m", 1, 1.0, 1.0, True, status="VERIFIED")
+
+    return engine
+
+
+@pytest.mark.asyncio
+async def test_a_consensus_timeout_keeps_the_translation_that_finished():
+    release = threading.Event()
+    verifier = ConsensusVerifier(enable_circuit_breaker=False)
+    verifier._select_engines = lambda query, mode: [("Slow", _EngineCall(_slow_engine(release)))]
+    try:
+        result = await verifier.verify_async("q", mode=VerificationMode.SINGLE, timeout_seconds=0.3)
+    finally:
+        release.set()
+
+    (blocked,) = result.verification_chain
+    assert blocked.status == "BLOCKED"
+    # A snapshot: the worker's later append does not reach the result.
+    assert blocked.translation.output == {"expression": "1"}
+    assert [e["output"] for e in _entries(chain_record(result.verification_chain))] == [{"expression": "1"}]
+
+
+def test_a_sequential_consensus_timeout_keeps_the_translation_that_finished(monkeypatch):
+    from qwed_new.core import consensus_verifier as cv
+
+    monkeypatch.setattr(cv, "_ENGINE_TIMEOUT_SECONDS", 0.3)
+    release = threading.Event()
+    verifier = ConsensusVerifier(enable_circuit_breaker=False)
+    try:
+        (blocked,) = verifier._execute_sequential("q", [("Slow", _EngineCall(_slow_engine(release)))])
+    finally:
+        release.set()
+
+    assert blocked.status == "BLOCKED"
+    assert blocked.translation.output == {"expression": "1"}
+
+
+def test_an_engine_that_does_not_translate_keeps_nothing_on_timeout(monkeypatch):
+    from qwed_new.core import consensus_verifier as cv
+
+    monkeypatch.setattr(cv, "_ENGINE_TIMEOUT_SECONDS", 0.3)
+    release = threading.Event()
+    verifier = ConsensusVerifier(enable_circuit_breaker=False)
+    try:
+        (blocked,) = verifier._execute_sequential("q", [("Plain", lambda query: release.wait(5))])
+    finally:
+        release.set()
+
+    assert blocked.translation is None
+
+
+@pytest.mark.asyncio
+async def test_a_batch_item_keeps_no_record_from_an_earlier_run_or_after_its_row():
+    seen = []
+
+    async def audit(job, item):
+        seen.append(item.raw_llm_output)
+
+    service = BatchVerificationService()
+    item = BatchItem(id="j-0", query="q", verification_type=VerificationType.NATURAL_LANGUAGE)
+    item.raw_llm_output = "left by an earlier run"
+    job = BatchJob(job_id="j", organization_id=1, items=[item])
+
+    async def fails(item, organization_id):
+        raise RuntimeError("engine down")
+
+    with patch.object(service, "_verify_item", fails):
+        await service.process_job(job, audit=audit)
+
+    assert seen == [None]
+    assert item.raw_llm_output is None
+
+
+@pytest.mark.asyncio
+async def test_a_batch_item_drops_its_record_once_the_row_is_written():
+    seen = []
+
+    async def audit(job, item):
+        seen.append(item.raw_llm_output)
+
+    service = BatchVerificationService()
+    item = BatchItem(id="j-0", query="q", verification_type=VerificationType.NATURAL_LANGUAGE)
+    job = BatchJob(job_id="j", organization_id=1, items=[item])
+
+    async def translates(item, organization_id):
+        item.raw_llm_output = "{}"
+        return {"status": "UNVERIFIABLE"}
+
+    with patch.object(service, "_verify_item", translates):
+        await service.process_job(job, audit=audit)
+
+    assert seen == ["{}"]
+    assert item.raw_llm_output is None
+
+
+def test_an_empty_fact_answer_is_kept_and_gives_no_advisory():
+    verifier = FactVerifier(use_llm_fallback=True)
+    verifier._translator = SimpleNamespace(verify_fact=lambda *args, **kwargs: {})
+
+    result = verifier.verify_fact("The sky is green", "Grass grows in fields.", provider="ollama")
+
+    assert not [check for check in result.advisory_checks if check.name == "llm_fallback"]
+    assert _entries(result.raw_llm_output)[0]["output"] == {}
+
+
+@pytest.mark.parametrize("primary_fails, side, side_model", [
+    (False, "azure_openai", "azure-deployment"),
+    (True, "anthropic", "anthropic-model"),
+])
+def test_auto_shift_names_the_side_that_answered(monkeypatch, primary_fails, side, side_model):
+    auto, primary, _ = _auto(monkeypatch)
+    primary.fails = primary_fails
+    layer = TranslationLayer()
+    layer._providers["auto"] = auto
+
+    output = auto.translate("q")
+    translation = layer.translation("math", output, "auto")
+
+    assert translation.provider_used == "auto"
+    assert translation.answering_provider == side
+    assert translation.translation_model == side_model
+    assert _entries(audit_record([translation]))[0]["answering_provider"] == side
+
+
+def test_auto_shift_names_no_side_after_a_failed_call(monkeypatch):
+    auto, primary, secondary = _auto(monkeypatch)
+    auto.translate("q")
+    primary.fails = secondary.fails = True
+    with pytest.raises(RuntimeError):
+        auto.translate("q")
+
+    assert auto.answered_provider is None
+    assert "answering_provider" not in Translation("math", 1, "auto", None).entry()

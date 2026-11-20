@@ -666,11 +666,14 @@ class FactVerifier:
             # The claim or context was refused before the model saw it (#632).
             logger.warning("Fact advisory refused: %s", e)
             return None, ("fact_verifier.translation_refused", e)
-        if not llm_result:
+        if llm_result is None:
             return None, None
-        # Read on this thread, right after the call (#585).
+        # Read on this thread, right after the call (#585). An empty answer
+        # is kept too: it is what the model returned (#578).
         translation = translation_of(self._translator, "fact", llm_result, provider)
         translations.append(translation)
+        if not llm_result:
+            return None, None
         provenance = translation.provenance()
         return AdvisoryCheck(
             name="llm_fallback",

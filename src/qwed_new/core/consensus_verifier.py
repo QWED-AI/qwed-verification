@@ -10,7 +10,7 @@ Enhanced Features:
 """
 
 from typing import List, Dict, Any, Optional, Tuple, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from decimal import Decimal
 import time
@@ -27,7 +27,7 @@ _CIRCUIT_OPEN_ERROR = "Engine excluded by open circuit breaker"
 import threading
 
 from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus, compute_proof_ref
-from qwed_new.core.translation_record import Translation, audit_record, translation_of
+from qwed_new.core.translation_record import Translation, audit_record, translation_in, translation_of
 from qwed_new.providers.base import TranslationRefused
 
 from .verification_context import VerificationContextDocument
@@ -44,6 +44,36 @@ NO_INDEPENDENT_VERIFICATION = "no_independent_verification"
 def _first(translations: List[Translation]) -> Optional[Translation]:
     """The translation an engine asked for, or None when it got none."""
     return translations[0] if translations else None
+
+
+def _keep_refused(error: BaseException, translations: Optional[List[Translation]], engine: str) -> None:
+    """Add the output the safety check refused, where ``error`` carries it,
+    to ``translations``: the audit row keeps it (#578)."""
+    refused = translation_in(error)
+    if refused is not None and translations is not None:
+        translations.append(refused.for_engine(engine))
+
+
+class _EngineCall:
+    """A translating engine, with the list of translations this request
+    owns (#578). The engine adds its translation as soon as the model
+    returns, so a timeout or failure branch can still keep it."""
+
+    def __init__(self, method: Callable[[str, List[Translation]], "EngineResult"]):
+        self.method = method
+        self.translations: List[Translation] = []
+
+    def __call__(self, query: str) -> "EngineResult":
+        return self.method(query, self.translations)
+
+
+def _snapshot(call: Any) -> Optional[Translation]:
+    """The translation an engine call holds now, for a result built without
+    it (a timeout or failure). A copy, so a worker that finishes later
+    cannot change the result. None for an engine that does not translate."""
+    if isinstance(call, _EngineCall):
+        return _first(list(call.translations))
+    return None
 
 
 def chain_record(chain: Any) -> Optional[str]:
@@ -84,7 +114,8 @@ class EngineResult:
     status: Optional[str] = None  # DiagnosticStatus value — preserves status through consensus
     # What the model translated the query into for this engine, with the
     # provider and model (#578, #585); None when the engine had no translation.
-    translation: Optional[Translation] = None
+    # Left out of repr: it is the model's unsanitised output.
+    translation: Optional[Translation] = field(default=None, repr=False)
 
     def provenance(self) -> Dict[str, Optional[str]]:
         """The provider and model whose translation this engine decided on,
@@ -553,7 +584,7 @@ class ConsensusVerifier:
             for engine_name, method in engine_methods:
                 if self._is_engine_available(engine_name):
                     tasks.append(
-                        (engine_name, loop.run_in_executor(pool, method, query))
+                        (engine_name, loop.run_in_executor(pool, method, query), method)
                     )
                 else:
                     # #352 review: a breaker-rejected engine must surface as
@@ -632,13 +663,13 @@ class ConsensusVerifier:
         engines = []
         
         # Always include math
-        engines.append(("SymPy", self._verify_with_math))
+        engines.append(("SymPy", _EngineCall(self._verify_with_math)))
         
         if mode in [VerificationMode.HIGH, VerificationMode.MAXIMUM]:
-            engines.append(("Python", self._verify_with_code))
+            engines.append(("Python", _EngineCall(self._verify_with_code)))
         
         if mode == VerificationMode.MAXIMUM:
-            engines.append(("Z3", self._verify_with_logic))
+            engines.append(("Z3", _EngineCall(self._verify_with_logic)))
             
             # Add stats for statistical queries
             query_lower = query.lower()
@@ -659,7 +690,7 @@ class ConsensusVerifier:
         overall limit; the pool is sized to the engine list, so every task
         starts immediately and nothing queues)."""
         results = []
-        for engine_name, task in tasks:
+        for engine_name, task, call in tasks:
             result, failure, timed_out = await self._await_engine(task, deadline_ns)
             if failure is not None:
                 # Engine exception: static result message (QWED str(exc)
@@ -671,6 +702,7 @@ class ConsensusVerifier:
                 results.append(self._blocked_engine_result(
                     engine_name, "engine_error", "Engine execution failed",
                     latency_ms=(time.monotonic_ns() - mono_start_ns) // 1_000_000,
+                    translation=_snapshot(call),
                 ))
                 continue
             if timed_out:
@@ -680,6 +712,7 @@ class ConsensusVerifier:
                 results.append(self._blocked_engine_result(
                     engine_name, "timeout", "Timeout",
                     latency_ms=(time.monotonic_ns() - mono_start_ns) // 1_000_000,
+                    translation=_snapshot(call),
                 ))
                 continue
             self._record_engine_result(engine_name, result)
@@ -742,12 +775,21 @@ class ConsensusVerifier:
     # Execution Methods
     # =========================================================================
     
-    def _blocked_engine_result(self, engine_name: str, method: str, error: str, latency_ms: float = 0, record: bool = True) -> EngineResult:
+    def _blocked_engine_result(
+        self,
+        engine_name: str,
+        method: str,
+        error: str,
+        latency_ms: float = 0,
+        record: bool = True,
+        translation: Optional[Translation] = None,
+    ) -> EngineResult:
         """Build a BLOCKED EngineResult and record it with the circuit breaker.
 
         #340: hung engines never complete, so without recording here the
         breaker never opens and every tenant's consensus requests keep
-        degrading until restart.
+        degrading until restart. ``translation`` is what the model returned
+        before the engine stopped, where it had (#578).
         """
         blocked = EngineResult(
             engine_name=engine_name,
@@ -758,6 +800,7 @@ class ConsensusVerifier:
             success=False,
             error=error,
             status="BLOCKED",
+            translation=translation,
         )
         if record:
             self._record_engine_result(engine_name, blocked, answered=False)
@@ -767,6 +810,7 @@ class ConsensusVerifier:
         """Execute engines in parallel using thread pool."""
         results = []
         futures = {}
+        calls = dict(engines)
         
         for engine_name, method in engines:
             if self._is_engine_available(engine_name):
@@ -800,6 +844,7 @@ class ConsensusVerifier:
                 except Exception as e:
                     results.append(self._blocked_engine_result(
                         engine_name, "parallel_execution", str(e),
+                        translation=_snapshot(calls[engine_name]),
                     ))
         except FutureTimeoutError:
             for future, engine_name in futures.items():
@@ -810,6 +855,7 @@ class ConsensusVerifier:
                     results.append(self._blocked_engine_result(
                         engine_name, "parallel_timeout",
                         f"Engine timed out after {_ENGINE_TIMEOUT_SECONDS}s",
+                        translation=_snapshot(calls[engine_name]),
                     ))
         
         return results
@@ -834,10 +880,12 @@ class ConsensusVerifier:
                     results.append(self._blocked_engine_result(
                         engine_name, "sequential_timeout",
                         f"Engine timed out after {_ENGINE_TIMEOUT_SECONDS}s",
+                        translation=_snapshot(method),
                     ))
                 except Exception as e:
                     results.append(self._blocked_engine_result(
                         engine_name, "sequential_execution", str(e),
+                        translation=_snapshot(method),
                     ))
             else:
                 results.append(self._blocked_engine_result(
@@ -852,10 +900,10 @@ class ConsensusVerifier:
     # Engine Methods
     # =========================================================================
     
-    def _verify_with_math(self, query: str) -> EngineResult:
+    def _verify_with_math(self, query: str, translations: Optional[List[Translation]] = None) -> EngineResult:
         """Verify using SymPy math engine."""
         start = time.time()
-        translations: List[Translation] = []
+        translations = [] if translations is None else translations
         try:
             expression, expected = self._parse_math_query(query, translations)
             result = self.math_verifier.verify_math(expression, expected)
@@ -898,10 +946,10 @@ class ConsensusVerifier:
                 status="BLOCKED",
             )
     
-    def _verify_with_code(self, query: str) -> EngineResult:
+    def _verify_with_code(self, query: str, translations: Optional[List[Translation]] = None) -> EngineResult:
         """Verify by executing Python code in the secure Docker sandbox."""
         start = time.time()
-        translations: List[Translation] = []
+        translations = [] if translations is None else translations
         try:
             code = self._generate_verification_code(query, translations)
 
@@ -948,10 +996,10 @@ class ConsensusVerifier:
                 error=str(e), status="BLOCKED",
             )
     
-    def _verify_with_logic(self, query: str) -> EngineResult:
+    def _verify_with_logic(self, query: str, translations: Optional[List[Translation]] = None) -> EngineResult:
         """Verify using Z3 logic solver."""
         start = time.time()
-        translations: List[Translation] = []
+        translations = [] if translations is None else translations
         try:
             variables, constraints = self._model_as_logic(query, translations)
             result = self.logic_verifier.verify_logic(variables, constraints)
@@ -1183,6 +1231,7 @@ class ConsensusVerifier:
             translator = TranslationLayer()
             task = translator.translate(query)
         except Exception as exc:
+            _keep_refused(exc, translations, "SymPy")
             raise ValueError(f"Query translation failed: {exc}") from exc
 
         if translations is not None:
@@ -1195,11 +1244,17 @@ class ConsensusVerifier:
         """Generate Python code for verification. The translation is added
         to ``translations``, where given (#578)."""
         try:
-            task = self.translator.translate(query)
+            # One read: a first use on two threads at once can build two
+            # instances, and the model is named from the one that translated.
+            # Inside the try, so a translator that cannot load still fails
+            # as a code generation failure.
+            translator = self.translator
+            task = translator.translate(query)
             if translations is not None:
-                translations.append(translation_of(self.translator, "math", task, engine="Python"))
+                translations.append(translation_of(translator, "math", task, engine="Python"))
             return f"result = {task.expression}"
         except Exception as e:
+            _keep_refused(e, translations, "Python")
             raise ValueError(f"Verification code generation failed: {e}") from e
     
     def _model_as_logic(
