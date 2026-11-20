@@ -62,6 +62,10 @@ AWS_KEY = "AKIA" + "ABCDEFGHIJKLMNOP"
 # Generated, so no scanner reads it as a real key: 40 base64 characters.
 _RNG = random.Random(20261119)
 AWS_SECRET = "".join(_RNG.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/") for _ in range(40))
+# A connection string with a password (#658), built so no scanner reads the
+# source as holding one.
+DB_PASSWORD = "".join(_RNG.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789") for _ in range(16))
+DB_ENV_LINE = "DATABASE_URL=postgresql://admin:" + DB_PASSWORD + "@db.example.com:5432/prod"
 
 
 def _split(text, at, char):
@@ -94,6 +98,7 @@ CASES = {
     "config_key": (lambda s: ConfigGuard().verify_config_safety({"openai_key": s})["verified"], OPENAI_KEY, 10),
     "config_string": (lambda s: ConfigGuard().scan_string(s)["verified"], "token " + OPENAI_KEY, 16),
     "config_aws_secret": (lambda s: ConfigGuard().scan_string(s)["verified"], "secret " + AWS_SECRET, 27),
+    "config_database_url": (lambda s: ConfigGuard().scan_string(s)["verified"], DB_ENV_LINE, 40),
     "pii_email": (lambda s: PIIGuard().scan(s)["verified"], "contact alice@example.com", 13),
     "pii_ssn_phone": (lambda s: PIIGuard().scan(s)["verified"], "call 555-123-4567", 8),
     "sovereignty_ssn": (lambda s: SovereigntyGuard().verify_routing(s, "openai")["verified"], "ssn 123-45-6789", 7),
@@ -443,6 +448,7 @@ QUADRATIC_ON_MAIN = {
     "pii_email": (lambda s: PIIGuard().scan(s), "a." * 20_000),
     "payload_jwt": (lambda s: ExfiltrationGuard().scan_payload(s), "eyJ-" * 10_000),
     "config_jwt": (lambda s: ConfigGuard().scan_string(s), "eyJ-" * 10_000),
+    "config_database_url": (lambda s: ConfigGuard().scan_string(s), ("postgres" + "://" + "a:") * 20_000),
     "tool_important": (lambda s: MCPPoisonGuard().verify_tool_definition({"name": "t", "description": s}), "<important>" * 4_000),
     "tool_distinct": (
         lambda s: MCPPoisonGuard().verify_tool_definition({"name": "t", "description": s}),
@@ -451,6 +457,7 @@ QUADRATIC_ON_MAIN = {
 }
 
 
+@pytest.mark.serial
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize("name", list(QUADRATIC_ON_MAIN))
 def test_long_runs_are_read_in_linear_time(name):

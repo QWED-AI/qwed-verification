@@ -352,6 +352,9 @@ PIECES = [
     KEY, SHA, SHA256, SRI["sha512"], ALPHABET62, "=" * 44, PADDED_28,
     "uses: o/r@", "- ", "sha256:", "sha512-", "sha1:", "@", "=", "x", " ", "\n", "#", '"', ":",
     "integrity: ", "\u0131ntegrity: ", "\u00e9", "\u0436", "\u0301", "\u200b",
+    # A key as a URL's password, and the placeholders DATABASE_URL reads out
+    # (#658): the AWS secret key pattern reads them as before.
+    "postgresql+psycopg2://u:", "redis://:", "${PG}", "<pw>", "***", "/",
 ]
 
 
