@@ -501,8 +501,9 @@ def _assert_advisory(result, status):
     # No SDK path takes the response copy as verified either.
     assert is_admitted(response) is False
     assert VerificationResult.from_dict(response).is_verified is False
+    sdk = QWEDClient(api_key="k", base_url="http://qwed.test")
     with pytest.raises(AttestationError, match="^no "):
-        QWEDClient(api_key="k", base_url="http://qwed.test").verify_attestation(response)
+        sdk.verify_attestation(response)
 
 
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])

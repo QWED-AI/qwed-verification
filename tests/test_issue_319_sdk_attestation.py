@@ -581,7 +581,8 @@ def test_a_consensus_answer_carries_no_token():
     result = client.verify_consensus("2+2")
 
     assert (result.attestation, result.proof_ref, result.admission) == (None, None, None)
-    assert "attestation" not in result.result and "proof_ref" not in result.result
+    assert "attestation" not in result.result
+    assert "proof_ref" not in result.result
     for answer in (result, result.result):
         with pytest.raises(AttestationError, match="^no "):
             client.verify_attestation(answer)
@@ -770,4 +771,5 @@ def test_an_async_consensus_answer_carries_no_token():
     result = _async_run(None, 0, lambda r: httpx.Response(200, json=data), call)
 
     assert (result.attestation, result.proof_ref, result.admission) == (None, None, None)
-    assert "attestation" not in result.result and "proof_ref" not in result.result
+    assert "attestation" not in result.result
+    assert "proof_ref" not in result.result
