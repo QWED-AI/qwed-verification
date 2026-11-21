@@ -24,6 +24,32 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     runs twelve checks. The README sample is the new output, and a test
     keeps the two the same.
 
+- **`ConfigGuard` reports a password in a connection URL of any scheme
+  (#658).** Its `DATABASE_URL` pattern named `postgres`, `mysql` and
+  `mongodb`, so a password under `postgresql`, `postgresql+psycopg2`,
+  `mongodb+srv`, `redis` with only a password, `amqp` or any other scheme
+  passed `scan_string`, `verify_config_safety` and the Action's
+  `scan-secrets`.
+  - It now reads the user and password after any `://` as one token, and
+    reads the three schemes it named with the reach they had, so nothing it
+    reported before is lost, except a password that holds the scheme and
+    `://` of the next `postgres`, `mysql` or `mongodb` URL, where the search
+    stops to stay linear.
+  - Read out: a port before a path, query or fragment; a Docker or OCI image
+    pinned by a digest of its algorithm's exact length that holds a letter
+    `a`-`f` (a digest of digits alone can read as a host and a zero-padded
+    port), also as an item of a YAML flow collection; and a password that is
+    exactly `${NAME}` or `<name>` in ASCII. `${NAME:-default}`, `$NAME` and a
+    run of `*` stay reported.
+  - A digest or a placeholder is read out only when no other `@` follows it
+    before the next whitespace, as a quote does not prove the value ended.
+    So compact JSON with a later `@`, such as a pinned image or a placeholder
+    URL beside an email address, is reported by `scan_string` and the
+    Action's `scan-secrets`, which read JSON as text; `verify_config_safety`
+    reads each parsed value alone and passes it.
+  - The CI and Docker workflows read the database password from a
+    variable, so the dogfood `scan-secrets` job still finds nothing.
+
 ## [11.0.0] - 2026-11-19
 
 A major release that fixes ten advisories. The code, SQL, maths, image and
