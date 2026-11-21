@@ -38,11 +38,15 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - Read out: a port before a path, query or fragment; a Docker or OCI image
     pinned by a digest of its algorithm's exact length that holds a letter
     `a`-`f` (a digest of digits alone can read as a host and a zero-padded
-    port),
-    also as an item of a YAML flow collection; and a password that is
-    exactly `${NAME}` or
-    `<name>` in ASCII, when no other `@` follows it before the next
-    whitespace. `${NAME:-default}`, `$NAME` and a run of `*` stay reported.
+    port), also as an item of a YAML flow collection; and a password that is
+    exactly `${NAME}` or `<name>` in ASCII. `${NAME:-default}`, `$NAME` and a
+    run of `*` stay reported.
+  - A digest or a placeholder is read out only when no other `@` follows it
+    before the next whitespace, as a quote does not prove the value ended.
+    So compact JSON with a later `@`, such as a pinned image or a placeholder
+    URL beside an email address, is reported by `scan_string` and the
+    Action's `scan-secrets`, which read JSON as text; `verify_config_safety`
+    reads each parsed value alone and passes it.
   - The CI and Docker workflows read the database password from a
     variable, so the dogfood `scan-secrets` job still finds nothing.
 
