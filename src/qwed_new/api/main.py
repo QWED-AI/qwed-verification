@@ -1997,11 +1997,14 @@ async def verify_with_consensus(
     confidence; otherwise a confidence below ``min_confidence`` is
     UNVERIFIABLE.
 
-    The errors are the request's or the service's: 400 for an unknown mode,
-    401 or 403 for a missing or refused API key, 413 for a body over the
-    limit, 422 for a body that does not validate, 429 when rate limited
-    (with Retry-After), 503 when the server is busy, and 500 when the audit
-    record cannot be stored, as no result is returned without it.
+    The errors are the request's or the service's: 400 for an unknown mode;
+    422 for a missing ``x-api-key`` header or a body that does not
+    validate; 401 for an API key that is invalid, inactive, expired or
+    revoked; 403 for an organisation that is inactive or missing; 408 when
+    the body is not received in time; 413 for a body over the limit; 429
+    when rate limited (with Retry-After); 503 when the server is busy; and
+    500 when the audit record cannot be stored, as no result is returned
+    without it, or on an unexpected server error.
 
     Returns the engine chain and a confidence score.
     """

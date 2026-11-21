@@ -20,9 +20,10 @@ import copy
 import threading
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi.testclient import TestClient
 from hypothesis import given, settings as hypothesis_settings, strategies as st
 
 from qwed_new.api import main as api_main
@@ -408,10 +409,37 @@ def test_the_route_documents_only_the_errors_it_returns():
 
     assert operation["responses"]["422"]["description"] == "Validation Error"
     assert "secure execution" not in operation["responses"]["503"]["description"].lower()
-    assert "advisory only" in operation["description"]
-    # The errors it does return are named: rate limited, audit record not stored.
-    assert "429 when rate limited" in operation["description"]
-    assert "500 when the audit" in operation["description"]
+    description = " ".join(operation["description"].split())
+    assert "advisory only" in description
+    # The errors it does return are named, each with its cause.
+    assert "422 for a missing ``x-api-key`` header" in description
+    assert "401 for an API key that is invalid" in description
+    assert "408 when the body is not received in time" in description
+    assert "429 when rate limited" in description
+    assert "500 when the audit record cannot be stored" in description
+
+
+@pytest.mark.parametrize("headers, status", [
+    ({}, 422),
+    ({"x-api-key": "not-a-key"}, 401),
+], ids=["no-key", "bad-key"])
+def test_the_key_errors_are_the_documented_ones(headers, status):
+    """No ``x-api-key`` header is FastAPI's 422, and a key that can never be
+    valid is 401, as the description says (the tenant check is not stubbed)."""
+    def _no_session():
+        # A plain function, not MagicMock itself: FastAPI would read its
+        # constructor parameters as query parameters.
+        return MagicMock()
+
+    api_main.app.dependency_overrides[api_main.get_session] = _no_session
+    try:
+        response = TestClient(api_main.app).post(
+            "/verify/consensus", json={"query": "What is 2 + 2?"}, headers=headers,
+        )
+    finally:
+        api_main.app.dependency_overrides.clear()
+
+    assert response.status_code == status
 
 
 @pytest.fixture
