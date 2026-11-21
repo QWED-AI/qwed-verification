@@ -36,8 +36,10 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     `://` of the next `postgres`, `mysql` or `mongodb` URL, where the search
     stops to stay linear.
   - Read out: a port before a path, query or fragment; a Docker or OCI image
-    pinned by a digest of its algorithm's exact length, also as an item of
-    a YAML flow collection; and a password that is exactly `${NAME}` or
+    pinned by a digest of its algorithm's exact length that holds a letter
+    `a`-`f` (of digits alone it reads as a host and a zero-padded port),
+    also as an item of a YAML flow collection; and a password that is
+    exactly `${NAME}` or
     `<name>` in ASCII, when no other `@` follows it before the next
     whitespace. `${NAME:-default}`, `$NAME` and a run of `*` stay reported.
   - The CI and Docker workflows read the database password from a

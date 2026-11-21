@@ -70,8 +70,11 @@ _SHAPE_KEYS = ("uses", "integrity")
 #   URLs and takes time linear in its length.
 # - Read out: a port before a path, query or fragment (host:4873/@scope/pkg,
 #   where the "@" is in the path), and a digest of its algorithm's exact
-#   length after the "@", which no host and port can be (a Docker image
-#   pinned by digest, alpine:3.18@sha256:...). The digest ends at whitespace,
+#   length after the "@" that holds a letter a-f, which no host and port can
+#   be (a Docker image pinned by digest, alpine:3.18@sha256:...). Of digits
+#   alone it is a host named sha256 and a zero-padded port to urllib
+#   (sha256:000...06379 is port 6379); a real digest holds a letter all but
+#   always. The digest ends at whitespace,
 #   a quote or the end of the text, or at a "," "]" or "}", which close an
 #   item of a YAML flow collection, when no "@" follows before the next
 #   whitespace.
@@ -102,7 +105,9 @@ _NOT_A_PLACEHOLDER = r"(?!(?a:\$\{[A-Za-z_][A-Za-z0-9_]*\}|<[A-Za-z_][A-Za-z0-9_
 _URL_USERINFO_TAIL = r"(?:[^\s\"'`:@]|:(?!//))+"
 _NOT_A_DIGEST = (
     "(?!(?a:"
-    + "|".join(f"{label}[0-9a-f]{{{length}}}" for label, length in _HEX_DIGEST_LENGTHS.items())
+    + "|".join(
+        f"{label}(?=[0-9]{{0,{length - 1}}}[a-f])[0-9a-f]{{{length}}}" for label, length in _HEX_DIGEST_LENGTHS.items()
+    )
     + r")(?:[\s\"'`]|\Z|[,\]}][^\s@]*(?:\s|\Z)))"
 )
 _URL_CREDENTIALS = (

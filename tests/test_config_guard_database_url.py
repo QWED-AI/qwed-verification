@@ -18,6 +18,7 @@ import re
 import string
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 from hypothesis import assume, given, settings
@@ -67,6 +68,7 @@ def test_the_values_have_the_shapes_the_tests_need():
     assert len(PASSWORD) == 16
     assert PASSWORD.isascii()
     assert PASSWORD.isalnum()
+    assert not SHA256.isdigit() and not SHA512.isdigit()
 
 
 def test_the_issue_example_is_reported():
@@ -300,6 +302,8 @@ def test_a_longer_or_empty_port_stays_reported(port):
 
 SHA256 = "".join(_RNG.choice("0123456789abcdef") for _ in range(64))
 SHA512 = "".join(_RNG.choice("0123456789abcdef") for _ in range(128))
+# Sixty-four digits that urllib reads as port 6379.
+ZERO_PADDED_PORT = "0" * 60 + "6379"
 
 # An image pinned by a digest: what follows the "@" is no host and port.
 DIGESTS = {
@@ -346,6 +350,10 @@ NOT_DIGESTS = {
     "host named sha256 with a port": "x" + SEP + "admin:" + PASSWORD + "@sha256:5432/db",
     "Cyrillic a in the label": "docker" + SEP + "alpine:3.18@sh\u0430256:" + SHA256,
     "full-width digits": "docker" + SEP + "alpine:3.18@sha256:" + "\uff11" * 64,
+    # Digits alone are a host and a zero-padded port (see below).
+    "digits alone": "x" + SEP + "admin:" + PASSWORD + "@sha256:" + ZERO_PADDED_PORT,
+    "digits alone in a flow sequence": "urls: [x" + SEP + "admin:" + PASSWORD + "@sha256:" + ZERO_PADDED_PORT + "]",
+    "digits alone in a flow mapping": "db: {url: x" + SEP + "admin:" + PASSWORD + "@sha256:" + ZERO_PADDED_PORT + "}",
     # A "@" later in the non-space run could end the userinfo.
     "digest, a bracket, then an at sign": "docker" + SEP + "alpine:3.18@sha256:" + SHA256 + "]x@y",
     "digest, a comma, then an at sign": "docker" + SEP + "alpine:3.18@sha256:" + SHA256 + ",x@y",
@@ -356,6 +364,13 @@ NOT_DIGESTS = {
 @pytest.mark.parametrize("name", list(NOT_DIGESTS))
 def test_a_near_digest_is_still_reported(name):
     assert _reported(NOT_DIGESTS[name])
+
+
+def test_a_digest_of_digits_alone_is_a_host_and_a_port():
+    # So the read-out needs a letter a-f in the digest, which a real one
+    # holds all but always.
+    parts = urlsplit("x" + SEP + "admin:" + PASSWORD + "@sha256:" + ZERO_PADDED_PORT)
+    assert (parts.hostname, parts.port, parts.password) == ("sha256", 6379, PASSWORD)
 
 
 NOT_CREDENTIALS = {
@@ -654,6 +669,7 @@ def _digest_at(text, at):
             and text[at:at + len(label)].lower() == label
             and len(value) == length
             and all(char in string.hexdigits for char in value)
+            and not value.isdigit()
             and (
                 end == len(text)
                 or text[end].isspace()
@@ -766,7 +782,9 @@ def test_the_pattern_finds_what_its_rules_say(pieces):
 # A placeholder password or a digest after the "@", then pieces that decide
 # whether it is read out: whitespace, a quote, the end, a "," "]" or "}",
 # and any later "@". Drawn around one, as the pieces above rarely build it.
-_READ_OUT_CORES = ["u:${PG}@", "u:<pw>@", "u:p@sha256:" + SHA256, "u:p@sha1:" + SHA256[:40]]
+_READ_OUT_CORES = [
+    "u:${PG}@", "u:<pw>@", "u:p@sha256:" + SHA256, "u:p@sha1:" + SHA256[:40], "u:p@sha256:" + ZERO_PADDED_PORT,
+]
 
 
 @settings(max_examples=600, deadline=None)
