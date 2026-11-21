@@ -17,6 +17,7 @@ it does not vote on the answer.
 
 import asyncio
 import copy
+import re
 import threading
 import time
 from types import SimpleNamespace
@@ -417,6 +418,39 @@ def test_the_route_documents_only_the_errors_it_returns():
     assert "408 when the body is not received in time" in description
     assert "429 when rate limited" in description
     assert "500 when the audit record cannot be stored" in description
+    # And the OpenAPI responses declare those errors, no more and no fewer.
+    named = set(re.findall(r"\b([45]\d\d) (?:for|when)\b", description))
+    assert named == {"400", "401", "403", "408", "413", "422", "429", "500", "503"}
+    assert set(operation["responses"]) == named | {"200"}
+
+
+def test_z3_alone_is_blocked_with_no_answer_below_the_minimum(client, isolated_audit_chain):  # noqa: F811
+    """Z3 proved the claim and no engine verified an answer: one engine is not
+    a consensus, so the route answers BLOCKED, with no answer, at confidence
+    0 (not UNVERIFIABLE for the confidence), as the description says."""
+    chain = [
+        _engine("SymPy", 5, status="UNVERIFIABLE", success=False),
+        _engine("Python", 4, status="UNVERIFIABLE"),
+        _engine("Z3", "VALID"),
+    ]
+    consensus = ConsensusVerifier(enable_circuit_breaker=False)._calculate_consensus(chain)
+    result = ConsensusResult(
+        final_answer=consensus["answer"], confidence=consensus["confidence"], engines_used=len(chain),
+        agreement_status=consensus["status"], verification_chain=chain, total_latency_ms=1.0,
+        status=consensus["diagnostic_status"],
+    )
+
+    with patch.object(api_main.consensus_verifier, "verify_async", AsyncMock(return_value=result)):
+        response = client.post("/verify/consensus", json={"query": "Is x > 3 if x > 5?"})
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["status"] == "BLOCKED"
+    assert body["final_answer"] is None
+    assert body["confidence"] == 0
+    assert body["constraint_id"] == "consensus.no_independent_verification"
+    assert body["meets_requirement"] is False
+    assert [row.is_verified for row in _rows(isolated_audit_chain)] == [False]
 
 
 @pytest.mark.parametrize("headers, status", [

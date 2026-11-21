@@ -1964,9 +1964,15 @@ class ConsensusVerifyRequest(BaseModel):
     # A confidence below the minimum and an unavailable secure execution
     # runtime are answered 200, with the status in the body (see the
     # description), not 422 or 503; 422 is FastAPI's request validation
-    # error (#633).
+    # error (#633). Every error the route does return is listed here.
     responses={
         400: {"description": "Invalid verification mode."},
+        401: {"description": "API key invalid, inactive, expired or revoked."},
+        403: {"description": "Organisation inactive or missing."},
+        408: {"description": "Request body not received in time."},
+        413: {"description": "Request body over the size limit."},
+        429: {"description": "Rate limit exceeded; see Retry-After."},
+        500: {"description": "Audit record not stored, or an unexpected server error."},
         503: {"description": "Server busy: too many requests in flight; retry shortly."},
     },
 )
@@ -1993,9 +1999,10 @@ async def verify_with_consensus(
 
     Every consensus outcome is an answer (200), not an error. A secure
     execution runtime that is unavailable, engines that are all blocked,
-    and an answer one engine verified alone are BLOCKED, whatever the
-    confidence; otherwise a confidence below ``min_confidence`` is
-    UNVERIFIABLE.
+    and a result only one engine verified are BLOCKED, whatever the
+    confidence: an answer one engine verified alone, or a claim Z3 proved
+    when no engine verified an answer (no ``final_answer`` then). Otherwise
+    a confidence below ``min_confidence`` is UNVERIFIABLE.
 
     The errors are the request's or the service's: 400 for an unknown mode;
     422 for a missing ``x-api-key`` header or a body that does not
@@ -2069,8 +2076,8 @@ async def verify_with_consensus(
         _safe_commit_log(log)
         return _merge_response(dr) | {"meets_requirement": False}
 
-    # An answer one engine verified alone is BLOCKED, whatever the
-    # confidence (#320).
+    # A result only one engine verified (an answer, or Z3's claim with no
+    # answer) is BLOCKED, whatever the confidence (#320).
     if result.confidence < request.min_confidence and result.agreement_status != NO_INDEPENDENT_VERIFICATION:
         dr = DiagnosticResult.unverifiable(
             f"Confidence ({result.confidence:.1%}) below required minimum ({request.min_confidence:.1%})",
