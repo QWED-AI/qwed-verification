@@ -206,6 +206,74 @@ def test_placeholders_everywhere_are_read_out():
     assert not _reported(_url("postgresql", "<user>", "<password>", "<host>:5432/<db>"))
 
 
+# More userinfo after the placeholder: urllib reads the password to the last
+# "@" before the path, so each of these holds a literal.
+PLACEHOLDER_THEN_MORE = {
+    "placeholder then a literal": "<password>@" + PASSWORD,
+    "variable then a literal": "${PG_PASSWORD}@x",
+    "placeholder then an at sign": "<pw>@",
+    "two variables split by an at sign": "${P}@${Q}",
+    "two at signs after": "<a>@b@c",
+    "zero-width space after the at sign": "<pw>@\u200bx",
+}
+
+
+@pytest.mark.parametrize("scheme", ["postgresql", "postgres", "MySQL", "mongodb", "https"])
+@pytest.mark.parametrize("name", list(PLACEHOLDER_THEN_MORE))
+def test_a_placeholder_with_more_userinfo_after_it_is_reported(name, scheme):
+    assert _reported(_with(PLACEHOLDER_THEN_MORE[name], scheme))
+
+
+def test_a_placeholder_with_more_userinfo_after_it_was_reported_before():
+    url = _url("postgres", "admin", "<password>@" + PASSWORD, "db.internal/app")
+    assert "DATABASE_URL" in _found(url, ConfigGuard(custom_patterns=OLD_GUARD_PATTERNS))
+    assert ConfigGuard().verify_config_safety({"database": {"url": url}})["verified"] is False
+
+
+@pytest.mark.parametrize("host", ["h/p@q", "h?mail=a@b", "h#a@b", "h,https" + SEP + "u@v"])
+def test_an_at_sign_anywhere_later_in_the_value_keeps_it_reported(host):
+    # Also in the path, the query, the fragment or a second URL glued on:
+    # the read-out needs no "@" before the next whitespace or quote.
+    assert _reported(_url("postgresql", "admin", "${PG_PASSWORD}", host))
+
+
+@pytest.mark.parametrize("scheme", ["postgresql", "postgres"])
+def test_a_quote_ends_the_value(scheme):
+    # Compact JSON and a glued YAML flow list: the "@" after the closing
+    # quote is in another value, and the tree reads the same.
+    url = _with("${PG_PASSWORD}", scheme)
+    config = {"database": {"url": url}, "admin_email": "ops@example.com"}
+    for text in (
+        json.dumps(config, separators=(",", ":")),
+        "urls: ['" + url + "','ops@example.com']",
+        "`" + url + "`@x",
+    ):
+        assert ConfigGuard().scan_string(text)["verified"] is True
+    assert ConfigGuard().verify_config_safety(config)["verified"] is True
+
+
+@pytest.mark.parametrize("quote", ["\u201d", "\u2019", "\uff02", "\u00b4"], ids=["curly double", "curly single", "full-width", "acute accent"])
+def test_a_look_alike_quote_does_not_end_the_value(quote):
+    assert _reported(_with("${PG_PASSWORD}") + quote + "x@y")
+
+
+def test_a_quote_inside_an_unquoted_value_ends_it_too():
+    # Knowingly out of scope: a quote ends the value, as it ends the user and
+    # password of the one-token reading, so a literal "@" and quote after a
+    # placeholder are not read as more userinfo.
+    assert not _reported(_url("postgresql", "admin", "${PG_PASSWORD}", 'h"x@y'))
+
+
+@pytest.mark.parametrize("scheme", ["postgresql", "postgres"])
+@pytest.mark.parametrize(
+    "after",
+    [" ops@example.com", "\tops@example.com", "\nadmin_email: ops@example.com", "  # ops@example.com", ""],
+    ids=["space", "tab", "newline", "comment", "end of the text"],
+)
+def test_whitespace_or_the_end_of_the_text_ends_the_run(after, scheme):
+    assert not _reported(_with("${PG_PASSWORD}", scheme) + after)
+
+
 # A port before a path, query or fragment: the "@" is not in the userinfo.
 PORTS = {
     "npm scope after a port": _url("http", "localhost", "4873/", "scope/pkg/-/pkg-1.0.0.tgz"),
@@ -253,6 +321,25 @@ def test_an_image_pinned_by_digest_is_read_out(name):
     assert ConfigGuard().scan_string(DIGESTS[name])["verified"] is True
 
 
+# A "," "]" or "}" closes an item of a YAML flow collection, so it ends the
+# digest too, when no "@" follows in the rest of the non-space run.
+_IMAGE = "docker" + SEP + "alpine:3.18@sha256:" + SHA256
+_OTHER_IMAGE = "oci" + SEP + "registry.example.com/app:1.2@sha512:" + SHA512
+FLOW_DIGESTS = {
+    "one item": "images: [" + _IMAGE + "]",
+    "two items": "images: [" + _IMAGE + ", " + _OTHER_IMAGE + "]",
+    "spaces inside": "images: [ " + _IMAGE + " ]",
+    "a mapping": "image: {ref: " + _IMAGE + "}",
+    "mappings in a list": "steps: [{uses: " + _IMAGE + "}, {uses: " + _OTHER_IMAGE + "}]",
+    "a tab after the comma": "matrix: {image: [" + _IMAGE + ",\t" + _OTHER_IMAGE + "]}",
+}
+
+
+@pytest.mark.parametrize("name", list(FLOW_DIGESTS))
+def test_an_image_in_a_yaml_flow_collection_is_read_out(name):
+    assert ConfigGuard().scan_string(FLOW_DIGESTS[name])["verified"] is True
+
+
 # A digest of the wrong length, glued to more text, or in another script is
 # not that shape; a host named sha256 with a port is a host.
 NOT_DIGESTS = {
@@ -264,6 +351,10 @@ NOT_DIGESTS = {
     "host named sha256 with a port": "x" + SEP + "admin:" + PASSWORD + "@sha256:5432/db",
     "Cyrillic a in the label": "docker" + SEP + "alpine:3.18@sh\u0430256:" + SHA256,
     "full-width digits": "docker" + SEP + "alpine:3.18@sha256:" + "\uff11" * 64,
+    # A "@" later in the non-space run could end the userinfo.
+    "digest, a bracket, then an at sign": "docker" + SEP + "alpine:3.18@sha256:" + SHA256 + "]x@y",
+    "digest, a comma, then an at sign": "docker" + SEP + "alpine:3.18@sha256:" + SHA256 + ",x@y",
+    "digest, a brace and a comma, then an at sign": "docker" + SEP + "alpine:3.18@sha256:" + SHA256 + "},x@y",
 }
 
 
@@ -516,6 +607,11 @@ LONG = {
     "named schemes only": ("postgres" + SEP) * 30_000,
     "named schemes as passwords": "mysql" + SEP + "a:" + ("postgres" + SEP) * 20_000,
     "named schemes with short passwords": ("mongodb" + SEP + "a:b ") * 20_000,
+    "placeholders with at signs": ("x" + SEP + "u:${PG}@") * 20_000,
+    "a placeholder before a long run": "x" + SEP + "u:${PG}@" + "a" * 200_000,
+    "named placeholders with at signs": ("postgres" + SEP + "u:<pw>@a") * 15_000,
+    "digests in a flow list": ("x" + SEP + "u:p@sha256:" + SHA256 + ",") * 3_000,
+    "a digest before a long run": "x" + SEP + "u:p@sha256:" + SHA256 + "]" + "a" * 200_000,
 }
 
 
@@ -544,6 +640,17 @@ def _named_at(text, at):
     return None
 
 
+def _no_at_in_run(text, at):
+    """Whether no "@" comes from *at* to the next whitespace, quote or the
+    end."""
+    end = at
+    while end < len(text) and not text[end].isspace() and text[end] not in _QUOTES:
+        if text[end] == "@":
+            return False
+        end += 1
+    return True
+
+
 def _digest_at(text, at):
     for label, length in _DIGEST_LENGTHS.items():
         value = text[at + len(label):at + len(label) + length]
@@ -553,7 +660,12 @@ def _digest_at(text, at):
             and text[at:at + len(label)].lower() == label
             and len(value) == length
             and all(char in string.hexdigits for char in value)
-            and (end == len(text) or text[end].isspace() or text[end] in _QUOTES)
+            and (
+                end == len(text)
+                or text[end].isspace()
+                or text[end] in _QUOTES
+                or (text[end] in ",]}" and _no_at_in_run(text, end + 1))
+            )
         ):
             return True
     return False
@@ -596,7 +708,9 @@ def _credential_end(text, at):
     while j < len(text) and _in_password(text, j):
         j += 1
     password = text[start:j]
-    if not password or text[j:j + 1] != "@" or _port_first(password) or _placeholder(password):
+    if not password or text[j:j + 1] != "@" or _port_first(password):
+        return None
+    if _placeholder(password) and _no_at_in_run(text, j + 1):
         return None
     if _digest_at(text, j + 1):
         return None
@@ -613,7 +727,9 @@ def _end_as_before(text, at):
     j = colon + 1
     while j < len(text) and text[j] != "@" and _named_at(text, j) is None:
         j += 1
-    if j == colon + 1 or text[j:j + 1] != "@" or _placeholder(text[colon + 1:j]):
+    if j == colon + 1 or text[j:j + 1] != "@":
+        return None
+    if _placeholder(text[colon + 1:j]) and _no_at_in_run(text, j + 1):
         return None
     return j + 1
 
@@ -636,7 +752,7 @@ def _reference_spans(text):
 
 PIECES = [
     "://", "postgresql", "+psycopg2", "POSTGRES", "mysql", "mongodb", "redis", "u", "admin", PASSWORD[:6],
-    ":", "@", "/", "//", "?", "#", "[", "]", " ", "\t", "\n", "\u00a0", '"', "'", "`",
+    ":", "@", "/", "//", "?", "#", "[", "]", ",", " ", "\t", "\n", "\u00a0", '"', "'", "`",
     "5432", "123456", "${PG}", "${PG:-x}", "$PG", "<pw>", "<>", "***", "*", "{", "}",
     "sha256:" + SHA256, "sha256:", "SHA256", "a" * 64,
     "\u200b", "\u0436", "\u212a", "\uff1a", "\uff20", chr(0x1C), chr(0xE003A),
@@ -653,22 +769,43 @@ def test_the_pattern_finds_what_its_rules_say(pieces):
     assert [m.span() for m in compiled.finditer(text)] == expected
 
 
+# A placeholder password or a digest after the "@", then pieces that decide
+# whether it is read out: whitespace, a quote, the end, a "," "]" or "}",
+# and any later "@". Drawn around one, as the pieces above rarely build it.
+_READ_OUT_CORES = ["u:${PG}@", "u:<pw>@", "u:p@sha256:" + SHA256, "u:p@sha1:" + SHA256[:40]]
+
+
+@settings(max_examples=600, deadline=None)
+@given(
+    before=st.lists(st.sampled_from(PIECES), max_size=4),
+    scheme=st.sampled_from(["postgresql", "postgres", "MySQL", "docker", ""]),
+    core=st.sampled_from(_READ_OUT_CORES),
+    after=st.lists(st.sampled_from(PIECES), max_size=8),
+)
+def test_the_read_outs_follow_their_rules_whatever_comes_after(before, scheme, core, after):
+    text = "".join(before) + scheme + SEP + core + "".join(after)
+    assert [m.span() for m in COMPILED.finditer(text)] == _reference_spans(text)
+
+
 OLD = re.compile(OLD_PATTERN, re.IGNORECASE)
 
 
 def _lost_on_purpose(text, found):
-    """Whether a match of the pattern before #658 is a form this PR reads
-    out on purpose: a placeholder password, or one that holds the scheme
-    and "://" of the next URL of the three schemes."""
+    """Whether a match of the pattern before #658 is a form the new pattern
+    reads out on purpose: a placeholder password with no "@" after it before
+    the next whitespace or quote, or one that holds the scheme and "://" of
+    the next URL of the three schemes."""
     colon = text.index(":", found.end(1) + 3)
     password = text[colon + 1:found.end() - 1]
-    return _placeholder(password) or any(_named_at(password, at) for at in range(len(password)))
+    if _placeholder(password) and _no_at_in_run(text, found.end()):
+        return True
+    return any(_named_at(password, at) for at in range(len(password)))
 
 
 # Pieces for texts around a URL of the three schemes named before #658.
 NAMED_PIECES = [
     "postgres" + SEP, "mysql" + SEP, "MONGODB" + SEP, "mysql+py", "postgresql" + SEP, "redis" + SEP, "://",
-    "u", "admin", "ab", ":", "@", "/", "//", "?", "#", " ", "\t", "\n", '"', "'", "`",
+    "u", "admin", "ab", ":", "@", "/", "//", "?", "#", ",", "]", " ", "\t", "\n", '"', "'", "`",
     "5432", "${PG}", "<pw>", "***", "*", "sha256:" + SHA256, "\u200b", "\uff1a",
 ]
 _NAMED_PARTS = st.lists(st.sampled_from(NAMED_PIECES), max_size=6)
