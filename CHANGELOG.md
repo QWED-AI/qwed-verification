@@ -37,7 +37,8 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     stops to stay linear.
   - Read out: a port before a path, query or fragment; a Docker or OCI image
     pinned by a digest of its algorithm's exact length that holds a letter
-    `a`-`f` (of digits alone it reads as a host and a zero-padded port),
+    `a`-`f` (a digest of digits alone can read as a host and a zero-padded
+    port),
     also as an item of a YAML flow collection; and a password that is
     exactly `${NAME}` or
     `<name>` in ASCII, when no other `@` follows it before the next

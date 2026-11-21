@@ -72,12 +72,12 @@ _SHAPE_KEYS = ("uses", "integrity")
 #   where the "@" is in the path), and a digest of its algorithm's exact
 #   length after the "@" that holds a letter a-f, which no host and port can
 #   be (a Docker image pinned by digest, alpine:3.18@sha256:...). Of digits
-#   alone it is a host named sha256 and a zero-padded port to urllib
+#   alone it can be a host named sha256 and a zero-padded port to urllib
 #   (sha256:000...06379 is port 6379); a real digest holds a letter all but
-#   always. The digest ends at whitespace,
-#   a quote or the end of the text, or at a "," "]" or "}", which close an
-#   item of a YAML flow collection, when no "@" follows before the next
-#   whitespace.
+#   always. The digest ends at whitespace
+#   or the end of the text, or at a quote or a "," "]" or "}" (which close
+#   an item of a YAML flow collection) when no "@" follows before the next
+#   whitespace: a quote does not prove the value ended (see below).
 #
 # The three schemes the pattern named before #658, postgres, mysql and
 # mongodb, keep its reach, so nothing it reported is lost: the user runs to
@@ -108,7 +108,7 @@ _NOT_A_DIGEST = (
     + "|".join(
         f"{label}(?=[0-9]{{0,{length - 1}}}[a-f])[0-9a-f]{{{length}}}" for label, length in _HEX_DIGEST_LENGTHS.items()
     )
-    + r")(?:[\s\"'`]|\Z|[,\]}][^\s@]*(?:\s|\Z)))"
+    + r")(?:\s|\Z|[,\]}\"'`][^\s@]*(?:\s|\Z)))"
 )
 _URL_CREDENTIALS = (
     "://" + _URL_USER + ":" + _NOT_A_PORT + _NOT_A_PLACEHOLDER + _URL_USERINFO_TAIL + "@" + _NOT_A_DIGEST

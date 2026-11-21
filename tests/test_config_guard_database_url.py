@@ -68,7 +68,8 @@ def test_the_values_have_the_shapes_the_tests_need():
     assert len(PASSWORD) == 16
     assert PASSWORD.isascii()
     assert PASSWORD.isalnum()
-    assert not SHA256.isdigit() and not SHA512.isdigit()
+    assert not SHA256.isdigit()
+    assert not SHA512.isdigit()
 
 
 def test_the_issue_example_is_reported():
@@ -358,12 +359,24 @@ NOT_DIGESTS = {
     "digest, a bracket, then an at sign": "docker" + SEP + "alpine:3.18@sha256:" + SHA256 + "]x@y",
     "digest, a comma, then an at sign": "docker" + SEP + "alpine:3.18@sha256:" + SHA256 + ",x@y",
     "digest, a brace and a comma, then an at sign": "docker" + SEP + "alpine:3.18@sha256:" + SHA256 + "},x@y",
+    # A quote does not prove the value ended: urllib reads to the last "@".
+    "digest, a double quote, then an at sign": "x" + SEP + "admin:" + PASSWORD + "@sha256:" + SHA256 + '"x@y',
+    "digest, a single quote, then an at sign": "x" + SEP + "admin:" + PASSWORD + "@sha256:" + SHA256 + "'x@y",
+    "digest, a backtick, then an at sign": "x" + SEP + "admin:" + PASSWORD + "@sha256:" + SHA256 + "`x@y",
 }
 
 
 @pytest.mark.parametrize("name", list(NOT_DIGESTS))
 def test_a_near_digest_is_still_reported(name):
     assert _reported(NOT_DIGESTS[name])
+
+
+def test_compact_json_with_a_digest_and_a_later_at_sign_stays_reported():
+    # Known false positive, as for a placeholder: the text scan cannot tell
+    # the quote that closes the value from one inside it. The tree passes.
+    config = {"image": "docker" + SEP + "alpine:3.18@sha256:" + SHA256, "admin_email": "ops@example.com"}
+    assert _reported(json.dumps(config, separators=(",", ":")))
+    assert ConfigGuard().verify_config_safety(config)["verified"] is True
 
 
 def test_a_digest_of_digits_alone_is_a_host_and_a_port():
@@ -673,8 +686,7 @@ def _digest_at(text, at):
             and (
                 end == len(text)
                 or text[end].isspace()
-                or text[end] in _QUOTES
-                or (text[end] in ",]}" and _no_at_in_run(text, end + 1))
+                or (text[end] in ",]}" + _QUOTES and _no_at_in_run(text, end + 1))
             )
         ):
             return True
@@ -784,6 +796,7 @@ def test_the_pattern_finds_what_its_rules_say(pieces):
 # and any later "@". Drawn around one, as the pieces above rarely build it.
 _READ_OUT_CORES = [
     "u:${PG}@", "u:<pw>@", "u:p@sha256:" + SHA256, "u:p@sha1:" + SHA256[:40], "u:p@sha256:" + ZERO_PADDED_PORT,
+    "u:p@sha256:" + SHA256 + '"', "u:p@sha256:" + SHA256 + "'", "u:p@sha256:" + SHA256 + "]",
 ]
 
 
