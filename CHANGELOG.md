@@ -39,8 +39,7 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     pinned by a digest of its algorithm's exact length, also as an item of
     a YAML flow collection; and a password that is exactly `${NAME}` or
     `<name>` in ASCII, when no other `@` follows it before the next
-    whitespace or quote. `${NAME:-default}`, `$NAME` and a run of `*` stay
-    reported.
+    whitespace. `${NAME:-default}`, `$NAME` and a run of `*` stay reported.
   - The CI and Docker workflows read the database password from a
     variable, so the dogfood `scan-secrets` job still finds nothing.
 

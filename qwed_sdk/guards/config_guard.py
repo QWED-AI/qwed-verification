@@ -74,7 +74,7 @@ _SHAPE_KEYS = ("uses", "integrity")
 #   pinned by digest, alpine:3.18@sha256:...). The digest ends at whitespace,
 #   a quote or the end of the text, or at a "," "]" or "}", which close an
 #   item of a YAML flow collection, when no "@" follows before the next
-#   whitespace or quote.
+#   whitespace.
 #
 # The three schemes the pattern named before #658, postgres, mysql and
 # mongodb, keep its reach, so nothing it reported is lost: the user runs to
@@ -85,23 +85,25 @@ _SHAPE_KEYS = ("uses", "integrity")
 #
 # Both read out a placeholder of one exact shape as the whole password:
 # ${NAME} or <name>, in ASCII, when no "@" follows it before the next
-# whitespace or quote, which end the value as they end the one-token
-# reading. urllib reads the password to the last "@" before the path, so a
-# placeholder, "@", more text and the host's "@" start a longer, literal
-# password, which the pattern before #658 reported. Not ${NAME:-default},
-# whose default can be a literal password, nor $NAME, as a literal password
-# can start with "$", nor a run of "*": a masked password has that shape,
-# but so can a literal one. This scan and the digest's stop at the next "@",
-# so no part of the text is scanned twice.
+# whitespace. urllib reads the password to the last "@" before the path, so
+# a placeholder, "@", more text and the host's "@" start a longer, literal
+# password, which the pattern before #658 reported. A quote does not end the
+# run, as a value can hold one (an apostrophe in a double-quoted value, any
+# quote in an unquoted one), so a later "@" in compact JSON keeps it
+# reported, where the parsed tree does not. Not ${NAME:-default}, whose
+# default can be a literal password, nor $NAME, as a literal password can
+# start with "$", nor a run of "*": a masked password has that shape, but so
+# can a literal one. This scan and the digest's stop at the next "@", so no
+# part of the text is scanned twice.
 _URL_USER = r"[^\s\"'`:/?#\[\]]*"
 _NOT_A_PORT = r"(?![0-9]{1,5}[/?#])"
-_NOT_A_PLACEHOLDER = r"(?!(?a:\$\{[A-Za-z_][A-Za-z0-9_]*\}|<[A-Za-z_][A-Za-z0-9_-]*>)@[^\s\"'`@]*(?:[\s\"'`]|\Z))"
+_NOT_A_PLACEHOLDER = r"(?!(?a:\$\{[A-Za-z_][A-Za-z0-9_]*\}|<[A-Za-z_][A-Za-z0-9_-]*>)@[^\s@]*(?:\s|\Z))"
 # What follows the user's ":", up to the "@": the password.
 _URL_USERINFO_TAIL = r"(?:[^\s\"'`:@]|:(?!//))+"
 _NOT_A_DIGEST = (
     "(?!(?a:"
     + "|".join(f"{label}[0-9a-f]{{{length}}}" for label, length in _HEX_DIGEST_LENGTHS.items())
-    + r")(?:[\s\"'`]|\Z|[,\]}][^\s\"'`@]*(?:[\s\"'`]|\Z)))"
+    + r")(?:[\s\"'`]|\Z|[,\]}][^\s@]*(?:\s|\Z)))"
 )
 _URL_CREDENTIALS = (
     "://" + _URL_USER + ":" + _NOT_A_PORT + _NOT_A_PLACEHOLDER + _URL_USERINFO_TAIL + "@" + _NOT_A_DIGEST

@@ -233,35 +233,30 @@ def test_a_placeholder_with_more_userinfo_after_it_was_reported_before():
 @pytest.mark.parametrize("host", ["h/p@q", "h?mail=a@b", "h#a@b", "h,https" + SEP + "u@v"])
 def test_an_at_sign_anywhere_later_in_the_value_keeps_it_reported(host):
     # Also in the path, the query, the fragment or a second URL glued on:
-    # the read-out needs no "@" before the next whitespace or quote.
+    # the read-out needs no "@" before the next whitespace.
     assert _reported(_url("postgresql", "admin", "${PG_PASSWORD}", host))
 
 
+@pytest.mark.parametrize(
+    "quote",
+    ['"', "'", "`", "\u201d", "\u2019", "\uff02"],
+    ids=["double", "single", "backtick", "curly double", "curly single", "full-width"],
+)
 @pytest.mark.parametrize("scheme", ["postgresql", "postgres"])
-def test_a_quote_ends_the_value(scheme):
-    # Compact JSON and a glued YAML flow list: the "@" after the closing
-    # quote is in another value, and the tree reads the same.
-    url = _with("${PG_PASSWORD}", scheme)
-    config = {"database": {"url": url}, "admin_email": "ops@example.com"}
-    for text in (
-        json.dumps(config, separators=(",", ":")),
-        "urls: ['" + url + "','ops@example.com']",
-        "`" + url + "`@x",
-    ):
-        assert ConfigGuard().scan_string(text)["verified"] is True
+def test_a_quote_does_not_end_the_value(quote, scheme):
+    # A value can hold a quote: an apostrophe in a double-quoted value, any
+    # quote in an unquoted one. So a later "@" keeps the placeholder reported.
+    assert _reported(_with("${PG_PASSWORD}@a" + quote + "b", scheme))
+    assert _reported('url: "' + _with("<pw>@a" + quote + "b", scheme) + '"')
+
+
+def test_compact_json_with_a_later_at_sign_stays_reported():
+    # Known false positive: the text scan cannot tell the quote that closes a
+    # JSON value from a quote inside one, so the "@" of the next value keeps
+    # the placeholder reported. The parsed tree reads each value alone.
+    config = {"database": {"url": _with("${PG_PASSWORD}")}, "admin_email": "ops@example.com"}
+    assert _reported(json.dumps(config, separators=(",", ":")))
     assert ConfigGuard().verify_config_safety(config)["verified"] is True
-
-
-@pytest.mark.parametrize("quote", ["\u201d", "\u2019", "\uff02", "\u00b4"], ids=["curly double", "curly single", "full-width", "acute accent"])
-def test_a_look_alike_quote_does_not_end_the_value(quote):
-    assert _reported(_with("${PG_PASSWORD}") + quote + "x@y")
-
-
-def test_a_quote_inside_an_unquoted_value_ends_it_too():
-    # Knowingly out of scope: a quote ends the value, as it ends the user and
-    # password of the one-token reading, so a literal "@" and quote after a
-    # placeholder are not read as more userinfo.
-    assert not _reported(_url("postgresql", "admin", "${PG_PASSWORD}", 'h"x@y'))
 
 
 @pytest.mark.parametrize("scheme", ["postgresql", "postgres"])
@@ -641,10 +636,9 @@ def _named_at(text, at):
 
 
 def _no_at_in_run(text, at):
-    """Whether no "@" comes from *at* to the next whitespace, quote or the
-    end."""
+    """Whether no "@" comes from *at* to the next whitespace or the end."""
     end = at
-    while end < len(text) and not text[end].isspace() and text[end] not in _QUOTES:
+    while end < len(text) and not text[end].isspace():
         if text[end] == "@":
             return False
         end += 1
@@ -793,8 +787,8 @@ OLD = re.compile(OLD_PATTERN, re.IGNORECASE)
 def _lost_on_purpose(text, found):
     """Whether a match of the pattern before #658 is a form the new pattern
     reads out on purpose: a placeholder password with no "@" after it before
-    the next whitespace or quote, or one that holds the scheme and "://" of
-    the next URL of the three schemes."""
+    the next whitespace, or one that holds the scheme and "://" of the next
+    URL of the three schemes."""
     colon = text.index(":", found.end(1) + 3)
     password = text[colon + 1:found.end() - 1]
     if _placeholder(password) and _no_at_in_run(text, found.end()):
