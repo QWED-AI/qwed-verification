@@ -564,16 +564,29 @@ def test_the_client_takes_only_a_result_or_a_response_dict():
         client.verify_attestation("a token on its own")
 
 
-def test_a_consensus_answer_keeps_its_token():
-    # verify_consensus builds its result by hand; it carries the token too
-    # (#512 review).
+def test_a_consensus_answer_carries_no_token():
+    # Consensus is advisory (#633): a token from a server that still signs
+    # one is not carried, in the result or the response copy it holds, so
+    # the answer cannot be checked as attested.
     data = {"meets_requirement": True, "status": "VERIFIED", "attestation": "t", "proof_ref": PROOF}
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json=data)
+
     client = QWEDClient(api_key="k", base_url="http://qwed.test")
-    client._client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=data)))
+    client._client = httpx.Client(transport=httpx.MockTransport(handler))
 
     result = client.verify_consensus("2+2")
 
-    assert (result.attestation, result.proof_ref) == ("t", PROOF)
+    assert (result.attestation, result.proof_ref, result.admission) == (None, None, None)
+    assert "attestation" not in result.result
+    assert "proof_ref" not in result.result
+    for answer in (result, result.result):
+        with pytest.raises(AttestationError, match="^no "):
+            client.verify_attestation(answer)
+    assert calls == ["/verify/consensus"]
 
 
 def test_the_client_reuses_the_jwks_within_its_lifetime(server):
@@ -745,9 +758,18 @@ def test_the_async_client_needs_its_context_to_fetch_keys():
         asyncio.run(fetch)
 
 
-def test_an_async_consensus_answer_keeps_its_token():
+def test_an_async_consensus_answer_carries_no_token():
     data = {"meets_requirement": True, "status": "VERIFIED", "attestation": "t", "proof_ref": PROOF}
 
-    result = _async_run(None, 0, lambda r: httpx.Response(200, json=data), lambda client: client.verify_consensus("2+2"))
+    async def call(client):
+        result = await client.verify_consensus("2+2")
+        for answer in (result, result.result):
+            with pytest.raises(AttestationError, match="^no "):
+                await client.verify_attestation(answer)
+        return result
 
-    assert (result.attestation, result.proof_ref) == ("t", PROOF)
+    result = _async_run(None, 0, lambda r: httpx.Response(200, json=data), call)
+
+    assert (result.attestation, result.proof_ref, result.admission) == (None, None, None)
+    assert "attestation" not in result.result
+    assert "proof_ref" not in result.result

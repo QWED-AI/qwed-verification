@@ -481,8 +481,10 @@ def test_verify_consensus_unverifiable_status(client):
     assert data["final_answer"] == "maybe"
 
 
-def test_verify_consensus_verified_with_proof_ref(client):
-    """Cover VERIFIED consensus with proof_ref included in response (#266)."""
+def test_verify_consensus_that_says_verified_is_advisory(client):
+    """A consensus result that says VERIFIED is UNVERIFIABLE, with no
+    proof_ref: consensus is advisory only (#633). It was VERIFIED with a
+    proof_ref (#266)."""
     from qwed_new.core.consensus_verifier import ConsensusResult
 
     fake = ConsensusResult(
@@ -505,10 +507,10 @@ def test_verify_consensus_verified_with_proof_ref(client):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "VERIFIED"
-    assert data["proof_ref"] is not None
-    assert data["proof_ref"].startswith("sha256:")
-    assert data["is_authoritative"] is True
+    assert data["status"] == "UNVERIFIABLE"
+    assert data["proof_ref"] is None
+    assert data["is_authoritative"] is False
+    assert data["advisory_only"] is True
 
 
 def test_verify_consensus_all_engines_blocked(client):

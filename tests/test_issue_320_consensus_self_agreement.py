@@ -7,7 +7,8 @@ gave. A unanimous vote of that one engine was VERIFIED, with
 as a consensus. The proof did not name the query either.
 
 One engine is not a consensus: an answer that only one engine verified is now
-BLOCKED, and a VERIFIED consensus binds the query in its proof.
+BLOCKED. Since #633 a consensus is advisory only: engines that agree are
+UNVERIFIABLE, with no proof.
 """
 
 from types import SimpleNamespace
@@ -68,30 +69,36 @@ def test_an_answer_one_engine_verified_is_not_a_consensus(results):
     assert consensus.get("proof_ref") is None
 
 
-def test_two_engines_that_verified_the_same_answer_are_a_consensus():
+def test_two_engines_that_verified_the_same_answer_are_advisory():
+    # They were VERIFIED. Both decided the model's translations, so their
+    # agreement is advisory (#633).
     consensus = ConsensusVerifier(enable_circuit_breaker=False)._calculate_consensus(
         [_engine("SymPy", 4), _engine("Z3", 4)]
     )
 
-    assert consensus["diagnostic_status"] == "VERIFIED"
+    assert consensus["diagnostic_status"] == "UNVERIFIABLE"
     assert consensus["status"] == "unanimous"
+    assert consensus.get("proof_ref") is None
 
 
-def test_a_verified_consensus_binds_the_query(monkeypatch):
-    # The proof bound the engines and the answer, not the query, so the same
-    # answer to different questions had the same proof.
+def test_an_agreeing_consensus_has_no_proof(monkeypatch):
+    # A VERIFIED consensus bound the query in its proof (#320); an advisory
+    # one has no proof to bind (#633).
     verifier = ConsensusVerifier(enable_circuit_breaker=False)
     monkeypatch.setattr(verifier, "_select_engines", lambda query, mode: [
         ("SymPy", lambda query: _engine("SymPy", 4)),
         ("Z3", lambda query: _engine("Z3", 4)),
     ])
 
-    first = verifier.verify_with_consensus("What is 2 + 2?", mode=VerificationMode.MAXIMUM, parallel=False)
-    second = verifier.verify_with_consensus("What is 3 + 1?", mode=VerificationMode.MAXIMUM, parallel=False)
+    result = verifier.verify_with_consensus("What is 2 + 2?", mode=VerificationMode.MAXIMUM, parallel=False)
+    diagnostic = result.to_diagnostic_result()
 
-    assert first.verified_evidence["query"] == "What is 2 + 2?"
-    assert first.to_diagnostic_result().proof_ref != second.to_diagnostic_result().proof_ref
-    assert first.proof_ref == first.to_diagnostic_result().proof_ref
+    assert result.agreement_status == "unanimous"
+    assert result.proof_ref is None
+    assert result.verified_evidence is None
+    assert diagnostic.status.value == "UNVERIFIABLE"
+    assert diagnostic.proof_ref is None
+    assert diagnostic.developer_fields["advisory_only"] is True
 
 
 def test_the_blocked_result_says_why():
@@ -117,7 +124,11 @@ _BLOCKED_ENGINE = EngineResult("Z3", "method", None, 0.0, 1.0, False, error="x",
     ("no_results", [], cv.DiagnosticStatus.UNVERIFIABLE, "no engine results available"),
     ("all_failed", [], cv.DiagnosticStatus.UNVERIFIABLE, "all engines failed"),
     ("unanimous", [_BLOCKED_ENGINE], cv.DiagnosticStatus.UNVERIFIABLE, "some engines blocked"),
-    ("unanimous", [], cv.DiagnosticStatus.UNVERIFIABLE, "advisory engines cannot verify claims"),
+    ("no_answer", [], cv.DiagnosticStatus.UNVERIFIABLE, "no engine computed an answer"),
+    ("unanimous", [], cv.DiagnosticStatus.UNVERIFIABLE, "advisory only"),
+    # A status that says VERIFIED, from a result built by hand (#633).
+    ("unanimous", [], cv.DiagnosticStatus.VERIFIED, "advisory only"),
+    ("unanimous", [], "VERIFIED", "advisory only"),
     ("unanimous", [], None, "no agreement"),
 ])
 def test_a_consensus_that_is_not_verified_says_why(agreement, chain, status, message):
@@ -131,3 +142,5 @@ def test_a_consensus_that_is_not_verified_says_why(agreement, chain, status, mes
 
     assert diagnostic.status.value == "UNVERIFIABLE"
     assert message in diagnostic.agent_message
+    assert diagnostic.proof_ref is None
+    assert diagnostic.developer_fields["advisory_only"] is True

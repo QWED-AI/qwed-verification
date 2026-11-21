@@ -242,7 +242,7 @@ class TestConsensusVerifierAdvisoryOnly:
         assert consensus["diagnostic_status"] == "UNVERIFIABLE"
 
     def test_verified_without_blocked(self):
-        """All VERIFIED (unanimous) → consensus VERIFIED with agreement."""
+        """All VERIFIED (unanimous) → UNVERIFIABLE: consensus is advisory (#633)."""
         results = [
             EngineResult(
                 engine_name="SymPy", method="math", result=4,
@@ -256,7 +256,9 @@ class TestConsensusVerifierAdvisoryOnly:
             ),
         ]
         consensus = self.verifier._calculate_consensus(results)
-        assert consensus["diagnostic_status"] == "VERIFIED"
+        assert consensus["diagnostic_status"] == "UNVERIFIABLE"
+        assert consensus["status"] == "unanimous"
+        assert consensus.get("proof_ref") is None
 
     def test_majority_consensus_unverifiable(self):
         """Majority agreement → consensus UNVERIFIABLE (not unanimous)."""
@@ -271,8 +273,9 @@ class TestConsensusVerifierAdvisoryOnly:
                 confidence=0.99, latency_ms=10, success=True,
                 status="VERIFIED",
             ),
+            # Not Z3: a claim engine does not vote on the answer (#659).
             EngineResult(
-                engine_name="Z3", method="logic", result=4,
+                engine_name="Stats", method="statistical_analysis", result=4,
                 confidence=0.995, latency_ms=10, success=True,
                 status="VERIFIED",
             ),
@@ -294,8 +297,9 @@ class TestConsensusVerifierAdvisoryOnly:
                 confidence=0.99, latency_ms=10, success=True,
                 status="VERIFIED",
             ),
+            # Not Z3: a claim engine does not vote on the answer (#659).
             EngineResult(
-                engine_name="Z3", method="logic", result=6,
+                engine_name="Stats", method="statistical_analysis", result=6,
                 confidence=0.995, latency_ms=10, success=True,
                 status="VERIFIED",
             ),
@@ -330,28 +334,24 @@ class TestConsensusVerifierAdvisoryOnly:
         assert consensus["diagnostic_status"] == "BLOCKED"
         assert consensus["status"] == "no_independent_verification"
 
-    def test_verified_evidence_answer_none_stays_null_and_type_differs(self):
-        """Verified consensus evidence: answer None→null, repr carries type info (#266)."""
+    def test_agreement_has_no_evidence_and_keeps_the_answer(self):
+        """Engines that agree are advisory (#633): no evidence or proof_ref,
+        whatever the answer, and the answer is kept as it is: None stays
+        None, and a Decimal stays a Decimal (#266)."""
         from decimal import Decimal
 
         verifier = ConsensusVerifier(enable_circuit_breaker=False)
 
-        none_result = verifier._calculate_consensus([
-            EngineResult("Logic", "logic", None, 1.0, 1.0, True, status="VERIFIED"),
-            EngineResult("Math", "symbolic_math", None, 1.0, 1.0, True, status="VERIFIED"),
-        ])
-        assert none_result["verified_evidence"]["answer"] is None
-
-        typed_result = verifier._calculate_consensus([
-            EngineResult("Logic", "logic", Decimal("1.0"), 1.0, 1.0, True, status="VERIFIED"),
-            EngineResult("Math", "symbolic_math", Decimal("1.0"), 1.0, 1.0, True, status="VERIFIED"),
-        ])
-        float_result = verifier._calculate_consensus([
-            EngineResult("Logic", "logic", 1.0, 1.0, 1.0, True, status="VERIFIED"),
-            EngineResult("Math", "symbolic_math", 1.0, 1.0, 1.0, True, status="VERIFIED"),
-        ])
-
-        assert typed_result["verified_evidence"]["answer"] != float_result["verified_evidence"]["answer"]
+        for answer in (None, Decimal("1.0"), 1.0):
+            consensus = verifier._calculate_consensus([
+                EngineResult("Logic", "logic", answer, 1.0, 1.0, True, status="VERIFIED"),
+                EngineResult("Math", "symbolic_math", answer, 1.0, 1.0, True, status="VERIFIED"),
+            ])
+            assert consensus["diagnostic_status"] == "UNVERIFIABLE"
+            assert consensus["status"] == "unanimous"
+            assert "verified_evidence" not in consensus
+            assert "proof_ref" not in consensus
+            assert consensus["answer"] is answer
 
 
 # ========================================================================

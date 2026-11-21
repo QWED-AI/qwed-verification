@@ -197,9 +197,12 @@ def test_a_verified_consensus_is_not_verified_anywhere(client, monkeypatch):  # 
     with patch.object(api_main.consensus_verifier, "verify_async", verify_async):
         body = client.post("/verify/consensus", json={"query": "What is 2 + 2?"}).json()
 
-    assert body["status"] == "VERIFIED"
+    # Consensus is advisory: not even its status says VERIFIED (#633).
+    assert body["status"] == "UNVERIFIABLE"
+    assert body["advisory_only"] is True
     assert body["meets_requirement"] is False
-    assert _signed_verified(body["attestation"]) is False
+    # Not VERIFIED, so nothing is signed.
+    assert body.get("attestation") is None
     assert [row.is_verified for row in rows] == [False]
 
 

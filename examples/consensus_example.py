@@ -1,9 +1,12 @@
 """
-QWED Consensus Verification Example.
+QWED Consensus Example (advisory only).
 
 Demonstrates:
-1. Using multiple engines to verify a query with higher confidence.
-2. Specifying verification mode and minimum confidence.
+1. Running several engines on a query.
+2. Specifying the mode and minimum confidence.
+
+Consensus is advisory only: the status is never VERIFIED and is_verified is
+always False (#633). Read the result as a signal for review.
 """
 
 from qwed_sdk import QWEDClient
@@ -12,10 +15,11 @@ import os
 def main():
     client = QWEDClient(api_key=os.environ.get("QWED_API_KEY", "qwed_test_key"))
 
-    print("--- Consensus Verification ---")
+    print("--- Consensus (advisory only) ---")
     query = "Is the square root of 16 equal to 4?"
 
-    # Mode can be 'single', 'high' (2 engines), or 'maximum' (3+ engines)
+    # Mode can be 'single', 'high' (2 engines), or 'maximum' (3+ engines);
+    # every mode is advisory.
     mode = "high"
     min_confidence = 0.90
 
