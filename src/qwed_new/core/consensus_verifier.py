@@ -154,17 +154,18 @@ def _snapshot(call: Any) -> Optional[Translation]:
     return None
 
 
-def _timed_out(call: Any) -> dict[str, Any]:
+def _timed_out(call: Any, started: bool = True) -> dict[str, Any]:
     """The fields of an engine that ran out of time: its translation, where
-    it had one, and its cause (#519). A translating engine with no
-    translation yet was still waiting for the model, so it is a failed
-    translation, as a provider call out of time is on every route. An
-    engine that had its translation, and so stopped after it, names no
-    cause, nor does one that does not translate: each stays BLOCKED, as
-    before. One snapshot decides both fields, so a translation that lands
-    meanwhile cannot split them."""
+    it had one, and its cause (#519). A translating engine that started and
+    has no translation yet was still waiting for the model, so it is a
+    failed translation, as a provider call out of time is on every route.
+    An engine that had its translation, and so stopped after it, names no
+    cause, nor does one that does not translate, nor one cancelled before it
+    started (``started`` False: queued behind other work, it asked the model
+    nothing): each stays BLOCKED, as before. One snapshot decides both
+    fields, so a translation that lands meanwhile cannot split them."""
     translation = _snapshot(call)
-    if isinstance(call, _EngineCall) and translation is None:
+    if started and isinstance(call, _EngineCall) and translation is None:
         return {
             "translation": None,
             "cause": TRANSLATION_FAILED,
@@ -977,12 +978,12 @@ class ConsensusVerifier:
             for future, engine_name in futures.items():
                 # a started thread cannot be force-killed in Python; cancel
                 # reaches only the not-yet-started futures
-                future.cancel()
+                cancelled = future.cancel()
                 if engine_name not in {r.engine_name for r in results}:
                     results.append(self._blocked_engine_result(
                         engine_name, "parallel_timeout",
                         f"Engine timed out after {_ENGINE_TIMEOUT_SECONDS}s",
-                        **_timed_out(calls[engine_name]),
+                        **_timed_out(calls[engine_name], started=not cancelled),
                     ))
         
         return results
@@ -1003,11 +1004,11 @@ class ConsensusVerifier:
                     self._record_engine_result(engine_name, result)
                     results.append(result)
                 except FutureTimeoutError:
-                    future.cancel()
+                    cancelled = future.cancel()
                     results.append(self._blocked_engine_result(
                         engine_name, "sequential_timeout",
                         f"Engine timed out after {_ENGINE_TIMEOUT_SECONDS}s",
-                        **_timed_out(method),
+                        **_timed_out(method, started=not cancelled),
                     ))
                 except Exception as e:
                     results.append(self._blocked_engine_result(

@@ -61,14 +61,23 @@ LEAK_MARKER = "leak-marker-519"
 
 @pytest.fixture(autouse=True)
 def _own_rate_limits(monkeypatch):
-    """Fresh per-organisation rate limits for each test. The control planes
-    the routes share keep one bucket per organisation; without this, the
-    many requests here drain it, and a later test on the same worker is
-    refused as over its rate limit."""
+    """Fresh in-memory rate limits for each test. The routes' control planes
+    keep one bucket per organisation, in Redis where it runs, as in CI,
+    where every worker shares it; the many requests here would drain it,
+    and a later test would be refused as over its rate limit. A control
+    plane built during a test (a batch service) keeps its limits in memory
+    too."""
+    from qwed_new.core import redis_config
+    from qwed_new.core.policy import RateLimiter
+
+    monkeypatch.setattr(redis_config, "is_redis_available", lambda: False)
     for control_plane in (api_main.control_plane, api_main.batch_service.control_plane):
+        policy = control_plane.policy
         limiters = {}
-        monkeypatch.setattr(control_plane.policy, "_tenant_limiters", limiters)
-        monkeypatch.setattr(control_plane.policy, "tenant_limiters", limiters)
+        monkeypatch.setattr(policy, "_redis_available", False)
+        monkeypatch.setattr(policy, "_tenant_limiters", limiters)
+        monkeypatch.setattr(policy, "tenant_limiters", limiters)
+        monkeypatch.setattr(policy, "global_limiter", RateLimiter(rate=60, per=60))
 
 
 # ------------------------------------------------------------- the causes
@@ -718,24 +727,24 @@ def test_a_stats_reply_with_no_code_is_a_failed_translation(
 
 def _stalling_engine(release, kind):
     """An engine that stalls until ``release``: a translating one waiting for
-    the model, or one that has its translation; or one that does not
+    the model, or one that has its translation (given before dispatch, so
+    the case does not depend on when its thread runs); or one that does not
     translate."""
     from qwed_new.core.consensus_verifier import _EngineCall
     from qwed_new.core.schemas import MathVerificationTask
     from qwed_new.core.translation_record import Translation
 
-    def _translating(_query, translations):
-        if kind == "translated":
-            task = MathVerificationTask(expression="2 + 2", claimed_answer=4.0, reasoning="r", confidence=1.0)
-            translations.append(Translation("math", task, "ollama", "model-519"))
+    def _stall(*_args):
         release.wait(5)
         raise RuntimeError("released")
 
-    def _plain(_query):
-        release.wait(5)
-        raise RuntimeError("released")
-
-    return _plain if kind == "not-translating" else _EngineCall(_translating)
+    if kind == "not-translating":
+        return _stall
+    call = _EngineCall(_stall)
+    if kind == "translated":
+        task = MathVerificationTask(expression="2 + 2", claimed_answer=4.0, reasoning="r", confidence=1.0)
+        call.translations.append(Translation("math", task, "ollama", "model-519"))
+    return call
 
 
 @pytest.mark.parametrize("kind, cause", [
@@ -773,3 +782,29 @@ def test_a_consensus_engine_out_of_time_names_a_cause_only_while_translating(mon
         assert consensus["cause_message"] == message_of(TimeoutError(), TRANSLATION_FAILED)
     else:
         assert consensus["diagnostic_status"] is DiagnosticStatus.BLOCKED
+
+
+@pytest.mark.parametrize("path", ["sequential", "parallel"])
+def test_a_consensus_engine_cancelled_before_it_ran_names_no_cause(monkeypatch, path):
+    # One worker: the first engine runs and waits for the model; the second
+    # is queued behind it, is cancelled at the deadline, and asked the model
+    # nothing.
+    from qwed_new.core import consensus_verifier
+
+    monkeypatch.setattr(consensus_verifier, "_ENGINE_TIMEOUT_SECONDS", 0.05)
+    verifier = consensus_verifier.ConsensusVerifier(max_workers=1, enable_circuit_breaker=False)
+    release = threading.Event()
+    engines = [("SymPy", _stalling_engine(release, "waiting")), ("Python", _stalling_engine(release, "waiting"))]
+    try:
+        if path == "sequential":
+            results = verifier._execute_sequential(QUESTION, engines)
+        else:
+            results = verifier._execute_parallel(QUESTION, engines)
+    finally:
+        release.set()
+
+    assert [(r.engine_name, r.cause) for r in results] == [("SymPy", TRANSLATION_FAILED), ("Python", None)]
+    consensus = verifier._calculate_consensus(results)
+    assert consensus["diagnostic_status"] is DiagnosticStatus.BLOCKED
+    assert consensus.get("cause") is None
+
