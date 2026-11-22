@@ -154,6 +154,25 @@ def _snapshot(call: Any) -> Optional[Translation]:
     return None
 
 
+def _timed_out(call: Any) -> dict[str, Any]:
+    """The fields of an engine that ran out of time: its translation, where
+    it had one, and its cause (#519). A translating engine with no
+    translation yet was still waiting for the model, so it is a failed
+    translation, as a provider call out of time is on every route. An
+    engine that had its translation, and so stopped after it, names no
+    cause, nor does one that does not translate: each stays BLOCKED, as
+    before. One snapshot decides both fields, so a translation that lands
+    meanwhile cannot split them."""
+    translation = _snapshot(call)
+    if isinstance(call, _EngineCall) and translation is None:
+        return {
+            "translation": None,
+            "cause": TRANSLATION_FAILED,
+            "cause_message": message_of(TimeoutError(), TRANSLATION_FAILED),
+        }
+    return {"translation": translation}
+
+
 def chain_record(chain: Any) -> Optional[str]:
     """The audit record (#578) of the translations in a verification chain,
     or None when no engine had one. An entry that is not an EngineResult
@@ -815,7 +834,7 @@ class ConsensusVerifier:
                 results.append(self._blocked_engine_result(
                     engine_name, "timeout", "Timeout",
                     latency_ms=(time.monotonic_ns() - mono_start_ns) // 1_000_000,
-                    translation=_snapshot(call),
+                    **_timed_out(call),
                 ))
                 continue
             self._record_engine_result(engine_name, result)
@@ -886,13 +905,16 @@ class ConsensusVerifier:
         latency_ms: float = 0,
         record: bool = True,
         translation: Optional[Translation] = None,
+        cause: str | None = None,
+        cause_message: str | None = None,
     ) -> EngineResult:
         """Build a BLOCKED EngineResult and record it with the circuit breaker.
 
         #340: hung engines never complete, so without recording here the
         breaker never opens and every tenant's consensus requests keep
         degrading until restart. ``translation`` is what the model returned
-        before the engine stopped, where it had (#578).
+        before the engine stopped, where it had (#578); ``cause`` is the
+        named cause it stopped for, where it is one (#519).
         """
         blocked = EngineResult(
             engine_name=engine_name,
@@ -904,6 +926,8 @@ class ConsensusVerifier:
             error=error,
             status="BLOCKED",
             translation=translation,
+            cause=cause,
+            cause_message=cause_message,
         )
         if record:
             self._record_engine_result(engine_name, blocked, answered=False)
@@ -958,7 +982,7 @@ class ConsensusVerifier:
                     results.append(self._blocked_engine_result(
                         engine_name, "parallel_timeout",
                         f"Engine timed out after {_ENGINE_TIMEOUT_SECONDS}s",
-                        translation=_snapshot(calls[engine_name]),
+                        **_timed_out(calls[engine_name]),
                     ))
         
         return results
@@ -983,7 +1007,7 @@ class ConsensusVerifier:
                     results.append(self._blocked_engine_result(
                         engine_name, "sequential_timeout",
                         f"Engine timed out after {_ENGINE_TIMEOUT_SECONDS}s",
-                        translation=_snapshot(method),
+                        **_timed_out(method),
                     ))
                 except Exception as e:
                     results.append(self._blocked_engine_result(
