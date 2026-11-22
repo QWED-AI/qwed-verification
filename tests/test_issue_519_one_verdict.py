@@ -837,3 +837,53 @@ def test_a_consensus_engine_cancelled_before_it_ran_names_no_cause(monkeypatch, 
     assert consensus["diagnostic_status"] is DiagnosticStatus.BLOCKED
     assert consensus.get("cause") is None
 
+
+
+class _FirstStartedExecutor(ThreadPoolExecutor):
+    """A one-worker pool whose first ``submit`` returns only once that task
+    has started; later tasks queue behind it."""
+
+    def __init__(self):
+        super().__init__(max_workers=1)
+        self._first = True
+
+    def submit(self, fn, /, *args, **kwargs):
+        if not self._first:
+            return super().submit(fn, *args, **kwargs)
+        self._first = False
+        started = threading.Event()
+
+        def _run(*run_args, **run_kwargs):
+            started.set()
+            return fn(*run_args, **run_kwargs)
+
+        future = super().submit(_run, *args, **kwargs)
+        assert started.wait(5), "the first engine never started"
+        return future
+
+
+@pytest.mark.parametrize("path", ["sequential", "parallel"])
+def test_one_engine_waiting_for_the_model_and_one_queued_are_told_apart(monkeypatch, path):
+    # In one run: the first engine is running and waits for the model,
+    # its sibling waits in the queue behind it. Each is read on its own: a
+    # failed translation for the first, no cause for the second, so the
+    # engines do not share a cause and the consensus is BLOCKED.
+    from qwed_new.core import consensus_verifier
+
+    monkeypatch.setattr(consensus_verifier, "_ENGINE_TIMEOUT_SECONDS", 0.05)
+    verifier = consensus_verifier.ConsensusVerifier(max_workers=1, enable_circuit_breaker=False)
+    monkeypatch.setattr(verifier, "_executor", _FirstStartedExecutor())
+    release = threading.Event()
+    engines = [("SymPy", _stalling_engine(release, "waiting")), ("Python", _stalling_engine(release, "waiting"))]
+    try:
+        if path == "sequential":
+            results = verifier._execute_sequential(QUESTION, engines)
+        else:
+            results = verifier._execute_parallel(QUESTION, engines)
+    finally:
+        release.set()
+
+    assert [(r.engine_name, r.cause) for r in results] == [("SymPy", TRANSLATION_FAILED), ("Python", None)]
+    consensus = verifier._calculate_consensus(results)
+    assert consensus["diagnostic_status"] is DiagnosticStatus.BLOCKED
+    assert consensus.get("cause") is None
