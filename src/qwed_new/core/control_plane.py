@@ -62,6 +62,18 @@ PIPELINE_ERROR = "control_plane.pipeline_error"
 _PIPELINE_ERROR_MESSAGE = "Internal pipeline error"
 
 
+def _logic_failure(error: BaseException, translated: bool) -> dict[str, str]:
+    """The error and cause of a /verify/logic request that raised (#519). A
+    provider call out of time, before it returned, is a failed translation,
+    named as on /verify/natural_language. Any other error is the pipeline's
+    own, BLOCKED: one escaping the bridge is not the model's, since the
+    bridge names every provider error, and the solver and every later step
+    come after the translation."""
+    if not translated and isinstance(error, (TimeoutError, asyncio.TimeoutError)):
+        return {"error": message_of(error, TRANSLATION_FAILED), "constraint_id": TRANSLATION_FAILED}
+    return {"error": _PIPELINE_ERROR_MESSAGE, "constraint_id": PIPELINE_ERROR}
+
+
 async def _run_provider_call(func, *args, **kwargs):
     """Run a blocking provider call off the event loop, bounded by a timeout."""
     return await asyncio.wait_for(
@@ -561,17 +573,9 @@ class ControlPlane:
                 f"Logic pipeline failure for org {organization_id}: {redact_pii(str(e))}",
                 exc_info=False
             )
-            # A provider call out of time is a failed translation, named as
-            # on /verify/natural_language (#519). Any other error is the
-            # pipeline's own, BLOCKED: one escaping the bridge is not the
-            # model's, since the bridge names every provider error, and the
-            # solver and every later step come after the translation.
-            out_of_time = not translated and isinstance(e, (TimeoutError, asyncio.TimeoutError))
-            cause = TRANSLATION_FAILED if out_of_time else PIPELINE_ERROR
             return {
                 "status": "ERROR",
-                "error": message_of(e, cause) if out_of_time else _PIPELINE_ERROR_MESSAGE,
-                "constraint_id": cause,
+                **_logic_failure(e, translated),
                 "provider_used": last_known_provider,
                 "translation_model": last_known_model,
                 RAW_LLM_OUTPUT_KEY: audit_record([translation]),

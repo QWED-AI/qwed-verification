@@ -16,6 +16,7 @@ verified.
 import asyncio
 import io
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
 import pytest
@@ -747,6 +748,23 @@ def _stalling_engine(release, kind):
     return call
 
 
+class _StartedExecutor(ThreadPoolExecutor):
+    """A pool whose ``submit`` returns only once the task has started, so a
+    deadline that follows the submit always finds the engine running, however
+    loaded the runner is."""
+
+    def submit(self, fn, /, *args, **kwargs):
+        started = threading.Event()
+
+        def _run(*run_args, **run_kwargs):
+            started.set()
+            return fn(*run_args, **run_kwargs)
+
+        future = super().submit(_run, *args, **kwargs)
+        assert started.wait(5), "the engine never started"
+        return future
+
+
 @pytest.mark.parametrize("kind, cause", [
     ("waiting", TRANSLATION_FAILED),
     ("translated", None),
@@ -758,6 +776,9 @@ def test_a_consensus_engine_out_of_time_names_a_cause_only_while_translating(mon
 
     monkeypatch.setattr(consensus_verifier, "_ENGINE_TIMEOUT_SECONDS", 0.05)
     verifier = consensus_verifier.ConsensusVerifier(enable_circuit_breaker=False)
+    # Each engine is running before its deadline starts. The async path runs
+    # them in its own pool, sized to the engine list.
+    monkeypatch.setattr(verifier, "_executor", _StartedExecutor(max_workers=4))
     release = threading.Event()
     engines = [("SymPy", _stalling_engine(release, kind)), ("Python", _stalling_engine(release, kind))]
     try:
@@ -786,16 +807,24 @@ def test_a_consensus_engine_out_of_time_names_a_cause_only_while_translating(mon
 
 @pytest.mark.parametrize("path", ["sequential", "parallel"])
 def test_a_consensus_engine_cancelled_before_it_ran_names_no_cause(monkeypatch, path):
-    # One worker: the first engine runs and waits for the model; the second
-    # is queued behind it, is cancelled at the deadline, and asked the model
-    # nothing.
+    # The pool's one worker is busy before the engines are submitted, so both
+    # wait in the queue, are cancelled at the deadline, and asked the model
+    # nothing: no cause, and the consensus is BLOCKED, not not_translated.
     from qwed_new.core import consensus_verifier
 
     monkeypatch.setattr(consensus_verifier, "_ENGINE_TIMEOUT_SECONDS", 0.05)
     verifier = consensus_verifier.ConsensusVerifier(max_workers=1, enable_circuit_breaker=False)
     release = threading.Event()
+    busy = threading.Event()
+
+    def _occupy():
+        busy.set()
+        release.wait(5)
+
     engines = [("SymPy", _stalling_engine(release, "waiting")), ("Python", _stalling_engine(release, "waiting"))]
     try:
+        verifier._executor.submit(_occupy)
+        assert busy.wait(5)
         if path == "sequential":
             results = verifier._execute_sequential(QUESTION, engines)
         else:
@@ -803,7 +832,7 @@ def test_a_consensus_engine_cancelled_before_it_ran_names_no_cause(monkeypatch, 
     finally:
         release.set()
 
-    assert [(r.engine_name, r.cause) for r in results] == [("SymPy", TRANSLATION_FAILED), ("Python", None)]
+    assert [(r.engine_name, r.cause) for r in results] == [("SymPy", None), ("Python", None)]
     consensus = verifier._calculate_consensus(results)
     assert consensus["diagnostic_status"] is DiagnosticStatus.BLOCKED
     assert consensus.get("cause") is None
