@@ -35,6 +35,12 @@ from qwed_new.core.diagnostics import (
     enforce_trust_decision,
 )
 from qwed_new.core.attestation import create_verification_attestation, AttestationStatus
+from qwed_new.core.failure_cause import (
+    INPUT_REFUSED,
+    POLICY_BLOCKED,
+    diagnostic_for,
+    diagnostic_for_exception,
+)
 # Every z3 solve runs on the one z3 thread, which the consensus Z3 engine
 # shares (#659); the provider translation runs concurrently via
 # _run_provider_call.
@@ -251,9 +257,11 @@ class ControlPlane:
         is_safe, security_reason = self.security_gateway.detect_advanced_injection(query)
         if not is_safe:
             logger.warning(f"Security block for org {organization_id}: {security_reason}")
+            message = f"Security Policy Violation: {security_reason}"
             return {
                 "status": "BLOCKED",
-                "error": f"Security Policy Violation: {security_reason}",
+                "error": message,
+                **self._stopped(diagnostic_for(INPUT_REFUSED, message), organization_id),
                 "latency_ms": (time.time() - start_time) * 1000
             }
         
@@ -263,6 +271,7 @@ class ControlPlane:
             return {
                 "status": "BLOCKED",
                 "error": reason,
+                **self._stopped(diagnostic_for(POLICY_BLOCKED, reason), organization_id),
                 "latency_ms": (time.time() - start_time) * 1000
             }
             
@@ -382,12 +391,30 @@ class ControlPlane:
             if raw_llm_output is None:
                 # Output the safety check refused is kept too (#578).
                 raw_llm_output = audit_record([translation_in(e)])
+            # One verdict for the cause (#519): no provider and a failed
+            # translation are UNVERIFIABLE, a refused text BLOCKED, each named.
             return {
                 "status": "ERROR",
                 "error": str(e),
+                **self._stopped(diagnostic_for_exception(e), organization_id),
                 RAW_LLM_OUTPUT_KEY: raw_llm_output,
                 "latency_ms": (time.time() - start_time) * 1000
             }
+
+    def _stopped(self, diagnostic: DiagnosticResult, organization_id: int | None) -> dict[str, Any]:
+        """The verdict of a request stopped before any engine decided it
+        (#519): a refusal, a policy block, no provider or a failed
+        translation. The routes report this diagnostic as they report a
+        decided one, so a cause reads the same on every route, and its
+        admission is never ADMIT."""
+        return {
+            "diagnostic": self.output_sanitizer.sanitize_output(
+                result=diagnostic.to_dict(),
+                output_type="diagnostic",
+                organization_id=organization_id,
+            ),
+            "admission": natural_language_admission(diagnostic).value,
+        }
 
     def _logic_solve(self, dsl_code: str, variables: Any, claim_dsl: Optional[str]) -> tuple:
         """The z3 call for a logic translation (#631), as (function, args):
@@ -416,6 +443,7 @@ class ControlPlane:
             result = {
                 "status": "BLOCKED",
                 "error": f"Security Policy Violation: {security_reason}",
+                "constraint_id": INPUT_REFUSED,  # #519: the same cause as on every route
                 "latency_ms": (time.time() - start_time) * 1000
             }
             if organization_id:
@@ -425,7 +453,10 @@ class ControlPlane:
         # 1. Policy
         allowed, reason = self.policy.check_policy(query, organization_id=organization_id)
         if not allowed:
-            result = {"status": "BLOCKED", "error": reason, "latency_ms": (time.time() - start_time) * 1000}
+            result = {
+                "status": "BLOCKED", "error": reason, "constraint_id": POLICY_BLOCKED,
+                "latency_ms": (time.time() - start_time) * 1000,
+            }
             if organization_id:
                 metrics_collector.track_request(organization_id, "BLOCKED", result["latency_ms"])
             return result

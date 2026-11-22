@@ -16,6 +16,7 @@ from z3 import Solver, sat, unsat
 from qwed_new.core.dsl import parse_and_validate, compile_to_z3
 from qwed_new.core.translation_record import audit_record, translation_of
 from qwed_new.core.translator import TranslationLayer
+from qwed_new.core.failure_cause import NO_PROVIDER, TRANSLATION_FAILED, cause_of, message_of
 from qwed_new.providers.base import ProviderConfigError
 
 from .diagnostics import DiagnosticResult
@@ -695,8 +696,13 @@ class DSLLogicVerifier:
         resolved_provider = provider_label
         translator = TranslationLayer()
         translation = None
+        # Set once the model has answered: an error after that is the DSL
+        # step refusing what it wrote, BLOCKED as before, not a translation
+        # cause (#519).
+        translated = False
         try:
             logic_result = translator.translate_logic(query, provider=provider_label)
+            translated = True
             translation = translation_of(translator, "logic", logic_result, provider_label)
             resolved_provider = self._provider_label(
                 getattr(translator, "last_resolved_provider", None) or provider_label
@@ -724,15 +730,25 @@ class DSLLogicVerifier:
                 status="ERROR",
                 error=str(e),
                 provider_used=resolved_provider,
+                constraint_id=NO_PROVIDER,  # #519: UNVERIFIABLE, as on every route
             ), None, translator.translation_model(provider_label), translation
         except ValueError as e:
             resolved_provider = self._provider_label(
                 getattr(translator, "last_resolved_provider", None) or resolved_provider
             )
+            # From the provider call, a refused text (input or the model's
+            # output) or a failed translation is named (#519); the DSL step
+            # refusing what the model wrote stays BLOCKED, with no cause.
+            cause = None if translated else cause_of(e)
+            if cause in (None, TRANSLATION_FAILED):
+                error = str(e) if str(e).startswith("Unsupported logic goal:") else "LLM translation failed"
+            else:
+                error = message_of(e, cause)
             return None, None, resolved_provider, DSLVerificationResult(
                 status="ERROR",
-                error=str(e) if str(e).startswith("Unsupported logic goal:") else "LLM translation failed",
+                error=error,
                 provider_used=resolved_provider,
+                constraint_id=cause,
             ), None, translator.translation_model(provider_label), translation
         except Exception:
             logger.debug(
@@ -748,6 +764,7 @@ class DSLLogicVerifier:
                 status="ERROR",
                 error="LLM translation failed",
                 provider_used=resolved_provider,
+                constraint_id=None if translated else TRANSLATION_FAILED,  # #519
             ), None, translator.translation_model(provider_label), translation
 
     def to_verification_context(self, result: "DiagnosticResult", query: str, attestation_token: Optional[str] = None) -> "VerificationContextDocument":

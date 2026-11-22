@@ -285,8 +285,10 @@ def test_stats_no_longer_reaches_the_model_with_a_refused_question(provider):
 
     assert provider.calls == []
     assert result.status.value == "BLOCKED"
-    # Blocked at the translation step, not later for a missing sandbox.
-    assert "could not be translated" in result.agent_message
+    # Blocked at the translation step, not later for a missing sandbox,
+    # with the cause every route names (#519).
+    assert result.constraint_id == "security.input_refused"
+    assert result.agent_message.startswith("Security Policy Violation")
 
 
 @pytest.mark.parametrize(("claim", "context"), [
@@ -301,7 +303,7 @@ def test_fact_refuses_a_request_whose_advisory_text_is_refused(provider, claim, 
 
     assert provider.calls == []
     assert result.status.value == "BLOCKED"
-    assert result.developer_fields["constraint_id"] == "fact_verifier.translation_refused"
+    assert result.developer_fields["constraint_id"] == "security.input_refused"  # #519
     assert "Security Policy Violation" in result.agent_message
     # What the deterministic pass computed is still reported (Gitar).
     for field in ("deterministic_verdict", "deterministic_confidence", "evidence", "citations", "scores"):

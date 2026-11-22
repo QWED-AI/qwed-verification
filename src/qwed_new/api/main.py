@@ -1950,6 +1950,7 @@ from qwed_new.core.consensus_verifier import (
     advisory,
     chain_record,
     consensus_verifier,
+    stopped_diagnostic,
 )
 
 class ConsensusVerifyRequest(BaseModel):
@@ -2001,8 +2002,10 @@ async def verify_with_consensus(
     execution runtime that is unavailable, engines that are all blocked,
     and a result only one engine verified are BLOCKED, whatever the
     confidence: an answer one engine verified alone, or a claim Z3 proved
-    when no engine verified an answer (no ``final_answer`` then). Otherwise
-    a confidence below ``min_confidence`` is UNVERIFIABLE.
+    when no engine verified an answer (no ``final_answer`` then). A refused
+    question is BLOCKED, and no provider or a failed translation in every
+    engine UNVERIFIABLE, each with its cause (#519). Otherwise a confidence
+    below ``min_confidence`` is UNVERIFIABLE.
 
     The errors are the request's or the service's: 400 for an unknown mode;
     422 for a missing ``x-api-key`` header or a body that does not
@@ -2058,13 +2061,11 @@ async def verify_with_consensus(
         _safe_commit_log(log)
         return _merge_response(dr) | {"meets_requirement": False}
 
-    # All engines blocked — preserve BLOCKED status (fail-closed)
-    if result.agreement_status == "blocked":
-        dr = DiagnosticResult.blocked(
-            "Consensus verification: all engines blocked",
-            developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
-        )
-        dr = _enforce_trust(advisory(dr), query=request.query, engine="consensus")
+    # All engines blocked, or stopped for a named cause (#519: a refused
+    # question is BLOCKED, no provider or a failed translation UNVERIFIABLE).
+    stopped = stopped_diagnostic(result)
+    if stopped is not None:
+        dr = _enforce_trust(advisory(stopped), query=request.query, engine="consensus")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=request.query,

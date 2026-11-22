@@ -481,7 +481,9 @@ def test_stats_verification_names_the_setting_to_fix(monkeypatch, caplog, active
     with caplog.at_level(logging.WARNING, logger="qwed_new.core.stats_verifier"):
         result = StatsVerifier().verify_stats("What is the mean of a?", pd.DataFrame({"a": [1, 2, 3]}))
 
-    assert result.status == DiagnosticStatus.BLOCKED
+    # Nothing was translated, as on every route (#519).
+    assert result.status == DiagnosticStatus.UNVERIFIABLE
+    assert result.constraint_id == "translation.no_provider"
     assert setting_to_fix in result.agent_message
     assert setting_to_fix in caplog.text
 
@@ -502,9 +504,10 @@ def test_fact_advisory_names_the_setting_to_fix(caplog, provider, setting_to_fix
         result = FactVerifier().verify_fact(*LOW_CONFIDENCE_FACT, provider=provider)
 
     # The provider the request names cannot run: no deterministic result
-    # stands in for the advisory it asked for.
-    assert result.status == DiagnosticStatus.BLOCKED
-    assert result.constraint_id == "fact_verifier.provider_config_error"
+    # stands in for the advisory it asked for. Nothing was translated, as on
+    # every route (#519).
+    assert result.status == DiagnosticStatus.UNVERIFIABLE
+    assert result.constraint_id == "translation.no_provider"
     assert setting_to_fix in result.agent_message
     assert setting_to_fix in caplog.text
     # What the deterministic pass computed is still reported.

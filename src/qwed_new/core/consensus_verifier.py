@@ -34,6 +34,16 @@ import threading
 from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
 from qwed_new.core.translation_record import Translation, audit_record, translation_in, translation_of
 from qwed_new.core.z3_thread import run_z3_call_blocking
+from qwed_new.core.failure_cause import (
+    CAUSES,
+    INPUT_REFUSED,
+    NO_PROVIDER,
+    TRANSLATION_CAUSES,
+    TRANSLATION_FAILED,
+    cause_of,
+    diagnostic_for,
+    message_of,
+)
 from qwed_new.providers.base import TranslationRefused
 
 from .verification_context import VerificationContextDocument
@@ -45,6 +55,9 @@ _NONE_CONSENSUS_KEY = object()
 # The agreement status of a result only one engine verified (#320): one engine
 # is not a consensus, so the result is BLOCKED.
 NO_INDEPENDENT_VERIFICATION = "no_independent_verification"
+# Every engine stopped before it decided anything, for one translation cause
+# (#519: no provider, or a failed translation): UNVERIFIABLE, with the cause.
+NOT_TRANSLATED = "not_translated"
 # The message of a consensus whose engines agree (#633).
 ADVISORY_MESSAGE = (
     "Consensus verification is advisory only: engines that agree on the model's "
@@ -72,6 +85,33 @@ def advisory(result: DiagnosticResult) -> DiagnosticResult:
     return DiagnosticResult.unverifiable(ADVISORY_MESSAGE, developer_fields=fields).with_audit_record(
         result.raw_llm_output
     )
+
+
+def stopped_diagnostic(result: Any) -> DiagnosticResult | None:
+    """The verdict of a consensus that stopped before any engine decided
+    (all engines blocked, or a named cause: #519), else None. A named cause
+    has its one verdict, as on every route: no provider or a failed
+    translation is UNVERIFIABLE, a refused question BLOCKED. It reads the
+    result's fields, so any result with them will do."""
+    fields = {
+        "agreement_status": result.agreement_status,
+        "confidence": result.confidence,
+        "engines_used": result.engines_used,
+    }
+    cause = getattr(result, "cause", None)
+    if isinstance(cause, str) and cause in CAUSES:
+        message = getattr(result, "cause_message", None)
+        return diagnostic_for(cause, message if isinstance(message, str) else None, fields)
+    if result.agreement_status == "blocked":
+        return DiagnosticResult.blocked("Consensus verification: all engines blocked", developer_fields=fields)
+    return None
+
+
+def _cause_fields(exc: BaseException) -> dict[str, str | None]:
+    """The named cause an engine's exception stands for (#519), with the
+    message a caller may see for it, as EngineResult fields."""
+    cause = cause_of(exc)
+    return {"cause": cause, "cause_message": message_of(exc, cause)}
 
 
 def _first(translations: List[Translation]) -> Optional[Translation]:
@@ -149,6 +189,10 @@ class EngineResult:
     # provider and model (#578, #585); None when the engine had no translation.
     # Left out of repr: it is the model's unsanitised output.
     translation: Optional[Translation] = field(default=None, repr=False)
+    # Why the engine stopped before deciding, where a named cause did (#519:
+    # failure_cause), with the message a caller may see for it.
+    cause: str | None = None
+    cause_message: str | None = None
 
     def provenance(self) -> Dict[str, Optional[str]]:
         """The provider and model whose translation this engine decided on,
@@ -173,11 +217,20 @@ class ConsensusResult:
     # code that reads them keeps working.
     proof_ref: Optional[str] = None
     verified_evidence: Optional[Dict[str, Any]] = None
+    # The named cause the consensus stopped for, where one did (#519): a
+    # refused question, or every engine stopped for the same translation
+    # cause. ``cause_message`` is the message a caller may see for it.
+    cause: str | None = None
+    cause_message: str | None = None
 
     def raw_llm_output(self) -> Optional[str]:
         """Every engine's translation, as the audit record (#578), or None
         when no engine had one."""
         return chain_record(self.verification_chain)
+
+    def stopped_diagnostic(self) -> DiagnosticResult | None:
+        """See ``stopped_diagnostic``."""
+        return stopped_diagnostic(self)
 
     def to_diagnostic_result(self) -> DiagnosticResult:
         """Convert this ConsensusResult to a DiagnosticResult.
@@ -194,6 +247,8 @@ class ConsensusResult:
             "engines_used": self.engines_used,
             "advisory_only": True,
         }
+        if self.cause in CAUSES:
+            return diagnostic_for(self.cause, self.cause_message, developer_fields)
         status_val = self.status.value if isinstance(self.status, DiagnosticStatus) else str(self.status)
         if status_val == DiagnosticStatus.VERIFIED.value:
             status_val = DiagnosticStatus.UNVERIFIABLE.value
@@ -572,6 +627,8 @@ class ConsensusVerifier:
             total_latency_ms=total_latency,
             parallel_execution=parallel and len(engine_methods) > 1,
             status=consensus.get("diagnostic_status"),
+            cause=consensus.get("cause"),
+            cause_message=consensus.get("cause_message"),
         )
     
     # =========================================================================
@@ -668,6 +725,8 @@ class ConsensusVerifier:
             total_latency_ms=total_latency,
             parallel_execution=True,
             status=consensus.get("diagnostic_status"),
+            cause=consensus.get("cause"),
+            cause_message=consensus.get("cause_message"),
         )
 
     def _refused(self, query: str, start_time: float) -> Optional[ConsensusResult]:
@@ -682,7 +741,7 @@ class ConsensusVerifier:
         from qwed_new.core.translator import TranslationLayer
         try:
             TranslationLayer().screen_question(query)
-        except TranslationRefused:
+        except TranslationRefused as refused:
             return ConsensusResult(
                 final_answer=None,
                 confidence=0.0,
@@ -691,6 +750,9 @@ class ConsensusVerifier:
                 verification_chain=[],
                 total_latency_ms=(time.time() - start_time) * 1000,
                 status=DiagnosticStatus.BLOCKED,
+                # The same cause as on every route (#519).
+                cause=INPUT_REFUSED,
+                cause_message=str(refused),
             )
         return None
 
@@ -968,6 +1030,7 @@ class ConsensusVerifier:
                 success=False,
                 error=str(e),
                 status="BLOCKED",
+                **_cause_fields(e),
             )
         except Exception as e:
             return EngineResult(
@@ -980,6 +1043,7 @@ class ConsensusVerifier:
                 success=False,
                 error=str(e),
                 status="BLOCKED",
+                **_cause_fields(e),
             )
     
     def _verify_with_code(self, query: str, translations: Optional[List[Translation]] = None) -> EngineResult:
@@ -1030,6 +1094,7 @@ class ConsensusVerifier:
                 result=None, confidence=0.0,
                 latency_ms=(time.time() - start) * 1000, success=False,
                 error=str(e), status="BLOCKED",
+                **_cause_fields(e),
             )
     
     # The Z3 engine's status for each verdict prove_from_dsl gives (#659),
@@ -1063,7 +1128,12 @@ class ConsensusVerifier:
         if translation is not None:
             translations.append(translation.for_engine("Z3"))
         if refused is not None:
-            return self._z3_result("BLOCKED", None, refused.error, translations, start_ns)
+            # The bridge names the cause it stopped for, where it is one (#519).
+            cause = refused.constraint_id if refused.constraint_id in CAUSES else None
+            return self._z3_result(
+                "BLOCKED", None, refused.error, translations, start_ns,
+                cause=cause, cause_message=refused.error if cause else None,
+            )
         if claim_dsl is None:
             return self._z3_result(
                 "UNVERIFIABLE", None,
@@ -1080,6 +1150,7 @@ class ConsensusVerifier:
     def _z3_result(
         status: str, verdict: Optional[str], reason: Optional[str],
         translations: List[Translation], start_ns: int,
+        cause: str | None = None, cause_message: str | None = None,
     ) -> EngineResult:
         """The Z3 engine's result: ``verdict`` is prove_from_dsl's, or None
         where no proof ran. ``start_ns`` is a ``time.monotonic_ns()``
@@ -1093,6 +1164,8 @@ class ConsensusVerifier:
             success=status == "VERIFIED",
             error=reason,
             status=status,
+            cause=cause,
+            cause_message=cause_message,
         )
     
     def _verify_with_stats(self, query: str) -> EngineResult:
@@ -1176,12 +1249,26 @@ class ConsensusVerifier:
 
         if not active:
             blocked_errors = [r.error for r in blocked if r.error]
+            cause, cause_message = self._shared_cause(blocked)
+            if cause in TRANSLATION_CAUSES:
+                # Nothing was translated, so nothing was decided (#519).
+                return {
+                    "answer": None,
+                    "confidence": 0.0,
+                    "status": NOT_TRANSLATED,
+                    "diagnostic_status": DiagnosticStatus.UNVERIFIABLE,
+                    "errors": blocked_errors,
+                    "cause": cause,
+                    "cause_message": cause_message,
+                }
             return {
                 "answer": None,
                 "confidence": 0.0,
                 "status": "blocked",
                 "diagnostic_status": DiagnosticStatus.BLOCKED,
                 "errors": blocked_errors,
+                "cause": cause,
+                "cause_message": cause_message,
             }
 
         successful = [r for r in active if r.success]
@@ -1246,6 +1333,24 @@ class ConsensusVerifier:
             "status": status,
             "diagnostic_status": DiagnosticStatus.UNVERIFIABLE,
         }
+
+    @staticmethod
+    def _shared_cause(blocked: list[EngineResult]) -> tuple[str | None, str | None]:
+        """The named cause every blocked engine stopped for, with its
+        message (#519). Engines that each stopped for a translation cause
+        translated nothing between them: the cause is no provider where one
+        of them had none (the setting to fix), else a failed translation.
+        Otherwise the engines must share one cause; if they do not, it is
+        ``(None, None)``, and the consensus is BLOCKED with no cause, as
+        before."""
+        causes = {r.cause for r in blocked}
+        if causes and causes <= TRANSLATION_CAUSES:
+            cause = NO_PROVIDER if NO_PROVIDER in causes else TRANSLATION_FAILED
+        elif len(causes) == 1 and None not in causes:
+            (cause,) = causes
+        else:
+            return None, None
+        return cause, next((r.cause_message for r in blocked if r.cause == cause and r.cause_message), None)
 
     @staticmethod
     def _verified_results(results: List[EngineResult]) -> List[EngineResult]:

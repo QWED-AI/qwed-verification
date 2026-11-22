@@ -15,6 +15,7 @@ same way in both places.
 from typing import Any
 
 from qwed_new.core.diagnostics import AdvisoryCheck, DiagnosticResult
+from qwed_new.core.failure_cause import CAUSES, diagnostic_for
 from qwed_new.core.translation_record import RAW_LLM_OUTPUT_KEY
 
 _PROVENANCE_KEYS = ("provider_used", "translation_model")
@@ -112,6 +113,8 @@ def logic_diagnostic(result: dict) -> DiagnosticResult:
     - VACUOUS (constraints that cannot hold together), SAT (constraints with
       no claim: one satisfying assignment proves nothing) and UNSAT are
       UNVERIFIABLE.
+    - A request stopped for a named cause (#519: no provider, a failed
+      translation, a refusal, a policy block) has that cause's verdict.
     - Anything else (an error) is BLOCKED.
 
     The verdict covers the translated constraints only (see ``_logic_scope``).
@@ -126,6 +129,12 @@ def _logic_verdict(result: dict) -> DiagnosticResult:
     """``logic_diagnostic``'s verdict, for a result without the audit record."""
     fields = {**result, **_logic_scope(result)}
     status = result.get("status", "ERROR")
+    cause = result.get("constraint_id")
+    if status in ("ERROR", "BLOCKED") and cause in CAUSES:
+        # Stopped before the solver for a named cause (#519): no provider or
+        # a failed translation is UNVERIFIABLE, a refusal or a policy block
+        # BLOCKED, as on every route.
+        return diagnostic_for(cause, result.get("error"), developer_fields=fields)
     if status == "VALID":
         return DiagnosticResult.verified(
             "The claim follows from the logic constraints",
@@ -163,8 +172,9 @@ def natural_language_diagnostic(result: Any) -> DiagnosticResult:
     """The verdict for a control-plane result.
 
     The control plane attaches the DiagnosticResult it enforced (signed and
-    attested for decided verdicts, #437), so it is used as produced. Results
-    without one (security or policy blocks, non-math queries, errors) fall back
+    attested for decided verdicts, #437), and the one for a request it stopped
+    (a refusal, a policy block, no provider, a failed translation: #519), so
+    it is used as produced. Results without one (non-math queries) fall back
     to the fail-closed legacy mapping, which can never yield VERIFIED. A
     non-math result was still decided by a translation, so it names the
     provider and model, as a decided one does (#585). The model's translation
