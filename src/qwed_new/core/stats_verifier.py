@@ -611,12 +611,17 @@ class StatsVerifier:
         try:
             code = self.translator.translate_stats(query, columns, provider=provider)
             translations.append(translation_of(self.translator, "stats", code, provider))
+            if not isinstance(code, str) or not code.strip():
+                # A reply with no code is no translation (#519); the audit
+                # row keeps it.
+                raise ValueError("The model returned no code")
         except Exception as e:
             # One verdict for the cause, as on every route (#519): no model
             # configured (the message names the setting to fix) or a failed
-            # translation is UNVERIFIABLE, a refused query BLOCKED. A message
-            # that is not a ProviderConfigError's or a refusal's carries
-            # nothing from the provider.
+            # translation, a blank reply among them, is UNVERIFIABLE, a
+            # refused query BLOCKED. A message that is not a
+            # ProviderConfigError's or a refusal's carries nothing from the
+            # provider.
             if isinstance(e, ProviderConfigError):
                 logger.warning("Stats code generation stopped: %s", e)
             else:

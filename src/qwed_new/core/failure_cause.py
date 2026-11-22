@@ -52,7 +52,10 @@ def cause_of(exc: BaseException) -> str:
 
     A wrapped exception (``raise ValueError(...) from exc``, as the consensus
     engines do) is read through its ``__cause__`` chain, so the cause does
-    not depend on which engine met it.
+    not depend on which engine met it. Any exception it does not recognise
+    reads as a failed translation, so callers pass only an exception from
+    the translation step: once the model has answered, an error is the
+    engine's, not a translation cause.
     """
     from qwed_new.core.translator import SecurityError
 
@@ -104,6 +107,7 @@ def diagnostic_for(
 def diagnostic_for_exception(
     exc: BaseException, developer_fields: dict[str, Any] | None = None
 ) -> DiagnosticResult:
-    """``diagnostic_for`` the cause ``exc`` stands for."""
+    """``diagnostic_for`` the cause ``exc``, an exception from the
+    translation step, stands for (see ``cause_of``)."""
     cause = cause_of(exc)
     return diagnostic_for(cause, message_of(exc, cause), developer_fields)

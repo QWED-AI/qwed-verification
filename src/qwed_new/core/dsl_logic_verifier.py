@@ -25,6 +25,16 @@ from .verification_context import VerificationContextDocument
 logger = logging.getLogger(__name__)
 
 
+class UnsupportedGoalError(ValueError):
+    """A logic translation whose goal the DSL step does not support.
+    ``message`` names that goal and nothing else, so it may reach the
+    caller (#519); any other error's text does not."""
+
+    def __init__(self, goal: str):
+        self.message = f"Unsupported logic goal: {goal}"
+        super().__init__(self.message)
+
+
 @dataclass
 class DSLVerificationResult:
     """Result of DSL-based logic verification."""
@@ -569,7 +579,7 @@ class DSLLogicVerifier:
         translation states no claim to prove (#631)."""
         goal = str(getattr(logic_task, "goal", "SATISFIABILITY")).strip().upper()
         if goal not in ("SATISFIABILITY", "VALIDITY"):
-            raise ValueError(f"Unsupported logic goal: {goal}")
+            raise UnsupportedGoalError(goal)
 
         constraints = [str(c).strip() for c in getattr(logic_task, "constraints", []) if str(c).strip()]
         claim = str(getattr(logic_task, "claim", None) or "").strip()
@@ -733,39 +743,48 @@ class DSLLogicVerifier:
                 constraint_id=NO_PROVIDER,  # #519: UNVERIFIABLE, as on every route
             ), None, translator.translation_model(provider_label), translation
         except ValueError as e:
-            resolved_provider = self._provider_label(
-                getattr(translator, "last_resolved_provider", None) or resolved_provider
-            )
-            # From the provider call, a refused text (input or the model's
-            # output) or a failed translation is named (#519); the DSL step
-            # refusing what the model wrote stays BLOCKED, with no cause.
-            cause = None if translated else cause_of(e)
-            if cause in (None, TRANSLATION_FAILED):
-                error = str(e) if str(e).startswith("Unsupported logic goal:") else "LLM translation failed"
-            else:
-                error = message_of(e, cause)
-            return None, None, resolved_provider, DSLVerificationResult(
-                status="ERROR",
-                error=error,
-                provider_used=resolved_provider,
-                constraint_id=cause,
-            ), None, translator.translation_model(provider_label), translation
-        except Exception:
+            return self._translation_error(e, translated, translator, provider_label, resolved_provider, translation)
+        except Exception as e:
             logger.debug(
                 "Translation failed with unexpected error (last_resolved_provider=%s, resolved_provider=%s)",
                 getattr(translator, "last_resolved_provider", None),
                 resolved_provider,
                 exc_info=True,
             )
-            resolved_provider = self._provider_label(
-                getattr(translator, "last_resolved_provider", None) or resolved_provider
-            )
-            return None, None, resolved_provider, DSLVerificationResult(
-                status="ERROR",
-                error="LLM translation failed",
-                provider_used=resolved_provider,
-                constraint_id=None if translated else TRANSLATION_FAILED,  # #519
-            ), None, translator.translation_model(provider_label), translation
+            return self._translation_error(e, translated, translator, provider_label, resolved_provider, translation)
+
+    def _translation_error(
+        self,
+        exc: Exception,
+        translated: bool,
+        translator: TranslationLayer,
+        provider_label: str | None,
+        resolved_provider: str | None,
+        translation: Any,
+    ) -> tuple:
+        """``translate_to_dsl``'s result for an error other than a missing
+        provider. From the provider call, a refused text (the input or the
+        model's output) or a failed translation is named, whatever wraps it
+        (#519); the DSL step refusing what the model wrote stays BLOCKED,
+        with no cause. Only a refusal's reason is passed on: any other error
+        reads "LLM translation failed", or names the unsupported goal, which
+        is all an UnsupportedGoalError carries."""
+        resolved_provider = self._provider_label(
+            getattr(translator, "last_resolved_provider", None) or resolved_provider
+        )
+        cause = None if translated else cause_of(exc)
+        if cause not in (None, TRANSLATION_FAILED):
+            error = message_of(exc, cause)
+        elif isinstance(exc, UnsupportedGoalError):
+            error = exc.message
+        else:
+            error = "LLM translation failed"
+        return None, None, resolved_provider, DSLVerificationResult(
+            status="ERROR",
+            error=error,
+            provider_used=resolved_provider,
+            constraint_id=cause,
+        ), None, translator.translation_model(provider_label), translation
 
     def to_verification_context(self, result: "DiagnosticResult", query: str, attestation_token: Optional[str] = None) -> "VerificationContextDocument":
         """Map a DiagnosticResult to a Verification Context v1.0 document."""

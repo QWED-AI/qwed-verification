@@ -107,9 +107,14 @@ def stopped_diagnostic(result: Any) -> DiagnosticResult | None:
     return None
 
 
-def _cause_fields(exc: BaseException) -> dict[str, str | None]:
+def _cause_fields(exc: BaseException, translated: bool) -> dict[str, str | None]:
     """The named cause an engine's exception stands for (#519), with the
-    message a caller may see for it, as EngineResult fields."""
+    message a caller may see for it, as EngineResult fields. Only the
+    translation step names one: once the model has answered, an error is
+    the engine's, the code check's or the sandbox's, and has no cause, so
+    the engine stays BLOCKED, as before."""
+    if translated:
+        return {"cause": None, "cause_message": None}
     cause = cause_of(exc)
     return {"cause": cause, "cause_message": message_of(exc, cause)}
 
@@ -1002,8 +1007,10 @@ class ConsensusVerifier:
         """Verify using SymPy math engine."""
         start = time.time()
         translations = [] if translations is None else translations
+        translated = False
         try:
             expression, expected = self._parse_math_query(query, translations)
+            translated = True
             result = self.math_verifier.verify_math(expression, expected)
             latency = (time.time() - start) * 1000
             is_correct = result.get("is_correct", False)
@@ -1018,21 +1025,8 @@ class ConsensusVerifier:
                 success=is_correct,
                 status="VERIFIED" if is_correct else "UNVERIFIABLE",
             )
-        except ValueError as e:
-            # Translation failure — blocked, not fabricated
-            return EngineResult(
-                engine_name="SymPy",
-                translation=_first(translations),
-                method="symbolic_math",
-                result=None,
-                confidence=0.0,
-                latency_ms=(time.time() - start) * 1000,
-                success=False,
-                error=str(e),
-                status="BLOCKED",
-                **_cause_fields(e),
-            )
         except Exception as e:
+            # A failed translation or engine error: blocked, not fabricated.
             return EngineResult(
                 engine_name="SymPy",
                 translation=_first(translations),
@@ -1043,15 +1037,17 @@ class ConsensusVerifier:
                 success=False,
                 error=str(e),
                 status="BLOCKED",
-                **_cause_fields(e),
+                **_cause_fields(e, translated),
             )
     
     def _verify_with_code(self, query: str, translations: Optional[List[Translation]] = None) -> EngineResult:
         """Verify by executing Python code in the secure Docker sandbox."""
         start = time.time()
         translations = [] if translations is None else translations
+        translated = False
         try:
             code = self._generate_verification_code(query, translations)
+            translated = True
 
             safety_result = self.code_verifier.verify_code(code)
             if not safety_result.is_verified or safety_result.developer_fields.get("is_valid") is not True:
@@ -1094,7 +1090,7 @@ class ConsensusVerifier:
                 result=None, confidence=0.0,
                 latency_ms=(time.time() - start) * 1000, success=False,
                 error=str(e), status="BLOCKED",
-                **_cause_fields(e),
+                **_cause_fields(e, translated),
             )
     
     # The Z3 engine's status for each verdict prove_from_dsl gives (#659),
