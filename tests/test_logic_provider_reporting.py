@@ -50,7 +50,9 @@ async def test_control_plane_logic_metrics_use_resolved_provider(monkeypatch):
     monkeypatch.setattr(
         cp.logic_verifier,
         "translate_to_dsl",
-        lambda query, provider: ("(GT x 5)", [{"name": "x", "type": "Int"}], "openai_compat", None, None, None, None),
+        lambda query, provider, on_translation=None: (
+            "(GT x 5)", [{"name": "x", "type": "Int"}], "openai_compat", None, None, None, None,
+        ),
     )
     monkeypatch.setattr(
         cp.logic_verifier,
@@ -92,7 +94,7 @@ async def test_control_plane_logic_exception_keeps_last_known_provider(monkeypat
     monkeypatch.setattr(cp.security_gateway, "detect_advanced_injection", lambda _: (True, ""))
     monkeypatch.setattr(cp.policy, "check_policy", lambda _query, organization_id=None: (True, ""))
     monkeypatch.setattr(cp.router, "route", lambda _query, preferred_provider=None: "openai_compat")
-    def _raise_runtime_error(query, provider):
+    def _raise_runtime_error(query, provider, on_translation=None):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(

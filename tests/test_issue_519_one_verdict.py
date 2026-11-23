@@ -15,6 +15,7 @@ verified.
 
 import asyncio
 import io
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
@@ -50,6 +51,7 @@ from tests.test_issue_320_logic_route_admission import (  # noqa: F401  (fixture
     _rows,
     client,
 )
+from tests.test_issue_578_raw_translation import MODEL
 from tests.test_issue_578_raw_translation import model  # noqa: F401  (fixture)
 
 QUESTION = "What is 2 + 2?"
@@ -440,7 +442,29 @@ async def _solver_out_of_time(*_args, **_kwargs):
     raise asyncio.TimeoutError
 
 
+class _DeadlineNow(BaseException):
+    """The provider deadline expiring at this point of the logic bridge. A
+    BaseException, so the bridge's own handlers let it through."""
+
+
+def _deadline_now(*_args, **_kwargs):
+    raise _DeadlineNow
+
+
+async def _expires_in_the_dsl_step(func, *args, **kwargs):
+    """``_run_provider_call`` with its deadline expiring in the DSL step: the
+    bridge runs, the model answers, and the deadline expires while the DSL
+    step builds the reply. No thread runs, so nothing depends on timing."""
+    try:
+        func(*args, **kwargs)
+    except _DeadlineNow:
+        raise asyncio.TimeoutError from None
+    raise AssertionError("the DSL step never ran")
+
+
 def _after_translation(monkeypatch, route, step):
+    from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
+
     control_plane = api_main.control_plane
     if step == "engine":
         monkeypatch.setattr(control_plane.math_verifier, "verify_math", _engine_crash)
@@ -448,6 +472,9 @@ def _after_translation(monkeypatch, route, step):
         monkeypatch.setattr("qwed_new.core.control_plane.create_verification_attestation", _engine_crash)
     elif step == "solver":
         monkeypatch.setattr("qwed_new.core.control_plane._run_z3_call", _solver_out_of_time)
+    elif step == "dsl-deadline":
+        monkeypatch.setattr(DSLLogicVerifier, "_logic_task_to_dsl", _deadline_now)
+        monkeypatch.setattr("qwed_new.core.control_plane._run_provider_call", _expires_in_the_dsl_step)
     elif step == "sanitiser":
         output_type = "math" if route == "natural_language" else "logic"
         monkeypatch.setattr(
@@ -464,6 +491,7 @@ def _after_translation(monkeypatch, route, step):
     ("natural_language", "sanitiser"),
     ("natural_language", "metrics"),
     ("logic", "solver"),
+    ("logic", "dsl-deadline"),
     ("logic", "sanitiser"),
     ("logic", "metrics"),
 ], ids=str)
@@ -486,19 +514,35 @@ def test_an_error_after_the_translation_is_blocked_and_names_no_translation_caus
         assert cause not in row.result
     # The model did answer, and the audit row keeps its translation (#578).
     assert row.raw_llm_output
+    if route == "logic":
+        # and names the model that answered, as every translation route does (#585).
+        assert json.loads(row.result)["developer_fields"]["translation_model"] == MODEL
 
 
 @pytest.mark.parametrize("route", ["natural_language", "logic"])
 def test_a_provider_call_out_of_time_is_a_failed_translation(
     client, isolated_audit_chain, monkeypatch, model, route,  # noqa: F811
 ):
-    monkeypatch.setattr("qwed_new.core.control_plane._PROVIDER_CALL_TIMEOUT_SECONDS", 0.05)
+    from qwed_new.core import control_plane
+
+    monkeypatch.setattr(control_plane, "_PROVIDER_CALL_TIMEOUT_SECONDS", 0.05)
     release = threading.Event()
+    provider_call = control_plane._run_provider_call
+
+    async def _releasing_once_it_ends(*args, **kwargs):
+        # The real deadline. The model answers only once it has expired: the
+        # test client waits for the provider's thread before the request
+        # returns, so the release cannot wait for the test.
+        try:
+            return await provider_call(*args, **kwargs)
+        finally:
+            release.set()
 
     def _late(*_args, **_kwargs):
-        release.wait(5)
+        release.wait()
         raise RuntimeError(f"too late: {LEAK_MARKER}")
 
+    monkeypatch.setattr(control_plane, "_run_provider_call", _releasing_once_it_ends)
     monkeypatch.setattr(model, "translate", _late)
     monkeypatch.setattr(model, "translate_logic", _late)
     try:
@@ -699,6 +743,31 @@ def test_the_dsl_step_refusing_what_the_model_wrote_names_no_cause(monkeypatch, 
     assert refused.error == "LLM translation failed"
 
 
+def test_the_logic_bridge_hands_over_the_translation_before_the_dsl_step(monkeypatch, model):  # noqa: F811
+    # A caller whose deadline expires in the DSL step has the model's answer.
+    from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
+
+    monkeypatch.setattr(DSLLogicVerifier, "_logic_task_to_dsl", _deadline_now)
+    handed = []
+    with pytest.raises(_DeadlineNow):
+        DSLLogicVerifier().translate_to_dsl(QUESTION, "ollama", on_translation=handed.append)
+
+    (translation,) = handed
+    assert translation.kind == "logic"
+    assert translation.output.claim == "x > 3"
+
+
+def test_the_logic_bridge_hands_over_nothing_when_the_model_does_not_answer(monkeypatch):
+    from qwed_new.core import dsl_logic_verifier as bridge
+
+    monkeypatch.setattr(bridge, "TranslationLayer", lambda: _Translator(RuntimeError("provider down")))
+    handed = []
+    refused = bridge.DSLLogicVerifier().translate_to_dsl(QUESTION, on_translation=handed.append)[3]
+
+    assert refused.constraint_id == TRANSLATION_FAILED
+    assert handed == []
+
+
 def test_the_dsl_step_names_only_the_unsupported_goal(model):  # noqa: F811
     from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier, UnsupportedGoalError
 
@@ -727,7 +796,8 @@ def test_a_stats_reply_with_no_code_is_a_failed_translation(
 
 
 def _stalling_engine(release, kind):
-    """An engine that stalls until ``release``: a translating one waiting for
+    """An engine that stalls until ``release``, and only then, so it cannot
+    stop on its own before the test is done: a translating one waiting for
     the model, or one that has its translation (given before dispatch, so
     the case does not depend on when its thread runs); or one that does not
     translate."""
@@ -736,7 +806,7 @@ def _stalling_engine(release, kind):
     from qwed_new.core.translation_record import Translation
 
     def _stall(*_args):
-        release.wait(5)
+        release.wait()
         raise RuntimeError("released")
 
     if kind == "not-translating":
@@ -819,7 +889,7 @@ def test_a_consensus_engine_cancelled_before_it_ran_names_no_cause(monkeypatch, 
 
     def _occupy():
         busy.set()
-        release.wait(5)
+        release.wait()
 
     engines = [("SymPy", _stalling_engine(release, "waiting")), ("Python", _stalling_engine(release, "waiting"))]
     try:
@@ -887,3 +957,59 @@ def test_one_engine_waiting_for_the_model_and_one_queued_are_told_apart(monkeypa
     consensus = verifier._calculate_consensus(results)
     assert consensus["diagnostic_status"] is DiagnosticStatus.BLOCKED
     assert consensus.get("cause") is None
+
+
+def _pool_reaching(point):
+    """A pool class whose ``submit`` returns only once the engine has reached
+    ``point``, so a deadline that follows the submit always finds it there."""
+
+    class _Pool(ThreadPoolExecutor):
+        def submit(self, fn, /, *args, **kwargs):
+            future = super().submit(fn, *args, **kwargs)
+            assert point.wait(5), "the engine never reached the point"
+            return future
+
+    return _Pool
+
+
+@pytest.mark.parametrize("path", ["sequential", "parallel", "async"])
+def test_a_consensus_z3_engine_out_of_time_in_the_dsl_step_names_no_cause(monkeypatch, model, path):  # noqa: F811
+    # The model answered, and the deadline expires while the DSL step builds
+    # its reply: the engine keeps the translation and names no cause.
+    from qwed_new.core import consensus_verifier
+    from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
+
+    monkeypatch.setattr(consensus_verifier, "_ENGINE_TIMEOUT_SECONDS", 0.05)
+    release = threading.Event()
+    building = threading.Event()
+
+    def _still_building(*_args):
+        building.set()
+        release.wait()
+        raise RuntimeError("released")
+
+    monkeypatch.setattr(DSLLogicVerifier, "_logic_task_to_dsl", _still_building)
+    verifier = consensus_verifier.ConsensusVerifier(enable_circuit_breaker=False)
+    pool = _pool_reaching(building)
+    monkeypatch.setattr(verifier, "_executor", pool(max_workers=1))
+    # The async path builds its own pool, sized to the engine list.
+    monkeypatch.setattr(consensus_verifier, "ThreadPoolExecutor", pool)
+    engines = [("Z3", consensus_verifier._EngineCall(verifier._verify_with_logic))]
+    try:
+        if path == "sequential":
+            results = verifier._execute_sequential(QUESTION, engines)
+        elif path == "parallel":
+            results = verifier._execute_parallel(QUESTION, engines)
+        else:
+            monkeypatch.setattr(verifier, "_select_engines", lambda *_args: engines)
+            monkeypatch.setattr(verifier, "_refused", lambda *_args: None)
+            results = asyncio.run(verifier.verify_async(QUESTION, timeout_seconds=0.05)).verification_chain
+    finally:
+        release.set()
+
+    (result,) = results
+    assert result.engine_name == "Z3"
+    assert result.status == "BLOCKED"
+    assert result.cause is None
+    assert result.translation.engine == "Z3"
+    assert result.translation.output.claim == "x > 3"

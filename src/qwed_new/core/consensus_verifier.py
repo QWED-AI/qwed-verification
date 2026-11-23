@@ -1143,11 +1143,14 @@ class ConsensusVerifier:
         """
         start_ns = time.monotonic_ns()
         translations = [] if translations is None else translations
-        dsl_code, variables, _provider, refused, claim_dsl, _model, translation = (
-            self.logic_verifier.translate_to_dsl(query)
+        # The bridge hands over the translation as soon as the model has
+        # answered, before the DSL step, so an engine out of time while that
+        # step runs keeps it and names no cause (#519).
+        dsl_code, variables, _provider, refused, claim_dsl, _model, _translation = (
+            self.logic_verifier.translate_to_dsl(
+                query, on_translation=lambda found: translations.append(found.for_engine("Z3"))
+            )
         )
-        if translation is not None:
-            translations.append(translation.for_engine("Z3"))
         if refused is not None:
             # The bridge names the cause it stopped for, where it is one (#519).
             cause = refused.constraint_id if refused.constraint_id in CAUSES else None

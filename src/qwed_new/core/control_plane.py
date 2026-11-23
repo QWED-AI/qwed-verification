@@ -62,16 +62,33 @@ PIPELINE_ERROR = "control_plane.pipeline_error"
 _PIPELINE_ERROR_MESSAGE = "Internal pipeline error"
 
 
-def _logic_failure(error: BaseException, translated: bool) -> dict[str, str]:
-    """The error and cause of a /verify/logic request that raised (#519). A
-    provider call out of time, before it returned, is a failed translation,
-    named as on /verify/natural_language. Any other error is the pipeline's
-    own, BLOCKED: one escaping the bridge is not the model's, since the
-    bridge names every provider error, and the solver and every later step
-    come after the translation."""
-    if not translated and isinstance(error, (TimeoutError, asyncio.TimeoutError)):
-        return {"error": message_of(error, TRANSLATION_FAILED), "constraint_id": TRANSLATION_FAILED}
-    return {"error": _PIPELINE_ERROR_MESSAGE, "constraint_id": PIPELINE_ERROR}
+def _logic_failure(
+    error: BaseException,
+    translated: bool,
+    translation: Translation | None,
+    translation_model: str | None,
+    answered: list[Translation],
+) -> dict[str, Any]:
+    """The error, cause, model and audit record of a /verify/logic request
+    that raised (#519). ``translated`` is set once the bridge returned, and
+    ``answered`` holds what the bridge handed over as soon as the model
+    answered: where the bridge did not return its translation, the
+    first entry is the model's answer, kept for the row (#578).
+
+    A provider call out of time before the model answered is a failed
+    translation, named as on /verify/natural_language; one that expires in
+    the DSL step, after the model answered, is not. Any other error is the
+    pipeline's own, BLOCKED: one escaping the bridge is not the model's,
+    since the bridge names every provider error, and the solver and every
+    later step come after the translation."""
+    if translation is None and answered:
+        translation = answered[0]
+        translation_model = translation.translation_model
+    if not translated and translation is None and isinstance(error, (TimeoutError, asyncio.TimeoutError)):
+        fields = {"error": message_of(error, TRANSLATION_FAILED), "constraint_id": TRANSLATION_FAILED}
+    else:
+        fields = {"error": _PIPELINE_ERROR_MESSAGE, "constraint_id": PIPELINE_ERROR}
+    return {**fields, "translation_model": translation_model, RAW_LLM_OUTPUT_KEY: audit_record([translation])}
 
 
 async def _run_provider_call(func, *args, **kwargs):
@@ -503,8 +520,12 @@ class ControlPlane:
         translation = None
         # Set once the provider call has returned (#519). The bridge names
         # every provider error itself, so the one translation cause named
-        # here is the call running out of time.
+        # here is the call running out of time before the model answered.
         translated = False
+        # The bridge's translation, handed over as soon as the model has
+        # answered: the provider deadline also covers the DSL step, and one
+        # that expires there comes after the answer (#519, #578).
+        answered: list[Translation] = []
 
         # 3. DSL Logic Pipeline
         try:
@@ -515,7 +536,9 @@ class ControlPlane:
             # logic requests translate in parallel, and z3 stays thread-safe.
             (
                 dsl_code, variables, resolved_provider, error, claim_dsl, translation_model, translation,
-            ) = await _run_provider_call(self.logic_verifier.translate_to_dsl, query, provider)
+            ) = await _run_provider_call(
+                self.logic_verifier.translate_to_dsl, query, provider, on_translation=answered.append
+            )
             translated = True
             last_known_model = translation_model
             if error is not None:
@@ -575,10 +598,8 @@ class ControlPlane:
             )
             return {
                 "status": "ERROR",
-                **_logic_failure(e, translated),
+                **_logic_failure(e, translated, translation, last_known_model, answered),
                 "provider_used": last_known_provider,
-                "translation_model": last_known_model,
-                RAW_LLM_OUTPUT_KEY: audit_record([translation]),
                 "latency_ms": (time.time() - start_time) * 1000
             }
 

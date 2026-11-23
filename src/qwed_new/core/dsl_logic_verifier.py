@@ -8,13 +8,14 @@ for secure, validated constraint parsing.
 import ast
 import logging
 import re
+from collections.abc import Callable
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 
 from z3 import Solver, sat, unsat
 
 from qwed_new.core.dsl import parse_and_validate, compile_to_z3
-from qwed_new.core.translation_record import audit_record, translation_of
+from qwed_new.core.translation_record import Translation, audit_record, translation_of
 from qwed_new.core.translator import TranslationLayer
 from qwed_new.core.failure_cause import NO_PROVIDER, TRANSLATION_FAILED, cause_of, message_of
 from qwed_new.providers.base import ProviderConfigError
@@ -687,7 +688,12 @@ class DSLLogicVerifier:
             verification_result.dsl_code = dsl_code
         return verification_result
 
-    def translate_to_dsl(self, query: str, provider: Optional[str] = None):
+    def translate_to_dsl(
+        self,
+        query: str,
+        provider: Optional[str] = None,
+        on_translation: Callable[[Translation], None] | None = None,
+    ):
         """Provider translation step (no z3). Returns (dsl_code, variables,
         resolved_provider, error_result, claim_dsl, translation_model,
         translation); error_result is a DSLVerificationResult on failure and
@@ -699,7 +705,12 @@ class DSLLogicVerifier:
         model returned nothing; a translation the DSL step refuses is kept
         too, since it decided the error. Safe to run in a
         worker thread concurrently — it performs no z3 work. A provider of None
-        uses the configured one (ACTIVE_PROVIDER)."""
+        uses the configured one (ACTIVE_PROVIDER).
+
+        on_translation, where given, receives the translation as soon as the
+        model has answered, before the DSL step (#519): a caller whose
+        deadline expires while this call runs can still tell an answer it
+        never had from one the DSL step was still building, and keep it."""
         # None leaves the choice to the translator, which uses the configured
         # provider. The default was Azure OpenAI whatever was configured (#574).
         provider_label = None if provider is None else self._provider_label(provider)
@@ -714,6 +725,8 @@ class DSLLogicVerifier:
             logic_result = translator.translate_logic(query, provider=provider_label)
             translated = True
             translation = translation_of(translator, "logic", logic_result, provider_label)
+            if on_translation is not None:
+                on_translation(translation)
             resolved_provider = self._provider_label(
                 getattr(translator, "last_resolved_provider", None) or provider_label
             )
