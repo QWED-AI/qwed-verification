@@ -14,6 +14,7 @@ verified.
 """
 
 import asyncio
+import inspect
 import io
 import json
 import threading
@@ -519,9 +520,11 @@ def test_an_error_after_the_translation_is_blocked_and_names_no_translation_caus
         assert json.loads(row.result)["developer_fields"]["translation_model"] == MODEL
 
 
-# Far past every deadline in these tests (0.05 seconds), so no runner, however
-# slow, reaches it while the deadline works.
-_WATCHDOG_SECONDS = 30
+# Far past every deadline these tests set (0.05 seconds), so no runner, however
+# slow, reaches it while the deadline works; and well short of every default
+# deadline they replace (30 seconds), so a deadline that falls back to its
+# default, or never fires, reaches the watchdog first and fails the test.
+_WATCHDOG_SECONDS = 10
 
 
 class _Release:
@@ -543,6 +546,22 @@ class _Release:
 
     def assert_not_expired(self):
         assert not self.expired, "a stalled call reached the watchdog: its deadline never fired"
+
+
+def test_the_watchdog_ends_well_before_every_default_deadline():
+    # A timeout test that passed on a default deadline would not show that
+    # the deadline it sets is used: each default stays at least twice the
+    # watchdog, so the watchdog is reached first.
+    from qwed_new.core import consensus_verifier, control_plane
+
+    defaults = {
+        "provider call": control_plane._PROVIDER_CALL_TIMEOUT_SECONDS,
+        "consensus engine": consensus_verifier._ENGINE_TIMEOUT_SECONDS,
+        "consensus run": inspect.signature(
+            consensus_verifier.ConsensusVerifier.verify_async
+        ).parameters["timeout_seconds"].default,
+    }
+    assert {name: seconds for name, seconds in defaults.items() if seconds < 2 * _WATCHDOG_SECONDS} == {}
 
 
 @pytest.mark.parametrize("route", ["natural_language", "logic"])
