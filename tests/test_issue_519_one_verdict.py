@@ -14,9 +14,11 @@ verified.
 """
 
 import asyncio
+import importlib.util
 import inspect
 import io
 import json
+import math
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -672,9 +674,11 @@ def test_a_translation_is_in_time_only_if_it_landed_before_the_deadline():
     # Only append notes a landing: an entry added any other way is never in time.
     found.extend(["unnoted"])
 
-    assert list(found) == ["early", "late", "unnoted"]
-    assert found.before(deadline) == ["early"]
-    assert LandedTranslations().before(deadline) == []
+    assert found.read(deadline) == (["early", "late", "unnoted"], ["early"])
+    assert LandedTranslations().read(deadline) == ([], [])
+    # Equal as lists are: when each landed is not part of the value.
+    assert found == ["early", "late", "unnoted"]
+    assert LandedTranslations() == []
 
 
 @hypothesis_settings(max_examples=200, deadline=None)
@@ -682,7 +686,7 @@ def test_a_translation_is_in_time_only_if_it_landed_before_the_deadline():
     st.lists(st.integers(min_value=0, max_value=50), max_size=8),
     st.integers(min_value=0, max_value=50),
 )
-def test_before_keeps_exactly_what_landed_before_the_deadline(stamps, deadline):
+def test_a_read_keeps_exactly_what_landed_before_the_deadline(stamps, deadline):
     from qwed_new.core import failure_cause
 
     clock = iter(stamps)
@@ -692,8 +696,86 @@ def test_before_keeps_exactly_what_landed_before_the_deadline(stamps, deadline):
         for index in range(len(stamps)):
             found.append(index)
 
-    assert list(found) == list(range(len(stamps)))
-    assert found.before(deadline) == [index for index, stamp in enumerate(stamps) if stamp < deadline]
+    assert found.read(deadline) == (
+        list(range(len(stamps))),
+        [index for index, stamp in enumerate(stamps) if stamp < deadline],
+    )
+
+
+def test_a_timeout_reads_an_append_under_way_in_both_or_neither():
+    # The append is paused after noting when it landed, holding the lock,
+    # before the translation is in the list. A timeout reading the engine
+    # meanwhile waits for it, so the translation it counts in time is the
+    # one the result keeps for the audit row.
+    from qwed_new.core import failure_cause
+    from qwed_new.core.consensus_verifier import _EngineCall, _timed_out
+
+    paused, resume = threading.Event(), threading.Event()
+
+    def _paused_clock():
+        paused.set()
+        assert resume.wait(5)
+        return 0
+
+    call = _EngineCall(lambda *_args: None)
+    call.started_ns = 0
+    fields = {}
+    with mock.patch.object(failure_cause, "time", SimpleNamespace(monotonic_ns=_paused_clock)):
+        appending = threading.Thread(target=call.translations.append, args=("answer",))
+        appending.start()
+        assert paused.wait(5)
+        reading = threading.Thread(target=lambda: fields.update(_timed_out(call, 1)))
+        reading.start()
+        reading.join(0.05)
+        resume.set()
+        appending.join(5)
+        reading.join(5)
+
+    assert fields == {"translation": "answer"}
+
+
+def test_a_deadline_is_whole_nanoseconds_with_no_floating_point_product():
+    from qwed_new.core import failure_cause
+
+    with mock.patch.object(failure_cause, "time", SimpleNamespace(monotonic_ns=lambda: 1_000)):
+        # 1.001 * 1e9 is 1000999999.9999999 in floating point.
+        assert deadline_after(1.001) == 1_000 + 1_001_000_000
+        assert deadline_after(0.05) == 1_000 + 50_000_000
+        assert deadline_after(1e300) == 1_000 + 10**309
+    for seconds in (math.inf, -math.inf, math.nan):
+        with pytest.raises(ValueError, match="finite"):
+            deadline_after(seconds)
+
+
+@pytest.mark.parametrize("raw", ["inf", "-inf", "Infinity", "nan", "NaN", "0", "-0", "-1", "", " ", "abc"])
+def test_a_provider_timeout_that_bounds_nothing_is_refused(raw):
+    from qwed_new.core import control_plane
+
+    with pytest.raises(ValueError, match="QWED_PROVIDER_TIMEOUT"):
+        control_plane._provider_timeout_seconds(raw)
+
+
+@pytest.mark.parametrize("raw, seconds", [
+    (None, 30.0), ("0.25", 0.25), ("1e-9", 1e-9), (" 5 ", 5.0), ("1e300", 1e300),
+])
+def test_a_provider_timeout_that_bounds_a_call_is_kept(raw, seconds):
+    from qwed_new.core import control_plane
+
+    assert control_plane._provider_timeout_seconds(raw) == seconds
+    assert deadline_after(seconds) > 0
+
+
+def test_the_control_plane_refuses_an_infinite_provider_timeout_when_it_loads(monkeypatch):
+    # Before any request: a logic request would otherwise fail on its
+    # deadline before it reached the provider. A fresh copy of the module
+    # is loaded, so the one every other test uses is left as it is.
+    from qwed_new.core import control_plane
+
+    monkeypatch.setenv("QWED_PROVIDER_TIMEOUT", "inf")
+    spec = importlib.util.spec_from_file_location("_control_plane_loading", control_plane.__file__)
+    loading = importlib.util.module_from_spec(spec)
+    with pytest.raises(ValueError, match="QWED_PROVIDER_TIMEOUT must be a finite number of seconds above zero"):
+        spec.loader.exec_module(loading)
 
 
 @pytest.mark.parametrize("error", [
@@ -961,6 +1043,30 @@ def _stalling_engine(release, kind):
     return call
 
 
+class _HeldClock:
+    """The clock engine starts and translation landings are read on, held at
+    zero until ``run``, then the real one. A deadline these tests set comes
+    after zero, so what an engine did before ``run`` is before its deadline
+    however slow the runner, and what it does after is read as it happens."""
+
+    def __init__(self):
+        self._running = False
+
+    def run(self):
+        self._running = True
+
+    def monotonic_ns(self):
+        return time.monotonic_ns() if self._running else 0
+
+
+def _hold_the_clock(monkeypatch) -> _HeldClock:
+    from qwed_new.core import failure_cause
+
+    clock = _HeldClock()
+    monkeypatch.setattr(failure_cause, "time", clock)
+    return clock
+
+
 class _StartedExecutor(ThreadPoolExecutor):
     """A pool whose ``submit`` returns only once the task has started, so a
     deadline that follows the submit always finds the engine running, however
@@ -988,6 +1094,9 @@ def test_a_consensus_engine_out_of_time_names_a_cause_only_while_translating(mon
     from qwed_new.core import consensus_verifier
 
     monkeypatch.setattr(consensus_verifier, "_ENGINE_TIMEOUT_SECONDS", 0.05)
+    # Each engine starts, and a given translation lands, before its deadline,
+    # on every path, however slow the runner.
+    _hold_the_clock(monkeypatch)
     verifier = consensus_verifier.ConsensusVerifier(enable_circuit_breaker=False)
     # Each engine is running before its deadline starts. The async path runs
     # them in its own pool, sized to the engine list.
@@ -1086,6 +1195,8 @@ def test_one_engine_waiting_for_the_model_and_one_queued_are_told_apart(monkeypa
     from qwed_new.core import consensus_verifier
 
     monkeypatch.setattr(consensus_verifier, "_ENGINE_TIMEOUT_SECONDS", 0.05)
+    # The first engine starts before its deadline, however slow the runner.
+    _hold_the_clock(monkeypatch)
     verifier = consensus_verifier.ConsensusVerifier(max_workers=1, enable_circuit_breaker=False)
     monkeypatch.setattr(verifier, "_executor", _FirstStartedExecutor())
     release = _Release()
@@ -1126,6 +1237,10 @@ def test_a_consensus_z3_engine_out_of_time_in_the_dsl_step_names_no_cause(monkey
     from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
 
     monkeypatch.setattr(consensus_verifier, "_ENGINE_TIMEOUT_SECONDS", 0.05)
+    # The engine starts, and the model's answer lands, before the deadline on
+    # every path, however slow the runner: the async deadline starts before
+    # the engine is even submitted.
+    _hold_the_clock(monkeypatch)
     release = _Release()
     building = threading.Event()
 
@@ -1149,9 +1264,7 @@ def test_a_consensus_z3_engine_out_of_time_in_the_dsl_step_names_no_cause(monkey
         else:
             monkeypatch.setattr(verifier, "_select_engines", lambda *_args: engines)
             monkeypatch.setattr(verifier, "_refused", lambda *_args: None)
-            # The async deadline starts before the engine is submitted: a
-            # second, so the model's answer lands before it on any runner.
-            results = asyncio.run(verifier.verify_async(QUESTION, timeout_seconds=1.0)).verification_chain
+            results = asyncio.run(verifier.verify_async(QUESTION, timeout_seconds=0.05)).verification_chain
     finally:
         release.set()
     release.assert_not_expired()
@@ -1176,6 +1289,9 @@ def test_a_consensus_answer_after_the_engine_deadline_is_a_failed_translation(mo
     from qwed_new.core.translation_record import Translation
 
     monkeypatch.setattr(consensus_verifier, "_ENGINE_TIMEOUT_SECONDS", 0.05)
+    # The engine starts before its deadline however slow the runner; the
+    # answer lands on the real clock, after it.
+    clock = _hold_the_clock(monkeypatch)
     release = _Release()
     landed = threading.Event()
     task = MathVerificationTask(expression="2 + 2", claimed_answer=4.0, reasoning="r", confidence=1.0)
@@ -1187,19 +1303,21 @@ def test_a_consensus_answer_after_the_engine_deadline_is_a_failed_translation(mo
         landed.set()
         raise RuntimeError("released")
 
-    snapshot = consensus_verifier._snapshot
+    call = _EngineCall(_answers_late)
+    read = call.translations.read
 
-    def _once_the_late_answer_landed(call):
+    def _once_the_late_answer_landed(deadline_ns):
         # The deadline has expired: the answer lands now, before the read.
         _past_any_early_expiry()
+        clock.run()
         release.set()
         assert landed.wait(5), "the late answer never landed"
-        return snapshot(call)
+        return read(deadline_ns)
 
-    monkeypatch.setattr(consensus_verifier, "_snapshot", _once_the_late_answer_landed)
+    call.translations.read = _once_the_late_answer_landed
     verifier = consensus_verifier.ConsensusVerifier(enable_circuit_breaker=False)
     monkeypatch.setattr(verifier, "_executor", _StartedExecutor(max_workers=2))
-    engines = [("SymPy", _EngineCall(_answers_late))]
+    engines = [("SymPy", call)]
     try:
         if path == "sequential":
             results = verifier._execute_sequential(QUESTION, engines)
@@ -1217,3 +1335,59 @@ def test_a_consensus_answer_after_the_engine_deadline_is_a_failed_translation(mo
     assert result.status == "BLOCKED"
     assert result.cause == TRANSLATION_FAILED
     assert result.translation is late
+
+
+@pytest.mark.parametrize("path", ["sequential", "parallel"])
+def test_a_consensus_engine_that_starts_after_its_deadline_names_no_cause(monkeypatch, path):
+    # Queued at the deadline, the engine starts in the moment before the
+    # timeout cancels it, so the cancel no longer reaches it. It had not
+    # started by the deadline and had asked the model nothing: no cause.
+    from qwed_new.core import consensus_verifier
+    from qwed_new.core.consensus_verifier import _EngineCall
+
+    monkeypatch.setattr(consensus_verifier, "_ENGINE_TIMEOUT_SECONDS", 0.05)
+    release = _Release()
+    free = threading.Event()
+    started = threading.Event()
+
+    class _Pool(ThreadPoolExecutor):
+        """One worker, held by a first task. Cancelling a later task, after
+        the deadline, frees the worker and lets that task start first."""
+
+        def submit(self, fn, /, *args, **kwargs):
+            future = super().submit(fn, *args, **kwargs)
+            cancel = future.cancel
+
+            def _start_then_cancel():
+                _past_any_early_expiry()
+                free.set()
+                assert started.wait(5), "the queued engine never started"
+                return cancel()
+
+            future.cancel = _start_then_cancel
+            return future
+
+    def _engine(_query, _translations):
+        started.set()
+        release.wait()
+        raise RuntimeError("released")
+
+    verifier = consensus_verifier.ConsensusVerifier(max_workers=1, enable_circuit_breaker=False)
+    pool = _Pool(max_workers=1)
+    monkeypatch.setattr(verifier, "_executor", pool)
+    engines = [("SymPy", _EngineCall(_engine))]
+    try:
+        ThreadPoolExecutor.submit(pool, free.wait, 5)
+        if path == "sequential":
+            results = verifier._execute_sequential(QUESTION, engines)
+        else:
+            results = verifier._execute_parallel(QUESTION, engines)
+    finally:
+        release.set()
+        free.set()
+    release.assert_not_expired()
+
+    (result,) = results
+    assert result.status == "BLOCKED"
+    assert result.cause is None
+    assert result.translation is None

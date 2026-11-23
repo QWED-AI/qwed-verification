@@ -23,8 +23,10 @@ None of them is admitted. The route that meets one writes its audit row as
 for any other verdict.
 """
 
+import math
 import threading
 import time
+from decimal import Decimal
 from typing import Any
 
 from qwed_new.core.diagnostics import DiagnosticResult
@@ -115,10 +117,19 @@ def diagnostic_for_exception(
     return diagnostic_for(cause, message_of(exc, cause), developer_fields)
 
 
+def now_ns() -> int:
+    """The clock a deadline, an engine's start and a translation's landing
+    are read on (#519): ``time.monotonic_ns``."""
+    return time.monotonic_ns()
+
+
 def deadline_after(seconds: float) -> int:
-    """The ``time.monotonic_ns`` reading ``seconds`` from now: a deadline a
-    translation's landing is read against (``LandedTranslations``)."""
-    return time.monotonic_ns() + int(seconds * 1_000_000_000)
+    """The ``now_ns`` reading ``seconds`` from now. The duration becomes
+    whole nanoseconds once, exactly, with no floating-point product, so
+    0.29 seconds is 290,000,000 nanoseconds. ``seconds`` must be finite."""
+    if not math.isfinite(seconds):
+        raise ValueError(f"a deadline needs a finite number of seconds, not {seconds!r}")
+    return now_ns() + int(Decimal(str(seconds)) * 1_000_000_000)
 
 
 class LandedTranslations(list):
@@ -127,8 +138,8 @@ class LandedTranslations(list):
     A provider call runs on a worker thread that no deadline stops, so the
     model may answer after the deadline expired and before the request
     reads this list. Whether the model answered in time, and so whether the
-    deadline is a failed translation, is read from ``before``: an answer
-    that lands late cannot change the cause. The list itself keeps a late
+    deadline is a failed translation, is read from ``read``: an answer that
+    lands late cannot change the cause. The list itself keeps a late
     answer, for the audit row (#578). Only ``append`` notes a landing: an
     entry added any other way never counts as in time."""
 
@@ -139,10 +150,17 @@ class LandedTranslations(list):
 
     def append(self, translation: Any) -> None:
         with self._lock:
-            self._landed.append((time.monotonic_ns(), translation))
+            self._landed.append((now_ns(), translation))
             super().append(translation)
 
-    def before(self, deadline_ns: int) -> list[Any]:
-        """The translations that landed before ``deadline_ns``."""
+    def read(self, deadline_ns: int) -> tuple[list[Any], list[Any]]:
+        """Every translation, and those that landed before ``deadline_ns``,
+        in one read under the lock: an append under way is in both or in
+        neither, so the audit row and the cause cannot disagree."""
         with self._lock:
-            return [found for landed, found in self._landed if landed < deadline_ns]
+            return list(self), [found for landed, found in self._landed if landed < deadline_ns]
+
+    def __eq__(self, other: object) -> bool:
+        # Equal as lists are, by the translations held: when each landed is
+        # bookkeeping, not part of the value.
+        return list.__eq__(self, other)

@@ -7,6 +7,7 @@ Request -> Policy Check -> Routing -> Translation -> Verification -> Response
 
 import asyncio
 import hashlib
+import math
 import os
 import time
 import logging
@@ -57,9 +58,27 @@ logger = logging.getLogger(__name__)
 # event loop and stall every co-tenant's request (#390). The bound is
 # QWED_PROVIDER_TIMEOUT where set, otherwise the default.
 _DEFAULT_PROVIDER_CALL_TIMEOUT_SECONDS = 30.0
-_PROVIDER_CALL_TIMEOUT_SECONDS = float(
-    os.environ.get("QWED_PROVIDER_TIMEOUT", _DEFAULT_PROVIDER_CALL_TIMEOUT_SECONDS)
-)
+
+
+def _provider_timeout_seconds(raw: str | None) -> float:
+    """The provider call's bound, from ``raw`` (QWED_PROVIDER_TIMEOUT), or
+    the default where it is not set. A value that is not a finite number of
+    seconds above zero is refused when the module loads, before any request
+    (#519): infinity or NaN bounds nothing, and no deadline can be read
+    against it; zero or less would end every call at once. A fraction of a
+    second is a valid bound."""
+    if raw is None:
+        return _DEFAULT_PROVIDER_CALL_TIMEOUT_SECONDS
+    try:
+        seconds = float(raw)
+    except ValueError:
+        seconds = math.nan
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError(f"QWED_PROVIDER_TIMEOUT must be a finite number of seconds above zero, not {raw!r}")
+    return seconds
+
+
+_PROVIDER_CALL_TIMEOUT_SECONDS = _provider_timeout_seconds(os.environ.get("QWED_PROVIDER_TIMEOUT"))
 
 # An error after the model answered (#519): the engine, the solver, the
 # attestation, the sanitiser or the metrics failed, not the translation, so
@@ -91,13 +110,13 @@ def _logic_failure(
     that lands late does not change the cause. Any other error is the
     pipeline's own, BLOCKED: one escaping the bridge is not the model's,
     since the bridge names every provider error, and the solver and every
-    later step come after the translation."""
-    in_time = translated or bool(answered.before(answered_by))
-    landed = list(answered)
+    later step come after the translation. The answer kept and the in-time
+    check come from one read, so they cannot disagree."""
+    landed, in_time = answered.read(answered_by)
     if translation is None and landed:
         translation = landed[0]
         translation_model = translation.translation_model
-    if not in_time and isinstance(error, (TimeoutError, asyncio.TimeoutError)):
+    if not (translated or in_time) and isinstance(error, (TimeoutError, asyncio.TimeoutError)):
         fields = {"error": message_of(error, TRANSLATION_FAILED), "constraint_id": TRANSLATION_FAILED}
     else:
         fields = {"error": _PIPELINE_ERROR_MESSAGE, "constraint_id": PIPELINE_ERROR}
