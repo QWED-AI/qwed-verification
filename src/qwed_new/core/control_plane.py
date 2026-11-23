@@ -52,8 +52,12 @@ logger = logging.getLogger(__name__)
 
 # A provider (LLM) call does blocking network I/O. It runs in a worker thread
 # under a wall-clock bound so a slow or hung upstream cannot tie up the shared
-# event loop and stall every co-tenant's request (#390).
-_PROVIDER_CALL_TIMEOUT_SECONDS = float(os.environ.get("QWED_PROVIDER_TIMEOUT", "30"))
+# event loop and stall every co-tenant's request (#390). The bound is
+# QWED_PROVIDER_TIMEOUT where set, otherwise the default.
+_DEFAULT_PROVIDER_CALL_TIMEOUT_SECONDS = 30.0
+_PROVIDER_CALL_TIMEOUT_SECONDS = float(
+    os.environ.get("QWED_PROVIDER_TIMEOUT", _DEFAULT_PROVIDER_CALL_TIMEOUT_SECONDS)
+)
 
 # An error after the model answered (#519): the engine, the solver, the
 # attestation, the sanitiser or the metrics failed, not the translation, so

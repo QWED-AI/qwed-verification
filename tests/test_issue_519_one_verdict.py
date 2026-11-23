@@ -550,12 +550,14 @@ class _Release:
 
 def test_the_watchdog_ends_well_before_every_default_deadline():
     # A timeout test that passed on a default deadline would not show that
-    # the deadline it sets is used: each default stays at least twice the
-    # watchdog, so the watchdog is reached first.
+    # the deadline it sets is used: each default the code sets stays at least
+    # twice the watchdog, so the watchdog is reached first. The provider
+    # call's is the code's own default: QWED_PROVIDER_TIMEOUT, where a runner
+    # sets it, is that runner's choice, and the timeout tests set their own.
     from qwed_new.core import consensus_verifier, control_plane
 
     defaults = {
-        "provider call": control_plane._PROVIDER_CALL_TIMEOUT_SECONDS,
+        "provider call": control_plane._DEFAULT_PROVIDER_CALL_TIMEOUT_SECONDS,
         "consensus engine": consensus_verifier._ENGINE_TIMEOUT_SECONDS,
         "consensus run": inspect.signature(
             consensus_verifier.ConsensusVerifier.verify_async
