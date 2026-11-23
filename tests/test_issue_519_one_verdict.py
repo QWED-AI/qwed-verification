@@ -14,6 +14,7 @@ verified.
 """
 
 import asyncio
+import decimal
 import importlib.util
 import inspect
 import io
@@ -742,6 +743,16 @@ def test_a_deadline_is_whole_nanoseconds_with_no_floating_point_product():
         assert deadline_after(1.001) == 1_000 + 1_001_000_000
         assert deadline_after(0.05) == 1_000 + 50_000_000
         assert deadline_after(1e300) == 1_000 + 10**309
+        # The deadline has its own decimal context: the caller's can neither
+        # round it nor trap it.
+        for hostile in (
+            decimal.Context(prec=3),
+            decimal.Context(prec=3, traps=[decimal.Inexact, decimal.Rounded]),
+            decimal.Context(prec=1, rounding=decimal.ROUND_UP),
+        ):
+            with decimal.localcontext(hostile):
+                assert deadline_after(1.001) == 1_000 + 1_001_000_000
+                assert deadline_after(1e300) == 1_000 + 10**309
     for seconds in (math.inf, -math.inf, math.nan):
         with pytest.raises(ValueError, match="finite"):
             deadline_after(seconds)
@@ -1067,10 +1078,20 @@ def _hold_the_clock(monkeypatch) -> _HeldClock:
     return clock
 
 
+def _wait_for_the_noted_start(fn):
+    """An engine call notes when it started as it begins: wait for that too,
+    so the timeout that follows finds the start noted, however loaded the
+    runner is. A task that is not an engine call notes nothing."""
+    waited = time.monotonic()
+    while getattr(fn, "started_ns", 0) is None:
+        assert time.monotonic() - waited < 5, "the engine never noted its start"
+        time.sleep(0.001)
+
+
 class _StartedExecutor(ThreadPoolExecutor):
-    """A pool whose ``submit`` returns only once the task has started, so a
-    deadline that follows the submit always finds the engine running, however
-    loaded the runner is."""
+    """A pool whose ``submit`` returns only once the task has started and, for
+    an engine call, noted its start, so a deadline that follows the submit
+    always finds the engine running, however loaded the runner is."""
 
     def submit(self, fn, /, *args, **kwargs):
         started = threading.Event()
@@ -1081,6 +1102,7 @@ class _StartedExecutor(ThreadPoolExecutor):
 
         future = super().submit(_run, *args, **kwargs)
         assert started.wait(5), "the engine never started"
+        _wait_for_the_noted_start(fn)
         return future
 
 
@@ -1098,9 +1120,10 @@ def test_a_consensus_engine_out_of_time_names_a_cause_only_while_translating(mon
     # on every path, however slow the runner.
     _hold_the_clock(monkeypatch)
     verifier = consensus_verifier.ConsensusVerifier(enable_circuit_breaker=False)
-    # Each engine is running before its deadline starts. The async path runs
-    # them in its own pool, sized to the engine list.
+    # Each engine is running, its start noted, before the timeout reads it.
+    # The async path builds its own pool, sized to the engine list: the same.
     monkeypatch.setattr(verifier, "_executor", _StartedExecutor(max_workers=4))
+    monkeypatch.setattr(consensus_verifier, "ThreadPoolExecutor", _StartedExecutor)
     release = _Release()
     engines = [("SymPy", _stalling_engine(release, kind)), ("Python", _stalling_engine(release, kind))]
     try:
@@ -1183,6 +1206,7 @@ class _FirstStartedExecutor(ThreadPoolExecutor):
 
         future = super().submit(_run, *args, **kwargs)
         assert started.wait(5), "the first engine never started"
+        _wait_for_the_noted_start(fn)
         return future
 
 
@@ -1316,7 +1340,10 @@ def test_a_consensus_answer_after_the_engine_deadline_is_a_failed_translation(mo
 
     call.translations.read = _once_the_late_answer_landed
     verifier = consensus_verifier.ConsensusVerifier(enable_circuit_breaker=False)
+    # The engine is running, its start noted at zero, before the clock runs;
+    # on the async path too, which builds its own pool.
     monkeypatch.setattr(verifier, "_executor", _StartedExecutor(max_workers=2))
+    monkeypatch.setattr(consensus_verifier, "ThreadPoolExecutor", _StartedExecutor)
     engines = [("SymPy", call)]
     try:
         if path == "sequential":

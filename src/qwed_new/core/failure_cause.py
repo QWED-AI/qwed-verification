@@ -26,7 +26,7 @@ for any other verdict.
 import math
 import threading
 import time
-from decimal import Decimal
+from decimal import Context, Decimal
 from typing import Any
 
 from qwed_new.core.diagnostics import DiagnosticResult
@@ -123,13 +123,21 @@ def now_ns() -> int:
     return time.monotonic_ns()
 
 
+# The deadline's own decimal context, so the caller's (a lower precision, a
+# trap on Inexact) can neither round a duration nor refuse it. A float's
+# shortest decimal form has at most 17 digits and a billion adds ten, so 40
+# digits hold every product exactly.
+_NANOSECONDS = Context(prec=40, traps=[])
+
+
 def deadline_after(seconds: float) -> int:
     """The ``now_ns`` reading ``seconds`` from now. The duration becomes
-    whole nanoseconds once, exactly, with no floating-point product, so
-    0.29 seconds is 290,000,000 nanoseconds. ``seconds`` must be finite."""
+    whole nanoseconds once, exactly, with no floating-point product and
+    whatever decimal context the caller has set, so 1.001 seconds is
+    1,001,000,000 nanoseconds. ``seconds`` must be finite."""
     if not math.isfinite(seconds):
         raise ValueError(f"a deadline needs a finite number of seconds, not {seconds!r}")
-    return now_ns() + int(Decimal(str(seconds)) * 1_000_000_000)
+    return now_ns() + int(_NANOSECONDS.multiply(Decimal(str(seconds)), 1_000_000_000))
 
 
 class LandedTranslations(list):
