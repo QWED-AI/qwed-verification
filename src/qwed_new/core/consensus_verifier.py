@@ -40,7 +40,9 @@ from qwed_new.core.failure_cause import (
     NO_PROVIDER,
     TRANSLATION_CAUSES,
     TRANSLATION_FAILED,
+    LandedTranslations,
     cause_of,
+    deadline_after,
     diagnostic_for,
     message_of,
 )
@@ -135,11 +137,12 @@ def _keep_refused(error: BaseException, translations: Optional[List[Translation]
 class _EngineCall:
     """A translating engine, with the list of translations this request
     owns (#578). The engine adds its translation as soon as the model
-    returns, so a timeout or failure branch can still keep it."""
+    returns, so a timeout or failure branch can still keep it; the list
+    notes when it landed, so a timeout reads whether it came in time."""
 
     def __init__(self, method: Callable[[str, List[Translation]], "EngineResult"]):
         self.method = method
-        self.translations: List[Translation] = []
+        self.translations: LandedTranslations = LandedTranslations()
 
     def __call__(self, query: str) -> "EngineResult":
         return self.method(query, self.translations)
@@ -154,20 +157,23 @@ def _snapshot(call: Any) -> Optional[Translation]:
     return None
 
 
-def _timed_out(call: Any, started: bool = True) -> dict[str, Any]:
-    """The fields of an engine that ran out of time: its translation, where
-    it had one, and its cause (#519). A translating engine that started and
-    has no translation yet was still waiting for the model, so it is a
-    failed translation, as a provider call out of time is on every route.
-    An engine that had its translation, and so stopped after it, names no
-    cause, nor does one that does not translate, nor one cancelled before it
-    started (``started`` False: queued behind other work, it asked the model
-    nothing): each stays BLOCKED, as before. One snapshot decides both
-    fields, so a translation that lands meanwhile cannot split them."""
+def _timed_out(call: Any, deadline_ns: int, started: bool = True) -> dict[str, Any]:
+    """The fields of an engine that ran out of time at ``deadline_ns``: its
+    translation, where it had one, and its cause (#519). A translating
+    engine that started and had no translation by the deadline was still
+    waiting for the model, so it is a failed translation, as a provider call
+    out of time is on every route. An engine that had its translation, and
+    so stopped after it, names no cause, nor does one that does not
+    translate, nor one cancelled before it started (``started`` False:
+    queued behind other work, it asked the model nothing): each stays
+    BLOCKED, as before. The cause is read as at the deadline: the worker
+    runs on after it, and a translation that lands late, before this runs,
+    does not change the cause, though the result keeps it for the audit row
+    (#578)."""
     translation = _snapshot(call)
-    if started and isinstance(call, _EngineCall) and translation is None:
+    if started and isinstance(call, _EngineCall) and not call.translations.before(deadline_ns):
         return {
-            "translation": None,
+            "translation": translation,
             "cause": TRANSLATION_FAILED,
             "cause_message": message_of(TimeoutError(), TRANSLATION_FAILED),
         }
@@ -835,7 +841,7 @@ class ConsensusVerifier:
                 results.append(self._blocked_engine_result(
                     engine_name, "timeout", "Timeout",
                     latency_ms=(time.monotonic_ns() - mono_start_ns) // 1_000_000,
-                    **_timed_out(call),
+                    **_timed_out(call, deadline_ns),
                 ))
                 continue
             self._record_engine_result(engine_name, result)
@@ -958,6 +964,7 @@ class ConsensusVerifier:
         # outside the inner try, so it escaped as an uncaught HTTP 500 after
         # blocking the caller for the full timeout. Catch it, cancel the
         # not-yet-started futures, and degrade to partial BLOCKED results.
+        deadline_ns = deadline_after(_ENGINE_TIMEOUT_SECONDS)
         try:
             for future in as_completed(futures, timeout=_ENGINE_TIMEOUT_SECONDS):
                 engine_name = futures[future]
@@ -983,7 +990,7 @@ class ConsensusVerifier:
                     results.append(self._blocked_engine_result(
                         engine_name, "parallel_timeout",
                         f"Engine timed out after {_ENGINE_TIMEOUT_SECONDS}s",
-                        **_timed_out(calls[engine_name], started=not cancelled),
+                        **_timed_out(calls[engine_name], deadline_ns, started=not cancelled),
                     ))
         
         return results
@@ -999,6 +1006,7 @@ class ConsensusVerifier:
         for engine_name, method in engines:
             if self._is_engine_available(engine_name):
                 future = self._executor.submit(method, query)
+                deadline_ns = deadline_after(_ENGINE_TIMEOUT_SECONDS)
                 try:
                     result = future.result(timeout=_ENGINE_TIMEOUT_SECONDS)
                     self._record_engine_result(engine_name, result)
@@ -1008,7 +1016,7 @@ class ConsensusVerifier:
                     results.append(self._blocked_engine_result(
                         engine_name, "sequential_timeout",
                         f"Engine timed out after {_ENGINE_TIMEOUT_SECONDS}s",
-                        **_timed_out(method, started=not cancelled),
+                        **_timed_out(method, deadline_ns, started=not cancelled),
                     ))
                 except Exception as e:
                     results.append(self._blocked_engine_result(

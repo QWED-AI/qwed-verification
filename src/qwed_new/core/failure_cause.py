@@ -23,6 +23,8 @@ None of them is admitted. The route that meets one writes its audit row as
 for any other verdict.
 """
 
+import threading
+import time
 from typing import Any
 
 from qwed_new.core.diagnostics import DiagnosticResult
@@ -111,3 +113,36 @@ def diagnostic_for_exception(
     translation step, stands for (see ``cause_of``)."""
     cause = cause_of(exc)
     return diagnostic_for(cause, message_of(exc, cause), developer_fields)
+
+
+def deadline_after(seconds: float) -> int:
+    """The ``time.monotonic_ns`` reading ``seconds`` from now: a deadline a
+    translation's landing is read against (``LandedTranslations``)."""
+    return time.monotonic_ns() + int(seconds * 1_000_000_000)
+
+
+class LandedTranslations(list):
+    """A request's translations, each noted with when it landed (#519).
+
+    A provider call runs on a worker thread that no deadline stops, so the
+    model may answer after the deadline expired and before the request
+    reads this list. Whether the model answered in time, and so whether the
+    deadline is a failed translation, is read from ``before``: an answer
+    that lands late cannot change the cause. The list itself keeps a late
+    answer, for the audit row (#578). Only ``append`` notes a landing: an
+    entry added any other way never counts as in time."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._lock = threading.Lock()
+        self._landed: list[tuple[int, Any]] = []
+
+    def append(self, translation: Any) -> None:
+        with self._lock:
+            self._landed.append((time.monotonic_ns(), translation))
+            super().append(translation)
+
+    def before(self, deadline_ns: int) -> list[Any]:
+        """The translations that landed before ``deadline_ns``."""
+        with self._lock:
+            return [found for landed, found in self._landed if landed < deadline_ns]

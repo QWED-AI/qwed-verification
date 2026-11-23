@@ -39,6 +39,8 @@ from qwed_new.core.failure_cause import (
     INPUT_REFUSED,
     POLICY_BLOCKED,
     TRANSLATION_FAILED,
+    LandedTranslations,
+    deadline_after,
     diagnostic_for,
     diagnostic_for_exception,
     message_of,
@@ -71,24 +73,31 @@ def _logic_failure(
     translated: bool,
     translation: Translation | None,
     translation_model: str | None,
-    answered: list[Translation],
+    answered: LandedTranslations,
+    answered_by: int,
 ) -> dict[str, Any]:
     """The error, cause, model and audit record of a /verify/logic request
     that raised (#519). ``translated`` is set once the bridge returned, and
     ``answered`` holds what the bridge handed over as soon as the model
-    answered: where the bridge did not return its translation, the
-    first entry is the model's answer, kept for the row (#578).
+    answered, each noted with when it landed; ``answered_by`` is the
+    provider deadline. Where the bridge did not return its translation, the
+    first entry is the model's answer, kept for the row (#578) even when it
+    came after the deadline.
 
     A provider call out of time before the model answered is a failed
     translation, named as on /verify/natural_language; one that expires in
-    the DSL step, after the model answered, is not. Any other error is the
+    the DSL step, after the model answered, is not. Which it was is read
+    as at the deadline: the worker thread runs on after it, and an answer
+    that lands late does not change the cause. Any other error is the
     pipeline's own, BLOCKED: one escaping the bridge is not the model's,
     since the bridge names every provider error, and the solver and every
     later step come after the translation."""
-    if translation is None and answered:
-        translation = answered[0]
+    in_time = translated or bool(answered.before(answered_by))
+    landed = list(answered)
+    if translation is None and landed:
+        translation = landed[0]
         translation_model = translation.translation_model
-    if not translated and translation is None and isinstance(error, (TimeoutError, asyncio.TimeoutError)):
+    if not in_time and isinstance(error, (TimeoutError, asyncio.TimeoutError)):
         fields = {"error": message_of(error, TRANSLATION_FAILED), "constraint_id": TRANSLATION_FAILED}
     else:
         fields = {"error": _PIPELINE_ERROR_MESSAGE, "constraint_id": PIPELINE_ERROR}
@@ -528,8 +537,11 @@ class ControlPlane:
         translated = False
         # The bridge's translation, handed over as soon as the model has
         # answered: the provider deadline also covers the DSL step, and one
-        # that expires there comes after the answer (#519, #578).
-        answered: list[Translation] = []
+        # that expires there comes after the answer (#519, #578). Each is
+        # noted with when it landed, so one that lands after the deadline
+        # counts as late.
+        answered = LandedTranslations()
+        answered_by = deadline_after(_PROVIDER_CALL_TIMEOUT_SECONDS)
 
         # 3. DSL Logic Pipeline
         try:
@@ -602,7 +614,7 @@ class ControlPlane:
             )
             return {
                 "status": "ERROR",
-                **_logic_failure(e, translated, translation, last_known_model, answered),
+                **_logic_failure(e, translated, translation, last_known_model, answered, answered_by),
                 "provider_used": last_known_provider,
                 "latency_ms": (time.time() - start_time) * 1000
             }

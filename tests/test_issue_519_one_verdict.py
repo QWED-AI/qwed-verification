@@ -18,8 +18,11 @@ import inspect
 import io
 import json
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
+from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 from hypothesis import given
@@ -41,7 +44,9 @@ from qwed_new.core.failure_cause import (
     OUTPUT_REFUSED,
     POLICY_BLOCKED,
     TRANSLATION_FAILED,
+    LandedTranslations,
     cause_of,
+    deadline_after,
     diagnostic_for,
     diagnostic_for_exception,
     message_of,
@@ -601,6 +606,96 @@ def test_a_provider_call_out_of_time_is_a_failed_translation(
     _assert_one_verdict(response, isolated_audit_chain, "UNVERIFIABLE", TRANSLATION_FAILED)
 
 
+def _past_any_early_expiry():
+    """Wait out the clock's resolution once a deadline has expired: a timer
+    may end its wait up to that much early (about 16 ms on Windows' tick
+    clock), so an answer landing at once could still read as before the
+    deadline. Past this, an answer is late on any clock."""
+    entry = time.monotonic_ns()
+    while time.monotonic_ns() - entry < 50_000_000:
+        time.sleep(0.005)
+
+
+def test_a_logic_answer_after_the_provider_deadline_is_a_failed_translation(
+    client, isolated_audit_chain, monkeypatch, model,  # noqa: F811
+):
+    # The worker thread runs on after the deadline: the model answers late,
+    # and the bridge hands its answer over before the route reads it. The
+    # cause is read as at the deadline, so the call is still a failed
+    # translation, and the row keeps the late answer (#578).
+    from qwed_new.core import control_plane
+
+    monkeypatch.setattr(control_plane, "_PROVIDER_CALL_TIMEOUT_SECONDS", 0.05)
+    release = _Release()
+    landed = threading.Event()
+    provider_call = control_plane._run_provider_call
+    answer = model.translate_logic
+
+    async def _answer_lands_after_the_deadline(func, *args, on_translation, **kwargs):
+        def _noting(found):
+            on_translation(found)
+            landed.set()
+
+        try:
+            return await provider_call(func, *args, on_translation=_noting, **kwargs)
+        except (TimeoutError, asyncio.TimeoutError):
+            _past_any_early_expiry()
+            release.set()
+            assert landed.wait(5), "the late answer never landed"
+            raise
+        finally:
+            release.set()
+
+    def _late_answer(*args, **kwargs):
+        release.wait()
+        return answer(*args, **kwargs)
+
+    monkeypatch.setattr(control_plane, "_run_provider_call", _answer_lands_after_the_deadline)
+    monkeypatch.setattr(model, "translate_logic", _late_answer)
+    try:
+        response = _post(client, "logic", QUESTION)
+    finally:
+        release.set()
+    release.assert_not_expired()
+
+    _assert_one_verdict(response, isolated_audit_chain, "UNVERIFIABLE", TRANSLATION_FAILED)
+    (row,) = _rows(isolated_audit_chain)
+    assert row.raw_llm_output
+
+
+def test_a_translation_is_in_time_only_if_it_landed_before_the_deadline():
+    found = LandedTranslations()
+    found.append("early")
+    deadline = deadline_after(0.001)
+    _past_any_early_expiry()
+    found.append("late")
+    # Only append notes a landing: an entry added any other way is never in time.
+    found.extend(["unnoted"])
+
+    assert list(found) == ["early", "late", "unnoted"]
+    assert found.before(deadline) == ["early"]
+    assert LandedTranslations().before(deadline) == []
+
+
+@hypothesis_settings(max_examples=200, deadline=None)
+@given(
+    st.lists(st.integers(min_value=0, max_value=50), max_size=8),
+    st.integers(min_value=0, max_value=50),
+)
+def test_before_keeps_exactly_what_landed_before_the_deadline(stamps, deadline):
+    from qwed_new.core import failure_cause
+
+    clock = iter(stamps)
+    found = LandedTranslations()
+    # This module's clock only: another thread reading the real one is untouched.
+    with mock.patch.object(failure_cause, "time", SimpleNamespace(monotonic_ns=lambda: next(clock))):
+        for index in range(len(stamps)):
+            found.append(index)
+
+    assert list(found) == list(range(len(stamps)))
+    assert found.before(deadline) == [index for index, stamp in enumerate(stamps) if stamp < deadline]
+
+
 @pytest.mark.parametrize("error", [
     RuntimeError(f"bridge bug: {LEAK_MARKER}"),
     ValueError(f"bridge bug: {LEAK_MARKER}"),
@@ -1054,7 +1149,9 @@ def test_a_consensus_z3_engine_out_of_time_in_the_dsl_step_names_no_cause(monkey
         else:
             monkeypatch.setattr(verifier, "_select_engines", lambda *_args: engines)
             monkeypatch.setattr(verifier, "_refused", lambda *_args: None)
-            results = asyncio.run(verifier.verify_async(QUESTION, timeout_seconds=0.05)).verification_chain
+            # The async deadline starts before the engine is submitted: a
+            # second, so the model's answer lands before it on any runner.
+            results = asyncio.run(verifier.verify_async(QUESTION, timeout_seconds=1.0)).verification_chain
     finally:
         release.set()
     release.assert_not_expired()
@@ -1065,3 +1162,58 @@ def test_a_consensus_z3_engine_out_of_time_in_the_dsl_step_names_no_cause(monkey
     assert result.cause is None
     assert result.translation.engine == "Z3"
     assert result.translation.output.claim == "x > 3"
+
+
+@pytest.mark.parametrize("path", ["sequential", "parallel", "async"])
+def test_a_consensus_answer_after_the_engine_deadline_is_a_failed_translation(monkeypatch, path):
+    # The engine's worker runs on after its deadline: the model answers late,
+    # and the translation lands before the timeout reads it. The cause is
+    # read as at the deadline, and the result keeps the late translation
+    # for the audit row (#578).
+    from qwed_new.core import consensus_verifier
+    from qwed_new.core.consensus_verifier import _EngineCall
+    from qwed_new.core.schemas import MathVerificationTask
+    from qwed_new.core.translation_record import Translation
+
+    monkeypatch.setattr(consensus_verifier, "_ENGINE_TIMEOUT_SECONDS", 0.05)
+    release = _Release()
+    landed = threading.Event()
+    task = MathVerificationTask(expression="2 + 2", claimed_answer=4.0, reasoning="r", confidence=1.0)
+    late = Translation("math", task, "ollama", "model-519")
+
+    def _answers_late(_query, translations):
+        release.wait()
+        translations.append(late)
+        landed.set()
+        raise RuntimeError("released")
+
+    snapshot = consensus_verifier._snapshot
+
+    def _once_the_late_answer_landed(call):
+        # The deadline has expired: the answer lands now, before the read.
+        _past_any_early_expiry()
+        release.set()
+        assert landed.wait(5), "the late answer never landed"
+        return snapshot(call)
+
+    monkeypatch.setattr(consensus_verifier, "_snapshot", _once_the_late_answer_landed)
+    verifier = consensus_verifier.ConsensusVerifier(enable_circuit_breaker=False)
+    monkeypatch.setattr(verifier, "_executor", _StartedExecutor(max_workers=2))
+    engines = [("SymPy", _EngineCall(_answers_late))]
+    try:
+        if path == "sequential":
+            results = verifier._execute_sequential(QUESTION, engines)
+        elif path == "parallel":
+            results = verifier._execute_parallel(QUESTION, engines)
+        else:
+            monkeypatch.setattr(verifier, "_select_engines", lambda *_args: engines)
+            monkeypatch.setattr(verifier, "_refused", lambda *_args: None)
+            results = asyncio.run(verifier.verify_async(QUESTION, timeout_seconds=0.05)).verification_chain
+    finally:
+        release.set()
+    release.assert_not_expired()
+
+    (result,) = results
+    assert result.status == "BLOCKED"
+    assert result.cause == TRANSLATION_FAILED
+    assert result.translation is late
