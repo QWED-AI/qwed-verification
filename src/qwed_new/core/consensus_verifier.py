@@ -44,6 +44,7 @@ from qwed_new.core.failure_cause import (
     cause_of,
     deadline_after,
     diagnostic_for,
+    message_for,
     message_of,
     now_ns,
 )
@@ -788,6 +789,9 @@ class ConsensusVerifier:
         try:
             TranslationLayer().screen_question(query)
         except TranslationRefused as refused:
+            # The screen's reason names the pattern it matched: the log
+            # keeps it, the caller reads the cause's own message (#519).
+            logger.warning("Consensus question refused: %s", refused)
             return ConsensusResult(
                 final_answer=None,
                 confidence=0.0,
@@ -798,7 +802,7 @@ class ConsensusVerifier:
                 status=DiagnosticStatus.BLOCKED,
                 # The same cause as on every route (#519).
                 cause=INPUT_REFUSED,
-                cause_message=str(refused),
+                cause_message=message_for(INPUT_REFUSED),
             )
         return None
 

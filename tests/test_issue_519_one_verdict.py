@@ -52,6 +52,7 @@ from qwed_new.core.failure_cause import (
     deadline_after,
     diagnostic_for,
     diagnostic_for_exception,
+    message_for,
     message_of,
 )
 from qwed_new.core.translator import SecurityError
@@ -169,10 +170,36 @@ def test_a_failed_translation_carries_nothing_from_the_provider(exc):
     assert LEAK_MARKER not in str(dr.to_dict())
 
 
-def test_the_setting_to_fix_and_the_refusal_reason_are_passed_on():
+# What the screens say when they refuse: the pattern they matched and the
+# other heuristics' findings. None of it reaches a caller (#519).
+SCREEN_TEXT = (
+    "Security Policy Violation", "Potential Prompt Injection", "Input too long", "hidden zero-width",
+    "mixed-language scripts", "mimics system prompt", "suspicious keywords", "injection payload",
+)
+# Refused three ways: a pattern, the pattern split by a zero-width space, and
+# past the screens' length bound.
+REFUSED_QUESTIONS = {
+    "pattern": INJECTION,
+    "zero-width": INJECTION.replace("instructions", "instruc\u200btions"),
+    "too-long": "What is 2+2? " * 800,
+}
+
+
+def _no_screen_text(text):
+    return [said for said in SCREEN_TEXT if said in text]
+
+
+def test_the_setting_to_fix_is_passed_on_and_a_refusal_reason_is_not():
     assert message_of(_wrapped(ProviderConfigError("Set OLLAMA_MODEL")), NO_PROVIDER) == "Set OLLAMA_MODEL"
-    refused = TranslationRefused("Security Policy Violation: suspicious keywords")
-    assert message_of(_wrapped(refused), INPUT_REFUSED) == str(refused)
+    for reason in (
+        "Potential Prompt Injection detected: 'ignore previous instructions'",
+        "Input too long (12000 chars). Maximum 2000 characters allowed.",
+        "Input contains hidden zero-width characters",
+    ):
+        refused = TranslationRefused(f"Security Policy Violation: {reason}")
+        for error in (refused, _wrapped(refused)):
+            assert message_of(error, INPUT_REFUSED) == message_for(INPUT_REFUSED)
+            assert _no_screen_text(diagnostic_for_exception(error).agent_message) == []
 
 
 @pytest.mark.parametrize("cause, status", [
@@ -332,11 +359,35 @@ def test_a_failure_or_refusal_gives_one_verdict_on_every_route(
 
 @pytest.mark.parametrize("route", ["natural_language", "logic"])
 def test_a_refused_question_names_why_on_the_control_plane_routes(client, isolated_audit_chain, route):  # noqa: F811
-    body = _post(client, route, INJECTION).json()
+    response = _post(client, route, INJECTION)
+    body = response.json()
 
     assert body["status"] == "BLOCKED"
     assert body["admission"] == "BLOCKED"
-    assert body["agent_message"].startswith("Security Policy Violation")
+    # Why: the cause and its message. The screen's reason, which names the
+    # pattern it matched, stays in the server log (#519).
+    assert body["constraint_id"] == INPUT_REFUSED
+    assert body["agent_message"] == message_for(INPUT_REFUSED)
+    assert _no_screen_text(response.text) == []
+
+
+@pytest.mark.parametrize("question", REFUSED_QUESTIONS, ids=list(REFUSED_QUESTIONS))
+@pytest.mark.parametrize("route", ["natural_language", "logic", "consensus-single", "stats"])
+def test_a_refused_question_never_shows_the_screens_reason(
+    client, isolated_audit_chain, model, route, question,  # noqa: F811
+):
+    # Refused a pattern, the pattern split by a zero-width space, or the
+    # length bound: each route names the cause with its own message, and
+    # neither the response nor the audit row says what the screen found.
+    response = _post(client, route, REFUSED_QUESTIONS[question])
+    body = response.json()
+
+    assert body["status"] == "BLOCKED"
+    assert body["constraint_id"] == INPUT_REFUSED
+    assert body["agent_message"] == message_for(INPUT_REFUSED)
+    assert _no_screen_text(response.text) == []
+    (row,) = _rows(isolated_audit_chain)
+    assert _no_screen_text(row.result) == []
 
 
 @pytest.mark.parametrize("request_provider, cause, status", [
@@ -359,11 +410,14 @@ def test_fact_names_a_provider_it_cannot_run_as_every_route_does(monkeypatch, re
 def test_fact_names_a_refused_claim_as_every_route_does(model):  # noqa: F811
     from qwed_new.core.fact_verifier import FactVerifier
 
-    result = FactVerifier().verify_fact(INJECTION, "The sky is blue.", provider="ollama", min_confidence=1.0)
+    for claim in REFUSED_QUESTIONS.values():
+        result = FactVerifier().verify_fact(claim, "The sky is blue.", provider="ollama", min_confidence=1.0)
 
-    assert result.status is DiagnosticStatus.BLOCKED
-    assert result.developer_fields["constraint_id"] == INPUT_REFUSED
-    assert result.agent_message.startswith("Security Policy Violation")
+        assert result.status is DiagnosticStatus.BLOCKED
+        assert result.developer_fields["constraint_id"] == INPUT_REFUSED
+        # The cause's message, never the screen's reason (#519).
+        assert result.agent_message == message_for(INPUT_REFUSED)
+        assert _no_screen_text(str(result.to_dict())) == []
 
 
 def _blocked(engine, cause, message=None):
@@ -932,12 +986,13 @@ def _wrapped_in(wrapper, inner):
 
 
 @pytest.mark.parametrize("error, cause, message", [
-    # Whatever wraps it, a refusal names its cause and its reason.
+    # Whatever wraps it, a refusal names its cause, with the cause's own
+    # message: the screen's reason names the pattern it matched.
     (_wrapped_in(RuntimeError, TranslationRefused("Security Policy Violation: x")), INPUT_REFUSED,
-     "Security Policy Violation: x"),
+     message_for(INPUT_REFUSED)),
     (_wrapped_in(KeyError, TranslationRefused("Security Policy Violation: x")), INPUT_REFUSED,
-     "Security Policy Violation: x"),
-    (_wrapped_in(RuntimeError, SecurityError("rejected")), OUTPUT_REFUSED, None),
+     message_for(INPUT_REFUSED)),
+    (_wrapped_in(RuntimeError, SecurityError("rejected")), OUTPUT_REFUSED, message_for(OUTPUT_REFUSED)),
     (RuntimeError(f"provider down: {LEAK_MARKER}"), TRANSLATION_FAILED, "LLM translation failed"),
     # Provider text that starts like the goal message is still provider text.
     (ValueError(f"Unsupported logic goal: {LEAK_MARKER}"), TRANSLATION_FAILED, "LLM translation failed"),

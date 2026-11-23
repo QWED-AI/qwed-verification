@@ -779,7 +779,8 @@ class DSLLogicVerifier:
         provider. From the provider call, a refused text (the input or the
         model's output) or a failed translation is named, whatever wraps it
         (#519); the DSL step refusing what the model wrote stays BLOCKED,
-        with no cause. Only a refusal's reason is passed on: any other error
+        with no cause. A refusal reads its cause's own message, never the
+        screen's reason, which names the pattern it matched; any other error
         reads "LLM translation failed", or names the unsupported goal, which
         is all an UnsupportedGoalError carries."""
         resolved_provider = self._provider_label(

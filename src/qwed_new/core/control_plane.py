@@ -44,6 +44,7 @@ from qwed_new.core.failure_cause import (
     deadline_after,
     diagnostic_for,
     diagnostic_for_exception,
+    message_for,
     message_of,
 )
 # Every z3 solve runs on the one z3 thread, which the consensus Z3 engine
@@ -326,7 +327,9 @@ class ControlPlane:
         is_safe, security_reason = self.security_gateway.detect_advanced_injection(query)
         if not is_safe:
             logger.warning(f"Security block for org {organization_id}: {security_reason}")
-            message = f"Security Policy Violation: {security_reason}"
+            # The screen's reason names the pattern it matched: the log
+            # keeps it, the caller reads the cause's own message (#519).
+            message = message_for(INPUT_REFUSED)
             return {
                 "status": "BLOCKED",
                 "error": message,
@@ -524,7 +527,8 @@ class ControlPlane:
             logger.warning(f"Security block (logic) for org {organization_id}: {security_reason}")
             result = {
                 "status": "BLOCKED",
-                "error": f"Security Policy Violation: {security_reason}",
+                # The log keeps the screen's reason, as above (#519).
+                "error": message_for(INPUT_REFUSED),
                 "constraint_id": INPUT_REFUSED,  # #519: the same cause as on every route
                 "latency_ms": (time.time() - start_time) * 1000
             }

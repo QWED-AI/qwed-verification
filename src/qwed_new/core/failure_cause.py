@@ -13,7 +13,9 @@ model was BLOCKED on ``/verify/logic``, "inconclusive" on
   be used. UNVERIFIABLE, with a message that carries nothing from the
   provider.
 - ``security.input_refused``: the injection screen refused the caller's text
-  before any model saw it. BLOCKED.
+  before any model saw it. BLOCKED, with the one message below on every
+  route: the screen's own reason names the pattern it matched, which is
+  detection logic, so it stays in the server log.
 - ``security.output_refused``: the safety check refused the model's
   translation. BLOCKED.
 - ``policy.blocked``: the control plane's policy refused the request.
@@ -77,20 +79,25 @@ def cause_of(exc: BaseException) -> str:
     return TRANSLATION_FAILED
 
 
+def message_for(cause: str) -> str:
+    """The message a caller sees for ``cause`` when nothing more may be said."""
+    return _DEFAULT_MESSAGES[cause]
+
+
 def message_of(exc: BaseException, cause: str) -> str:
     """The message a caller may see for ``exc``: the text of a
-    ProviderConfigError or a refusal, which carries nothing from a provider;
-    otherwise the cause's own message."""
+    ProviderConfigError, which names the setting to fix and carries nothing
+    from a provider; otherwise the cause's own message. A refusal's text is
+    never passed on: the screen's reason names the pattern it matched, and
+    a caller who reads it can reword the question around that pattern."""
     current: BaseException | None = exc
     seen = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         if cause == NO_PROVIDER and isinstance(current, ProviderConfigError):
             return str(current)
-        if cause == INPUT_REFUSED and isinstance(current, TranslationRefused):
-            return str(current)
         current = current.__cause__
-    return _DEFAULT_MESSAGES[cause]
+    return message_for(cause)
 
 
 def diagnostic_for(
