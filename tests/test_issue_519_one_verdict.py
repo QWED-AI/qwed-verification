@@ -519,6 +519,32 @@ def test_an_error_after_the_translation_is_blocked_and_names_no_translation_caus
         assert json.loads(row.result)["developer_fields"]["translation_model"] == MODEL
 
 
+# Far past every deadline in these tests (0.05 seconds), so no runner, however
+# slow, reaches it while the deadline works.
+_WATCHDOG_SECONDS = 30
+
+
+class _Release:
+    """The test's release for a stalled call. The call waits for it, or for
+    the watchdog: a slow runner cannot end the stall before the test is
+    done, and a deadline that never fires fails the test, through
+    ``assert_not_expired``, instead of hanging the run."""
+
+    def __init__(self):
+        self._event = threading.Event()
+        self.expired = False
+
+    def wait(self):
+        if not self._event.wait(_WATCHDOG_SECONDS):
+            self.expired = True
+
+    def set(self):
+        self._event.set()
+
+    def assert_not_expired(self):
+        assert not self.expired, "a stalled call reached the watchdog: its deadline never fired"
+
+
 @pytest.mark.parametrize("route", ["natural_language", "logic"])
 def test_a_provider_call_out_of_time_is_a_failed_translation(
     client, isolated_audit_chain, monkeypatch, model, route,  # noqa: F811
@@ -526,7 +552,7 @@ def test_a_provider_call_out_of_time_is_a_failed_translation(
     from qwed_new.core import control_plane
 
     monkeypatch.setattr(control_plane, "_PROVIDER_CALL_TIMEOUT_SECONDS", 0.05)
-    release = threading.Event()
+    release = _Release()
     provider_call = control_plane._run_provider_call
 
     async def _releasing_once_it_ends(*args, **kwargs):
@@ -549,6 +575,7 @@ def test_a_provider_call_out_of_time_is_a_failed_translation(
         response = _post(client, route, QUESTION)
     finally:
         release.set()
+    release.assert_not_expired()
 
     _assert_one_verdict(response, isolated_audit_chain, "UNVERIFIABLE", TRANSLATION_FAILED)
 
@@ -796,7 +823,7 @@ def test_a_stats_reply_with_no_code_is_a_failed_translation(
 
 
 def _stalling_engine(release, kind):
-    """An engine that stalls until ``release``, and only then, so it cannot
+    """An engine that stalls until ``release`` (a ``_Release``), so it cannot
     stop on its own before the test is done: a translating one waiting for
     the model, or one that has its translation (given before dispatch, so
     the case does not depend on when its thread runs); or one that does not
@@ -849,7 +876,7 @@ def test_a_consensus_engine_out_of_time_names_a_cause_only_while_translating(mon
     # Each engine is running before its deadline starts. The async path runs
     # them in its own pool, sized to the engine list.
     monkeypatch.setattr(verifier, "_executor", _StartedExecutor(max_workers=4))
-    release = threading.Event()
+    release = _Release()
     engines = [("SymPy", _stalling_engine(release, kind)), ("Python", _stalling_engine(release, kind))]
     try:
         if path == "sequential":
@@ -862,6 +889,7 @@ def test_a_consensus_engine_out_of_time_names_a_cause_only_while_translating(mon
             results = asyncio.run(verifier.verify_async(QUESTION, timeout_seconds=0.05)).verification_chain
     finally:
         release.set()
+    release.assert_not_expired()
 
     assert [r.status for r in results] == ["BLOCKED", "BLOCKED"]
     assert [r.cause for r in results] == [cause, cause]
@@ -884,7 +912,7 @@ def test_a_consensus_engine_cancelled_before_it_ran_names_no_cause(monkeypatch, 
 
     monkeypatch.setattr(consensus_verifier, "_ENGINE_TIMEOUT_SECONDS", 0.05)
     verifier = consensus_verifier.ConsensusVerifier(max_workers=1, enable_circuit_breaker=False)
-    release = threading.Event()
+    release = _Release()
     busy = threading.Event()
 
     def _occupy():
@@ -901,6 +929,7 @@ def test_a_consensus_engine_cancelled_before_it_ran_names_no_cause(monkeypatch, 
             results = verifier._execute_parallel(QUESTION, engines)
     finally:
         release.set()
+    release.assert_not_expired()
 
     assert [(r.engine_name, r.cause) for r in results] == [("SymPy", None), ("Python", None)]
     consensus = verifier._calculate_consensus(results)
@@ -943,7 +972,7 @@ def test_one_engine_waiting_for_the_model_and_one_queued_are_told_apart(monkeypa
     monkeypatch.setattr(consensus_verifier, "_ENGINE_TIMEOUT_SECONDS", 0.05)
     verifier = consensus_verifier.ConsensusVerifier(max_workers=1, enable_circuit_breaker=False)
     monkeypatch.setattr(verifier, "_executor", _FirstStartedExecutor())
-    release = threading.Event()
+    release = _Release()
     engines = [("SymPy", _stalling_engine(release, "waiting")), ("Python", _stalling_engine(release, "waiting"))]
     try:
         if path == "sequential":
@@ -952,6 +981,7 @@ def test_one_engine_waiting_for_the_model_and_one_queued_are_told_apart(monkeypa
             results = verifier._execute_parallel(QUESTION, engines)
     finally:
         release.set()
+    release.assert_not_expired()
 
     assert [(r.engine_name, r.cause) for r in results] == [("SymPy", TRANSLATION_FAILED), ("Python", None)]
     consensus = verifier._calculate_consensus(results)
@@ -980,7 +1010,7 @@ def test_a_consensus_z3_engine_out_of_time_in_the_dsl_step_names_no_cause(monkey
     from qwed_new.core.dsl_logic_verifier import DSLLogicVerifier
 
     monkeypatch.setattr(consensus_verifier, "_ENGINE_TIMEOUT_SECONDS", 0.05)
-    release = threading.Event()
+    release = _Release()
     building = threading.Event()
 
     def _still_building(*_args):
@@ -1006,6 +1036,7 @@ def test_a_consensus_z3_engine_out_of_time_in_the_dsl_step_names_no_cause(monkey
             results = asyncio.run(verifier.verify_async(QUESTION, timeout_seconds=0.05)).verification_chain
     finally:
         release.set()
+    release.assert_not_expired()
 
     (result,) = results
     assert result.engine_name == "Z3"
