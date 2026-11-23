@@ -1,27 +1,28 @@
 # Root of qwed-verification
 language: en-US
 reviews:
-  instructions: |
-    Follow QWED_RULES.md strictly.
-
-    QWED is a deterministic verification and enforcement boundary, not a
-    conventional application. Do not suggest changes that weaken enforcement in
-    exchange for convenience, usability, or availability.
-
-    Reject suggestions that introduce or recommend:
-    - fallback execution
-    - graceful degradation past failed verification
-    - raw eval/exec as backup behavior
-    - user-configurable security guards
-    - retries or auto-correction that bypass verification
-    - trust in model output as proof
-    - scoring or confidence heuristics for enforcement decisions
-    - relying on system prompts as security boundaries
-
-    Prefer fail-closed behavior and default-deny handling.
   auto_review:
     enabled: true
   path_instructions:
+    - path: "**"
+      instructions: |
+        Follow QWED_RULES.md strictly.
+
+        QWED is a deterministic verification and enforcement boundary, not a
+        conventional application. Do not suggest changes that weaken enforcement in
+        exchange for convenience, usability, or availability.
+
+        Reject suggestions that introduce or recommend:
+        - fallback execution
+        - graceful degradation past failed verification
+        - raw eval/exec as backup behavior
+        - user-configurable security guards
+        - retries or auto-correction that bypass verification
+        - trust in model output as proof
+        - scoring or confidence heuristics for enforcement decisions
+        - relying on system prompts as security boundaries
+
+        Prefer fail-closed behavior and default-deny handling.
     - path: "**/*.py"
       instructions: |
         You are a security auditor for QWED (Deterministic AI Verification).

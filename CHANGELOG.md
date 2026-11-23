@@ -7,10 +7,10 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ### Changed
 
-- **`/verify/consensus` is advisory only (#633).** Every engine decides a
-  model's translation of the query, so engines that agree have not verified
-  a claim. The route now returns `UNVERIFIABLE` or `BLOCKED`, never
-  `VERIFIED`, in every mode.
+- **`/verify/consensus` is advisory only (#633).** Each engine decides a
+  model's translation of the query or, for Stats, computes a value from the
+  numbers in it, so engines that agree have not verified a claim. The route
+  now returns `UNVERIFIABLE` or `BLOCKED`, never `VERIFIED`, in every mode.
   - Every response carries `advisory_only: true`, `meets_requirement: false`
     and `proof_ref: null`, and none carries an attestation.
     `ConsensusResult.proof_ref` and `verified_evidence` are always `None`.
@@ -25,10 +25,12 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     older server.
   - Before, a consensus was `VERIFIED` only when two distinct engines
     verified the same answer, and none did from 10.0.0, as the Z3 engine
-    failed on every query (#659 below). One verdict moves: in `maximum`
-    mode, a query that SymPy verifies and whose claim Z3 proves was
-    `BLOCKED` (`no_independent_verification`) and is now `UNVERIFIABLE`.
-    Neither is admitted.
+    failed on every query (#659 below). Two verdicts move in `maximum`
+    mode, and none is admitted: a query that SymPy verifies and whose claim
+    Z3 proves was `BLOCKED` (`no_independent_verification`) and is now
+    `UNVERIFIABLE`; a query that only Z3 verifies was `UNVERIFIABLE` and is
+    now `BLOCKED` (`no_independent_verification`), as one engine is not a
+    consensus.
   - A confidence below `min_confidence` and an unavailable sandbox are HTTP
     200 answers, and the route's OpenAPI now lists 401, 403, 408, 413, 422,
     429, 500 and 503 with their causes.
@@ -99,9 +101,11 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     `/verify/fact` (when the model advisory runs), `/verify/consensus`,
     `/verify/batch` and `POST /agents/{agent_id}/verify` now store the
     parsed translation, with its provider and model, as canonical JSON:
-    sorted keys, no spaces, ASCII only. The row keeps it when the route
-    later blocks the result, a consensus engine times out or fails, or the
-    safety check refuses the model's output.
+    sorted keys, no spaces, ASCII only. The row keeps a translation the
+    model has returned, also when the route later blocks the result, a
+    consensus engine times out or fails, or the safety check refuses the
+    model's output; an engine that times out before its model answers
+    leaves none.
   - A record over 64,000 characters is stored as `truncated: true` with its
     `length`, `sha256` and first 16,000 characters as `preview`; one that
     cannot be written as JSON is `unserializable: true`, with the number of
