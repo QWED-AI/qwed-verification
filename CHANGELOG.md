@@ -121,6 +121,26 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     the translation marks the query as not maths. No verdict or admission
     changes.
 
+- **`ConfigGuard` reads out public hashes, not AWS secret keys (#655).**
+  Its `AWS_SECRET_KEY` pattern takes any 40 base64 characters, so
+  `scan-secrets` reported pinned action commits, `sha256:` digests, npm
+  integrity hashes, comment rules of `=` and alphabets as AWS secret keys:
+  22 findings on this repository, none a secret.
+  - The built-in pattern drops a match only when its whole run of base64
+    characters is one of: the commit of a step that pins an action or
+    reusable workflow (`uses: owner/repo@<40 hex>`); a hex digest after
+    `sha1:`, `sha256:`, `sha384:` or `sha512:`, of that algorithm's exact
+    length; an integrity hash (`sha256-`, `sha384-`, `sha512-`) that is the
+    value of an `integrity` key; nothing but `=`; or characters in strictly
+    ascending order. A label or the key counts only after a character that
+    ends a name, in ASCII. Every other match stays reported.
+  - A caller's `AWS_SECRET_KEY` pattern, even the default text, is searched
+    as written.
+  - The dogfood workflow's `scan-secrets` job now fails on a finding.
+  - A key put into one of these shapes on purpose is read out, and
+    `/verify/code` still reports a 40-character commit hash in code as a
+    secret.
+
 ## [11.0.0] - 2026-11-19
 
 A major release that fixes ten advisories. The code, SQL, maths, image and
