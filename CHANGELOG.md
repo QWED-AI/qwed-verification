@@ -131,9 +131,10 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     reusable workflow (`uses: owner/repo@<40 hex>`); a hex digest after
     `sha1:`, `sha256:`, `sha384:` or `sha512:`, of that algorithm's exact
     length; an integrity hash (`sha256-`, `sha384-`, `sha512-`) that is the
-    value of an `integrity` key; nothing but `=`; or characters in strictly
-    ascending order. A label or the key counts only after a character that
-    ends a name, in ASCII. Every other match stays reported.
+    value of an `integrity` key or attribute; nothing but `=`; or characters
+    in strictly ascending order. A label, or the key or attribute, counts
+    only after a character that ends a name, in ASCII. Every other match
+    stays reported.
   - A caller's `AWS_SECRET_KEY` pattern, even the default text, is searched
     as written.
   - The dogfood workflow's `scan-secrets` job now fails on a finding.
