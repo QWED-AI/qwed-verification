@@ -5,7 +5,48 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ## [Unreleased]
 
+### Changed
+
+- **`/verify/consensus` is advisory only (#633).** Every engine decides a
+  model's translation of the query, so engines that agree have not verified
+  a claim. The route now returns `UNVERIFIABLE` or `BLOCKED`, never
+  `VERIFIED`, in every mode.
+  - Every response carries `advisory_only: true`, `meets_requirement: false`
+    and `proof_ref: null`, and none carries an attestation.
+    `ConsensusResult.proof_ref` and `verified_evidence` are always `None`.
+  - Every result passes through `advisory()`, so a status other than
+    `UNVERIFIABLE` or `BLOCKED` becomes `UNVERIFIABLE` before it reaches the
+    response, the attestation or the audit row. Each `verification_chain`
+    entry keeps its engine's own status, which can be `VERIFIED`.
+  - The Python SDK's `verify_consensus`, sync and async, reads every
+    response as advisory: `is_verified` is always false, `status` is kept
+    only when it is exactly `UNVERIFIABLE` or `BLOCKED`, and any
+    `attestation`, `proof_ref` and `admission` are dropped, even from an
+    older server.
+  - Before, a consensus was `VERIFIED` only when two distinct engines
+    verified the same answer, and none did from 10.0.0, as the Z3 engine
+    failed on every query (#659 below). One verdict moves: in `maximum`
+    mode, a query that SymPy verifies and whose claim Z3 proves was
+    `BLOCKED` (`no_independent_verification`) and is now `UNVERIFIABLE`.
+    Neither is admitted.
+  - A confidence below `min_confidence` and an unavailable sandbox are HTTP
+    200 answers, and the route's OpenAPI now lists 401, 403, 408, 413, 422,
+    429, 500 and 503 with their causes.
+  - Callers that gated execution on a `VERIFIED` consensus must stop: treat
+    its result as a signal for review.
+
 ### Fixed
+
+- **The Z3 engine in `maximum` consensus runs (#659).** It failed on every
+  query and was recorded as `BLOCKED`. It now proves the translated claim
+  from its constraints, as `/verify/logic` does: only a proof is `VERIFIED`
+  for that engine; a counterexample, constraints that cannot all hold, an
+  undecided proof or no claim is `UNVERIFIABLE`; and a refused translation
+  is `BLOCKED`. Z3 decides a claim, not a value, so it does not vote on the
+  answer.
+  - Its solves run on the thread `/verify/logic` uses, under
+    `QWED_Z3_TIMEOUT` (default 15 seconds). A solve that does not finish in
+    time is a `BLOCKED` Z3 result and a failure for the circuit breaker.
 
 - **`qwed test` no longer shows a satisfiable set of constraints as
   `VERIFIED` (#660).** Its logic check ran `verify_logic` on `x > 3`,
@@ -49,6 +90,32 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     reads each parsed value alone and passes it.
   - The CI and Docker workflows read the database password from a
     variable, so the dogfood `scan-secrets` job still finds nothing.
+
+- **Audit rows keep the model's translation (#578).** `raw_llm_output` was
+  never set, so the row of a route that asks a model to translate kept no
+  record of what the model returned, and a verdict reached on a translation
+  could not be re-checked from its row.
+  - `/verify/natural_language`, `/verify/logic`, `/verify/stats`,
+    `/verify/fact` (when the model advisory runs), `/verify/consensus`,
+    `/verify/batch` and `POST /agents/{agent_id}/verify` now store the
+    parsed translation, with its provider and model, as canonical JSON:
+    sorted keys, no spaces, ASCII only. The row keeps it when the route
+    later blocks the result, a consensus engine times out or fails, or the
+    safety check refuses the model's output.
+  - A record over 64,000 characters is stored as `truncated: true` with its
+    `length`, `sha256` and first 16,000 characters as `preview`; one that
+    cannot be written as JSON is `unserializable: true`, with the number of
+    translations under `translations`.
+  - No API response or audit route returns the record. It holds the model's
+    output before output sanitising, so anyone who can read the audit
+    database can read it. The entry hash covers the column.
+  - More results name the provider and model (#585): `/verify/stats` in
+    `developer_fields` once the model has written code, the `/verify/fact`
+    `llm_fallback` advisory in its `details`, each `/verify/consensus`
+    `verification_chain` entry (`null` when the engine had no translation),
+    and a `/verify/natural_language` result that is `UNVERIFIABLE` because
+    the translation marks the query as not maths. No verdict or admission
+    changes.
 
 ## [11.0.0] - 2026-11-19
 
