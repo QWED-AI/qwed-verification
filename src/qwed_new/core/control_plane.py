@@ -7,6 +7,7 @@ Request -> Policy Check -> Routing -> Translation -> Verification -> Response
 
 import asyncio
 import hashlib
+import math
 import os
 import time
 import logging
@@ -35,6 +36,18 @@ from qwed_new.core.diagnostics import (
     enforce_trust_decision,
 )
 from qwed_new.core.attestation import create_verification_attestation, AttestationStatus
+from qwed_new.core.failure_cause import (
+    INPUT_REFUSED,
+    POLICY_BLOCKED,
+    TRANSLATION_FAILED,
+    LandedTranslations,
+    deadline_after,
+    diagnostic_for,
+    diagnostic_for_exception,
+    message_for,
+    message_of,
+    wait_out_async,
+)
 # Every z3 solve runs on the one z3 thread, which the consensus Z3 engine
 # shares (#659); the provider translation runs concurrently via
 # _run_provider_call.
@@ -44,8 +57,78 @@ logger = logging.getLogger(__name__)
 
 # A provider (LLM) call does blocking network I/O. It runs in a worker thread
 # under a wall-clock bound so a slow or hung upstream cannot tie up the shared
-# event loop and stall every co-tenant's request (#390).
-_PROVIDER_CALL_TIMEOUT_SECONDS = float(os.environ.get("QWED_PROVIDER_TIMEOUT", "30"))
+# event loop and stall every co-tenant's request (#390). The bound is
+# QWED_PROVIDER_TIMEOUT where set, otherwise the default.
+_DEFAULT_PROVIDER_CALL_TIMEOUT_SECONDS = 30.0
+
+
+def _provider_timeout_seconds(raw: str | None) -> float:
+    """The provider call's bound, from ``raw`` (QWED_PROVIDER_TIMEOUT), or
+    the default where it is not set. A value that is not a finite number of
+    seconds above zero is refused when the module loads, before any request
+    (#519): infinity or NaN bounds nothing, and no deadline can be read
+    against it; zero or less would end every call at once. A fraction of a
+    second is a valid bound."""
+    if raw is None:
+        return _DEFAULT_PROVIDER_CALL_TIMEOUT_SECONDS
+    try:
+        seconds = float(raw)
+    except ValueError:
+        seconds = math.nan
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError(f"QWED_PROVIDER_TIMEOUT must be a finite number of seconds above zero, not {raw!r}")
+    return seconds
+
+
+_PROVIDER_CALL_TIMEOUT_SECONDS = _provider_timeout_seconds(os.environ.get("QWED_PROVIDER_TIMEOUT"))
+
+# An error after the model answered (#519): the engine, the solver, the
+# attestation, the sanitiser or the metrics failed, not the translation, so
+# it names no translation cause. BLOCKED on both control-plane routes.
+PIPELINE_ERROR = "control_plane.pipeline_error"
+_PIPELINE_ERROR_MESSAGE = "Internal pipeline error"
+
+
+async def _logic_failure(
+    error: BaseException,
+    translated: bool,
+    translation: Translation | None,
+    translation_model: str | None,
+    answered: LandedTranslations,
+    answered_by: int,
+) -> dict[str, Any]:
+    """The error, cause, model and audit record of a /verify/logic request
+    that raised (#519). ``translated`` is set once the bridge returned, and
+    ``answered`` holds what the bridge handed over as soon as the model
+    answered, each noted with when it landed; ``answered_by`` is the
+    provider deadline. Where the bridge did not return its translation, the
+    first entry is the model's answer, kept for the row (#578) even when it
+    came after the deadline.
+
+    A provider call out of time before the model answered is a failed
+    translation, named as on /verify/natural_language; one that expires in
+    the DSL step, after the model answered, is not. Which it was is read
+    as at the deadline: the worker thread runs on after it, and an answer
+    that lands late does not change the cause. Any other error is the
+    pipeline's own, BLOCKED: one escaping the bridge is not the model's,
+    since the bridge names every provider error, and the solver and every
+    later step come after the translation. The answer kept and the in-time
+    check come from one read, so they cannot disagree, and the read is at
+    or after the deadline: a wait may end up to its clock's resolution
+    early, and an answer that lands in that time came in time. The rest of
+    an early end is slept on the event loop, without blocking it."""
+    timed_out = isinstance(error, (TimeoutError, asyncio.TimeoutError))
+    if timed_out and not translated:
+        await wait_out_async(answered_by)
+    landed, in_time = answered.read(answered_by)
+    if translation is None and landed:
+        translation = landed[0]
+        translation_model = translation.translation_model
+    if timed_out and not (translated or in_time):
+        fields = {"error": message_of(error, TRANSLATION_FAILED), "constraint_id": TRANSLATION_FAILED}
+    else:
+        fields = {"error": _PIPELINE_ERROR_MESSAGE, "constraint_id": PIPELINE_ERROR}
+    return {**fields, "translation_model": translation_model, RAW_LLM_OUTPUT_KEY: audit_record([translation])}
 
 
 async def _run_provider_call(func, *args, **kwargs):
@@ -251,9 +334,13 @@ class ControlPlane:
         is_safe, security_reason = self.security_gateway.detect_advanced_injection(query)
         if not is_safe:
             logger.warning(f"Security block for org {organization_id}: {security_reason}")
+            # The screen's reason names the pattern it matched: the log
+            # keeps it, the caller reads the cause's own message (#519).
+            message = message_for(INPUT_REFUSED)
             return {
                 "status": "BLOCKED",
-                "error": f"Security Policy Violation: {security_reason}",
+                "error": message,
+                **self._stopped(diagnostic_for(INPUT_REFUSED, message), organization_id),
                 "latency_ms": (time.time() - start_time) * 1000
             }
         
@@ -263,6 +350,7 @@ class ControlPlane:
             return {
                 "status": "BLOCKED",
                 "error": reason,
+                **self._stopped(diagnostic_for(POLICY_BLOCKED, reason), organization_id),
                 "latency_ms": (time.time() - start_time) * 1000
             }
             
@@ -271,6 +359,9 @@ class ControlPlane:
         # The audit record, once the model has returned (#578): an error
         # after that point keeps it.
         raw_llm_output = None
+        # Set once the model has answered: an error after that is no
+        # translation cause (#519).
+        translated = False
         
         try:
             # 3. Translation (LLM Call)
@@ -279,6 +370,7 @@ class ControlPlane:
             task, translation = await _run_provider_call(
                 self._translate_math, query, provider
             )
+            translated = True
             translation_model = translation.translation_model
             # What the model returned, for the audit row only (#578). It is
             # set on the response after sanitising, which escapes text, and
@@ -382,12 +474,49 @@ class ControlPlane:
             if raw_llm_output is None:
                 # Output the safety check refused is kept too (#578).
                 raw_llm_output = audit_record([translation_in(e)])
+            # One verdict for the cause (#519). Before the model answered, no
+            # provider, a failed translation or a provider call out of time is
+            # UNVERIFIABLE, a refused text BLOCKED, each named. After it, the
+            # engine, the attestation, the sanitiser or the metrics failed:
+            # BLOCKED, as on /verify/logic.
+            if translated:
+                stopped = DiagnosticResult.blocked(
+                    _PIPELINE_ERROR_MESSAGE, developer_fields={"constraint_id": PIPELINE_ERROR}
+                )
+            else:
+                stopped = diagnostic_for_exception(e)
             return {
                 "status": "ERROR",
                 "error": str(e),
+                **self._stopped(stopped, organization_id),
                 RAW_LLM_OUTPUT_KEY: raw_llm_output,
                 "latency_ms": (time.time() - start_time) * 1000
             }
+
+    def _stopped(self, diagnostic: DiagnosticResult, organization_id: int | None) -> dict[str, Any]:
+        """The verdict of a request stopped before any engine decided it
+        (#519): a refusal, a policy block, no provider, a failed translation,
+        or an error after the translation. The routes report this diagnostic
+        as they report a decided one, so a cause reads the same on every
+        route, and its admission is never ADMIT.
+
+        Where the sanitiser itself fails, the request gets a fixed BLOCKED
+        pipeline error, whose text is this module's own, in its place, and
+        never the diagnostic that was not sanitised; the caller's handler
+        still writes the audit row it holds."""
+        try:
+            shown = self.output_sanitizer.sanitize_output(
+                result=diagnostic.to_dict(),
+                output_type="diagnostic",
+                organization_id=organization_id,
+            )
+        except Exception as e:  # noqa: BLE001 - fail closed on the sanitiser's own failure
+            logger.error("Diagnostic sanitising failed (exception_type=%s)", type(e).__name__, exc_info=False)
+            diagnostic = DiagnosticResult.blocked(
+                _PIPELINE_ERROR_MESSAGE, developer_fields={"constraint_id": PIPELINE_ERROR}
+            )
+            shown = diagnostic.to_dict()
+        return {"diagnostic": shown, "admission": natural_language_admission(diagnostic).value}
 
     def _logic_solve(self, dsl_code: str, variables: Any, claim_dsl: Optional[str]) -> tuple:
         """The z3 call for a logic translation (#631), as (function, args):
@@ -415,7 +544,9 @@ class ControlPlane:
             logger.warning(f"Security block (logic) for org {organization_id}: {security_reason}")
             result = {
                 "status": "BLOCKED",
-                "error": f"Security Policy Violation: {security_reason}",
+                # The log keeps the screen's reason, as above (#519).
+                "error": message_for(INPUT_REFUSED),
+                "constraint_id": INPUT_REFUSED,  # #519: the same cause as on every route
                 "latency_ms": (time.time() - start_time) * 1000
             }
             if organization_id:
@@ -425,7 +556,10 @@ class ControlPlane:
         # 1. Policy
         allowed, reason = self.policy.check_policy(query, organization_id=organization_id)
         if not allowed:
-            result = {"status": "BLOCKED", "error": reason, "latency_ms": (time.time() - start_time) * 1000}
+            result = {
+                "status": "BLOCKED", "error": reason, "constraint_id": POLICY_BLOCKED,
+                "latency_ms": (time.time() - start_time) * 1000,
+            }
             if organization_id:
                 metrics_collector.track_request(organization_id, "BLOCKED", result["latency_ms"])
             return result
@@ -437,6 +571,17 @@ class ControlPlane:
         # What the model returned, once it has (#578): an error after that
         # point keeps it.
         translation = None
+        # Set once the provider call has returned (#519). The bridge names
+        # every provider error itself, so the one translation cause named
+        # here is the call running out of time before the model answered.
+        translated = False
+        # The bridge's translation, handed over as soon as the model has
+        # answered: the provider deadline also covers the DSL step, and one
+        # that expires there comes after the answer (#519, #578). Each is
+        # noted with when it landed, so one that lands after the deadline
+        # counts as late.
+        answered = LandedTranslations()
+        answered_by = deadline_after(_PROVIDER_CALL_TIMEOUT_SECONDS)
 
         # 3. DSL Logic Pipeline
         try:
@@ -447,7 +592,10 @@ class ControlPlane:
             # logic requests translate in parallel, and z3 stays thread-safe.
             (
                 dsl_code, variables, resolved_provider, error, claim_dsl, translation_model, translation,
-            ) = await _run_provider_call(self.logic_verifier.translate_to_dsl, query, provider)
+            ) = await _run_provider_call(
+                self.logic_verifier.translate_to_dsl, query, provider, on_translation=answered.append
+            )
+            translated = True
             last_known_model = translation_model
             if error is not None:
                 result = error
@@ -504,12 +652,11 @@ class ControlPlane:
                 f"Logic pipeline failure for org {organization_id}: {redact_pii(str(e))}",
                 exc_info=False
             )
+            failure = await _logic_failure(e, translated, translation, last_known_model, answered, answered_by)
             return {
                 "status": "ERROR",
-                "error": "Internal pipeline error",
+                **failure,
                 "provider_used": last_known_provider,
-                "translation_model": last_known_model,
-                RAW_LLM_OUTPUT_KEY: audit_record([translation]),
                 "latency_ms": (time.time() - start_time) * 1000
             }
 

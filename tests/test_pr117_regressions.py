@@ -116,8 +116,9 @@ def test_stats_verifier_masks_translation_exceptions(caplog):
     with caplog.at_level("ERROR"):
         result = verifier.verify_stats("What is the mean of value?", df)
 
-    assert result.status.value == "BLOCKED"
-    assert result.constraint_id == "stats_verifier.validation_error"
+    # A failed translation, as on every route (#519).
+    assert result.status.value == "UNVERIFIABLE"
+    assert result.constraint_id == "translation.failed"
     assert "secret" not in result.agent_message
     assert "secret" not in str(result.developer_fields)
     assert "secret" not in caplog.text

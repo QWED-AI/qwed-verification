@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 INTERNAL_VERIFICATION_ERROR = "Internal verification error"
 INTERNAL_PROCESSING_ERROR = "Internal processing error"
 
-from qwed_new.core.control_plane import ControlPlane, natural_language_admission
+from qwed_new.core.control_plane import _PROVIDER_CALL_TIMEOUT_SECONDS, ControlPlane, natural_language_admission
 from qwed_new.core.route_diagnostics import (
     guard_diagnostic,
     logic_diagnostic,
@@ -248,8 +248,9 @@ class _BodySizeLimitMiddleware:
 # excess rejected (413) before any parse work starts.
 # Wall-clock bound for a single code verification run on the event loop (#445).
 _CODE_VERIFY_TIMEOUT_SECONDS = float(os.environ.get("QWED_CODE_VERIFY_TIMEOUT", "10"))
-# Wall-clock bound for a blocking provider (LLM) call run off the loop (#390).
-_PROVIDER_CALL_TIMEOUT_SECONDS = float(os.environ.get("QWED_PROVIDER_TIMEOUT", "30"))
+# The wall-clock bound for a blocking provider (LLM) call run off the loop
+# (#390), _PROVIDER_CALL_TIMEOUT_SECONDS, is the control plane's, imported
+# above, so QWED_PROVIDER_TIMEOUT is read and checked in one place (#519).
 _MAX_STATS_UPLOAD_BYTES = 10_000_000
 # #353 (CodeAnt on PR #354): the byte cap bounds transfer, not the expanded
 # in-memory frame — bound rows x columns after the parse as well.
@@ -1950,6 +1951,7 @@ from qwed_new.core.consensus_verifier import (
     advisory,
     chain_record,
     consensus_verifier,
+    stopped_diagnostic,
 )
 
 class ConsensusVerifyRequest(BaseModel):
@@ -2001,8 +2003,10 @@ async def verify_with_consensus(
     execution runtime that is unavailable, engines that are all blocked,
     and a result only one engine verified are BLOCKED, whatever the
     confidence: an answer one engine verified alone, or a claim Z3 proved
-    when no engine verified an answer (no ``final_answer`` then). Otherwise
-    a confidence below ``min_confidence`` is UNVERIFIABLE.
+    when no engine verified an answer (no ``final_answer`` then). A refused
+    question is BLOCKED, and no provider or a failed translation in every
+    engine UNVERIFIABLE, each with its cause (#519). Otherwise a confidence
+    below ``min_confidence`` is UNVERIFIABLE.
 
     The errors are the request's or the service's: 400 for an unknown mode;
     422 for a missing ``x-api-key`` header or a body that does not
@@ -2058,13 +2062,11 @@ async def verify_with_consensus(
         _safe_commit_log(log)
         return _merge_response(dr) | {"meets_requirement": False}
 
-    # All engines blocked — preserve BLOCKED status (fail-closed)
-    if result.agreement_status == "blocked":
-        dr = DiagnosticResult.blocked(
-            "Consensus verification: all engines blocked",
-            developer_fields={"agreement_status": result.agreement_status, "confidence": result.confidence, "engines_used": result.engines_used},
-        )
-        dr = _enforce_trust(advisory(dr), query=request.query, engine="consensus")
+    # All engines blocked, or stopped for a named cause (#519: a refused
+    # question is BLOCKED, no provider or a failed translation UNVERIFIABLE).
+    stopped = stopped_diagnostic(result)
+    if stopped is not None:
+        dr = _enforce_trust(advisory(stopped), query=request.query, engine="consensus")
         log = VerificationLog(
             organization_id=tenant.organization_id,
             query=request.query,

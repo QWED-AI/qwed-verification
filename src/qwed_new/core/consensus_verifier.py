@@ -15,7 +15,7 @@ Enhanced Features:
 """
 
 from typing import List, Dict, Any, Optional, Tuple, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from decimal import Decimal
 import time
@@ -34,6 +34,23 @@ import threading
 from qwed_new.core.diagnostics import DiagnosticResult, DiagnosticStatus
 from qwed_new.core.translation_record import Translation, audit_record, translation_in, translation_of
 from qwed_new.core.z3_thread import run_z3_call_blocking
+from qwed_new.core.failure_cause import (
+    CAUSES,
+    INPUT_REFUSED,
+    NO_PROVIDER,
+    TRANSLATION_CAUSES,
+    TRANSLATION_FAILED,
+    LandedTranslations,
+    cause_of,
+    deadline_after,
+    diagnostic_for,
+    message_for,
+    message_of,
+    nanoseconds,
+    now_ns,
+    wait_out,
+    wait_out_async,
+)
 from qwed_new.providers.base import TranslationRefused
 
 from .verification_context import VerificationContextDocument
@@ -45,6 +62,9 @@ _NONE_CONSENSUS_KEY = object()
 # The agreement status of a result only one engine verified (#320): one engine
 # is not a consensus, so the result is BLOCKED.
 NO_INDEPENDENT_VERIFICATION = "no_independent_verification"
+# Every engine stopped before it decided anything, for one translation cause
+# (#519: no provider, or a failed translation): UNVERIFIABLE, with the cause.
+NOT_TRANSLATED = "not_translated"
 # The message of a consensus whose engines agree (#633).
 ADVISORY_MESSAGE = (
     "Consensus verification is advisory only: engines that agree on the model's "
@@ -74,6 +94,38 @@ def advisory(result: DiagnosticResult) -> DiagnosticResult:
     )
 
 
+def stopped_diagnostic(result: Any) -> DiagnosticResult | None:
+    """The verdict of a consensus that stopped before any engine decided
+    (all engines blocked, or a named cause: #519), else None. A named cause
+    has its one verdict, as on every route: no provider or a failed
+    translation is UNVERIFIABLE, a refused question BLOCKED. It reads the
+    result's fields, so any result with them will do."""
+    fields = {
+        "agreement_status": result.agreement_status,
+        "confidence": result.confidence,
+        "engines_used": result.engines_used,
+    }
+    cause = getattr(result, "cause", None)
+    if isinstance(cause, str) and cause in CAUSES:
+        message = getattr(result, "cause_message", None)
+        return diagnostic_for(cause, message if isinstance(message, str) else None, fields)
+    if result.agreement_status == "blocked":
+        return DiagnosticResult.blocked("Consensus verification: all engines blocked", developer_fields=fields)
+    return None
+
+
+def _cause_fields(exc: BaseException, translated: bool) -> dict[str, str | None]:
+    """The named cause an engine's exception stands for (#519), with the
+    message a caller may see for it, as EngineResult fields. Only the
+    translation step names one: once the model has answered, an error is
+    the engine's, the code check's or the sandbox's, and has no cause, so
+    the engine stays BLOCKED, as before."""
+    if translated:
+        return {"cause": None, "cause_message": None}
+    cause = cause_of(exc)
+    return {"cause": cause, "cause_message": message_of(exc, cause)}
+
+
 def _first(translations: List[Translation]) -> Optional[Translation]:
     """The translation an engine asked for, or None when it got none."""
     return translations[0] if translations else None
@@ -90,14 +142,23 @@ def _keep_refused(error: BaseException, translations: Optional[List[Translation]
 class _EngineCall:
     """A translating engine, with the list of translations this request
     owns (#578). The engine adds its translation as soon as the model
-    returns, so a timeout or failure branch can still keep it."""
+    returns, so a timeout or failure branch can still keep it. The list
+    notes when each translation landed, and the call when the engine
+    started, so a timeout reads both as at its deadline (#519)."""
 
     def __init__(self, method: Callable[[str, List[Translation]], "EngineResult"]):
         self.method = method
-        self.translations: List[Translation] = []
+        self.translations: LandedTranslations = LandedTranslations()
+        self.started_ns: int | None = None
 
     def __call__(self, query: str) -> "EngineResult":
+        self.started_ns = now_ns()
         return self.method(query, self.translations)
+
+    def started_before(self, deadline_ns: int) -> bool:
+        """Whether the engine had started by ``deadline_ns``."""
+        started = self.started_ns
+        return started is not None and started < deadline_ns
 
 
 def _snapshot(call: Any) -> Optional[Translation]:
@@ -107,6 +168,55 @@ def _snapshot(call: Any) -> Optional[Translation]:
     if isinstance(call, _EngineCall):
         return _first(list(call.translations))
     return None
+
+
+def _timed_out(call: Any, deadline_ns: int) -> dict[str, Any]:
+    """``_read_timeout``, read at or after ``deadline_ns`` on a thread that
+    may block: the parallel and sequential paths."""
+    if isinstance(call, _EngineCall):
+        # A wait may end up to its clock's resolution early.
+        wait_out(deadline_ns)
+    return _read_timeout(call, deadline_ns)
+
+
+async def _timed_out_async(call: Any, deadline_ns: int) -> dict[str, Any]:
+    """``_read_timeout``, read at or after ``deadline_ns`` on the event
+    loop, which sleeps out the rest of an early end without blocking: the
+    async collector."""
+    if isinstance(call, _EngineCall):
+        await wait_out_async(deadline_ns)
+    return _read_timeout(call, deadline_ns)
+
+
+def _read_timeout(call: Any, deadline_ns: int) -> dict[str, Any]:
+    """The fields of an engine that ran out of time at ``deadline_ns``: its
+    translation, where it had one, and its cause (#519). A translating
+    engine that had started by the deadline and had no translation by it
+    was still waiting for the model, so it is a failed translation, as a
+    provider call out of time is on every route. An engine that had its
+    translation, and so stopped after it, names no cause, nor does one that
+    does not translate, nor one that had not started (queued behind other
+    work, it asked the model nothing): each stays BLOCKED, as before.
+
+    Both are read as at the deadline, from when the engine started and when
+    its translation landed, not from whether a cancel still reached it: the
+    worker runs on after the deadline, and what it does then, starting or
+    translating, does not change the cause, though a late translation is
+    kept for the audit row (#578). The translation and the in-time check
+    come from one read, so they cannot disagree. The caller reads at or
+    after the deadline (``_timed_out``, ``_timed_out_async``), so a
+    translation that lands in time is counted."""
+    if not isinstance(call, _EngineCall):
+        return {"translation": None}
+    kept, in_time = call.translations.read(deadline_ns)
+    translation = _first(kept)
+    if call.started_before(deadline_ns) and not in_time:
+        return {
+            "translation": translation,
+            "cause": TRANSLATION_FAILED,
+            "cause_message": message_of(TimeoutError(), TRANSLATION_FAILED),
+        }
+    return {"translation": translation}
 
 
 def chain_record(chain: Any) -> Optional[str]:
@@ -149,6 +259,10 @@ class EngineResult:
     # provider and model (#578, #585); None when the engine had no translation.
     # Left out of repr: it is the model's unsanitised output.
     translation: Optional[Translation] = field(default=None, repr=False)
+    # Why the engine stopped before deciding, where a named cause did (#519:
+    # failure_cause), with the message a caller may see for it.
+    cause: str | None = None
+    cause_message: str | None = None
 
     def provenance(self) -> Dict[str, Optional[str]]:
         """The provider and model whose translation this engine decided on,
@@ -173,6 +287,11 @@ class ConsensusResult:
     # code that reads them keeps working.
     proof_ref: Optional[str] = None
     verified_evidence: Optional[Dict[str, Any]] = None
+    # The named cause the consensus stopped for, where one did (#519): a
+    # refused question, or every engine stopped for the same translation
+    # cause. ``cause_message`` is the message a caller may see for it.
+    cause: str | None = None
+    cause_message: str | None = None
 
     def raw_llm_output(self) -> Optional[str]:
         """Every engine's translation, as the audit record (#578), or None
@@ -194,6 +313,8 @@ class ConsensusResult:
             "engines_used": self.engines_used,
             "advisory_only": True,
         }
+        if self.cause in CAUSES:
+            return diagnostic_for(self.cause, self.cause_message, developer_fields)
         status_val = self.status.value if isinstance(self.status, DiagnosticStatus) else str(self.status)
         if status_val == DiagnosticStatus.VERIFIED.value:
             status_val = DiagnosticStatus.UNVERIFIABLE.value
@@ -572,6 +693,8 @@ class ConsensusVerifier:
             total_latency_ms=total_latency,
             parallel_execution=parallel and len(engine_methods) > 1,
             status=consensus.get("diagnostic_status"),
+            cause=consensus.get("cause"),
+            cause_message=consensus.get("cause_message"),
         )
     
     # =========================================================================
@@ -608,7 +731,8 @@ class ConsensusVerifier:
 
         results = []
         mono_start_ns = time.monotonic_ns()
-        deadline_ns = mono_start_ns + int(timeout_seconds * 1_000_000_000)
+        # Whole nanoseconds, exactly, as every deadline here (#519).
+        deadline_ns = mono_start_ns + nanoseconds(timeout_seconds)
 
         # #352: a DEDICATED per-call executor sized to the engine list.
         # Every engine starts immediately (nothing ever queues), so a hung
@@ -668,6 +792,8 @@ class ConsensusVerifier:
             total_latency_ms=total_latency,
             parallel_execution=True,
             status=consensus.get("diagnostic_status"),
+            cause=consensus.get("cause"),
+            cause_message=consensus.get("cause_message"),
         )
 
     def _refused(self, query: str, start_time: float) -> Optional[ConsensusResult]:
@@ -683,6 +809,9 @@ class ConsensusVerifier:
         try:
             TranslationLayer().screen_question(query)
         except TranslationRefused:
+            # The screen's reason names the pattern it matched: the
+            # translator's log keeps it, the caller reads the cause's own
+            # message (#519).
             return ConsensusResult(
                 final_answer=None,
                 confidence=0.0,
@@ -691,6 +820,9 @@ class ConsensusVerifier:
                 verification_chain=[],
                 total_latency_ms=(time.time() - start_time) * 1000,
                 status=DiagnosticStatus.BLOCKED,
+                # The same cause as on every route (#519).
+                cause=INPUT_REFUSED,
+                cause_message=message_for(INPUT_REFUSED),
             )
         return None
 
@@ -743,13 +875,14 @@ class ConsensusVerifier:
                 continue
             if timed_out:
                 # The pool is sized to the engine list, so an unfinished task
-                # at expiry was genuinely running past its budget — record it
-                # with the breaker.
-                results.append(self._blocked_engine_result(
+                # at expiry was genuinely running past its budget: record it
+                # with the breaker now, before the wait below, where the
+                # request can be cancelled, so a timeout seen counts once.
+                blocked = self._blocked_engine_result(
                     engine_name, "timeout", "Timeout",
                     latency_ms=(time.monotonic_ns() - mono_start_ns) // 1_000_000,
-                    translation=_snapshot(call),
-                ))
+                )
+                results.append(replace(blocked, **await _timed_out_async(call, deadline_ns)))
                 continue
             self._record_engine_result(engine_name, result)
             results.append(result)
@@ -819,13 +952,16 @@ class ConsensusVerifier:
         latency_ms: float = 0,
         record: bool = True,
         translation: Optional[Translation] = None,
+        cause: str | None = None,
+        cause_message: str | None = None,
     ) -> EngineResult:
         """Build a BLOCKED EngineResult and record it with the circuit breaker.
 
         #340: hung engines never complete, so without recording here the
         breaker never opens and every tenant's consensus requests keep
         degrading until restart. ``translation`` is what the model returned
-        before the engine stopped, where it had (#578).
+        before the engine stopped, where it had (#578); ``cause`` is the
+        named cause it stopped for, where it is one (#519).
         """
         blocked = EngineResult(
             engine_name=engine_name,
@@ -837,6 +973,8 @@ class ConsensusVerifier:
             error=error,
             status="BLOCKED",
             translation=translation,
+            cause=cause,
+            cause_message=cause_message,
         )
         if record:
             self._record_engine_result(engine_name, blocked, answered=False)
@@ -866,6 +1004,7 @@ class ConsensusVerifier:
         # outside the inner try, so it escaped as an uncaught HTTP 500 after
         # blocking the caller for the full timeout. Catch it, cancel the
         # not-yet-started futures, and degrade to partial BLOCKED results.
+        deadline_ns = deadline_after(_ENGINE_TIMEOUT_SECONDS)
         try:
             for future in as_completed(futures, timeout=_ENGINE_TIMEOUT_SECONDS):
                 engine_name = futures[future]
@@ -891,7 +1030,7 @@ class ConsensusVerifier:
                     results.append(self._blocked_engine_result(
                         engine_name, "parallel_timeout",
                         f"Engine timed out after {_ENGINE_TIMEOUT_SECONDS}s",
-                        translation=_snapshot(calls[engine_name]),
+                        **_timed_out(calls[engine_name], deadline_ns),
                     ))
         
         return results
@@ -907,6 +1046,7 @@ class ConsensusVerifier:
         for engine_name, method in engines:
             if self._is_engine_available(engine_name):
                 future = self._executor.submit(method, query)
+                deadline_ns = deadline_after(_ENGINE_TIMEOUT_SECONDS)
                 try:
                     result = future.result(timeout=_ENGINE_TIMEOUT_SECONDS)
                     self._record_engine_result(engine_name, result)
@@ -916,7 +1056,7 @@ class ConsensusVerifier:
                     results.append(self._blocked_engine_result(
                         engine_name, "sequential_timeout",
                         f"Engine timed out after {_ENGINE_TIMEOUT_SECONDS}s",
-                        translation=_snapshot(method),
+                        **_timed_out(method, deadline_ns),
                     ))
                 except Exception as e:
                     results.append(self._blocked_engine_result(
@@ -940,8 +1080,10 @@ class ConsensusVerifier:
         """Verify using SymPy math engine."""
         start = time.time()
         translations = [] if translations is None else translations
+        translated = False
         try:
             expression, expected = self._parse_math_query(query, translations)
+            translated = True
             result = self.math_verifier.verify_math(expression, expected)
             latency = (time.time() - start) * 1000
             is_correct = result.get("is_correct", False)
@@ -956,20 +1098,8 @@ class ConsensusVerifier:
                 success=is_correct,
                 status="VERIFIED" if is_correct else "UNVERIFIABLE",
             )
-        except ValueError as e:
-            # Translation failure — blocked, not fabricated
-            return EngineResult(
-                engine_name="SymPy",
-                translation=_first(translations),
-                method="symbolic_math",
-                result=None,
-                confidence=0.0,
-                latency_ms=(time.time() - start) * 1000,
-                success=False,
-                error=str(e),
-                status="BLOCKED",
-            )
         except Exception as e:
+            # A failed translation or engine error: blocked, not fabricated.
             return EngineResult(
                 engine_name="SymPy",
                 translation=_first(translations),
@@ -980,14 +1110,17 @@ class ConsensusVerifier:
                 success=False,
                 error=str(e),
                 status="BLOCKED",
+                **_cause_fields(e, translated),
             )
     
     def _verify_with_code(self, query: str, translations: Optional[List[Translation]] = None) -> EngineResult:
         """Verify by executing Python code in the secure Docker sandbox."""
         start = time.time()
         translations = [] if translations is None else translations
+        translated = False
         try:
             code = self._generate_verification_code(query, translations)
+            translated = True
 
             safety_result = self.code_verifier.verify_code(code)
             if not safety_result.is_verified or safety_result.developer_fields.get("is_valid") is not True:
@@ -1030,6 +1163,7 @@ class ConsensusVerifier:
                 result=None, confidence=0.0,
                 latency_ms=(time.time() - start) * 1000, success=False,
                 error=str(e), status="BLOCKED",
+                **_cause_fields(e, translated),
             )
     
     # The Z3 engine's status for each verdict prove_from_dsl gives (#659),
@@ -1057,13 +1191,21 @@ class ConsensusVerifier:
         """
         start_ns = time.monotonic_ns()
         translations = [] if translations is None else translations
-        dsl_code, variables, _provider, refused, claim_dsl, _model, translation = (
-            self.logic_verifier.translate_to_dsl(query)
+        # The bridge hands over the translation as soon as the model has
+        # answered, before the DSL step, so an engine out of time while that
+        # step runs keeps it and names no cause (#519).
+        dsl_code, variables, _provider, refused, claim_dsl, _model, _translation = (
+            self.logic_verifier.translate_to_dsl(
+                query, on_translation=lambda found: translations.append(found.for_engine("Z3"))
+            )
         )
-        if translation is not None:
-            translations.append(translation.for_engine("Z3"))
         if refused is not None:
-            return self._z3_result("BLOCKED", None, refused.error, translations, start_ns)
+            # The bridge names the cause it stopped for, where it is one (#519).
+            cause = refused.constraint_id if refused.constraint_id in CAUSES else None
+            return self._z3_result(
+                "BLOCKED", None, refused.error, translations, start_ns,
+                cause=cause, cause_message=refused.error if cause else None,
+            )
         if claim_dsl is None:
             return self._z3_result(
                 "UNVERIFIABLE", None,
@@ -1080,6 +1222,7 @@ class ConsensusVerifier:
     def _z3_result(
         status: str, verdict: Optional[str], reason: Optional[str],
         translations: List[Translation], start_ns: int,
+        cause: str | None = None, cause_message: str | None = None,
     ) -> EngineResult:
         """The Z3 engine's result: ``verdict`` is prove_from_dsl's, or None
         where no proof ran. ``start_ns`` is a ``time.monotonic_ns()``
@@ -1093,6 +1236,8 @@ class ConsensusVerifier:
             success=status == "VERIFIED",
             error=reason,
             status=status,
+            cause=cause,
+            cause_message=cause_message,
         )
     
     def _verify_with_stats(self, query: str) -> EngineResult:
@@ -1176,12 +1321,26 @@ class ConsensusVerifier:
 
         if not active:
             blocked_errors = [r.error for r in blocked if r.error]
+            cause, cause_message = self._shared_cause(blocked)
+            if cause in TRANSLATION_CAUSES:
+                # Nothing was translated, so nothing was decided (#519).
+                return {
+                    "answer": None,
+                    "confidence": 0.0,
+                    "status": NOT_TRANSLATED,
+                    "diagnostic_status": DiagnosticStatus.UNVERIFIABLE,
+                    "errors": blocked_errors,
+                    "cause": cause,
+                    "cause_message": cause_message,
+                }
             return {
                 "answer": None,
                 "confidence": 0.0,
                 "status": "blocked",
                 "diagnostic_status": DiagnosticStatus.BLOCKED,
                 "errors": blocked_errors,
+                "cause": cause,
+                "cause_message": cause_message,
             }
 
         successful = [r for r in active if r.success]
@@ -1246,6 +1405,24 @@ class ConsensusVerifier:
             "status": status,
             "diagnostic_status": DiagnosticStatus.UNVERIFIABLE,
         }
+
+    @staticmethod
+    def _shared_cause(blocked: list[EngineResult]) -> tuple[str | None, str | None]:
+        """The named cause every blocked engine stopped for, with its
+        message (#519). Engines that each stopped for a translation cause
+        translated nothing between them: the cause is no provider where one
+        of them had none (the setting to fix), else a failed translation.
+        Otherwise the engines must share one cause; if they do not, it is
+        ``(None, None)``, and the consensus is BLOCKED with no cause, as
+        before."""
+        causes = {r.cause for r in blocked}
+        if causes and causes <= TRANSLATION_CAUSES:
+            cause = NO_PROVIDER if NO_PROVIDER in causes else TRANSLATION_FAILED
+        elif len(causes) == 1 and None not in causes:
+            (cause,) = causes
+        else:
+            return None, None
+        return cause, next((r.cause_message for r in blocked if r.cause == cause and r.cause_message), None)
 
     @staticmethod
     def _verified_results(results: List[EngineResult]) -> List[EngineResult]:

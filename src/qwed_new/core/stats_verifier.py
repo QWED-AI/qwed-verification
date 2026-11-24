@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 import ast
 
+from qwed_new.core.failure_cause import diagnostic_for_exception
 from qwed_new.providers.base import ProviderConfigError
 
 from .diagnostics import AdvisoryCheck, DiagnosticResult, DiagnosticStatus, enforce_trust_decision
@@ -572,6 +573,8 @@ class StatsVerifier:
             - execution failure                      -> BLOCKED (stats_verifier.execution_failure)
             - security/validation failure            -> BLOCKED (stats_verifier.validation_error)
             - secure sandbox unavailable             -> BLOCKED (stats_verifier.runtime_unavailable)
+            - no model configured / code not written -> UNVERIFIABLE (translation.no_provider /
+              translation.failed), a refused query  -> BLOCKED (security.input_refused) (#519)
 
             agent_message is agent-safe (no raw subprocess output or internal
             identifiers leak); execution evidence is retained in developer_fields.
@@ -608,31 +611,28 @@ class StatsVerifier:
         try:
             code = self.translator.translate_stats(query, columns, provider=provider)
             translations.append(translation_of(self.translator, "stats", code, provider))
-        except ProviderConfigError as e:
-            # The setting to fix (no model, or an unknown ACTIVE_PROVIDER), not
-            # a provider failure: it reaches the operator and the caller, as on
-            # the logic path. Its message carries nothing from a provider.
-            logger.warning("Stats code generation stopped: %s", e)
-            return DiagnosticResult.blocked(
-                agent_message=str(e),
-                developer_fields={
-                    "constraint_id": CONSTRAINT_VALIDATION_ERROR,
-                    "is_valid": False,
-                    "is_error": True,
-                    "columns": columns,
-                    "execution_time_ms": _elapsed(),
-                },
-            )
+            if not isinstance(code, str) or not code.strip():
+                # A reply with no code is no translation (#519); the audit
+                # row keeps it.
+                raise ValueError("The model returned no code")
         except Exception as e:
-            logger.error(
-                "Stats code generation failed (exception_type=%s)",
-                type(e).__name__,
-                exc_info=False,
-            )
-            return DiagnosticResult.blocked(
-                agent_message="Statistical verification could not be completed because the request could not be translated.",
+            # One verdict for the cause, as on every route (#519): no model
+            # configured (the message names the setting to fix) or a failed
+            # translation, a blank reply among them, is UNVERIFIABLE, a
+            # refused query BLOCKED. A message that is not a
+            # ProviderConfigError's or a refusal's carries nothing from the
+            # provider.
+            if isinstance(e, ProviderConfigError):
+                logger.warning("Stats code generation stopped: %s", e)
+            else:
+                logger.error(
+                    "Stats code generation failed (exception_type=%s)",
+                    type(e).__name__,
+                    exc_info=False,
+                )
+            return diagnostic_for_exception(
+                e,
                 developer_fields={
-                    "constraint_id": CONSTRAINT_VALIDATION_ERROR,
                     "is_valid": False,
                     "is_error": True,
                     "columns": columns,

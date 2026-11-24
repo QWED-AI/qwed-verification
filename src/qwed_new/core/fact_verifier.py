@@ -19,6 +19,7 @@ import hashlib
 import logging
 from collections import Counter
 
+from qwed_new.core.failure_cause import diagnostic_for_exception
 from qwed_new.providers.base import ProviderConfigError, TranslationRefused
 
 from qwed_new.core.diagnostics import (
@@ -245,11 +246,11 @@ class FactVerifier:
         }
         if refusal is not None:
             # The request is refused rather than answered without the advisory
-            # it asked for. Its message carries nothing from a provider, and
-            # what the deterministic pass computed is kept.
-            constraint_id, refused = refusal
-            developer_fields["constraint_id"] = constraint_id
-            return DiagnosticResult.blocked(str(refused), developer_fields)
+            # it asked for, with its cause's verdict, as on every route (#519):
+            # no model configured is UNVERIFIABLE, a refused claim or context
+            # BLOCKED. Its message carries nothing from a provider, and what
+            # the deterministic pass computed is kept.
+            return diagnostic_for_exception(refusal, developer_fields)
         if advisory_checks:
             developer_fields["advisory_checks"] = advisory_checks
 
@@ -646,12 +647,13 @@ class FactVerifier:
 
     def _llm_advisory(
         self, claim: str, context: str, provider: str, translations: List[Translation]
-    ) -> Tuple[Optional[AdvisoryCheck], Optional[Tuple[str, ValueError]]]:
+    ) -> Tuple[Optional[AdvisoryCheck], Optional[ValueError]]:
         """The model advisory, or why the request is refused instead.
 
         Returns ``(advisory, None)``, the advisory None when the provider
-        failed; or ``(None, (constraint_id, refused))`` when the request is
-        refused rather than answered without the advisory it asked for. An
+        failed; or ``(None, refused)`` when the request is refused rather
+        than answered without the advisory it asked for (#519 names the
+        cause from the exception). An
         advisory names the provider and model that gave it (#585), and is
         added to ``translations`` (#578).
         """
@@ -661,11 +663,11 @@ class FactVerifier:
             # The provider the request names cannot run (an unknown name,
             # or no model): the setting to fix, not a provider failure.
             logger.warning("Fact advisory stopped: %s", e)
-            return None, ("fact_verifier.provider_config_error", e)
+            return None, e
         except TranslationRefused as e:
             # The claim or context was refused before the model saw it (#632).
             logger.warning("Fact advisory refused: %s", e)
-            return None, ("fact_verifier.translation_refused", e)
+            return None, e
         if llm_result is None:
             return None, None
         # Read on this thread, right after the call (#585). An empty answer

@@ -6,6 +6,7 @@ It selects the active provider based on configuration.
 """
 
 import ast
+import logging
 from typing import Any
 
 from qwed_new.config import settings, ProviderType
@@ -21,6 +22,8 @@ from qwed_new.providers.openai_direct import OpenAIDirectProvider
 from qwed_new.providers.gemini_provider import GeminiProvider
 from qwed_new.providers.openai_compat import OpenAICompatProvider
 from qwed_new.providers.ollama_provider import OllamaProvider
+
+logger = logging.getLogger(__name__)
 
 
 class SecurityError(ValueError):
@@ -216,12 +219,20 @@ class TranslationLayer:
         if not (0.0 <= task.confidence <= 1.0):
             raise SecurityError("Invalid confidence value")
 
+    @staticmethod
+    def _refused(reason: str) -> TranslationRefused:
+        """The refusal for ``reason``, logged here, where every route's screen
+        runs: the caller reads only its cause's message, as the reason names
+        the pattern the screen matched (#519)."""
+        logger.warning("Translation input refused: %s", reason)
+        return TranslationRefused(f"Security Policy Violation: {reason}")
+
     def _screened(self, text: str) -> str:
         """A maths or logic question, once the control plane's check passes;
         otherwise ``TranslationRefused``, with the reason it gives."""
         is_safe, reason = self._screen.detect_advanced_injection(str(text))
         if not is_safe:
-            raise TranslationRefused(f"Security Policy Violation: {reason}")
+            raise self._refused(reason)
         return text
 
     def screen_question(self, text: str) -> str:
@@ -236,7 +247,7 @@ class TranslationLayer:
         phrase patterns' cost bounded on a long context."""
         is_safe, reason = self._screen.basic_gateway.detect_injection(str(text), whole_words=True)
         if not is_safe:
-            raise TranslationRefused(f"Security Policy Violation: {reason}")
+            raise self._refused(reason)
         return text
 
     def translate(self, user_query: str, provider: str | None = None) -> MathVerificationTask:

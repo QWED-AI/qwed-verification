@@ -37,6 +37,47 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - Callers that gated execution on a `VERIFIED` consensus must stop: treat
     its result as a signal for review.
 
+- **One verdict for each cause that stops a verification (#519).** With no
+  model configured, `/verify/logic` was `BLOCKED`, `/verify/natural_language`
+  `UNVERIFIABLE` with the legacy "inconclusive" mapping, and
+  `/verify/consensus`, `/verify/stats` and `/verify/fact` (with a provider
+  named) `BLOCKED`, each with a message of its own. Each cause now has one
+  verdict on every route, named in `constraint_id`, with an audit row, and
+  none is admitted. `/verify/fact`, where the model only adds an advisory,
+  is the exception for a provider failing or running out of time (below).
+  - `translation.no_provider` (no model configured, or a provider QWED does
+    not know) and `translation.failed` (the provider failed or ran out of
+    time, or its translation could not be used) are `UNVERIFIABLE`. On
+    `/verify/fact` only the first applies: a provider failing there, or
+    running out of time, is set out below.
+  - `security.input_refused` (the injection screen refused the caller's
+    text), `security.output_refused` (the safety check refused the model's
+    translation) and `policy.blocked` are `BLOCKED`.
+  - An error after the model has answered stays `BLOCKED`: it is
+    `control_plane.pipeline_error` on `/verify/natural_language` and
+    `/verify/logic`, and names no cause in a consensus engine.
+  - A refused question gets a fixed message. The screen's reason, which
+    `/verify/logic`'s `error` and the `/verify/fact` message showed before,
+    stays in the server log.
+  - A consensus in which every engine stopped for a translation cause, the
+    same one or not, is `UNVERIFIABLE`, with `agreement_status:
+    not_translated` and that cause (`translation.no_provider` where any
+    engine had no provider). One in which every engine was refused for the
+    same cause is `BLOCKED` with it. Any other mix, or an engine blocked for
+    no named cause, stays `BLOCKED`, "all engines blocked", as before. An
+    engine still waiting for the model at its deadline is
+    `translation.failed`; one that had not started names no cause.
+  - Batch items have their route's verdict.
+  - `QWED_PROVIDER_TIMEOUT` must be a finite number of seconds above zero,
+    or the server does not start. Before, zero or less ended every provider
+    call at once, and infinity bounded none.
+  - On `/verify/fact`, the model only adds an advisory to the deterministic
+    verdict. A provider that fails at run time leaves that verdict, without
+    the advisory and with no cause, as before, and a provider call out of
+    time still answers 503 (#671).
+  - Callers that read a cause from a route's status or message should read
+    `constraint_id`.
+
 - **sqlglot 28.0.0 or later is required.** `pyproject.toml` allowed 20.0.0,
   but the SQL checks are written against 28.0.0 and later. On 20.0.0, 35 of
   the 849 SQL tests fail, each because a query is refused where it should be
