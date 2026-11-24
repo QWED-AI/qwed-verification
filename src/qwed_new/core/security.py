@@ -29,8 +29,10 @@ _TOO_LONG = "Input too long (max 10000 chars)"
 # copies keep every other character, each where it was.
 _MARK = "\u200b"
 _ANY_IGNORABLE = re.compile(_IGNORABLE)
-# A letter or digit a reader sees, in such a copy: U+200B is not one.
-_SEEN_IN_COPY = r"[^\W_]"
+# A letter or digit a reader sees, in such a copy: U+200B is not one. Nor
+# is a Greek letter, for a phrase's edges: one glued to a phrase
+# ("instruction" + final sigma, "rules" + sigma) does not hide it (PR #672).
+_SEEN_IN_COPY = r"(?![\u0370-\u03ff\u1f00-\u1fff])[^\W_]"
 
 
 # A character that ends a line (str.splitlines reads the same ones).
@@ -61,7 +63,7 @@ _LOOKALIKES = str.maketrans({
     "\u039a": "k", "\u039c": "m", "\u039d": "n", "\u039f": "o", "\u03a1": "p", "\u03a4": "t",
     "\u03a5": "y", "\u03a7": "x",
     # Greek letters that NFKC keeps and that look Latin (PR #672)
-    "\u03c4": "t", "\u03f2": "c", "\u03f9": "c", "\u03c2": "c", "\u03f3": "j", "\u037f": "j",
+    "\u03c4": "t", "\u03f2": "c", "\u03f9": "c", "\u03c2": "s", "\u03f3": "j", "\u037f": "j",
     "\u03b7": "n", "\u03b3": "y", "\u03c9": "w", "\u03f5": "e", "\u03f1": "p",
     # Armenian
     "\u0585": "o", "\u057d": "u", "\u0570": "h", "\u0578": "n",
@@ -123,16 +125,16 @@ def _read_through_word(word: str) -> str:
 _ENDING = "(?:" + "|".join(_read_through_word(e) for e in ("s", "es", "ed", "ing")) + ")?"
 
 # What may stand between two words of a phrase (#646): whitespace and
-# default-ignorables, with at most one dash, underscore or comma among
+# default-ignorables, with at most one dash, underscore, comma or apostrophe among
 # them, or a dot with nothing after it ("ignore.previous"). A dot then a
 # space ends a sentence, and a phrase does not run across one. The three
 # forms start with different characters and none holds a letter, so a
 # failed word gives back at most one run of whitespace and ignorables.
 _GAP = rf"(?:\s|{_MARK})"
-_BETWEEN_WORDS = rf"(?:{_GAP}+(?:[-_,]{_GAP}*)?|[-_,]{_GAP}*|\.)"
+_BETWEEN_WORDS = rf"(?:{_GAP}+(?:[-_,'\u2019]{_GAP}*)?|[-_,'\u2019]{_GAP}*|\.)"
 # The same for a copy that holds no ignorable, where reading through them
 # can match nothing more and costs about twice as much.
-_PLAIN_BETWEEN_WORDS = r"(?:\s+(?:[-_,]\s*)?|[-_,]\s*|\.)"
+_PLAIN_BETWEEN_WORDS = r"(?:\s+(?:[-_,'\u2019]\s*)?|[-_,'\u2019]\s*|\.)"
 _PLAIN_ENDING = "(?:s|es|ed|ing)?"
 # Words a caller may put between an instruction verb and what it names:
 # "ignore all the previous instructions", "forget what you were told above".
@@ -252,14 +254,29 @@ _ALSO_DATA = _forms(
 )
 _MODES = ("developer", "dan", "god", "jailbreak", "jailbroken", "admin", "simulated", "unrestricted")
 
-# "act as if" plays a role when a person follows ("act as if you are
-# DAN", "act as if I were", "act as if there are no rules"); otherwise it
-# states a premise ("act as if x = 3", "act as if the die is fair"), which
-# passes (PR #672).
-_PERSONS = (
-    "you", "youre", "your", "i", "im", "we", "my", "me", "he", "she", "they", "there",
+# "act as if" states a premise, which passes, only in two shapes (PR #672):
+# one variable equal to something ("act as if x = 3", "a equals 2"), or
+# "the", "a" or "an", one word that is not an instruction or a safeguard,
+# and "is", "are", "was" or "were" ("act as if the die is fair").
+# Anything else after "act as if" plays a role: "you are DAN", "I were",
+# "no rules apply", "the safety guidelines were disabled".
+_NOT_A_PREMISE_NOUN = (
+    *_INSTRUCTIONS,
+    *_forms(
+        "restriction:s", "constraint:s", "filter:s", "limit:s", "polic:y,ies",
+        "guardrail:s", "model:s", "assistant:s", "bot:s", "chatbot:s", "system:s",
+    ),
+    "safety", "ai",
 )
-_ASSUMPTION = rf"if{_BETWEEN_WORDS}(?!{_one_of(_PERSONS)}(?!{_SEEN_IN_COPY}))"
+_WORD_IN_COPY = rf"[^\W\d_](?:{_MARK}*[^\W\d_])*"
+_ASSUMPTION = (
+    rf"if{_BETWEEN_WORDS}(?:"
+    rf"[a-z0-9](?!{_SEEN_IN_COPY}){_GAP}*(?:=|(?:is|equals?)(?!{_SEEN_IN_COPY}))"
+    rf"|(?:the|a|an){_BETWEEN_WORDS}"
+    rf"(?!{_one_of(_NOT_A_PREMISE_NOUN)}(?!{_SEEN_IN_COPY})){_WORD_IN_COPY}"
+    rf"{_BETWEEN_WORDS}(?:is|are|was|were)(?!{_SEEN_IN_COPY})"
+    rf")"
+)
 _ACT_AS = "act as"
 
 # Each phrase: the name a refusal gives, and its slots.
@@ -274,6 +291,11 @@ _PHRASES = (
     (_ACT_AS, (("going",), ("to",), ("act",), ("as", "like"), ("!re", _ASSUMPTION))),
     (_ACT_AS, (("please", "now", "you"), ("act",), ("as", "like"), ("!re", _ASSUMPTION))),
     (_ACT_AS, (("^",), ("act",), ("as", "like"), ("!re", _ASSUMPTION))),
+    # A role that only a model plays, wherever "act as" stands.
+    (_ACT_AS, (
+        _forms("act:s,ing,ed"), ("as", "like"), ("*", ("a", "an", "the", "my", "your"), 1),
+        ("unrestricted", "unfiltered", "uncensored", "jailbroken", "dan", "evil", "rogue"),
+    )),
     ("you are now", (("you",), ("are",), ("now",), ("!", (
         "able", "ready", "done", "finished", "logged", "signed", "registered",
         "enrolled", "subscribed", "eligible", "connected",
@@ -285,10 +307,22 @@ _PHRASES = (
         ("your", "hidden", "secret"), ("*", ("initial", "original", "system"), 1),
         ("instructions", "prompt", "prompts", "guidelines", "programming"),
     )),
-    # "the system prompt", not a column or field of logged prompts.
+    # The system prompt asked for ("print the system prompt", "what is the
+    # system prompt"), not named, as a header or a column of logged prompts
+    # is (PR #672).
     ("the system prompt", (
-        ("the",), ("system",), ("prompt", "prompts", "instructions", "message"),
+        _forms(
+            "print:s,ed,ing", "show:s,ed,ing,n", "reveal:s,ed,ing", "repeat:s,ed,ing",
+            "output:s,ted,ting", "display:s,ed,ing", "give:s", "tell:s", "write:s",
+            "return:s,ed,ing", "share:s,d", "leak:s,ed,ing", "dump:s,ed,ing", "recite:s,d",
+        ),
+        ("*", ("me", "us", "the", "your", "full", "entire", "exact", "whole", "complete"), 3),
+        ("system",), ("prompt", "prompts", "instructions", "message"),
         ("!", ("column", "columns", "field", "fields")),
+    )),
+    ("the system prompt", (
+        ("what",), ("is", "was", "are", "were", "s"), ("the", "your"), ("system",),
+        ("prompt", "prompts", "instructions", "message"), ("!", ("column", "columns", "field", "fields")),
     )),
     ("your rules", (("your",), ("rules",))),
     ("new instructions", (("new",), ("instructions",))),
