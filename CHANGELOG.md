@@ -37,6 +37,14 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - Callers that gated execution on a `VERIFIED` consensus must stop: treat
     its result as a signal for review.
 
+- **sqlglot 28.0.0 or later is required.** `pyproject.toml` allowed 20.0.0,
+  but the SQL checks are written against 28.0.0 and later. On 20.0.0, 35 of
+  the 849 SQL tests fail, each because a query is refused where it should be
+  admitted or is refused for another reason, and the function catalogue does
+  not sort five kinds that 20.0.0 parses. `pip install qwed` now asks for
+  `sqlglot>=28.0.0`; the server image and `requirements.txt` already pin
+  30.25.0.
+
 ### Fixed
 
 - **The Z3 engine in `maximum` consensus runs (#659).** It failed on every
@@ -141,6 +149,20 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - A key put into one of these shapes on purpose is read out, and
     `/verify/code` still reports a 40-character commit hash in code as a
     secret.
+
+- **`FIND_IN_SET`, `ST_X` and `ST_Y` with sqlglot 30.34.0.** That release
+  parses each into a function kind of its own, and `SQLVerifier` and
+  `SQLGuard` refuse a kind their catalogue has not sorted, so any query
+  calling one was refused where sqlglot 30.34.0 is installed. The server
+  image pins 30.25.0; `pip install qwed` takes the newest.
+  - Each computes only from its arguments, so all three are admitted, on
+    30.34.0 and on older sqlglot, which reads them as calls by name. Before,
+    `ST_X` and `ST_Y` were refused on every version.
+  - Still refused: a call through a schema, a quoted or misspelt name, and
+    any call inside the arguments that is refused on its own, such as
+    `load_file`, `getenv` or `sleep`.
+  - A test now fails when the installed sqlglot parses a function kind the
+    catalogue has not sorted.
 
 ## [11.0.0] - 2026-11-19
 
