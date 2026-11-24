@@ -97,9 +97,9 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - A phrase is a sequence of words: an instruction verb, up to four
     qualifiers and what it names ("ignore all the prior instructions"), or
     a fixed phrase such as "developer mode". Its words may be joined by
-    whitespace, invisible characters, a dash, an underscore, a comma, or a
-    dot with no space after it, and Cyrillic and Greek look-alike letters
-    are read as Latin. Orders, messages, text and similar nouns also name
+    whitespace, invisible characters, a dash, an underscore, a comma, an
+    apostrophe as in "let's", or a dot with no space after it, and Cyrillic
+    and Greek look-alike letters are read as Latin. Orders, messages, text and similar nouns also name
     data, so they count as what an override names only after a qualifier
     such as "previous" or "your": "Drop the orders under $20" passes.
   - The maths check refuses only jailbreak, sudo and role play as words of

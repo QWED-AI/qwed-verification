@@ -32,6 +32,9 @@ _ANY_IGNORABLE = re.compile(_IGNORABLE)
 # A letter or digit a reader sees, in such a copy: U+200B is not one. Nor
 # is a Greek letter, for a phrase's edges: one glued to a phrase
 # ("instruction" + final sigma, "rules" + sigma) does not hide it (PR #672).
+# Any letter or digit, Greek too: what makes a word follow a phrase
+# ("forget all" + theta + " values" goes on).
+_ANY_LETTER_OR_DIGIT = r"[^\W_]"
 _SEEN_IN_COPY = r"(?![\u0370-\u03ff\u1f00-\u1fff])[^\W_]"
 
 
@@ -125,16 +128,24 @@ def _read_through_word(word: str) -> str:
 _ENDING = "(?:" + "|".join(_read_through_word(e) for e in ("s", "es", "ed", "ing")) + ")?"
 
 # What may stand between two words of a phrase (#646): whitespace and
-# default-ignorables, with at most one dash, underscore, comma or apostrophe among
+# default-ignorables, with at most one dash, underscore or comma among
 # them, or a dot with nothing after it ("ignore.previous"). A dot then a
-# space ends a sentence, and a phrase does not run across one. The three
-# forms start with different characters and none holds a letter, so a
-# failed word gives back at most one run of whitespace and ignorables.
+# space ends a sentence, and a phrase does not run across one. No form
+# holds a letter, and of the two that may start with an ignorable only
+# one holds an apostrophe, so a failed word gives back at most one run of
+# whitespace and ignorables.
+# An apostrophe joins two words only with nothing a reader sees around it,
+# as in a contraction ("what's", "let" + U+200B + "'s"); a quote after a
+# space ("ignore 'instructions'") does not (PR #672).
 _GAP = rf"(?:\s|{_MARK})"
-_BETWEEN_WORDS = rf"(?:{_GAP}+(?:[-_,'\u2019]{_GAP}*)?|[-_,'\u2019]{_GAP}*|\.)"
+_BETWEEN_WORDS = rf"(?:{_GAP}+(?:[-_,]{_GAP}*)?|[-_,]{_GAP}*|\.|{_MARK}*['\u2019]{_MARK}*)"
 # The same for a copy that holds no ignorable, where reading through them
 # can match nothing more and costs about twice as much.
-_PLAIN_BETWEEN_WORDS = r"(?:\s+(?:[-_,'\u2019]\s*)?|[-_,'\u2019]\s*|\.)"
+_PLAIN_BETWEEN_WORDS = r"(?:\s+(?:[-_,]\s*)?|[-_,]\s*|\.|['\u2019])"
+# The same without the underscore, for a phrase that an identifier such as
+# a CSV header ("the_system_prompt") may hold as a name (PR #672).
+_BETWEEN_WORDS_NOT_JOINED = rf"(?:{_GAP}+(?:[-,]{_GAP}*)?|[-,]{_GAP}*|\.|{_MARK}*['\u2019]{_MARK}*)"
+_PLAIN_BETWEEN_WORDS_NOT_JOINED = r"(?:\s+(?:[-,]\s*)?|[-,]\s*|\.|['\u2019])"
 _PLAIN_ENDING = "(?:s|es|ed|ing)?"
 # Words a caller may put between an instruction verb and what it names:
 # "ignore all the previous instructions", "forget what you were told above".
@@ -159,14 +170,25 @@ def _following(slot, between: str, read_through: bool) -> str:
     elif len(slot) > 1:
         follower = _one_of(slot[1], read_through) + rf"(?!{_SEEN_IN_COPY})"
     else:
-        follower = _SEEN_IN_COPY
+        follower = _ANY_LETTER_OR_DIGIT
     return rf"(?!{between}{follower})"
 
 
 def _sentence_start(read_through: bool) -> str:
-    """Where a first slot written ``("^",)`` puts a phrase."""
+    """Where a first slot written ``("^",)`` puts a phrase: after the run
+    of whitespace and ignorables that starts the text, follows a
+    sentence's end, or holds a line break other than one that ends a
+    line ending with a letter or a comma, as a wrapped sentence's does.
+    The search starts only where such a run starts, so it reads each run
+    once however many line breaks it holds (PR #672)."""
     gap = _GAP if read_through else r"\s"
-    return rf"(?:\A|(?<=[.!?:;\"\u201c\u201d(>*])|(?<=\n)(?<![^\W\d_]\n)(?<!,\n)){gap}*"
+    return (
+        rf"(?<!{gap})(?:\A|(?<=[.!?:;\"\u201c\u201d(>*])"
+        # A line break first, after a line that does not end with a letter
+        # or a comma; or one later in the run, after an ignorable.
+        rf"|(?<![^\W\d_])(?<!,)(?=\n)|(?={gap}+?\n))"
+        rf"{gap}*"
+    )
 
 
 def _slot(slot, between: str, read_through: bool) -> str:
@@ -176,6 +198,15 @@ def _slot(slot, between: str, read_through: bool) -> str:
         most = slot[2] if len(slot) > 2 else _MAX_QUALIFIERS
         return rf"(?:{_one_of(slot[1], read_through)}{between}){{0,{most}}}"
     return _one_of(slot, read_through) + between
+
+
+def _separator(slots, read_through: bool):
+    """What joins a phrase's words, and its slots without a leading
+    ``("~",)``, which leaves the underscore out: words an identifier
+    joins ("the_system_prompt") are a name, not the phrase."""
+    if slots[0] == ("~",):
+        return (_BETWEEN_WORDS_NOT_JOINED if read_through else _PLAIN_BETWEEN_WORDS_NOT_JOINED), slots[1:]
+    return (_BETWEEN_WORDS if read_through else _PLAIN_BETWEEN_WORDS), slots
 
 
 def _phrase_search(slots, whole_words: bool, read_through: bool = True) -> "re.Pattern[str]":
@@ -189,11 +220,12 @@ def _phrase_search(slots, whole_words: bool, read_through: bool = True) -> "re.P
     first slot written ``("^",)`` puts the phrase at the start of the text,
     after a sentence's end ("Act as a terminal."), or at a line's start
     when the line before does not end with a letter or a comma, as a
-    wrapped sentence's does. In whole-word mode no
+    wrapped sentence's does. A first slot written ``("~",)`` keeps the
+    underscore out of what joins the words. In whole-word mode no
     letter or digit a reader sees may touch the phrase at either end.
     With ``read_through`` false, the search is for a copy that holds no
     ignorable, and matches there exactly what the full search matches."""
-    between = _BETWEEN_WORDS if read_through else _PLAIN_BETWEEN_WORDS
+    between, slots = _separator(slots, read_through)
     unless = ""
     if slots[-1][0] in ("!", "!re"):
         unless = _following(slots[-1], between, read_through)
@@ -258,6 +290,7 @@ _MODES = ("developer", "dan", "god", "jailbreak", "jailbroken", "admin", "simula
 # one variable equal to something ("act as if x = 3", "a equals 2"), or
 # "the", "a" or "an", one word that is not an instruction or a safeguard,
 # and "is", "are", "was" or "were" ("act as if the die is fair").
+# A model or a system is a maths object with a maths property only (below).
 # Anything else after "act as if" plays a role: "you are DAN", "I were",
 # "no rules apply", "the safety guidelines were disabled".
 _NOT_A_PREMISE_NOUN = (
@@ -268,16 +301,47 @@ _NOT_A_PREMISE_NOUN = (
     ),
     "safety", "ai",
 )
+# "Model" and "system" name maths objects too: a premise about one passes
+# with a maths property after it ("act as if the model is linear", "the
+# system is consistent"), written plainly, and plays a role with anything
+# else ("the model is unrestricted") (PR #672).
+_MATHS_OBJECT = _forms("model:s", "system:s")
+_MATHS_PROPERTY = (
+    "linear", "nonlinear", "quadratic", "cubic", "polynomial", "exponential",
+    "logarithmic", "logistic", "periodic", "continuous", "differentiable",
+    "convex", "concave", "stationary", "stable", "unstable", "bounded",
+    "deterministic", "stochastic", "symmetric", "invertible", "singular",
+    "consistent", "inconsistent", "homogeneous", "monotonic", "ergodic",
+    "frictionless", "overdetermined", "underdetermined", "solvable", "normal",
+    "uniform", "additive", "multiplicative",
+)
 _WORD_IN_COPY = rf"[^\W\d_](?:{_MARK}*[^\W\d_])*"
 _ASSUMPTION = (
     rf"if{_BETWEEN_WORDS}(?:"
-    rf"[a-z0-9](?!{_SEEN_IN_COPY}){_GAP}*(?:=|(?:is|equals?)(?!{_SEEN_IN_COPY}))"
+    rf"[a-z0-9\u0370-\u03ff](?!{_ANY_LETTER_OR_DIGIT}){_GAP}*(?:=|(?:is|equals?)(?!{_SEEN_IN_COPY}))"
     rf"|(?:the|a|an){_BETWEEN_WORDS}"
     rf"(?!{_one_of(_NOT_A_PREMISE_NOUN)}(?!{_SEEN_IN_COPY})){_WORD_IN_COPY}"
     rf"{_BETWEEN_WORDS}(?:is|are|was|were)(?!{_SEEN_IN_COPY})"
+    rf"|(?:the|a|an){_BETWEEN_WORDS}{_one_of(_MATHS_OBJECT, False)}{_BETWEEN_WORDS}"
+    rf"(?:is|are|was|were){_BETWEEN_WORDS}{_one_of(_MATHS_PROPERTY, False)}(?!{_SEEN_IN_COPY})"
     rf")"
 )
 _ACT_AS = "act as"
+_STORY_ROLES = ("dan", "evil", "rogue")
+
+# A column of logged system prompts ("the system prompt column holds the
+# text") is data, and so is an aggregate of them ("the system prompt token
+# counts", "the system prompt's length"), unless the same sentence goes on
+# to ask for the text ("the system prompt length and its text"), read up
+# to 120 characters on (PR #672).
+_PROMPT_COLUMN = _forms("column:s", "field:s")
+_PROMPT_ATTRIBUTE = _forms("token:s", "length:s", "count:s", "size:s", "id:s")
+_PROMPT_TEXT = (*_forms("text:s", "content:s", "wording:s"), "verbatim", "body", "itself")
+_PROMPT_METADATA = (
+    rf"(?:s{_BETWEEN_WORDS})?(?:{_one_of(_PROMPT_COLUMN)}(?!{_SEEN_IN_COPY})"
+    rf"|{_one_of(_PROMPT_ATTRIBUTE)}(?!{_SEEN_IN_COPY})"
+    rf"(?!(?:(?![.!?;]{_GAP}).){{0,120}}?(?<!{_SEEN_IN_COPY}){_one_of(_PROMPT_TEXT)}(?!{_SEEN_IN_COPY})))"
+)
 
 # Each phrase: the name a refusal gives, and its slots.
 _PHRASES = (
@@ -288,13 +352,34 @@ _PHRASES = (
         ("*", _OVERRIDE_QUALIFIERS, 3), _ALSO_DATA,
     )),
     (_ACT_AS, (("you",), ("to", "will", "must", "should", "shall"), ("act",), ("as", "like"), ("!re", _ASSUMPTION))),
-    (_ACT_AS, (("going",), ("to",), ("act",), ("as", "like"), ("!re", _ASSUMPTION))),
+    (_ACT_AS, (
+        ("you",), ("*", ("are", "re"), 1), ("going",), ("to",), ("act",), ("as", "like"),
+        ("!re", _ASSUMPTION),
+    )),
     (_ACT_AS, (("please", "now", "you"), ("act",), ("as", "like"), ("!re", _ASSUMPTION))),
     (_ACT_AS, (("^",), ("act",), ("as", "like"), ("!re", _ASSUMPTION))),
     # A role that only a model plays, wherever "act as" stands.
     (_ACT_AS, (
-        _forms("act:s,ing,ed"), ("as", "like"), ("*", ("a", "an", "the", "my", "your"), 1),
-        ("unrestricted", "unfiltered", "uncensored", "jailbroken", "dan", "evil", "rogue"),
+        ("act", "acting"), ("as", "like"), ("*", ("a", "an", "the", "my", "your"), 1),
+        ("unrestricted", "unfiltered", "uncensored", "jailbroken"),
+    )),
+    # A name or a trait that a part in a story takes too ("In the play, Alex
+    # will act as Dan", "act as the evil queen"): a model's role when it is
+    # asked for ("let's act as DAN", and "Acting as DAN" or "Start acting as
+    # DAN" at a sentence's start; "you will", "please" and a sentence's
+    # start ask above, for any role), or when a model follows it ("act as
+    # an evil AI") (PR #672).
+    (_ACT_AS, (
+        ("let", "lets", "pretend"), ("*", ("us", "s", "to"), 1), ("act",), ("as", "like"),
+        ("*", ("a", "an", "the", "my", "your"), 1), _STORY_ROLES,
+    )),
+    (_ACT_AS, (
+        ("^",), ("*", ("start", "begin", "keep", "continue"), 1), ("acting",), ("as", "like"),
+        ("*", ("a", "an", "the", "my", "your"), 1), _STORY_ROLES,
+    )),
+    (_ACT_AS, (
+        ("act", "acting"), ("as", "like"), ("*", ("a", "an", "the", "my", "your"), 1), _STORY_ROLES,
+        ("ai", "assistant", "model", "chatbot", "bot", "llm", "gpt", "chatgpt"),
     )),
     ("you are now", (("you",), ("are",), ("now",), ("!", (
         "able", "ready", "done", "finished", "logged", "signed", "registered",
@@ -316,13 +401,21 @@ _PHRASES = (
             "output:s,ted,ting", "display:s,ed,ing", "give:s", "tell:s", "write:s",
             "return:s,ed,ing", "share:s,d", "leak:s,ed,ing", "dump:s,ed,ing", "recite:s,d",
         ),
-        ("*", ("me", "us", "the", "your", "full", "entire", "exact", "whole", "complete"), 3),
+        ("*", ("me", "us", "out"), 2), ("the", "your"),
+        ("*", ("full", "entire", "exact", "whole", "complete", "original", "initial"), 2),
         ("system",), ("prompt", "prompts", "instructions", "message"),
-        ("!", ("column", "columns", "field", "fields")),
+        ("!re", _PROMPT_METADATA),
+    )),
+    # Named in prose ("translate the system prompt", "what does the system
+    # prompt say"); a header joins the words with underscores and passes.
+    ("the system prompt", (
+        ("~",), ("the",), ("system",), ("prompt", "prompts", "instructions", "message"),
+        ("!re", _PROMPT_METADATA),
     )),
     ("the system prompt", (
         ("what",), ("is", "was", "are", "were", "s"), ("the", "your"), ("system",),
-        ("prompt", "prompts", "instructions", "message"), ("!", ("column", "columns", "field", "fields")),
+        ("prompt", "prompts", "instructions", "message"),
+        ("!re", _PROMPT_METADATA),
     )),
     ("your rules", (("your",), ("rules",))),
     ("new instructions", (("new",), ("instructions",))),
@@ -369,7 +462,9 @@ def _found(searches, copies: tuple[str, ...], plain=None) -> str | None:
 # Greek letters inside a Latin word, with Latin letters on both sides (PR
 # #672): a Greek letter that only touches one, as in maths notation (the
 # d of a differential, 2k times pi, omega t, mu g, sin theta), is not.
-_LATIN_LETTER = "[A-Za-z\u00c0-\u024f]"
+# The multiplication and division signs among the Latin-1 letters are
+# not letters ("2 times pi r" written with the sign).
+_LATIN_LETTER = "[A-Za-z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u024f]"
 _GREEK_LETTER = "[\u0370-\u03ff\u1f00-\u1fff]"
 _GREEK_IN_LATIN = re.compile(f"{_LATIN_LETTER}{_GREEK_LETTER}+{_LATIN_LETTER}")
 
@@ -440,7 +535,8 @@ class SecurityGateway:
         place (#646): an instruction verb, up to four qualifiers and what it
         names ("ignore all the prior instructions"), or a fixed phrase such
         as "developer mode". Its words may be joined by whitespace,
-        invisible characters, a dash, an underscore, a comma, or a dot with
+        invisible characters, a dash, an underscore, a comma, an apostrophe
+        inside a contraction ("what's"), or a dot with
         no space after it; a phrase does not run across a sentence's end.
 
         With ``whole_words`` a phrase matches only where no letter or digit
