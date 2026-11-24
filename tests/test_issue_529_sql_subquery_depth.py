@@ -147,8 +147,8 @@ def test_a_long_union_chain_is_walked_once(monkeypatch):
 
 
 def test_tuple_children_from_older_sqlglot_are_unwrapped(monkeypatch):
-    # sqlglot 20.x, which pyproject allows, yields tuples from
-    # iter_expressions (review on #554). The walk takes the expression out.
+    # sqlglot 20.x yields tuples from iter_expressions (review on #554). The
+    # walk takes the expression out.
     from sqlglot import exp, parse_one
 
     tree = parse_one("SELECT name FROM users WHERE id IN (SELECT user_id FROM orders)", read="sqlite")

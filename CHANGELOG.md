@@ -5,7 +5,58 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
 
 ## [Unreleased]
 
+### Changed
+
+- **`/verify/consensus` is advisory only (#633).** Each engine decides a
+  model's translation of the query or, for Stats, computes a value from the
+  numbers in it, so engines that agree have not verified a claim. The route
+  now returns `UNVERIFIABLE` or `BLOCKED`, never `VERIFIED`, in every mode.
+  - Every response carries `advisory_only: true`, `meets_requirement: false`
+    and `proof_ref: null`, and none carries an attestation.
+    `ConsensusResult.proof_ref` and `verified_evidence` are always `None`.
+  - Every result passes through `advisory()`, so a status other than
+    `UNVERIFIABLE` or `BLOCKED` becomes `UNVERIFIABLE` before it reaches the
+    response, the attestation or the audit row. Each `verification_chain`
+    entry keeps its engine's own status, which can be `VERIFIED`.
+  - The Python SDK's `verify_consensus`, sync and async, reads every
+    response as advisory: `is_verified` is always false, `status` is kept
+    only when it is exactly `UNVERIFIABLE` or `BLOCKED`, and any
+    `attestation`, `proof_ref` and `admission` are dropped, even from an
+    older server.
+  - Before, a consensus was `VERIFIED` only when two distinct engines
+    verified the same answer, and none did from 10.0.0, as the Z3 engine
+    failed on every query (#659 below). Two verdicts move in `maximum`
+    mode, and none is admitted: a query that SymPy verifies and whose claim
+    Z3 proves was `BLOCKED` (`no_independent_verification`) and is now
+    `UNVERIFIABLE`; a query that only Z3 verifies was `UNVERIFIABLE` and is
+    now `BLOCKED` (`no_independent_verification`), as one engine is not a
+    consensus.
+  - A confidence below `min_confidence` and an unavailable sandbox are HTTP
+    200 answers, and the route's OpenAPI now lists 401, 403, 408, 413, 422,
+    429, 500 and 503 with their causes.
+  - Callers that gated execution on a `VERIFIED` consensus must stop: treat
+    its result as a signal for review.
+
+- **sqlglot 28.0.0 or later is required.** `pyproject.toml` allowed 20.0.0,
+  but the SQL checks are written against 28.0.0 and later. On 20.0.0, 35 of
+  the 849 SQL tests fail, each because a query is refused where it should be
+  admitted or is refused for another reason, and the function catalogue does
+  not sort five kinds that 20.0.0 parses. `pip install qwed` now asks for
+  `sqlglot>=28.0.0`; the server image and `requirements.txt` already pin
+  30.25.0.
+
 ### Fixed
+
+- **The Z3 engine in `maximum` consensus runs (#659).** It failed on every
+  query and was recorded as `BLOCKED`. It now proves the translated claim
+  from its constraints, as `/verify/logic` does: only a proof is `VERIFIED`
+  for that engine; a counterexample, constraints that cannot all hold, an
+  undecided proof or no claim is `UNVERIFIABLE`; and a refused translation
+  is `BLOCKED`. Z3 decides a claim, not a value, so it does not vote on the
+  answer.
+  - Its solves run on the thread `/verify/logic` uses, under
+    `QWED_Z3_TIMEOUT` (default 15 seconds). A solve that does not finish in
+    time is a `BLOCKED` Z3 result and a failure for the circuit breaker.
 
 - **`qwed test` no longer shows a satisfiable set of constraints as
   `VERIFIED` (#660).** Its logic check ran `verify_logic` on `x > 3`,
@@ -49,6 +100,69 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     reads each parsed value alone and passes it.
   - The CI and Docker workflows read the database password from a
     variable, so the dogfood `scan-secrets` job still finds nothing.
+
+- **Audit rows keep the model's translation (#578).** `raw_llm_output` was
+  never set, so the row of a route that asks a model to translate kept no
+  record of what the model returned, and a verdict reached on a translation
+  could not be re-checked from its row.
+  - `/verify/natural_language`, `/verify/logic`, `/verify/stats`,
+    `/verify/fact` (when the model advisory runs), `/verify/consensus`,
+    `/verify/batch` and `POST /agents/{agent_id}/verify` now store the
+    parsed translation, with its provider and model, as canonical JSON:
+    sorted keys, no spaces, ASCII only. The row keeps a translation the
+    model has returned, also when the route later blocks the result, a
+    consensus engine times out or fails, or the safety check refuses the
+    model's output; an engine that times out before its model answers
+    leaves none.
+  - A record over 64,000 characters is stored as `truncated: true` with its
+    `length`, `sha256` and first 16,000 characters as `preview`; one that
+    cannot be written as JSON is `unserializable: true`, with the number of
+    translations under `translations`.
+  - No API response or audit route returns the record. It holds the model's
+    output before output sanitising, so anyone who can read the audit
+    database can read it. The entry hash covers the column.
+  - More results name the provider and model (#585): `/verify/stats` in
+    `developer_fields` once the model has written code, the `/verify/fact`
+    `llm_fallback` advisory in its `details`, each `/verify/consensus`
+    `verification_chain` entry (`null` when the engine had no translation),
+    and a `/verify/natural_language` result that is `UNVERIFIABLE` because
+    the translation marks the query as not maths. No verdict or admission
+    changes.
+
+- **`ConfigGuard` reads out public hashes, not AWS secret keys (#655).**
+  Its `AWS_SECRET_KEY` pattern takes any 40 base64 characters, so
+  `scan-secrets` reported pinned action commits, `sha256:` digests, npm
+  integrity hashes, comment rules of `=` and alphabets as AWS secret keys:
+  22 findings on this repository, none a secret.
+  - The built-in pattern drops a match only when its whole run of base64
+    characters is one of: the commit of a step that pins an action or
+    reusable workflow (`uses: owner/repo@<40 hex>`); a hex digest after
+    `sha1:`, `sha256:`, `sha384:` or `sha512:`, of that algorithm's exact
+    length; an integrity hash (`sha256-`, `sha384-`, `sha512-`) that is the
+    value of an `integrity` key or attribute; nothing but `=`; or characters
+    in strictly ascending order. A label, or the key or attribute, counts
+    only after a character that ends a name, in ASCII. Every other match
+    stays reported.
+  - A caller's `AWS_SECRET_KEY` pattern, even the default text, is searched
+    as written.
+  - The dogfood workflow's `scan-secrets` job now fails on a finding.
+  - A key put into one of these shapes on purpose is read out, and
+    `/verify/code` still reports a 40-character commit hash in code as a
+    secret.
+
+- **`FIND_IN_SET`, `ST_X` and `ST_Y` with sqlglot 30.34.0.** That release
+  parses each into a function kind of its own, and `SQLVerifier` and
+  `SQLGuard` refuse a kind their catalogue has not sorted, so any query
+  calling one was refused where sqlglot 30.34.0 is installed. The server
+  image pins 30.25.0; `pip install qwed` takes the newest.
+  - Each computes only from its arguments, so all three are admitted, on
+    30.34.0 and on older sqlglot, which reads them as calls by name. Before,
+    `ST_X` and `ST_Y` were refused on every version.
+  - Still refused: a call through a schema, a quoted or misspelt name, and
+    any call inside the arguments that is refused on its own, such as
+    `load_file`, `getenv` or `sleep`.
+  - A test now fails when the installed sqlglot parses a function kind the
+    catalogue has not sorted.
 
 ## [11.0.0] - 2026-11-19
 
