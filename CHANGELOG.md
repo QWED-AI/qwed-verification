@@ -150,8 +150,9 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - Each computes only from its arguments, so all three are admitted, on
     30.34.0 and on older sqlglot, which reads them as calls by name. Before,
     `ST_X` and `ST_Y` were refused on every version.
-  - A call through a schema, a quoted or misspelt name and a read inside
-    the arguments are still refused.
+  - Still refused: a call through a schema, a quoted or misspelt name, and
+    any call inside the arguments that is refused on its own, such as
+    `load_file`, `getenv` or `sleep`.
   - A test now fails when the installed sqlglot parses a function kind the
     catalogue has not sorted.
 

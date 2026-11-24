@@ -120,7 +120,7 @@ def test_other_forms_of_the_same_call_are_admitted(query):
     # Used as a table, it is not a row generator.
     ("mysql", "SELECT * FROM find_in_set('a', 'b')"),
     ("mysql", "SELECT * FROM users, st_x(geom)"),
-    # An admitted call does not admit what its arguments read.
+    # A call in the arguments that is refused on its own is still refused.
     ("mysql", "SELECT find_in_set('a', load_file('/etc/passwd')) FROM users"),
     ("mysql", "SELECT ST_X(geom) FROM users WHERE find_in_set('a', sleep(5))"),
     ("duckdb", "SELECT find_in_set('a', getenv('HOME'))"),
