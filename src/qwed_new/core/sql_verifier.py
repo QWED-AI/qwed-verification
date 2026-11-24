@@ -1782,8 +1782,8 @@ class SQLVerifier:
 
     @staticmethod
     def _child_expressions(node: exp.Expression) -> List[exp.Expression]:
-        """The node's child expressions. Older sqlglot (20.x, allowed by
-        pyproject) yields tuples holding the child; take the expression out."""
+        """The node's child expressions. Older sqlglot (20.x) yields tuples
+        holding the child; take the expression out."""
         children = []
         for child in node.iter_expressions():
             if isinstance(child, tuple):

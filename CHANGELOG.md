@@ -37,6 +37,14 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
   - Callers that gated execution on a `VERIFIED` consensus must stop: treat
     its result as a signal for review.
 
+- **sqlglot 28.0.0 or later is required.** `pyproject.toml` allowed 20.0.0,
+  but the SQL checks are written against 28.0.0 and later. On 20.0.0, 35 of
+  the 849 SQL tests fail, each because a query is refused where it should be
+  admitted or is refused for another reason, and the function catalogue does
+  not sort five kinds that 20.0.0 parses. `pip install qwed` now asks for
+  `sqlglot>=28.0.0`; the server image and `requirements.txt` already pin
+  30.25.0.
+
 ### Fixed
 
 - **The Z3 engine in `maximum` consensus runs (#659).** It failed on every
