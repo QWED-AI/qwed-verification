@@ -99,12 +99,16 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     a fixed phrase such as "developer mode". Its words may be joined by
     whitespace, invisible characters, a dash, an underscore, a comma, or a
     dot with no space after it, and Cyrillic and Greek look-alike letters
-    are read as Latin.
+    are read as Latin. Orders, messages, text and similar nouns also name
+    data, so they count as what an override names only after a qualifier
+    such as "previous" or "your": "Drop the orders under $20" passes.
   - The maths check refuses only jailbreak, sudo and role play as words of
-    their own, and Greek letters beside Latin are maths. The policy check
-    and the maths check read whole words, as the stats and fact check does.
+    their own, and a Greek letter beside Latin is maths unless it sits
+    inside a Latin word. Its 2,000-character bound is the phrase check's
+    10,000. The policy check and the maths check read whole words, as the
+    stats and fact check does.
   - None of those GSM8K questions, SQuAD questions or 1,204 SQuAD
-    paragraphs is refused now, and the stats and fact check refuses 71 of
+    paragraphs is refused now, and the stats and fact check refuses 70 of
     160 English attacks from the deepset prompt-injections set (42 before).
 
 - **The Z3 engine in `maximum` consensus runs (#659).** It failed on every
