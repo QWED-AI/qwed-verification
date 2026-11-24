@@ -46,6 +46,7 @@ from qwed_new.core.failure_cause import (
     diagnostic_for_exception,
     message_for,
     message_of,
+    wait_out,
 )
 # Every z3 solve runs on the one z3 thread, which the consensus Z3 engine
 # shares (#659); the provider translation runs concurrently via
@@ -112,12 +113,17 @@ def _logic_failure(
     pipeline's own, BLOCKED: one escaping the bridge is not the model's,
     since the bridge names every provider error, and the solver and every
     later step come after the translation. The answer kept and the in-time
-    check come from one read, so they cannot disagree."""
+    check come from one read, so they cannot disagree, and the read is at
+    or after the deadline: a wait may end up to its clock's resolution
+    early, and an answer that lands in that time came in time."""
+    timed_out = isinstance(error, (TimeoutError, asyncio.TimeoutError))
+    if timed_out and not translated:
+        wait_out(answered_by)
     landed, in_time = answered.read(answered_by)
     if translation is None and landed:
         translation = landed[0]
         translation_model = translation.translation_model
-    if not (translated or in_time) and isinstance(error, (TimeoutError, asyncio.TimeoutError)):
+    if timed_out and not (translated or in_time):
         fields = {"error": message_of(error, TRANSLATION_FAILED), "constraint_id": TRANSLATION_FAILED}
     else:
         fields = {"error": _PIPELINE_ERROR_MESSAGE, "constraint_id": PIPELINE_ERROR}
@@ -491,15 +497,25 @@ class ControlPlane:
         (#519): a refusal, a policy block, no provider, a failed translation,
         or an error after the translation. The routes report this diagnostic
         as they report a decided one, so a cause reads the same on every
-        route, and its admission is never ADMIT."""
-        return {
-            "diagnostic": self.output_sanitizer.sanitize_output(
+        route, and its admission is never ADMIT.
+
+        Where the sanitiser itself fails, the request gets a fixed BLOCKED
+        pipeline error, whose text is this module's own, in its place, and
+        never the diagnostic that was not sanitised; the caller's handler
+        still writes the audit row it holds."""
+        try:
+            shown = self.output_sanitizer.sanitize_output(
                 result=diagnostic.to_dict(),
                 output_type="diagnostic",
                 organization_id=organization_id,
-            ),
-            "admission": natural_language_admission(diagnostic).value,
-        }
+            )
+        except Exception as e:  # noqa: BLE001 - fail closed on the sanitiser's own failure
+            logger.error("Diagnostic sanitising failed (exception_type=%s)", type(e).__name__, exc_info=False)
+            diagnostic = DiagnosticResult.blocked(
+                _PIPELINE_ERROR_MESSAGE, developer_fields={"constraint_id": PIPELINE_ERROR}
+            )
+            shown = diagnostic.to_dict()
+        return {"diagnostic": shown, "admission": natural_language_admission(diagnostic).value}
 
     def _logic_solve(self, dsl_code: str, variables: Any, claim_dsl: Optional[str]) -> tuple:
         """The z3 call for a logic translation (#631), as (function, args):

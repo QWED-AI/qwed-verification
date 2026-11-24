@@ -47,7 +47,7 @@ CAUSES = TRANSLATION_CAUSES | {INPUT_REFUSED, OUTPUT_REFUSED, POLICY_BLOCKED}
 _DEFAULT_MESSAGES = {
     NO_PROVIDER: "No model provider is configured, so the question was not translated and nothing was verified",
     TRANSLATION_FAILED: "The translation by the model failed, so nothing was verified",
-    INPUT_REFUSED: "The question was refused by the injection screen before any model saw it",
+    INPUT_REFUSED: "The input was refused by the injection screen before any model saw it",
     OUTPUT_REFUSED: "The safety check refused the translation by the model",
     POLICY_BLOCKED: "The request was refused by policy",
 }
@@ -137,14 +137,38 @@ def now_ns() -> int:
 _NANOSECONDS = Context(prec=40, traps=[])
 
 
-def deadline_after(seconds: float) -> int:
-    """The ``now_ns`` reading ``seconds`` from now. The duration becomes
-    whole nanoseconds once, exactly, with no floating-point product and
-    whatever decimal context the caller has set, so 1.001 seconds is
-    1,001,000,000 nanoseconds. ``seconds`` must be finite."""
+def nanoseconds(seconds: float) -> int:
+    """``seconds`` as whole nanoseconds, converted once, exactly, with no
+    floating-point product and whatever decimal context the caller has set,
+    so 1.001 seconds is 1,001,000,000 nanoseconds. ``seconds`` must be
+    finite."""
     if not math.isfinite(seconds):
         raise ValueError(f"a deadline needs a finite number of seconds, not {seconds!r}")
-    return now_ns() + int(_NANOSECONDS.multiply(Decimal(str(seconds)), 1_000_000_000))
+    return int(_NANOSECONDS.multiply(Decimal(str(seconds)), 1_000_000_000))
+
+
+def deadline_after(seconds: float) -> int:
+    """The ``now_ns`` reading ``seconds`` from now (see ``nanoseconds``)."""
+    return now_ns() + nanoseconds(seconds)
+
+
+# How early a timer may end a wait: its clock's resolution, about 16 ms at
+# most (Windows' tick clock), well inside this bound.
+_EARLY_BY_AT_MOST_NS = 100_000_000
+# One tick more than what is left, so a clock that reads in ticks has reached
+# the deadline when the sleep ends.
+_CLOCK_RESOLUTION_S = time.get_clock_info("monotonic").resolution
+
+
+def wait_out(deadline_ns: int) -> None:
+    """Once a wait for ``deadline_ns`` has ended, sleep out what is left of
+    it, so what landed is read at or after the deadline: a timer may end a
+    wait up to its clock's resolution early, and a translation that lands in
+    that time came in time. Nothing is left to wait for a deadline that has
+    passed, or one far ahead, which is not the deadline that ended the wait."""
+    remaining = deadline_ns - now_ns()
+    if 0 < remaining <= _EARLY_BY_AT_MOST_NS:
+        time.sleep(remaining / 1_000_000_000 + _CLOCK_RESOLUTION_S)
 
 
 class LandedTranslations(list):

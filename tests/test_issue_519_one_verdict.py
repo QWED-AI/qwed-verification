@@ -19,6 +19,7 @@ import importlib.util
 import inspect
 import io
 import json
+import logging
 import math
 import threading
 import time
@@ -757,31 +758,56 @@ def test_a_read_keeps_exactly_what_landed_before_the_deadline(stamps, deadline):
     )
 
 
+class _WatchedLock:
+    """A record's lock that says when a thread other than ``owner`` asks for
+    it, so a test resumes the owner only once the reader is waiting."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.owner = None
+        self.asked = threading.Event()
+
+    def __enter__(self):
+        if threading.current_thread() is not self.owner:
+            self.asked.set()
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, *_exc):
+        self._lock.release()
+
+
 def test_a_timeout_reads_an_append_under_way_in_both_or_neither():
     # The append is paused after noting when it landed, holding the lock,
-    # before the translation is in the list. A timeout reading the engine
-    # meanwhile waits for it, so the translation it counts in time is the
-    # one the result keeps for the audit row.
+    # before the translation is in the list. The timeout reads the engine
+    # meanwhile, and the append resumes only once that read waits for the
+    # lock: the translation it counts in time is the one the result keeps
+    # for the audit row.
     from qwed_new.core import failure_cause
     from qwed_new.core.consensus_verifier import _EngineCall, _timed_out
 
     paused, resume = threading.Event(), threading.Event()
-
-    def _paused_clock():
-        paused.set()
-        assert resume.wait(5)
-        return 0
-
     call = _EngineCall(lambda *_args: None)
     call.started_ns = 0
+    lock = _WatchedLock()
+    call.translations._lock = lock
+
+    def _clock():
+        # Only the append's note of its landing pauses.
+        if threading.current_thread() is lock.owner:
+            paused.set()
+            assert resume.wait(5)
+        return 0
+
     fields = {}
-    with mock.patch.object(failure_cause, "time", SimpleNamespace(monotonic_ns=_paused_clock)):
-        appending = threading.Thread(target=call.translations.append, args=("answer",))
+    appending = threading.Thread(target=call.translations.append, args=("answer",))
+    lock.owner = appending
+    with mock.patch.object(failure_cause, "time", SimpleNamespace(monotonic_ns=_clock, sleep=time.sleep)):
         appending.start()
         assert paused.wait(5)
         reading = threading.Thread(target=lambda: fields.update(_timed_out(call, 1)))
         reading.start()
-        reading.join(0.05)
+        assert lock.asked.wait(5), "the timeout never asked for the lock"
         resume.set()
         appending.join(5)
         reading.join(5)
@@ -1123,6 +1149,10 @@ class _HeldClock:
 
     def monotonic_ns(self):
         return time.monotonic_ns() if self._running else 0
+
+    @staticmethod
+    def sleep(seconds):
+        time.sleep(seconds)
 
 
 def _hold_the_clock(monkeypatch) -> _HeldClock:
@@ -1473,3 +1503,125 @@ def test_a_consensus_engine_that_starts_after_its_deadline_names_no_cause(monkey
     assert result.status == "BLOCKED"
     assert result.cause is None
     assert result.translation is None
+
+
+def test_waiting_out_a_deadline_sleeps_only_the_rest_of_an_early_end():
+    from qwed_new.core.failure_cause import now_ns, wait_out
+
+    deadline = now_ns() + 30_000_000
+    wait_out(deadline)
+    assert now_ns() >= deadline
+    # A deadline passed, or far ahead (not the one that ended the wait):
+    # nothing to wait for.
+    started = time.perf_counter()
+    wait_out(now_ns() - 1)
+    wait_out(now_ns() + 10_000_000_000)
+    assert time.perf_counter() - started < 0.5
+
+
+def test_a_consensus_timeout_that_ends_early_counts_a_translation_that_lands_in_time():
+    # The wait ended before its deadline, as a timer may by its clock's
+    # resolution, and the model's answer lands before the deadline: it came
+    # in time, so the engine names no cause.
+    from qwed_new.core.consensus_verifier import _EngineCall, _timed_out
+    from qwed_new.core.failure_cause import now_ns
+
+    call = _EngineCall(lambda *_args: None)
+    call.started_ns = now_ns()
+    deadline = now_ns() + 80_000_000
+    landing = threading.Timer(0.02, call.translations.append, args=("answer",))
+    landing.start()
+    try:
+        fields = _timed_out(call, deadline)
+    finally:
+        landing.join(5)
+
+    assert fields == {"translation": "answer"}
+
+
+def test_a_logic_deadline_that_ends_early_counts_an_answer_that_lands_in_time():
+    from qwed_new.core.control_plane import _logic_failure
+    from qwed_new.core.failure_cause import now_ns
+    from qwed_new.core.translation_record import Translation
+
+    answered = LandedTranslations()
+    answer = Translation("logic", {"claim": "x > 3"}, "ollama", MODEL)
+    landing = threading.Timer(0.02, answered.append, args=(answer,))
+    landing.start()
+    try:
+        fields = _logic_failure(asyncio.TimeoutError(), False, None, None, answered, now_ns() + 80_000_000)
+    finally:
+        landing.join(5)
+    assert fields["constraint_id"] == PIPELINE_ERROR
+    assert fields["translation_model"] == MODEL
+
+    # An error that is not the deadline's is read at once, however far the
+    # deadline is.
+    started = time.perf_counter()
+    fields = _logic_failure(RuntimeError("solver"), True, None, None, LandedTranslations(), now_ns() + 30 * 10**9)
+    assert time.perf_counter() - started < 0.5
+    assert fields["constraint_id"] == PIPELINE_ERROR
+
+
+def test_the_async_consensus_deadline_is_whole_nanoseconds(monkeypatch):
+    from qwed_new.core import consensus_verifier
+
+    verifier = consensus_verifier.ConsensusVerifier(enable_circuit_breaker=False)
+    seen = {}
+
+    async def _collect(_tasks, deadline_ns, mono_start_ns):
+        seen["span"] = deadline_ns - mono_start_ns
+        return []
+
+    monkeypatch.setattr(verifier, "_collect_engine_results", _collect)
+    monkeypatch.setattr(verifier, "_select_engines", lambda *_args: [])
+    monkeypatch.setattr(verifier, "_refused", lambda *_args: None)
+    asyncio.run(verifier.verify_async(QUESTION, timeout_seconds=1.001))
+
+    # 1.001 * 1e9 is 1000999999.9999999 in floating point.
+    assert seen["span"] == 1_001_000_000
+
+
+@pytest.mark.parametrize("question", [QUESTION, INJECTION], ids=["translated", "refused"])
+def test_a_diagnostic_the_sanitiser_cannot_read_is_a_pipeline_error(
+    client, isolated_audit_chain, monkeypatch, model, question,  # noqa: F811
+):
+    # The diagnostic sanitiser fails, here and again in the error handler:
+    # a fixed BLOCKED pipeline error in its place, never the diagnostic it
+    # did not sanitise, and the audit row keeps the translation it holds.
+    sanitizer = api_main.control_plane.output_sanitizer
+    sanitize = sanitizer.sanitize_output
+
+    def _failing(*args, **kwargs):
+        if kwargs.get("output_type") == "diagnostic":
+            raise RuntimeError(f"sanitiser down: {LEAK_MARKER}")
+        return sanitize(*args, **kwargs)
+
+    monkeypatch.setattr(sanitizer, "sanitize_output", _failing)
+    response = _post(client, "natural_language", question)
+
+    _assert_one_verdict(response, isolated_audit_chain, "BLOCKED", PIPELINE_ERROR)
+    assert _no_screen_text(response.text) == []
+    (row,) = _rows(isolated_audit_chain)
+    assert bool(row.raw_llm_output) is (question == QUESTION)
+
+
+@pytest.mark.parametrize("route", ["natural_language", "logic", "consensus-single", "stats"])
+def test_the_screens_reason_stays_in_the_server_log(client, isolated_audit_chain, model, caplog, route):  # noqa: F811
+    # The caller reads the cause's message; the operator's log says what the
+    # screen found, on every route.
+    with caplog.at_level(logging.WARNING):
+        response = _post(client, route, INJECTION)
+
+    assert response.json()["constraint_id"] == INPUT_REFUSED
+    assert any("Potential Prompt Injection detected" in record.getMessage() for record in caplog.records)
+
+
+def test_the_screens_reason_for_a_fact_stays_in_the_server_log(model, caplog):  # noqa: F811
+    from qwed_new.core.fact_verifier import FactVerifier
+
+    with caplog.at_level(logging.WARNING):
+        result = FactVerifier().verify_fact(INJECTION, "The sky is blue.", provider="ollama", min_confidence=1.0)
+
+    assert result.developer_fields["constraint_id"] == INPUT_REFUSED
+    assert any("Potential Prompt Injection detected" in record.getMessage() for record in caplog.records)

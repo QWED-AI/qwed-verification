@@ -46,7 +46,9 @@ from qwed_new.core.failure_cause import (
     diagnostic_for,
     message_for,
     message_of,
+    nanoseconds,
     now_ns,
+    wait_out,
 )
 from qwed_new.providers.base import TranslationRefused
 
@@ -185,6 +187,9 @@ def _timed_out(call: Any, deadline_ns: int) -> dict[str, Any]:
     come from one read, so they cannot disagree."""
     if not isinstance(call, _EngineCall):
         return {"translation": None}
+    # A wait may end up to its clock's resolution early: read at or after
+    # the deadline, so a translation that lands in time is counted.
+    wait_out(deadline_ns)
     kept, in_time = call.translations.read(deadline_ns)
     translation = _first(kept)
     if call.started_before(deadline_ns) and not in_time:
@@ -712,7 +717,8 @@ class ConsensusVerifier:
 
         results = []
         mono_start_ns = time.monotonic_ns()
-        deadline_ns = mono_start_ns + int(timeout_seconds * 1_000_000_000)
+        # Whole nanoseconds, exactly, as every deadline here (#519).
+        deadline_ns = mono_start_ns + nanoseconds(timeout_seconds)
 
         # #352: a DEDICATED per-call executor sized to the engine list.
         # Every engine starts immediately (nothing ever queues), so a hung
@@ -788,10 +794,10 @@ class ConsensusVerifier:
         from qwed_new.core.translator import TranslationLayer
         try:
             TranslationLayer().screen_question(query)
-        except TranslationRefused as refused:
-            # The screen's reason names the pattern it matched: the log
-            # keeps it, the caller reads the cause's own message (#519).
-            logger.warning("Consensus question refused: %s", refused)
+        except TranslationRefused:
+            # The screen's reason names the pattern it matched: the
+            # translator's log keeps it, the caller reads the cause's own
+            # message (#519).
             return ConsensusResult(
                 final_answer=None,
                 confidence=0.0,

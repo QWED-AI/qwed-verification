@@ -35,6 +35,7 @@ from qwed_new.core.consensus_verifier import (
 )
 from qwed_new.core.diagnostics import DiagnosticStatus
 from qwed_new.core.fact_verifier import FactVerifier
+from qwed_new.core.failure_cause import INPUT_REFUSED, message_for
 from qwed_new.core.stats_verifier import StatsVerifier
 from qwed_new.core.translator import TranslationLayer, TranslationRefused
 from tests.test_issue_320_logic_route_admission import client  # noqa: F401  (fixture)
@@ -289,7 +290,7 @@ def test_stats_no_longer_reaches_the_model_with_a_refused_question(provider):
     # with the cause every route names and its message, not the screen's
     # reason (#519).
     assert result.constraint_id == "security.input_refused"
-    assert result.agent_message == "The question was refused by the injection screen before any model saw it"
+    assert result.agent_message == message_for(INPUT_REFUSED)
 
 
 @pytest.mark.parametrize(("claim", "context"), [
@@ -306,7 +307,7 @@ def test_fact_refuses_a_request_whose_advisory_text_is_refused(provider, claim, 
     assert result.status.value == "BLOCKED"
     assert result.developer_fields["constraint_id"] == "security.input_refused"  # #519
     # The cause's message, not the screen's reason, which names its pattern.
-    assert result.agent_message == "The question was refused by the injection screen before any model saw it"
+    assert result.agent_message == message_for(INPUT_REFUSED)
     assert "Security Policy Violation" not in str(result.to_dict())
     # What the deterministic pass computed is still reported (Gitar).
     for field in ("deterministic_verdict", "deterministic_confidence", "evidence", "citations", "scores"):
