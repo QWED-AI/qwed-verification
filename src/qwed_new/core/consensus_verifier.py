@@ -298,10 +298,6 @@ class ConsensusResult:
         when no engine had one."""
         return chain_record(self.verification_chain)
 
-    def stopped_diagnostic(self) -> DiagnosticResult | None:
-        """See ``stopped_diagnostic``."""
-        return stopped_diagnostic(self)
-
     def to_diagnostic_result(self) -> DiagnosticResult:
         """Convert this ConsensusResult to a DiagnosticResult.
 

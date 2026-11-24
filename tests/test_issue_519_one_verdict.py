@@ -458,6 +458,68 @@ def test_the_consensus_cause_when_every_engine_is_blocked(causes, status, cause)
         assert consensus["cause_message"] == f"message for {cause}"
 
 
+# Every status a result can be built with, by the verifier or by hand.
+_RESULT_STATUSES = [DiagnosticStatus.VERIFIED, DiagnosticStatus.UNVERIFIABLE, DiagnosticStatus.BLOCKED, None]
+
+
+def _consensus_result(cause, status, message=None):
+    from qwed_new.core.consensus_verifier import ConsensusResult
+
+    return ConsensusResult(
+        final_answer=4, confidence=1.0, engines_used=3, agreement_status="unanimous",
+        verification_chain=[], total_latency_ms=1.0, status=status,
+        cause=cause, cause_message=message,
+    )
+
+
+@pytest.mark.parametrize("message", [None, "message for the cause"])
+@pytest.mark.parametrize("status", _RESULT_STATUSES, ids=str)
+@pytest.mark.parametrize("cause, verdict", [
+    (NO_PROVIDER, DiagnosticStatus.UNVERIFIABLE),
+    (TRANSLATION_FAILED, DiagnosticStatus.UNVERIFIABLE),
+    (INPUT_REFUSED, DiagnosticStatus.BLOCKED),
+    (OUTPUT_REFUSED, DiagnosticStatus.BLOCKED),
+    (POLICY_BLOCKED, DiagnosticStatus.BLOCKED),
+])
+def test_a_consensus_result_with_a_cause_converts_to_that_causes_verdict(cause, verdict, status, message):
+    # For a caller that converts a result itself: a named cause gives the
+    # cause's one verdict, the same as the route's stopped_diagnostic,
+    # whatever status the result was built with, so a result built as
+    # VERIFIED by hand is not VERIFIED (#633).
+    from qwed_new.core.consensus_verifier import stopped_diagnostic
+
+    result = _consensus_result(cause, status, message)
+    dr = result.to_diagnostic_result()
+
+    assert dr.status is verdict
+    assert dr.developer_fields["constraint_id"] == cause
+    assert dr.developer_fields["advisory_only"] is True
+    assert dr.agent_message == (message or diagnostic_for(cause).agent_message)
+    assert admission_decision(dr) is AdmissionDecision.BLOCKED
+    stopped = stopped_diagnostic(result)
+    assert (stopped.status, stopped.developer_fields["constraint_id"], stopped.agent_message) == (
+        dr.status, cause, dr.agent_message,
+    )
+
+
+@pytest.mark.parametrize("status", _RESULT_STATUSES, ids=str)
+@pytest.mark.parametrize("cause", [
+    None, "", "translation.failed ", "TRANSLATION.FAILED", "translation", "security.input_refused\t",
+    "translation.failed\u200b", "tr\u0430nslation.failed", "\uff54ranslation.failed",
+], ids=repr)
+def test_a_consensus_result_with_a_cause_that_is_not_named_keeps_its_statuss_verdict(cause, status):
+    # A cause that is not one of the names (a trailing space or tab, upper
+    # case, a prefix, a zero-width space, a Cyrillic or full-width letter)
+    # is not read as one: the result keeps the verdict of its status, never
+    # VERIFIED, and names no cause.
+    dr = _consensus_result(cause, status).to_diagnostic_result()
+
+    expected = DiagnosticStatus.BLOCKED if status is DiagnosticStatus.BLOCKED else DiagnosticStatus.UNVERIFIABLE
+    assert dr.status is expected
+    assert "constraint_id" not in dr.developer_fields
+    assert admission_decision(dr) is AdmissionDecision.BLOCKED
+
+
 @pytest.mark.parametrize("kind, scenario", [
     ("natural_language", "no-model"),
     ("natural_language", "refused"),
