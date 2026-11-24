@@ -239,7 +239,7 @@ class PolicyEngine:
                 return False, "Rate limit exceeded. Please try again later."
         
         # 2. Security / Prompt Injection
-        is_safe, reason = self.security_gateway.detect_injection(query)
+        is_safe, reason = self.security_gateway.detect_injection(query, whole_words=True)
         if not is_safe:
             return False, f"Security Policy Violation: {reason}"
             

@@ -32,14 +32,37 @@ def _collapse_ws(text: str) -> str:
     return re.sub(r'\s+', ' ', text).strip()
 
 
+# Letters from other scripts that a reader takes for Latin ones (#646),
+# read as the Latin letter in one more copy of the text. NFKC leaves them.
+_LOOKALIKES = str.maketrans({
+    # Cyrillic
+    "\u0430": "a", "\u0435": "e", "\u043a": "k", "\u043c": "m", "\u043e": "o", "\u0440": "p",
+    "\u0441": "c", "\u0443": "y", "\u0445": "x", "\u0456": "i", "\u0458": "j", "\u0455": "s",
+    "\u0501": "d", "\u051b": "q", "\u051d": "w", "\u04cf": "l", "\u04bb": "h",
+    "\u0410": "a", "\u0412": "b", "\u0415": "e", "\u041a": "k", "\u041c": "m", "\u041d": "h",
+    "\u041e": "o", "\u0420": "p", "\u0421": "c", "\u0422": "t", "\u0425": "x", "\u0406": "i",
+    "\u0408": "j", "\u0405": "s", "\u04ae": "y", "\u051a": "q", "\u051c": "w",
+    # Greek
+    "\u03b1": "a", "\u03bf": "o", "\u03b9": "i", "\u03ba": "k", "\u03bd": "v", "\u03c1": "p",
+    "\u03c5": "u", "\u03c7": "x", "\u03b5": "e",
+    "\u0391": "a", "\u0392": "b", "\u0395": "e", "\u0396": "z", "\u0397": "h", "\u0399": "i",
+    "\u039a": "k", "\u039c": "m", "\u039d": "n", "\u039f": "o", "\u03a1": "p", "\u03a4": "t",
+    "\u03a5": "y", "\u03a7": "x",
+    # Latin letters outside ASCII that NFKC keeps
+    "\u0131": "i", "\u0261": "g",
+})
+
+
 def _phrase_copies(prompt: str) -> Optional[Tuple[str, ...]]:
     """The copies the phrase check reads: the original and its NFKC form,
     whitespace collapsed, and the text as the guards read it (GHSA-v3m4),
     with each character a reader does not see written as U+200B, which the
     patterns read through: controls (U+001F and U+0085 too), format
     characters such as U+FFF9 and U+13430, blanks such as U+2800, and
-    nonspacing marks. ``None`` when a copy grows the text past the length
-    bound. A copy the same as another is not read twice."""
+    nonspacing marks; then each of those with the look-alike letters of
+    other scripts read as the Latin letters they look like (#646).
+    ``None`` when a copy grows the text past the length bound. A copy the
+    same as another is not read twice."""
     from qwed_new.guards.canonical_text import marked_copies
 
     collapsed = _collapse_ws(prompt)
@@ -50,27 +73,8 @@ def _phrase_copies(prompt: str) -> Optional[Tuple[str, ...]]:
     marked = [_collapse_ws(copy) for copy in marked_copies(prompt)]
     if any(len(copy) > 10000 for copy in marked):
         return None
-    return tuple(dict.fromkeys((collapsed, folded, *marked)))
-
-
-def _read_through_ignorables(pattern: str) -> str:
-    """``pattern`` as a model reads it: default-ignorable characters may sit
-    between any two letters of a word, and may stand in for, or sit beside,
-    the space between words. The patterns are letters, spaces and ``.*``.
-
-    No two parts can match the same characters: ignorables are not allowed
-    after a word's last letter, where the separator or ``.*`` takes them,
-    and no ignorable is whitespace. Parts that could share characters would
-    backtrack polynomially on a run of ignorables."""
-    parts = []
-    for token in re.split(r"(\.\*| )", pattern):
-        if token == ".*":
-            parts.append(token)
-        elif token == " ":
-            parts.append(rf"(?:\s|{_IGNORABLE})+")
-        elif token:
-            parts.append(_read_through_word(token))
-    return "".join(parts)
+    copies = (collapsed, folded, *marked)
+    return tuple(dict.fromkeys((*copies, *(copy.translate(_LOOKALIKES) for copy in copies))))
 
 
 def _read_through_word(word: str) -> str:
@@ -78,46 +82,147 @@ def _read_through_word(word: str) -> str:
     return (_IGNORABLE + "*").join(re.escape(char) for char in word)
 
 
-# The endings the last word of a phrase may take in whole-word mode, read
-# through ignorables the same way ("prompte<U+200B>d" is "prompted").
+# The endings the last word of a phrase may take.
 _ENDING = "(?:" + "|".join(_read_through_word(e) for e in ("s", "es", "ed", "ing")) + ")?"
 
+# What may stand between two words of a phrase (#646): whitespace and
+# default-ignorables, with at most one dash, underscore or comma among
+# them, or a dot with nothing after it ("ignore.previous"). A dot then a
+# space ends a sentence, and a phrase does not run across one. The three
+# forms start with different characters and none holds a letter, so a
+# failed word gives back at most one run of whitespace and ignorables.
+_GAP = rf"(?:\s|{_IGNORABLE})"
+_BETWEEN_WORDS = rf"(?:{_GAP}+(?:[-_,]{_GAP}*)?|[-_,]{_GAP}*|\.)"
+# Words a caller may put between an instruction verb and what it names:
+# "ignore all the previous instructions", "forget what you were told above".
+_MAX_QUALIFIERS = 4
 
-def _phrase_parts(pattern: str, whole_words: bool) -> Tuple[str, ...]:
-    """``pattern`` as one search per part around its ``.*``, each read
-    through ignorables. In whole-word mode no letter or digit may touch the
-    start of the first part or the end of the last, which may take an
-    ending."""
-    parts = [_read_through_ignorables(part) for part in pattern.split(".*")]
-    if whole_words:
-        edge = _SEEN_LETTER_OR_DIGIT
-        parts[0] = rf"(?<!{edge})(?:{parts[0]})"
-        parts[-1] = rf"(?:{parts[-1]}){_ENDING}(?!{edge})"
-    return tuple(parts)
+
+def _one_of(words) -> str:
+    """One of ``words``, each read through ignorables; longer words first."""
+    return "(?:" + "|".join(_read_through_word(w) for w in sorted(set(words), key=len, reverse=True)) + ")"
 
 
-def _parts_in_copies(parts: Tuple[str, ...], copies: Tuple[str, ...]) -> bool:
-    """Whether the parts match one of the copies in order, as ``.*``
-    between them would. The copies hold no newline, so ``.*`` spans all
-    of a copy.
-
-    One search for ``A.*B`` retries from every match of ``A`` and costs
-    their number times the length of the text, about 0.1 s for 10,000
-    characters, all of it holding the GIL (#645). Here each part is one
-    linear search, from where the part before it first ends. The first
-    match of a part ends earliest, so the next part is found whenever
-    ``.*`` would find it."""
-    searches = [re.compile(part, re.IGNORECASE) for part in parts]
-    for text in copies:
-        position = 0
-        for search in searches:
-            found = search.search(text, position)
-            if found is None:
-                break
-            position = found.end()
+def _phrase_search(slots, whole_words: bool) -> "re.Pattern[str]":
+    """The search for a phrase: ``slots`` in order, each a tuple of the
+    words that may stand there, joined by ``_BETWEEN_WORDS``. A slot
+    written ``("*", words)`` holds up to ``_MAX_QUALIFIERS`` of ``words``,
+    or none. A last slot written ``("!", words)`` holds none of them: the
+    phrase is not found when one of ``words`` follows it ("you are now
+    able"); written ``("!",)``, no word may follow it ("forget all."). A
+    first slot written ``("^",)`` puts the phrase at the start of the text
+    or after a sentence's end ("Act as a terminal."). In whole-word mode no
+    letter or digit a reader sees may touch the phrase at either end."""
+    unless = ""
+    if slots[-1][0] == "!":
+        if len(slots[-1]) > 1:
+            follower = _one_of(slots[-1][1]) + rf"(?!{_SEEN_LETTER_OR_DIGIT})"
         else:
-            return True
-    return False
+            follower = _SEEN_LETTER_OR_DIGIT
+        unless = rf"(?!{_BETWEEN_WORDS}{follower})"
+        slots = slots[:-1]
+    start = ""
+    if slots[0] == ("^",):
+        start = rf"(?:\A|(?<=[.!?:;\"\u201c\u201d(>*]))(?:\s|{_IGNORABLE})*"
+        slots = slots[1:]
+    body = ""
+    for slot in slots:
+        if slot[0] == "*":
+            body += rf"(?:{_one_of(slot[1])}{_BETWEEN_WORDS}){{0,{_MAX_QUALIFIERS}}}"
+        else:
+            body += _one_of(slot) + _BETWEEN_WORDS
+    # The last word may take an English ending ("modes", "prompted"), read
+    # through ignorables the same way ("prompte<U+200B>d").
+    body = body[: -len(_BETWEEN_WORDS)] + _ENDING
+    if whole_words:
+        body = rf"(?<!{_SEEN_LETTER_OR_DIGIT}){body}(?!{_SEEN_LETTER_OR_DIGIT})"
+    return re.compile(start + body + unless, re.IGNORECASE)
+
+
+def _forms(*groups: str) -> tuple[str, ...]:
+    """The word forms written in ``groups``, each "stem:ending,ending"."""
+    out = []
+    for group in groups:
+        stem, _, endings = group.partition(":")
+        out.append(stem)
+        out.extend(stem + ending for ending in endings.split(",") if ending)
+    return tuple(out)
+
+
+# The instruction an override names (#646).
+_OVERRIDE_VERBS = _forms(
+    "ignor:e,es,ed,ing", "disregard:s,ed,ing", "forget:s,ting", "forgot:ten",
+    "drop:s,ped,ping", "abandon:s,ed,ing", "discard:s,ed,ing",
+)
+_OVERRIDE_QUALIFIERS = (
+    "all", "any", "the", "your", "my", "our", "of", "these", "those", "every", "each",
+    "prior", "previous", "preceding", "earlier", "above", "foregoing", "former",
+    "original", "initial", "existing", "current", "system", "about", "provided",
+    "given", "other", "that", "this", "what", "you", "i", "were", "was", "have",
+    "had", "been", "got", "said", "told", "everything",
+)
+_OVERRIDE_OBJECTS = _forms(
+    "instruction:s", "rule:s", "prompt:s", "direction:s", "directive:s", "order:s",
+    "command:s", "guideline:s", "guidance", "context", "everything", "above",
+    "information", "assignment:s", "tasks", "message:s", "constraint:s",
+    "restriction:s", "programming", "training", "polic:y,ies", "safeguard:s", "text",
+    "article:s", "document:s",
+)
+_MODES = ("developer", "dan", "god", "jailbreak", "jailbroken", "admin", "simulated", "unrestricted")
+
+# Each phrase: the name a refusal gives, and its slots.
+_PHRASES = (
+    ("ignore ... instructions", (_OVERRIDE_VERBS, ("*", _OVERRIDE_QUALIFIERS), _OVERRIDE_OBJECTS)),
+    ("act as", (("you",), ("to", "will", "must", "should", "shall"), ("act",), ("as", "like"))),
+    ("act as", (("going",), ("to",), ("act",), ("as", "like"))),
+    ("act as", (("please", "now", "you"), ("act",), ("as", "like"))),
+    ("act as", (("^",), ("act",), ("as", "like"), ("!", ("if", "though")))),
+    ("you are now", (("you",), ("are",), ("now",), ("!", (
+        "able", "ready", "done", "finished", "given", "at", "on", "back", "here", "there",
+        "sure", "aware", "eligible", "logged", "signed", "connected", "registered",
+    )))),
+    ("forget all", (_forms("forget:s,ting", "forgot"), ("all",), ("!",))),
+    ("from now on", (("from",), ("now",), ("on",), ("you",), ("are", "will"))),
+    ("pretend to be", (("pretend",), ("to", "you", "that"), ("be", "are", "you"))),
+    ("your instructions", (("your", "hidden", "secret"), (
+        "instructions", "prompt", "prompts", "guidelines", "programming",
+    ))),
+    ("system prompt", (("system", "initial"), ("prompt", "prompts", "instructions"))),
+    ("your rules", (("your",), ("rules",))),
+    ("new instructions", (("new",), ("instructions",))),
+    ("new task", (("your",), ("new",), ("task", "tasks", "instructions"))),
+    ("tell me secrets", (("tell",), ("me",), ("*", ("your", "the", "all", "any", "of")), ("secret", "secrets"))),
+    ("system override", (("system",), ("override",))),
+    ("mode", (_MODES, ("mode",))),
+)
+
+# Words the maths check also refuses on their own (#646): none is a word a
+# maths or statistics question uses.
+_MATHS_WORDS = (
+    ("jailbreak", (_forms("jailbreak:s,ing,ed", "jailbroken"),)),
+    ("sudo", (("sudo",),)),
+    ("roleplay", (_forms("roleplay:s,ing,ed"),)),
+    ("role play", (("role",), _forms("play:s,ing"))),
+)
+
+
+def _searches(phrases, whole_words: bool):
+    return tuple((name, _phrase_search(slots, whole_words)) for name, slots in phrases)
+
+
+_PHRASE_SEARCHES = {mode: _searches(_PHRASES, mode) for mode in (False, True)}
+_MATHS_WORD_SEARCHES = _searches(_MATHS_WORDS, True)
+
+
+
+def _found(searches, copies: tuple[str, ...]) -> str | None:
+    """The name of the first search that matches one of the copies, else
+    None. Each search is one pass over a copy: no pattern holds ``.*``."""
+    for name, search in searches:
+        for text in copies:
+            if search.search(text):
+                return name
+    return None
 
 
 # Module-level PII Constants
@@ -152,22 +257,8 @@ class SecurityGateway:
     def __init__(self):
         # Heuristic patterns for Prompt Injection
         # These are common "jailbreak" phrases.
-        self.injection_patterns = [
-            r"ignore previous instructions",
-            r"ignore all instructions",
-            r"forget everything",
-            r"forget all",
-            r"tell me secrets",
-            r"system override",
-            r"you are now",
-            r"developer mode",
-            r"act as",
-            r"forget your rules",
-            r"ignore the above",
-            r"simulated mode",
-            r"disregard.*instructions",
-            r"disregard.*prompt"
-        ]
+        # The phrases the check refuses (#646), by name.
+        self.injection_patterns = [name for name, _ in _PHRASES]
         
         
         # PII Patterns (Regex) are now module-level constants
@@ -179,19 +270,28 @@ class SecurityGateway:
         Checks for potential prompt injection attempts.
         Returns (is_safe, reason).
 
-        With ``whole_words`` a pattern matches only where no letter or digit
+        Each phrase is a sequence of words, with set words allowed in each
+        place (#646): an instruction verb, up to four qualifiers and what it
+        names ("ignore all the prior instructions"), or a fixed phrase such
+        as "developer mode". Its words may be joined by whitespace,
+        invisible characters, a dash, an underscore, a comma, or a dot with
+        no space after it; a phrase does not run across a sentence's end.
+
+        With ``whole_words`` a phrase matches only where no letter or digit
         touches it, so "act as" is not found inside "Impact assessment"
         (#632). An underscore separates, as a space does, and the last word
         may still take an English ending ("prompts", "prompted", "modes"),
-        so neither gets a phrase past the check.
+        so neither gets a phrase past the check. Every route reads whole
+        words: the policy check, the maths check, and stats and fact text.
 
         The check reads the caller's text the way a model does, and folding
-        can only add refusals. It reads the whitespace-collapsed original
-        and its NFKC form, held to the same 10,000-character bound, and each
-        pattern lets default-ignorable characters follow any of its letters
-        and stand between its words. An invisible character inside a word,
-        as a separator, or both, hides nothing. The text the caller sent is
-        left as it was.
+        can only add refusals. It reads the whitespace-collapsed original,
+        its NFKC form and the text with each invisible character marked,
+        each also with look-alike letters read as Latin, all held to the
+        same 10,000-character bound, and each word lets default-ignorable
+        characters follow any of its letters. An invisible character inside
+        a word, as a separator, or both, hides nothing. The text the caller
+        sent is left as it was.
         """
         # 1. Length Check (Prevent buffer overflow / context exhaustion)
         if len(prompt) > 10000:
@@ -204,9 +304,9 @@ class SecurityGateway:
             return False, _TOO_LONG
 
         # 3. Heuristic Check. Runs for all inputs, with no whitelist bypass.
-        for pattern in self.injection_patterns:
-            if _parts_in_copies(_phrase_parts(pattern, whole_words), copies):
-                return False, f"Potential Prompt Injection detected: '{pattern}'"
+        found = _found(_PHRASE_SEARCHES[whole_words], copies)
+        if found is not None:
+            return False, f"Potential Prompt Injection detected: '{found}'"
 
         return True, None
 
@@ -247,12 +347,8 @@ class EnhancedSecurityGateway:
         )
         
         # Additional injection keywords (beyond basic patterns)
-        self.advanced_keywords = [
-            'disregard', 'override', 'bypass', 'jailbreak', 'prompt',
-            'instructions', 'system', 'admin', 'root', 'sudo',
-            'pretend', 'roleplay', 'act like', 'simulate',
-            'developer', 'debug', 'mode', 'unlock'
-        ]
+        # Words the maths check refuses on their own (#646), by name.
+        self.advanced_keywords = [name for name, _ in _MATHS_WORDS]
         
         # Block count for monitoring
         self.blocks_count = 0
@@ -265,7 +361,7 @@ class EnhancedSecurityGateway:
             (is_safe, reason) - True if safe, False with reason if blocked
         """
         # Layer 1: Basic patterns (existing SecurityGateway)
-        is_safe, reason = self.basic_gateway.detect_injection(prompt)
+        is_safe, reason = self.basic_gateway.detect_injection(prompt, whole_words=True)
         if not is_safe:
             self.blocks_count += 1
             logger.warning(f"Basic injection detected: {reason}")
@@ -347,21 +443,16 @@ class EnhancedSecurityGateway:
         return True, None
     
     def _contains_injection_keywords(self, text: str) -> bool:
-        """Check for common injection phrases."""
-        text_lower = text.lower()
-        
-        # Check advanced keywords
-        for keyword in self.advanced_keywords:
-            if keyword in text_lower:
-                return True
-        
-        # Check basic patterns from SecurityGateway
-        for pattern in self.basic_gateway.injection_patterns:
-            if re.search(pattern, text, re.IGNORECASE):
-                return True
-        
-        return False
-    
+        """Whether ``text`` holds a phrase the check refuses, or a word the
+        maths check refuses on its own, each as whole words (#646)."""
+        copies = _phrase_copies(text)
+        if copies is None:
+            return True
+        return (
+            _found(_PHRASE_SEARCHES[True], copies) is not None
+            or _found(_MATHS_WORD_SEARCHES, copies) is not None
+        )
+
     def _contains_mixed_scripts(self, text: str) -> bool:
         """
         Detect suspicious mixing of Unicode scripts.
@@ -388,6 +479,12 @@ class EnhancedSecurityGateway:
             elif char.isalpha():
                 scripts.add('latin')
         
+        # Greek letters are mathematical symbols (theta, the zeta function,
+        # TGF-beta), so Greek beside Latin is not mixing (#646). A Greek
+        # look-alike inside a Latin phrase is read as the Latin letter by
+        # the phrase check.
+        scripts.discard('greek')
+
         # If more than one script, it's suspicious
         # Exception: allow CJK + Latin (common in multilingual queries)
         if len(scripts) > 1:
