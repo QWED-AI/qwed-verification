@@ -14,6 +14,7 @@ verified.
 """
 
 import asyncio
+import contextlib
 import decimal
 import importlib.util
 import inspect
@@ -1505,18 +1506,84 @@ def test_a_consensus_engine_that_starts_after_its_deadline_names_no_cause(monkey
     assert result.translation is None
 
 
-def test_waiting_out_a_deadline_sleeps_only_the_rest_of_an_early_end():
-    from qwed_new.core.failure_cause import now_ns, wait_out
+class _ScriptedClock:
+    """The clock and the sleeps ``wait_out`` and ``wait_out_async`` use, for
+    the early-end tests. The clock reads zero, so a wait for a deadline
+    ahead of it ended early, and moves only when a sleep waits out the rest:
+    ``landing`` (the model's answer) runs 20 ms into that sleep, and the
+    sleep ends where it was asked to. No timer or thread is involved, so the
+    runner's speed cannot move the landing past the deadline. With
+    ``blocking`` False a blocking sleep fails the test: it would have held
+    the event loop."""
 
-    deadline = now_ns() + 30_000_000
-    wait_out(deadline)
-    assert now_ns() >= deadline
-    # A deadline passed, or far ahead (not the one that ended the wait):
-    # nothing to wait for.
-    started = time.perf_counter()
-    wait_out(now_ns() - 1)
-    wait_out(now_ns() + 10_000_000_000)
-    assert time.perf_counter() - started < 0.5
+    LANDS_AFTER_NS = 20_000_000
+
+    def __init__(self, landing=None, blocking=True):
+        self.now = 0
+        self.slept = []
+        self._landing = landing
+        self._blocking = blocking
+
+    def monotonic_ns(self):
+        return self.now
+
+    def _sleep_through(self, seconds):
+        self.slept.append(seconds)
+        started = self.now
+        self.now = started + self.LANDS_AFTER_NS
+        if self._landing is not None:
+            self._landing()
+        self.now = started + round(seconds * 1_000_000_000)
+
+    def sleep(self, seconds):
+        assert self._blocking, "a blocking sleep held the event loop"
+        self._sleep_through(seconds)
+
+    async def async_sleep(self, seconds):
+        self._sleep_through(seconds)
+
+
+@contextlib.contextmanager
+def _scripted_clock(landing=None, blocking=True):
+    from qwed_new.core import failure_cause
+
+    clock = _ScriptedClock(landing, blocking)
+    with mock.patch.object(failure_cause, "time", clock), mock.patch.object(
+        failure_cause, "asyncio", SimpleNamespace(sleep=clock.async_sleep), create=True
+    ):
+        yield clock
+
+
+_EARLY_BOUND_NS = 100_000_000
+
+
+@hypothesis_settings(max_examples=150, deadline=None)
+@given(
+    remaining=st.one_of(
+        st.sampled_from([-1, 0, 1, _EARLY_BOUND_NS - 1, _EARLY_BOUND_NS, _EARLY_BOUND_NS + 1]),
+        st.integers(-(10**12), 10**12),
+    )
+)
+def test_waiting_out_a_deadline_sleeps_only_the_rest_of_an_early_end(remaining):
+    # A wait that ended at most the bound before its deadline sleeps out the
+    # rest and one clock tick, on a thread or on the event loop; a deadline
+    # passed, or far ahead (not the one that ended the wait), is not waited
+    # for.
+    from qwed_new.core import failure_cause
+
+    assert failure_cause._EARLY_BY_AT_MOST_NS == _EARLY_BOUND_NS
+    waits = {
+        "thread": failure_cause.wait_out,
+        "event loop": lambda deadline: asyncio.run(failure_cause.wait_out_async(deadline)),
+    }
+    for where, wait in waits.items():
+        with _scripted_clock(blocking=where == "thread") as clock:
+            wait(remaining)
+        if 0 < remaining <= _EARLY_BOUND_NS:
+            assert clock.slept == [remaining / 1_000_000_000 + failure_cause._CLOCK_RESOLUTION_S], where
+            assert clock.now >= remaining, where
+        else:
+            assert clock.slept == [], where
 
 
 def test_a_consensus_timeout_that_ends_early_counts_a_translation_that_lands_in_time():
@@ -1524,43 +1591,62 @@ def test_a_consensus_timeout_that_ends_early_counts_a_translation_that_lands_in_
     # resolution, and the model's answer lands before the deadline: it came
     # in time, so the engine names no cause.
     from qwed_new.core.consensus_verifier import _EngineCall, _timed_out
-    from qwed_new.core.failure_cause import now_ns
 
     call = _EngineCall(lambda *_args: None)
-    call.started_ns = now_ns()
-    deadline = now_ns() + 80_000_000
-    landing = threading.Timer(0.02, call.translations.append, args=("answer",))
-    landing.start()
-    try:
-        fields = _timed_out(call, deadline)
-    finally:
-        landing.join(5)
+    with _scripted_clock(landing=lambda: call.translations.append("answer")) as clock:
+        call.started_ns = clock.now
+        fields = _timed_out(call, 80_000_000)
 
     assert fields == {"translation": "answer"}
+    assert clock.slept
+
+
+def test_the_async_consensus_collector_waits_out_an_early_end_without_blocking():
+    # The same early end on the async path: the collector runs on the event
+    # loop, so the rest is slept there without blocking it, and the answer
+    # that lands in time counts.
+    from qwed_new.core.consensus_verifier import ConsensusVerifier, _EngineCall
+
+    verifier = ConsensusVerifier(enable_circuit_breaker=False)
+    call = _EngineCall(lambda *_args: None)
+
+    async def _collect():
+        stalled = asyncio.get_running_loop().create_future()
+        try:
+            return await verifier._collect_engine_results([("symbolic", stalled, call)], 80_000_000, 0)
+        finally:
+            stalled.cancel()
+
+    with _scripted_clock(landing=lambda: call.translations.append("answer"), blocking=False) as clock:
+        call.started_ns = clock.now
+        (result,) = asyncio.run(_collect())
+
+    assert result.status == "BLOCKED"
+    assert result.method == "timeout"
+    assert result.cause is None
+    assert result.translation == "answer"
+    assert clock.slept
 
 
 def test_a_logic_deadline_that_ends_early_counts_an_answer_that_lands_in_time():
     from qwed_new.core.control_plane import _logic_failure
-    from qwed_new.core.failure_cause import now_ns
     from qwed_new.core.translation_record import Translation
 
     answered = LandedTranslations()
     answer = Translation("logic", {"claim": "x > 3"}, "ollama", MODEL)
-    landing = threading.Timer(0.02, answered.append, args=(answer,))
-    landing.start()
-    try:
-        fields = _logic_failure(asyncio.TimeoutError(), False, None, None, answered, now_ns() + 80_000_000)
-    finally:
-        landing.join(5)
+    with _scripted_clock(landing=lambda: answered.append(answer), blocking=False) as clock:
+        fields = asyncio.run(_logic_failure(asyncio.TimeoutError(), False, None, None, answered, 80_000_000))
     assert fields["constraint_id"] == PIPELINE_ERROR
     assert fields["translation_model"] == MODEL
+    assert clock.slept
 
-    # An error that is not the deadline's is read at once, however far the
-    # deadline is.
-    started = time.perf_counter()
-    fields = _logic_failure(RuntimeError("solver"), True, None, None, LandedTranslations(), now_ns() + 30 * 10**9)
-    assert time.perf_counter() - started < 0.5
-    assert fields["constraint_id"] == PIPELINE_ERROR
+    # A timeout after the bridge returned, and an error that is not the
+    # deadline's, are read at once, however close the deadline is.
+    for error, translated in ((asyncio.TimeoutError(), True), (RuntimeError("solver"), True), (RuntimeError("x"), False)):
+        with _scripted_clock(blocking=False) as clock:
+            fields = asyncio.run(_logic_failure(error, translated, None, None, LandedTranslations(), 80_000_000))
+        assert clock.slept == [], (error, translated)
+        assert fields["constraint_id"] == PIPELINE_ERROR
 
 
 def test_the_async_consensus_deadline_is_whole_nanoseconds(monkeypatch):

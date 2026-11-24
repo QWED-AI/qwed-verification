@@ -25,6 +25,7 @@ None of them is admitted. The route that meets one writes its audit row as
 for any other verdict.
 """
 
+import asyncio
 import math
 import threading
 import time
@@ -160,15 +161,32 @@ _EARLY_BY_AT_MOST_NS = 100_000_000
 _CLOCK_RESOLUTION_S = time.get_clock_info("monotonic").resolution
 
 
-def wait_out(deadline_ns: int) -> None:
-    """Once a wait for ``deadline_ns`` has ended, sleep out what is left of
-    it, so what landed is read at or after the deadline: a timer may end a
-    wait up to its clock's resolution early, and a translation that lands in
-    that time came in time. Nothing is left to wait for a deadline that has
+def _rest_of(deadline_ns: int) -> float:
+    """The seconds to sleep once a wait for ``deadline_ns`` has ended, so
+    what landed is read at or after the deadline: a timer may end a wait up
+    to its clock's resolution early, and a translation that lands in that
+    time came in time. Nothing is left to wait for a deadline that has
     passed, or one far ahead, which is not the deadline that ended the wait."""
     remaining = deadline_ns - now_ns()
     if 0 < remaining <= _EARLY_BY_AT_MOST_NS:
-        time.sleep(remaining / 1_000_000_000 + _CLOCK_RESOLUTION_S)
+        return remaining / 1_000_000_000 + _CLOCK_RESOLUTION_S
+    return 0.0
+
+
+def wait_out(deadline_ns: int) -> None:
+    """Sleep out what is left of ``deadline_ns`` (see ``_rest_of``), on a
+    thread that may block: the worker pool's waits."""
+    rest = _rest_of(deadline_ns)
+    if rest:
+        time.sleep(rest)
+
+
+async def wait_out_async(deadline_ns: int) -> None:
+    """``wait_out`` on the event loop: the rest is slept with
+    ``asyncio.sleep``, so other requests run meanwhile."""
+    rest = _rest_of(deadline_ns)
+    if rest:
+        await asyncio.sleep(rest)
 
 
 class LandedTranslations(list):

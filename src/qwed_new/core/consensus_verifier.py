@@ -49,6 +49,7 @@ from qwed_new.core.failure_cause import (
     nanoseconds,
     now_ns,
     wait_out,
+    wait_out_async,
 )
 from qwed_new.providers.base import TranslationRefused
 
@@ -170,6 +171,24 @@ def _snapshot(call: Any) -> Optional[Translation]:
 
 
 def _timed_out(call: Any, deadline_ns: int) -> dict[str, Any]:
+    """``_read_timeout``, read at or after ``deadline_ns`` on a thread that
+    may block: the parallel and sequential paths."""
+    if isinstance(call, _EngineCall):
+        # A wait may end up to its clock's resolution early.
+        wait_out(deadline_ns)
+    return _read_timeout(call, deadline_ns)
+
+
+async def _timed_out_async(call: Any, deadline_ns: int) -> dict[str, Any]:
+    """``_read_timeout``, read at or after ``deadline_ns`` on the event
+    loop, which sleeps out the rest of an early end without blocking: the
+    async collector."""
+    if isinstance(call, _EngineCall):
+        await wait_out_async(deadline_ns)
+    return _read_timeout(call, deadline_ns)
+
+
+def _read_timeout(call: Any, deadline_ns: int) -> dict[str, Any]:
     """The fields of an engine that ran out of time at ``deadline_ns``: its
     translation, where it had one, and its cause (#519). A translating
     engine that had started by the deadline and had no translation by it
@@ -184,12 +203,11 @@ def _timed_out(call: Any, deadline_ns: int) -> dict[str, Any]:
     worker runs on after the deadline, and what it does then, starting or
     translating, does not change the cause, though a late translation is
     kept for the audit row (#578). The translation and the in-time check
-    come from one read, so they cannot disagree."""
+    come from one read, so they cannot disagree. The caller reads at or
+    after the deadline (``_timed_out``, ``_timed_out_async``), so a
+    translation that lands in time is counted."""
     if not isinstance(call, _EngineCall):
         return {"translation": None}
-    # A wait may end up to its clock's resolution early: read at or after
-    # the deadline, so a translation that lands in time is counted.
-    wait_out(deadline_ns)
     kept, in_time = call.translations.read(deadline_ns)
     translation = _first(kept)
     if call.started_before(deadline_ns) and not in_time:
@@ -863,10 +881,10 @@ class ConsensusVerifier:
                 # The pool is sized to the engine list, so an unfinished task
                 # at expiry was genuinely running past its budget — record it
                 # with the breaker.
+                latency_ms = (time.monotonic_ns() - mono_start_ns) // 1_000_000
+                fields = await _timed_out_async(call, deadline_ns)
                 results.append(self._blocked_engine_result(
-                    engine_name, "timeout", "Timeout",
-                    latency_ms=(time.monotonic_ns() - mono_start_ns) // 1_000_000,
-                    **_timed_out(call, deadline_ns),
+                    engine_name, "timeout", "Timeout", latency_ms=latency_ms, **fields,
                 ))
                 continue
             self._record_engine_result(engine_name, result)

@@ -46,7 +46,7 @@ from qwed_new.core.failure_cause import (
     diagnostic_for_exception,
     message_for,
     message_of,
-    wait_out,
+    wait_out_async,
 )
 # Every z3 solve runs on the one z3 thread, which the consensus Z3 engine
 # shares (#659); the provider translation runs concurrently via
@@ -89,7 +89,7 @@ PIPELINE_ERROR = "control_plane.pipeline_error"
 _PIPELINE_ERROR_MESSAGE = "Internal pipeline error"
 
 
-def _logic_failure(
+async def _logic_failure(
     error: BaseException,
     translated: bool,
     translation: Translation | None,
@@ -115,10 +115,11 @@ def _logic_failure(
     later step come after the translation. The answer kept and the in-time
     check come from one read, so they cannot disagree, and the read is at
     or after the deadline: a wait may end up to its clock's resolution
-    early, and an answer that lands in that time came in time."""
+    early, and an answer that lands in that time came in time. The rest of
+    an early end is slept on the event loop, without blocking it."""
     timed_out = isinstance(error, (TimeoutError, asyncio.TimeoutError))
     if timed_out and not translated:
-        wait_out(answered_by)
+        await wait_out_async(answered_by)
     landed, in_time = answered.read(answered_by)
     if translation is None and landed:
         translation = landed[0]
@@ -651,9 +652,10 @@ class ControlPlane:
                 f"Logic pipeline failure for org {organization_id}: {redact_pii(str(e))}",
                 exc_info=False
             )
+            failure = await _logic_failure(e, translated, translation, last_known_model, answered, answered_by)
             return {
                 "status": "ERROR",
-                **_logic_failure(e, translated, translation, last_known_model, answered, answered_by),
+                **failure,
                 "provider_used": last_known_provider,
                 "latency_ms": (time.time() - start_time) * 1000
             }
