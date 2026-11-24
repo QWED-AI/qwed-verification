@@ -142,6 +142,19 @@ Versions 8.0.0 and earlier are in [docs/CHANGELOG-archive.md](docs/CHANGELOG-arc
     `/verify/code` still reports a 40-character commit hash in code as a
     secret.
 
+- **`FIND_IN_SET`, `ST_X` and `ST_Y` with sqlglot 30.34.0.** That release
+  parses each into a function kind of its own, and `SQLVerifier` and
+  `SQLGuard` refuse a kind their catalogue has not sorted, so any query
+  calling one was refused where sqlglot 30.34.0 is installed. The server
+  image pins 30.25.0; `pip install qwed` takes the newest.
+  - Each computes only from its arguments, so all three are admitted, on
+    30.34.0 and on older sqlglot, which reads them as calls by name. Before,
+    `ST_X` and `ST_Y` were refused on every version.
+  - A call through a schema, a quoted or misspelt name and a read inside
+    the arguments are still refused.
+  - A test now fails when the installed sqlglot parses a function kind the
+    catalogue has not sorted.
+
 ## [11.0.0] - 2026-11-19
 
 A major release that fixes ten advisories. The code, SQL, maths, image and

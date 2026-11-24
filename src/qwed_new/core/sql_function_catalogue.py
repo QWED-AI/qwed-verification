@@ -1,7 +1,7 @@
 """
-The functions sqlglot parses into a known expression, as of sqlglot 28.0.0
-and 30.31.0, sorted into those that stay inside the database and those that
-reach outside it (GHSA-wgcp-398q-m296).
+The functions sqlglot parses into a known expression, as of sqlglot 28.0.0,
+30.31.0 and 30.34.0, sorted into those that stay inside the database and
+those that reach outside it (GHSA-wgcp-398q-m296).
 
 SQLVerifier and SQLGuard admit a function sqlglot knows only when its kind
 is in ``TYPED_FUNCTIONS``. A kind a later sqlglot adds is not, so it is
@@ -22,7 +22,7 @@ REACHING_TYPED_FUNCTIONS = frozenset({
     "vectorsearch"
 })
 
-# Every other kind of the two versions.
+# Every other kind of those versions.
 TYPED_FUNCTIONS = frozenset({
     "_explodeouter", "abs", "acos", "acosh", "addmonths", "agg", "aggfunc", "and",
     "anonymousaggfunc", "anyvalue", "apply", "approxdistinct", "approximatesimilarity",
@@ -59,6 +59,7 @@ TYPED_FUNCTIONS = frozenset({
     "degrees", "denserank", "ditodate", "dotproduct", "elt", "encode", "encrypt", "encryptraw",
     "endswith", "equalnull", "euclideandistance", "exists", "exp", "explode", "explodeouter",
     "explodinggenerateseries", "extract", "factorial", "farmfingerprint", "featuresattime",
+    "findinset",
     "first", "firstvalue", "flatten", "float64", "floor", "format", "frombase", "frombase32",
     "frombase64", "fromiso8601date", "fromiso8601timestamp", "fromiso8601timestampnanos",
     "fromjson", "func", "gapfill", "generatedatearray", "generateseries",
@@ -98,7 +99,8 @@ TYPED_FUNCTIONS = frozenset({
     "sqrt", "stack", "standardhash", "starmap", "startswith", "stddev", "stddevpop",
     "stddevsamp", "stdistance", "stpoint", "string", "stringtoarray", "stripnullvalue",
     "strposition", "strtodate", "strtok", "strtoksplittotable", "strtoktoarray", "strtomap",
-    "strtotime", "strtounix", "struct", "structextract", "stuff", "substring", "substringindex",
+    "strtotime", "strtounix", "struct", "structextract", "stuff", "stx", "sty",
+    "substring", "substringindex",
     "sum", "systimestamp", "tan", "tanh", "time", "timeadd", "timediff", "timefromparts",
     "timeslice", "timestamp", "timestampadd", "timestampdiff", "timestampfromparts",
     "timestampltzfromparts", "timestampsub", "timestamptrunc", "timestamptzfromparts",

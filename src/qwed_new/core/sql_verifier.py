@@ -288,7 +288,7 @@ KNOWN_VALUE_FUNCTIONS = frozenset({
     "from_days", "weekday", "dayname", "monthname", "quarter", "yearweek", "json_unquote", "json_contains",
     "json_length", "json_keys", "json_array", "json_valid", "json_search", "json_set", "json_insert",
     "json_replace", "json_remove", "json_merge_preserve", "json_merge_patch", "any_value", "bit_count",
-    "inet_aton", "inet_ntoa", "uuid",
+    "inet_aton", "inet_ntoa", "uuid", "st_x", "st_y",
     # SQLite
     "date", "time", "datetime", "julianday", "strftime", "printf", "total", "quote", "unixepoch",
     "timediff", "likely", "unlikely", "likelihood", "zeroblob", "char", "unicode", "json_group_array",

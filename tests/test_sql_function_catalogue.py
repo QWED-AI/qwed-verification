@@ -1,0 +1,180 @@
+"""The function catalogue sorts every kind the installed sqlglot parses.
+
+SQLVerifier and SQLGuard admit a function sqlglot parses into a known
+expression only when its kind is in ``TYPED_FUNCTIONS``, so a kind a newer
+sqlglot adds is refused until someone reads it. sqlglot 30.34.0 parses
+FIND_IN_SET, ST_X and ST_Y into their own kinds (``findinset``, ``stx`` and
+``sty``); older versions read them as calls by name. Each computes only from
+its arguments, so each is admitted whichever way sqlglot reads it, and a
+near miss of the name is still refused.
+"""
+
+import inspect
+import sys
+
+import pytest
+import sqlglot
+from hypothesis import given, settings
+from hypothesis import strategies as st
+from sqlglot import exp, parse_one
+from sqlglot.dialects.dialect import Dialect, Dialects
+
+from qwed_new.core.diagnostics import admission_decision
+from qwed_new.core.sql_function_catalogue import REACHING_TYPED_FUNCTIONS, TYPED_FUNCTIONS
+from qwed_new.core.sql_verifier import KNOWN_VALUE_FUNCTIONS, SQLVerifier
+from qwed_new.guards.sql_guard import SQLGuard
+
+DDL = "CREATE TABLE users (id INT, name TEXT, geom TEXT);"
+
+DIALECTS = [
+    "mysql", "postgres", "duckdb", "bigquery", "snowflake", "spark", "databricks", "hive", "clickhouse",
+    "starrocks", "doris", "singlestore", "trino", "tsql", "oracle", "sqlite", "redshift",
+]
+
+
+def _function_kinds():
+    """Every ``exp.Func`` kind of the installed sqlglot, with every dialect
+    loaded so that a kind a dialect defines is counted too."""
+    for dialect in Dialects:
+        if dialect.value:
+            Dialect.get_or_raise(dialect.value)
+    modules = [
+        module for name, module in list(sys.modules.items())
+        if module is not None and (name == "sqlglot" or name.startswith("sqlglot."))
+    ]
+    return {
+        cls.key for module in modules for _, cls in inspect.getmembers(module, inspect.isclass)
+        if issubclass(cls, exp.Func)
+    }
+
+
+def _verdicts(query, dialect):
+    with_schema = admission_decision(SQLVerifier().verify_sql(query, DDL, dialect=dialect)).value
+    without = admission_decision(SQLVerifier().verify_sql(query, None, dialect=dialect)).value
+    guard = SQLGuard().verify_query(query, dialect=dialect)
+    return with_schema, without, guard["verified"]
+
+
+def test_every_function_kind_of_the_installed_sqlglot_is_sorted():
+    # An anonymous call is checked by name against KNOWN_VALUE_FUNCTIONS.
+    unsorted = sorted(_function_kinds() - TYPED_FUNCTIONS - REACHING_TYPED_FUNCTIONS - {"anonymous"})
+    assert not unsorted, (
+        f"sqlglot {sqlglot.__version__} parses function kinds the catalogue does not sort: {unsorted}. "
+        "Read what each computes and add it to TYPED_FUNCTIONS or REACHING_TYPED_FUNCTIONS in "
+        "src/qwed_new/core/sql_function_catalogue.py."
+    )
+
+
+def test_no_kind_is_both_admitted_and_reaching():
+    assert not TYPED_FUNCTIONS & REACHING_TYPED_FUNCTIONS
+
+
+@pytest.mark.parametrize("name", ["find_in_set", "st_x", "st_y"])
+def test_the_name_is_known_however_sqlglot_reads_it(name):
+    call = parse_one(name + "(a, b)").find(exp.Func)
+    if isinstance(call, exp.Anonymous):
+        assert name in KNOWN_VALUE_FUNCTIONS
+    else:
+        assert call.key in TYPED_FUNCTIONS
+
+
+@pytest.mark.parametrize("query", [
+    "SELECT ST_X(geom), ST_Y(geom) FROM users",
+    "SELECT find_in_set('a', name) FROM users",
+    "SELECT id FROM users WHERE FIND_IN_SET(name, 'a,b') > 0 ORDER BY st_x(geom)",
+])
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_st_x_st_y_and_find_in_set_are_admitted(dialect, query):
+    assert _verdicts(query, dialect) == ("ADMIT", "ADMIT", True)
+
+
+@pytest.mark.parametrize("query", [
+    # MySQL's ST_X(point, new_x) returns the point with X replaced.
+    "SELECT ST_X(geom, 1.5) FROM users",
+    "SELECT st_x(geom), St_Y(geom), Find_In_Set('a', name) FROM users",
+    "SELECT ST_X (geom), ST_Y\t(geom), FIND_IN_SET\n('a', name) FROM users",
+    "SELECT ST_X/**/(geom) FROM users",
+    "SELECT find_in_set('a', (SELECT name FROM users)) FROM users",
+])
+def test_other_forms_of_the_same_call_are_admitted(query):
+    assert _verdicts(query, "mysql") == ("ADMIT", "ADMIT", True)
+
+
+@pytest.mark.parametrize("dialect, query", [
+    # A name glued, split or inflected is another function.
+    ("mysql", "SELECT stx(geom) FROM users"),
+    ("mysql", "SELECT findinset('a', name) FROM users"),
+    ("mysql", "SELECT st__x(geom) FROM users"),
+    ("mysql", "SELECT find_in_sets('a', name) FROM users"),
+    ("mysql", "SELECT find_in_setting('a', name) FROM users"),
+    ("mysql", "SELECT st-x(geom) FROM users"),
+    ("mysql", "SELECT st.x(geom) FROM users"),
+    # A quoted name can name another function.
+    ("mysql", 'SELECT "ST_X"(geom) FROM users'),
+    ("mysql", "SELECT `find_in_set`('a', name) FROM users"),
+    # A call through a schema or package can be any function.
+    ("mysql", "SELECT db.find_in_set('a', name) FROM users"),
+    ("postgres", "SELECT public.st_x(geom) FROM users"),
+    ("tsql", "SELECT dbo.find_in_set('a', name) FROM users"),
+    ("oracle", "SELECT pkg.st_y(geom) FROM users"),
+    # Used as a table, it is not a row generator.
+    ("mysql", "SELECT * FROM find_in_set('a', 'b')"),
+    ("mysql", "SELECT * FROM users, st_x(geom)"),
+    # An admitted call does not admit what its arguments read.
+    ("mysql", "SELECT find_in_set('a', load_file('/etc/passwd')) FROM users"),
+    ("mysql", "SELECT ST_X(geom) FROM users WHERE find_in_set('a', sleep(5))"),
+    ("duckdb", "SELECT find_in_set('a', getenv('HOME'))"),
+    ("postgres", "SELECT ST_Y(query_to_xml('SELECT 1', true, true, ''))"),
+    # Look-alike letters from other scripts and zero-width characters.
+    ("mysql", "SELECT ST_Х(geom) FROM users"),
+    ("mysql", "SELECT find_іn_set('a', name) FROM users"),
+    ("mysql", "SELECT ST_Χ(geom) FROM users"),
+    ("mysql", "SELECT ST​_X(geom) FROM users"),
+    ("mysql", "SELECT ＳＴ_X(geom) FROM users"),
+])
+def test_a_near_miss_or_misuse_is_refused(dialect, query):
+    with_schema, without, guard = _verdicts(query, dialect)
+    assert (with_schema, without, guard) == ("BLOCKED", "BLOCKED", False)
+
+
+_LOOK_ALIKES = {"s": "ѕ", "x": "х", "y": "у", "i": "і", "e": "е", "t": "τ"}
+
+
+@st.composite
+def _near_misses(draw):
+    """A name one change away from st_x, st_y or find_in_set."""
+    name = draw(st.sampled_from(["st_x", "st_y", "find_in_set"]))
+    change = draw(st.sampled_from(
+        ["glue", "double", "suffix", "prefix", "look-alike", "zero-width", "fullwidth"]
+    ))
+    if change == "glue":
+        name = name.replace("_", "")
+    elif change == "double":
+        at = draw(st.sampled_from([i for i, char in enumerate(name) if char == "_"]))
+        name = name[:at] + "_" + name[at:]
+    elif change == "suffix":
+        name += draw(st.sampled_from(["s", "es", "ed", "ing", "_", "2", "x"]))
+    elif change == "prefix":
+        name = draw(st.sampled_from(["_", "x", "my_"])) + name
+    elif change == "look-alike":
+        at = draw(st.sampled_from([i for i, char in enumerate(name) if char in _LOOK_ALIKES]))
+        name = name[:at] + _LOOK_ALIKES[name[at]] + name[at + 1:]
+    elif change == "zero-width":
+        at = draw(st.integers(1, len(name) - 1))
+        zero_width = draw(st.sampled_from(["​", "‌", "‍", "⁠", "﻿"]))
+        name = name[:at] + zero_width + name[at:]
+    else:
+        at = draw(st.sampled_from([i for i, char in enumerate(name) if char.isalpha()]))
+        name = name[:at] + chr(ord(name[at]) - ord("a") + 0xFF41) + name[at + 1:]
+    return draw(st.sampled_from([str.lower, str.upper, str.title]))(name)
+
+
+@settings(max_examples=150, deadline=None)
+@given(
+    name=_near_misses(),
+    dialect=st.sampled_from(["mysql", "postgres", "duckdb", "spark", "clickhouse", "snowflake"]),
+)
+def test_a_name_one_change_from_an_admitted_one_is_refused(name, dialect):
+    query = "SELECT " + name + "(geom) FROM users"
+    _, without, guard = _verdicts(query, dialect)
+    assert (without, guard) == ("BLOCKED", False)
