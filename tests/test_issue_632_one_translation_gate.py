@@ -114,6 +114,13 @@ def test_an_over_long_text_is_refused(provider, method):
     _refused(provider, lambda: METHODS[method][0](TranslationLayer(), "x" * 10001))
 
 
+@pytest.mark.parametrize("method", QUESTION_METHODS)
+def test_a_question_past_the_old_bound_reaches_the_provider(provider, method):
+    # The maths check refused any question over 2,000 characters until #646.
+    question = ("What is 2 + 3? " * 140)[:2001]
+    _reached(provider, method, lambda: METHODS[method][0](TranslationLayer(), question), question)
+
+
 @pytest.mark.parametrize("method", list(METHODS))
 def test_an_ordinary_question_reaches_the_provider_unchanged(provider, method):
     _reached(provider, method, lambda: METHODS[method][0](TranslationLayer(), QUESTION), QUESTION)

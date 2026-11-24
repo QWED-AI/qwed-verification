@@ -57,8 +57,8 @@ class TranslationLayer:
       context) gets the phrase check the policy engine runs, with its
       10,000-character bound. The maths check adds layers written for a
       maths question (Base64 payloads, likeness to its system prompt,
-      mixed scripts, zero-width characters) that a data file's header or
-      a fact's context can trip.
+      words such as jailbreak and sudo, mixed scripts, zero-width
+      characters) that a data file's header or a fact's context can trip.
     """
 
     def __init__(self):

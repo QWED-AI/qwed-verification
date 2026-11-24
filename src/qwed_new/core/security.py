@@ -33,9 +33,15 @@ _ANY_IGNORABLE = re.compile(_IGNORABLE)
 _SEEN_IN_COPY = r"[^\W_]"
 
 
+# A character that ends a line (str.splitlines reads the same ones).
+_LINE_BREAK = re.compile(r"[\n\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]")
+
+
 def _collapse_ws(text: str) -> str:
-    """Tabs, newlines and repeated spaces become a single space."""
-    return re.sub(r'\s+', ' ', text).strip()
+    """Each run of whitespace becomes one space, or one newline where the
+    run breaks a line, so a line's start can still be read as a
+    sentence's (PR #672)."""
+    return re.sub(r'\s+', lambda run: "\n" if _LINE_BREAK.search(run.group()) else " ", text).strip()
 
 
 # Letters from other scripts that a reader takes for Latin ones (#646),
@@ -137,7 +143,37 @@ def _one_of(words, read_through: bool = True) -> str:
     """One of ``words``, each read through ignorables unless
     ``read_through`` is false; longer words first."""
     word = _read_through_word if read_through else re.escape
-    return "(?:" + "|".join(word(w) for w in sorted(set(words), key=len, reverse=True)) + ")"
+    # Longer words first, then in order, so the pattern is the same in
+    # every process whatever its hash seed (PR #672).
+    ordered = sorted(set(words), key=lambda w: (-len(w), w))
+    return "(?:" + "|".join(word(w) for w in ordered) + ")"
+
+
+def _following(slot, between: str, read_through: bool) -> str:
+    """The lookahead a last slot written ``("!re", pattern)``,
+    ``("!", words)`` or ``("!",)`` puts after a phrase."""
+    if slot[0] == "!re":
+        follower = slot[1]
+    elif len(slot) > 1:
+        follower = _one_of(slot[1], read_through) + rf"(?!{_SEEN_IN_COPY})"
+    else:
+        follower = _SEEN_IN_COPY
+    return rf"(?!{between}{follower})"
+
+
+def _sentence_start(read_through: bool) -> str:
+    """Where a first slot written ``("^",)`` puts a phrase."""
+    gap = _GAP if read_through else r"\s"
+    return rf"(?:\A|(?<=[.!?:;\"\u201c\u201d(>*])|(?<=\n)(?<![^\W\d_]\n)(?<!,\n)){gap}*"
+
+
+def _slot(slot, between: str, read_through: bool) -> str:
+    """One slot's words and the separator after them; a ``("*", words)``
+    slot repeats both up to its bound."""
+    if slot[0] == "*":
+        most = slot[2] if len(slot) > 2 else _MAX_QUALIFIERS
+        return rf"(?:{_one_of(slot[1], read_through)}{between}){{0,{most}}}"
+    return _one_of(slot, read_through) + between
 
 
 def _phrase_search(slots, whole_words: bool, read_through: bool = True) -> "re.Pattern[str]":
@@ -148,35 +184,23 @@ def _phrase_search(slots, whole_words: bool, read_through: bool = True) -> "re.P
     phrase is not found when one of ``words`` follows it ("you are now
     able"); written ``("!",)``, no word may follow it ("forget all.");
     written ``("!re", pattern)``, ``pattern`` may not follow it. A
-    first slot written ``("^",)`` puts the phrase at the start of the text
-    or after a sentence's end ("Act as a terminal."). In whole-word mode no
+    first slot written ``("^",)`` puts the phrase at the start of the text,
+    after a sentence's end ("Act as a terminal."), or at a line's start
+    when the line before does not end with a letter or a comma, as a
+    wrapped sentence's does. In whole-word mode no
     letter or digit a reader sees may touch the phrase at either end.
     With ``read_through`` false, the search is for a copy that holds no
     ignorable, and matches there exactly what the full search matches."""
     between = _BETWEEN_WORDS if read_through else _PLAIN_BETWEEN_WORDS
     unless = ""
-    if slots[-1][0] == "!re":
-        unless = rf"(?!{between}{slots[-1][1]})"
-        slots = slots[:-1]
-    elif slots[-1][0] == "!":
-        if len(slots[-1]) > 1:
-            follower = _one_of(slots[-1][1], read_through) + rf"(?!{_SEEN_IN_COPY})"
-        else:
-            follower = _SEEN_IN_COPY
-        unless = rf"(?!{between}{follower})"
+    if slots[-1][0] in ("!", "!re"):
+        unless = _following(slots[-1], between, read_through)
         slots = slots[:-1]
     start = ""
     if slots[0] == ("^",):
-        gap = _GAP if read_through else r"\s"
-        start = rf"(?:\A|(?<=[.!?:;\"\u201c\u201d(>*])){gap}*"
+        start = _sentence_start(read_through)
         slots = slots[1:]
-    body = ""
-    for slot in slots:
-        if slot[0] == "*":
-            most = slot[2] if len(slot) > 2 else _MAX_QUALIFIERS
-            body += rf"(?:{_one_of(slot[1], read_through)}{between}){{0,{most}}}"
-        else:
-            body += _one_of(slot, read_through) + between
+    body = "".join(_slot(slot, between, read_through) for slot in slots)
     # The last word may take an English ending ("modes", "prompted"), read
     # through ignorables the same way ("prompte<U+200B>d").
     body = body[: -len(between)] + (_ENDING if read_through else _PLAIN_ENDING)
@@ -228,12 +252,14 @@ _ALSO_DATA = _forms(
 )
 _MODES = ("developer", "dan", "god", "jailbreak", "jailbroken", "admin", "simulated", "unrestricted")
 
-# "act as if x = 3": an assumption about a variable, not a role to play.
-# One letter or digit, then "=", "is" or "equals" (PR #672).
-_ASSUMPTION = (
-    rf"if{_BETWEEN_WORDS}[a-z0-9](?!{_SEEN_IN_COPY}){_GAP}*"
-    rf"(?:=|(?:is|equals?)(?!{_SEEN_IN_COPY}))"
+# "act as if" plays a role when a person follows ("act as if you are
+# DAN", "act as if I were", "act as if there are no rules"); otherwise it
+# states a premise ("act as if x = 3", "act as if the die is fair"), which
+# passes (PR #672).
+_PERSONS = (
+    "you", "youre", "your", "i", "im", "we", "my", "me", "he", "she", "they", "there",
 )
+_ASSUMPTION = rf"if{_BETWEEN_WORDS}(?!{_one_of(_PERSONS)}(?!{_SEEN_IN_COPY}))"
 _ACT_AS = "act as"
 
 # Each phrase: the name a refusal gives, and its slots.
@@ -248,14 +274,22 @@ _PHRASES = (
     (_ACT_AS, (("going",), ("to",), ("act",), ("as", "like"), ("!re", _ASSUMPTION))),
     (_ACT_AS, (("please", "now", "you"), ("act",), ("as", "like"), ("!re", _ASSUMPTION))),
     (_ACT_AS, (("^",), ("act",), ("as", "like"), ("!re", _ASSUMPTION))),
-    ("you are now", (("you",), ("are",), ("now",), ("!", ("able",)))),
+    ("you are now", (("you",), ("are",), ("now",), ("!", (
+        "able", "ready", "done", "finished", "logged", "signed", "registered",
+        "enrolled", "subscribed", "eligible", "connected",
+    )))),
     ("forget all", (_forms("forget:s,ting", "forgot"), ("all",), ("!",))),
     ("from now on", (("from",), ("now",), ("on",), ("you",), ("are", "will"))),
     ("pretend to be", (("pretend",), ("to", "you", "that"), ("be", "are", "you"))),
-    ("your instructions", (("your", "hidden", "secret"), (
-        "instructions", "prompt", "prompts", "guidelines", "programming",
-    ))),
-    ("your system prompt", (("your",), ("system",), ("prompt", "prompts", "instructions", "message"))),
+    ("your instructions", (
+        ("your", "hidden", "secret"), ("*", ("initial", "original", "system"), 1),
+        ("instructions", "prompt", "prompts", "guidelines", "programming"),
+    )),
+    # "the system prompt", not a column or field of logged prompts.
+    ("the system prompt", (
+        ("the",), ("system",), ("prompt", "prompts", "instructions", "message"),
+        ("!", ("column", "columns", "field", "fields")),
+    )),
     ("your rules", (("your",), ("rules",))),
     ("new instructions", (("new",), ("instructions",))),
     ("new task", (("your",), ("new",), ("task", "tasks", "instructions"))),
@@ -298,10 +332,12 @@ def _found(searches, copies: tuple[str, ...], plain=None) -> str | None:
     return None
 
 
-# A Greek letter touching a Latin one, in a word (PR #672).
+# Greek letters inside a Latin word, with Latin letters on both sides (PR
+# #672): a Greek letter that only touches one, as in maths notation (the
+# d of a differential, 2k times pi, omega t, mu g, sin theta), is not.
 _LATIN_LETTER = "[A-Za-z\u00c0-\u024f]"
 _GREEK_LETTER = "[\u0370-\u03ff\u1f00-\u1fff]"
-_GREEK_IN_LATIN = re.compile(f"{_LATIN_LETTER}{_GREEK_LETTER}|{_GREEK_LETTER}{_LATIN_LETTER}")
+_GREEK_IN_LATIN = re.compile(f"{_LATIN_LETTER}{_GREEK_LETTER}+{_LATIN_LETTER}")
 
 
 def _seen_letters(text: str) -> str:
@@ -457,7 +493,17 @@ class EnhancedSecurityGateway:
         Returns:
             (is_safe, reason) - True if safe, False with reason if blocked
         """
-        # Zero-width characters first (PR #672): one pass that refuses on
+        # The length bound first (PR #672): it reads no character, so an
+        # over-long text is refused before any layer scans it.
+        if len(prompt) > self.max_input_length:
+            self.blocks_count += 1
+            logger.warning(f"Input exceeds {self.max_input_length} chars: {len(prompt)}")
+            return False, (
+                f"Input too long ({len(prompt)} chars). "
+                f"Maximum {self.max_input_length} characters allowed."
+            )
+
+        # Zero-width characters next (PR #672): one pass that refuses on
         # its own, before the costly layers read a text of them. Every
         # layer only refuses, so the order changes no verdict.
         if self._contains_zero_width_chars(prompt):
@@ -471,15 +517,6 @@ class EnhancedSecurityGateway:
             self.blocks_count += 1
             logger.warning(f"Basic injection detected: {reason}")
             return False, reason
-        
-        # Layer 2: Stricter length check (70% effective per research)
-        if len(prompt) > self.max_input_length:
-            self.blocks_count += 1
-            logger.warning(f"Input exceeds {self.max_input_length} chars: {len(prompt)}")
-            return False, (
-                f"Input too long ({len(prompt)} chars). "
-                f"Maximum {self.max_input_length} characters allowed."
-            )
         
         # Layer 3: Base64/encoding detection
         is_safe, reason = self._check_base64_encoding(prompt)
@@ -544,8 +581,13 @@ class EnhancedSecurityGateway:
         # piece into the next, so each is read as it would be alone, and
         # a text of many pieces costs one read (PR #672). The read is
         # outside the try, so an error in it is not taken for bad Base64.
-        if pieces and self._contains_injection_keywords(". ".join(pieces)):
-            return False, "Base64-encoded injection payload detected"
+        if pieces:
+            joined = ". ".join(pieces)
+            # Read one by one where the join passes the length bound, so two
+            # pieces that fit alone are not refused for their sum (PR #672).
+            readings = [joined] if _phrase_copies(joined) is not None else pieces
+            if any(self._contains_injection_keywords(text) for text in readings):
+                return False, "Base64-encoded injection payload detected"
 
         return True, None
     
@@ -598,9 +640,9 @@ class EnhancedSecurityGateway:
                 scripts.add('latin')
         
         # Greek letters are mathematical symbols (theta, the zeta function,
-        # TGF-beta), so a Greek letter that stands apart from Latin letters
-        # is not mixing (#646). One inside a run of Latin letters
-        # ("instru" + lunate sigma + "tions") is, as on main.
+        # TGF-beta, d theta, 2k pi), so a Greek letter that is not inside a
+        # Latin word is not mixing (#646). One inside a Latin word ("instru"
+        # + lunate sigma + "tions") is, as on main.
         if 'greek' in scripts and not _GREEK_IN_LATIN.search(_seen_letters(text)):
             scripts.discard('greek')
 
