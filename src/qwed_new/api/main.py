@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 INTERNAL_VERIFICATION_ERROR = "Internal verification error"
 INTERNAL_PROCESSING_ERROR = "Internal processing error"
 
-from qwed_new.core.control_plane import ControlPlane, natural_language_admission
+from qwed_new.core.control_plane import _PROVIDER_CALL_TIMEOUT_SECONDS, ControlPlane, natural_language_admission
 from qwed_new.core.route_diagnostics import (
     guard_diagnostic,
     logic_diagnostic,
@@ -248,8 +248,9 @@ class _BodySizeLimitMiddleware:
 # excess rejected (413) before any parse work starts.
 # Wall-clock bound for a single code verification run on the event loop (#445).
 _CODE_VERIFY_TIMEOUT_SECONDS = float(os.environ.get("QWED_CODE_VERIFY_TIMEOUT", "10"))
-# Wall-clock bound for a blocking provider (LLM) call run off the loop (#390).
-_PROVIDER_CALL_TIMEOUT_SECONDS = float(os.environ.get("QWED_PROVIDER_TIMEOUT", "30"))
+# The wall-clock bound for a blocking provider (LLM) call run off the loop
+# (#390), _PROVIDER_CALL_TIMEOUT_SECONDS, is the control plane's, imported
+# above, so QWED_PROVIDER_TIMEOUT is read and checked in one place (#519).
 _MAX_STATS_UPLOAD_BYTES = 10_000_000
 # #353 (CodeAnt on PR #354): the byte cap bounds transfer, not the expanded
 # in-memory frame — bound rows x columns after the parse as well.
